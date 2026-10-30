@@ -1,11 +1,14 @@
 /**
  * A space's computers (its desks), as its Computer tab lists them: each with
- * whether it's online, whose it is, and whether it's the one agents use
- * (when there are several), picked to work on below; its menu (make it the
- * default, ask its owner first, open its page, move it to another space,
- * through the command palette's space picker; take it out of the space,
- * which asks first). Then adding one: connecting a computer to this space,
- * or putting one of yours here. Sharing one into a shared space says plainly
+ * whether it's online (a cloud computer: its state, from its kind's View),
+ * whose it is, and whether it's the one agents use (when there are
+ * several), picked to work on below; its menu (make it the default, ask its
+ * owner first, open its page, move it to another space, through the command
+ * palette's space picker; take it out of the space, which asks first). Then
+ * adding one: where the app has kinds of computer that make one (a cloud
+ * computer), the ways to add one as a choice, in a dialog (and as cards
+ * while there's none yet); else connecting a computer to this space; or
+ * putting one of yours here. Sharing one into a shared space says plainly
  * what it means first: members' agents run commands as you, on your
  * machine; and lets you keep the yes to yourself.
  */
@@ -17,6 +20,7 @@ import {
   Checkbox,
   Dialog,
   Icon,
+  LazyView,
   Menu,
   type MenuItem,
   message,
@@ -27,7 +31,8 @@ import {
 import type { Reached } from "../../../../access/spaces/contract.ts";
 import type { Computer } from "../../collections/computer.ts";
 import type { Desk } from "../../collections/desk.ts";
-import { ConnectDialog } from "./connect.tsx";
+import { AddChoices, AddDialog, type AddStep } from "./add.tsx";
+import type { Kind } from "./kinds.ts";
 import { ComputerMark } from "./mark.tsx";
 import { moveStep } from "./move.ts";
 import { folderPath, nameOf } from "./names.ts";
@@ -38,17 +43,20 @@ type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 const called = (space: Reached) => space.kind === "personal" ? "Personal" : space.name;
 
 /** What it means to share a computer into a shared space, said before it's done. */
-export function ShareWarning({ space, name }: { space: Reached; name: string }): ReactNode {
+export function ShareWarning(
+  { space, name, kept }: { space: Reached; name: string; kept?: boolean },
+): ReactNode {
   return (
     <Notice tone="warning" icon="alert" title={`${called(space)}'s members will work on ${name}`}>
       They, and the agents working for them, run commands, start jobs and change files there, in a
-      folder of its own. It all runs as you, on your machine: share it with people you trust.
+      folder of its own. It all runs as you{kept ? "" : ", on your machine"}: share it with people
+      you trust.
     </Notice>
   );
 }
 
 export function Desks(
-  { space, desks, mine, chosen, choose, me, call, compact }: {
+  { space, desks, mine, chosen, choose, me, call, compact, kinds = [], kindOf = {} }: {
     space: Reached;
     desks: Desk[];
     /** The person's computers. */
@@ -59,15 +67,19 @@ export function Desks(
     me?: string;
     call: Call;
     compact?: boolean;
+    /** Kinds of computer beyond people's own machines, and the person's computers of one. */
+    kinds?: Kind[];
+    kindOf?: Record<string, Kind>;
   },
 ): ReactNode {
-  const [connecting, setConnecting] = useState(false);
+  const [adding, setAdding] = useState<AddStep>();
   const [sharing, setSharing] = useState<Computer>();
   const [removing, setRemoving] = useState<Desk>();
   const [error, setError] = useState<string>();
   const shared = space.kind !== "personal";
   const manage = space.can.includes("manage");
   const others = mine.filter((c) => !desks.some((d) => d.computer === c._id));
+  const makers = kinds.filter((k) => k.add);
   const act = async (action: string, input: unknown) => {
     setError(undefined);
     try {
@@ -80,12 +92,26 @@ export function Desks(
     shared
       ? setSharing(computer)
       : void act("computer.share", { computer: computer._id, in: space._id });
-  const adding: (MenuItem | "separator")[] = [
-    { label: "Connect a computer", icon: "plus", onSelect: () => setConnecting(true) },
+  /** One of yours, as a menu says it: a kind's, or offline. */
+  const yours = (c: Computer) =>
+    `${nameOf(c)}${
+      kindOf[c._id] ? ` (${kindOf[c._id].title.toLowerCase()})` : c.online ? "" : " (offline)"
+    }`;
+  const menu: (MenuItem | "separator")[] = [
+    ...makers.map((k): MenuItem => ({
+      label: `${k.add!.heading ?? k.add!.title}…`,
+      icon: k.icon ?? "server",
+      onSelect: () => setAdding(`kind:${k.key}`),
+    })),
+    {
+      label: makers.length ? "Connect your own machine…" : "Connect a computer",
+      icon: makers.length ? "computer" : "plus",
+      onSelect: () => setAdding("connect"),
+    },
     ...(others.length ? ["separator" as const] : []),
     ...others.map((c): MenuItem => ({
-      label: `Add ${nameOf(c)}${c.online ? "" : " (offline)"}`,
-      icon: "computer",
+      label: `Add ${yours(c)}`,
+      icon: kindOf[c._id]?.icon ?? "computer",
       onSelect: () => share(c),
     })),
   ];
@@ -109,6 +135,7 @@ export function Desks(
                 remove={() => setRemoving(d)}
                 move={() =>
                   openPalette(moveStep({ desk: d._id, name: nameOf(d), from: space._id, call }))}
+                kind={kindOf[d.computer]}
               />
             ))}
             <li className="desks-add">
@@ -117,36 +144,44 @@ export function Desks(
                 text="Add a computer"
                 variant={compact ? "ghost" : "outline"}
                 size="sm"
-                items={adding}
+                items={menu}
               />
             </li>
           </ul>
         )
         : (
-          <div className="desks-none">
+          <div className={`desks-none${makers.length ? " desks-none-choices" : ""}`}>
             <span className="desks-none-icon">
               <Icon name="computer" size={26} />
             </span>
             <h3>{shared ? `No computer in ${space.name} yet` : "No computer here yet"}</h3>
             <p>
-              Connect one, and agents in {shared ? "this space's" : "your"}{" "}
+              {makers.length ? "Add one" : "Connect one"}, and agents in{" "}
+              {shared ? "this space's" : "your"}{" "}
               chats run commands and jobs, read and write files, browse and search on it, in a
               folder of its own. They ask before they change anything.
             </p>
+            {makers.length
+              ? <AddChoices kinds={makers} pick={setAdding} compact={compact} />
+              : null}
             <div className="desks-none-actions">
-              <Button variant="primary" icon="plus" onClick={() => setConnecting(true)}>
-                Connect a computer
-              </Button>
+              {makers.length
+                ? null
+                : (
+                  <Button variant="primary" icon="plus" onClick={() => setAdding("connect")}>
+                    Connect a computer
+                  </Button>
+                )}
               {others.length
                 ? (
                   <Menu
                     label="Add one of your computers"
                     text="Add one of yours"
                     icon="computer"
-                    variant="outline"
+                    variant={makers.length ? "ghost" : "outline"}
                     items={others.map((c) => ({
-                      label: `${nameOf(c)}${c.online ? "" : " (offline)"}`,
-                      icon: "computer",
+                      label: yours(c),
+                      icon: kindOf[c._id]?.icon ?? "computer",
                       onSelect: () => share(c),
                     }))}
                   />
@@ -156,20 +191,26 @@ export function Desks(
           </div>
         )}
       {shared && !compact && desks.length ? <Whose desks={desks} space={space} me={me} /> : null}
-      <ConnectDialog
-        open={connecting}
-        onClose={() => setConnecting(false)}
+      <AddDialog
+        {...(adding ? { step: adding } : {})}
+        go={setAdding}
+        onClose={() => setAdding(undefined)}
         call={call}
         computers={mine}
-        here={space._id}
+        space={space._id}
         where={called(space)}
-        notice={shared ? <ShareWarning space={space} name="it" /> : undefined}
+        {...(shared ? { notice: <ShareWarning space={space} name="it" /> } : {})}
+        kinds={kinds}
+        kindOf={kindOf}
+        others={others}
+        share={share}
       />
       <ShareDialog
         computer={sharing}
         space={space}
         onClose={() => setSharing(undefined)}
         call={call}
+        kept={!!sharing && !!kindOf[sharing._id]}
       />
       <RemoveDialog
         desk={removing}
@@ -222,7 +263,7 @@ function Whose({ desks, space, me }: { desks: Desk[]; space: Reached; me?: strin
 }
 
 function DeskCard(
-  { desk: d, space, several, chosen, choose, mine, manage, act, remove, move }: {
+  { desk: d, space, several, chosen, choose, mine, manage, act, remove, move, kind }: {
     desk: Desk;
     space: Reached;
     several: boolean;
@@ -234,6 +275,8 @@ function DeskCard(
     remove(): void;
     /** Moves it to another space (its owner only). */
     move(): void;
+    /** Its kind, a cloud computer's: its state shows instead of online or not. */
+    kind?: Kind;
   },
 ): ReactNode {
   const name = nameOf(d);
@@ -262,7 +305,7 @@ function DeskCard(
       : []),
     ...(mine
       ? [{
-        label: "Open its page",
+        label: kind ? "Open it" : "Open its page",
         icon: "external" as const,
         href: `/computer/${encodeURIComponent(d.computer)}?in=${encodeURIComponent(space._id)}`,
       }, { label: "Move to another space…", icon: "move" as const, onSelect: move }]
@@ -283,7 +326,18 @@ function DeskCard(
     <span className="desk-meta">
       <span>{mine ? "Yours" : `${d.owner}'s`}</span>
       <span aria-hidden="true">·</span>
-      {d.online ? <span className="desk-online">Online</span> : d.seen
+      {kind
+        ? (
+          <LazyView
+            kind={kind.view}
+            item={{ _id: d.computer }}
+            hints={{ mode: "badge" }}
+            fallback={<span>{kind.title}</span>}
+          />
+        )
+        : d.online
+        ? <span className="desk-online">Online</span>
+        : d.seen
         ? (
           <span>
             Seen <Time at={d.seen} />
@@ -302,7 +356,7 @@ function DeskCard(
   );
   const inside = (
     <>
-      <ComputerMark online={d.online} />
+      <ComputerMark online={d.online} icon={kind?.icon} />
       <span className="desk-text">
         <span className="desk-name">
           <span className="desk-name-text">{name}</span>
@@ -334,11 +388,13 @@ function DeskCard(
 
 /** Putting one of yours into a shared space, once you've read what it means. */
 function ShareDialog(
-  { computer, space, onClose, call }: {
+  { computer, space, onClose, call, kept }: {
     computer?: Computer;
     space: Reached;
     onClose(): void;
     call: Call;
+    /** Whether it's one the app keeps (a cloud computer), not the person's machine. */
+    kept?: boolean;
   },
 ): ReactNode {
   const [ask, setAsk] = useState(false);
@@ -385,7 +441,7 @@ function ShareDialog(
       }
     >
       <div className="desks-dialog">
-        <ShareWarning space={space} name={name} />
+        <ShareWarning space={space} name={name} kept={kept} />
         <Checkbox
           checked={ask}
           onChange={(event) => setAsk(event.target.checked)}

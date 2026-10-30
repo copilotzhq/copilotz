@@ -3,9 +3,12 @@
  * watcher, a long build), everyone's, the agents' too (`jobs.list` with
  * `all`). Each says whose it is, whether it runs or how it ended, and since
  * when; its logs open under it, the end of them, kept current while it
- * runs; and it stops (an agent's, as that agent). A job of your own starts
- * from the top. The list is asked for again every few seconds, more often
- * while it shows, and never while the page is hidden.
+ * runs; and it stops (an agent's, as that agent). One kept running says so.
+ * A job that serves a port shows it, with its preview and what else it can
+ * become (serve.tsx); the computer's previews come first. A job of your own
+ * starts from the top: its command, a name, the port it serves, and whether
+ * to keep it running. The list is asked for again every few seconds, more
+ * often while it shows, and never while the page is hidden.
  */
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
@@ -13,6 +16,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   CodeBlock,
   EmptyState,
   Icon,
@@ -26,6 +30,8 @@ import {
 import type { Job, JobsLogs } from "../../shared/workloads.ts";
 import { listOf } from "./calls.ts";
 import { type Named, whose, type Work } from "./names.ts";
+import { jobToStart, serves } from "./previews.ts";
+import { JobServe, Previews, type Served } from "./serve.tsx";
 
 /** How often the list is asked for: while it shows, and while it doesn't. */
 const SHOWN_MS = 2_500;
@@ -36,8 +42,11 @@ const TAIL = 64 * 1024;
 
 export type Jobs = { list?: Job[]; error?: string; refresh(): Promise<void> };
 
-/** The jobs in the folder, kept current while the computer is online. */
-export function useJobs(work: Work, online: boolean, shown: boolean): Jobs {
+/**
+ * The jobs in the folder, kept current while the computer is online; `quiet`
+ * (a computer that sleeps, where asking is using it), only while they show.
+ */
+export function useJobs(work: Work, online: boolean, shown: boolean, quiet = false): Jobs {
   const [list, setList] = useState<Job[]>();
   const [error, setError] = useState<string>();
   // An answer for a folder no longer shown is dropped.
@@ -58,11 +67,12 @@ export function useJobs(work: Work, online: boolean, shown: boolean): Jobs {
   useEffect(() => {
     if (!online) return;
     void refresh();
+    if (quiet && !shown) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, shown ? SHOWN_MS : HIDDEN_MS);
     return () => clearInterval(timer);
-  }, [refresh, online, shown]);
+  }, [refresh, online, shown, quiet]);
   return { list, error, refresh };
 }
 
@@ -70,13 +80,15 @@ const newest = (a: Job, b: Job) =>
   (b.endedAt ?? b.startedAt).localeCompare(a.endedAt ?? a.startedAt);
 
 export function JobsTab(
-  { work, jobs, me, agents, active }: {
+  { work, jobs, me, agents, active, served }: {
     work: Work;
     jobs: Jobs;
     me?: string;
     /** Agents as they're named, for whose each job is. */
     agents?: Record<string, Named>;
     active: boolean;
+    /** Where they run, for what they serve: previews, and what else a server can become. */
+    served?: Served;
   },
 ): ReactNode {
   const [open, setOpen] = useState<string>();
@@ -92,6 +104,7 @@ export function JobsTab(
           setOpen(job.id);
         }}
       />
+      {served ? <Previews served={served} jobs={list ?? []} me={me} /> : null}
       {jobs.error && list === undefined
         ? (
           <Notice tone="destructive" role="alert" title="Couldn't list the jobs">
@@ -134,6 +147,7 @@ export function JobsTab(
                           toggle={() => setOpen(open === job.id ? undefined : job.id)}
                           stopped={jobs.refresh}
                           active={active}
+                          {...(served ? { served } : {})}
                         />
                       ))}
                     </ul>
@@ -146,17 +160,24 @@ export function JobsTab(
         : (
           <EmptyState icon="activity" title="No jobs here yet" className="jobs-empty">
             Jobs are commands that keep running: a dev server, a watcher, a long build. Start one
-            above, or ask an agent to; theirs show here too.
+            above, or ask an agent to; theirs show here too. A job that serves a port gets a
+            preview: an address to open what it serves.
           </EmptyState>
         )}
     </div>
   );
 }
 
-/** Starting a job of your own: its command, and a name if you like. */
+/**
+ * Starting a job of your own: its command, a name if you like, the port it
+ * serves (for its preview), and whether to keep it running (started again
+ * whenever the computer starts: a cloud computer's wake, say).
+ */
 function Start({ work, started }: { work: Work; started(job: Job): Promise<void> }): ReactNode {
   const [command, setCommand] = useState("");
   const [name, setName] = useState("");
+  const [port, setPort] = useState("");
+  const [keep, setKeep] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const id = useId();
@@ -167,15 +188,16 @@ function Start({ work, started }: { work: Work; started(job: Job): Promise<void>
       onSubmit={async (event) => {
         event.preventDefault();
         if (!command.trim() || busy) return;
+        const input = jobToStart({ command, name, port, keep });
+        if ("error" in input) return setError(input.error);
         setBusy(true);
         setError(undefined);
         try {
-          const job = await work<Job>("jobs.start", {
-            command: command.trim(),
-            ...(name.trim() ? { name: name.trim() } : {}),
-          });
+          const job = await work<Job>("jobs.start", input);
           setCommand("");
           setName("");
+          setPort("");
+          setKeep(false);
           await started(job);
         } catch (e) {
           setError(message(e));
@@ -206,16 +228,42 @@ function Start({ work, started }: { work: Work; started(job: Job): Promise<void>
         autoComplete="off"
         onChange={(event) => setName(event.target.value)}
       />
+      <label className="copilotz-sr" htmlFor={`${id}-port`}>
+        The port it serves (if it's a server)
+      </label>
+      <Input
+        id={`${id}-port`}
+        className="jobs-port"
+        value={port}
+        placeholder="Port"
+        inputMode="numeric"
+        autoComplete="off"
+        title="The port it serves, if it's a server: for its preview"
+        onChange={(event) => setPort(event.target.value.replace(/\D/g, "").slice(0, 5))}
+      />
       <Button type="submit" variant="primary" icon="play" loading={busy} disabled={!command.trim()}>
         Start
       </Button>
+      <Checkbox
+        className="jobs-keep"
+        checked={keep}
+        onChange={(event) => setKeep(event.target.checked)}
+        label={
+          <>
+            Keep running{" "}
+            <span className="jobs-keep-hint">
+              · started again whenever the computer starts
+            </span>
+          </>
+        }
+      />
       {error ? <p role="alert" className="jobs-error">{error}</p> : null}
     </form>
   );
 }
 
 function JobRow(
-  { job, me, agents, work, open, toggle, stopped, active }: {
+  { job, me, agents, work, open, toggle, stopped, active, served }: {
     job: Job;
     me?: string;
     agents?: Record<string, Named>;
@@ -224,6 +272,7 @@ function JobRow(
     toggle(): void;
     stopped(): Promise<void>;
     active: boolean;
+    served?: Served;
   },
 ): ReactNode {
   const [stopping, setStopping] = useState(false);
@@ -253,6 +302,17 @@ function JobRow(
               : failed
               ? <Badge tone="destructive">exit {job.exitCode}</Badge>
               : <Badge>done</Badge>}
+            {job.keep
+              ? (
+                <Badge
+                  tone="primary"
+                  variant="outline"
+                  title="Kept running: started again whenever the computer starts"
+                >
+                  kept
+                </Badge>
+              )
+              : null}
           </p>
           {title !== job.command ? <code className="job-command">{job.command}</code> : null}
           <p className="job-meta">
@@ -316,6 +376,7 @@ function JobRow(
         </div>
       </div>
       {error ? <p role="alert" className="jobs-error job-error">{error}</p> : null}
+      {served && serves(job) ? <JobServe job={job} title={title} served={served} /> : null}
       {open
         ? (
           <div id={`${id}-logs`} className="job-logs">

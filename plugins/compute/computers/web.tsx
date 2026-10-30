@@ -18,7 +18,17 @@
  * `spaceTabs` and the web shell's `palette` (moving one of yours to another
  * space, through spaces' picker, as each computer's menu does), and reads
  * the spaces the person reaches (`space.reached`). What agents ask shows
- * once their turn is over (`conversation`'s `working` hint).
+ * once their turn is over (`conversation`'s `working` hint). A job that
+ * serves a port gets a preview (`computer.preview`), opened in a tab, its
+ * link copied, for the space's members or anyone with the link; the
+ * computer's previews list over its jobs.
+ *
+ * Other front ends add to it through two resources (see
+ * views/web/kinds.ts): `computerKinds`, kinds of computer beyond people's
+ * own machines (cloud computers: making one is a choice where people add a
+ * computer; their state shows wherever they do; asleep, they wake), and
+ * `jobActions`, what else a job that serves a port can become (published
+ * as an app).
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { asksView } from "./views/web/asks.tsx";

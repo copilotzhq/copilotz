@@ -38,11 +38,13 @@ export const shellView = (
   const open = kind ? ctx.show(kind, id ? { _id: id } : {}, asked) : ctx.show("home", {}, asked);
   const panel = ctx.resources.panel as Panel | null | undefined;
   const viewer = ctx.viewer?.name ?? "";
+  const label = ctx.viewer?.label;
   return (
     <Frame
       path={where.path + (where.space ?? "")}
       brand={app}
       viewer={viewer}
+      {...(label ? { label } : {})}
       palette={{
         sources: sourcesOf(ctx.resources.palette),
         hints: {

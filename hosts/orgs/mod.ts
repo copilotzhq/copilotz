@@ -19,7 +19,9 @@
  * - `POST /signout`: out of the directory and every org.
  * - `/o/<org>/…`: that org, by its address, for what reaches it without a
  *   browser's session: its API (a key), its webhooks (signed), its
- *   computers' socket and downloads. The org's own handlers say who may.
+ *   computers' downloads. The org's own handlers say who may.
+ * - `/o/<org>/oxian`: that org's socket, for its pages and its computers
+ *   (a ticket or a computer's credentials say who); no cookie needed.
  * - Staff's console: `GET /console/orgs`; `POST /console/orgs/<id>`
  *   `{ suspended?, name? }`; `POST …/<id>/move` `{ schema }` (its rows to
  *   another schema); `GET …/<id>/export` (its rows, as SQL); `POST
@@ -30,10 +32,17 @@
  * its tenant), its plugins with the host's `here` (the org's name, and how
  * it reaches the directory), and `admit` for its browsers.
  */
-import type { Actor, Plugins, Runtime } from "../../runtime/mod.ts";
+import type { Actor, Plugins, Runtime, Transport } from "../../runtime/mod.ts";
 import { definePlugin } from "../../runtime/mod.ts";
 import { createTickets, type Tickets } from "../web/tickets.ts";
-import { type Code, cookieOf, setCookie, webServer, type WebServerOptions } from "../web/server.ts";
+import {
+  type Code,
+  cookieOf,
+  setCookie,
+  socket,
+  webServer,
+  type WebServerOptions,
+} from "../web/server.ts";
 
 /** An org as the host opens it. */
 export type OrgInfo = {
@@ -48,10 +57,18 @@ export type OrgsHostOptions =
   & {
     /** The directory's runtime: identity, a sign-in method, and the directory plugin. */
     directory: Runtime;
-    /** Opens an org: the app's runtime for it, with these plugins too and this `admit`. */
+    /**
+     * Opens an org: the app's runtime for it, with these plugins too, this
+     * `admit`, and these `transports` (its socket, at `/oxian` and at its
+     * address, `/o/<org>/oxian`).
+     */
     open(
       org: OrgInfo,
-      given: { plugins: Plugins; admit: (ticket: string) => Actor | undefined },
+      given: {
+        plugins: Plugins;
+        admit: (ticket: string) => Actor | undefined;
+        transports: Transport[];
+      },
     ): Promise<Runtime>;
     /** The socket upgrade for an org's runtime (its transport for browsers). */
     upgrade(runtime: Runtime, request: Request): Response | Promise<Response>;
@@ -84,6 +101,12 @@ const MONTH = 30 * 86_400;
 const sessionOf = (org: string) => `s_${org}`;
 /** Where an org is reached by its address: `/o/<org>`. */
 const baseOf = (org: string) => `/o/${encodeURIComponent(org)}`;
+/**
+ * Where a page's or a computer's socket reaches an org: under its address
+ * (`/o/<org>/oxian`), which names it without cookies (Safari sends none with
+ * a socket). Its runtime takes sockets there and at `/oxian` (`given.transports`).
+ */
+const socketOf = (org: string) => `${baseOf(org)}${socket.config.path}`;
 /** The org a path addresses (`/o/<org>/…`), and the path within it. */
 const addressed = (path: string) => {
   const found = /^\/o\/([^/]+)(\/.*)?$/.exec(path);
@@ -157,7 +180,11 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     if (!cell) {
       cell = (async () => {
         const tickets = createTickets();
-        const runtime = await options.open(org, { plugins: [here(org)], admit: tickets.admit });
+        const runtime = await options.open(org, {
+          plugins: [here(org)],
+          admit: tickets.admit,
+          transports: [socket, { type: "websocket", config: { path: socketOf(org.id) } }],
+        });
         const serve = webServer({
           runtime,
           tickets,
@@ -171,6 +198,7 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
           cookie: sessionOf(org.id),
           signIn: false,
           base: baseOf(org.id),
+          socket: socketOf(org.id),
         });
         const made = { org, runtime, tickets, serve, last: Date.now() };
         live.set(org.id, made);
@@ -419,6 +447,8 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
         if (org.suspended) return json({ error: "This org is suspended." }, { status: 403 });
         const cell = await cellOf(org);
         cell.last = Date.now();
+        // Its socket, as it came: its runtime takes sockets at this address too.
+        if (at.path === socket.config.path) return await options.upgrade(cell.runtime, request);
         const inner = new URL(url);
         inner.pathname = at.path;
         return await cell.serve(new Request(inner, request));
@@ -600,12 +630,12 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
      * before its socket connects; one not open yet is a retry for the client.
      */
     openRuntime(request: Request): Runtime | undefined {
-      const at = addressed(new URL(request.url).pathname);
-      const org = at?.org ?? cookieOf(request, CURRENT);
+      const named = addressed(new URL(request.url).pathname)?.org;
+      const org = named ?? cookieOf(request, CURRENT);
       const cell = org ? live.get(org) : undefined;
-      // An org addressed but closed (a computer connecting first) opens for its retry.
-      if (!cell && at) {
-        void orgInfo(at.org).then((info) => {
+      // An org named but closed (a computer connecting first) opens for its retry.
+      if (!cell && named) {
+        void orgInfo(named).then((info) => {
           if (info && !info.suspended) void cellOf(info).catch(() => {});
         }).catch(() => {});
       }

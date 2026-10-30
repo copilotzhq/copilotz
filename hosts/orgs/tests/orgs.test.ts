@@ -81,6 +81,8 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     // In Acme, her browser connects as her; she's its owner.
     const connected = await (await ana.send("POST", "/connect")).json();
     assertEquals(connected.person, "ana@example.com");
+    // What her page shows her as: her name as she signed in, not her id.
+    assertEquals(connected.name, "ana");
     const acmeRt = (await host.runtime(acme.id)) as Runtime;
     const asAna: Actor = { kind: "person", id: "ana@example.com" };
     assertEquals(await acmeRt.call("org.me", {}, { actor: asAna }), {
@@ -328,9 +330,17 @@ test("orgs: an org's address reaches it without a session; inviting an outsider 
     const probed = await host.serve(new Request(`${BASE}/o/${acme.id}/probe`, { method: "POST" }));
     assertEquals(await probed.json(), { org: acme.id });
     assertEquals((await host.serve(new Request(`${BASE}/o/nope/probe`))).status, 404);
-    // Its page says where it is, so the addresses it shows work.
+    // Its page says where it is, so the addresses it shows work, and where its socket connects.
     const page = await (await ana.send("GET", "/")).text();
     assert(page.includes(`"base":"/o/${acme.id}"`));
+    assert(page.includes(`"socket":"/o/${acme.id}/oxian"`));
+    // A socket at its address reaches it without cookies (Safari sends none with one): as a
+    // request (Deno's upgrade, given it as it came), and at once, for Node's.
+    const named = `${BASE}/o/${acme.id}/oxian`;
+    assertEquals((await host.serve(new Request(named))).status, 299);
+    assertEquals(host.openRuntime(new Request(named)), await host.runtime(acme.id));
+    assertEquals((await host.serve(new Request(`${BASE}/o/nope/oxian`))).status, 404);
+    assertEquals((await host.serve(new Request(`${BASE}/oxian`))).status, 401);
     // Bob isn't in Acme: a space's invitation brings him to the org too, as a guest.
     const acmeRt = (await host.runtime(acme.id)) as Runtime;
     const asAna: Actor = { kind: "person", id: "ana@example.com" };

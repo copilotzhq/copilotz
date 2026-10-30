@@ -32,7 +32,7 @@ const host = orgsHost({
       store: memoryStore(),
       plugins: [...plugins, ...given.plugins],
       executors: 2,
-      transports: [socket],
+      transports: given.transports,
       admit: given.admit,
     }),
   upgrade: () => new Response("Connect again", { status: 503 }),

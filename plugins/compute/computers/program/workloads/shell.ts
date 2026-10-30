@@ -47,10 +47,17 @@ export async function findShell(
 const quote = (shell: Shell, text: string) =>
   shell.kind === "bash" ? `'${text.replaceAll("'", `'\\''`)}'` : `'${text.replaceAll("'", "''")}'`;
 
-/** PowerShell's arguments for a script: given whole, so no quoting rule of Windows' touches it. */
+/**
+ * PowerShell's arguments for a script: given whole, so no quoting rule of
+ * Windows' touches it. Its streams as text: given an encoded command, it
+ * would otherwise write stderr as CLIXML, for a PowerShell reading it.
+ */
 const encoded = (script: string) => [
   "-NoLogo",
   "-NoProfile",
+  "-NonInteractive",
+  "-OutputFormat",
+  "Text",
   "-EncodedCommand",
   Buffer.from(script, "utf16le").toString("base64"),
 ];

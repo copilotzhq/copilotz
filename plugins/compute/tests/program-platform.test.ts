@@ -53,8 +53,16 @@ test("bash on macOS and Linux; on Windows, PowerShell 7 when it's there, else 5.
 test("PowerShell gets its commands whole (encoded), never quoted by Windows' rules", () => {
   const pwsh = { kind: "powershell" as const, path: "pwsh" };
   const decode = (args: string[]) => {
-    assertEquals(args.slice(0, 3), ["-NoLogo", "-NoProfile", "-EncodedCommand"]);
-    const bytes = Uint8Array.from(atob(args[3]), (c) => c.charCodeAt(0));
+    // Its streams as text, not CLIXML.
+    assertEquals(args.slice(0, 6), [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-OutputFormat",
+      "Text",
+      "-EncodedCommand",
+    ]);
+    const bytes = Uint8Array.from(atob(args[6]), (c) => c.charCodeAt(0));
     return new TextDecoder("utf-16le").decode(bytes);
   };
   const job = decode(commandArgs(pwsh, `echo "it's" | Out-Host`));

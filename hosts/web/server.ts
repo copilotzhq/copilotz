@@ -24,6 +24,8 @@
  * - `GET /files/<id>`: a file someone sent, as the signed-in person reaches it
  *   (chat's `file.content`), with ranges for audio; `?download=1` saves it
  *   (see `files.ts`).
+ * - Plugins' own paths, their `routes` resource: a webhook, an OAuth callback,
+ *   an API, a download (see `routes.ts`).
  * - Anything else: the page, which loads the entry. Given the app's `theme`, the
  *   page carries it (its variables and the page's base), so the first paint
  *   is in it, dark included, before the code loads; the host takes over. Its
@@ -42,6 +44,7 @@ import { BASE } from "./style.ts";
 import { fontsOf, fromGoogle, plainColour, preloadsOf, themeCss } from "./theme/css.ts";
 import type { Theme } from "./theme/default.ts";
 import { HOST_ASSETS, hostFiles } from "./theme/files/mod.ts";
+import { routeServer } from "./routes.ts";
 import { ownPath } from "./theme/own-path.ts";
 import { pictureOf } from "./theme/picture.ts";
 import type { Tickets } from "./tickets.ts";
@@ -73,6 +76,7 @@ export type WebServerOptions = {
 };
 
 export type { Asset };
+export { type HttpAnswer, type HttpRequest, httpRequest, type Route, VISITOR } from "./routes.ts";
 
 /**
  * Bundled code: its files by name (`deno bundle --code-splitting --outdir`'s),
@@ -209,6 +213,7 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
     return secret ? await runtime.query<Actor | null>("credential.actor", { secret }) : null;
   };
   const files = fileServer(runtime, whom);
+  const routes = routeServer(runtime, whom);
 
   const signedIn = (url: URL, session: string, person: string) =>
     json({ person }, {
@@ -216,7 +221,7 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
     });
 
   return async (request) => {
-    const asset = assets(request) ?? files(request);
+    const asset = assets(request) ?? files(request) ?? routes(request);
     if (asset) return await asset;
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;

@@ -1,7 +1,7 @@
 # Orgs, the directory, and running many of them
 
-Agreed 2026-10-29/30. How an app on Copilotz serves many organisations: what an org is, where
-its data lives, how people sign in and move between orgs, who administers what, and how it runs.
+Agreed 2026-10-29/30. How an app on Copilotz serves many organisations: what an org is, where its
+data lives, how people sign in and move between orgs, who administers what, and how it runs.
 
 ## An org is a tenant
 
@@ -34,11 +34,12 @@ its data lives, how people sign in and move between orgs, who administers what, 
   old rows.
 - **Exporting:**
   - raw rows by tenant, in one consistent snapshot, for moving and restoring;
-  - a JSON export for the org's admins (documents by collection, the event log, files), read
-    through the owner so the rules decide.
+  - a JSON export for the org's admins (documents by collection, the event log, files), read through
+    the owner so the rules decide.
 - **Deleting an org** removes its rows in batches in the background.
-- **Connections:** one pool per process, shared by every org it hosts. An open org's writer holds a
-  connection; idle orgs hold none.
+- **Connections:** one pool per process (`postgresPool`), shared by every org it hosts, in two
+  lanes: commits and reads. A store takes a connection for a statement, or a transaction while it is
+  open, and gives it back, so an idle org holds none and a busy one only while it commits.
 - SQLite and memory stores stay one org per store.
 
 ## The directory: routing only
@@ -51,8 +52,7 @@ A small runtime of its own, holding only what routing needs:
 - **invitations to orgs**, by verified email, pending until accepted;
 - **where each org lives** (its placement) and a small summary it reports (members, size, last
   active, daily usage) for the platform console;
-- **verified domains:** an org that verified `acme.com` may turn on "anyone at @acme.com can
-  join";
+- **verified domains:** an org that verified `acme.com` may turn on "anyone at @acme.com can join";
 - **platform staff.**
 
 People inside an org are known by their verified email, the same in every org, so the directory's
@@ -66,34 +66,33 @@ membership and the org's own people line up without a mapping.
 - **Between processes,** that hand-over is a one-time ticket. In one process it's a call.
 - **The org switcher** lists the account's orgs, and creates new ones. Entering another org swaps
   the session the browser holds; each org's session is kept, so switching back is instant.
-- **Addressing:** one host serves every org, which is chosen by session (the switcher), so the
-  app works on a single address such as a Cloud Run URL. A subdomain or custom domain per org can
-  be added later, as another way to pick the org.
+- **Addressing:** one host serves every org, which is chosen by session (the switcher), so the app
+  works on a single address such as a Cloud Run URL. A subdomain or custom domain per org can be
+  added later, as another way to pick the org.
 
 ## Roles
 
 - **In an org:** owner, admin, member, guest.
-  - **Owners and admins have owner access to everything in the org,** as in Google Workspace:
-    every space (Personal spaces included), conversation, agent, computer and memory. That lets them
+  - **Owners and admins have owner access to everything in the org,** as in Google Workspace: every
+    space (Personal spaces included), conversation, agent, computer and memory. That lets them
     manage what someone leaves behind and hand it over. Members are told so in the app.
   - Members reach the spaces they're members of; guests only those they were invited to.
-- **Platform staff,** for now, have the same access in every org. Everything they do is recorded
-  as theirs in the org's event log and shows in its activity.
+- **Platform staff,** for now, have the same access in every org. Everything they do is recorded as
+  theirs in the org's event log and shows in its activity.
 - **Agents** are unchanged. They act for whoever asked, narrowed to the conversation's space, even
   when that person is an admin.
 
 ## A job's authority is the owner's to give
 
-The owner records each job's actor when it dispatches it, and checks every op the job sends
-against it. An op acts as that actor; trusted code that acts for another (`ctx.as()`) keeps whose
-job it was (`via`), and only then passes. An executor admitted as bound (`bound:<org>`, an org's
-own workers) acts only as its jobs. This is in place, and it's what makes org-run workers
-possible:
+The owner records each job's actor when it dispatches it, and checks every op the job sends against
+it. An op acts as that actor; trusted code that acts for another (`ctx.as()`) keeps whose job it was
+(`via`), and only then passes. An executor admitted as bound (`bound:<org>`, an org's own workers)
+acts only as its jobs. This is in place, and it's what makes org-run workers possible:
 
 - they're enrolled like computers, with a revocable credential for one org;
 - they're sent only that org's own plugins' work;
-- they reach models, secrets and connected accounts only through Actions that run on the
-  platform's executors.
+- they reach models, secrets and connected accounts only through Actions that run on the platform's
+  executors.
 
 ## Many orgs per process
 
@@ -118,17 +117,17 @@ possible:
   - domains and joining;
   - computers and workers;
   - export and deletion.
-- **The platform console** (staff) lists orgs with their summaries, placement and writer state; looks
-  people up; and runs operations on an org (move, export, suspend, delete, restart its writer). Each
-  operation is an Action, so it's on the record. The console reads no org's content.
+- **The platform console** (staff) lists orgs with their summaries, placement and writer state;
+  looks people up; and runs operations on an org (move, export, suspend, delete, restart its
+  writer). Each operation is an Action, so it's on the record. The console reads no org's content.
 - **Health** comes from the metrics the runtime exports; alerts belong to the monitoring system.
 
 ## Operations
 
 - **Deploys:** drain the old revision before the new one takes the writers, as before. Each org's
   epoch fences any overlap.
-- **Backups:** the database's own backups cover every org. Restoring one org means restoring a backup
-  aside and copying that org's rows back.
+- **Backups:** the database's own backups cover every org. Restoring one org means restoring a
+  backup aside and copying that org's rows back.
 - Every log line and metric carries the org.
 - **Quotas per org** (writes, model spend, workers) come before the broad release, with
   backpressure, not hard failures.
@@ -137,6 +136,7 @@ possible:
 
 The computer program is a single executable for macOS, Linux and Windows. The app serves it with
 install commands that carry the enrollment code:
+
 - it starts at login and updates itself, checking each download's hash;
 - signed and notarized downloads need the signing accounts, before the broad release;
 - the Linux build is also what a cloud computer will run.

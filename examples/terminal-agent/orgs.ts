@@ -4,7 +4,9 @@
  * org is a runtime of its own, opened when first used.
  *
  *   deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/orgs.ts [--port 8800]
- *     [--postgres=postgres://…]   every org a tenant of one shared schema (else in memory)
+ *     [--postgres=postgres://…]   every org a tenant of one shared schema, on one
+ *                                 pool of connections (else in memory); staff
+ *                                 can then move, export and delete orgs
  *     STAFF=you@example.com       platform staff, who go into any org
  *
  * Sign in by name on this machine (`ana@example.com`), or with Google when
@@ -14,12 +16,18 @@ import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
 import { handler } from "@oxian/oxian-js/adapters/deno";
 import { createRuntime, definePlugin, type Store } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
-import { postgresStore } from "../../stores/sql/postgres/mod.ts";
+import {
+  copyTenant,
+  dropTenant,
+  exportTenant,
+  postgresPool,
+  postgresStore,
+} from "../../stores/sql/postgres/mod.ts";
 import { googleSignIn, identity } from "../../plugins/access/mod.ts";
 import { directory } from "../../plugins/access/directory/mod.ts";
 import { socket } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
-import { orgsHost } from "../../hosts/orgs/mod.ts";
+import { type OrgInfo, orgsHost } from "../../hosts/orgs/mod.ts";
 import { plugins } from "./app.ts";
 
 const args = parseArgs(Deno.args, { string: ["port", "postgres"] });
@@ -29,15 +37,25 @@ const google = clientId
   ? [googleSignIn, definePlugin({ name: "google", resources: { google: { clientId } } })]
   : [];
 
-/** A store: an org's tenant of the shared schema, or memory. */
+/** Every org's connections: one pool, however many orgs are open. */
+const pool = args.postgres ? await postgresPool({ url: args.postgres }) : undefined;
+
+/** A store: an org's tenant of its schema, or memory. */
 const storeOf = async (schema: string, tenant?: string): Promise<Store> =>
-  args.postgres
-    ? await postgresStore(
-      { url: args.postgres, schema, ...(tenant ? { tenant } : {}) } as Parameters<
-        typeof postgresStore
-      >[0],
-    )
-    : memoryStore();
+  pool ? await postgresStore({ pool, schema, ...(tenant ? { tenant } : {}) }) : memoryStore();
+
+/** What staff may do to an org's rows, where they are in Postgres. */
+const operations = pool && {
+  async move(org: OrgInfo, to: OrgInfo["placement"]) {
+    const from = { pool, schema: org.placement.schema };
+    await copyTenant({ from, to: { pool, schema: to.schema }, tenant: org.id });
+    await dropTenant({ ...from, tenant: org.id });
+  },
+  export: (org: OrgInfo) => exportTenant({ pool, schema: org.placement.schema, tenant: org.id }),
+  async drop(org: OrgInfo) {
+    await dropTenant({ pool, schema: org.placement.schema, tenant: org.id });
+  },
+};
 
 const dir = await createRuntime({
   store: await storeOf("directory"),
@@ -72,6 +90,7 @@ const host = orgsHost({
       admit: given.admit,
     }),
   upgrade: (runtime, request) => handler(runtime.hypervisor)(request),
+  ...(operations ? { operations } : {}),
   code: await bundle(),
   title: "Copilotz",
   theme: themeOf([]),

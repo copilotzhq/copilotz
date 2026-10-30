@@ -12,7 +12,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { Buffer } from "node:buffer";
 import process from "node:process";
 import { ownFolder } from "./state.ts";
@@ -89,8 +89,9 @@ export function serviceOf(options: ServiceOptions): Service {
   const env = options.env ?? process.env;
   const home = options.home ?? homedir();
   if (platform === "darwin") {
-    const plist = join(home, "Library", "LaunchAgents", `${LABEL}.plist`);
-    const log = join(home, "Library", "Logs", "Copilotz", "computer.log");
+    // Its own system's paths, wherever it's planned (tests plan every system's).
+    const plist = posix.join(home, "Library", "LaunchAgents", `${LABEL}.plist`);
+    const log = posix.join(home, "Library", "Logs", "Copilotz", "computer.log");
     // Its person's session (planned elsewhere, as tests do, there's no uid: 0 stands in).
     const domain = `gui/${process.getuid?.() ?? 0}`;
     return {
@@ -165,7 +166,12 @@ ${
       logs: log,
     };
   }
-  const unit = join(env.XDG_CONFIG_HOME || join(home, ".config"), "systemd", "user", UNIT);
+  const unit = posix.join(
+    env.XDG_CONFIG_HOME || posix.join(home, ".config"),
+    "systemd",
+    "user",
+    UNIT,
+  );
   return {
     kind: "systemd",
     files: [{

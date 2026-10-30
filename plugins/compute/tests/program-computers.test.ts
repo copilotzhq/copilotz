@@ -6,6 +6,7 @@
  * agent hears, and her panel fails saying why; when it stops, it's offline.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
@@ -112,7 +113,9 @@ test("the program connects to the plugin; agents work on it once their person sa
     const ran = await tool("terminal", { stdin }) as { stdout: string; exitCode: number };
     assertEquals(ran.exitCode, 0);
     assert(/[\\/]personal$/.test(ran.stdout.trim()), ran.stdout);
-    assertEquals(await readFile(join(root, "personal", "made.txt"), "utf8"), "hi\n");
+    const made = join(root, "personal", "made.txt");
+    assert(existsSync(made), `${made} isn't there: ${JSON.stringify(ran)}`);
+    assertEquals(await readFile(made, "utf8"), "hi\n");
 
     // Writes, always: then they just happen.
     await tool("write_file", { path: "notes/a.md", content: "# A" });

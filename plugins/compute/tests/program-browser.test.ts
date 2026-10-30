@@ -155,7 +155,7 @@ test({
         assert(existsSync(join(profileA, "Default")), "Chrome keeps its profile there");
         for (const profile of [profileA, profileB]) {
           const lines = chromeOn(profile);
-          assertEquals(lines.length, 1, lines.join("\n"));
+          assertEquals(lines.length, 1, `${profile}:\n${running("--user-data-dir").join("\n")}`);
           assertStringIncludes(lines[0], "--mute-audio");
           assertStringIncludes(lines[0], "--headless");
           assert(!lines[0].includes("--remote-debugging-port"), "no debugging port");
@@ -258,7 +258,11 @@ test({
           { action: "evaluate", expression: "localStorage.setItem('kept', 'yes')" },
         ]);
         assert(signedIn.success, JSON.stringify(signedIn));
-        assertEquals(chromeOn(profile).length, 1);
+        assertEquals(
+          chromeOn(profile).length,
+          1,
+          `${profile}:\n${running("--user-data-dir").join("\n")}`,
+        );
 
         await computer.stop();
         assertEquals(chromeOn(profile), []);

@@ -4,6 +4,7 @@
  */
 import { assert, assertEquals } from "@std/assert";
 import { existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import process from "node:process";
 import { join } from "node:path";
 import { tempDir, test } from "../../../testing/mod.ts";
 import { type Entry, type FilesRead, type Scope, WORK } from "../computers/shared/workloads.ts";
@@ -65,7 +66,10 @@ test("files are written, listed, read and edited in the space's folder", async (
       new: "1",
     });
     assertEquals(edited, { path: "run.sh", size: 25 });
-    assertEquals(statSync(join(root, "alpha", "run.sh")).mode & 0o777, 0o755);
+    // It keeps its mode (POSIX's: Windows has none such).
+    if (process.platform !== "win32") {
+      assertEquals(statSync(join(root, "alpha", "run.sh")).mode & 0o777, 0o755);
+    }
     const twice = await work<Failed>(WORK.filesEdit, {
       scope: scope(),
       path: "run.sh",

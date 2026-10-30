@@ -12,7 +12,7 @@ import { delimiter, join } from "node:path";
 import process from "node:process";
 import { tempDir, test } from "../../../testing/mod.ts";
 import { createSpaces } from "../computers/program/workloads/spaces.ts";
-import { commandArgs, type Shell } from "../computers/program/workloads/shell.ts";
+import { commandArgs, newlines, type Shell } from "../computers/program/workloads/shell.ts";
 import { createShells } from "../computers/program/workloads/terminal.ts";
 import type { Scope, TerminalResult } from "../computers/shared/workloads.ts";
 
@@ -125,9 +125,11 @@ test({
       cwd: tempDir(),
       stdio: ["ignore", "pipe", "pipe"],
     });
+    // Its lines as the program reads them (Windows' end "\r\n").
     let out = "";
-    child.stdout!.setEncoding("utf8").on("data", (text: string) => out += text);
+    const lines = newlines(shell);
+    child.stdout!.setEncoding("utf8").on("data", (text: string) => out += lines.text(text));
     const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
-    assertEquals([out, code], ["it's 2\n", 5]);
+    assertEquals([out + lines.end(), code], ["it's 2\n", 5]);
   },
 });

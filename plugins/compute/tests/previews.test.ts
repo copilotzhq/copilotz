@@ -100,7 +100,7 @@ function serving() {
                 ["connection", "keep-alive"],
                 ["transfer-encoding", "chunked"],
                 ["set-cookie", "a=1; Path=/"],
-                ["set-cookie", "b=2; Path=/"],
+                ["set-cookie", "b=2; Domain=copilotz.app; Path=/"],
               ],
             }) + "\n",
           ));
@@ -320,6 +320,7 @@ test("an agent previews its job; a member gets in through the app, and it stream
     assertEquals(page.status, 200);
     assertEquals(page.headers.get("x-echo"), "yes");
     assertEquals(page.headers.get("connection"), null);
+    // Its cookies are its host's alone: no Domain, so no other preview or app gets them.
     assertEquals(page.headers.getSetCookie(), ["a=1; Path=/", "b=2; Path=/"]);
     const echoed = await page.json();
     assertEquals([echoed.method, echoed.path, echoed.port, echoed.body], [

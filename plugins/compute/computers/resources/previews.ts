@@ -104,10 +104,17 @@ const configOf = (runtime: Runtime) => {
   return config;
 };
 
-/** A cookie a request carries, by name. */
-const cookieOf = (request: Request, name: string) =>
-  request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${name}=`))
-    ?.slice(name.length + 1);
+/** Every value of a cookie a request carries, by name (another host may have set one too). */
+const cookiesOf = (request: Request, name: string) =>
+  (request.headers.get("cookie") ?? "").split(/;\s*/).filter((c) => c.startsWith(`${name}=`))
+    .map((c) => c.slice(name.length + 1));
+
+/**
+ * A cookie the computer's server sets, for its preview's host alone: its
+ * `Domain` goes, so no preview sets cookies on the domain's other hosts (other
+ * previews, apps).
+ */
+const hostOnly = (cookie: string) => cookie.replace(/;\s*domain=[^;]*/gi, "");
 
 /**
  * `to` as a path on this host (`/a?b`), as browsers would read it; undefined
@@ -328,7 +335,8 @@ async function forward(
   const headers = new Headers();
   for (const [name, value] of said.headers ?? []) {
     const lower = name.toLowerCase();
-    if (!HOP.has(lower) && lower !== "content-length") headers.append(name, value);
+    if (HOP.has(lower) || lower === "content-length") continue;
+    headers.append(name, lower === "set-cookie" ? hostOnly(value) : value);
   }
   // Answers that have no body, by their status or the method, send none.
   const bodiless = request.method === "HEAD" || [101, 103, 204, 205, 304].includes(said.status);
@@ -357,7 +365,10 @@ async function servePreview(request: Request, served: Served): Promise<Response>
     );
   }
   if (preview.visibility !== "link") {
-    const allowed = await verify(settings.key, cookieOf(request, COOKIE), "cookie", host);
+    let allowed = false;
+    for (const cookie of cookiesOf(request, COOKIE)) {
+      if (await verify(settings.key, cookie, "cookie", host)) allowed = true;
+    }
     if (!allowed) {
       if (!settings.app) {
         return text(500, "This app doesn't say where people sign in (previews.app).");

@@ -445,6 +445,28 @@ test("who gets in: members, or anyone with a link one; and only to paths on the 
       { actor: bob },
     );
     assertEquals(api.previews.find((p) => p._id === label)?.port, 8080);
+    // A space's previews, as its members' pages read them, say their addresses.
+    const here = await rt.query<{ _id: string; url?: string }[]>("preview.here", { in: launch }, {
+      actor: bob,
+    });
+    assertEquals(
+      here.find((p) => p._id === label)?.url,
+      open.replace(/\/\/[^.]+\./, `//${label}.`),
+    );
+    // A desk of the space, said: the preview is made there; one not there isn't.
+    const [chosen] = await rt.query<{ _id: string }[]>("desk.here", { in: launch }, {
+      actor: bob,
+    });
+    const onDesk = await rt.call<{ label: string }>("computer.preview", {
+      in: launch,
+      desk: chosen._id,
+      port: 4001,
+    }, { actor: bob });
+    assert(onDesk.label.endsWith("-preview"));
+    const elsewhere = await rt.call("computer.preview", { in: launch, desk: "nope", port: 1 }, {
+      actor: bob,
+    }).then(() => "made", (error) => (error as { code?: string }).code);
+    assertEquals(elsewhere, "not_found");
     assertStringIncludes(await tool({ job: "watch" }), "says no port");
     assertStringIncludes(await tool({}), "Which port?");
     assertStringIncludes(await tool({ job: "nope" }), 'no job "nope"');

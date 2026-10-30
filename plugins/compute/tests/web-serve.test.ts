@@ -10,6 +10,7 @@ import { assert, assertEquals } from "@std/assert";
 import type { Preview } from "../computers/collections/preview.ts";
 import { addressOf, asked, publishOf, reach, sentence } from "../computers/views/web/asked.ts";
 import {
+  blockedBy,
   jobActionsOf,
   kindByComputer,
   kindsOf,
@@ -17,12 +18,10 @@ import {
   titled,
 } from "../computers/views/web/kinds.ts";
 import {
-  domainOf,
   jobToStart,
   portsOf,
   previewOfJob,
   previewsAt,
-  previewUrl,
   serves,
   shown,
 } from "../computers/views/web/previews.ts";
@@ -51,6 +50,30 @@ import {
 } from "../apps/views/web/apps.ts";
 import type { AppDoc } from "../apps/collections/app.ts";
 import { test } from "../../../testing/mod.ts";
+
+test("a kind that can't be made now says why, from its available query; otherwise it can", () => {
+  const kind = {
+    title: "Cloud computer",
+    mine: "cloudComputer.mine",
+    view: "cloud.computer",
+    add: {
+      view: "cloud.new",
+      title: "Use a cloud computer",
+      description: "…",
+      available: "cloudComputer.sizes",
+      unavailable: { admins: "Only admins.", default: "Not now." },
+    },
+  };
+  assertEquals(blockedBy(kind, { create: false, why: "admins" }), "Only admins.");
+  assertEquals(blockedBy(kind, { create: false, why: "budget" }), "Not now.");
+  assertEquals(blockedBy(kind, { create: true }), undefined);
+  // Still loading, or an app that doesn't say: it can be picked.
+  assertEquals(blockedBy(kind, undefined), undefined);
+  assertEquals(
+    blockedBy({ ...kind, add: { ...kind.add, available: undefined } }, { create: false }),
+    undefined,
+  );
+});
 
 test("kinds of computer: in their order, complete ones only, and which computers are of one", () => {
   const kinds = kindsOf({
@@ -90,11 +113,6 @@ test("what a job serves, and its preview's address", () => {
   assertEquals(serves({ running: true, ports: [8080] }), true);
   assertEquals(serves({ running: false, port: 8080 }), false);
   assertEquals(serves({ running: true }), false);
-  assertEquals(previewUrl("copilotz.app", "abc-preview"), "https://abc-preview.copilotz.app/");
-  assertEquals(previewUrl("localhost:8797", "abc-preview"), "http://abc-preview.localhost:8797/");
-  assertEquals(domainOf("https://abc-preview.copilotz.app/", "abc-preview"), "copilotz.app");
-  assertEquals(domainOf("https://elsewhere.app/", "abc-preview"), undefined);
-  assertEquals(domainOf("not a url", "x"), undefined);
   assertEquals(shown("https://abc-preview.copilotz.app/"), "abc-preview.copilotz.app");
   const p = (over: Partial<Preview>): Preview => ({
     _id: "p",
@@ -175,10 +193,18 @@ test("a cloud computer's sizes and prices, as people pay them", () => {
     ["standard", false, null],
   ]);
   assertEquals(sizes.disk, { gb: 10, gbMonth: 0.2, snapshotGbMonth: null });
+  // An app that says nothing: 10 GB, the usual minutes, and anyone may try.
   assertEquals(sizesOf(undefined), {
     sizes: [],
     disk: { gb: 10, gbMonth: null, snapshotGbMonth: null },
+    warmMinutes: 10,
+    viewMinutes: 120,
+    create: true,
   });
+  // What the app says of the person: may they make one, and why not.
+  const refused = sizesOf({ sizes: [], warmMinutes: 15, create: false, why: "budget" });
+  assertEquals([refused.warmMinutes, refused.create, refused.why], [15, false, "budget"]);
+  assertEquals(sizesOf({ create: false, why: "nonsense" }).why, undefined);
   assertEquals([money(0.4), money(0.0335), money(12), money(0.05)], [
     "$0.40",
     "$0.034",

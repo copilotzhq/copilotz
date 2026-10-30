@@ -30,6 +30,12 @@ const deskSchema = {
     folder: { type: "string" },
     /** What its computer asks about, when it says (see computer.ts). */
     approve: { type: "array", items: { enum: ["terminal", "jobs", "writes"] } },
+    /** What the app says of its computer, when it keeps it (see computer.ts). */
+    status: {
+      type: "object",
+      properties: { kind: { type: "string" }, state: { type: "string" }, size: { type: "string" } },
+      required: ["kind"],
+    },
     /** Who answers what an agent asks here: whom it works for, or the owner. */
     answers: { type: "string", enum: ["asker", "owner"] },
     /** The one agents use, when the space has several. */

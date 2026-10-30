@@ -13,11 +13,13 @@ import type { AppDoc } from "../collections/app.ts";
 import type { Where } from "./archive.ts";
 import { codeOf, failure } from "./errors.ts";
 import { hostOf } from "./host.ts";
-import { claimLabel } from "./label.ts";
+import { claimLabel, kept, slugOf } from "./label.ts";
 import { settingsOf } from "./settings.ts";
 
 export type PublishInput = {
   in: string;
+  /** The space's computer (its desk there), when the person says which. */
+  desk?: string;
   name: string;
   job?: string;
   port?: number;
@@ -47,6 +49,25 @@ export const detailOf = (input: Omit<PublishInput, "in">) =>
     input.port ? `on port ${input.port}` : "",
     input.path ? `from ${input.path}` : "",
   ].filter(Boolean).join(" ");
+
+/**
+ * Where an app of this name in the space will be, as its person is asked: its
+ * address, published already; else its name's, when nothing here has it (one
+ * taken in another org gets a short suffix when it's published).
+ */
+export async function addressFor(
+  ctx: Context,
+  space: string,
+  name: string,
+): Promise<string | undefined> {
+  const apps = ctx.as().db.collection<AppDoc>("app");
+  const had = await apps.findOne({ space, name: name.trim(), status: { $ne: "removed" } });
+  if (had) return had.url;
+  const label = slugOf(name);
+  if (!label || kept(label)) return undefined;
+  if (await apps.findOne({ label, status: { $ne: "removed" } })) return undefined;
+  return `https://${label}.${settingsOf(ctx).domain}`;
+}
 
 /** When the scheduler builds `app`: now, as a timer of its own (one per app). */
 const buildNow = (app: string) => ({
@@ -110,7 +131,11 @@ export async function publish(
   if (!name) throw failure("An app needs a name.", "invalid");
   // Nowhere to publish to fails now, not once it's building.
   hostOf(ctx);
-  const where = await ctx.as().call<Where>("computer.scope", { in: input.in, who: input.who });
+  const where = await ctx.as().call<Where>("computer.scope", {
+    in: input.in,
+    who: input.who,
+    ...(input.desk ? { desk: input.desk } : {}),
+  });
   const source = await sourceOf(ctx, where, input);
   const apps = ctx.as().db.collection<AppDoc>("app");
   const had = await apps.findOne({ space: input.in, name, status: { $ne: "removed" } });

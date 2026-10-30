@@ -1,30 +1,19 @@
 /**
  * `cloud.create` `{ size, in?, name? }`: a cloud computer for the person
  * asking, in a space they may work in (their Personal space unless they
- * say), shared into others as any computer is. Who may: the org's owners and
- * admins (and platform staff), its members too when the settings say
- * (`create: "members"`), and anyone in their own personal org; and only
- * while the org's cloud spend this month is under its budget (`budgetUsd`),
- * when it has one. Its record and secret are made directly (`computer.provision`),
+ * say), shared into others as any computer is. Who may, and when: see
+ * shared/may.ts (`cloud.may` asks it). Its record and secret are made directly (`computer.provision`),
  * its agents asking their person only what the settings' `approve` says
  * (nothing by default: publishing is always asked), then its disk, in the
  * first placement; its first wake formats it. Answers `{ computer }`.
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { defineAction } from "../../../../runtime/mod.ts";
 import { hostFor } from "../shared/host.ts";
 import { diskOf } from "../shared/names.ts";
-import { forbidden, invalid, runs, standingOf } from "../shared/people.ts";
+import { mayCreate } from "../shared/may.ts";
+import { forbidden, invalid } from "../shared/people.ts";
 import { recordsOf } from "../shared/records.ts";
 import { settingsOf } from "../shared/settings.ts";
-
-/** What cloud computers have cost the org this month, at their price (none without a ledger). */
-async function spent(ctx: Context, now: string): Promise<number> {
-  const totals = await ctx.as().db.collection("usage").query<{ price?: number }[]>("totals", {
-    filter: { meter: "computer", at: { $gte: `${now.slice(0, 7)}-01T00:00:00.000Z` } },
-    by: [],
-  }).catch(() => []);
-  return totals.reduce((sum, t) => sum + (t.price ?? 0), 0);
-}
 
 export const createAction = defineAction({
   description: "Makes a cloud computer, in a space (your Personal space unless you say)",
@@ -45,18 +34,17 @@ export const createAction = defineAction({
     if (!size) {
       throw invalid(`No size "${input.size}": ${Object.keys(set.sizes).join(", ") || "none"}`);
     }
-    const me = await standingOf(ctx);
-    const personal = (ctx.resources.org as { kind?: string } | undefined)?.kind === "personal";
-    const may = runs(me) || (set.create === "members" && me.role !== "guest") ||
-      (personal && me.role === "owner");
-    if (!may) throw forbidden("Only the org's owners and admins make cloud computers here.");
-    const now = new Date().toISOString();
-    if (set.budgetUsd !== undefined && await spent(ctx, now) >= set.budgetUsd) {
+    const may = await mayCreate(ctx);
+    if (may.why === "admins") {
+      throw forbidden("Only the org's owners and admins make cloud computers here.");
+    }
+    if (may.why === "budget") {
       throw Object.assign(
         new Error("This month's budget for cloud computers is spent: no more can be made."),
         { code: "budget" },
       );
     }
+    const now = new Date().toISOString();
     const placement = set.placements[0];
     if (!placement) throw invalid("The app has no placement for cloud computers.");
     const host = await hostFor(ctx, placement);

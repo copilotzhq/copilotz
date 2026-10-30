@@ -8,7 +8,7 @@
 import type { Tool } from "../../../agents/chat/contract.ts";
 import { tool } from "../../../agents/chat/contract.ts";
 import { messageOf } from "../shared/errors.ts";
-import { can, detailOf, personOf, publish as publishApp } from "../shared/publish.ts";
+import { addressFor, can, detailOf, personOf, publish as publishApp } from "../shared/publish.ts";
 
 const publish = tool({
   description: "Publishes what one of your jobs on this space's computer serves as an app " +
@@ -40,11 +40,14 @@ const publish = tool({
       return "This conversation isn't in a space, so there's no computer to publish from.";
     }
     if (!await can(ctx, thread.in, "write")) return "You can't publish from this space.";
+    // Its person reads where it'll be: "wants to publish Shop at https://shop.copilotz.app".
+    const address = await addressFor(ctx, thread.in, input.name).catch(() => undefined);
     const may = await ctx.call<true | string>("computer.allowed", {
       thread: ctx.thread,
       agent: ctx.agent,
       kind: "publish",
       detail: detailOf(input),
+      ...(address ? { preview: address } : {}),
     });
     if (may !== true) return may;
     try {

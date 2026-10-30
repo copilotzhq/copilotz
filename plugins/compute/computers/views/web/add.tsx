@@ -29,22 +29,40 @@ export function AddChoices(
         k.add
           ? [
             <li key={k.key}>
-              <Card
-                as="button"
-                interactive
-                padding="none"
-                className="add-choice"
-                onClick={() => pick(`kind:${k.key}`)}
-              >
-                <span className="add-choice-icon" data-kind={k.key}>
-                  <Icon name={k.icon ?? "server"} size={20} />
-                </span>
-                <span className="add-choice-text">
-                  <span className="add-choice-title">{k.add.title}</span>
-                  <span className="add-choice-description">{k.add.description}</span>
-                </span>
-                <Icon name="chevron" size={16} className="add-choice-go" />
-              </Card>
+              {k.blocked
+                ? (
+                  // Not now (only admins make them here, a budget spent): what it is, and why not.
+                  <Card padding="none" className="add-choice" data-blocked aria-disabled="true">
+                    <span className="add-choice-icon" data-kind={k.key}>
+                      <Icon name={k.icon ?? "server"} size={20} />
+                    </span>
+                    <span className="add-choice-text">
+                      <span className="add-choice-title">{k.add.title}</span>
+                      <span className="add-choice-description add-choice-why">
+                        <Icon name="lock" size={13} />
+                        {k.blocked}
+                      </span>
+                    </span>
+                  </Card>
+                )
+                : (
+                  <Card
+                    as="button"
+                    interactive
+                    padding="none"
+                    className="add-choice"
+                    onClick={() => pick(`kind:${k.key}`)}
+                  >
+                    <span className="add-choice-icon" data-kind={k.key}>
+                      <Icon name={k.icon ?? "server"} size={20} />
+                    </span>
+                    <span className="add-choice-text">
+                      <span className="add-choice-title">{k.add.title}</span>
+                      <span className="add-choice-description">{k.add.description}</span>
+                    </span>
+                    <Icon name="chevron" size={16} className="add-choice-go" />
+                  </Card>
+                )}
             </li>,
           ]
           : []

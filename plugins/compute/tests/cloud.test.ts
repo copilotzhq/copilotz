@@ -27,6 +27,7 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
 import { chat, type ToolContext } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
+import { join } from "../../access/tests/join.ts";
 import { usage, type UsageRecord } from "../../billing/mod.ts";
 import {
   cloud,
@@ -34,6 +35,7 @@ import {
   cloudPool,
   type Computer,
   computers,
+  type Desk,
   type PoolVm,
   remotePool,
 } from "../mod.ts";
@@ -373,7 +375,18 @@ test("pools keep their floor by the hour, plus the wakes of the last minutes, up
 
 test("who makes cloud computers, and who sees them", async () => {
   await setup(async (rt) => {
-    // Members don't, by default; owners and admins do.
+    // Members don't, by default; owners and admins do: the sizes offered say so, and why.
+    type Offer = { create: boolean; why?: string; warmMinutes: number; viewMinutes: number };
+    const offer = (actor: Actor) => rt.query<Offer>("cloudComputer.sizes", {}, { actor });
+    const forAna = await offer(ana);
+    assertEquals([forAna.create, forAna.why, forAna.warmMinutes, forAna.viewMinutes], [
+      true,
+      undefined,
+      10,
+      120,
+    ]);
+    assertEquals([(await offer(bob)).create, (await offer(bob)).why], [false, "admins"]);
+    assertEquals(await rt.call("cloud.may", {}, { actor: bob }), { create: false, why: "admins" });
     const refused = await rt.call("cloud.create", { size: "small" }, { actor: bob })
       .then(() => "made", (error) => (error as { code?: string }).code);
     assertEquals(refused, "forbidden");
@@ -416,13 +429,52 @@ test("who makes cloud computers, and who sees them", async () => {
     assertEquals([mine._id, mine.size], [computer, "standard"]);
     const [named] = await rt.query<Computer[]>("computer.mine", {}, { actor: bob });
     assertEquals(named.name, "Bob's box");
+    assertEquals(
+      (await rt.query<{ create: boolean }>("cloudComputer.sizes", {}, { actor: bob })).create,
+      true,
+    );
   }, { settings: { create: "members" } });
   await setup(async (rt) => {
     // This month's budget spent (none, here): nobody makes more, owners neither.
     const refused = await rt.call("cloud.create", { size: "small" }, { actor: ana })
       .then(() => "made", (error) => (error as { code?: string }).code);
     assertEquals(refused, "budget");
+    const offered = await rt.query<{ create: boolean; why?: string }>("cloudComputer.sizes", {}, {
+      actor: ana,
+    });
+    assertEquals([offered.create, offered.why], [false, "budget"]);
   }, { settings: { budgetUsd: 0 } });
+});
+
+test("a cloud computer shared into a space: its members see how it is, on its desk there", async () => {
+  await setup(async (rt) => {
+    const { computer } = await rt.call<{ computer: string }>("cloud.create", {
+      size: "small",
+    }, { actor: ana });
+    const { space } = await rt.call<{ space: string }>("space.create", { name: "Launch" }, {
+      actor: ana,
+    });
+    await join(rt, space, bob, "editor", ana);
+    await rt.call("computer.share", { computer, in: space }, { actor: ana });
+    await rt.idle();
+    const status = async () => {
+      const desks = await rt.query<Desk[]>("desk.here", { in: space }, { actor: bob });
+      return desks.find((d) => d.computer === computer)?.status;
+    };
+    // Bob, a member, sees how Ana's is, not only that it's offline.
+    assertEquals(await status(), { kind: "cloud", state: "asleep", size: "small" });
+    // Woken (by Bob's own work there), it's awake on every desk of it.
+    const [desk] = await rt.query<Desk[]>("desk.here", { in: space }, { actor: bob });
+    await rt.call("computer.work", { desk: desk._id, work: "wake" }, { actor: bob });
+    await rt.idle();
+    assertEquals((await status())?.state, "awake");
+    // Nobody outside the system marks a computer.
+    const marked = await rt.call("computer.mark", {
+      computer,
+      status: { kind: "cloud", state: "awake" },
+    }, { actor: bob }).then(() => "marked", (error) => (error as { code?: string }).code);
+    assertEquals(marked, "forbidden");
+  });
 });
 
 test("sizes are offered with their price an hour, and storage's per GB-month", async () => {

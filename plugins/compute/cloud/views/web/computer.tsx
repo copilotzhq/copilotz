@@ -16,7 +16,9 @@
  *   when it's taking longer. Still waking when asked, it asks again.
  *
  * Live: its record (`cloudComputer.mine`) says each state as it changes.
- * Not one of the person's cloud computers, it shows nothing.
+ * Someone else's, shared into a space (`badge` only), shows the state its
+ * desk there says (`item.status`, kept by the cloud plugin); otherwise, not
+ * one of the person's, it shows nothing.
  */
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -45,14 +47,19 @@ import {
   spent,
   stillWaking,
   WAKE_MS,
-  WARM_MINUTES,
 } from "./cloud.ts";
+import { minutes } from "./new.tsx";
 import { STYLE } from "./style.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export const cloudComputerView = (
-  item: { _id?: string; desk?: string; name?: string },
+  item: {
+    _id?: string;
+    desk?: string;
+    name?: string;
+    status?: { kind?: string; state?: string };
+  },
   ctx: ViewContext<ReactNode>,
 ): ReactNode => {
   const mode = ctx.hints.mode;
@@ -62,10 +69,19 @@ export const cloudComputerView = (
     ? undefined
     : ctx.db.collection(COLLECTION).query<unknown>("sizes", {}).value;
   const record = mine?.find((r) => r._id === item._id);
+  const style = <style href="cloud-web" precedence="copilotz">{STYLE}</style>;
+  // Someone else's, in a space they shared it into: its state, as its desk there says.
+  if (!record && mode === "badge" && item.status?.kind === "cloud" && stateOf(item.status.state)) {
+    return (
+      <>
+        {style}
+        <StateBadge state={stateOf(item.status.state)!} />
+      </>
+    );
+  }
   if (!record) return null;
   const sizes = sizesOf(offered);
   const size = sizes.sizes.find((s) => s.id === record.size);
-  const style = <style href="cloud-web" precedence="copilotz">{STYLE}</style>;
   if (mode === "badge") {
     return (
       <>
@@ -101,6 +117,12 @@ export const cloudComputerView = (
   }
   return null;
 };
+
+const STATES: CloudComputer["state"][] = ["cold", "asleep", "waking", "awake", "releasing"];
+
+/** A state as a desk says it, if it's one. */
+const stateOf = (state: unknown): CloudComputer["state"] | undefined =>
+  STATES.find((s) => s === state);
 
 /** Now, every `ms` while `on`. */
 function useNow(on: boolean, ms: number): number {
@@ -330,7 +352,7 @@ function Asleep(
         {hour !== null
           ? <>You pay while it's awake ({money(hour)} an hour).{" "}</>
           : "You pay while it's awake. "}
-        It sleeps again after {WARM_MINUTES} minutes unused
+        It sleeps again after {minutes(sizes.warmMinutes)} unused
         {sizes.disk.gbMonth !== null ? "; its disk is kept while it sleeps." : "."}
       </p>
     </div>

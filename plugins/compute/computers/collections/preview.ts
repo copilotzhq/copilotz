@@ -7,6 +7,8 @@
  * address open it, `members` only the space's members, signed in.
  */
 import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { previewUrl } from "../shared/preview-url.ts";
+import { settingsOf } from "../shared/settings.ts";
 
 const previewSchema = {
   type: "object",
@@ -31,11 +33,14 @@ export const preview = defineCollection({
   schema: previewSchema,
   indexes: [["space"], ["computer"]],
   queries: {
-    /** A space's previews, the newest first. */
+    /** A space's previews, the newest first, each with its address (`url`). */
     here: {
       allow: (actor) => actor.kind === "person",
-      run: (previews, params: { in: string }) =>
-        previews.find({ space: params.in }, { sort: { at: -1 } }),
+      run: async (previews, params: { in: string }, ctx) => {
+        const domain = settingsOf(ctx).previews?.domain;
+        const found = await previews.find({ space: params.in }, { sort: { at: -1 } });
+        return domain ? found.map((p) => ({ ...p, url: previewUrl(domain, p._id) })) : found;
+      },
     },
     /**
      * A preview by its label, while its computer is still in its space (a
@@ -53,4 +58,8 @@ export const preview = defineCollection({
   },
 });
 
-export type Preview = Infer<typeof previewSchema> & { _id: string };
+export type Preview = Infer<typeof previewSchema> & {
+  _id: string;
+  /** Its address, as `preview.here` gives it. */
+  url?: string;
+};

@@ -23,8 +23,11 @@
  *   `coldDays` go cold (a snapshot).
  * - **Destroying:** `cloud.destroy` (its owner, or the org's admins).
  * - **Reading:** `cloudComputer.mine` (yours), `cloudComputer.sizes` (what
- *   people choose from, priced with `usage.quote`), `cloud.org` (the org's,
- *   for its admins).
+ *   people choose from, priced with `usage.quote`, with the warm and view
+ *   minutes, and whether the asker may make one now: `create`, `why` not),
+ *   `cloud.may` (just that), `cloud.org` (the org's, for its admins). Each
+ *   computer's state is on its desks too (`computer.mark`, as it changes), so
+ *   a space's members see how anyone's shared into it is.
  * - **Metering** (meter `computer`): VM seconds as `cloud/<size>`, disk and
  *   snapshot GB-hours as `cloud/disk` and `cloud/snapshot`, priced by the
  *   app's cost and price books (storage's rates per GB-hour: `per: 1`).
@@ -70,6 +73,7 @@ import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { createAction } from "./actions/create.ts";
 import { dailyAction } from "./actions/daily.ts";
 import { destroyAction } from "./actions/destroy.ts";
+import { mayAction } from "./actions/may.ts";
 import { orgAction } from "./actions/org.ts";
 import { poolAdmitAction, poolGoneAction, poolReadyAction } from "./actions/pool.ts";
 import { poolTickAction } from "./actions/pool-tick.ts";
@@ -82,6 +86,7 @@ import { wakeAction } from "./actions/wake.ts";
 import { gceHost } from "./adapters/gce/index.ts";
 import { localHost } from "./adapters/local.ts";
 import { cloudComputer } from "./collections/cloud-computer.ts";
+import { markProcessor } from "./processors/mark.ts";
 import { poolVm } from "./collections/pool-vm.ts";
 import { type CloudHostAdapter, POOL, POOL_ACTIONS, POOL_KIND } from "./contract.ts";
 import { personOf } from "./shared/people.ts";
@@ -129,9 +134,12 @@ export const cloud: Plugin = definePlugin({
     "cloud.destroy": destroyAction,
     "cloud.touch": touchAction,
     "cloud.org": orgAction,
+    "cloud.may": mayAction,
     "cloud.tick": tickAction,
     "cloud.daily": dailyAction,
   },
+  // Its desks show how it is, to everyone in their spaces.
+  processors: { "cloud.mark": markProcessor },
   schedules: {
     "cloud.tick": { every: "1m", call: "cloud.tick", input: {}, retries: 0 },
     "cloud.daily": { cron: "30 3 * * *", call: "cloud.daily", input: {} },

@@ -135,7 +135,7 @@ export function Desks(
                 remove={() => setRemoving(d)}
                 move={() =>
                   openPalette(moveStep({ desk: d._id, name: nameOf(d), from: space._id, call }))}
-                kind={kindOf[d.computer]}
+                kind={kindOf[d.computer] ?? kinds.find((k) => k.key === d.status?.kind)}
               />
             ))}
             <li className="desks-add">
@@ -330,7 +330,7 @@ function DeskCard(
         ? (
           <LazyView
             kind={kind.view}
-            item={{ _id: d.computer }}
+            item={{ _id: d.computer, ...(d.status ? { status: d.status } : {}) }}
             hints={{ mode: "badge" }}
             fallback={<span>{kind.title}</span>}
           />

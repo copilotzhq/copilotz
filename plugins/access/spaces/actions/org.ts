@@ -146,6 +146,8 @@ export const orgMeAction = defineAction({
   description:
     "Your standing in the org: your role, whether you're platform staff, and the org (in an app " +
     "serving many)",
+  // Only reads: not recorded, so reads (a query, a View) ask it too.
+  record: false,
   input: { type: "object", additionalProperties: false },
   allow: (actor) => actor.kind === "person",
   run: async (ctx) => ({

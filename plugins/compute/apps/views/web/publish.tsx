@@ -172,6 +172,8 @@ function PublishForm(
         try {
           const answer = await call<{ app: string }>("app.publish", {
             in: item.in,
+            // From the computer the job runs on, not the space's default.
+            ...(item.desk ? { desk: item.desk } : {}),
             name: name.trim(),
             job: item.job,
             ...(port ? { port: number } : {}),

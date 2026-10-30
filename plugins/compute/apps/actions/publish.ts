@@ -15,6 +15,8 @@ export const publishAction = defineAction({
     properties: {
       /** The space (default: your Personal space). */
       in: { type: "string" },
+      /** The space's computer to publish from (its desk there); else the space's own. */
+      desk: { type: "string" },
       name: { type: "string", minLength: 1, maxLength: 80 },
       /** The job whose port it serves, and whose command runs it. */
       job: { type: "string" },

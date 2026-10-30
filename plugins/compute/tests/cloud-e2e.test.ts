@@ -94,6 +94,8 @@ test({
         }),
       ],
       transports: [{ type: "websocket", config: { path: "/oxian" } }],
+      // Two executors, as apps run: a VM one of them started is let in by the other.
+      executors: 2,
       clock: manualClock(Date.now()),
     });
     const listener = await host(rt.hypervisor);

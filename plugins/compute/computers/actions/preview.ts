@@ -2,9 +2,10 @@
  * Previews of what a space's computer serves (see collections/preview.ts),
  * made by a person or, through the `preview` tool, by an agent for one:
  *
- * - `computer.preview` `{ in?, job?, port?, visibility? }`: the port a job
- *   serves (`port`; else the job's, or the first it listens on), on the
- *   space's computer (its desk there: one online first, as agents pick),
+ * - `computer.preview` `{ in?, desk?, job?, port?, visibility? }`: the port a
+ *   job serves (`port`; else the job's, or the first it listens on), on the
+ *   space's computer (`desk`, one of the space's; else one online first, as
+ *   agents pick),
  *   at `https://<label>.<domain>/`. Where many orgs are served, the host is
  *   claimed for the org (its `directory` resource's `claimHost`), so its
  *   requests come here. Only who may work in the space makes one.
@@ -17,6 +18,7 @@
 import { type Context, defineAction } from "../../../../runtime/mod.ts";
 import type { Preview } from "../collections/preview.ts";
 import { failed } from "../shared/failed.ts";
+import { previewUrl } from "../shared/preview-url.ts";
 import { may, mustBeAble } from "../shared/desks.ts";
 import { personOf } from "../shared/person.ts";
 import { settingsOf } from "../shared/settings.ts";
@@ -39,13 +41,7 @@ function previewsOf(ctx: Context) {
   return previews;
 }
 
-/** How a host is reached: https, but plain http for development's `localhost`. */
-export const schemeOf = (host: string): "http" | "https" =>
-  /^(.+\.)?localhost(:\d+)?$/.test(host) ? "http" : "https";
-
-/** A preview's address. */
-export const previewUrl = (domain: string, label: string): string =>
-  `${schemeOf(domain)}://${label}.${domain}/`;
+export { previewUrl, schemeOf } from "../shared/preview-url.ts";
 
 /** A new preview's label: ten random letters and digits, then `-preview`. */
 function newLabel() {
@@ -69,6 +65,8 @@ export const previewAction = defineAction({
     type: "object",
     properties: {
       in: space,
+      /** The space's computer to preview from (its desk there); else one online first. */
+      desk: { type: "string" },
       /** A job's id (or name), as the computer lists them: its port, unless `port` says. */
       job: { type: "string" },
       port: { type: "integer", minimum: 1, maximum: 65535 },
@@ -85,8 +83,17 @@ export const previewAction = defineAction({
     await mustBeAble(ctx, where, "write");
     // As agents pick: one online first, else the space's own (asleep, it wakes when asked).
     const desks = await desksIn(ctx, where);
-    const desk = desks.find((d) => d.online) ?? desks[0];
-    if (!desk) throw fail("There's no computer in this space to preview.");
+    const desk = input.desk
+      ? desks.find((d) => d._id === input.desk)
+      : desks.find((d) => d.online) ?? desks[0];
+    if (!desk) {
+      throw fail(
+        input.desk
+          ? "That computer isn't in this space."
+          : "There's no computer in this space to preview.",
+        input.desk ? "not_found" : "invalid",
+      );
+    }
     let port = input.port;
     let who = ctx.actor?.kind === "agent" ? `agent:${ctx.actor.id}` : `person:${person}`;
     let job: Job | undefined;

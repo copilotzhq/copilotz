@@ -223,8 +223,20 @@ test("a person publishes a job: building at once, then live, routed to its targe
     const computer = await connect(s, { jobs: [{ id: "j1", port: 3000, command: "npm start" }] });
     try {
       const { space } = await rt.call<{ space: string }>("space.personal", {}, { actor: ana });
+      // The space's computer, said (its desk there): a desk not there isn't one.
+      const [desk] = await rt.query<{ _id: string }[]>("desk.here", { in: space }, { actor: ana });
+      const elsewhere = await rt.call("app.publish", {
+        in: space,
+        desk: "nope",
+        name: "x",
+        port: 1,
+      }, {
+        actor: ana,
+      }).then(() => "made", (error) => (error as { code?: string }).code);
+      assertEquals(elsewhere, "not_found");
       const published = await rt.call<Published>("app.publish", {
         in: space,
+        desk: desk._id,
         job: "j1",
         name: "My Shop!",
       }, { actor: ana });
@@ -307,10 +319,12 @@ test("an agent's publish waits for its person's yes, even where nothing else is 
       assertStringIncludes(waiting, "publish Blog on port 8080");
       assertEquals(await rt.call("app.list", { in: space }, { actor: ana }), []);
       const [asked] = await rt.query<Approval[]>("approval.pending", {}, { actor: ana });
-      assertEquals([asked.work, asked.detail, asked.agent], [
+      assertEquals([asked.work, asked.detail, asked.agent, asked.preview], [
         "publish",
         "publish Blog on port 8080",
         "assistant",
+        // Where it'll be, as the card says it.
+        "https://blog.copilotz.app",
       ]);
 
       // Yes, this once: it publishes, answering at once.

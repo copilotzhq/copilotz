@@ -7,6 +7,7 @@
  */
 import { defineCollection } from "../../../../runtime/mod.ts";
 import { type CloudComputer, SUBJECTS } from "../contract.ts";
+import type { May } from "../shared/may.ts";
 import { settingsOf } from "../shared/settings.ts";
 
 const placement = {
@@ -70,7 +71,10 @@ export const cloudComputer = defineCollection({
     /**
      * The sizes people choose from, each with its price an hour, and what a
      * new computer's disk is: its GB, and storage's price per GB-month (a
-     * disk's, and a snapshot's once it's cold).
+     * disk's, and a snapshot's once it's cold); how long one stays awake
+     * unused (`warmMinutes`) and while someone has it open (`viewMinutes`);
+     * and whether the asker may make one now (`create`; `why` not: only
+     * admins make them here, or this month's budget is spent).
      */
     sizes: {
       allow: (actor) => actor.kind === "person",
@@ -89,6 +93,7 @@ export const cloudComputer = defineCollection({
             hour: await quote(SUBJECTS.vm(id), { seconds: 3600 }),
           })),
         );
+        const may = await ctx.call<May>("cloud.may", {}).catch((): May => ({ create: false }));
         return {
           sizes,
           disk: {
@@ -96,6 +101,9 @@ export const cloudComputer = defineCollection({
             gbMonth: await quote(SUBJECTS.disk, { gbHours: MONTH_HOURS }),
             snapshotGbMonth: await quote(SUBJECTS.snapshot, { gbHours: MONTH_HOURS }),
           },
+          warmMinutes: set.warmMinutes,
+          viewMinutes: set.viewMinutes,
+          ...may,
         };
       },
     },

@@ -6,7 +6,9 @@
 # connected to the app as a free VM, it waits to serve a computer, whose disk it mounts there.
 #
 # It reads the VM's metadata: `app-url` (the app it connects to) and `computer-release` (where the
-# release is: its base URL, or its manifest.json's). It runs at every boot, and skips what's done
+# release is: its base URL, or its manifest.json's). With `copilotz-image=TRUE` (a VM an image is
+# made from: setup-gcp.sh's IMAGE), it stops once everything's installed, with no service: pool
+# VMs made from that image then boot in seconds, as each checks only the program's release. It runs at every boot, and skips what's done
 # already. What it says goes to the serial console (and Cloud Logging) through Google's startup
 # script runner; the service's own output goes there too.
 set -euo pipefail
@@ -103,6 +105,11 @@ else
     { rm -f "$BIN.next"; fail "$file's SHA-256 isn't the release's"; }
   chmod 755 "$BIN.next"
   mv -f "$BIN.next" "$BIN"
+fi
+
+if [ "$(metadata copilotz-image 2>/dev/null || true)" = TRUE ]; then
+  say "image ready: no service on an image's VM"
+  exit 0
 fi
 
 # The service: as root (it mounts the computer's disk), again whenever it stops.

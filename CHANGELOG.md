@@ -1,3 +1,39 @@
+## 1.0.0-rc.5 — 2026-10-30
+
+- **Cloud computers** (plugin `cloud`, see design/cloud-computers.md): computers the app hosts for
+  its people. A cloud computer is a disk; a VM from a pool serves it for one wake, then goes.
+  `cloud.create` `{ size, in?, name? }` makes one (an org's owners and admins, or its members when
+  the settings say, under the org's monthly `budgetUsd`); work for one that's asleep wakes it (a few
+  seconds; about 30 from cold); unused for `warmMinutes` (10) it's released, and after `coldDays`
+  (7) it goes cold, kept as a snapshot. A person with it open (`computer.view`, every few minutes
+  from its panel) keeps it awake up to `viewMinutes` (120). `cloud.destroy`, `cloud.org`, queries
+  `cloudComputer.mine` and `cloudComputer.sizes` (each size priced an hour). Hosts are adapters:
+  Compute Engine (`gceHost`: managed instance groups as pools, pd-balanced disks, VMs admitted by
+  their Google identity tokens) and a local one for development and tests. Metered under `computer`
+  as `cloud/<size>` (VM seconds), `cloud/disk` and `cloud/snapshot` (GB-hours).
+- **Computer program:** `computer pool --app <url>`, a free VM of an app's pool: it waits to serve
+  a computer, mounts its disk, and runs it. scripts/cloud has a Google Cloud project's setup and the
+  pool VMs' startup script.
+- **Previews:** what a job serves, at `https://<computer>-preview.<domain>`, carried to the computer
+  over its own connection (no inbound network), streamed both ways (`computer.http`). For a space's
+  members (a signed cookie, given by the app) or anyone with the link. `computer.preview`,
+  `computer.previews`, `computer.unpreview`, and the agents' `preview` tool. Settings
+  `computers.previews` `{ domain, key }`. WebSockets aren't carried yet.
+- **Apps** (plugin `apps`): what a job serves, published to run on its own at
+  `https://<label>.copilotz.app`. The space's folder is archived by its computer
+  (`computer.archive`), built (its Dockerfile, else buildpacks) and deployed as a service that
+  scales to zero. `app.publish` (and the agents' `publish` tool, always asked), `app.list`,
+  `app.redeploy`, `app.remove`; builds and running metered under `app`. Hosts: Cloud Run
+  (`cloudRun`) and a local one (`localApps`).
+- **Jobs** can say their `port` (a preview's) and be kept (`keep`): a kept job runs again when its
+  computer wakes.
+- **Web host:** routes by host (`{ host }` beside `{ path }`); a trusted front (`front`: a secret
+  header and the host it forwards) for apps behind a proxy; orgs claim hosts in the directory
+  (`orgHost`), resolved at `/__copilotz/hosts/resolve`.
+- **Runtime:** `runtime.workers.dispatch(kind, id, workload, body?)`, for host code (a route)
+  streaming work to a connected worker.
+- **Usage:** `usage.quote` prices quantities as a use would be, without recording one.
+
 ## 1.0.0-rc.4 — 2026-10-30
 
 - **Usage: every use has a price.** It's the cost (a margin of 0) unless the app's price book says

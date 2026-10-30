@@ -19,6 +19,9 @@
 #   RUNTIME_SA       compass-runtime@$PROJECT.iam.gserviceaccount.com   the app's, acting as the controller
 #   SMALL_MACHINE    e2-medium
 #   STANDARD_MACHINE n2-standard-2
+#   IMAGE            the pools' boot image, in this project: a disk of a Debian 12 VM that ran
+#                    pool-startup.sh with metadata copilotz-image=TRUE (its tools installed);
+#                    else Debian 12, which installs them at each pool VM's boot (minutes)
 #   VERSION          a hash of the templates' settings and pool-startup.sh (lowercase, digits, dashes)
 set -euo pipefail
 
@@ -33,6 +36,7 @@ SMALL_MACHINE=${SMALL_MACHINE:-e2-medium}
 # Two dedicated vCPUs and 8 GB. Not N4 or C4A (as the design suggests): they take Hyperdisk only,
 # and computers' disks are pd-balanced, which E2 (small) needs.
 STANDARD_MACHINE=${STANDARD_MACHINE:-n2-standard-2}
+IMAGE=${IMAGE:-}
 
 CONTROLLER=cz-controller@$PROJECT.iam.gserviceaccount.com
 POOL_SA=cz-pool@$PROJECT.iam.gserviceaccount.com
@@ -60,6 +64,14 @@ boot_disk() {
     *) echo pd-balanced ;;
   esac
 }
+# The pools' boot image: IMAGE (this project's), else Debian 12's latest.
+image_flags() {
+  if [ -n "$IMAGE" ]; then
+    echo "--image=$IMAGE --image-project=$PROJECT"
+  else
+    echo "--image-family=debian-12 --image-project=debian-cloud"
+  fi
+}
 sha() { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; }
 # IAM takes a few seconds to know a new service account: a binding is tried again a while.
 patiently() {
@@ -75,7 +87,8 @@ patiently() {
 [ -f "$STARTUP" ] || { echo "setup-gcp.sh: no $STARTUP" >&2; exit 1; }
 # The templates' version: what they're made from, hashed (the same settings, the same templates).
 settings() {
-  printf '%s\n' "$APP_URL" "$RELEASE" "$SMALL_MACHINE" "$STANDARD_MACHINE" "$POOL_SA" "$SUBNET"
+  printf '%s\n' "$APP_URL" "$RELEASE" "$SMALL_MACHINE" "$STANDARD_MACHINE" "$POOL_SA" "$SUBNET" \
+    "$IMAGE"
   cat "$STARTUP"
 }
 if [ -z "${VERSION:-}" ]; then VERSION=$(settings | sha | cut -c1-8); fi
@@ -180,7 +193,7 @@ for size in $SIZES; do
     # need none), and what the startup script reads from its metadata.
     run gcloud compute instance-templates create "$template" --project="$PROJECT" \
       --machine-type="$type" \
-      --image-family=debian-12 --image-project=debian-cloud \
+      $(image_flags) \
       --boot-disk-size=10GB --boot-disk-type="$(boot_disk "$type")" \
       --network="projects/$PROJECT/global/networks/$NETWORK" \
       --subnet="projects/$PROJECT/regions/$REGION/subnetworks/$SUBNET" \

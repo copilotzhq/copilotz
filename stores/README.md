@@ -18,7 +18,7 @@ What the runtime sends out and never reads back (metrics) isn't kept here: that'
 | ---------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `memory`   | `memory/`       | The reference: runs the MongoDB API in JavaScript (`runtime/mongo.ts`). Nothing survives the process. The runtime's own (`runtime/memory.ts`, what `durable: false` collections live in); picked from here. |
 | `sqlite`   | `sql/sqlite/`   | The runtime's SQLite (`node:sqlite` on Node and Deno, `bun:sqlite` on Bun, or a database passed in), one file, WAL.                                                                                         |
-| `postgres` | `sql/postgres/` | Ominipg: a PostgreSQL server for a `postgres://` URL, or PGlite in this process for `:memory:` and files. One schema per owner, so one tenant dumps and moves as a unit.                                    |
+| `postgres` | `sql/postgres/` | Ominipg: a PostgreSQL server for a `postgres://` URL, or PGlite in this process for `:memory:` and files. Tenant-scoped: many orgs share a schema, each reaching only its own rows ([Tenants](#tenants)).   |
 | `latency`  | `latency/`      | Wraps any store and adds a delay per database round trip, to see what a turn costs at production latency (`--rtt`).                                                                                         |
 
 The SQL stores share one MongoDB-to-SQL translation (`sql/shared/filter.ts`); each brings its
@@ -27,6 +27,42 @@ dialect. Both keep five tables (`events`, `nodes` with documents as JSON, `edges
 (`SELECT * FROM message`). Read them with any client while the runtime runs
 (`sqlite3 -box
 .data/copilotz.sqlite`, `psql`), or with `/sql <query>` in the chat.
+
+## Tenants
+
+An org is a tenant. The Postgres store is bound to `(schema, tenant)`
+(`postgresStore({ url | pool, schema, tenant })`), and every statement it makes names its tenant, so
+isolation never depends on rules elsewhere being right. Without `tenant`, a store is its schema's
+only tenant (`""`), in the same tables.
+
+- **Every row carries `tenant`, and every key and index leads with it:** documents are keyed
+  `(tenant, collection, id)`, and so on for edges, vectors and declared indexes.
+  `meta (tenant, key)` holds each tenant's fencing epoch and Processor positions. Blobs are keyed
+  `(tenant, id)`: content dedupes within an org, never across.
+- **Events are numbered per tenant,** `(tenant, seq)`. The owner is its tenant's only writer, so the
+  store numbers them itself. It loads the highest number when it opens, and each write takes a range
+  before it is sent, so an owner's writes still run together. A recorded update or delete of many,
+  whose events can't be counted first, runs alone. A number a write doesn't use stays a gap, as a
+  sequence's would.
+- **Placement is the host's choice:** small orgs share a few schemas; a big one gets a schema, or a
+  database, of its own. `sql/postgres/tenants.ts` moves them:
+  - `copyTenant({ from, to, tenant })` copies a tenant's rows unchanged, from one consistent
+    snapshot: in one transaction within a database, streamed in batches between two;
+  - `dropTenant` deletes them in batches, its epoch first, which fences its owner;
+  - `exportTenant` streams them as a script of one COPY per table, which `psql` restores.
+- **Connections:** `postgresPool({ url })` is shared by every store a process opens on a database.
+  Commits go through its write lane and reads through its read lane, taking a connection per
+  statement or open transaction: idle and closed stores hold none. A store given a `url` makes a
+  pool of its own.
+- **Views:** one per collection for the schema, showing the tenant a session names
+  (`SET copilotz.tenant = 'org_1'`; else `""`, a schema's only tenant). Not a view per tenant: that
+  grows the catalog with sign-ups, with DDL on every open. They're for reading: SQL can reach the
+  tables beside them, so `inspect` (`/sql` in the chat) runs only in a schema of its own.
+- **The layout before tenants** (no `tenant` column) migrates in place when a store opens it, in one
+  transaction under a lock: its rows become the tenant `""`, keys are rebuilt to lead with it, and
+  nothing is renumbered.
+- **SQLite and memory stay one tenant per store,** a file per org: a file already moves and deletes
+  whole, and has a single writer, the org's.
 
 ## MongoDB compatibility
 
@@ -56,9 +92,11 @@ All stores support:
   schema types as scalars (strings, numbers, booleans), so they never hold arrays: filters on them
   (equality, `$in`, comparisons with a value of the field's type) use the index, and so do sorts on
   them (missing first, as MongoDB orders them). SQL stores make them as partial indexes, one
-  collection each, and drop ones no longer declared. SQLite keeps the statistics its planner needs
-  to prefer them to the primary key: gathered at open when missing, and again each time the table
-  about doubles; Postgres gathers its own.
+  collection each, and drop ones no longer declared (Postgres: from a schema of its own; tenants
+  sharing one may run another version of the app). SQLite keeps the statistics its planner needs to
+  prefer them to the primary key: gathered at open when missing, and again each time the table about
+  doubles; Postgres gathers its own. Until it has (a new table, or a tenant that grew fast since),
+  its planner may read and sort more rows than an index would.
 - **`writeConcern: { w: 0 }`** on updates, replaces and deletes: in a transaction the write goes
   with the commit, unacknowledged.
 

@@ -2,19 +2,25 @@
  * PostgreSQL storage adapter on Ominipg: a PostgreSQL server for a
  * `postgres://` URL, or PGlite in this process for `:memory:` and files.
  *
- * Each owner's data lives in its own schema, so one tenant's data dumps and
- * moves as a unit. There are five tables: `events`, `nodes` (documents as
- * jsonb), `edges`, `vectors` and `blobs` (bytea), plus `meta` for the fencing
- * epoch. MongoDB filters and sorts become SQL over the jsonb (`dialect.ts`),
- * and so do most updates (`update.ts`); the rest read the matching documents,
- * apply the reference operators and write them back, in the same transaction.
+ * A store holds one tenant's data (an org's) in a schema other tenants may
+ * share: every statement it makes names its tenant, so isolation never
+ * depends on anything outside the store, and a tenant's rows copy elsewhere
+ * unchanged (`tenants.ts`). Small orgs can share a few schemas and a big one
+ * have its own: placement is the host's choice. Without a `tenant`, a store
+ * is its schema's only tenant (""), with the same tables.
  *
- * With a server, the owner writes through one connection and reads committed
- * state through a second. PGlite has a single connection, so its reads wait
- * for an open transaction.
+ * There are five tables: `events`, `nodes` (documents as jsonb), `edges`,
+ * `vectors` and `blobs` (bytea), plus `meta` for each tenant's fencing epoch
+ * and Processor positions (`layout.ts`). MongoDB filters and sorts become SQL
+ * over the jsonb (`dialect.ts`), and so do most updates (`update.ts`); the
+ * rest read the matching documents, apply the reference operators and write
+ * them back, in the same transaction.
+ *
+ * Connections come from a pool (`pool.ts`): one shared by every store the
+ * process opens, or one of the store's own for a URL. The owner commits
+ * through its write lane and reads committed state through its read lane.
+ * PGlite has a single connection, so its reads wait for an open transaction.
  */
-import { Ominipg } from "@oxian/ominipg";
-import { autoConfigure } from "@oxian/ominipg/auto";
 import type { JSONSchema } from "../../../runtime/define.ts";
 import { applyUpdate, seedOf } from "../../../runtime/mongo.ts";
 import { canonical } from "../../../runtime/registry.ts";
@@ -37,9 +43,23 @@ import { type Bind, page, type Scalars, where } from "../shared/filter.ts";
 import { postgres, postgresAggregates, scalar } from "./dialect.ts";
 import { grouped } from "../shared/aggregate.ts";
 import { expression } from "./update.ts";
+import {
+  constant,
+  forget,
+  ident,
+  type Layout,
+  others,
+  prepare,
+  remembered,
+  type Row,
+  type Session,
+  TABLES,
+} from "./layout.ts";
+import { type PostgresPool, postgresPool } from "./pool.ts";
+import { dropTenant } from "./tenants.ts";
 
-type Row = Record<string, unknown>;
-type Session = { query(sql: string, params?: unknown[]): Promise<{ rows: Row[] }> };
+export { type PostgresPool, postgresPool } from "./pool.ts";
+export { copyTenant, dropTenant, exportTenant, type Location } from "./tenants.ts";
 
 const hex = (bytes: Uint8Array) =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -61,7 +81,6 @@ const notInserted = (docs: [string, Doc][], inserted: [string, string][]) => {
   }
 };
 
-const ident = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
 /** Numbered parameters ($1, $2, …) in the order they are bound. */
@@ -73,9 +92,27 @@ const binder = () => {
 
 const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
 
+/** A short hash, the same for the same text: names and fingerprints for what a store makes. */
+const hash = (text: string) => {
+  let h = 2166136261;
+  for (const c of text) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+  return h.toString(36);
+};
+
+/** Each event once: an id given twice in one commit is one event. */
+const unique = <E extends { id: string }>(events: E[]) => {
+  const seen = new Set<string>();
+  return events.filter((e) => !seen.has(e.id) && seen.add(e.id));
+};
+
 export async function postgresStore(options: {
-  url: string;
+  /** A database for this store alone: it opens its own connections, and closes them with itself. */
+  url?: string;
+  /** Or connections shared with the process's other stores (`postgresPool`); the host closes it. */
+  pool?: PostgresPool;
   schema?: string;
+  /** Whose data this is (an org's id). Without one, the store is its schema's only tenant (""). */
+  tenant?: string;
   /** Hears every SQL statement sent, for debugging. */
   trace?: (sql: string) => void;
 }): Promise<
@@ -83,86 +120,53 @@ export async function postgresStore(options: {
     /** Exposes each collection as a SQL view of its schema's top-level fields. */
     describe(collections: Record<string, JSONSchema>): Promise<void>;
     index(collections: Record<string, IndexSpec[]>): Promise<void>;
-    /** Runs a read-only query, for inspection tools. */
+    /** Runs a read-only query, for inspection tools; in a schema of its own only. */
     inspect(sql: string): Promise<Row[]>;
-    /** Deletes everything this store holds (its schema), then closes. */
+    /** Deletes everything this store holds, then closes: a tenant gone for good. */
     drop(): Promise<void>;
   }
 > {
+  if (!options.url === !options.pool) throw new Error("postgresStore takes a url or a pool");
+  const tenant = options.tenant ?? "";
+  if (tenant.includes("\u0000")) throw new Error("A tenant can't contain a NUL character");
+  const own = !options.pool;
+  // A pool of its own holds what a store alone may need: an owner's commits run together.
+  const pool = options.pool ?? await postgresPool({ url: options.url!, writes: 5, reads: 5 });
   const schema = options.schema ?? "copilotz";
   const t = (table: string) => `${ident(schema)}.${table}`;
-  // PGlite loads pgvector itself; a server needs it installed.
-  const connect = () =>
-    Ominipg.connect(autoConfigure({ url: options.url, pgliteExtensions: ["vector"] }));
-  const writer = await connect();
-  const server = /^postgres(ql)?:\/\//.test(options.url);
-  const committed = server ? await connect() : writer;
+  /** This store's tenant, as SQL: every statement names it. */
+  const T = constant(tenant);
+  const writer = pool.writes;
+  const committed = pool.reads;
+  let layout: Layout;
+  try {
+    layout = await prepare(pool, schema);
+  } catch (error) {
+    if (own) await pool.close();
+    throw error;
+  }
+  let closed = false;
   const close = async () => {
-    await writer.close();
-    if (committed !== writer) await committed.close();
+    closed = true;
+    if (own) await pool.close();
   };
   let statements = 0;
   const trace = options.trace;
   const run = async (db: Session, sql: string, params: unknown[] = []) => {
+    if (closed) throw new Error("This store is closed.");
     statements++;
     trace?.(sql);
     return (await db.query(sql, params)).rows;
   };
+  /** A session whose statements count as this store's, and are traced. */
+  const counted = (db: Session): Session => ({
+    query: async (sql, params) => ({ rows: await run(db, sql, params) }),
+  });
 
-  for (
-    const ddl of [
-      `CREATE SCHEMA IF NOT EXISTS ${ident(schema)}`,
-      `CREATE TABLE IF NOT EXISTS ${t("meta")} (key text PRIMARY KEY, value bigint NOT NULL)`,
-      `INSERT INTO ${t("meta")} (key, value) VALUES ('epoch', 0) ON CONFLICT DO NOTHING`,
-      `CREATE TABLE IF NOT EXISTS ${t("events")} (seq bigserial PRIMARY KEY, id text NOT NULL ` +
-      `UNIQUE, type text NOT NULL, data jsonb NOT NULL, cause text, at text NOT NULL, actor jsonb)`,
-      // Events record who did them since the actor came in: older logs gain the column.
-      `ALTER TABLE ${t("events")} ADD COLUMN IF NOT EXISTS actor jsonb`,
-      `CREATE INDEX IF NOT EXISTS events_cause ON ${t("events")} (cause)`,
-      `CREATE TABLE IF NOT EXISTS ${t("nodes")} (collection text NOT NULL, id text NOT NULL, ` +
-      `doc jsonb NOT NULL, n bigserial, PRIMARY KEY (collection, id))`,
-      `CREATE TABLE IF NOT EXISTS ${t("edges")} ("from" text NOT NULL, type text NOT NULL, ` +
-      `"to" text NOT NULL, data jsonb, PRIMARY KEY ("from", type, "to"))`,
-      `CREATE INDEX IF NOT EXISTS edges_to ON ${t("edges")} ("to", type)`,
-      `CREATE TABLE IF NOT EXISTS ${
-        t("blobs")
-      } (id text PRIMARY KEY, data bytea NOT NULL, type text)`,
-    ]
-  ) await writer.query(ddl);
-
-  // Vectors use pgvector when the database has it (PGlite always does), and
+  // Vectors are pgvector's where the database has it (PGlite always does), and
   // jsonb otherwise, ranked in JavaScript.
-  const pgvector = await (async () => {
-    try {
-      await writer.query("CREATE EXTENSION IF NOT EXISTS vector");
-    } catch {
-      // Not installed, not allowed, or created concurrently: look again.
-    }
-    return (await writer.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).rows.length >
-      0;
-  })();
-  const columns = (await writer.query(
-    `SELECT column_name, udt_name FROM information_schema.columns WHERE table_schema = $1 AND ` +
-      `table_name = 'vectors'`,
-    [schema],
-  )).rows as { column_name: string; udt_name: string }[];
-  // Vectors were once keyed by id alone, before any were written: start them over.
-  if (columns.length && !columns.some((c) => c.column_name === "field")) {
-    await writer.query(`DROP TABLE ${t("vectors")}`);
-    columns.length = 0;
-  }
+  const pgvector = layout.vector;
   const kind = pgvector ? "vector" : "jsonb";
-  await writer.query(
-    `CREATE TABLE IF NOT EXISTS ${t("vectors")} (collection text NOT NULL, node text NOT NULL, ` +
-      `field text NOT NULL, embedding ${kind} NOT NULL, PRIMARY KEY (collection, node, field))`,
-  );
-  if (pgvector && columns.some((c) => c.column_name === "embedding" && c.udt_name === "jsonb")) {
-    await writer.query(
-      `ALTER TABLE ${
-        t("vectors")
-      } ALTER COLUMN embedding TYPE vector USING embedding::text::vector`,
-    );
-  }
 
   const event = (row: Row): Event => ({
     seq: Number(row.seq),
@@ -174,27 +178,99 @@ export async function postgresStore(options: {
     at: String(row.at),
   });
 
+  /**
+   * Writes run together, as they come, except one that runs alone: it waits
+   * for those running to end, and those after it wait for it. (A write whose
+   * events can't be counted before it runs is one; see `take`.)
+   */
+  const waiting: { alone: boolean; start(): void }[] = [];
+  let running = 0;
+  let solo = false;
+  const pump = () => {
+    while (waiting.length && !solo && !(waiting[0].alone && running)) {
+      const next = waiting.shift()!;
+      running++;
+      solo = next.alone;
+      next.start();
+    }
+  };
+  const gate = <R>(alone: boolean, work: () => Promise<R>): Promise<R> =>
+    new Promise<R>((resolve, reject) => {
+      waiting.push({
+        alone,
+        start: () =>
+          void work().then(resolve, reject).finally(() => {
+            running--;
+            if (alone) solo = false;
+            pump();
+          }),
+      });
+      pump();
+    });
+
+  /**
+   * The highest seq given out in this tenant's log, loaded when the store
+   * opens. The owner is its tenant's only writer (fenced by its epoch), so
+   * the store numbers events itself, in memory, and writes explicit values.
+   * Writes running together each take a range of numbers before they are
+   * sent, one no other write gets, and number what they record from its
+   * start. Numbers a write doesn't use stay a gap, as a sequence leaves one;
+   * no number is given twice, even when a write's outcome is unknown. A write
+   * whose events can't be counted before it runs, runs alone, numbering from
+   * the last given out.
+   */
+  let last: number | undefined;
+  /**
+   * The seq before a write's first event, `count` numbers taken (none, alone:
+   * it numbers on from the last). Before opening, from the log itself: such a
+   * write is fenced anyway.
+   */
+  const take = (count: number | "alone") => {
+    if (last === undefined) {
+      return `(SELECT coalesce(max(seq), 0) FROM ${t("events")} WHERE tenant = ${T})`;
+    }
+    const before = last;
+    if (count !== "alone") last += count;
+    return `${before}::bigint`;
+  };
+  /** What a write that ran alone numbered: the last given out moves past it. */
+  const numbered = (seqs: number[]) => {
+    for (const seq of seqs) if (last !== undefined && seq > last) last = seq;
+  };
+  const load = async () => {
+    const [row] = await run(
+      writer,
+      `SELECT coalesce(max(seq), 0) AS seq FROM ${t("events")} WHERE tenant = ${T}`,
+    );
+    return Number(row.seq);
+  };
+
+  /**
+   * Appends events to the tenant's log, numbered on from `before`: `source`
+   * yields rows (id, type, data, cause, actor, at), ordered by `order`. An id
+   * already in the log was committed by an earlier attempt: it is skipped,
+   * its number left unused.
+   */
+  const appending = (source: string, order: string, before: string, condition = "TRUE") =>
+    `INSERT INTO ${t("events")} (tenant, seq, id, type, data, cause, actor, at) SELECT ${T}, ` +
+    `${before} + row_number() OVER (ORDER BY ${order}), x.id, x.type, x.data, x.cause, ` +
+    `x.actor, x.at FROM (${source}) x WHERE ${condition} ON CONFLICT (tenant, id) DO NOTHING`;
+
   // Collections with declared indexes: their fields' types, for filters to use the indexes.
   // Such a collection is named literally in queries, as its partial indexes are.
   const scalars = new Map<string, Scalars>();
   const named = (collection: string, bind: Bind) =>
-    scalars.has(collection) ? `'${collection.replaceAll("'", "''")}'` : bind(collection);
+    scalars.has(collection) ? literal(collection) : bind(collection);
   /** An index's name: short, and the same for the same collection and fields. */
-  const indexName = (collection: string, fields: string[]) => {
-    let h = 2166136261;
-    // Indexes hold NULL first (see the dialect's `sorted`).
-    for (const c of `${collection}\u0000${fields.join("\u0000")}\u0000nulls first`) {
-      h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
-    }
-    return `ix_${h.toString(36)}`;
-  };
+  const indexName = (collection: string, fields: string[]) =>
+    // Indexes lead with the tenant, and hold NULL first (see the dialect's `sorted`).
+    `ix_${hash(`${collection}\u0000${fields.join("\u0000")}\u0000nulls first\u0000tenant`)}`;
 
   const reader = (db: Session): Reader => {
     const find: Reader["find"] = async (collection, filter = {}, options = {}) => {
       const { bind, params } = binder();
-      const sql =
-        `SELECT doc FROM ${t("nodes")} WHERE collection = ${named(collection, bind)} AND ` +
-        `${where(filter, postgres, bind, scalars.get(collection))}` +
+      const sql = `SELECT doc FROM ${t("nodes")} WHERE tenant = ${T} AND collection = ` +
+        `${named(collection, bind)} AND ${where(filter, postgres, bind, scalars.get(collection))}` +
         page(options, postgres, bind, scalars.get(collection));
       return (await run(db, sql, params)).map((row) => row.doc as Doc);
     };
@@ -202,10 +278,11 @@ export async function postgresStore(options: {
       find,
       async nearest(collection, field, query, options = {}) {
         const { bind, params } = binder();
-        const join = `FROM ${t("nodes")} n JOIN ${t("vectors")} v ON v.collection = n.collection ` +
-          `AND v.node = n.id WHERE n.collection = ${named(collection, bind)} AND v.field = ${
-            bind(field)
-          } AND ${where(options.filter ?? {}, postgres, bind, scalars.get(collection))}`;
+        const join = `FROM ${t("nodes")} n JOIN ${t("vectors")} v ON v.tenant = n.tenant AND ` +
+          `v.collection = n.collection AND v.node = n.id WHERE n.tenant = ${T} AND n.collection = ` +
+          `${named(collection, bind)} AND v.field = ${bind(field)} AND ${
+            where(options.filter ?? {}, postgres, bind, scalars.get(collection))
+          }`;
         const limit = options.limit ?? 10;
         if (pgvector) {
           const q = `${bind(JSON.stringify(query))}::vector`;
@@ -231,15 +308,15 @@ export async function postgresStore(options: {
         if (!plan.group) return await find(collection, plan.match, plan);
         const { bind, params } = binder();
         const query = grouped({ ...plan, group: plan.group }, postgres, postgresAggregates, bind);
-        const sql = `SELECT ${query.select} FROM ${t("nodes")} WHERE collection = ${
-          named(collection, bind)
-        } AND ${where(plan.match, postgres, bind, scalars.get(collection))}${query.groupBy}`;
+        const sql = `SELECT ${query.select} FROM ${t("nodes")} WHERE tenant = ${T} AND ` +
+          `collection = ${named(collection, bind)} AND ` +
+          `${where(plan.match, postgres, bind, scalars.get(collection))}${query.groupBy}`;
         return query.read(await run(db, sql, params));
       },
       async count(collection, filter = {}) {
         const { bind, params } = binder();
-        const sql = `SELECT count(*)::int AS n FROM ${t("nodes")} WHERE collection = ` +
-          `${named(collection, bind)} AND ${
+        const sql = `SELECT count(*)::int AS n FROM ${t("nodes")} WHERE tenant = ${T} AND ` +
+          `collection = ${named(collection, bind)} AND ${
             where(filter, postgres, bind, scalars.get(collection))
           }`;
         return Number((await run(db, sql, params))[0]?.n ?? 0);
@@ -247,8 +324,9 @@ export async function postgresStore(options: {
       async edges(query) {
         const rows = await run(
           db,
-          `SELECT "from", type, "to", data FROM ${t("edges")} WHERE ($1::text IS NULL OR ` +
-            `"from" = $1) AND ($2::text IS NULL OR type = $2) AND ($3::text IS NULL OR "to" = $3)`,
+          `SELECT "from", type, "to", data FROM ${t("edges")} WHERE tenant = ${T} AND ` +
+            `($1::text IS NULL OR "from" = $1) AND ($2::text IS NULL OR type = $2) AND ` +
+            `($3::text IS NULL OR "to" = $3)`,
           [query.from ?? null, query.type ?? null, query.to ?? null],
         );
         return rows.map((row) => ({
@@ -259,7 +337,11 @@ export async function postgresStore(options: {
         }));
       },
       async blob(id) {
-        const [row] = await run(db, `SELECT data, type FROM ${t("blobs")} WHERE id = $1`, [id]);
+        const [row] = await run(
+          db,
+          `SELECT data, type FROM ${t("blobs")} WHERE tenant = ${T} AND id = $1`,
+          [id],
+        );
         if (!row) return null;
         return {
           id,
@@ -270,14 +352,14 @@ export async function postgresStore(options: {
       events: async (after, limit = 1000) =>
         (await run(
           db,
-          `SELECT * FROM ${t("events")} WHERE seq > $1 ORDER BY seq LIMIT $2`,
+          `SELECT * FROM ${t("events")} WHERE tenant = ${T} AND seq > $1 ORDER BY seq LIMIT $2`,
           [after, limit],
         )).map(event),
       related: async (id, types) =>
         (await run(
           db,
-          `SELECT * FROM ${t("events")} WHERE (id = $1 OR cause = $1) AND type = ANY($2::text[]) ` +
-            `ORDER BY seq`,
+          `SELECT * FROM ${t("events")} WHERE tenant = ${T} AND (id = $1 OR cause = $1) AND ` +
+            `type = ANY($2::text[]) ORDER BY seq`,
           [id, types],
         )).map(event),
     };
@@ -300,12 +382,12 @@ export async function postgresStore(options: {
       if (!docs.length) return new Set<string>();
       const { bind, params } = binder();
       const values = docs.map((doc) =>
-        `(${bind(collection)}, ${bind(doc._id)}, ${bind(JSON.stringify(doc))}::jsonb)`
+        `(${T}, ${bind(collection)}, ${bind(doc._id)}, ${bind(JSON.stringify(doc))}::jsonb)`
       );
       // ON CONFLICT keeps the transaction usable, and names exactly which ids existed.
       const inserted = await run(
         tx,
-        `INSERT INTO ${t("nodes")} (collection, id, doc) VALUES ${values.join(", ")} ` +
+        `INSERT INTO ${t("nodes")} (tenant, collection, id, doc) VALUES ${values.join(", ")} ` +
           `ON CONFLICT DO NOTHING RETURNING id`,
         params,
       );
@@ -329,7 +411,8 @@ export async function postgresStore(options: {
         // Content-addressed: an existing id already holds these bytes.
         await run(
           tx,
-          `INSERT INTO ${t("blobs")} (id, data, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+          `INSERT INTO ${t("blobs")} (tenant, id, data, type) VALUES (${T}, $1, $2, $3) ` +
+            `ON CONFLICT DO NOTHING`,
           [blob.id, blob.data, blob.type ?? null],
         );
       }
@@ -372,13 +455,13 @@ export async function postgresStore(options: {
       const limit = many ? "" : " LIMIT 1";
       const value = next(bind);
       const insert = seed
-        ? `, ins AS (INSERT INTO ${t("nodes")} (collection, id, doc) SELECT ${c}, ` +
+        ? `, ins AS (INSERT INTO ${t("nodes")} (tenant, collection, id, doc) SELECT ${T}, ${c}, ` +
           `${bind(seed._id)}, ${bind(JSON.stringify(seed))}::jsonb WHERE NOT EXISTS ` +
           `(SELECT 1 FROM prev) ON CONFLICT DO NOTHING RETURNING id)`
         : "";
       const docs = along.length
-        ? `, docs AS (INSERT INTO ${t("nodes")} (collection, id, doc) SELECT v.collection, ` +
-          `v.id, v.doc FROM (VALUES ${
+        ? `, docs AS (INSERT INTO ${t("nodes")} (tenant, collection, id, doc) SELECT ${T}, ` +
+          `v.collection, v.id, v.doc FROM (VALUES ${
             along.map(([collection, doc], i) =>
               `(${bind(collection)}::text, ${bind(doc._id)}::text, ${
                 bind(JSON.stringify(doc))
@@ -388,12 +471,14 @@ export async function postgresStore(options: {
         : "";
       const [row] = await run(
         tx,
-        `WITH prev AS (SELECT id, doc, n FROM ${t("nodes")} WHERE collection = ${c} AND ${match} ` +
-          `ORDER BY n${limit} FOR UPDATE), upd AS (UPDATE ${t("nodes")} t SET doc = ${value} ` +
-          `FROM prev WHERE t.collection = ${c} AND t.id = prev.id AND t.doc IS DISTINCT FROM ` +
-          `${value} RETURNING prev.doc AS before, t.doc AS after, prev.n)${insert}${docs} ` +
-          `SELECT (SELECT count(*) FROM prev)::int AS matched, (SELECT jsonb_agg(jsonb_build_object(` +
-          `'before', before, 'after', after) ORDER BY n) FROM upd) AS updated` +
+        `WITH prev AS (SELECT id, doc, n FROM ${t("nodes")} WHERE tenant = ${T} AND collection = ` +
+          `${c} AND ${match} ORDER BY n${limit} FOR UPDATE), upd AS (UPDATE ${t("nodes")} t SET ` +
+          `doc = ${value} FROM prev WHERE t.tenant = ${T} AND t.collection = ${c} AND t.id = ` +
+          `ANY (ARRAY (SELECT id FROM prev)) AND t.id = prev.id AND t.doc IS DISTINCT FROM ` +
+          `${value} RETURNING prev.doc AS before, t.doc AS ` +
+          `after, prev.n)${insert}${docs} SELECT (SELECT count(*) FROM prev)::int AS matched, ` +
+          `(SELECT jsonb_agg(jsonb_build_object('before', before, 'after', after) ORDER BY n) ` +
+          `FROM upd) AS updated` +
           (seed ? `, (SELECT count(*) FROM ins)::int AS inserted` : "") +
           (along.length
             ? `, (SELECT jsonb_agg(jsonb_build_array(collection, id)) FROM docs) AS held`
@@ -421,11 +506,12 @@ export async function postgresStore(options: {
       };
     };
     const write = (collection: string, doc: Doc) =>
-      run(tx, `UPDATE ${t("nodes")} SET doc = $3::jsonb WHERE collection = $1 AND id = $2`, [
-        collection,
-        doc._id,
-        JSON.stringify(doc),
-      ]);
+      run(
+        tx,
+        `UPDATE ${t("nodes")} SET doc = $3::jsonb WHERE tenant = ${T} AND collection = $1 AND ` +
+          `id = $2`,
+        [collection, doc._id, JSON.stringify(doc)],
+      );
     return {
       ...read,
       flush,
@@ -485,13 +571,11 @@ export async function postgresStore(options: {
         const c = bind(collection);
         const rows = await run(
           tx,
-          `DELETE FROM ${t("nodes")} t USING (SELECT id FROM ${
-            t("nodes")
-          } WHERE collection = ${c} ` +
+          `DELETE FROM ${t("nodes")} t WHERE t.tenant = ${T} AND t.collection = ${c} AND t.id = ` +
+            `ANY (ARRAY (SELECT id FROM ${t("nodes")} WHERE tenant = ${T} AND collection = ${c} ` +
             `AND ${where(filter, postgres, bind)}${
               page(options.many ? {} : { limit: 1 }, postgres, bind)
-            }) ` +
-            `d WHERE t.collection = ${c} AND t.id = d.id RETURNING t.doc, t.n`,
+            })) RETURNING t.doc, t.n`,
           params,
         );
         const gone = rows.sort((a, b) => Number(a.n) - Number(b.n)).map((row) => row.doc as Doc);
@@ -504,8 +588,10 @@ export async function postgresStore(options: {
         await flush();
         await run(
           tx,
-          `INSERT INTO ${t("edges")} ("from", type, "to", data) VALUES ($1, $2, $3, $4::jsonb) ` +
-            `ON CONFLICT ("from", type, "to") DO UPDATE SET data = EXCLUDED.data`,
+          `INSERT INTO ${
+            t("edges")
+          } (tenant, "from", type, "to", data) VALUES (${T}, $1, $2, $3, ` +
+            `$4::jsonb) ON CONFLICT (tenant, "from", type, "to") DO UPDATE SET data = EXCLUDED.data`,
           [
             edge.from,
             edge.type,
@@ -516,11 +602,12 @@ export async function postgresStore(options: {
       },
       async unlink(edge) {
         await flush();
-        await run(tx, `DELETE FROM ${t("edges")} WHERE "from" = $1 AND type = $2 AND "to" = $3`, [
-          edge.from,
-          edge.type,
-          edge.to,
-        ]);
+        await run(
+          tx,
+          `DELETE FROM ${t("edges")} WHERE tenant = ${T} AND "from" = $1 AND type = $2 AND ` +
+            `"to" = $3`,
+          [edge.from, edge.type, edge.to],
+        );
       },
       putBlob(value: Blob) {
         held.blobs.push(value);
@@ -529,9 +616,11 @@ export async function postgresStore(options: {
       async putVector(value) {
         await run(
           tx,
-          `INSERT INTO ${t("vectors")} (collection, node, field, embedding) VALUES ($1, $2, $3, ` +
-            `$4::${kind}) ON CONFLICT (collection, node, field) DO UPDATE SET embedding = ` +
-            `EXCLUDED.embedding`,
+          `INSERT INTO ${
+            t("vectors")
+          } (tenant, collection, node, field, embedding) VALUES (${T}, ` +
+            `$1, $2, $3, $4::${kind}) ON CONFLICT (tenant, collection, node, field) DO UPDATE SET ` +
+            `embedding = EXCLUDED.embedding`,
           [value.collection, value.doc, value.field, JSON.stringify(value.embedding)],
         );
       },
@@ -539,8 +628,8 @@ export async function postgresStore(options: {
         if (!docs.length) return;
         await run(
           tx,
-          `DELETE FROM ${t("vectors")} WHERE collection = $1 AND node = ANY($2::text[])` +
-            (field ? " AND field = $3" : ""),
+          `DELETE FROM ${t("vectors")} WHERE tenant = ${T} AND collection = $1 AND ` +
+            `node = ANY($2::text[])` + (field ? " AND field = $3" : ""),
           field ? [collection, docs, field] : [collection, docs],
         );
       },
@@ -550,12 +639,19 @@ export async function postgresStore(options: {
     };
   };
 
-  const rows = (emitted: Omit<Event, "seq" | "at">[], at: string, bind: Bind) =>
-    emitted.map((e) =>
-      `(${bind(e.id)}::text, ${bind(e.type)}::text, ${bind(JSON.stringify(e.data))}::jsonb, ` +
-      `${bind(e.cause ?? null)}::text, ${bind(e.actor ? JSON.stringify(e.actor) : null)}::jsonb, ` +
-      `${bind(at)}::text)`
-    );
+  /** Events as VALUES rows (id, type, data, cause, actor, at, i), parameters bound. */
+  const rows = (emitted: Omit<Event, "seq" | "at">[], at: string, bind: Bind) => {
+    const when = bind(at);
+    return `SELECT * FROM (VALUES ${
+      emitted.map((e, i) =>
+        `(${bind(e.id)}::text, ${bind(e.type)}::text, ${bind(JSON.stringify(e.data))}::jsonb, ` +
+        `${bind(e.cause ?? null)}::text, ${
+          bind(e.actor ? JSON.stringify(e.actor) : null)
+        }::jsonb, ` +
+        `${when}::text, ${i})`
+      ).join(", ")
+    }) v(id, type, data, cause, actor, at, i)`;
+  };
   const committedEvents = (
     emitted: Omit<Event, "seq" | "at">[],
     at: string,
@@ -584,7 +680,7 @@ export async function postgresStore(options: {
     }
     const [row] = await run(
       committed,
-      `SELECT collection, id FROM ${t("nodes")} WHERE (collection, id) IN ` +
+      `SELECT collection, id FROM ${t("nodes")} WHERE tenant = ${T} AND (collection, id) IN ` +
         `(SELECT * FROM unnest($1::text[], $2::text[])) LIMIT 1`,
       [docs.map(([collection]) => collection), docs.map(([, doc]) => doc._id)],
     );
@@ -594,7 +690,7 @@ export async function postgresStore(options: {
   /**
    * The transaction's held writes, events and positions as one statement with
    * no parameters, so it can travel with COMMIT. Text is dollar-quoted with a
-   * tag the text doesn't contain, so nothing needs escaping.
+   * tag the text can't end early, so nothing needs escaping.
    */
   const final = (
     emitted: Omit<Event, "seq" | "at">[],
@@ -602,21 +698,18 @@ export async function postgresStore(options: {
     at: string,
     held: Held,
   ) => {
-    const text = (value: string) => {
-      let tag = "$q$";
-      while (value.includes(tag)) tag = `$q${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}$`;
-      return `${tag}${value}${tag}`;
-    };
-    const nullable = (value?: string) => (value === undefined ? "NULL" : `${text(value)}::text`);
+    const text = constant;
+    // Typed, as VALUES rows: a bare NULL there would be text.
+    const nullable = (value?: string) => `${value === undefined ? "NULL" : text(value)}::text`;
     const ctes: string[] = [];
     const entries = Object.entries(positions).map(([name, seq]) => {
       if (!Number.isSafeInteger(seq)) throw new Error(`Invalid position ${seq}`);
-      return `(${text(`position:${name}`)}::text, ${seq}::bigint)`;
+      return `(${T}, ${text(`position:${name}`)}::text, ${seq}::bigint)`;
     });
     if (entries.length) {
       ctes.push(
-        `pos AS (INSERT INTO ${t("meta")} (key, value) VALUES ${entries.join(", ")} ` +
-          `ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value)`,
+        `pos AS (INSERT INTO ${t("meta")} (tenant, key, value) VALUES ${entries.join(", ")} ` +
+          `ON CONFLICT (tenant, key) DO UPDATE SET value = EXCLUDED.value)`,
       );
     }
     if (held.docs.length) {
@@ -626,28 +719,37 @@ export async function postgresStore(options: {
         }::jsonb, ${i})`
       );
       ctes.push(
-        `docs AS (INSERT INTO ${t("nodes")} (collection, id, doc) SELECT v.collection, v.id, ` +
-          `v.doc FROM (VALUES ${values.join(", ")}) v(collection, id, doc, i) ORDER BY v.i)`,
+        `docs AS (INSERT INTO ${t("nodes")} (tenant, collection, id, doc) SELECT ${T}, ` +
+          `v.collection, v.id, v.doc FROM (VALUES ${
+            values.join(", ")
+          }) v(collection, id, doc, i) ` +
+          `ORDER BY v.i)`,
       );
     }
     if (held.blobs.length) {
       const values = held.blobs.map((b) =>
-        `(${text(b.id)}::text, decode(${text(hex(b.data))}, 'hex'), ${nullable(b.type)})`
+        `(${T}, ${text(b.id)}::text, decode(${text(hex(b.data))}, 'hex'), ${nullable(b.type)})`
       );
       ctes.push(
-        `b AS (INSERT INTO ${t("blobs")} (id, data, type) VALUES ${values.join(", ")} ` +
+        `b AS (INSERT INTO ${t("blobs")} (tenant, id, data, type) VALUES ${values.join(", ")} ` +
           `ON CONFLICT DO NOTHING)`,
       );
     }
     const head = ctes.length ? `WITH ${ctes.join(", ")} ` : "";
     if (!emitted.length) return `${head}SELECT 1`;
-    const rows = emitted.map((e) =>
+    const when = `${text(at)}::text`;
+    const values = emitted.map((e, i) =>
       `(${text(e.id)}::text, ${text(e.type)}::text, ${text(JSON.stringify(e.data))}::jsonb, ` +
-      `${nullable(e.cause)}, ${e.actor ? `${text(JSON.stringify(e.actor))}::jsonb` : "NULL"}, ` +
-      `${text(at)}::text)`
+      `${nullable(e.cause)}, ${e.actor ? text(JSON.stringify(e.actor)) : "NULL"}::jsonb, ` +
+      `${when}, ${i})`
     );
-    return `${head}INSERT INTO ${t("events")} (id, type, data, cause, actor, at) ` +
-      `VALUES ${rows.join(", ")} ON CONFLICT (id) DO NOTHING RETURNING seq, id`;
+    return `${head}${
+      appending(
+        `SELECT * FROM (VALUES ${values.join(", ")}) v(id, type, data, cause, actor, at, i)`,
+        "x.i",
+        take(emitted.length),
+      )
+    } RETURNING seq, id`;
   };
 
   /** Upserts Processor positions into `meta`, as a CTE named `pos`, when there are any. */
@@ -657,8 +759,9 @@ export async function postgresStore(options: {
     const values = entries.map(([name, seq]) =>
       `(${bind(`position:${name}`)}::text, ${bind(seq)}::bigint)`
     );
-    return `pos AS (INSERT INTO ${t("meta")} (key, value) SELECT * FROM (VALUES ` +
-      `${values.join(", ")}) p${guard} ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value)`;
+    return `pos AS (INSERT INTO ${t("meta")} (tenant, key, value) SELECT ${T}, p.key, p.value ` +
+      `FROM (VALUES ${values.join(", ")}) p(key, value)${guard} ON CONFLICT (tenant, key) DO ` +
+      `UPDATE SET value = EXCLUDED.value)`;
   };
 
   /**
@@ -674,14 +777,17 @@ export async function postgresStore(options: {
     const { bind, params } = binder();
     const pos = saving(positions, bind);
     const ins = emitted.length
-      ? `INSERT INTO ${t("events")} (id, type, data, cause, actor, at) VALUES ` +
-        `${rows(emitted, at, bind).join(", ")} ON CONFLICT (id) DO NOTHING RETURNING seq, id`
+      ? `${appending(rows(emitted, at, bind), "x.i", take(emitted.length))} RETURNING seq, id`
       : "";
     if (!pos && !ins) return [];
     const sql = ins ? `${pos ? `WITH ${pos} ` : ""}${ins}` : `WITH ${pos} SELECT 1`;
     const inserted = await run(tx, sql, params);
     return ins ? committedEvents(emitted, at, inserted as { id: string; seq: number }[]) : [];
   };
+
+  /** The fence: this tenant's epoch, locked for share until the statement or transaction ends. */
+  const fence = `fence AS (SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch' ` +
+    `FOR SHARE)`;
 
   /**
    * Held writes, events and positions alone, as one statement that checks the
@@ -697,7 +803,7 @@ export async function postgresStore(options: {
     const { bind, params } = binder();
     const epoch = bind(owner);
     const fenced_ = ` WHERE (SELECT value FROM fence) = ${epoch}::bigint`;
-    const ctes = [`fence AS (SELECT value FROM ${t("meta")} WHERE key = 'epoch' FOR SHARE)`];
+    const ctes = [fence];
     if (held.docs.length) {
       const values = held.docs.map(([collection, doc], i) =>
         `(${bind(collection)}::text, ${bind(doc._id)}::text, ${
@@ -705,9 +811,9 @@ export async function postgresStore(options: {
         }::jsonb, ${i})`
       );
       ctes.push(
-        `docs AS (INSERT INTO ${t("nodes")} (collection, id, doc) SELECT v.collection, v.id, ` +
-          `v.doc FROM (VALUES ${values.join(", ")}) v(collection, id, doc, i)${fenced_} ` +
-          `ORDER BY v.i)`,
+        `docs AS (INSERT INTO ${t("nodes")} (tenant, collection, id, doc) SELECT ${T}, ` +
+          `v.collection, v.id, v.doc FROM (VALUES ${values.join(", ")}) v(collection, id, doc, i)` +
+          `${fenced_} ORDER BY v.i)`,
       );
     }
     if (held.blobs.length) {
@@ -715,17 +821,21 @@ export async function postgresStore(options: {
         `(${bind(b.id)}::text, ${bind(b.data)}::bytea, ${bind(b.type ?? null)}::text)`
       );
       ctes.push(
-        `b AS (INSERT INTO ${t("blobs")} (id, data, type) SELECT * FROM (VALUES ` +
-          `${values.join(", ")}) v${fenced_} ON CONFLICT DO NOTHING)`,
+        `b AS (INSERT INTO ${t("blobs")} (tenant, id, data, type) SELECT ${T}, v.id, v.data, ` +
+          `v.type FROM (VALUES ${values.join(", ")}) v(id, data, type)${fenced_} ON CONFLICT ` +
+          `DO NOTHING)`,
       );
     }
     if (emitted.length) {
       ctes.push(
-        `ins AS (INSERT INTO ${
-          t("events")
-        } (id, type, data, cause, actor, at) SELECT * FROM (VALUES ` +
-          `${rows(emitted, at, bind).join(", ")}) v${fenced_} ON CONFLICT (id) DO NOTHING ` +
-          `RETURNING seq, id)`,
+        `ins AS (${
+          appending(
+            rows(emitted, at, bind),
+            "x.i",
+            take(emitted.length),
+            `(SELECT value FROM fence) = ${epoch}::bigint`,
+          )
+        } RETURNING seq, id)`,
       );
     }
     const pos = saving(positions, bind, fenced_);
@@ -767,15 +877,22 @@ export async function postgresStore(options: {
       if (touched.has(key) && (kind === "other" || touched.get(key) === "other")) return undefined;
       touched.set(key, kind);
     }
-    return (async () => {
+    // Each write it records takes as many numbers as documents it may change; one of many
+    // documents can't say how many, so the command runs alone.
+    const alone = writes.some(({ write: op, record }) =>
+      record && (op.op === "update" || op.op === "delete") && op.options.many
+    );
+    const recorded = writes.reduce(
+      (sum, { write: op, record }) =>
+        sum + (!record ? 0 : op.op === "insert" ? op.docs.length : "collection" in op ? 1 : 0),
+      0,
+    );
+    return gate(alone, async () => {
       const at = new Date().toISOString();
       const { bind, params } = binder();
       const epoch = bind(owner);
       const ok = "EXISTS (SELECT 1 FROM ok)";
-      const ctes = [
-        `fence AS (SELECT value FROM ${t("meta")} WHERE key = 'epoch' FOR SHARE)`,
-        `ok AS (SELECT 1 FROM fence WHERE value = ${epoch}::bigint)`,
-      ];
+      const ctes = [fence, `ok AS (SELECT 1 FROM fence WHERE value = ${epoch}::bigint)`];
       const select = [`(SELECT value FROM fence) AS epoch`];
       // Every event, ordered by its step: emits as given, then each write's own.
       const sources: string[] = [];
@@ -796,7 +913,7 @@ export async function postgresStore(options: {
             // No ON CONFLICT: a duplicate _id fails the whole statement, so nothing commits.
             // With `ifAbsent`, existing ids are skipped, and only what went in is returned.
             ctes.push(
-              `w${n} AS (INSERT INTO ${t("nodes")} (collection, id, doc) SELECT ${
+              `w${n} AS (INSERT INTO ${t("nodes")} (tenant, collection, id, doc) SELECT ${T}, ${
                 bind(op.collection)
               }, v.id, v.doc FROM (VALUES ${values.join(", ")}) v(id, doc, i) WHERE ${ok} ` +
                 `ORDER BY v.i${op.ifAbsent ? " ON CONFLICT DO NOTHING" : ""} RETURNING id, doc, n)`,
@@ -819,19 +936,22 @@ export async function postgresStore(options: {
               inserted.push([op.collection, seed]);
             }
             ctes.push(
-              `prev${n} AS (SELECT id, doc, n FROM ${t("nodes")} WHERE ${ok} AND collection = ` +
-                `${collection} AND ${match} ORDER BY n${many ? "" : " LIMIT 1"} FOR UPDATE)`,
+              `prev${n} AS (SELECT id, doc, n FROM ${t("nodes")} WHERE ${ok} AND tenant = ${T} ` +
+                `AND collection = ${collection} AND ${match} ORDER BY n${
+                  many ? "" : " LIMIT 1"
+                } FOR UPDATE)`,
               `upd${n} AS (UPDATE ${t("nodes")} t SET doc = ${value} FROM prev${n} WHERE ` +
-                `t.collection = ${collection} AND t.id = prev${n}.id AND t.doc IS DISTINCT FROM ` +
-                `${value} RETURNING t.id, prev${n}.doc AS before, t.doc AS after, prev${n}.n)`,
+                `t.tenant = ${T} AND t.collection = ${collection} AND t.id = ANY (ARRAY (SELECT ` +
+                `id FROM prev${n})) AND t.id = prev${n}.id AND t.doc IS DISTINCT FROM ${value} ` +
+                `RETURNING t.id, prev${n}.doc AS before, t.doc AS after, prev${n}.n)`,
             );
             if (seed) {
               ctes.push(
                 `ins${n} AS (INSERT INTO ${
                   t("nodes")
-                } (collection, id, doc) SELECT ${collection}, ` +
-                  `${bind(seed._id)}, ${bind(JSON.stringify(seed))}::jsonb WHERE ${ok} AND NOT ` +
-                  `EXISTS (SELECT 1 FROM prev${n}) RETURNING id, doc, n)`,
+                } (tenant, collection, id, doc) SELECT ${T}, ` +
+                  `${collection}, ${bind(seed._id)}, ${bind(JSON.stringify(seed))}::jsonb WHERE ` +
+                  `${ok} AND NOT EXISTS (SELECT 1 FROM prev${n}) RETURNING id, doc, n)`,
               );
             }
             changes = `SELECT id, before, after, n AS ord FROM upd${n}` +
@@ -845,10 +965,12 @@ export async function postgresStore(options: {
           case "delete": {
             const collection = bind(op.collection);
             ctes.push(
-              `del${n} AS (DELETE FROM ${t("nodes")} t USING (SELECT id FROM ${t("nodes")} WHERE ` +
-                `${ok} AND collection = ${collection} AND ${where(op.filter, postgres, bind)}` +
-                `${page(op.options.many ? {} : { limit: 1 }, postgres, bind)}) d WHERE ` +
-                `t.collection = ${collection} AND t.id = d.id RETURNING t.id, t.doc, t.n)`,
+              `del${n} AS (DELETE FROM ${t("nodes")} t WHERE t.tenant = ${T} AND t.collection = ` +
+                `${collection} AND t.id = ANY (ARRAY (SELECT id FROM ${t("nodes")} WHERE ${ok} ` +
+                `AND tenant = ${T} AND collection = ${collection} AND ` +
+                `${where(op.filter, postgres, bind)}` +
+                `${page(op.options.many ? {} : { limit: 1 }, postgres, bind)})) RETURNING t.id, ` +
+                `t.doc, t.n)`,
             );
             changes = `SELECT id, doc AS before, NULL::jsonb AS after, n AS ord FROM del${n}`;
             select.push(`(SELECT count(*) FROM del${n})::int AS deleted${n}`);
@@ -856,20 +978,20 @@ export async function postgresStore(options: {
           }
           case "link":
             ctes.push(
-              `w${n} AS (INSERT INTO ${t("edges")} ("from", type, "to", data) SELECT ` +
-                `${bind(op.edge.from)}, ${bind(op.edge.type)}, ${bind(op.edge.to)}, ` +
+              `w${n} AS (INSERT INTO ${t("edges")} (tenant, "from", type, "to", data) SELECT ` +
+                `${T}, ${bind(op.edge.from)}, ${bind(op.edge.type)}, ${bind(op.edge.to)}, ` +
                 `${
                   bind(op.edge.data === undefined ? null : JSON.stringify(op.edge.data))
                 }::jsonb ` +
-                `WHERE ${ok} ON CONFLICT ("from", type, "to") DO UPDATE SET data = EXCLUDED.data)`,
+                `WHERE ${ok} ON CONFLICT (tenant, "from", type, "to") DO UPDATE SET data = ` +
+                `EXCLUDED.data)`,
             );
             break;
           case "unlink":
             ctes.push(
-              `w${n} AS (DELETE FROM ${t("edges")} WHERE ${ok} AND "from" = ${
+              `w${n} AS (DELETE FROM ${t("edges")} WHERE ${ok} AND tenant = ${T} AND "from" = ${
                 bind(op.edge.from)
-              } ` +
-                `AND type = ${bind(op.edge.type)} AND "to" = ${bind(op.edge.to)})`,
+              } AND type = ${bind(op.edge.type)} AND "to" = ${bind(op.edge.to)})`,
             );
             break;
         }
@@ -897,10 +1019,14 @@ export async function postgresStore(options: {
             `${bind(c.actor ? JSON.stringify(c.actor) : null)}::jsonb AS actor FROM changes${n}`,
         );
       }
-      const emits = c.steps.flatMap((step, i) => "emit" in step ? [{ ...step.emit, i }] : []);
+      const emits = unique(
+        c.steps.flatMap((step, i) =>
+          "emit" in step ? [{ ...step.emit, id: step.emit.id ?? crypto.randomUUID(), i }] : []
+        ),
+      );
       if (emits.length) {
         const values = emits.map((e) =>
-          `(${e.i}, 0, ${bind(e.id ?? crypto.randomUUID())}::text, ${bind(e.type)}::text, ` +
+          `(${e.i}, 0, ${bind(e.id)}::text, ${bind(e.type)}::text, ` +
           `${bind(JSON.stringify(e.data))}::jsonb, ${bind(e.cause ?? null)}::text, ` +
           `${bind(e.actor ? JSON.stringify(e.actor) : null)}::jsonb)`
         );
@@ -913,16 +1039,21 @@ export async function postgresStore(options: {
           `(${bind(b.id)}::text, ${bind(b.data)}::bytea, ${bind(b.type ?? null)}::text)`
         );
         ctes.push(
-          `b AS (INSERT INTO ${t("blobs")} (id, data, type) SELECT * FROM (VALUES ` +
-            `${values.join(", ")}) v WHERE ${ok} ON CONFLICT DO NOTHING)`,
+          `b AS (INSERT INTO ${t("blobs")} (tenant, id, data, type) SELECT ${T}, v.id, v.data, ` +
+            `v.type FROM (VALUES ${values.join(", ")}) v(id, data, type) WHERE ${ok} ON CONFLICT ` +
+            `DO NOTHING)`,
         );
       }
       if (sources.length) {
         ctes.push(
-          `ev AS (INSERT INTO ${t("events")} (id, type, data, cause, actor, at) SELECT id, type, ` +
-            `data, cause, actor, ${bind(at)} FROM (${sources.join(" UNION ALL ")}) x WHERE ${ok} ` +
-            `ORDER BY grp, ord ON CONFLICT (id) DO NOTHING ` +
-            `RETURNING seq, id, type, data, cause, actor, at)`,
+          `ev AS (${
+            appending(
+              `SELECT u.*, ${bind(at)}::text AS at FROM (${sources.join(" UNION ALL ")}) u`,
+              "x.grp, x.ord",
+              take(alone ? "alone" : emits.length + recorded),
+              ok,
+            )
+          } RETURNING seq, id, type, data, cause, actor, at)`,
         );
         select.push(`(SELECT jsonb_agg(to_jsonb(ev) ORDER BY seq) FROM ev) AS events`);
       }
@@ -932,6 +1063,8 @@ export async function postgresStore(options: {
       try {
         [row] = await run(writer, `WITH ${ctes.join(", ")} SELECT ${select.join(", ")}`, params);
       } catch (error) {
+        // Whether its events went in may be unknown: what ran alone moves past what the log holds.
+        if (alone && last !== undefined) last = Math.max(last, await load().catch(() => last!));
         // A duplicate _id fails the statement on the primary key.
         throw await conflict(error, inserted);
       }
@@ -945,6 +1078,7 @@ export async function postgresStore(options: {
         ...(e.actor == null ? {} : { actor: e.actor as Event["actor"] }),
         at: String(e.at),
       }));
+      if (alone) numbered(events.map((e) => e.seq));
       const results = writes.map(({ write: op }, n) => {
         const matched = Number(row[`matched${n}`] ?? 0);
         const seed = seeds[n];
@@ -960,111 +1094,123 @@ export async function postgresStore(options: {
       });
       const changes = writes.map((_, n) => (row[`changes${n}`] ?? []) as Change[]);
       return { results, events, changes };
-    })();
+    });
   };
 
   return {
     ...reader(committed),
     command,
-    async open() {
-      const [row] = await run(
-        writer,
-        `UPDATE ${t("meta")} SET value = value + 1 WHERE key = 'epoch' RETURNING value`,
-      );
-      return { epoch: Number(row.value) };
-    },
+    // Alone: the writes before it end first.
+    open: () =>
+      gate(true, async () => {
+        last = undefined;
+        const [row] = await run(
+          writer,
+          `INSERT INTO ${t("meta")} (tenant, key, value) VALUES (${T}, 'epoch', 1) ON CONFLICT ` +
+            `(tenant, key) DO UPDATE SET value = meta.value + 1 RETURNING value`,
+        );
+        // Then the log: whoever wrote last may have been another owner, who can't any more.
+        last = await load();
+        return { epoch: Number(row.value) };
+      }),
     async positions() {
       const rows = await run(
         committed,
-        `SELECT key, value FROM ${t("meta")} WHERE key LIKE 'position:%'`,
+        `SELECT key, value FROM ${t("meta")} WHERE tenant = ${T} AND key LIKE 'position:%'`,
       );
       return Object.fromEntries(
         rows.map((row) => [String(row.key).slice("position:".length), Number(row.value)]),
       );
     },
-    async transaction(owner, work, options = {}) {
-      const positions = options.positions ?? {};
-      // The database transaction opens with the command's first statement. A
-      // command that only records events (an action's completion, say) needs
-      // none: its events go in as one fenced statement, atomic on its own.
-      const emitted: Omit<Event, "seq" | "at">[] = [];
-      let open:
-        | { tx: Promise<Session>; done: PromiseWithResolvers<void>; settled: Promise<void> }
-        | undefined;
-      const begin = () => {
-        if (!open) {
-          const ready = Promise.withResolvers<Session>();
-          const done = Promise.withResolvers<void>();
-          done.promise.catch(() => {});
-          const settled = writer.transaction(async (tx: Session) => {
-            // Unparameterized, so Ominipg sends it together with BEGIN. FOR SHARE
-            // waits for a newer owner's claim to settle, then sees it.
+    transaction: (owner, work, options = {}) =>
+      gate(false, async () => {
+        const positions = options.positions ?? {};
+        // The database transaction opens with the command's first statement. A
+        // command that only records events (an action's completion, say) needs
+        // none: its events go in as one fenced statement, atomic on its own.
+        const emitted: Omit<Event, "seq" | "at">[] = [];
+        let open:
+          | { tx: Promise<Session>; done: PromiseWithResolvers<void>; settled: Promise<void> }
+          | undefined;
+        const begin = () => {
+          if (closed) throw new Error("This store is closed.");
+          if (!open) {
+            const ready = Promise.withResolvers<Session>();
+            const done = Promise.withResolvers<void>();
+            done.promise.catch(() => {});
+            const settled = writer.transaction(async (tx: Session) => {
+              // Unparameterized, so Ominipg sends it together with BEGIN. FOR SHARE
+              // waits for a newer owner's claim to settle, then sees it.
+              const [fence] = await run(
+                tx,
+                `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch' FOR SHARE`,
+              );
+              if (Number(fence?.value) !== owner) throw fenced();
+              ready.resolve(tx);
+              await done.promise;
+            });
+            settled.catch((error) => ready.reject(error));
+            ready.promise.catch(() => {});
+            open = { tx: ready.promise, done, settled };
+          }
+          return open.tx;
+        };
+        const lazy: Session = { query: async (sql, params) => (await begin()).query(sql, params) };
+        const held: Held = { docs: [], blobs: [] };
+        // What the last statement inserts, to name a duplicate _id if it fails.
+        let inserting: [string, Doc][] = [];
+        try {
+          const scope = transaction(lazy, emitted, held);
+          const result = await work(scope);
+          const events = unique(emitted);
+          const writes = events.length || Object.keys(positions).length ||
+            held.docs.length || held.blobs.length;
+          inserting = held.docs;
+          if (!open) {
+            if (writes) return { result, events: await append(owner, events, positions, held) };
+            // Nothing to write: still tell a fenced owner so.
             const [fence] = await run(
-              tx,
-              `SELECT value FROM ${t("meta")} WHERE key = 'epoch' FOR SHARE`,
+              writer,
+              `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch'`,
             );
-            if (Number(fence.value) !== owner) throw fenced();
-            ready.resolve(tx);
-            await done.promise;
-          });
-          settled.catch((error) => ready.reject(error));
-          ready.promise.catch(() => {});
-          open = { tx: ready.promise, done, settled };
-        }
-        return open.tx;
-      };
-      const lazy: Session = { query: async (sql, params) => (await begin()).query(sql, params) };
-      const held: Held = { docs: [], blobs: [] };
-      // What the last statement inserts, to name a duplicate _id if it fails.
-      let last: [string, Doc][] = [];
-      try {
-        const scope = transaction(lazy, emitted, held);
-        const result = await work(scope);
-        const writes = emitted.length || Object.keys(positions).length ||
-          held.docs.length || held.blobs.length;
-        last = held.docs;
-        if (!open) {
-          if (writes) return { result, events: await append(owner, emitted, positions, held) };
-          // Nothing to write: still tell a fenced owner so.
-          const [fence] = await run(writer, `SELECT value FROM ${t("meta")} WHERE key = 'epoch'`);
-          if (Number(fence.value) !== owner) throw fenced();
-          return { result, events: [] };
-        }
-        const tx = await open.tx;
-        const finish = (tx as { finish?: Finish }).finish;
-        if (finish && writes) {
-          // Ominipg 0.11.2+: the last statement and COMMIT go in one round trip.
-          // It must carry no parameters, so its values are written as literals.
-          const at = new Date().toISOString();
-          const sql = final(emitted, positions, at, held);
-          statements++;
-          trace?.(sql);
-          const { rows } = await finish.call(tx, sql);
+            if (Number(fence?.value) !== owner) throw fenced();
+            return { result, events: [] };
+          }
+          const tx = await open.tx;
+          const finish = (tx as { finish?: Finish }).finish;
+          if (finish && writes) {
+            // Ominipg 0.11.2+: the last statement and COMMIT go in one round trip.
+            // It must carry no parameters, so its values are written as literals.
+            const at = new Date().toISOString();
+            const sql = final(events, positions, at, held);
+            statements++;
+            trace?.(sql);
+            const { rows } = await finish.call(tx, sql);
+            open.done.resolve();
+            await open.settled;
+            return {
+              result,
+              events: events.length
+                ? committedEvents(events, at, rows as { id: string; seq: number }[])
+                : [],
+            };
+          }
+          await scope.flush();
+          const recorded = await record(tx, events, positions);
           open.done.resolve();
           await open.settled;
-          return {
-            result,
-            events: emitted.length
-              ? committedEvents(emitted, at, rows as { id: string; seq: number }[])
-              : [],
-          };
+          statements++; // COMMIT
+          return { result, events: recorded };
+        } catch (error) {
+          if (open) {
+            open.done.reject(error);
+            await open.settled.catch(() => {});
+          }
+          throw await conflict(error, inserting);
         }
-        await scope.flush();
-        const events = await record(tx, emitted, positions);
-        open.done.resolve();
-        await open.settled;
-        statements++; // COMMIT
-        return { result, events };
-      } catch (error) {
-        if (open) {
-          open.done.reject(error);
-          await open.settled.catch(() => {});
-        }
-        throw await conflict(error, last);
-      }
-    },
+      }),
     async index(collections) {
-      const wanted = new Set<string>();
+      const wanted = new Map<string, string>();
       for (const [collection, specs] of Object.entries(collections)) {
         scalars.set(
           collection,
@@ -1072,51 +1218,124 @@ export async function postgresStore(options: {
         );
         for (const spec of specs) {
           const name = indexName(collection, spec.fields.map((f) => f.path));
-          wanted.add(name);
-          await run(
-            writer,
-            `CREATE INDEX IF NOT EXISTS ${ident(name)} ON ${t("nodes")} ` +
-              `(${spec.fields.map((f) => `${scalar(f.path, f.type)} NULLS FIRST`).join(", ")}) ` +
-              `WHERE collection = '${collection.replaceAll("'", "''")}'`,
+          wanted.set(
+            name,
+            `CREATE INDEX IF NOT EXISTS ${ident(name)} ON ${t("nodes")} (tenant, ` +
+              `${spec.fields.map((f) => `${scalar(f.path, f.type)} NULLS FIRST`).join(", ")}) ` +
+              `WHERE collection = ${literal(collection)}`,
           );
         }
       }
-      // Indexes no longer declared go.
-      const existing = await run(
-        writer,
-        `SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = 'nodes' ` +
-          `AND indexname LIKE 'ix\\_%'`,
-        [schema],
+      // A schema's indexes serve all its tenants: this process makes them once.
+      const known = remembered(pool);
+      const key = `${schema}\u0000indexes`;
+      const signature = [...wanted.keys()].sort().join(",");
+      if (known.get(key) === signature) return;
+      // Making an index that exists still locks the table against writes: only missing ones.
+      const existing = new Set(
+        (await run(
+          writer,
+          `SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = 'nodes' ` +
+            `AND indexname LIKE 'ix\\_%'`,
+          [schema],
+        )).map((row) => String(row.indexname)),
       );
-      for (const { indexname } of existing) {
-        if (!wanted.has(String(indexname))) {
-          await run(writer, `DROP INDEX IF EXISTS ${ident(schema)}.${ident(String(indexname))}`);
+      for (const [name, ddl] of wanted) if (!existing.has(name)) await run(writer, ddl);
+      // Indexes no longer declared go, from a schema of its own: tenants sharing one may run
+      // other versions of the app, which still declare them.
+      const stale = [...existing].filter((name) => !wanted.has(name));
+      if (stale.length && !(await others(counted(writer), schema, tenant))) {
+        for (const name of stale) {
+          await run(writer, `DROP INDEX IF EXISTS ${ident(schema)}.${ident(name)}`);
         }
       }
+      known.set(key, signature);
     },
+    /**
+     * One view per collection for the schema, showing the rows of one tenant:
+     * the session's `copilotz.tenant` setting, else "" (a schema's only
+     * tenant), so `SELECT * FROM message` reads as before. A view can't keep
+     * a tenant from the tables beside it, so the views are for reading, not
+     * a boundary. One set serves every tenant (not a set each, which would
+     * grow the catalog with the tenants), and it changes only when a
+     * collection's fields do.
+     */
     async describe(collections) {
-      for (const [name, def] of Object.entries(collections)) {
-        const fields = Object.keys(
-          (def as { properties?: Record<string, unknown> }).properties ?? {},
-        ).filter((field) => field !== "_id");
-        const columns = fields.map((field) => `doc ->> ${literal(field)} AS ${ident(field)}`);
-        await writer.query(`DROP VIEW IF EXISTS ${t(ident(name))}`);
-        await writer.query(
-          `CREATE VIEW ${t(ident(name))} AS SELECT ${["id AS _id", ...columns].join(", ")} ` +
-            `FROM ${t("nodes")} WHERE collection = ${literal(name)} ORDER BY n`,
+      const views = Object.entries(collections)
+        .filter(([name]) => !(TABLES as readonly string[]).includes(name))
+        .map(([name, def]) => {
+          const fields = Object.keys(
+            (def as { properties?: Record<string, unknown> }).properties ?? {},
+          ).filter((field) => field !== "_id");
+          const columns = fields.map((field) => `doc ->> ${literal(field)} AS ${ident(field)}`);
+          const sql = `SELECT ${["id AS _id", ...columns].join(", ")} FROM ${t("nodes")} ` +
+            `WHERE tenant = coalesce(current_setting('copilotz.tenant', true), '') AND ` +
+            `collection = ${literal(name)} ORDER BY n`;
+          return { name, sql, note: `copilotz ${hash(sql)}` };
+        });
+      const known = remembered(pool);
+      const key = `${schema}\u0000views`;
+      const signature = views.map((view) => `${view.name}:${view.note}`).join(",");
+      if (known.get(key) === signature) return;
+      /** The views not as described: missing, or another definition. A table's name is skipped. */
+      const stale = async (db: Session) => {
+        const { rows } = await db.query(
+          `SELECT c.relname AS name, c.relkind AS kind, obj_description(c.oid, 'pg_class') AS ` +
+            `note FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace WHERE ` +
+            `s.nspname = $1 AND c.relname = ANY($2::text[])`,
+          [schema, views.map((view) => view.name)],
+        );
+        const found = new Map(rows.map((row) => [String(row.name), row]));
+        return views.filter((view) => {
+          const it = found.get(view.name);
+          return !it || (it.kind === "v" && it.note !== view.note);
+        });
+      };
+      if ((await stale(counted(committed))).length) {
+        await writer.transaction(async (tx: Session) => {
+          await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+            `copilotz:${schema}:views`,
+          ]);
+          for (const view of await stale(tx)) {
+            const name = t(ident(view.name));
+            await tx.query(`DROP VIEW IF EXISTS ${name}`);
+            await tx.query(`CREATE VIEW ${name} AS ${view.sql}`);
+            await tx.query(`COMMENT ON VIEW ${name} IS ${literal(view.note)}`);
+          }
+        });
+      }
+      known.set(key, signature);
+    },
+    async inspect(sql) {
+      // Any SQL can reach the tables, and so other tenants' rows: only in a schema of its own.
+      if (await others(counted(committed), schema, tenant)) {
+        throw Object.assign(
+          new Error("This store shares its schema with other tenants: it can't be inspected."),
+          { code: "shared_schema" },
         );
       }
+      return await committed.transaction(async (tx: Session) => {
+        // The views show this tenant, and unqualified names are the schema's.
+        await tx.query(
+          `SELECT set_config('copilotz.tenant', ${T}, true), set_config('search_path', ` +
+            `${constant(`${ident(schema)}, public`)}, true)`,
+        );
+        return (await tx.query(sql)).rows;
+      }, { readOnly: true });
     },
-    inspect: async (sql) =>
-      await committed.transaction(
-        async (tx: Session) => (await tx.query(sql)).rows,
-        { readOnly: true },
-      ),
     roundTrips: () => statements,
     close,
-    /** Deletes everything this store holds (its schema), then closes: a tenant gone for good. */
+    /**
+     * Deletes everything this store holds, then closes: a tenant gone for
+     * good. Its schema goes with it when no other tenant is in it.
+     */
     async drop() {
-      await run(writer, `DROP SCHEMA IF EXISTS ${ident(schema)} CASCADE`);
+      if (await others(counted(writer), schema, tenant)) {
+        await dropTenant({ pool, schema, tenant });
+      } else {
+        await run(writer, `DROP SCHEMA IF EXISTS ${ident(schema)} CASCADE`);
+        forget(pool, schema);
+      }
       await close();
     },
   };

@@ -117,9 +117,11 @@ async function start(make: () => Store | Promise<Store>) {
   await rt.idle();
   const advance = async (ms: number) => {
     clock.advance(ms);
-    await rt.idle();
-    // A run's send starts a turn: let it finish too.
-    await rt.idle();
+    // A run's send starts a turn just after the run: idle until nothing more starts.
+    do {
+      await rt.idle();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } while (rt.stats().pending > 0);
   };
   const timers = async () => (await store.find(TIMERS, {})) as unknown as Timer[];
   return { rt, advance, timers };

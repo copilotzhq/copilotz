@@ -15,16 +15,19 @@ import { memoryStore } from "../memory/mod.ts";
 import { sqliteStore } from "../sql/sqlite/mod.ts";
 import { postgresStore } from "../sql/postgres/mod.ts";
 import { env, tempFile, temporary, test } from "../../testing/mod.ts";
+import { pooled } from "./pooled.ts";
 
 const POSTGRES = env("COPILOTZ_TEST_POSTGRES_URL");
 const stores: Record<string, () => Store | Promise<Store>> = {
   memory: memoryStore,
   sqlite: () => sqliteStore({ path: tempFile(".sqlite") }),
   pglite: () => postgresStore({ url: ":memory:" }),
+  "pglite tenant": () => pooled(":memory:"),
   ...(POSTGRES
     ? {
       postgres: () =>
         temporary(postgresStore({ url: POSTGRES, schema: `v_${crypto.randomUUID().slice(0, 8)}` })),
+      "postgres tenant": () => pooled(POSTGRES),
     }
     : {}),
 };

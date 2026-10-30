@@ -10,6 +10,7 @@ import { memoryStore } from "../memory/mod.ts";
 import { sqliteStore } from "../sql/sqlite/mod.ts";
 import { postgresStore } from "../sql/postgres/mod.ts";
 import { env, tempFile, temporary, test } from "../../testing/mod.ts";
+import { pooled } from "./pooled.ts";
 
 const temp = () => tempFile(".sqlite");
 
@@ -21,8 +22,13 @@ const adapters: Record<string, () => Store | Promise<Store>> = {
   memory: () => memoryStore(),
   sqlite: () => sqliteStore({ path: temp() }),
   pglite: () => postgresStore({ url: ":memory:" }),
+  // A tenant of a schema it shares with another, which must never show.
+  "pglite tenant": () => pooled(":memory:"),
   ...(POSTGRES
-    ? { postgres: () => temporary(postgresStore({ url: POSTGRES, schema: schema() })) }
+    ? {
+      postgres: () => temporary(postgresStore({ url: POSTGRES, schema: schema() })),
+      "postgres tenant": () => pooled(POSTGRES),
+    }
     : {}),
 };
 

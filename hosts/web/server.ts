@@ -25,7 +25,9 @@
  *   (chat's `file.content`), with ranges for audio; `?download=1` saves it
  *   (see `files.ts`).
  * - Plugins' own paths, their `routes` resource: a webhook, an OAuth callback,
- *   an API, a download (see `routes.ts`).
+ *   an API, a download (see `routes.ts`). A request to a host a route takes
+ *   (a preview's) is that route's alone, whatever its path: never the page,
+ *   the code or the socket.
  * - `GET /manifest.webmanifest` and `GET /sw.js`: the app, installable: its
  *   manifest (name, colours, icons drawn from the theme's mark) and its
  *   service worker, which keeps the code at hand and offers new versions
@@ -49,7 +51,7 @@ import { BASE } from "./style.ts";
 import { fontsOf, fromGoogle, plainColour, preloadsOf, themeCss } from "./theme/css.ts";
 import type { Theme } from "./theme/default.ts";
 import { HOST_ASSETS, hostFiles } from "./theme/files/mod.ts";
-import { routeServer } from "./routes.ts";
+import { type Front, routeServer } from "./routes.ts";
 import { ownPath } from "./theme/own-path.ts";
 import { pictureOf } from "./theme/picture.ts";
 import type { Tickets } from "./tickets.ts";
@@ -102,10 +104,20 @@ export type WebServerOptions = {
    * under `/assets/copilotz/`, which is the host's own.
    */
   assets?: Record<string, Asset>;
+  /**
+   * The app's front (a Cloudflare worker before it): a request carrying its
+   * secret (`x-copilotz-front`) is for the host it forwards
+   * (`x-forwarded-host`), which routes by host go by. Without it, or
+   * without the secret, forwarded headers are ignored.
+   */
+  front?: Front;
 };
 
 export type { Asset };
 export {
+  type Front,
+  hostMatches,
+  hostOf,
   type HttpAnswer,
   type HttpRequest,
   httpRequest,
@@ -281,7 +293,7 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
     return secret ? await runtime.query<Actor | null>("credential.actor", { secret }) : null;
   };
   const files = fileServer(runtime, whom);
-  const routes = routeServer(runtime, whom);
+  const routes = routeServer(runtime, whom, options.front ? { front: options.front } : {});
 
   /** The service worker, for this version of the code: its version is the code's own. */
   let worker: Promise<string> | undefined;
@@ -303,7 +315,8 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
     });
 
   return async (request) => {
-    const asset = assets(request) ?? files(request) ?? routes(request);
+    // Routes first: a host a route takes is all its own (the host's paths are never routes').
+    const asset = routes(request) ?? assets(request) ?? files(request);
     if (asset) return await asset;
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;

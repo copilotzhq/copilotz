@@ -1,7 +1,8 @@
 /**
  * A computer for apps' tests: it keeps the secret it's told, lists the jobs
  * it's given, and sends `archive` (a gzipped tar) as a folder, in chunks,
- * or the failure it's given instead, as the computer program would.
+ * or the failure it's given instead, or stops partway, as the computer
+ * program would.
  */
 import { createWorker } from "@oxian/oxian-js";
 import { type Job, WORK } from "../../computers/shared/workloads.ts";
@@ -17,6 +18,8 @@ export function archivingComputer(
     archive: Uint8Array;
     jobs?: Partial<Job>[];
     failArchive?: { message: string; code: string };
+    /** Stops the archive partway, with this error, as the program does past `maxBytes`. */
+    stopArchive?: string;
   },
 ) {
   const asked: { work: string; input: Record<string, unknown> }[] = [];
@@ -72,6 +75,9 @@ export function archivingComputer(
         let at = 0;
         return new ReadableStream<Uint8Array>({
           pull(controller) {
+            if (options.stopArchive && at > 0) {
+              return controller.error(new Error(options.stopArchive));
+            }
             if (at >= bytes.length) return controller.close();
             controller.enqueue(bytes.slice(at, at + 64));
             at += 64;

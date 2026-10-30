@@ -1,46 +1,38 @@
 /**
  * An app's host (`<label>.<domain>`) in the directory, which the front (the
- * Cloudflare worker) asks where to send each host's requests: claimed when
- * the app is recorded (no target yet: it's building), claimed again with
- * its target once it's live, released when it's removed. An org's runtime
- * reaches the directory through the orgs host's `directory` resource; an
- * app with no directory (one runtime, development) claims nothing, and
- * its own records keep labels apart.
+ * Cloudflare worker) asks where to send each host's requests: claimed with
+ * no target when the app is recorded (it's building: its label is held, and
+ * nothing routes there yet), claimed again with its target once it's live
+ * (the front then sends the host straight to its service), and released
+ * when it's removed. An org's runtime reaches the directory through the
+ * orgs host's `directory` resource; a single runtime (development) has
+ * none, claims nothing, and its own records keep labels apart.
  *
- * A host another org holds is taken: `claimHost` throws with a code saying
- * so (`taken`, `conflict`, `exists`), or answers false.
+ * `claimHost` refuses (`forbidden`) another org's host, and the app's own.
  */
 import type { Resources } from "../../../../runtime/mod.ts";
 import { codeOf } from "./errors.ts";
 
 /** What the apps plugin uses of the directory's resource. */
 export type HostClaims = {
-  claimHost?(host: string, options?: { target?: string }): Promise<unknown>;
-  releaseHost?(host: string): Promise<unknown>;
+  claimHost?(host: string, claim?: { target?: string }): Promise<void>;
+  releaseHost?(host: string): Promise<void>;
 };
-
-const TAKEN = new Set(["taken", "conflict", "exists", "already_exists", "host_taken"]);
 
 const claimsOf = (ctx: { resources: Resources }) =>
   ctx.resources.directory as HostClaims | undefined;
 
-/** Claims `host` (routing it to `target`, when given); false when another holds it. */
+/** Claims `host` (routing it to `target`, when given); false when it's someone else's. */
 export async function claim(
   ctx: { resources: Resources },
   host: string,
   target?: string,
 ): Promise<boolean> {
-  const claims = claimsOf(ctx);
-  if (!claims?.claimHost) return true;
   try {
-    const said = await claims.claimHost(host, target ? { target } : {});
-    const refused = said === false ||
-      (typeof said === "object" && said !== null &&
-        ((said as { claimed?: unknown }).claimed === false ||
-          (said as { ok?: unknown }).ok === false));
-    return !refused;
+    await claimsOf(ctx)?.claimHost?.(host, target ? { target } : {});
+    return true;
   } catch (error) {
-    if (TAKEN.has(codeOf(error) ?? "")) return false;
+    if (codeOf(error) === "forbidden") return false;
     throw error;
   }
 }

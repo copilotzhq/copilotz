@@ -37,18 +37,20 @@ const cy: Actor = { kind: "person", id: "cy" };
 
 type Published = { app: string; url: string; status: string };
 
-/** An app host that builds nothing: it reads what it's sent, and says what it did. */
+/**
+ * An app host that builds nothing: it reads what it's sent, and says what it
+ * did; its builds fail with `state.fail` while it's set.
+ */
 function fakeHost(options: { failBuild?: string } = {}) {
   const calls: Record<string, unknown>[] = [];
+  const state = { fail: options.failBuild };
   let revisions = 0;
   const host: AppHost = {
     async build({ app, archive, command, port }) {
       const files: string[] = [];
       for await (const entry of entries(archive)) files.push(entry.name);
       calls.push({ op: "build", app, command, port, files });
-      if (options.failBuild) {
-        throw Object.assign(new Error(options.failBuild), { minutes: 1 });
-      }
+      if (state.fail) throw Object.assign(new Error(state.fail), { minutes: 1 });
       return { image: `fake/${app}:${revisions + 1}`, minutes: 2 };
     },
     deploy({ app, image, port }) {
@@ -69,7 +71,7 @@ function fakeHost(options: { failBuild?: string } = {}) {
       return Promise.resolve({ vcpuSeconds: 10, gibSeconds: 5, requests: 7 });
     },
   };
-  return { host, calls };
+  return { host, calls, state };
 }
 
 /** The directory's hosts, as an org's runtime reaches them; `taken`: other orgs' already. */
@@ -81,7 +83,9 @@ function fakeDirectory(taken: string[] = []) {
     claimHost: (host: string, options?: { target?: string }) => {
       said.push([host, options?.target]);
       if (taken.includes(host)) {
-        return Promise.reject(Object.assign(new Error("taken"), { code: "taken" }));
+        return Promise.reject(
+          Object.assign(new Error(`${host} is another org's`), { code: "forbidden" }),
+        );
       }
       claims.set(host, options?.target ?? null);
       return Promise.resolve();
@@ -386,6 +390,48 @@ test("a folder the computer can't archive fails the app; without billing nothing
       await computer.worker.stop();
     }
   }, { billing: false });
+});
+
+test("an archive that stops partway fails the app; a redeploy that fails leaves it live, saying why", async () => {
+  await setup(async (s) => {
+    const { rt } = s;
+    const computer = await connect(s, { stopArchive: "it's over 512 MiB (too_large)" });
+    try {
+      const published = await rt.call<Published>("app.publish", { name: "big", port: 4000 }, {
+        actor: ana,
+      });
+      await settled(rt, published.app);
+      const app = await appOf(rt, published.app);
+      assertEquals(app.status, "failed");
+      // Relayed through the owner to plugin code, the stream's own message is lost (`handler_failed`).
+      assertStringIncludes(app.error!, "couldn't archive the folder");
+    } finally {
+      await computer.worker.stop();
+    }
+  });
+
+  await setup(async (s) => {
+    const { rt, host } = s;
+    const computer = await connect(s);
+    try {
+      const published = await rt.call<Published>("app.publish", { name: "site", port: 4000 }, {
+        actor: ana,
+      });
+      await settled(rt, published.app);
+      host.state.fail = "the new one doesn't build";
+      await rt.call("app.redeploy", { app: published.app }, { actor: ana });
+      await settled(rt, published.app);
+      const app = await appOf(rt, published.app);
+      // Its first revision still runs.
+      assertEquals([app.status, app.error, app.revision], [
+        "live",
+        "the new one doesn't build",
+        "site-00001",
+      ]);
+    } finally {
+      await computer.worker.stop();
+    }
+  });
 });
 
 test("taking an app down removes it at the host and lets its host go: its publisher's or a manager's call", async () => {

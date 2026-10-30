@@ -226,3 +226,35 @@ export const tools: Record<string, Tool> = {
   browser,
   web_search: webSearch,
 };
+
+/**
+ * `preview`: an address for what one of the agent's jobs serves (a dev
+ * server, a site), for the space's members to open (see actions/preview.ts).
+ */
+tools.preview = tool({
+  description: "Makes a link to what one of your background jobs serves (a dev server, a site), " +
+    "for the people of this space to open in their browser: give the job (its id or name) or " +
+    "the port it serves. Start the server with start_job first.",
+  input: {
+    type: "object",
+    properties: {
+      job: { type: "string" },
+      port: { type: "integer", minimum: 1, maximum: 65535 },
+    },
+  },
+  run: async (input, ctx) => {
+    // As the agent reads it: a conversation its person doesn't reach has no space for it.
+    const thread = await ctx.db.collection<{ in?: string }>("thread").findOne({ _id: ctx.thread });
+    if (!thread?.in) return "This conversation isn't in a space, so there's no computer here.";
+    try {
+      const { url } = await ctx.call<{ url: string }>("computer.preview", {
+        in: thread.in,
+        ...(input.job ? { job: input.job } : {}),
+        ...(input.port ? { port: input.port } : {}),
+      });
+      return `${url}\nOnly this space's members can open it, signed in to the app.`;
+    } catch (error) {
+      return `Error: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  },
+});

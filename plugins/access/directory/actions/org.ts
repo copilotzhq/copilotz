@@ -275,7 +275,8 @@ export const placeOrgAction = defineAction({
 });
 
 export const deleteOrgAction = defineAction({
-  description: "Forgets an org: it, who belonged, and its invitations (its rows are dropped apart)",
+  description:
+    "Forgets an org: it, who belonged, its invitations and hosts (its rows are dropped apart)",
   input: {
     type: "object",
     properties: { org: { type: "string" } },
@@ -286,6 +287,7 @@ export const deleteOrgAction = defineAction({
     await ctx.transaction(async (tx) => {
       await tx.db.collection("membership").deleteMany({ org: input.org });
       await tx.db.collection("invite").deleteMany({ org: input.org });
+      await tx.db.collection("orgHost").deleteMany({ org: input.org });
       await tx.db.collection("org").deleteOne({ _id: input.org });
     });
     return { deleted: input.org };

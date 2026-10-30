@@ -13,7 +13,7 @@ import {
   WORK,
 } from "../../computers/shared/workloads.ts";
 import type { AppDoc } from "../collections/app.ts";
-import { failure } from "./errors.ts";
+import { failure, messageOf } from "./errors.ts";
 
 export type Where = { computer: string; online: boolean; scope: Scope };
 
@@ -82,7 +82,10 @@ export async function unlessFailed(
         controller.enqueue(head);
         return;
       }
-      const next = await reader.read();
+      // A computer that stops partway (past `maxBytes`, `tar` failing) errors the stream.
+      const next = await reader.read().catch((error) => {
+        throw failure(`The computer couldn't archive the folder: ${messageOf(error)}`);
+      });
       if (next.done) controller.close();
       else controller.enqueue(next.value);
     },

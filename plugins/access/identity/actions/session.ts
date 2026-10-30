@@ -13,7 +13,8 @@ export const startSession = defineAction({
   description: "Starts a session for a verified person; its secret is returned once",
   input: {
     type: "object",
-    properties: { person: { type: "string" }, ms: { type: "number" } },
+    // `staff`: platform staff entering an org, who reach all of it (on the record as them).
+    properties: { person: { type: "string" }, ms: { type: "number" }, staff: { type: "boolean" } },
     required: ["person"],
     additionalProperties: false,
   },
@@ -25,6 +26,7 @@ export const startSession = defineAction({
       kind: "session",
       person: input.person,
       hint: made.slice(0, 8),
+      ...(input.staff ? { staff: true } : {}),
       expires: new Date(now + (input.ms ?? LASTS)).toISOString(),
       at: new Date(now).toISOString(),
     });
@@ -48,5 +50,20 @@ export const endSession = defineAction({
       kind: "session",
     });
     return { ended: ended.acknowledged ? ended.deletedCount : 0 };
+  },
+});
+
+export const revokeCredentials = defineAction({
+  description: "Ends every session and key of a person: they're out, wherever they're signed in",
+  input: {
+    type: "object",
+    properties: { person: { type: "string" } },
+    required: ["person"],
+    additionalProperties: false,
+  },
+  // No `allow`: the system's (taking someone out of an org).
+  run: async (ctx, input) => {
+    const ended = await ctx.db.collection("credential").deleteMany({ person: input.person });
+    return { ended: ended.deletedCount };
   },
 });

@@ -20,7 +20,7 @@
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { createKey, revokeKey } from "./actions/key.ts";
 import { emailOf, setPerson } from "./actions/person.ts";
-import { endSession, startSession } from "./actions/session.ts";
+import { endSession, revokeCredentials, startSession } from "./actions/session.ts";
 import { credential } from "./collections/credential.ts";
 import { person } from "./collections/person.ts";
 
@@ -33,6 +33,7 @@ export const identity: Plugin = definePlugin({
   actions: {
     "session.start": startSession,
     "session.end": endSession,
+    "credential.revoke": revokeCredentials,
     "key.create": createKey,
     "key.revoke": revokeKey,
     "person.set": setPerson,

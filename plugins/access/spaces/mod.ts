@@ -52,6 +52,18 @@ import {
   sendInvitationAction,
 } from "./actions/invitation.ts";
 import { removeMemberAction, setMemberAction } from "./actions/member.ts";
+import {
+  inviteToOrgAction,
+  joinOrgAction,
+  orgInvitesAction,
+  orgMeAction,
+  orgPeopleAction,
+  orgRoleAction,
+  orgSummaryAction,
+  removeFromOrgAction,
+  renameOrgAction,
+  uninviteAction,
+} from "./actions/org.ts";
 import { personalAction } from "./actions/personal.ts";
 import { renameAction } from "./actions/rename.ts";
 import { shareAction } from "./actions/share.ts";
@@ -68,11 +80,22 @@ import { elsewhereView } from "./views/elsewhere.ts";
 import { whereView } from "./views/where.ts";
 
 export type { Invitation } from "./collections/invitation.ts";
+export type { DirectoryPort } from "./actions/org.ts";
 export type { Member } from "./collections/member.ts";
 export type { Reached, Space } from "./collections/space.ts";
 export type { SpaceInvite, SpaceSidebar, SpaceTab } from "./contract.ts";
 export type { Request } from "./collections/request.ts";
-export { memberKey, type Reach, reachOf, ROLES, type Verb } from "./shared/reach.ts";
+export {
+  memberKey,
+  ORG,
+  ORG_ROLES,
+  type OrgRole,
+  orgRoleOf,
+  type Reach,
+  reachOf,
+  ROLES,
+  type Verb,
+} from "./shared/reach.ts";
 export type { Shared } from "./shared/rules.ts";
 
 export const spaces: Plugin = definePlugin({
@@ -91,6 +114,16 @@ export const spaces: Plugin = definePlugin({
     "space.roster": rosterAction,
     "member.set": setMemberAction,
     "member.remove": removeMemberAction,
+    "org.join": joinOrgAction,
+    "org.role": orgRoleAction,
+    "org.remove": removeFromOrgAction,
+    "org.me": orgMeAction,
+    "org.people": orgPeopleAction,
+    "org.invite": inviteToOrgAction,
+    "org.invites": orgInvitesAction,
+    "org.uninvite": uninviteAction,
+    "org.summary": orgSummaryAction,
+    "org.rename": renameOrgAction,
     "invitation.send": sendInvitationAction,
     "invitation.accept": acceptInvitationAction,
     "invitation.decline": declineInvitationAction,

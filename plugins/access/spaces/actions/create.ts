@@ -4,7 +4,7 @@
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import { seat } from "../shared/agents.ts";
-import { memberKey } from "../shared/reach.ts";
+import { memberKey, orgRoleOf } from "../shared/reach.ts";
 
 export const createAction = defineAction({
   description: "Makes a space (a shared one, an org…); its maker manages it",
@@ -16,6 +16,11 @@ export const createAction = defineAction({
   },
   allow: (actor) => actor.kind === "person",
   run: async (ctx, input) => {
+    if (await orgRoleOf(ctx.actor!, ctx.as()) === "guest") {
+      throw Object.assign(new Error("Guests work in the spaces they're invited to."), {
+        code: "forbidden",
+      });
+    }
     const id = input.id ?? crypto.randomUUID();
     const who = memberKey(ctx.actor!);
     // Nobody reaches a space before it exists: it's made as the system, for them.

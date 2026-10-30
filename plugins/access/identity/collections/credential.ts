@@ -17,6 +17,8 @@ const credentialSchema = {
     /** The first characters of its secret, to tell keys apart. */
     hint: { type: "string" },
     expires: { type: "string" },
+    /** A session of platform staff's, who reach the whole org. */
+    staff: { type: "boolean" },
     at: { type: "string" },
   },
   required: ["kind", "person", "at"],
@@ -37,6 +39,7 @@ export const credential = defineCollection({
         kind: "person",
         id: found.person,
         ...(found.kind === "key" ? { key: found._id.slice(0, 12) } : {}),
+        ...(found.staff ? { staff: true } : {}),
       };
     },
     /** A person's keys, without their secrets. */

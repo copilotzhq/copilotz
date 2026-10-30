@@ -17,6 +17,19 @@ export const ROLES: Record<string, Verb[]> = {
   manager: ["read", "write", "manage"],
 };
 
+/**
+ * The org itself, where people's org roles are kept, as memberships of it:
+ * `{ space: "*", member: "person:ana", role: "admin" }`. Owners and admins
+ * reach everything in the org, Personal spaces too (they manage what people
+ * leave behind); members read who's in it; guests reach only the spaces
+ * they were let into. Platform staff (an actor marked `staff`) reach it all.
+ */
+export const ORG = "*";
+export const ORG_ROLES = ["owner", "admin", "member", "guest"] as const;
+export type OrgRole = typeof ORG_ROLES[number];
+const RUN = new Set<string>(["owner", "admin"]);
+const ALL: Verb[] = ["read", "write", "manage"];
+
 /** How an actor appears as a member: `person:ana`. */
 export const memberKey = (actor: { kind: string; id: string }) => `${actor.kind}:${actor.id}`;
 
@@ -41,6 +54,7 @@ async function walk(key: string, ctx: ReadContext): Promise<Reach> {
     );
     const next = new Map<string, Set<Verb>>();
     for (const m of found) {
+      if (m.space === ORG) continue;
       const allowed = frontier.get(m.member)!;
       const can = new Set((roles[m.role] ?? []).filter((verb) => allowed.has(verb)));
       const known = reach.get(m.space);
@@ -55,11 +69,36 @@ async function walk(key: string, ctx: ReadContext): Promise<Reach> {
   return reach;
 }
 
+/** Someone's role in the org, if they have one. */
+export async function orgRoleOf(actor: Actor, ctx: ReadContext): Promise<OrgRole | undefined> {
+  if (actor.kind !== "person") return undefined;
+  const held = await ctx.db.collection<Member>("member").findOne({
+    _id: `${ORG}|${memberKey(actor)}`,
+  });
+  return held?.role as OrgRole | undefined;
+}
+
+/** Everything in the org, every verb: what its owners, admins and staff reach. */
+async function everything(ctx: ReadContext): Promise<Reach> {
+  const spaces = await ctx.db.collection("space").find({});
+  const reach: Reach = new Map(spaces.map((s) => [String(s._id), { can: new Set(ALL) }]));
+  reach.set(ORG, { can: new Set(ALL) });
+  return reach;
+}
+
 /** What `actor` reaches; an agent acting for someone (`for`), what both reach. */
 export async function reachOf(actor: Actor, ctx: ReadContext): Promise<Reach> {
-  const own = await walk(memberKey(actor), ctx);
   const principal = actor.for as Actor | undefined;
-  if (!principal) return own;
+  if (!principal) {
+    if (actor.kind === "person" && actor.staff === true) return await everything(ctx);
+    const role = await orgRoleOf(actor, ctx);
+    if (role && RUN.has(role)) return await everything(ctx);
+    const own = await walk(memberKey(actor), ctx);
+    // Members see who's in the org; guests only the spaces they're in.
+    if (role === "member") own.set(ORG, { can: new Set<Verb>(["read"]) });
+    return own;
+  }
+  const own = await walk(memberKey(actor), ctx);
   const theirs = await reachOf(principal, ctx);
   const both: Reach = new Map();
   for (const [space, mine] of own) {

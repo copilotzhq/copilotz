@@ -15,6 +15,7 @@ export const setPerson = defineAction({
       person: { type: "string" },
       email: { type: "string" },
       name: { type: "string" },
+      picture: { type: "string" },
     },
     required: ["person"],
     additionalProperties: false,
@@ -26,6 +27,7 @@ export const setPerson = defineAction({
       $set: {
         ...(input.email ? { email: input.email.trim().toLowerCase() } : {}),
         ...(input.name ? { name: input.name } : {}),
+        ...(input.picture ? { picture: input.picture } : {}),
         at: known?.at ?? new Date().toISOString(),
       },
     }, { upsert: true });

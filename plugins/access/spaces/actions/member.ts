@@ -13,7 +13,7 @@ import { type Context, defineAction } from "../../../../runtime/mod.ts";
 import { mustKnow, unseat } from "../shared/agents.ts";
 import { keepsAManager } from "../shared/managers.ts";
 import { joinable } from "../shared/personal.ts";
-import { memberKey, reachOf } from "../shared/reach.ts";
+import { memberKey, ORG, reachOf } from "../shared/reach.ts";
 
 const who = {
   type: "object",
@@ -54,6 +54,7 @@ export const setMemberAction = defineAction({
   },
   allow: (actor) => actor.kind === "person",
   run: async (ctx, input) => {
+    if (input.space === ORG) throw forbidden("Org roles change with org.role.");
     await manages(ctx, input.space, input.on);
     const key = memberKey(input.member);
     if (!input.on) {
@@ -106,6 +107,7 @@ export const removeMemberAction = defineAction({
   },
   allow: (actor) => actor.kind === "person",
   run: async (ctx, input) => {
+    if (input.space === ORG) throw forbidden("People leave the org with org.remove.");
     await manages(ctx, input.space, input.on);
     if (!input.on) await keepsAManager(ctx, input.space, memberKey(input.member));
     await ctx.as().db.collection("member").deleteOne({

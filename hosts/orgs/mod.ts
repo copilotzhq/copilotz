@@ -105,6 +105,8 @@ export function orgsHost(options: OrgsHostOptions) {
   const { directory } = options;
   const idleMs = options.idleMs ?? 30 * 60_000;
   const cells = new Map<string, Promise<Cell>>();
+  /** The cells open now, for what must find one at once (a socket upgrade on Node). */
+  const live = new Map<string, Cell>();
 
   /** What an org reaches of the directory: invitations, and who leaves. */
   const here = (org: OrgInfo) =>
@@ -151,7 +153,9 @@ export function orgsHost(options: OrgsHostOptions) {
           cookie: sessionOf(org.id),
           signIn: false,
         });
-        return { org, runtime, tickets, serve, last: Date.now() };
+        const made = { org, runtime, tickets, serve, last: Date.now() };
+        live.set(org.id, made);
+        return made;
       })();
       cells.set(org.id, cell);
       cell.catch(() => cells.delete(org.id));
@@ -293,6 +297,7 @@ export function orgsHost(options: OrgsHostOptions) {
       const stats = cell.runtime.stats();
       if (now - cell.last > idleMs && stats.browsers === 0 && stats.pending === 0) {
         cells.delete(id);
+        live.delete(id);
         await cell.runtime.close().catch(() => {});
       }
     }
@@ -310,6 +315,7 @@ export function orgsHost(options: OrgsHostOptions) {
   const closeCell = async (org: string) => {
     const pending = cells.get(org);
     cells.delete(org);
+    live.delete(org);
     known.delete(org);
     const cell = await pending?.catch(() => undefined);
     await cell?.runtime.close().catch(() => {});
@@ -526,6 +532,17 @@ export function orgsHost(options: OrgsHostOptions) {
 
   return {
     serve,
+    /**
+     * The runtime of the org a request is in, if it's open now; at once, for
+     * hosts whose socket upgrade can't wait (Node's). The page opens its org
+     * before its socket connects; one not open yet is a retry for the client.
+     */
+    openRuntime(request: Request): Runtime | undefined {
+      const org = cookieOf(request, CURRENT);
+      const cell = org ? live.get(org) : undefined;
+      if (cell) cell.last = Date.now();
+      return cell?.runtime;
+    },
     /** An org's runtime, opening it if needed: for the app's own work on an org. */
     runtime: async (org: string) => {
       const info = await orgInfo(org);
@@ -533,6 +550,7 @@ export function orgsHost(options: OrgsHostOptions) {
     },
     async close() {
       clearInterval(sweep);
+      live.clear();
       const open = await Promise.all([...cells.values()].map((c) => c.catch(() => undefined)));
       cells.clear();
       await Promise.all(open.map((cell) => cell?.runtime.close().catch(() => {})));

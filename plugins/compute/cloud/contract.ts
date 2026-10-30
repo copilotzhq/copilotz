@@ -69,6 +69,10 @@ export type CloudComputer = {
   metered?: string;
   /** Whether its disk has been formatted and its state written (its first wake did). */
   ready?: boolean;
+  /** When a person last had it open (its terminal, a preview): it stays warm, up to `viewMinutes`. */
+  viewed?: string;
+  /** When its disk (or, cold, its snapshot) was last metered to. */
+  stored?: string;
   at: string;
 };
 
@@ -98,8 +102,12 @@ export type CloudHost = {
   /** Makes a disk from a snapshot, in this placement (its zone). */
   restore(placement: Placement, snapshot: string, disk: string, gb: number): Promise<void>;
   deleteSnapshot(placement: Placement, snapshot: string): Promise<void>;
-  /** Attaches a disk to a VM as `device` (seen in the VM as `/dev/disk/by-id/google-<device>`). */
-  attach(placement: Placement, vm: string, disk: string, device: string): Promise<void>;
+  /**
+   * Attaches a disk to a VM as `device` (seen in the VM as
+   * `/dev/disk/by-id/google-<device>`). A host whose VMs see it elsewhere
+   * answers where (a local host: the disk's folder); that's `PoolAssign.device`.
+   */
+  attach(placement: Placement, vm: string, disk: string, device: string): Promise<string | void>;
   /** Detaches it; `force` when the VM's gone or doesn't answer. */
   detach(placement: Placement, vm: string, disk: string, force?: boolean): Promise<void>;
   /** A size's pool here: the free VMs it's asked to keep, and the VMs in it now. */
@@ -118,6 +126,24 @@ export type CloudHost = {
     audience: string,
   ): Promise<{ vm: string; placement: Placement } | null>;
 };
+
+/**
+ * A host adapter, as an app gives it (the `cloudHost` adapters, by the name
+ * the `cloud` settings' `host` says): the host for a placement's account
+ * (undefined: the app's own), made once per account and runtime, with what
+ * the runtime's resources say (the app's address, say); or one host for
+ * every account.
+ *
+ * ```ts
+ * adapters: { cloudHost: { gce: (account, { resources }) => gceHost(credentialsOf(account)) } }
+ * ```
+ */
+export type CloudHostAdapter =
+  | CloudHost
+  | ((
+    account: string | undefined,
+    given: { resources: Record<string, Record<string, unknown>> },
+  ) => CloudHost | Promise<CloudHost>);
 
 /** The worker kind pool VMs connect as, and the work they serve. */
 export const POOL_KIND = "pool";

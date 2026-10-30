@@ -8,6 +8,7 @@ import { defineAction } from "../../../../runtime/mod.ts";
 import type { Desk } from "../collections/desk.ts";
 import { failed } from "../shared/failed.ts";
 import { mustBeAble } from "../shared/desks.ts";
+import { touch, wake } from "../shared/wake.ts";
 import { WORK } from "../shared/workloads.ts";
 
 /** What a person may do on their computer from its panel. */
@@ -45,10 +46,18 @@ export const workAction = defineAction({
     if (!desk) throw Object.assign(new Error("No such computer here"), { code: "invalid" });
     await mustBeAble(ctx, desk.in, "write");
     const who = input.as && input.work.startsWith("jobs.") ? input.as : `person:${ctx.actor!.id}`;
+    // A computer that sleeps (a cloud computer) is woken first; used, it stays awake a while.
+    if (!desk.online) {
+      const woke = await wake(ctx, desk.computer);
+      if (typeof woke === "string") {
+        throw Object.assign(new Error(woke), { code: "unavailable" });
+      }
+    }
+    const touched = touch(ctx, desk.computer);
     const answer = await ctx.workers.call("computer", desk.computer, PANEL[input.work], {
       ...input.input,
       scope: { space: desk.in, folder: desk.folder, who },
-    });
+    }).finally(() => touched);
     // What it couldn't do fails the call, saying why (a path outside the folder, a file not there).
     const error = failed(answer);
     if (error) throw error;

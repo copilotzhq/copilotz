@@ -17,6 +17,7 @@ import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../stores/sql/postgres/mod.ts";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { fileBlobs } from "../../stores/blobs/files/mod.ts";
 import { env, host, spawn, tempDir, tempFile, temporary, test } from "../../testing/mod.ts";
 
@@ -567,7 +568,7 @@ test("an executor lost mid-call is recorded by the owner, and the call can be re
   const port = new URL(String(listener.url)).port;
   const children: ReturnType<typeof spawn>[] = [];
   const executor = () => {
-    const child = spawn(new URL("./fixtures/executor.ts", import.meta.url).pathname, {
+    const child = spawn(fileURLToPath(new URL("./fixtures/executor.ts", import.meta.url)), {
       args: [port],
       env: { COPILOTZ_EXECUTOR_KEY: key },
     });

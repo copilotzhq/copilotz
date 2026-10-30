@@ -17,9 +17,10 @@
 import { assertEquals } from "@std/assert";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "./mod.ts";
 
-const ROOT = normalize(join(dirname(new URL(import.meta.url).pathname), ".."));
+const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), ".."));
 const LAYERS = ["runtime", "stores", "exporters", "plugins", "hosts"];
 
 function files(dir: string): string[] {

@@ -5,7 +5,14 @@
  */
 import { Box, Text, useInput } from "ink";
 import { TextInput } from "@inkjs/ui";
-import { createContext, type ReactNode, useContext, useState, useSyncExternalStore } from "react";
+import {
+  type Context,
+  createContext,
+  type ReactNode,
+  useContext,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 export type Typing = {
   /** Runs a line: a command, or text for the `"*"` command. */
@@ -20,7 +27,9 @@ export type Typing = {
   interactive: boolean;
 };
 
-export const TypingContext = createContext<Typing | undefined>(undefined);
+export const TypingContext: Context<Typing | undefined> = createContext<Typing | undefined>(
+  undefined,
+);
 
 export function Composer({ prompt }: { prompt: unknown }): ReactNode {
   const typing = useContext(TypingContext);

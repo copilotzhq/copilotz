@@ -101,7 +101,15 @@ const withCookies = (request: Request, cookies: Record<string, string>) => {
   return new Request(request, { headers });
 };
 
-export function orgsHost(options: OrgsHostOptions) {
+/** The orgs host: its request handler, and what an app reaches of the orgs it has open. */
+export type OrgsHost = {
+  serve(request: Request): Promise<Response>;
+  openRuntime(request: Request): Runtime | undefined;
+  runtime(org: string): Promise<Runtime | undefined>;
+  close(): Promise<void>;
+};
+
+export function orgsHost(options: OrgsHostOptions): OrgsHost {
   const { directory } = options;
   const idleMs = options.idleMs ?? 30 * 60_000;
   const cells = new Map<string, Promise<Cell>>();

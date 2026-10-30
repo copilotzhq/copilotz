@@ -129,7 +129,7 @@ export const modelOf = ({ model, effort, maxTokens, temperature }: Agent): Model
 });
 
 /** Who a new conversation's messages go to when nobody is mentioned. */
-export const defaults = (agents: Record<string, Agent>) => {
+export const defaults = (agents: Record<string, Agent>): string[] => {
   const chosen = Object.keys(agents).filter((name) => agents[name].default);
   return chosen.length ? chosen : Object.keys(agents).slice(0, 1);
 };

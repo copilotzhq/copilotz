@@ -31,7 +31,7 @@ export async function verify(
   token: string,
   keys: Jwk[],
   audience: string | string[],
-  now = Date.now(),
+  now: number = Date.now(),
 ): Promise<Claims> {
   const [head, body, signature] = token.split(".");
   if (!head || !body || !signature) throw refused("not a token");

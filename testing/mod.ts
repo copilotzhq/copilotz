@@ -152,8 +152,9 @@ export function spawn(
 export async function host(
   hypervisor: Hypervisor,
 ): Promise<{ url: string | URL; shutdown(): Promise<void> }> {
+  // A full specifier: a published module has no import map to resolve a bare one.
   const adapter = runtime === "deno"
-    ? "@oxian/oxian-js/adapters/deno"
+    ? "jsr:@oxian/oxian-js@0.23.2/adapters/deno"
     : "@oxian/oxian-js/adapters/node";
   const { serve } = await import(adapter);
   return await serve({ hypervisor, hostname: "127.0.0.1", port: 0 });

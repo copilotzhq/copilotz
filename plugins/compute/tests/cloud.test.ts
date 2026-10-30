@@ -114,10 +114,14 @@ async function setup(
     rt: Awaited<ReturnType<typeof createRuntime>>,
     world: ReturnType<typeof fakeCloud>,
   ) => Promise<void>,
-  options: { settings?: Record<string, unknown>; jobs?: () => Job[] } = {},
+  options: {
+    settings?: Record<string, unknown>;
+    jobs?: () => Job[];
+    booting?: { hold: boolean };
+  } = {},
 ) {
   const topic = `cloud-test.${crypto.randomUUID()}`;
-  const world = fakeCloud(topic, { jobs: options.jobs });
+  const world = fakeCloud(topic, { jobs: options.jobs, booting: options.booting });
   const rt = await createRuntime({
     store: memoryStore(),
     plugins: [
@@ -371,6 +375,27 @@ test("pools keep their floor by the hour, plus the wakes of the last minutes, up
     await rt.call("pool.tick", { now: "2026-11-02T03:00:00.000Z" });
     assertEquals((await world.host.pool(PLACE, "small")).target, 3, "capped at max");
   }, { settings: { pool: { floor: [{ from: 22, to: 6, count: 5 }], max: 3 } } });
+});
+
+test("a pool grown for a wake isn't shrunk while its VM boots", async () => {
+  const booting = { hold: true };
+  await setup(async (rt, world) => {
+    const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
+      size: "small",
+    }, { actor: ana });
+    const woke = rt.call("cloud.wake", { computer: id });
+    await until(async () => (await world.host.pool(PLACE, "small")).target === 1, "grown for it");
+    // The minute's sizing comes while its VM boots: the pool keeps it.
+    const { pools } = await rt.call<{ pools: Record<string, number> }>("pool.tick", {});
+    assertEquals(pools["test-a/small"], 1);
+    assertEquals((await world.host.pool(PLACE, "small")).target, 1);
+    booting.hold = false;
+    await world.boot(PLACE, "small");
+    assertEquals(await woke, { state: "awake" });
+    // Its want went with its take.
+    assertEquals(await recordsOf(rt, "poolWant"), []);
+    await rt.call("cloud.release", { computer: id });
+  }, { booting });
 });
 
 test("who makes cloud computers, and who sees them", async () => {

@@ -166,7 +166,12 @@ type Disk = { gb: number; state?: string };
 
 export function fakeCloud(
   topic: string,
-  options: { jobs?: () => Job[]; topics?: Record<string, string> } = {},
+  options: {
+    jobs?: () => Job[];
+    topics?: Record<string, string>;
+    /** While `hold`, a pool's new VMs are booting: none starts until `boot`. */
+    booting?: { hold: boolean };
+  } = {},
 ) {
   const disks = new Map<string, Disk>();
   const snapshots = new Map<string, Disk>();
@@ -214,7 +219,7 @@ export function fakeCloud(
   /** Starts or stops a pool's free VMs until it has its target. */
   async function fill(p: Placement, size: string) {
     const target = targets.get(key(p, size)) ?? 0;
-    while (pooled(p, size).length < target) startVm(p, size);
+    while (!options.booting?.hold && pooled(p, size).length < target) startVm(p, size);
     while (pooled(p, size).length > target) await stopVm(pooled(p, size).at(-1)!);
   }
 
@@ -294,6 +299,8 @@ export function fakeCloud(
 
   return {
     host,
+    /** The VMs a held pool was booting start now. */
+    boot: (p: Placement, size: string) => fill(p, size),
     disks,
     snapshots,
     vms,

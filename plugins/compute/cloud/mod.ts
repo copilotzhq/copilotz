@@ -88,6 +88,7 @@ import { localHost } from "./adapters/local.ts";
 import { cloudComputer } from "./collections/cloud-computer.ts";
 import { markProcessor } from "./processors/mark.ts";
 import { poolVm } from "./collections/pool-vm.ts";
+import { poolWant } from "./collections/pool-want.ts";
 import { type CloudHostAdapter, POOL, POOL_ACTIONS, POOL_KIND } from "./contract.ts";
 import { personOf } from "./shared/people.ts";
 import { DEFAULTS, settingsOf } from "./shared/settings.ts";
@@ -161,7 +162,7 @@ export const cloud: Plugin = definePlugin({
 /** The pools of VMs cloud computers wake on, where pool VMs connect: see the module's doc. */
 export const cloudPool: Plugin = definePlugin({
   name: "cloud-pool",
-  collections: { poolVm },
+  collections: { poolVm, poolWant },
   workers: {
     [POOL_KIND]: {
       admit: "pool.admit",
@@ -189,7 +190,8 @@ export const cloudPool: Plugin = definePlugin({
   resources: { cloud: {} },
   adapters: { cloudHost: hosts },
   // Pool VMs: only the system.
-  guard: (_actor, { collection }) => collection === "poolVm" ? { _id: { $in: [] } } : undefined,
+  guard: (_actor, { collection }) =>
+    collection === "poolVm" || collection === "poolWant" ? { _id: { $in: [] } } : undefined,
 });
 
 /**

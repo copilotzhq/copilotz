@@ -8,6 +8,13 @@ import type { CloudComputer, PoolVm } from "../contract.ts";
 
 export const recordsOf = (ctx: Context) => ctx.as().db.collection<CloudComputer>("cloudComputer");
 export const poolsOf = (ctx: Context) => ctx.as().db.collection<PoolVm>("poolVm");
+/** Wakes waiting for a VM a pool grew for them (collection `poolWant`). */
+export const wantsOf = (ctx: Context) =>
+  ctx.as().db.collection<
+    { placement: PoolVm["placement"]; size: string; computer: string; at: string }
+  >(
+    "poolWant",
+  );
 
 /** The computer record, as the computers plugin keeps it: connected or not, and what it's called. */
 export const computerOf = (ctx: Context, id: string) =>

@@ -81,6 +81,8 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     // In Acme, her browser connects as her; she's its owner.
     const connected = await (await ana.send("POST", "/connect")).json();
     assertEquals(connected.person, "ana@example.com");
+    // What her page shows her as: her name as she signed in, not her id.
+    assertEquals(connected.name, "ana");
     const acmeRt = (await host.runtime(acme.id)) as Runtime;
     const asAna: Actor = { kind: "person", id: "ana@example.com" };
     assertEquals(await acmeRt.call("org.me", {}, { actor: asAna }), {

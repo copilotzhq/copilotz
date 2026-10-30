@@ -338,7 +338,18 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
         case "POST /connect": {
           const actor = await whom(request);
           if (!actor) return json({ error: "Not signed in" }, { status: 401 });
-          return json({ ticket: tickets.issue(actor), person: actor.id });
+          // What the page shows them as: their name as they signed in, else their email.
+          const profile = actor.kind === "person"
+            ? await runtime.query<{ name?: string; email?: string } | null>("person.profile", {
+              person: actor.id,
+            }).catch(() => null)
+            : null;
+          const name = profile?.name ?? profile?.email;
+          return json({
+            ticket: tickets.issue(actor),
+            person: actor.id,
+            ...(name ? { name } : {}),
+          });
         }
         case "POST /signin/google": {
           if (!options.google || !signIn) break;

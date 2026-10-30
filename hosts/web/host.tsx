@@ -87,7 +87,7 @@ const config = () =>
   };
 
 /** A ticket for one connection, or nothing when nobody is signed in. */
-async function ticket(): Promise<{ ticket: string; person: string } | undefined> {
+async function ticket(): Promise<{ ticket: string; person: string; name?: string } | undefined> {
   const response = await fetch("/connect", { method: "POST" });
   if (response.status === 401) return undefined;
   if (!response.ok) throw new Error(`Couldn't connect: ${response.statusText}`);
@@ -150,7 +150,12 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     plugins: options.plugins,
   });
   await client.ready;
-  const viewer = { kind: "person", name: first.person };
+  // Who they are (their id), and what they're shown as (their name).
+  const viewer = {
+    kind: "person",
+    name: first.person,
+    ...(first.name ? { label: first.name } : {}),
+  };
   session.client = client;
   session.viewer = viewer;
   let space = (await options.start?.(client, first.person))?.space;

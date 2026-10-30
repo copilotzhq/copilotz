@@ -7,7 +7,7 @@
 #
 # It reads the VM's metadata: `app-url` (the app it connects to) and `computer-release` (where the
 # release is: its base URL, or its manifest.json's). With `copilotz-image=TRUE` (a VM an image is
-# made from: setup-gcp.sh's IMAGE), it stops once everything's installed, with no service: pool
+# made from: setup-gcp.sh's IMAGE), it shuts down once everything's installed, with no service: pool
 # VMs made from that image then boot in seconds, as each checks only the program's release. It runs at every boot, and skips what's done
 # already. What it says goes to the serial console (and Cloud Logging) through Google's startup
 # script runner; the service's own output goes there too.
@@ -107,8 +107,14 @@ else
   mv -f "$BIN.next" "$BIN"
 fi
 
+# An image's VM: done. Each VM made from the image gets a machine id of its own; this one stops,
+# its disk ready to make the image from.
 if [ "$(metadata copilotz-image 2>/dev/null || true)" = TRUE ]; then
-  say "image ready: no service on an image's VM"
+  truncate -s 0 /etc/machine-id
+  rm -f /var/lib/dbus/machine-id
+  say "image ready: stopping"
+  sync
+  shutdown -h now
   exit 0
 fi
 

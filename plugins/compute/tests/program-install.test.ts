@@ -98,7 +98,8 @@ test({
 });
 
 test({
-  name: "install.sh takes a release from elsewhere (--from), and says what's missing",
+  name:
+    "install.sh takes a release from elsewhere (--from), passes the folder on, and says what's missing",
   ignore: !posix,
   fn: () =>
     release("/releases/v1/", async (url) => {
@@ -109,11 +110,13 @@ test({
         "K7Q-4MZ",
         "--from",
         `${url}/releases/v1`,
+        "--folder",
+        "acme-studio",
       ]);
       assertEquals(from.code, 0, from.said);
       assertEquals(
         readFileSync(join(home, "ran"), "utf8"),
-        "install https://app.example.com --code K7Q-4MZ\n",
+        "install https://app.example.com --code K7Q-4MZ --folder acme-studio\n",
       );
       const none = await install(tempDir(), [url, "--code", "K7Q-4MZ"]);
       assert(none.code !== 0);

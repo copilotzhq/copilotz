@@ -3,6 +3,8 @@
 #
 #   curl -fsSL https://app.example.com/computer/download/install.sh | sh -s -- https://app.example.com --code K7Q-4MZ
 #
+# (--folder <name>: the folder its spaces go in, under ~/Copilotz, as the app's command says.)
+#
 # It downloads this machine's binary from the app's /computer/download/ (or --from <base>, where
 # the release is), checks its SHA-256 against the release's manifest, puts it in ~/.copilotz/bin
 # (and that on your PATH), then runs `computer install <app> --code <code>`: connected, the
@@ -13,16 +15,17 @@ set -eu
 say() { printf '%s\n' "$*"; }
 fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
-app="" code="" from=""
+app="" code="" from="" folder=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --code) [ $# -ge 2 ] || fail "--code needs a code"; code=$2; shift 2 ;;
     --from) [ $# -ge 2 ] || fail "--from needs a URL"; from=$2; shift 2 ;;
+    --folder) [ $# -ge 2 ] || fail "--folder needs a name"; folder=$2; shift 2 ;;
     -*) fail "unknown option $1" ;;
     *) app=$1; shift ;;
   esac
 done
-[ -n "$app" ] && [ -n "$code" ] || fail "usage: install.sh <app-url> --code <CODE> [--from <base>]"
+[ -n "$app" ] && [ -n "$code" ] || fail "usage: install.sh <app-url> --code <CODE> [--from <base>] [--folder <name>]"
 # The app's own release is on its origin.
 base=${from:-$(printf '%s\n' "$app" | sed 's#^\([a-z]*://[^/]*\).*#\1#')/computer/download/}
 case $base in */) ;; *) base=$base/ ;; esac
@@ -97,4 +100,5 @@ case ":$PATH:" in
 esac
 
 say ""
+if [ -n "$folder" ]; then exec "$bin" install "$app" --code "$code" --folder "$folder"; fi
 exec "$bin" install "$app" --code "$code"

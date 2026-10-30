@@ -3,26 +3,36 @@
  * (`~/.config/copilotz`, `$XDG_CONFIG_HOME/copilotz`, or on Windows
  * `%LOCALAPPDATA%\Copilotz`, this machine's own: it's this machine's
  * identity), readable only by its user (`COPILOTZ_COMPUTER_STATE` puts it
- * elsewhere): the app it connects to, its id and secret once enrolled, its
- * root, its name, and whether agents may show browser windows.
+ * elsewhere): each app (or org) it's connected to, with its id and secret
+ * there once enrolled and the folder its spaces go in; its name; and whether
+ * agents may show browser windows. One machine serves many orgs, each as a
+ * computer of its own there, its spaces under a folder of its own.
  */
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { plainName } from "../shared/folder.ts";
 import type { Windows } from "./browser/chrome.ts";
 import { alive } from "./workloads/processes.ts";
 
 export type { Windows } from "./browser/chrome.ts";
 
-export type State = {
-  /** The app's URL, as given. */
+/** An app (or an org of one) this machine is a computer of. */
+export type Connection = {
+  /** The app's URL, as given (an org's address: `https://host/o/acme`). */
   url: string;
+  /** Its id and secret there, once enrolled. */
   id?: string;
   secret?: string;
-  /** Where spaces' folders are. */
+  /** Where its spaces' folders are. */
   root: string;
+};
+
+export type State = {
+  /** The apps it's connected to, each its own computer there. */
+  connections: Connection[];
   name?: string;
   /** `never`: agents' browsers stay hidden, never a window on this screen (`connect --windows`). */
   windows?: Windows;
@@ -56,11 +66,73 @@ export async function loadState(path = statePath()): Promise<State | undefined> 
     if ((error as { code?: string })?.code === "ENOENT") return undefined;
     throw error;
   }
-  const state = JSON.parse(text) as State;
-  if (typeof state?.url !== "string" || typeof state.root !== "string") {
+  const kept = JSON.parse(text);
+  // Kept before a machine served many: its one connection, its folder as it was.
+  if (typeof kept?.url === "string" && typeof kept.root === "string") {
+    const { url, id, secret, root, name, windows } = kept;
+    return {
+      connections: [{ url, root, ...(id ? { id } : {}), ...(secret ? { secret } : {}) }],
+      ...(name ? { name } : {}),
+      ...(windows ? { windows } : {}),
+    };
+  }
+  const state = kept as State;
+  if (
+    !Array.isArray(state?.connections) ||
+    !state.connections.every((c) => typeof c?.url === "string" && typeof c.root === "string")
+  ) {
     throw new Error(`${path} isn't a computer's state: run \`forget\`, then \`connect\` again`);
   }
   return state;
+}
+
+/** Whether two URLs are the same app (or org): they connect to the same socket. */
+export const sameApp = (a: string, b: string): boolean => socketUrl(a) === socketUrl(b);
+
+/** The connection to `url`'s app in `state`, if it has one. */
+export const connectionOf = (state: State | undefined, url: string): Connection | undefined =>
+  state?.connections.find((c) => sameApp(c.url, url));
+
+/** `state` with `connection` in it, in place of one to the same app. */
+export const withConnection = (state: State | undefined, connection: Connection): State => ({
+  ...state,
+  connections: [
+    ...(state?.connections ?? []).filter((c) => !sameApp(c.url, connection.url)),
+    connection,
+  ],
+});
+
+/** What changes the state goes one at a time in this process: each reads what the last wrote. */
+const changing = new Map<string, Promise<unknown>>();
+
+/** Changes the state at `path`: `change` gets it as it is (or undefined) and gives it as it'll be. */
+export function updateState(
+  path: string,
+  change: (state: State | undefined) => State | Promise<State>,
+): Promise<State> {
+  const done = (changing.get(path) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    const state = await change(await loadState(path));
+    await saveState(state, path);
+    return state;
+  });
+  changing.set(path, done);
+  return done;
+}
+
+/**
+ * The folder an app's spaces go in under the root: `name`, as the app says
+ * (its org's, `acme`), plain; else its org's id (`/o/o-1a2b` is `o-1a2b`),
+ * else its host. One already taken is numbered (`acme-2`).
+ */
+export function folderFor(url: string, taken: string[] = [], name?: string): string {
+  const parsed = new URL(url);
+  const org = /^\/o\/([^/]+)/.exec(parsed.pathname)?.[1];
+  const base = name && plainName(name, "")
+    ? plainName(name)
+    : (org ? decodeURIComponent(org) : parsed.hostname).replace(/[^\w.-]+/g, "-") || "app";
+  let folder = base;
+  for (let n = 2; taken.includes(folder); n++) folder = `${base}-${n}`;
+  return folder;
 }
 
 /** Keeps `state` at `path`, readable only by this user, replacing it whole. */

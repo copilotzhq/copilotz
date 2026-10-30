@@ -5,6 +5,7 @@
  * version and each binary's file, size and SHA-256. Plain data and functions
  * only: the build, the app, its web front end and the program all read it.
  */
+import { plainName } from "../shared/folder.ts";
 
 /**
  * The work an app offers a computer a newer release with (`computer.update`;
@@ -63,18 +64,22 @@ export const binaryFor = (manifest: Manifest, { os, arch }: Platform): Binary | 
 /**
  * The one line that installs the program and connects it with `code`: on
  * macOS and Linux (`sh`), or in Windows' PowerShell. `base` is where the
- * release is (absolute), named only when it isn't the app's own.
+ * release is (absolute), named only when it isn't the app's own; `folder`,
+ * the folder its spaces go in (its org's name), plain, so the line needs no quoting.
  */
 export function installCommand(
   shell: "sh" | "powershell",
-  { app, code, base }: { app: string; code: string; base: string },
+  { app, code, base, folder }: { app: string; code: string; base: string; folder?: string },
 ): string {
   const own = base === new URL(DOWNLOADS, app).href;
+  const named = folder ? plainName(folder, "") : "";
   return shell === "sh"
-    ? `curl -fsSL ${base}install.sh | sh -s -- ${app} --code ${code}${own ? "" : ` --from ${base}`}`
+    ? `curl -fsSL ${base}install.sh | sh -s -- ${app} --code ${code}${
+      own ? "" : ` --from ${base}`
+    }${named ? ` --folder ${named}` : ""}`
     : `& ([scriptblock]::Create((irm ${base}install.ps1))) ${app} -Code ${code}${
       own ? "" : ` -From ${base}`
-    }`;
+    }${named ? ` -Folder ${named}` : ""}`;
 }
 
 /** A version's parts: its numbers, and its pre-release's (`1.0.0-rc.1`: rc, 1). */

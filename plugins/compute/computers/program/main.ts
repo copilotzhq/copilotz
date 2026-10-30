@@ -1,15 +1,21 @@
 /**
  * The computer program: run it once on a machine to let an app's agents
  * (and people) use it, each space in a folder of its own under its root.
+ * One machine serves many apps (or orgs of one): each is a computer of its
+ * own there, its spaces under a folder of its own (`~/Copilotz/<org>`, named
+ * as the app says with `--folder`, its org's name).
  *
  *   computer install <app-url> --code <CODE> [--root <dir>] [--name <label>] [--windows <w>]
- *                                      connect it, then keep it running in the background
+ *                                      connect it (adding this app), then keep it running
+ *                                      in the background
  *   computer connect <app-url> --code <CODE> [--root <dir>] [--name <label>] [--windows <w>]
- *                                      connect it, and keep it running here
+ *                                      connect it (adding this app), and keep it running here
  *   computer [run] [--root <dir>] [--windows <w>] [--log <file>]
- *                                      run as the computer it was connected as
+ *                                      run as the computer it was connected as, to every app
+ *   computer list                      the apps it's connected to, and where their spaces are
+ *   computer disconnect <app-url>      disconnect it from an app (its folder stays)
  *   computer install | uninstall       start it at login and keep it running, or stop that
- *   computer forget                    forget it (its folders stay)
+ *   computer forget                    forget it, for every app (its folders stay)
  *
  * `--windows never` (or `COPILOTZ_BROWSER_WINDOWS=never`) keeps agents'
  * browsers hidden: none is ever shown on this screen. `connect` keeps it;
@@ -24,20 +30,34 @@ import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { type Computer, type ComputerOptions, startComputer } from "./computer.ts";
-import { installedPath, installService, serviceOf, uninstallService } from "./service.ts";
 import {
+  installedPath,
+  installService,
+  serviceInstalled,
+  serviceOf,
+  stopService,
+  uninstallService,
+} from "./service.ts";
+import {
+  type Connection,
+  connectionOf,
   defaultRoot,
+  folderFor,
   forgetState,
   holdState,
   loadState,
   rootPath,
-  saveState,
+  sameApp,
   socketUrl,
+  type State,
   statePath,
+  updateState,
   windowsSetting,
+  withConnection,
 } from "./state.ts";
 import { copyProgram, PROGRAM, tidyAside } from "./update.ts";
 import { VERSION } from "./version.ts";
@@ -46,19 +66,29 @@ import { exitCode, WINDOWS } from "./workloads/processes.ts";
 const USAGE = `Copilotz computer ${VERSION}
 
   computer install <app-url> --code <CODE> [--root <dir>] [--name <label>] [--windows allow|never]
-      Connects this machine to an app with a code from it, then keeps it
-      running in the background, from login on (as the installed program).
+      Connects this machine to an app (or an org) with a code from it, then keeps
+      it running in the background, from login on (as the installed program).
+      Connected to others already, it adds this one: a computer of its own there.
   computer connect <app-url> --code <CODE> [--root <dir>] [--name <label>] [--windows allow|never]
       Connects this machine to an app with a code from it, then keeps running here.
-      Spaces' folders go under --root (${defaultRoot()} unless given).
+      Each app's spaces go in a folder of its own under --root (${defaultRoot()}
+      unless given): --folder <name> (as the app's command says), else its org's
+      id or its host.
   computer [run] [--root <dir>] [--windows allow|never] [--log <file>]
-      Runs as the computer it was connected as (--log: also what it says, to <file>).
+      Runs as the computer it was connected as, to every app (--log: also what it
+      says, to <file>).
+  computer list
+      The apps it's connected to, and where each one's spaces are.
+  computer disconnect <app-url>
+      Disconnects it from that app (restarting it if it runs in the background);
+      that app's folder stays.
   computer install
       Starts it at login and keeps it running in the background (it starts now too).
   computer uninstall
       Stops that: it stops, and no longer starts at login.
   computer forget
-      Forgets it (its id and secret), and uninstalls it; its folders stay.
+      Forgets it (its ids and secrets, for every app), and uninstalls it; its
+      folders stay.
 
 Agents' browsers are hidden unless they show one on this screen (to let you
 sign in, say). --windows never keeps them hidden, always; connect keeps it,
@@ -99,48 +129,69 @@ async function relaunch(argv: string[]): Promise<never> {
 }
 
 /**
- * Runs a computer until a signal stops it (or the app turns it away), holding
- * its state; updated, it starts again as the new version (`again`'s
- * arguments). Turned away, it ends with `away`: 0 when running as itself, so
- * what starts it at login doesn't try again in vain.
+ * Runs a computer for each app it's connected to, until a signal stops them,
+ * holding the state. One updated, they all stop and it starts again as the
+ * new version (`again`'s arguments). One the app turns away stops, saying
+ * so; the rest run on. None left, it ends with `away`: 0 when running as
+ * itself, so what starts it at login doesn't try again in vain.
  */
-async function serve(options: ComputerOptions, again: string[], away: number) {
-  const say = options.log ?? console.log;
-  const release = await holdState(options.statePath);
-  let computer: Computer;
+async function serve(list: ComputerOptions[], again: string[], away: number) {
+  const say = list[0].log ?? console.log;
+  const release = await holdState(list[0].statePath);
+  const computers: Computer[] = [];
   try {
-    computer = await startComputer(options);
+    for (const options of list) computers.push(await startComputer(options));
   } catch (error) {
+    await Promise.allSettled(computers.map((computer) => computer.stop()));
     await release();
     throw error;
   }
+  for (const [i, computer] of computers.entries()) {
+    say(`${list[i].url}: spaces under ${tilde(computer.info.root)}`);
+  }
   say(
-    `spaces under ${computer.info.root}; browser: ${computer.info.browser ?? "none found"}` +
-      (options.windows === "never" ? " (always hidden: --windows never)" : ""),
+    `browser: ${computers[0].info.browser ?? "none found"}` +
+      (list[0].windows === "never" ? " (always hidden: --windows never)" : ""),
   );
   let stopping = false;
-  const stop = async (code: number) => {
-    if (stopping) return;
+  const stopAll = async () => {
     stopping = true;
-    await computer.stop();
+    await Promise.allSettled(computers.map((computer) => computer.stop()));
     await release();
-    process.exit(code);
   };
-  const signalled = () => void stop(0);
+  const signalled = () => {
+    if (!stopping) void stopAll().then(() => process.exit(0));
+  };
   process.on("SIGINT", signalled);
   process.on("SIGTERM", signalled);
-  try {
-    if (await computer.closed === "updated") {
+  // How each ends: updated (they all start again as the new one), turned away (it alone), stopped.
+  const ends = computers.map((computer, i) =>
+    computer.closed.then((how) => ({ i, how }), (error: unknown) => ({ i, error }))
+  );
+  const running = new Set(computers.keys());
+  let code = away;
+  while (running.size && !stopping) {
+    const end = await Promise.race([...running].map((i) => ends[i]));
+    running.delete(end.i);
+    if ("how" in end && end.how === "updated") {
       // Stopped already; from here, the new one's signals are its own.
       process.off("SIGINT", signalled);
       process.off("SIGTERM", signalled);
-      await release();
+      await stopAll();
       await relaunch(again);
     }
-  } catch (error) {
-    say(error instanceof Error ? error.message : String(error));
-    await stop((error as { code?: string })?.code === "refused" ? away : 1);
+    if ("error" in end) {
+      const { error } = end;
+      say(`${list[end.i].url}: ${error instanceof Error ? error.message : String(error)}`);
+      // Not turned away (something broke): it ends, to be started again.
+      if ((error as { code?: string })?.code !== "refused") code = 1;
+      if (code === 1) break;
+    }
   }
+  // A signal stops them, and ends it (see `signalled`).
+  if (stopping) return;
+  await stopAll();
+  process.exit(code);
 }
 
 /**
@@ -200,6 +251,7 @@ async function main(argv: string[]) {
     options: {
       code: { type: "string" },
       root: { type: "string" },
+      folder: { type: "string" },
       name: { type: "string" },
       windows: { type: "string" },
       log: { type: "string" },
@@ -224,37 +276,55 @@ async function main(argv: string[]) {
     if (values.log) appendFileSync(values.log, `${timed}\n`);
   };
 
+  /** How a connection runs: its app, its folder, and what this machine is. */
+  const optionsOf = (connection: Connection, name?: string, kept?: State["windows"]) => ({
+    url: connection.url,
+    root: connection.root,
+    statePath: path,
+    ...(name ? { name } : {}),
+    windows: windows() ?? kept ?? "allow",
+    log,
+  });
+
   if (command === "connect" || (command === "install" && rest.length)) {
     const [url] = rest;
     if (!url || !values.code) throw new Error(`Usage: computer ${command} <app-url> --code <CODE>`);
     if (command === "install") installed();
     socketUrl(url);
-    const root = rootPath(values.root ?? defaultRoot());
-    // A new enrollment: whatever it was before is replaced once the app answers.
-    await saveState({
-      url,
-      root,
+    // Connected to it already, its folder stays; else a folder of its own under the root, named
+    // as the app says (--folder, its org's name), else for its org or host.
+    const before = await loadState(path);
+    const known = connectionOf(before, url);
+    const root = known?.root ?? join(
+      rootPath(values.root ?? defaultRoot()),
+      folderFor(url, (before?.connections ?? []).map((c) => basename(c.root)), values.folder),
+    );
+    // A new enrollment there: its old id and secret go; the other apps' stay.
+    const state = await updateState(path, (state) => ({
+      ...withConnection(state, { url, root }),
       ...(values.name ? { name: values.name } : {}),
       ...(said ? { windows: said } : {}),
-    }, path);
+    }));
     log(`connecting to ${url}…`);
-    const options = {
-      url,
-      root,
-      statePath: path,
-      code: values.code,
-      ...(values.name ? { name: values.name } : {}),
-      windows: windows() ?? "allow",
-      log,
-    };
-    if (command === "connect") return await serve(options, ["run"], 1);
-    await enroll(options);
+    const added = { ...optionsOf({ url, root }, state.name, state.windows), code: values.code };
+    if (command === "connect") {
+      const others = state.connections.filter((c) => !sameApp(c.url, url) && c.id && c.secret);
+      return await serve(
+        [added, ...others.map((c) => optionsOf(c, state.name, state.windows))],
+        ["run"],
+        1,
+      );
+    }
+    // Running in the background, it holds the state: it stops while this enrolls, and starts
+    // again with every app (`install`).
+    await stopService(serviceOf({ program: installedPath() }));
+    await enroll(added);
     return await install();
   }
 
   if (command === "install") {
     const state = await loadState(path);
-    if (!state?.id || !state.secret) {
+    if (!state?.connections.some((c) => c.id && c.secret)) {
       throw new Error("Not connected yet: run `computer install <app-url> --code <CODE>`");
     }
     return await install();
@@ -271,24 +341,68 @@ async function main(argv: string[]) {
 
   if (command === "run") {
     const state = await loadState(path);
-    if (!state) {
+    if (!state?.connections.length) {
       throw new Error("Not connected yet: run `computer connect <app-url> --code <CODE>`");
     }
-    if (!state.id || !state.secret) {
+    const enrolled = state.connections.filter((c) => c.id && c.secret);
+    for (const c of state.connections) {
+      if (!c.id || !c.secret) log(`${c.url}: not enrolled (get a new code and connect again)`);
+    }
+    if (!enrolled.length) {
       throw new Error("Not enrolled: get a new code and run `computer connect` again");
     }
+    if (values.root && enrolled.length > 1) {
+      throw new Error("--root names one app's folder: connected to several, each keeps its own");
+    }
     return await serve(
-      {
-        url: state.url,
-        root: values.root ? rootPath(values.root) : state.root,
-        statePath: path,
-        ...(state.name ? { name: state.name } : {}),
-        windows: windows() ?? state.windows ?? "allow",
-        log,
-      },
+      enrolled.map((c) =>
+        optionsOf(
+          values.root ? { ...c, root: rootPath(values.root) } : c,
+          state.name,
+          state.windows,
+        )
+      ),
       argv,
       0,
     );
+  }
+
+  if (command === "list") {
+    const state = await loadState(path);
+    if (!state?.connections.length) {
+      return console.log(
+        "Not connected to any app yet: `computer connect <app-url> --code <CODE>`",
+      );
+    }
+    for (const c of state.connections) {
+      console.log(
+        `${c.url}\n  spaces under ${tilde(c.root)}; ${c.id ? `computer ${c.id}` : "not enrolled"}`,
+      );
+    }
+    return;
+  }
+
+  if (command === "disconnect") {
+    const [url] = rest;
+    if (!url) throw new Error("Usage: computer disconnect <app-url>");
+    const gone = connectionOf(await loadState(path), url);
+    if (!gone) return console.log(`Not connected to ${url} (\`computer list\` says to which).`);
+    // Running in the background, it holds the state: it stops, and starts again without it.
+    const service = serviceOf({ program: installedPath() });
+    const background = await serviceInstalled(service);
+    if (background) await stopService(service);
+    const state = await updateState(path, (state) => ({
+      ...state!,
+      connections: state!.connections.filter((c) => !sameApp(c.url, url)),
+    }));
+    console.log(
+      `Disconnected from ${gone.url}; its folder stays (${tilde(gone.root)}). ` +
+        "Forgetting the computer in the app removes it there.",
+    );
+    if (!background) return;
+    if (state.connections.some((c) => c.id && c.secret)) return await install();
+    await uninstallService(service);
+    return console.log("Connected to no other app: it no longer runs in the background.");
   }
 
   if (command === "forget") {

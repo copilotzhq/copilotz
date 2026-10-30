@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Actor, createRuntime, type Plugin } from "../../../runtime/mod.ts";
+import { type Actor, createRuntime, definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
 import { chat } from "../../agents/chat/mod.ts";
@@ -140,6 +140,25 @@ test("a code comes with where to download the program, when the app has a releas
     const made = await rt.call<{ downloads?: unknown }>("computer.code", {}, { actor: ana });
     assertEquals(made.downloads, undefined);
   });
+});
+
+test("on an org, a code says the folder its spaces go in: the org's name, plain; personal for one's own", async () => {
+  const org = (name: string, kind: string) =>
+    definePlugin({
+      name: "org-here",
+      resources: { org: { id: "o-1", name, kind, base: "/o/o-1" } },
+    });
+  const folderOf = async (plugin?: Plugin) => {
+    let folder: unknown;
+    await setup(plugin, async (rt) => {
+      folder = (await rt.call<{ folder?: string }>("computer.code", {}, { actor: ana })).folder;
+    });
+    return folder;
+  };
+  assertEquals(await folderOf(org("Acme Studio, Inc.", "team")), "acme-studio-inc");
+  assertEquals(await folderOf(org("Ana Souza", "personal")), "personal");
+  assertEquals(await folderOf(org("!!!", "team")), undefined);
+  assertEquals(await folderOf(), undefined);
 });
 
 test({

@@ -10,7 +10,7 @@
  * fine.
  */
 import { execFile } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, posix } from "node:path";
 import { Buffer } from "node:buffer";
@@ -234,6 +234,19 @@ export async function installService(service: Service) {
 }
 
 /** Uninstalls `service`; false when there was nothing to remove (its logs stay). */
+/** Stops it, if it runs, without uninstalling it (it starts again at login, or with `installService`). */
+export async function stopService(service: Service): Promise<void> {
+  for (const command of service.stop) await exec(command).catch(() => {});
+}
+
+/** Whether it's installed: its files are there. */
+export async function serviceInstalled(service: Service): Promise<boolean> {
+  for (const { path } of service.files) {
+    if (await stat(path).then(() => true, () => false)) return true;
+  }
+  return false;
+}
+
 export async function uninstallService(service: Service): Promise<boolean> {
   let removed = false;
   for (const command of service.stop) await exec(command).then(() => removed = true, () => {});

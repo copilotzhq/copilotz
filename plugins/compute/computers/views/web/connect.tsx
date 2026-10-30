@@ -41,7 +41,8 @@ const within = (path: string, app: string) =>
 
 /** A release of the program, as `computer.code` says it: its base, version and binaries. */
 type Release = { base: string; version: string; binaries: Binary[] };
-type Code = { code: string; expires: string; url?: string; downloads?: Release };
+/** A code, and (on an org) the folder its spaces go in there, plain, as the program takes it. */
+type Code = { code: string; expires: string; url?: string; folder?: string; downloads?: Release };
 
 /** Now, every second while `on`. */
 function useNow(on: boolean): number {
@@ -259,6 +260,7 @@ export function ConnectDialog(
                         arch={arch}
                         app={app}
                         code={code.code}
+                        folder={code.folder}
                         spent={expired}
                       />
                     )
@@ -324,7 +326,8 @@ function Command(
 ): ReactNode {
   const release = code.downloads;
   if (!release) {
-    const command = `deno task computer connect ${app} --code ${code.code}`;
+    const folder = code.folder ? ` --folder ${code.folder}` : "";
+    const command = `deno task computer connect ${app} --code ${code.code}${folder}`;
     return (
       <CodeBlock
         className="connect-command"
@@ -333,6 +336,7 @@ function Command(
           { text: "$ ", tone: "muted" },
           { text: `deno task computer connect ${app} \\\n    --code ` },
           { text: code.code, tone: spent ? "muted" : "accent" },
+          ...(folder ? [{ text: folder }] : []),
         ]}
         copy={spent ? false : command}
       />
@@ -340,7 +344,12 @@ function Command(
   }
   const base = within(release.base, app);
   const windows = system === "win32";
-  const command = installCommand(windows ? "powershell" : "sh", { app, code: code.code, base });
+  const command = installCommand(windows ? "powershell" : "sh", {
+    app,
+    code: code.code,
+    base,
+    folder: code.folder,
+  });
   return (
     <CodeBlock
       className="connect-command"
@@ -357,7 +366,7 @@ function Command(
  * SHA-256, and how to run one; behind a disclosure.
  */
 function Direct(
-  { release, system, mine, arch, app, code, spent }: {
+  { release, system, mine, arch, app, code, folder, spent }: {
     release: Release;
     system: System;
     /** Whether it's the visitor's own system, and their architecture, when it's known. */
@@ -365,6 +374,7 @@ function Direct(
     arch?: string;
     app: string;
     code: string;
+    folder?: string;
     spent: boolean;
   },
 ): ReactNode {
@@ -379,9 +389,10 @@ function Direct(
     : undefined;
   const windows = system === "win32";
   const path = windows ? `$HOME\\Downloads\\${first.file}` : `~/Downloads/${first.file}`;
+  const named = folder ? ` --folder ${folder}` : "";
   const run = windows
-    ? `& "${path}" install ${app} --code ${code}`
-    : `chmod +x ${path} && ${path} install ${app} --code ${code}`;
+    ? `& "${path}" install ${app} --code ${code}${named}`
+    : `chmod +x ${path} && ${path} install ${app} --code ${code}${named}`;
   return (
     <details className="connect-direct">
       <summary>

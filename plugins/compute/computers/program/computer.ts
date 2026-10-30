@@ -19,7 +19,7 @@ import process from "node:process";
 import { type Enrolled, type Info, WORK } from "../shared/workloads.ts";
 import { createBrowsers, findChrome, type Windows } from "./browser/mod.ts";
 import { newer, type Offer, UPDATE } from "./release.ts";
-import { loadState, saveState, socketUrl } from "./state.ts";
+import { connectionOf, loadState, socketUrl, updateState, withConnection } from "./state.ts";
 import { checkOffer, PROGRAM, updateProgram } from "./update.ts";
 import { VERSION } from "./version.ts";
 import { answer, fail } from "./workloads/answer.ts";
@@ -38,7 +38,7 @@ export type ComputerOptions = {
   url: string;
   /** Where spaces' folders go. */
   root: string;
-  /** Where its id and secret are kept (state.ts). */
+  /** Where its id and secret are kept (state.ts), with those of the other apps it serves. */
   statePath: string;
   /** A one-time code to enroll with, while it has no id and secret. */
   code?: string;
@@ -128,7 +128,7 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     unenrolled = reject;
   });
   enrolled.catch(() => {});
-  const known = await loadState(options.statePath);
+  const known = connectionOf(await loadState(options.statePath), options.url);
   if (known?.id && known.secret) enrolledNow();
 
   /** Updates `program` to what the app offers, when it's newer, then stops, to start again as it. */
@@ -158,16 +158,19 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
       if (typeof input?.id !== "string" || !input.id || typeof input.secret !== "string") {
         fail("enrolled needs an id and a secret");
       }
-      const state = await loadState(options.statePath);
-      // What `connect` kept (its name, its windows) stays.
-      await saveState({
-        ...(options.name ? { name: options.name } : {}),
-        ...state,
-        url: state?.url ?? options.url,
-        root: state?.root ?? options.root,
-        id: input.id,
-        secret: input.secret,
-      }, options.statePath);
+      // Its own connection, beside the others'; what `connect` kept (its name, its windows) stays.
+      await updateState(options.statePath, (state) => {
+        const known = connectionOf(state, options.url);
+        return {
+          ...(options.name ? { name: options.name } : {}),
+          ...withConnection(state, {
+            url: known?.url ?? options.url,
+            root: known?.root ?? options.root,
+            id: input.id,
+            secret: input.secret,
+          }),
+        };
+      });
       log(`enrolled as ${input.id}`);
       enrolledNow();
       return { ok: true };
@@ -251,7 +254,7 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
         activate: ({ workerId }) => ({ identity: { workerId, ...attempt } }),
         // Who it is, as the state says now: itself once enrolled, its code before.
         register: async () => {
-          const state = await loadState(options.statePath);
+          const state = connectionOf(await loadState(options.statePath), options.url);
           const capability = state?.id && state.secret
             ? `computer:${state.id}.${state.secret}`
             : options.code

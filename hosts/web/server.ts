@@ -62,6 +62,16 @@ export type WebServerOptions = {
   /** Sign in by name, from this machine only: for trying things out. */
   dev?: boolean;
   /**
+   * The session cookie's name ("session" by default): one per org, when a
+   * host serves many (`hosts/orgs`).
+   */
+  cookie?: string;
+  /**
+   * Whether people sign in and out here (true by default). A host serving
+   * many orgs signs people in once, at its directory, and says false.
+   */
+  signIn?: boolean;
+  /**
    * The app's theme, as its front ends give it (`themeOf(plugins)`, of those
    * with a `theme` resource): the page carries it for its first paint.
    */
@@ -99,15 +109,16 @@ const json = (value: unknown, init: ResponseInit = {}) =>
     headers: { "content-type": "application/json", ...init.headers },
   });
 
-const cookieOf = (request: Request) =>
-  request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${COOKIE}=`))
-    ?.slice(COOKIE.length + 1);
+/** A cookie a request carries, by name. */
+export const cookieOf = (request: Request, name = COOKIE) =>
+  request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${name}=`))
+    ?.slice(name.length + 1);
 
 const loopback = (url: URL) => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 
-/** The session, as an httpOnly cookie: Secure unless this is the machine itself, over http. */
-const setCookie = (url: URL, value: string, maxAge: number) =>
-  `${COOKIE}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${
+/** A session, as an httpOnly cookie: Secure unless this is the machine itself, over http. */
+export const setCookie = (url: URL, value: string, maxAge: number, name = COOKIE) =>
+  `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${
     url.protocol === "https:" || !loopback(url) ? "; Secure" : ""
   }`;
 
@@ -186,6 +197,8 @@ ${look(options.theme)}<title>${options.title ?? "Copilotz"}</title>
 
 export function webServer(options: WebServerOptions): (request: Request) => Promise<Response> {
   const { runtime, tickets } = options;
+  const name = options.cookie ?? COOKIE;
+  const signIn = options.signIn ?? true;
   const taken = Object.keys(options.assets ?? {}).find((path) => path.startsWith(HOST_ASSETS));
   if (taken) {
     throw new Error(
@@ -209,7 +222,7 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
 
   /** Who the session cookie says is signed in, if anyone. */
   const whom = async (request: Request): Promise<Actor | null> => {
-    const secret = cookieOf(request);
+    const secret = cookieOf(request, name);
     return secret ? await runtime.query<Actor | null>("credential.actor", { secret }) : null;
   };
   const files = fileServer(runtime, whom);
@@ -217,7 +230,7 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
 
   const signedIn = (url: URL, session: string, person: string) =>
     json({ person }, {
-      headers: { "set-cookie": setCookie(url, session, 30 * 86_400) },
+      headers: { "set-cookie": setCookie(url, session, 30 * 86_400, name) },
     });
 
   return async (request) => {
@@ -244,7 +257,7 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
           return json({ ticket: tickets.issue(actor), person: actor.id });
         }
         case "POST /signin/google": {
-          if (!options.google) break;
+          if (!options.google || !signIn) break;
           const { idToken } = await request.json() as { idToken: string };
           const { session, person } = await runtime.call<{ session: string; person: string }>(
             "google.sign-in",
@@ -253,7 +266,7 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
           return signedIn(url, session, person);
         }
         case "POST /signin/dev": {
-          if (!options.dev || !loopback(url)) break;
+          if (!options.dev || !signIn || !loopback(url)) break;
           const { name } = await request.json() as { name: string };
           const person = String(name ?? "").trim().toLowerCase();
           const email = /^[a-z0-9._+-]{1,64}@[a-z0-9.-]{1,64}$/.test(person);
@@ -265,7 +278,8 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
           return signedIn(url, session, person);
         }
         case "POST /signout": {
-          const secret = cookieOf(request);
+          if (!signIn) break;
+          const secret = cookieOf(request, name);
           if (secret) {
             const actor = await runtime.query<{ kind: string; id: string } | null>(
               "credential.actor",
@@ -275,7 +289,7 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
               await runtime.call("session.end", { session: secret }, { actor }).catch(() => {});
             }
           }
-          return json({}, { headers: { "set-cookie": setCookie(url, "", 0) } });
+          return json({}, { headers: { "set-cookie": setCookie(url, "", 0, name) } });
         }
       }
       if (url.pathname === socket.config.path) return await options.upgrade(request);

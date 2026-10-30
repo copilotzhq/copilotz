@@ -129,8 +129,9 @@ seconds. Also previews of what a job serves, and publishing a job as an app that
 ## Previews: what a job serves
 
 - **A job says the port it serves,** or the program finds the port it listens on.
-- **The preview URL** is `https://<preview>.preview.<domain>/`. It's per host, so a site's absolute
-  paths work.
+- **The preview URL** is `https://<preview>-preview.copilotz.app/`, on the user-content domain (see
+  Domains). It's per host, so a site's absolute paths work, and it's one label deep, so Cloudflare's
+  free wildcard certificate covers it.
 - **Routing:** the app's web host sends each request to the computer's own connection, as an HTTP
   workload (`computer.http`), which forwards it to `127.0.0.1:<port>`.
   - It needs no inbound network, so it works for personal and cloud computers alike.
@@ -140,8 +141,7 @@ seconds. Also previews of what a job serves, and publishing a job as an app that
   host. "Anyone with the link" is optional.
 - **Traffic goes through the app's process.** That's right for development, not for an app's real
   users (see Apps).
-- **The domain** is a wildcard: through the existing Cloudflare front (no cost), or a Google global
-  load balancer with a wildcard certificate (~$18/month + $0.008/GiB).
+- **The front** is the Cloudflare worker we already have: no load balancer to pay for.
 
 ## Apps: publishing a job
 
@@ -154,9 +154,10 @@ seconds. Also previews of what a job serves, and publishing a job as an app that
   Services run in an apps project, with service accounts allowed nothing.
 - **Revisions:** each publish is a new revision, and rolling back routes to an older one. Settings
   and secrets come from the space.
-- **URL:** `https://<app>.apps.<domain>`, through one load balancer that routes to every service
-  (serverless NEG with a URL mask) and a wildcard certificate. Custom domains go through Certificate
-  Manager; the first 100 certificates are free.
+- **URL:** `https://<app>.copilotz.app`. The Cloudflare worker routes each app's host straight to
+  its Cloud Run URL, from a small table the app keeps, so there's no Google load balancer. Custom
+  domains go through Cloudflare for SaaS (custom hostnames: 100 free, then about $0.10 each a
+  month).
 - **Records:** `app` holds its space, name, source (computer, folder, command, port), revisions,
   URL, domains and visibility.
 - **Agent tools:** `preview(job)` and `publish(job)`.
@@ -183,10 +184,10 @@ seconds. Also previews of what a job serves, and publishing a job as an app that
 | Free pool, floor of 1 VM in one zone, always: e2-medium + 10 GB boot disk + IP       | ~$29           |
 | Free pool, floor of 1 in working hours only (~264 h)                                 | ~$10           |
 | Free pool, floor of 0 (wakes boot, ~45 s)                                            | $0             |
-| Load balancer for previews and apps (Google), or the Cloudflare front                | ~$18, or $0    |
+| The front for previews and apps: the Cloudflare worker we already run                | $0             |
 | Certificates (first 100), templates, instance groups, the app-side controller        | $0             |
 | Images and Artifact Registry (first 0.5 GB free)                                     | < $1           |
-| **Total, nobody using it**                                                           | **$0 to ~$50** |
+| **Total, nobody using it**                                                           | **$0 to ~$30** |
 | Each computer that exists but sleeps: its 10 GB disk, or ~$0.05/GB of data once cold | ~$1, or cents  |
 
 ## Measured (2026-10-30)
@@ -219,11 +220,72 @@ e2-medium VMs with Debian 12, in us-central1-a, with 10 GB pd-balanced disks and
    - per-org budgets and limits;
    - other hosts (GKE Agent Sandbox, Agent Compute Engine).
 
-## To decide
+## Domains
 
-- **The margin on storage.** At 90%, a sleeping 10 GB computer costs its owner ~$10/month.
-- **The warm window** (10 minutes?) and **the pool floor** by hour.
-- **The domain:** the Cloudflare front, or a Google load balancer.
-- **The sizes** offered, and who may create cloud computers (anyone, within the org's budget, or
-  admins only).
-- **Approvals on cloud computers:** off by default (it's isolated), or as on people's own machines.
+- **The app** moves to `compass.copilotz.com`.
+- **What people's computers and apps serve** gets its own registrable domain: `copilotz.app`.
+  - Previews are `<id>-preview.copilotz.app` and apps are `<app>.copilotz.app`.
+  - Content on the app's own domain could set cookies the app trusts, which is why GitHub serves
+    user content from `github.io`.
+  - Later, `copilotz.app` goes on the Public Suffix List, so each app is a site of its own to
+    browsers.
+- **Both are on Cloudflare,** behind the worker we already run.
+- **`copilotz.app` serves the previous app today.** It becomes the user-content domain once that app
+  has moved, which fits the switch already planned (people move to the new app, then the old one
+  goes).
+
+## In an org's own cloud (later)
+
+Enterprises may want computers, and later more, in their own Google Cloud. The design keeps that
+open, at three depths:
+
+1. **Computers in their cloud.** The app keeps running ours; their computers' disks and VMs live in
+   their project.
+   - Their VMs connect out to the app, as ours do: no inbound ports.
+   - Their VMs can reach their private network directly.
+   - Google bills them for the VMs, so their cost in our books is 0, and the price is whatever we
+     charge for the service.
+
+   It works one of two ways:
+   - they grant our controller's service account roles on their project;
+   - or, closer to what enterprises prefer, they run the host adapter themselves in their project: a
+     small worker that connects out to the app and carries out its pool operations with their own
+     service account. Then they grant us nothing.
+2. **Their data in their database.** Tenancy already places a big org in a schema or a database of
+   its own; that database can be theirs.
+3. **The whole app in their cloud,** self-hosted from the same packages and images.
+
+What keeps the first open, at little cost now:
+
+- a placement says **whose account** as well as project and zone;
+- the host adapter is built per placement, with its own credentials, never one global client;
+- pools are per placement;
+- the image comes from the public release;
+- cost books are per placement;
+- nothing in the plugin names our project.
+
+## Proposed defaults (to confirm)
+
+- **Margins:**
+  - compute: 90%, ten times its cost (~$0.40/h for small);
+  - storage: 50%, twice its cost (a sleeping 10 GB computer ~$2/month).
+
+  After 7 days unused, a computer's disk goes cold (a snapshot), billed on its data. For reference,
+  GitHub Codespaces lists 2 dedicated cores at $0.18/h and storage at $0.07/GB-month.
+- **Warm window:** 10 minutes after the last activity (an agent's call, a person's input). A
+  computer also stays awake while a person has its terminal or a preview open, up to 2 hours. It's
+  an org setting.
+- **Pool:** one zone, with a floor of 1 free VM in working hours and 0 at night (~$10/month). The
+  pool follows the wake rate as use grows, and gains zones when capacity or failover needs them.
+- **Sizes:**
+  - small: e2-medium, 2 shared vCPU, 4 GB;
+  - standard: 2 dedicated vCPU, 8 GB (n4-standard-2 or c4a-standard-2).
+
+  Large (4 vCPU, 16 GB) comes when builds need it.
+- **Who creates them:** org admins by default; an org setting opens it to members. A monthly budget
+  per org stops creation when it's reached.
+- **Approvals on cloud computers:**
+  - off by default for commands, jobs and writes (the computer is isolated);
+  - always asked for what reaches outside it: publishing an app, and using connected accounts.
+
+  An org can turn the rest back on.

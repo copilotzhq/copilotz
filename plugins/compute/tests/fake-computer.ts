@@ -2,7 +2,7 @@
  * A computer for tests: it does nothing but say what it was asked, and keeps
  * the secret it's told, as the computer program does.
  */
-import { createWorker } from "@oxian/oxian-js";
+import { createWorker, type WorkerWorkHandler } from "@oxian/oxian-js";
 import { UPDATE } from "../computers/program/release.ts";
 import { WORK } from "../computers/shared/workloads.ts";
 
@@ -15,12 +15,17 @@ const read = async <T>(input: ReadableStream<Uint8Array>) =>
  * `<id>.<secret>`); `lose` answers `enrolled` with a failure, keeping
  * nothing, as a program that stopped before it saved its secret; `info` says
  * more of what it is (its version, system); `updates`: it takes updates, as
- * the built program does.
+ * the built program does; `workloads`: more work it serves, or other answers.
  */
 export function fakeComputer(
   topic: string,
   first: string,
-  options: { lose?: boolean; info?: Record<string, unknown>; updates?: boolean } = {},
+  options: {
+    lose?: boolean;
+    info?: Record<string, unknown>;
+    updates?: boolean;
+    workloads?: Record<string, WorkerWorkHandler>;
+  } = {},
 ) {
   const asked: { work: string; input: Record<string, unknown> }[] = [];
   let credential = first;
@@ -76,6 +81,7 @@ export function fakeComputer(
       ...answer(WORK.search, () => [
         { title: "Deno", url: "https://deno.com", snippet: "A runtime" },
       ]),
+      ...options.workloads,
     },
   });
   return { worker, asked, credential: () => credential };

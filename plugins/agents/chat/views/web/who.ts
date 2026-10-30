@@ -13,10 +13,12 @@ export const names = (list: string[]): string =>
   list.length < 2 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
 
 /**
- * What home greets someone as: their name, capitalised; signed in by email,
- * its first part, up to a dot ("ana.lima@example.com" is "Ana").
+ * What home greets someone as: their first name, capitalised; signed in by
+ * email, its first part, up to a dot ("ana.lima@example.com" is "Ana"). An
+ * id that isn't a name ("google:1234") greets no one by name.
  */
 export const greeted = (name: string): string => {
-  const first = name.split("@")[0].split(/[._+-]/).find(Boolean) ?? "";
+  if (/^[a-z]+:/.test(name)) return "";
+  const first = name.split("@")[0].split(/[\s._+-]/).find(Boolean) ?? "";
   return first ? first[0].toLocaleUpperCase() + first.slice(1) : "";
 };

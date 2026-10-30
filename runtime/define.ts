@@ -159,8 +159,12 @@ export type Views = Record<string, Record<string, ViewDef>>;
 // deno-lint-ignore no-explicit-any
 export type ViewDef = (item: any, ctx: ViewContext<any>) => unknown;
 
-/** Who looks: a View renders relative to it (your own messages, your bubbles). */
-export type Viewer = { name: string; kind?: string };
+/**
+ * Who looks: a View renders relative to it (your own messages, your bubbles).
+ * `name` is who they are (a person's id); `label` what they're shown as, when
+ * it isn't that (a person's own name, as they signed in).
+ */
+export type Viewer = { name: string; kind?: string; label?: string };
 
 export type RenderOptions = { viewer?: Viewer; hints?: Record<string, unknown> };
 

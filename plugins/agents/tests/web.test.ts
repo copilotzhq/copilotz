@@ -85,6 +85,9 @@ test("a title cut short for a step's name, and what home greets someone as", () 
   assertEquals(greeted("ana"), "Ana");
   assertEquals(greeted("ana@example.com"), "Ana");
   assertEquals(greeted("ana.lima@example.com"), "Ana");
+  // Their name as they signed in: the first of it; an id that isn't a name, no one.
+  assertEquals(greeted("Ana Lima"), "Ana");
+  assertEquals(greeted("google:113900649446"), "");
   assertEquals(greeted(""), "");
 });
 

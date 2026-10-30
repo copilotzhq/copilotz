@@ -156,7 +156,10 @@ test("an app's URL becomes its socket; a socket stays as it is", () => {
   assertEquals(socketUrl("https://app.example.com/some/page"), "wss://app.example.com/oxian");
   // An org of a host serving many is reached under its address.
   assertEquals(socketUrl("https://app.example.com/o/acme"), "wss://app.example.com/o/acme/oxian");
-  assertEquals(socketUrl("https://app.example.com/o/acme/"), "wss://app.example.com/o/acme/oxian");
+  assertEquals(
+    socketUrl("https://app.example.com/o/acme/"),
+    "wss://app.example.com/o/acme/oxian",
+  );
   assertEquals(
     socketUrl("ws://127.0.0.1:8787/core/executors"),
     "ws://127.0.0.1:8787/core/executors",

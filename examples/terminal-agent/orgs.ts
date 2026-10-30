@@ -86,7 +86,7 @@ const host = orgsHost({
         }),
       ],
       executors: 2,
-      transports: [socket],
+      transports: given.transports,
       admit: given.admit,
     }),
   upgrade: (runtime, request) => handler(runtime.hypervisor)(request),

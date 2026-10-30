@@ -84,6 +84,13 @@ export type WebServerOptions = {
    */
   base?: string;
   /**
+   * Where the page's socket connects, when it isn't the runtime's own
+   * `/oxian`: a host serving many orgs gives each org its address there
+   * (`/o/<org>/oxian`), so the socket finds it without cookies, which Safari
+   * doesn't send with a socket.
+   */
+  socket?: string;
+  /**
    * The app's theme, as its front ends give it (`themeOf(plugins)`, of those
    * with a `theme` resource): the page carries it for its first paint.
    */
@@ -233,6 +240,7 @@ ${look(options.theme)}${installable(options)}<title>${options.title ?? "Copilotz
       google: options.google ?? null,
       dev: options.dev ?? false,
       ...(options.base ? { base: options.base } : {}),
+      ...(options.socket ? { socket: options.socket } : {}),
     })
       .replaceAll("<", "\\u003c")}</script>
 </head>
@@ -330,7 +338,18 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
         case "POST /connect": {
           const actor = await whom(request);
           if (!actor) return json({ error: "Not signed in" }, { status: 401 });
-          return json({ ticket: tickets.issue(actor), person: actor.id });
+          // What the page shows them as: their name as they signed in, else their email.
+          const profile = actor.kind === "person"
+            ? await runtime.query<{ name?: string; email?: string } | null>("person.profile", {
+              person: actor.id,
+            }).catch(() => null)
+            : null;
+          const name = profile?.name ?? profile?.email;
+          return json({
+            ticket: tickets.issue(actor),
+            person: actor.id,
+            ...(name ? { name } : {}),
+          });
         }
         case "POST /signin/google": {
           if (!options.google || !signIn) break;

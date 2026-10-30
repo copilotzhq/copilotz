@@ -63,13 +63,15 @@ const phone = {
 };
 
 export function Frame(
-  { path, brand, viewer, sidebar, menu, call, panel, palette, children }: {
+  { path, brand, viewer, label, sidebar, menu, call, panel, palette, children }: {
     /** Where the page is: going elsewhere closes the drawer, and the panel's sheet. */
     path: string;
     /** The app's name, which its logo says (or shows). */
     brand: string;
     /** Who's looking: the panel is kept as they left it. */
     viewer: string;
+    /** What the viewer is shown as, when not their id (their name). */
+    label?: string;
     sidebar: ReactNode;
     /** What front ends put in the person's menu (the `userMenu` resource). */
     menu: UserMenuEntry[];
@@ -185,7 +187,7 @@ export function Frame(
       {viewer
         ? (
           <Me
-            name={viewer}
+            name={label ?? viewer}
             email={orgs?.email}
             menu={menu}
             {...(orgs ? { orgs: { here: !!here, standing, staff: orgs.staff } } : {})}

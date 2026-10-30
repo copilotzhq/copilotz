@@ -43,9 +43,13 @@ const running = (text: string) =>
     : execFileSync("/bin/ps", ["-axww", "-o", "command="], { encoding: "utf8" }))
     .split(/\r?\n/).filter((line) => line.includes(text));
 
-/** The Chrome on `profile` (its browser process, not its helpers). */
+/** The Chrome on `profile` (its browser process, not its helpers), by the path it was given. */
 const chromeOn = (profile: string) =>
-  running(`--user-data-dir=${profile} `).filter((line) => !line.includes("--type="));
+  // Windows' temporary folders have short names (RUNNER~1) that Chrome is given long.
+  running(
+    `--user-data-dir=${process.platform === "win32" ? realpathSync.native(profile) : profile} `,
+  )
+    .filter((line) => !line.includes("--type="));
 
 /**
  * A site to sign in to: `/set` gives a cookie that lasts, and `/session` one

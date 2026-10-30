@@ -62,9 +62,10 @@ const encoded = (script: string) => [
   Buffer.from(script, "utf16le").toString("base64"),
 ];
 
-/** Every PowerShell's start: UTF-8 out, no progress bars. */
+/** Every PowerShell's start: UTF-8 out, no progress bars, no colors (errors are text, not ANSI). */
 const PRELUDE = [
   "$ProgressPreference = 'SilentlyContinue'",
+  "try { $PSStyle.OutputRendering = 'PlainText' } catch {}",
   "try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch {}",
   "$OutputEncoding = [Text.UTF8Encoding]::new($false)",
 ];

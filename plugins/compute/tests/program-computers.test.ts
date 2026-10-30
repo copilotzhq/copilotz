@@ -108,7 +108,7 @@ test("the program connects to the plugin; agents work on it once their person sa
     await answer("thread");
     // In the computer's shell: PowerShell on Windows.
     const stdin = process.platform === "win32"
-      ? 'Set-Content -NoNewline made.txt "hi`n"; (Get-Location).Path'
+      ? 'Set-Content -Path made.txt -Value "hi`n" -NoNewline; (Get-Location).Path'
       : "echo hi > made.txt && pwd";
     const ran = await tool("terminal", { stdin }) as { stdout: string; exitCode: number };
     assertEquals(ran.exitCode, 0);

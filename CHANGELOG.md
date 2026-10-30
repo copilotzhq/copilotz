@@ -1,3 +1,16 @@
+## 1.0.0-rc.2 — 2026-10-30
+
+- **Orgs:** an org's socket is in its own address (`/o/<org>/oxian`), beside the shared `/oxian`, so
+  a browser that sends no cookies with a WebSocket (Safari) reaches its org. The web host's page
+  says which socket to use (`socket`) and its base (`base`).
+- **Web:** a person shows as their name, from their profile, not as their id: the viewer has a
+  `label` beside its `name`, which the shell's account menu and the chat's greeting use.
+- **Computers:** one machine serves many apps, or many orgs of one. Each is a computer of its own
+  there, with its own id and secret, all in one program; a state kept before becomes its one
+  connection. `computer list` says which and where; `computer disconnect <app-url>` leaves one. An
+  org's spaces go in a folder named for the org (`~/Copilotz/acme-studio`, `~/Copilotz/personal`): a
+  code made on an org says it (`folder`), and the install lines pass it on (`--folder`).
+
 ## 1.0.0-rc.1 — 2026-10-30
 
 Copilotz 1.0 is a new runtime, written from scratch: one runtime for agents and the apps around

@@ -11,7 +11,7 @@
  * GitHub release, a bucket), whose manifest it reads once, as it starts.
  *
  * ```ts
- * plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.1" })]
+ * plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.2" })]
  * plugins: [...plugins, await computerDownloads({ url: "https://github.com/…/releases/download/…/" })]
  * ```
  */

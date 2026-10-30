@@ -22,7 +22,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.1"`), and
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.2"`), and
 the imports below are the same everywhere. Some pieces need a package of their own, installed beside
 it: `esbuild` to bundle the web host on Node, `@electric-sql/pglite` for PostgreSQL in the process,
 and `@types/react` for the front ends' types.
@@ -206,7 +206,7 @@ node scripts/computer/build.ts      # dist/computer/<version>/: a binary per pla
 ```ts
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.1" })], // /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.2" })], // /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://…/releases/download/…/" })], // or elsewhere
 ```
 

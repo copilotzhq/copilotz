@@ -10,11 +10,13 @@
  * connects again as itself, with the same attempt identity. It asks the app
  * for nothing. Built (not run from source), it also takes newer versions
  * the app offers (`UPDATE`): it updates itself (update.ts) and stops, to be
- * started again as it.
+ * started again as it. Starting, it starts again the jobs it keeps (their
+ * list is `.copilotz/jobs.json` under its root: see jobs.ts).
  */
 import { createWorker, type Worker } from "@oxian/oxian-js";
 import { randomUUID } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
+import { join } from "node:path";
 import process from "node:process";
 import { type Enrolled, type Info, WORK } from "../shared/workloads.ts";
 import { createBrowsers, findChrome, type Windows } from "./browser/mod.ts";
@@ -23,8 +25,10 @@ import { connectionOf, loadState, socketUrl, updateState, withConnection } from 
 import { checkOffer, PROGRAM, updateProgram } from "./update.ts";
 import { VERSION } from "./version.ts";
 import { answer, fail } from "./workloads/answer.ts";
+import { createArchive } from "./workloads/archive.ts";
 import { createBrowserWork } from "./workloads/browser.ts";
 import { createFiles } from "./workloads/files.ts";
+import { createHttp } from "./workloads/http.ts";
 import { machineInfo } from "./workloads/info.ts";
 import { createJobs } from "./workloads/jobs.ts";
 import { createSpaces } from "./workloads/spaces.ts";
@@ -60,6 +64,8 @@ export type ComputerOptions = {
   shells?: ShellLimits;
   /** How long a job gets to stop after SIGTERM. */
   jobStopGraceMs?: number;
+  /** Whether it starts again the jobs it keeps: unless it's only enrolling (false). */
+  resume?: boolean;
   /** Who's browser, unused this long, stops (its profile stays). */
   browserIdleMs?: number;
   /** Where its concise log lines go (never a secret). */
@@ -107,7 +113,11 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
 
   const spaces = createSpaces(root);
   const shells = createShells(spaces, shell, options.shells);
-  const jobs = createJobs(spaces, shell, { stopGraceMs: options.jobStopGraceMs });
+  const jobs = createJobs(spaces, shell, {
+    stopGraceMs: options.jobStopGraceMs,
+    kept: join(root, ".copilotz", "jobs.json"),
+    log,
+  });
   const files = createFiles(spaces);
   const browsers = createBrowsers({
     root,
@@ -191,7 +201,11 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     [WORK.search]: answer((input: Parameters<typeof search>[0], signal) =>
       search(input, { url: searchUrl, browser: browser.search, signal })
     ),
+    // Streamed both ways, not one JSON value.
+    [WORK.http]: createHttp(spaces),
+    [WORK.archive]: createArchive(spaces),
   };
+  if (options.resume !== false) await jobs.resume();
 
   // One attempt per process, kept across reconnects, so Oxian can fence a replaced one.
   const attempt = { attemptId: randomUUID(), epoch: Date.now() };

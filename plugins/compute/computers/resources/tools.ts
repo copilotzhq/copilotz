@@ -9,7 +9,7 @@ import type { Tool, ToolContext } from "../../../agents/chat/contract.ts";
 import { tool } from "../../../agents/chat/contract.ts";
 import { allowed } from "../shared/ask.ts";
 import type { Asked } from "../shared/settings.ts";
-import { whereFor } from "../shared/where.ts";
+import { touch, whereAwake } from "../shared/wake.ts";
 import { browserActionSchema, browserDescription } from "../shared/browser.ts";
 import { WORK } from "../shared/workloads.ts";
 
@@ -30,7 +30,8 @@ async function on(
   input: Record<string, unknown>,
   asked?: { kind: Asked; detail: string; preview?: string },
 ): Promise<unknown> {
-  const where = await whereFor(ctx, ctx.thread, `agent:${ctx.agent}`);
+  // A computer that sleeps (a cloud computer) is woken first.
+  const where = await whereAwake(ctx, ctx.thread, `agent:${ctx.agent}`);
   if ("missing" in where) return where.missing;
   if (asked) {
     const may = await allowed(ctx, {
@@ -39,6 +40,7 @@ async function on(
       desk: where.desk._id,
       computer: where.desk.computer,
       ...(where.desk.name ? { name: where.desk.name } : {}),
+      ...(where.desk.approve ? { approve: where.desk.approve } : {}),
       agent: ctx.agent,
       thread: ctx.thread,
       in: where.scope.space,
@@ -48,6 +50,8 @@ async function on(
     });
     if (may !== true) return may;
   }
+  // It was used: it stays awake a while (alongside the work, which doesn't wait on it).
+  const touched = touch(ctx, where.desk.computer);
   try {
     return await ctx.workers.call("computer", where.desk.computer, work, {
       ...input,
@@ -55,6 +59,8 @@ async function on(
     });
   } catch (error) {
     return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    await touched;
   }
 }
 
@@ -226,3 +232,35 @@ export const tools: Record<string, Tool> = {
   browser,
   web_search: webSearch,
 };
+
+/**
+ * `preview`: an address for what one of the agent's jobs serves (a dev
+ * server, a site), for the space's members to open (see actions/preview.ts).
+ */
+tools.preview = tool({
+  description: "Makes a link to what one of your background jobs serves (a dev server, a site), " +
+    "for the people of this space to open in their browser: give the job (its id or name) or " +
+    "the port it serves. Start the server with start_job first.",
+  input: {
+    type: "object",
+    properties: {
+      job: { type: "string" },
+      port: { type: "integer", minimum: 1, maximum: 65535 },
+    },
+  },
+  run: async (input, ctx) => {
+    // As the agent reads it: a conversation its person doesn't reach has no space for it.
+    const thread = await ctx.db.collection<{ in?: string }>("thread").findOne({ _id: ctx.thread });
+    if (!thread?.in) return "This conversation isn't in a space, so there's no computer here.";
+    try {
+      const { url } = await ctx.call<{ url: string }>("computer.preview", {
+        in: thread.in,
+        ...(input.job ? { job: input.job } : {}),
+        ...(input.port ? { port: input.port } : {}),
+      });
+      return `${url}\nOnly this space's members can open it, signed in to the app.`;
+    } catch (error) {
+      return `Error: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  },
+});

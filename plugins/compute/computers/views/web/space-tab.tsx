@@ -1,8 +1,9 @@
 /**
  * A space's computers (kind `computer.space`: its Computer tab, item
  * `{ _id }`, the space; spaces' `spaceTabs`): those it has (its desks), each
- * a machine of someone's with a folder for this space, and adding one
- * (connecting a computer here, or putting one of yours here); then the one
+ * a machine of someone's (or a cloud computer: `computerKinds`) with a
+ * folder for this space, and adding one (a cloud computer, connecting a
+ * computer here, or putting one of yours here); then the one
  * picked (the one agents use, at first) to work on: its terminal, jobs and
  * files in this space's folder (agents' jobs by their names: chat's
  * `thread.agents`). A viewer sees them; those who may write here
@@ -16,7 +17,16 @@ import type { Reached } from "../../../../access/spaces/contract.ts";
 import type { Team } from "../../../../agents/chat/contract.ts";
 import type { Computer } from "../../collections/computer.ts";
 import type { Desk } from "../../collections/desk.ts";
+import type { Preview } from "../../collections/preview.ts";
 import { Desks } from "./desks.tsx";
+import {
+  type JobAction,
+  jobActionsOf,
+  type Kind,
+  kindByComputer,
+  kindsOf,
+  queryOf,
+} from "./kinds.ts";
 import { type Named, namedOf } from "./names.ts";
 import { STYLE } from "./style.ts";
 import { Workspace } from "./workspace.tsx";
@@ -33,9 +43,20 @@ export const spaceComputersView = (
   const spaces = ctx.db.collection("space").query<Reached[]>("reached", {}).value;
   // The agents answering here, as they're named: whose its jobs are.
   const team = ctx.db.collection("thread").query<Team>("agents", { in: id }).value;
+  // What its computers serve, at addresses of their own.
+  const previews = ctx.db.collection("preview").query<Preview[]>("here", { in: id }).value;
+  // Kinds of computer beyond people's own machines (cloud ones), and which of the person's are.
+  const kinds = kindsOf(ctx.resources.computerKinds);
+  const records = kinds.map((k) => {
+    const [collection, query] = queryOf(k.mine)!;
+    return ctx.db.collection(collection).query<{ _id: string }[]>(query, {}).value;
+  });
   const compact = ctx.hints.mode === "panel";
   const style = <style href="computers-web" precedence="copilotz">{STYLE}</style>;
-  if (desks === undefined || mine === undefined || spaces === undefined) {
+  if (
+    desks === undefined || mine === undefined || spaces === undefined ||
+    records.some((r) => r === undefined)
+  ) {
     return (
       <div className="space-computers" aria-busy="true">
         {style}
@@ -58,6 +79,10 @@ export const spaceComputersView = (
         agents={namedOf(team?.agents)}
         compact={compact}
         call={ctx.call}
+        kinds={kinds}
+        kindOf={kindByComputer(kinds, records)}
+        previews={previews ?? []}
+        jobActions={jobActionsOf(ctx.resources.jobActions)}
       />
     </>
   );
@@ -77,7 +102,7 @@ const machineOf = (desk: Desk, mine: Computer[]): Computer =>
   };
 
 function SpaceComputers(
-  { space, desks, mine, me, agents, compact, call }: {
+  { space, desks, mine, me, agents, compact, call, kinds, kindOf, previews, jobActions }: {
     space: Reached;
     desks: Desk[];
     mine: Computer[];
@@ -85,6 +110,10 @@ function SpaceComputers(
     agents: Record<string, Named>;
     compact: boolean;
     call: Call;
+    kinds: Kind[];
+    kindOf: Record<string, Kind>;
+    previews: Preview[];
+    jobActions: JobAction[];
   },
 ): ReactNode {
   const [picked, setPicked] = useState<string>();
@@ -102,6 +131,8 @@ function SpaceComputers(
         me={me}
         call={call}
         compact={compact}
+        kinds={kinds}
+        kindOf={kindOf}
       />
       {desk && write
         ? (
@@ -117,6 +148,9 @@ function SpaceComputers(
             fixed
             compact={compact}
             {...(desk.owner === me ? {} : { theirs: desk.owner })}
+            {...(kindOf[desk.computer] ? { kind: kindOf[desk.computer] } : {})}
+            previews={previews}
+            jobActions={jobActions}
           />
         )
         : desk

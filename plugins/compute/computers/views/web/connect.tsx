@@ -10,7 +10,9 @@
  * a way to open it; what it does, and how to stop it. An app with no release
  * of the program (`downloads`) gets the command for its code instead. A
  * `notice` goes over the steps (connecting into a shared space shares the
- * computer there).
+ * computer there). `useConnect` is the same flow for a dialog of another's
+ * (adding a computer, where connecting your own machine is one choice, with
+ * a way `back`).
  */
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
@@ -80,21 +82,50 @@ function parts(command: string, code: string, spent: boolean, prompt: string): C
   ];
 }
 
-export function ConnectDialog(
-  { open, onClose, call, computers, here, where, notice }: {
-    open: boolean;
-    onClose(): void;
-    call<R = unknown>(action: string, input?: unknown): Promise<R>;
-    /** The person's computers, live: a new one online is the one this code connected. */
-    computers: Computer[];
-    /** Where the person works: the space it's connected to, and the link to it. */
-    here?: string;
-    /** That space's name, as the title says it. */
-    where?: string;
-    /** What to know first, over the steps. */
-    notice?: ReactNode;
-  },
-): ReactNode {
+type ConnectProps = {
+  open: boolean;
+  onClose(): void;
+  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  /** The person's computers, live: a new one online is the one this code connected. */
+  computers: Computer[];
+  /** Where the person works: the space it's connected to, and the link to it. */
+  here?: string;
+  /** That space's name, as the title says it. */
+  where?: string;
+  /** What to know first, over the steps. */
+  notice?: ReactNode;
+  /** Back to choosing how to add a computer, when connecting was a choice. */
+  back?(): void;
+};
+
+/** Connecting, as a dialog shows it: its title, what it means, the steps, and its buttons. */
+export type ConnectFlow = {
+  title: string;
+  description?: string;
+  body: ReactNode;
+  footer: ReactNode;
+};
+
+export function ConnectDialog(props: ConnectProps): ReactNode {
+  const flow = useConnect(props);
+  return (
+    <Dialog
+      open={props.open}
+      onClose={props.onClose}
+      size="lg"
+      title={flow.title}
+      description={flow.description}
+      footer={flow.footer}
+    >
+      {flow.body}
+    </Dialog>
+  );
+}
+
+/** Connecting a computer while `open`: a fresh code each time, until the computer comes. */
+export function useConnect(
+  { open, onClose, call, computers, here, where, notice, back }: ConnectProps,
+): ConnectFlow {
   const [code, setCode] = useState<Code>();
   const [error, setError] = useState<string>();
   const [system, setSystem] = useState<System>(() => visitorSystem() ?? "darwin");
@@ -134,190 +165,203 @@ export function ConnectDialog(
   const release = code?.downloads;
   const info = arrived?.info as Partial<Info> | undefined;
 
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      size="lg"
-      title={arrived
-        ? "Your computer is connected"
-        : where
-        ? `Connect a computer to ${where}`
-        : "Connect a computer"}
-      description={arrived
-        ? undefined
-        : "Your agents can then work on it: run commands and jobs, read and write files, browse " +
-          "and search, each space in a folder of its own. They ask you before commands and changes."}
-      footer={arrived
-        ? (
-          <>
-            <Button onClick={onClose}>Done</Button>
-            <Button
-              variant="primary"
-              icon="terminal"
-              href={`/computer/${encodeURIComponent(arrived._id)}${
-                here ? `?in=${encodeURIComponent(here)}` : ""
-              }`}
-              onClick={onClose}
-            >
-              Open {nameOf(arrived)}
-            </Button>
-          </>
-        )
-        : <Button onClick={onClose}>Close</Button>}
-    >
-      {arrived
-        ? (
-          <div className="connect-done" role="status">
-            <span className="connect-done-icon">
-              <Icon name="check" size={22} />
-            </span>
-            <div>
-              <p className="connect-done-name">Connected: {nameOf(arrived)}</p>
-              <p className="connect-done-facts">
-                {[systemOf(info?.os), info?.arch, info?.root ? tilde(info.root) : undefined]
-                  .filter(Boolean).join(" · ")}
-              </p>
-              {release
-                ? (
-                  <p className="connect-done-facts">
-                    It runs in the background there, and starts again when you log in on it.
-                  </p>
-                )
-                : null}
+  return {
+    title: arrived
+      ? "Your computer is connected"
+      : back
+      ? where ? `Connect your own machine to ${where}` : "Connect your own machine"
+      : where
+      ? `Connect a computer to ${where}`
+      : "Connect a computer",
+    ...(arrived ? {} : {
+      description: "Your agents can then work on it: run commands and jobs, read and write " +
+        "files, browse and search, each space in a folder of its own. They ask you before " +
+        "commands and changes.",
+    }),
+    footer: arrived
+      ? (
+        <>
+          <Button onClick={onClose}>Done</Button>
+          <Button
+            variant="primary"
+            icon="terminal"
+            href={`/computer/${encodeURIComponent(arrived._id)}${
+              here ? `?in=${encodeURIComponent(here)}` : ""
+            }`}
+            onClick={onClose}
+          >
+            Open {nameOf(arrived)}
+          </Button>
+        </>
+      )
+      : (
+        <>
+          {back
+            ? (
+              <Button variant="ghost" icon="chevron-left" className="add-back" onClick={back}>
+                Back
+              </Button>
+            )
+            : null}
+          <Button onClick={onClose}>Close</Button>
+        </>
+      ),
+    body: (
+      <>
+        {arrived
+          ? (
+            <div className="connect-done" role="status">
+              <span className="connect-done-icon">
+                <Icon name="check" size={22} />
+              </span>
+              <div>
+                <p className="connect-done-name">Connected: {nameOf(arrived)}</p>
+                <p className="connect-done-facts">
+                  {[systemOf(info?.os), info?.arch, info?.root ? tilde(info.root) : undefined]
+                    .filter(Boolean).join(" · ")}
+                </p>
+                {release
+                  ? (
+                    <p className="connect-done-facts">
+                      It runs in the background there, and starts again when you log in on it.
+                    </p>
+                  )
+                  : null}
+              </div>
             </div>
-          </div>
-        )
-        : (
-          <>
-            {notice ? <div className="connect-notice">{notice}</div> : null}
-            <ol className="connect-steps">
-              <li>
-                <span className="connect-step-number" aria-hidden="true">1</span>
-                <div className="connect-step">
-                  {release
-                    ? (
-                      <div className="connect-step-head">
-                        <p className="connect-step-title">Install the computer program</p>
-                        <Tabs
-                          label="That computer's system"
-                          value={system}
-                          onChange={setSystem}
-                          tabs={SYSTEMS.map((os) => ({ value: os, label: OS_NAMES[os] }))}
-                          className="connect-systems"
-                        />
-                      </div>
-                    )
-                    : null}
-                  <p>
-                    {release
-                      ? WHERE[system]
-                      : "In a terminal on that computer, from your copy of the app's code, run:"}
-                  </p>
-                  {error
-                    ? (
-                      <Notice
-                        tone="destructive"
-                        role="alert"
-                        action={<Button size="sm" onClick={() => void fresh()}>Try again</Button>}
-                      >
-                        Couldn't make a code: {error}
-                      </Notice>
-                    )
-                    : code
-                    ? <Command code={code} app={app} system={system} spent={expired} />
-                    : <Skeleton height={64} radius="lg" />}
-                  {code
-                    ? (
-                      <p className="connect-expiry" aria-live="polite">
-                        {expired
-                          ? (
-                            <>
-                              <span>This code has run out.</span>
-                              <Button size="sm" icon="refresh" onClick={() => void fresh()}>
-                                New code
-                              </Button>
-                            </>
-                          )
-                          : (
-                            <>
-                              <Icon name="lock" size={13} />
-                              <span>
-                                The code works once, for{" "}
-                                <b className="connect-left">{clock(left)}</b> more
-                              </span>
-                            </>
-                          )}
-                      </p>
-                    )
-                    : null}
-                  {release && code
-                    ? (
-                      <Direct
-                        release={release}
-                        system={system}
-                        mine={system === visitorSystem()}
-                        arch={arch}
-                        app={app}
-                        code={code.code}
-                        folder={code.folder}
-                        spent={expired}
-                      />
-                    )
-                    : null}
-                </div>
-              </li>
-              <li>
-                <span className="connect-step-number" aria-hidden="true">2</span>
-                <div className="connect-step">
-                  <p>
+          )
+          : (
+            <>
+              {notice ? <div className="connect-notice">{notice}</div> : null}
+              <ol className="connect-steps">
+                <li>
+                  <span className="connect-step-number" aria-hidden="true">1</span>
+                  <div className="connect-step">
                     {release
                       ? (
-                        <>
-                          It connects, then keeps running in the background, and starts when you log
-                          in. Each space gets a folder in{" "}
-                          <code>
-                            {system === "win32" ? "%USERPROFILE%\\Copilotz" : "~/Copilotz"}
-                          </code>{" "}
-                          on it.
-                        </>
+                        <div className="connect-step-head">
+                          <p className="connect-step-title">Install the computer program</p>
+                          <Tabs
+                            label="That computer's system"
+                            value={system}
+                            onChange={setSystem}
+                            tabs={SYSTEMS.map((os) => ({ value: os, label: OS_NAMES[os] }))}
+                            className="connect-systems"
+                          />
+                        </div>
                       )
-                      : (
-                        <>
-                          Leave it running. Each space gets a folder in <code>~/Copilotz</code>{" "}
-                          on that computer (<code>--root</code> puts them elsewhere), and next time
-                          {" "}
-                          <code>deno task computer</code> starts it again.
-                        </>
-                      )}
-                  </p>
-                </div>
-              </li>
-              {code && !expired
+                      : null}
+                    <p>
+                      {release
+                        ? WHERE[system]
+                        : "In a terminal on that computer, from your copy of the app's code, run:"}
+                    </p>
+                    {error
+                      ? (
+                        <Notice
+                          tone="destructive"
+                          role="alert"
+                          action={<Button size="sm" onClick={() => void fresh()}>Try again</Button>}
+                        >
+                          Couldn't make a code: {error}
+                        </Notice>
+                      )
+                      : code
+                      ? <Command code={code} app={app} system={system} spent={expired} />
+                      : <Skeleton height={64} radius="lg" />}
+                    {code
+                      ? (
+                        <p className="connect-expiry" aria-live="polite">
+                          {expired
+                            ? (
+                              <>
+                                <span>This code has run out.</span>
+                                <Button size="sm" icon="refresh" onClick={() => void fresh()}>
+                                  New code
+                                </Button>
+                              </>
+                            )
+                            : (
+                              <>
+                                <Icon name="lock" size={13} />
+                                <span>
+                                  The code works once, for{" "}
+                                  <b className="connect-left">{clock(left)}</b> more
+                                </span>
+                              </>
+                            )}
+                        </p>
+                      )
+                      : null}
+                    {release && code
+                      ? (
+                        <Direct
+                          release={release}
+                          system={system}
+                          mine={system === visitorSystem()}
+                          arch={arch}
+                          app={app}
+                          code={code.code}
+                          folder={code.folder}
+                          spent={expired}
+                        />
+                      )
+                      : null}
+                  </div>
+                </li>
+                <li>
+                  <span className="connect-step-number" aria-hidden="true">2</span>
+                  <div className="connect-step">
+                    <p>
+                      {release
+                        ? (
+                          <>
+                            It connects, then keeps running in the background, and starts when you
+                            log in. Each space gets a folder in{" "}
+                            <code>
+                              {system === "win32" ? "%USERPROFILE%\\Copilotz" : "~/Copilotz"}
+                            </code>{" "}
+                            on it.
+                          </>
+                        )
+                        : (
+                          <>
+                            Leave it running. Each space gets a folder in <code>~/Copilotz</code>
+                            {" "}
+                            on that computer (<code>--root</code>{" "}
+                            puts them elsewhere), and next time <code>deno task computer</code>{" "}
+                            starts it again.
+                          </>
+                        )}
+                    </p>
+                  </div>
+                </li>
+                {code && !expired
+                  ? (
+                    <li className="connect-waiting" role="status">
+                      <Spinner size={15} />
+                      Waiting for your computer…
+                    </li>
+                  )
+                  : null}
+              </ol>
+              {release
                 ? (
-                  <li className="connect-waiting" role="status">
-                    <Spinner size={15} />
-                    Waiting for your computer…
-                  </li>
+                  <p className="connect-stop">
+                    <Icon name="info" size={14} />
+                    <span>
+                      To stop it, run <code>computer uninstall</code>{" "}
+                      on it: it stops, and no longer starts at login. Forgetting it here, on its
+                      page, disconnects it for good.
+                    </span>
+                  </p>
                 )
                 : null}
-            </ol>
-            {release
-              ? (
-                <p className="connect-stop">
-                  <Icon name="info" size={14} />
-                  <span>
-                    To stop it, run <code>computer uninstall</code>{" "}
-                    on it: it stops, and no longer starts at login. Forgetting it here, on its page,
-                    disconnects it for good.
-                  </span>
-                </p>
-              )
-              : null}
-          </>
-        )}
-    </Dialog>
-  );
+            </>
+          )}
+      </>
+    ),
+  };
 }
 
 /** The line to run (the program's, from the app's release; or, without one, from its code). */

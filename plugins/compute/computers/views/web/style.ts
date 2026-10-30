@@ -78,6 +78,40 @@ export const STYLE = `
   .connect-binary .copilotz-button { width: 100%; justify-content: center; }
 }
 
+/* Adding one: the ways, as a choice */
+.add-body { display: grid; gap: 20px; }
+.add-choices { list-style: none; display: grid; gap: 10px; margin: 0; padding: 0; }
+.add-choice { display: grid; grid-template-columns: 44px minmax(0, 1fr) 16px; align-items: center; gap: 14px; width: 100%;
+  padding: 14px 16px 14px 14px; color: inherit; font: inherit; }
+.add-choice:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.add-choice-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--radius-lg);
+  background: var(--muted); color: var(--secondary-foreground); }
+.add-choice-icon[data-kind] { background: var(--primary-soft); color: var(--primary-text); }
+.add-choice-text { display: grid; gap: 3px; min-width: 0; }
+.add-choice-title { font-size: 15px; font-weight: 640; }
+.add-choice-description { color: var(--muted-foreground); font-size: 13px; line-height: 1.45; }
+.add-choice-go { color: var(--muted-foreground); transition: transform .15s, color .15s; }
+.add-choice:hover .add-choice-go { color: var(--foreground); transform: translateX(2px); }
+.add-yours { display: grid; gap: 8px; }
+.add-yours h3 { margin: 0; color: var(--muted-foreground); font-size: 12px; font-weight: 650; letter-spacing: .06em;
+  text-transform: uppercase; }
+.add-yours ul { list-style: none; display: grid; gap: 2px; margin: 0; padding: 0; }
+.add-yours-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 6px 10px;
+  border: 0; border-radius: var(--radius-md); background: transparent; color: inherit; font: inherit; text-align: left;
+  cursor: pointer; }
+.add-yours-item:hover { background: var(--accent); color: var(--accent-foreground); }
+.add-yours-item:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.add-yours-item .computer-dot { outline-color: var(--popover); }
+.add-yours-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 560; }
+.add-yours-state { color: var(--muted-foreground); font-size: 12.5px; }
+.add-yours-plus { color: var(--muted-foreground); }
+.add-back { margin-right: auto; }
+.desks-none-choices { max-width: 560px; }
+.desks-none-choices .add-choices { width: 100%; margin-top: 10px; text-align: left; }
+.desks-none-choices .desks-none-actions { margin-top: 2px; }
+.add-choices-compact .add-choice { grid-template-columns: 36px minmax(0, 1fr) 14px; gap: 10px; padding: 10px 12px 10px 10px; }
+.add-choices-compact .add-choice-icon { width: 36px; height: 36px; }
+
 /* A space's computers: its tab */
 .space-computers { display: grid; gap: 16px; }
 .desks { display: grid; gap: 10px; }
@@ -163,8 +197,11 @@ button.desk-pick { cursor: pointer; }
 
 /* Jobs */
 .jobs { display: grid; gap: 18px; }
-.jobs-start { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 200px) auto; gap: 8px; }
+.jobs-start { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 200px) 92px auto; gap: 8px; }
 .jobs-command input { font-family: var(--font-mono); font-size: 13.5px; }
+.jobs-port input { font-variant-numeric: tabular-nums; }
+.jobs-keep { grid-column: 1 / -1; margin: 2px 2px 0; font-size: 13.5px; }
+.jobs-keep-hint { color: var(--muted-foreground); }
 .jobs-error { grid-column: 1 / -1; margin: 0; color: var(--destructive-text); font-size: 13px; }
 .jobs-group { display: grid; gap: 8px; }
 .jobs-group h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; font-weight: 650;
@@ -196,11 +233,54 @@ button.desk-pick { cursor: pointer; }
 .job-streams { display: grid; gap: 8px; }
 .job-loading { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted-foreground); font-size: 13px; }
 .jobs-empty { margin-top: 18px; }
+
+/* What a job serves: its port, its preview, what else it can become */
+.job-serve { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
+  margin: 0 12px 12px 52px; padding: 8px 8px 8px 12px; border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--muted) 70%, var(--card)); font-size: 13px; }
+.job-serve-what { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0;
+  color: var(--secondary-foreground); }
+.job-serve-what code { font-size: 12.5px; font-weight: 600; color: var(--foreground); }
+.job-serve-dot { width: 7px; height: 7px; border-radius: var(--radius-full); background: var(--success); }
+.job-serve-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--primary-text);
+  font-weight: 560; text-decoration: none; }
+.job-serve-url:hover { text-decoration: underline; text-underline-offset: 3px; }
+.job-serve-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.job-serve-split { display: inline-flex; }
+.job-serve-split > .copilotz-button { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.job-serve-split .copilotz-icon-button { width: 28px; height: 30px; margin-left: -1px; border-top-left-radius: 0;
+  border-bottom-left-radius: 0; }
+.job-serve-error { flex-basis: 100%; }
+.serve-who { display: inline-flex; align-items: center; gap: 5px; color: var(--muted-foreground); font-size: 12.5px;
+  white-space: nowrap; }
+.serve-who[data-visibility=link] { color: var(--warning-text); }
+
+/* Previews */
+.preview-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 10px 10px 10px 14px; }
+.preview[aria-busy] { opacity: .65; }
+.preview-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-md);
+  background: var(--primary-soft); color: var(--primary-text); }
+.preview-icon[data-visibility=link] { background: var(--warning-soft); color: var(--warning-text); }
+.preview-text { display: grid; gap: 2px; min-width: 0; }
+.preview-url { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--primary-text);
+  font-weight: 600; font-size: 14px; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
+.preview-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 0; color: var(--muted-foreground); font-size: 12.5px; }
+.preview-meta code { font-size: 12px; }
+.preview-meta .copilotz-time { font-size: 12.5px; }
+.preview-job { min-width: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview-actions { display: flex; align-items: center; gap: 4px; }
+.preview-error { margin: 0 14px 10px 56px; }
 @container computer-work (max-width: 560px) {
-  .jobs-start { grid-template-columns: minmax(0, 1fr) auto; }
+  .jobs-start { grid-template-columns: minmax(0, 1fr) 84px auto; }
   .jobs-start .jobs-command { grid-column: 1 / -1; }
   .job-row { grid-template-columns: 26px minmax(0, 1fr); }
   .job-actions { grid-column: 2; }
+  .job-serve { margin-left: 12px; }
+  .preview-row { grid-template-columns: 30px minmax(0, 1fr); }
+  .preview-actions { grid-column: 2; }
+  .preview-error { margin-left: 14px; }
 }
 
 /* Files */
@@ -289,6 +369,11 @@ button.desk-pick { cursor: pointer; }
 .ask-where .copilotz-time { font-size: 12.5px; }
 .ask-what .copilotz-code-body { padding: 7px 11px; font-size: 13px; }
 .ask-preview .copilotz-code-head code { font-size: 12.5px; font-weight: 600; }
+.ask-publish { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--card); }
+.ask-publish-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; font-size: 14.5px; }
+.ask-publish-at { color: var(--primary-text); font-size: 13px; overflow-wrap: anywhere; }
+.ask-publish-from { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
 .ask-answers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ask-deny { margin-left: auto; color: var(--destructive-text); }
 .ask-error { margin: 0; color: var(--destructive-text); font-size: 13px; }

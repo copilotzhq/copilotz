@@ -37,7 +37,7 @@ const READ = 256 * 1024;
 const MOST = 16 * 1024 * 1024;
 
 /** A path's segments, refused if it's absolute or climbs out. */
-function segments(path: unknown, folderItself = false): string[] {
+export function segments(path: unknown, folderItself = false): string[] {
   if (path === undefined && folderItself) return [];
   if (typeof path !== "string" || path.includes("\0") || path.includes("\\")) {
     fail("path must be a relative path", "invalid_path");
@@ -67,7 +67,7 @@ function explain(error: unknown, path: string): never {
 }
 
 /** What `parts` names, which must exist, as a real path inside the folder. */
-async function existing(folder: string, parts: string[], shown: string) {
+export async function existing(folder: string, parts: string[], shown: string) {
   let real: string;
   try {
     real = await realpath(join(folder, ...parts));

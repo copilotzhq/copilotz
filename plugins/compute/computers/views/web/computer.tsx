@@ -5,7 +5,10 @@
  * found), and forgetting it, behind a confirm; then its terminal, jobs and
  * files in one space's folder, the space they work in unless they pick
  * another (agents' jobs by their names: chat's `thread.agents`, for each
- * space it's in). Live: it goes offline, and the page says so at once.
+ * space it's in), with what its jobs serve (previews: `preview.here`, for
+ * each space it's in). Live: it goes offline, and the page says so at once.
+ * A cloud computer (a kind's, `computerKinds`) says its state as it
+ * changes, and wakes when its page opens.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -13,6 +16,8 @@ import { Button, EmptyState, Page, Skeleton, Title } from "../../../../../hosts/
 import type { Computer } from "../../collections/computer.ts";
 import type { Team } from "../../../../agents/chat/contract.ts";
 import type { Desk } from "../../collections/desk.ts";
+import type { Preview } from "../../collections/preview.ts";
+import { jobActionsOf, kindByComputer, kindsOf, queryOf } from "./kinds.ts";
 import { type Named, namedOf } from "./names.ts";
 import { ComputerPage, type Space } from "./page.tsx";
 import { STYLE } from "./style.ts";
@@ -33,8 +38,21 @@ export const computerView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
     {},
     ...teams.map((team) => namedOf(team?.agents)),
   );
+  // What it serves, at addresses of their own, in each space it's in.
+  const previews = [...new Set((desks ?? []).map((d) => d.in))].flatMap((space) =>
+    ctx.db.collection("preview").query<Preview[]>("here", { in: space }).value ?? []
+  );
+  // Its kind, a cloud computer's, from the kinds' own lists.
+  const kinds = kindsOf(ctx.resources.computerKinds);
+  const records = kinds.map((k) => {
+    const [collection, query] = queryOf(k.mine)!;
+    return ctx.db.collection(collection).query<{ _id: string }[]>(query, {}).value;
+  });
   const style = <style href="computers-web" precedence="copilotz">{STYLE}</style>;
-  if (mine === undefined || spaces === undefined || desks === undefined) {
+  if (
+    mine === undefined || spaces === undefined || desks === undefined ||
+    records.some((r) => r === undefined)
+  ) {
     return (
       <Page title={<Skeleton width={200} height={30} />} width="lg">
         {style}
@@ -70,6 +88,7 @@ export const computerView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
       </div>
     );
   }
+  const kind = kindByComputer(kinds, records)[computer._id];
   return (
     <>
       {style}
@@ -82,6 +101,9 @@ export const computerView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
         me={ctx.viewer?.name}
         agents={agents}
         call={ctx.call}
+        {...(kind ? { kind } : {})}
+        previews={previews}
+        jobActions={jobActionsOf(ctx.resources.jobActions)}
       />
     </>
   );

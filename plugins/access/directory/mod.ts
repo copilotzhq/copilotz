@@ -2,7 +2,8 @@
  * The directory: routing only, for apps that serve many orgs (see
  * design/tenancy.md). It knows who signs in (the identity plugin's people,
  * by their sign-in method), which orgs each belongs to, invitations to orgs
- * by email, where each org lives, and platform staff. An org's own data
+ * by email, where each org lives, the hosts orgs claimed (a preview's, an
+ * app's: `orgHost.resolve` says whose), and platform staff. An org's own data
  * (its people's roles, spaces, conversations) lives in the org.
  *
  * It runs in a runtime of its own, beside identity and a sign-in method;
@@ -33,20 +34,23 @@ import {
   orgInvitesAction,
   sendInviteAction,
 } from "./actions/invite.ts";
+import { claimHostAction, releaseHostAction } from "./actions/host.ts";
 import { invite } from "./collections/invite.ts";
 import { membership } from "./collections/membership.ts";
 import { org } from "./collections/org.ts";
+import { orgHost } from "./collections/org-host.ts";
 import { staff } from "./collections/staff.ts";
 
 export type { Org } from "./collections/org.ts";
 export type { Membership } from "./collections/membership.ts";
 export type { Invite } from "./collections/invite.ts";
+export type { OrgHost } from "./collections/org-host.ts";
 export type { DirectorySettings } from "./shared/settings.ts";
 
 export const directory: Plugin = definePlugin({
   name: "directory",
   requires: ["identity"],
-  collections: { org, membership, invite, staff },
+  collections: { org, membership, invite, staff, orgHost },
   actions: {
     "org.create": createOrgAction,
     "org.mine": myOrgsAction,
@@ -64,6 +68,8 @@ export const directory: Plugin = definePlugin({
     "invite.org": orgInvitesAction,
     "invite.answer": answerInviteAction,
     "invite.cancel": cancelInviteAction,
+    "host.claim": claimHostAction,
+    "host.release": releaseHostAction,
   },
 });
 

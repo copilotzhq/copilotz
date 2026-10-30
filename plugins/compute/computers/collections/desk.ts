@@ -28,6 +28,8 @@ const deskSchema = {
     info: { type: "object" },
     /** Its folder there, under the computer's root. */
     folder: { type: "string" },
+    /** What its computer asks about, when it says (see computer.ts). */
+    approve: { type: "array", items: { enum: ["terminal", "jobs", "writes"] } },
     /** Who answers what an agent asks here: whom it works for, or the owner. */
     answers: { type: "string", enum: ["asker", "owner"] },
     /** The one agents use, when the space has several. */

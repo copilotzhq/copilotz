@@ -27,6 +27,20 @@
  *   another schema); `GET …/<id>/export` (its rows, as SQL); `POST
  *   …/<id>/delete` `{ confirm: <its name> }`. The app does the rows'
  *   part (`operations`). Staff enter any org with `/orgs/enter`.
+ * - Hosts orgs claimed (`claimHost` in an org's `directory` resource: a
+ *   preview's `<id>-preview.copilotz.app`, an app's): with the app's own
+ *   hosts named (`hosts`), a request to any other host is the org's that
+ *   claimed it, answered by its runtime's routes by host alone (never its
+ *   page or socket); a host nobody claimed is a 404. Which org a host is
+ *   kept a minute, forgotten here as soon as an org claims or releases it.
+ * - `GET /__copilotz/hosts/resolve?host=<h>`: whose a host is, `{ org,
+ *   target? }` (or 404), for the app's front only (it carries `front`'s
+ *   secret): the front sends a host with a target (an app's service)
+ *   straight there.
+ *
+ * Behind a front (a Cloudflare worker), `front: { secret }`: a request
+ * carrying the secret (`x-copilotz-front`) is for the host it forwards
+ * (`x-forwarded-host`); any other's forwarded headers are ignored.
  *
  * The app says how to open an org: its store (at the org's placement, as
  * its tenant), its plugins with the host's `here` (the org's name, and how
@@ -43,6 +57,7 @@ import {
   webServer,
   type WebServerOptions,
 } from "../web/server.ts";
+import { hostMatches, hostOf, hostServer, vouched } from "../web/routes.ts";
 
 /** An org as the host opens it. */
 export type OrgInfo = {
@@ -53,8 +68,14 @@ export type OrgInfo = {
 };
 
 export type OrgsHostOptions =
-  & Pick<WebServerOptions, "title" | "theme" | "google" | "dev" | "assets">
+  & Pick<WebServerOptions, "title" | "theme" | "google" | "dev" | "assets" | "front">
   & {
+    /**
+     * The app's own hosts (`compass.copilotz.com`; patterns as routes' are,
+     * `*.run.app`): a request to any other is for a host an org claimed.
+     * Unset, every host is the app's, and claims route nothing.
+     */
+    hosts?: string[];
     /** The directory's runtime: identity, a sign-in method, and the directory plugin. */
     directory: Runtime;
     /**
@@ -92,8 +113,19 @@ type Cell = {
   runtime: Runtime;
   tickets: Tickets;
   serve: (request: Request) => Promise<Response>;
+  /** Its routes by host alone, for a host it claimed. */
+  hosted: (request: Request) => Promise<Response> | undefined;
   last: number;
 };
+
+/** Whose a claimed host is, and where the front sends it. */
+type Claim = { org: string; target?: string };
+
+/** How long which org a host is stays known here (claims and releases here forget it at once). */
+const CLAIMS_MS = 60_000;
+
+/** Where the front asks whose a host is. */
+const RESOLVE = "/__copilotz/hosts/resolve";
 
 const DIRECTORY = "dir";
 const CURRENT = "org";
@@ -149,7 +181,24 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
   /** The cells open now, for what must find one at once (a socket upgrade on Node). */
   const live = new Map<string, Cell>();
 
-  /** What an org reaches of the directory: invitations, and who leaves. */
+  /** Whether a host is the app's own (every host is, when the app names none). */
+  const own = (host: string) =>
+    !options.hosts || options.hosts.some((pattern) => hostMatches(pattern, host));
+
+  /** Which org each host is, as the directory says, kept a minute: every request asks. */
+  const claims = new Map<string, { claim: Promise<Claim | null>; until: number }>();
+  const claimOf = (host: string) => {
+    const kept = claims.get(host);
+    if (kept && kept.until > Date.now()) return kept.claim;
+    const claim = directory.query<Claim | null>("orgHost.resolve", { host });
+    claims.set(host, { claim, until: Date.now() + CLAIMS_MS });
+    claim.catch(() => claims.delete(host));
+    return claim;
+  };
+  /** A host as claims keep it: lowercase, no trailing dot. */
+  const plainHost = (host: string) => String(host ?? "").trim().toLowerCase().replace(/\.$/, "");
+
+  /** What an org reaches of the directory: invitations, who leaves, and the hosts it claims. */
   const here = (org: OrgInfo) =>
     definePlugin({
       name: "org-here",
@@ -170,6 +219,29 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
             directory.call("org.rename", { org: org.id, name }).then(() => {
               known.delete(org.id);
             }),
+          /**
+           * Makes a host the org's: its requests are its routes' by host (a
+           * preview's), or, with a `target`, the front sends them there (an
+           * app's service). Refused for the app's own hosts, and another org's.
+           */
+          claimHost: async (host: string, claim: { target?: string } = {}) => {
+            const name = plainHost(host);
+            if (options.hosts && own(name)) {
+              throw Object.assign(new Error(`${name} is the app's own`), { code: "forbidden" });
+            }
+            await directory.call("host.claim", {
+              org: org.id,
+              host: name,
+              ...(claim.target ? { target: claim.target } : {}),
+            });
+            claims.delete(name);
+          },
+          /** The host is no longer the org's. */
+          releaseHost: async (host: string) => {
+            const name = plainHost(host);
+            await directory.call("host.release", { org: org.id, host: name });
+            claims.delete(name);
+          },
         },
       },
     });
@@ -195,12 +267,23 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
           ...(options.google ? { google: options.google } : {}),
           ...(options.dev ? { dev: options.dev } : {}),
           ...(options.assets ? { assets: options.assets } : {}),
+          ...(options.front ? { front: options.front } : {}),
           cookie: sessionOf(org.id),
           signIn: false,
           base: baseOf(org.id),
           socket: socketOf(org.id),
         });
-        const made = { org, runtime, tickets, serve, last: Date.now() };
+        const hosted = hostServer(
+          runtime,
+          async (request) => {
+            const secret = cookieOf(request, sessionOf(org.id));
+            return secret
+              ? await runtime.query<Actor | null>("credential.actor", { secret })
+              : null;
+          },
+          options.front ? { front: options.front } : {},
+        );
+        const made = { org, runtime, tickets, serve, hosted, last: Date.now() };
         live.set(org.id, made);
         return made;
       })();
@@ -436,10 +519,34 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     return json({ error: "Not found" }, { status: 404 });
   };
 
+  /** Whose a host is, for the front alone: `{ org, target? }`, or 404. */
+  const resolve = async (request: Request, url: URL): Promise<Response> => {
+    if (!vouched(request, options.front)) {
+      return json({ error: "The front's only" }, { status: 403 });
+    }
+    const claim = await claimOf(plainHost(url.searchParams.get("host") ?? ""));
+    return claim ? json(claim) : json({ error: "Nobody's host" }, { status: 404 });
+  };
+
+  /** A request to a host an org claimed: its routes by host answer it, or nothing does. */
+  const claimed = async (request: Request, host: string): Promise<Response> => {
+    const claim = await claimOf(host);
+    const org = claim ? await orgInfo(claim.org) : null;
+    if (!org) return json({ error: "Not found" }, { status: 404 });
+    if (org.suspended) return json({ error: "This org is suspended." }, { status: 403 });
+    const cell = await cellOf(org);
+    cell.last = Date.now();
+    return await (cell.hosted(request) ?? json({ error: "Not found" }, { status: 404 }));
+  };
+
   const serve = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;
     try {
+      if (request.method === "GET" && url.pathname === RESOLVE) return await resolve(request, url);
+      // Another host than the app's: an org's that claimed it, and nothing of the app's.
+      const host = hostOf(request, options.front);
+      if (!own(host)) return await claimed(request, host);
       const at = addressed(url.pathname);
       if (at) {
         const org = await orgInfo(at.org);
@@ -630,6 +737,8 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
      * before its socket connects; one not open yet is a retry for the client.
      */
     openRuntime(request: Request): Runtime | undefined {
+      // A host an org claimed has no socket of the app's.
+      if (!own(hostOf(request, options.front))) return undefined;
       const named = addressed(new URL(request.url).pathname)?.org;
       const org = named ?? cookieOf(request, CURRENT);
       const cell = org ? live.get(org) : undefined;

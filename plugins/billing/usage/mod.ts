@@ -22,6 +22,8 @@
  * - **Totals** by any field or tag: `runtime.query("usage.totals", { filter, by })`.
  *   Whole closed days come from rollups (`usage.close`, scheduled daily),
  *   the rest from the records, with the same result.
+ * - **Quotes** (`usage.quote`): what a use would be charged now, rated the
+ *   same way and recorded nowhere, for showing prices before use.
  * - **Re-rating** (`usage.rerate`) never changes a record: it appends
  *   adjustments for what new rates would change, so totals follow.
  * - **Across an org** (where the app serves many): `usage.org` (totals) and
@@ -44,6 +46,7 @@ import { usage } from "./collections/usage.ts";
 import { DEFAULTS, rollupsOf } from "./shared/settings.ts";
 import { recordAction } from "./actions/record.ts";
 import { orgUsageAction, usageCallsAction } from "./actions/org.ts";
+import { quoteAction } from "./actions/quote.ts";
 import { ledger } from "./resources/ledger.ts";
 
 export type { Use } from "./shared/use.ts";
@@ -72,6 +75,7 @@ export const usagePlugin: Plugin = definePlugin({
     "usage.close": closeAction,
     "usage.org": orgUsageAction,
     "usage.calls": usageCallsAction,
+    "usage.quote": quoteAction,
   },
   schedules: { "usage.close": { cron: "10 0 * * *", call: "usage.close", input: {} } },
   check(merged) {

@@ -21,6 +21,12 @@ const computerSchema = {
     seen: { type: "string" },
     /** What the machine is, as it said when it came (see Info). */
     info: { type: "object" },
+    /**
+     * What an agent asks its person before doing here, in place of the
+     * settings' `approve`: a computer of its own the app hosts (a cloud
+     * computer, isolated) asks nothing. Publishing is always asked.
+     */
+    approve: { type: "array", items: { enum: ["terminal", "jobs", "writes"] } },
     at: { type: "string" },
   },
   required: ["owner", "secret", "online", "at"],

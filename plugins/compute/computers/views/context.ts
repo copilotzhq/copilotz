@@ -37,6 +37,13 @@ export const contextViews = {
       const here = [...desks.value].sort((a, b) => Number(!!b.default) - Number(!!a.default));
       const desk = here.find((d) => d.online);
       if (!desk) {
+        // Where something wakes computers (cloud computers), using one that's asleep wakes it.
+        if (here.length && (ctx.resources.computerWake as { wake?: string } | undefined)?.wake) {
+          return `This space's computer, ${here[0].name ?? "theirs"}, is offline or asleep. ` +
+            "If the app hosts it (a cloud computer), your computer tools wake it: the first " +
+            `call waits a few seconds. If not, they won't work until ${here[0].owner} starts ` +
+            "it again.";
+        }
         return here.length
           ? `This space's computer, ${here[0].name ?? "theirs"}, is offline, so your computer ` +
             `tools won't work until ${here[0].owner} starts it again (on it: deno task computer).`
@@ -49,7 +56,7 @@ export const contextViews = {
         | { os?: string; root?: string; windows?: string; shell?: string }
         | undefined;
       const sep = info?.os === "win32" ? "\\" : "/";
-      const asked = settingsOf(ctx).approve.map((work) => ASKED[work]);
+      const asked = (desk.approve ?? settingsOf(ctx).approve).map((work) => ASKED[work]);
       const answerer = desk.answers === "owner" ? desk.owner : person;
       return [
         `You work on this space's computer, ${desk.name ?? "theirs"} (${owned}${

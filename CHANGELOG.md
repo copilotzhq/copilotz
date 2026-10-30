@@ -1,3 +1,69 @@
+## 1.0.0-rc.5 — 2026-10-30
+
+- **Cloud computers** (plugin `cloud`, see design/cloud-computers.md): computers the app hosts for
+  its people. A cloud computer is a disk; a VM from a pool serves it for one wake, then goes.
+  `cloud.create` `{ size, in?, name? }` makes one (an org's owners and admins, or its members when
+  the settings say, under the org's monthly `budgetUsd`); work for one that's asleep wakes it (a few
+  seconds; about 30 from cold); unused for `warmMinutes` (10) it's released, and after `coldDays`
+  (7) it goes cold, kept as a snapshot. A person with it open (`computer.view`, every few minutes
+  from its panel) keeps it awake up to `viewMinutes` (120). Its agents ask their person nothing
+  first (the `cloud` settings' `approve`, `[]` by default, in place of the computers plugin's;
+  publishing an app is always asked). `cloud.destroy`, `cloud.org`, queries `cloudComputer.mine` and
+  `cloudComputer.sizes` (each size priced an hour). Hosts are adapters: Compute Engine (`gceHost`:
+  managed instance groups as pools, pd-balanced disks, VMs admitted by their Google identity tokens)
+  and a local one for development and tests. Metered under `computer` as `cloud/<size>` (VM
+  seconds), `cloud/disk` and `cloud/snapshot` (GB-hours).
+- **Cloud pools** (plugin `cloudPool`): the pools' VMs, where they connect (the `pool` worker kind),
+  and the Actions `cloud` reaches them through: `pool.take`, `pool.serve`, `pool.stop`, `pool.drop`,
+  `pool.renew`, and `pool.tick` each minute (pools sized by the hour). Each VM given is leased:
+  renewed each minute while its computer uses it, deleted once nobody does. A VM serving a computer
+  connects again as itself when its socket drops, until it's told to stop; then, or gone, never
+  again. One runtime has both plugins; an app of many orgs runs `cloudPool` once (its directory's
+  runtime, needing nothing else) and gives each org's runtime `remotePool(call, org)`, the same
+  Actions forwarded there, each org touching only its own VMs.
+- **Computer program:** `computer pool --app <url>`, a free VM of an app's pool: it waits to serve a
+  computer, mounts its disk, and runs it, connected at the address it's told (its org's). Given the
+  app's socket (`wss://…`), its identity is still for the app's https origin. scripts/cloud has a
+  Google Cloud project's setup and the pool VMs' startup script.
+- **Previews:** what a job serves, at `https://<computer>-preview.<domain>`, carried to the computer
+  over its own connection (no inbound network), streamed both ways (`computer.http`). For a space's
+  members (a signed cookie, given by the app) or anyone with the link. `computer.preview`,
+  `computer.previews`, `computer.unpreview`, and the agents' `preview` tool. Settings
+  `computers.previews` `{ domain, key }`. WebSockets aren't carried yet.
+- **Apps** (plugin `apps`): what a job serves, published to run on its own at
+  `https://<label>.copilotz.app`. The space's folder is archived by its computer
+  (`computer.archive`), built (its Dockerfile, else buildpacks) and deployed as a service that
+  scales to zero. `app.publish` (and the agents' `publish` tool, always asked), `app.list`,
+  `app.redeploy`, `app.remove`; builds and running metered under `app`. Hosts: Cloud Run
+  (`cloudRun`) and a local one (`localApps`).
+- **Apps' safety:** services and images are named `cz-app-<name>` (an app never replaces another
+  service in its project); builds run as `cz-build@<project>` (`buildServiceAccount`), never the
+  project's default service account, as they run the app's own Dockerfile. `app.publish`'s `port`
+  wins over its job's.
+- **Previews' safety:** a preview's `Set-Cookie` loses its `Domain` (no preview sets cookies for the
+  domain's other hosts); a request with several `cz_preview` cookies gets in when any is its host's.
+- **Jobs** can say their `port` (a preview's) and be kept (`keep`): a kept job runs again when its
+  computer wakes.
+- **A person's panel** (`computer.work`): `wake` wakes a computer that sleeps (its page opened);
+  what only reads (`jobs.list`, `jobs.logs`, `files.list`, `files.read`, `search`) neither wakes it
+  nor keeps it awake, so a page left open lets it sleep (`computer.view` keeps it awake while
+  viewed, up to the limit). A computer the app makes says what its agents ask about
+  (`computer.provision`'s `approve`, kept on it and its desks).
+- **On the web** (`copilotz/plugins/compute/web`: `computersWeb`, `cloudWeb`, `appsWeb`):
+  - adding a computer is one choice: a cloud computer (its sizes, priced an hour), your own machine,
+    or one of yours;
+  - a cloud computer shows its state, how long it's been awake and about what that came to; asleep,
+    waking it, with honest progress; deleting it, asked first;
+  - a job serving a port can be previewed (members, or anyone with the link), opened, copied and
+    published as an app (live as it builds), and a space has an Apps tab;
+  - jobs can be kept running.
+- **Web host:** routes by host (`{ host }` beside `{ path }`); a trusted front (`front`: a secret
+  header and the host it forwards) for apps behind a proxy; orgs claim hosts in the directory
+  (`orgHost`), resolved at `/__copilotz/hosts/resolve`.
+- **Runtime:** `runtime.workers.dispatch(kind, id, workload, body?)`, for host code (a route)
+  streaming work to a connected worker.
+- **Usage:** `usage.quote` prices quantities as a use would be, without recording one.
+
 ## 1.0.0-rc.4 — 2026-10-30
 
 - **Usage: every use has a price.** It's the cost (a margin of 0) unless the app's price book says

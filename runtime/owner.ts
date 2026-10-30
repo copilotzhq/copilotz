@@ -81,6 +81,8 @@ export type Stats = {
   calls: number;
   /** Executors connected and ready for jobs. */
   executors: number;
+  /** Browsers connected, as people. */
+  browsers: number;
   /** Reads answered from the owner's cache, and reads that went to the store. */
   hits: number;
   misses: number;
@@ -1101,6 +1103,44 @@ export async function createOwner(
     };
   };
 
+  /**
+   * Each running job's authority: whom the owner sent it to work for (null:
+   * the system). Every op an executor sends in a job is checked against it.
+   * It acts as that actor, or, from an executor holding the owner's key, as
+   * someone its code chose with `ctx.as()`, which keeps whose job it was
+   * (`via`). What an executor claims never widens what its job was given.
+   */
+  const pinned = new Map<string, Actor | null>();
+  const pinning = new Map<string, PromiseWithResolvers<Actor | null>>();
+  const pin = (job: string, actor: Actor | undefined) => {
+    pinned.set(job, actor ?? null);
+    pinning.get(job)?.resolve(actor ?? null);
+    pinning.delete(job);
+  };
+  /** A job's authority, once its dispatch has returned: its first op can come sooner. */
+  const authority = (job: string): Promise<Actor | null> => {
+    if (pinned.has(job)) return Promise.resolve(pinned.get(job)!);
+    let waiting = pinning.get(job);
+    if (!waiting) {
+      const made = Promise.withResolvers<Actor | null>();
+      const late = setTimeout(() => made.reject(forbidden("Not a job this owner sent")), 10_000);
+      void made.promise.finally(() => clearTimeout(late)).catch(() => {});
+      pinning.set(job, waiting = made);
+    }
+    return waiting.promise;
+  };
+  /** Whose job an actor works in: the first actor before any `ctx.as()`. */
+  const rootOf = (actor: Actor | undefined): Actor | undefined =>
+    actor?.via ? rootOf(actor.via as Actor) : actor;
+  const authorize = async (request: OpRequest, job: string, trusted: boolean) => {
+    const given = await authority(job);
+    const claimed = request.actor;
+    if (canonical(claimed ?? null) === canonical(given)) return;
+    // Trusted code may act for others, and says for whom it did.
+    if (trusted && (!given || canonical(rootOf(claimed) ?? null) === canonical(given))) return;
+    throw forbidden("This job can't act as that");
+  };
+
   const ready = new Set<string>();
   const hypervisor = createHypervisor({
     transports: options.transports,
@@ -1121,9 +1161,14 @@ export async function createOwner(
         if (!job || provider === BROWSER || provider.startsWith("worker:")) return undefined;
         if (context.workload === DISPATCH) return sending(context.metadata);
         if (context.workload !== OP) return undefined;
+        // Executors holding the owner's key run the app's own code. One admitted as bound
+        // (`bound:…`, an org's own) runs only as its jobs.
+        const trusted = !provider.startsWith("bound:");
         return async ({ input }) => {
           try {
-            return encode({ value: await serve(await decode<OpRequest>(input), job) });
+            const request = await decode<OpRequest>(input);
+            await authorize(request, job, trusted);
+            return encode({ value: await serve(request, job) });
           } catch (error) {
             return encode({ error: failure(error) });
           }
@@ -1253,6 +1298,7 @@ export async function createOwner(
       body: encode(job),
       signal: signal ? AbortSignal.any([closing.signal, signal]) : closing.signal,
     });
+    pin(handle.operationId, job.kind === "process" ? job.event.actor : job.actor);
     let outcome: Exclude<Line, { frame: unknown }> | undefined;
     let lost: unknown;
     try {
@@ -1269,6 +1315,7 @@ export async function createOwner(
       }
       heldBy.delete(handle.operationId);
       labelled.delete(handle.operationId);
+      pinned.delete(handle.operationId);
     }
     if (signal?.aborted && !closing.signal.aborted && !(outcome && "result" in outcome)) {
       // Stopped: what it committed stays; `recorded` when it ended on its own record.
@@ -1619,6 +1666,7 @@ export async function createOwner(
       jobs,
       calls,
       executors: ready.size,
+      browsers: browsers.count(),
       hits: cache?.stats().hits ?? 0,
       misses: cache?.stats().misses ?? 0,
     }),

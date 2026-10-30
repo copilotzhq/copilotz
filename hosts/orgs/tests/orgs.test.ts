@@ -145,3 +145,77 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     await dir.close();
   }
 });
+
+test("orgs: staff move an org's rows, export them, and delete the org", async () => {
+  const dir = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      identity,
+      directory,
+      definePlugin({ name: "d", resources: { directory: { staff: ["sam@example.com"] } } }),
+    ],
+  });
+  const opened: [string, string][] = [];
+  const done: string[] = [];
+  const host = orgsHost({
+    directory: dir,
+    open: async (org, given) => {
+      opened.push([org.id, org.placement.schema]);
+      return await createRuntime({
+        store: memoryStore(),
+        plugins: [...access, ...given.plugins],
+        admit: given.admit,
+      });
+    },
+    upgrade: () => new Response(null, { status: 299 }),
+    code: { entry: "app.js", files: { "app.js": "" } },
+    dev: true,
+    operations: {
+      move: (org, to) => Promise.resolve(void done.push(`move ${org.id} ${to.schema}`)),
+      export: (org) => new Response(`-- ${org.id}\n`).body as ReadableStream<Uint8Array>,
+      drop: (org) => Promise.resolve(void done.push(`drop ${org.id}`)),
+    },
+  });
+  try {
+    const ana = browser(host.serve);
+    await ana.send("POST", "/signin/dev", { name: "ana@example.com" });
+    const { org: acme } = await (await ana.send("POST", "/orgs", { name: "Acme" })).json();
+    const sam = browser(host.serve);
+    await sam.send("POST", "/signin/dev", { name: "sam@example.com" });
+    // Only staff operate; a bad schema name is refused.
+    assertEquals(
+      (await ana.send("POST", `/console/orgs/${acme.id}/move`, { schema: "big" })).status,
+      403,
+    );
+    assertEquals(
+      (await sam.send("POST", `/console/orgs/${acme.id}/move`, { schema: "Big!" })).status,
+      400,
+    );
+    // Moved: closed, its rows moved, and opened again where they went.
+    const moved =
+      await (await sam.send("POST", `/console/orgs/${acme.id}/move`, { schema: "acme" })).json();
+    assertEquals(moved.placement, { schema: "acme" });
+    assertEquals((await ana.send("POST", "/orgs/enter", { org: acme.id })).status, 200);
+    assertEquals(opened.filter(([id]) => id === acme.id), [[acme.id, "orgs"], [acme.id, "acme"]]);
+    // Exported, as a download.
+    const exported = await sam.send("GET", `/console/orgs/${acme.id}/export`);
+    assertEquals(await exported.text(), `-- ${acme.id}\n`);
+    assert(exported.headers.get("content-disposition")!.includes(`${acme.id}.sql`));
+    // Deleted only when its name is typed; then nobody's in it.
+    assertEquals(
+      (await sam.send("POST", `/console/orgs/${acme.id}/delete`, { confirm: "acme" })).status,
+      400,
+    );
+    assertEquals(
+      (await sam.send("POST", `/console/orgs/${acme.id}/delete`, { confirm: "Acme" })).status,
+      200,
+    );
+    assertEquals(done, [`move ${acme.id} acme`, `drop ${acme.id}`]);
+    const orgs = await (await ana.send("GET", "/orgs")).json();
+    assertEquals(orgs.orgs.map((o: { name: string }) => o.name), ["ana"]);
+    assertEquals((await ana.send("POST", "/orgs/enter", { org: acme.id })).status, 403);
+  } finally {
+    await host.close();
+    await dir.close();
+  }
+});

@@ -15,11 +15,13 @@
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import {
   createOrgAction,
+  deleteOrgAction,
   enterOrgAction,
   getOrgAction,
   leaveOrgAction,
   listOrgsAction,
   myOrgsAction,
+  placeOrgAction,
   renameOrgAction,
   reportOrgAction,
   suspendOrgAction,
@@ -55,6 +57,8 @@ export const directory: Plugin = definePlugin({
     "org.suspend": suspendOrgAction,
     "org.report": reportOrgAction,
     "org.list": listOrgsAction,
+    "org.place": placeOrgAction,
+    "org.delete": deleteOrgAction,
     "invite.send": sendInviteAction,
     "invite.mine": myInvitesAction,
     "invite.org": orgInvitesAction,

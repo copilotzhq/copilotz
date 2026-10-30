@@ -249,3 +249,45 @@ export const getOrgAction = defineAction({
       : null;
   },
 });
+
+export const placeOrgAction = defineAction({
+  description: "Says where an org's rows now live (after they were moved there)",
+  input: {
+    type: "object",
+    properties: {
+      org: { type: "string" },
+      placement: {
+        type: "object",
+        properties: { schema: { type: "string" } },
+        required: ["schema"],
+        additionalProperties: false,
+      },
+    },
+    required: ["org", "placement"],
+    additionalProperties: false,
+  },
+  run: async (ctx, input) => {
+    await ctx.db.collection("org").updateOne({ _id: input.org }, {
+      $set: { placement: input.placement },
+    });
+    return { placement: input.placement };
+  },
+});
+
+export const deleteOrgAction = defineAction({
+  description: "Forgets an org: it, who belonged, and its invitations (its rows are dropped apart)",
+  input: {
+    type: "object",
+    properties: { org: { type: "string" } },
+    required: ["org"],
+    additionalProperties: false,
+  },
+  run: async (ctx, input) => {
+    await ctx.transaction(async (tx) => {
+      await tx.db.collection("membership").deleteMany({ org: input.org });
+      await tx.db.collection("invite").deleteMany({ org: input.org });
+      await tx.db.collection("org").deleteOne({ _id: input.org });
+    });
+    return { deleted: input.org };
+  },
+});

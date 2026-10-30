@@ -17,8 +17,11 @@
  * - `POST /orgs/invites/answer` `{ invite, accept }`: joins (and enters) or
  *   declines.
  * - `POST /signout`: out of the directory and every org.
- * - Staff's console: `GET /console/orgs`, and `POST /console/orgs/<id>`
- *   `{ suspended?, name? }`. Staff enter any org with `/orgs/enter`.
+ * - Staff's console: `GET /console/orgs`; `POST /console/orgs/<id>`
+ *   `{ suspended?, name? }`; `POST …/<id>/move` `{ schema }` (its rows to
+ *   another schema); `GET …/<id>/export` (its rows, as SQL); `POST
+ *   …/<id>/delete` `{ confirm: <its name> }`. The app does the rows'
+ *   part (`operations`). Staff enter any org with `/orgs/enter`.
  *
  * The app says how to open an org: its store (at the org's placement, as
  * its tenant), its plugins with the host's `here` (the org's name, and how
@@ -52,6 +55,16 @@ export type OrgsHostOptions =
     code: Code | (() => Code | Promise<Code>);
     /** How long an org nobody uses stays open (30 minutes by default). */
     idleMs?: number;
+    /**
+     * What staff may do to an org's rows, the app's (its stores know where
+     * they live): move them to another placement, export them, drop them.
+     * The host closes the org first where it must, and tells the directory.
+     */
+    operations?: {
+      move?(org: OrgInfo, to: OrgInfo["placement"]): Promise<void>;
+      export?(org: OrgInfo): ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>>;
+      drop?(org: OrgInfo): Promise<void>;
+    };
   };
 
 type Cell = {
@@ -293,6 +306,73 @@ export function orgsHost(options: OrgsHostOptions) {
     return staff ? who : null;
   };
 
+  /** Stops an org's runtime, so nothing writes while its rows move or go. */
+  const closeCell = async (org: string) => {
+    const pending = cells.get(org);
+    cells.delete(org);
+    known.delete(org);
+    const cell = await pending?.catch(() => undefined);
+    await cell?.runtime.close().catch(() => {});
+  };
+
+  /** Staff's operations on an org: `/console/orgs/<id>[/move|/export|/delete]`. */
+  const operate = async (request: Request, org: OrgInfo, what: string): Promise<Response> => {
+    const ops = options.operations ?? {};
+    if (request.method === "GET" && what === "export") {
+      if (!ops.export) return json({ error: "This app doesn't export orgs" }, { status: 501 });
+      return new Response(await ops.export(org), {
+        headers: {
+          "content-type": "application/sql; charset=utf-8",
+          "content-disposition": `attachment; filename="${org.id}.sql"`,
+        },
+      });
+    }
+    if (request.method !== "POST") return json({ error: "Not found" }, { status: 404 });
+    const body = await request.json().catch(() => ({})) as {
+      suspended?: boolean;
+      name?: string;
+      schema?: string;
+      confirm?: string;
+    };
+    switch (what) {
+      case "": {
+        if (typeof body.suspended === "boolean") {
+          await directory.call("org.suspend", { org: org.id, suspended: body.suspended });
+          known.delete(org.id);
+        }
+        if (typeof body.name === "string" && body.name.trim()) {
+          await directory.call("org.rename", { org: org.id, name: body.name.trim() });
+          known.delete(org.id);
+        }
+        return json({ org: org.id });
+      }
+      case "move": {
+        if (!ops.move) return json({ error: "This app doesn't move orgs" }, { status: 501 });
+        const to = { schema: String(body.schema ?? "").trim() };
+        if (!/^[a-z][a-z0-9_]{0,62}$/.test(to.schema)) {
+          return json({ error: "A schema name (lowercase letters, digits, _)" }, { status: 400 });
+        }
+        if (to.schema === org.placement.schema) return json({ org: org.id, placement: to });
+        await closeCell(org.id);
+        await ops.move(org, to);
+        await directory.call("org.place", { org: org.id, placement: to });
+        return json({ org: org.id, placement: to });
+      }
+      case "delete": {
+        if (!ops.drop) return json({ error: "This app doesn't delete orgs" }, { status: 501 });
+        // Typing its name confirms it: nothing of it is kept.
+        if (body.confirm !== org.name) {
+          return json({ error: "Type the org's name to delete it" }, { status: 400 });
+        }
+        await closeCell(org.id);
+        await ops.drop(org);
+        await directory.call("org.delete", { org: org.id });
+        return json({ deleted: org.id });
+      }
+    }
+    return json({ error: "Not found" }, { status: 404 });
+  };
+
   const serve = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;
@@ -395,15 +475,13 @@ export function orgsHost(options: OrgsHostOptions) {
           return json(await directory.call("org.list", {}));
         }
       }
-      if (request.method === "POST" && url.pathname.startsWith("/console/orgs/")) {
+      if (url.pathname.startsWith("/console/orgs/")) {
         if (!await staffOnly(request)) return json({ error: "Staff only" }, { status: 403 });
-        const org = decodeURIComponent(url.pathname.slice("/console/orgs/".length));
-        const { suspended, name } = await request.json() as { suspended?: boolean; name?: string };
-        if (typeof suspended === "boolean") await directory.call("org.suspend", { org, suspended });
-        if (typeof name === "string" && name.trim()) {
-          await directory.call("org.rename", { org, name: name.trim() });
-        }
-        return json({ org });
+        const [org, what = ""] = url.pathname.slice("/console/orgs/".length).split("/")
+          .map(decodeURIComponent);
+        const info = await directory.call<OrgInfo | null>("org.get", { org });
+        if (!info) return json({ error: "No such org" }, { status: 404 });
+        return await operate(request, info, what);
       }
       if (url.pathname.startsWith("/signin")) return json({ error: "Not found" }, { status: 404 });
 

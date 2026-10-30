@@ -72,6 +72,11 @@ test("an executor acts only as its job's actor, or says it acts for them", async
     assertEquals(await as({ ...bob, via: ana }, ana), "ok");
     assertEquals(await as({ kind: "system", id: "system", via: ana }, ana), "ok");
     assertEquals(await as({ ...bob, via: { kind: "person", id: "eve" } }, ana), "forbidden");
+    // A job that is itself someone acting for another (a timer set through ctx.as()):
+    // acting on from it keeps the whole chain.
+    const bobForAna = { ...bob, via: ana };
+    assertEquals(await as({ kind: "system", id: "system", via: bobForAna }, bobForAna), "ok");
+    assertEquals(await as({ kind: "system", id: "system", via: bob }, bobForAna), "forbidden");
     // A system job's code may act for anyone.
     assertEquals(await as(bob), "ok");
     assertEquals(await as(null), "ok");

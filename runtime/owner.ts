@@ -1129,15 +1129,15 @@ export async function createOwner(
     }
     return waiting.promise;
   };
-  /** Whose job an actor works in: the first actor before any `ctx.as()`. */
-  const rootOf = (actor: Actor | undefined): Actor | undefined =>
-    actor?.via ? rootOf(actor.via as Actor) : actor;
+  /** Whether `actor` is `given`, or acts (through `ctx.as()`, `via`) within its job. */
+  const within = (actor: Actor | undefined, given: string): boolean =>
+    !!actor && (canonical(actor) === given || within(actor.via as Actor | undefined, given));
   const authorize = async (request: OpRequest, job: string, trusted: boolean) => {
     const given = await authority(job);
     const claimed = request.actor;
     if (canonical(claimed ?? null) === canonical(given)) return;
-    // Trusted code may act for others, and says for whom it did.
-    if (trusted && (!given || canonical(rootOf(claimed) ?? null) === canonical(given))) return;
+    // Trusted code may act for others, and says in whose job it did.
+    if (trusted && (!given || within(claimed, canonical(given)))) return;
     throw forbidden("This job can't act as that");
   };
 

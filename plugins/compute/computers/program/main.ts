@@ -16,6 +16,9 @@
  *   computer disconnect <app-url>      disconnect it from an app (its folder stays)
  *   computer install | uninstall       start it at login and keep it running, or stop that
  *   computer forget                    forget it, for every app (its folders stay)
+ *   computer pool --app <app-url> [--vm <name>] [--token <t>] [--root <dir>]
+ *                                      be a free VM of the app's pool of cloud computers,
+ *                                      serving the one it's given (pool.ts)
  *
  * `--windows never` (or `COPILOTZ_BROWSER_WINDOWS=never`) keeps agents'
  * browsers hidden: none is ever shown on this screen. `connect` keeps it;
@@ -34,6 +37,7 @@ import { basename, join, resolve } from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { type Computer, type ComputerOptions, startComputer } from "./computer.ts";
+import { startPool } from "./pool.ts";
 import {
   installedPath,
   installService,
@@ -88,6 +92,12 @@ const USAGE = `Copilotz computer ${VERSION}
   computer forget
       Forgets it (its ids and secrets, for every app), and uninstalls it; its
       folders stay.
+  computer pool --app <app-url> [--vm <name>] [--token <token>] [--root <dir>]
+      Runs as a free VM of the app's pool of cloud computers, until the app gives
+      it one to serve: it mounts that computer's disk at --root (/mnt/computer
+      unless given) and runs it, until it's released. The VM's name and identity
+      come from Compute Engine's metadata server, unless --vm and --token (or
+      COPILOTZ_POOL_TOKEN) give them.
 
 Agents' browsers are hidden unless they show one on this screen (to let you
 sign in, say). --windows never keeps them hidden, always; connect keeps it,
@@ -204,7 +214,8 @@ async function enroll(options: ComputerOptions) {
   const late = setTimeout(() => console.log("still connecting…"), 10_000);
   let computer: Computer | undefined;
   try {
-    computer = await startComputer(options);
+    // What runs in the background runs its kept jobs: they don't start here too.
+    computer = await startComputer({ ...options, resume: false });
     await Promise.race([computer.enrolled, computer.closed]);
     await new Promise((resolve) => setTimeout(resolve, 1000));
   } finally {
@@ -253,6 +264,9 @@ async function main(argv: string[]) {
       name: { type: "string" },
       windows: { type: "string" },
       log: { type: "string" },
+      app: { type: "string" },
+      vm: { type: "string" },
+      token: { type: "string" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },
@@ -283,6 +297,30 @@ async function main(argv: string[]) {
     windows: windows() ?? kept ?? "allow",
     log,
   });
+
+  if (command === "pool") {
+    const app = values.app ?? rest[0];
+    if (!app) {
+      throw new Error("Usage: computer pool --app <app-url> [--vm <name>] [--token <token>]");
+    }
+    socketUrl(app);
+    const pool = await startPool({
+      app,
+      root: rootPath(values.root ?? "/mnt/computer"),
+      ...(values.vm ? { vm: values.vm } : {}),
+      ...(values.token || process.env.COPILOTZ_POOL_TOKEN
+        ? { token: values.token || process.env.COPILOTZ_POOL_TOKEN }
+        : {}),
+      log,
+    });
+    log(`pool VM ${pool.vm}: connecting to ${app}…`);
+    // A signal releases what it serves (its jobs stop, its disk is unmounted), then it ends.
+    const signalled = () => void pool.stop().then(() => process.exit(0));
+    process.on("SIGINT", signalled);
+    process.on("SIGTERM", signalled);
+    await pool.closed;
+    return;
+  }
 
   if (command === "connect" || (command === "install" && rest.length)) {
     const [url] = rest;

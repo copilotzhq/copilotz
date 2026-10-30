@@ -415,7 +415,7 @@ export async function createOwner(
     for (const event of events) {
       measure.events.add(1, { type: event.type });
       publish({ kind: "event", event });
-      route(event);
+      route(event, true);
     }
     if (seen.length) observers.changed(seen);
   };
@@ -1553,11 +1553,18 @@ export async function createOwner(
 
   // Events routed while recovering may have been handled before the restart.
   let recovering = false;
-  function route(event: Event) {
+  /**
+   * Gives an event to the Processors that want it. One read back from the log
+   * goes to those whose cursor is before it; one just committed (`live`) is
+   * new to all of them, whatever their cursors say: writes running together
+   * take their numbers in one order and may commit in another, so a cursor
+   * can be past an event that commits after it.
+   */
+  function route(event: Event, live = false) {
     const retry = recovering;
     head = Math.max(head, event.seq);
     for (const [name, processor] of Object.entries(registry.processors)) {
-      if (event.seq <= (saved.get(name) ?? 0)) continue;
+      if (!live && event.seq <= (saved.get(name) ?? 0)) continue;
       if (!wants(processor, event)) {
         // Nothing to do for it: the cursor may move past it.
         seen.set(name, Math.max(seen.get(name) ?? 0, event.seq));

@@ -8,10 +8,18 @@
  */
 import type { Resources } from "../../../../runtime/mod.ts";
 
-/** Work that may need a person's yes. */
-export type Asked = "terminal" | "jobs" | "writes";
+/**
+ * Work that may need a person's yes. Publishing what a space's folder serves
+ * as an app (the apps plugin) is always asked, whatever `approve` says: it
+ * reaches outside the computer.
+ */
+export type Asked = "terminal" | "jobs" | "writes" | "publish";
 
-export type ComputersSettings = { approve?: Asked[]; codeMinutes?: number; url?: string };
+export type ComputersSettings = {
+  approve?: Exclude<Asked, "publish">[];
+  codeMinutes?: number;
+  url?: string;
+};
 
 export const settingsOf = (ctx: { resources: Resources }) => {
   const set = (ctx.resources.computers ?? {}) as ComputersSettings;

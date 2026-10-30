@@ -20,6 +20,7 @@
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { admitAction } from "./actions/admit.ts";
+import { allowedAction } from "./actions/allowed.ts";
 import { approveAction } from "./actions/approve.ts";
 import { codeAction } from "./actions/code.ts";
 import { defaultAction } from "./actions/default.ts";
@@ -28,6 +29,7 @@ import { moveAction } from "./actions/move.ts";
 import { goneAction } from "./actions/gone.ts";
 import { readyAction } from "./actions/ready.ts";
 import { renameAction } from "./actions/rename.ts";
+import { scopeAction } from "./actions/scope.ts";
 import { shareAction } from "./actions/share.ts";
 import { unshareAction } from "./actions/unshare.ts";
 import { workAction } from "./actions/work.ts";
@@ -76,6 +78,9 @@ export const computers: Plugin = definePlugin({
     "computer.move": moveAction,
     "computer.approve": approveAction,
     "computer.work": workAction,
+    // For other plugins' code (apps): where a space's work goes, and whether an agent may.
+    "computer.scope": scopeAction,
+    "computer.allowed": allowedAction,
   },
   // Agents with computer tools know, each turn, whose computer they work on and what waits for a yes.
   views: contextViews,

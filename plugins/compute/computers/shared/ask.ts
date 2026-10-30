@@ -30,7 +30,7 @@ export type Ask = {
 
 /** True: go ahead. A string: what the agent is told instead (it waits for its person). */
 export async function allowed(ctx: Context, ask: Ask): Promise<true | string> {
-  if (!settingsOf(ctx).approve.includes(ask.work)) return true;
+  if (ask.work !== "publish" && !settingsOf(ctx).approve.includes(ask.work)) return true;
   const system = ctx.as();
   const grants = system.db.collection<Grant>("grant");
   const found = await grants.findOne({
@@ -61,8 +61,12 @@ export async function allowed(ctx: Context, ask: Ask): Promise<true | string> {
   if (!waiting) {
     await approvals.insertOne({ ...ask, status: "pending", at: new Date().toISOString() });
   }
-  const what =
-    { terminal: "run this", jobs: "start this job", writes: "change this file" }[ask.work];
+  const what = {
+    terminal: "run this",
+    jobs: "start this job",
+    writes: "change this file",
+    publish: "publish this as an app",
+  }[ask.work];
   const whose = ask.owner === ask.for ? "their" : `${ask.owner}'s`;
   return `Waiting for ${ask.owner}'s yes to ${what} on ${whose} computer: ${ask.detail}\n` +
     `${ask.owner === ask.for ? "They see" : `${ask.owner}, whose computer it is, sees`} your ` +

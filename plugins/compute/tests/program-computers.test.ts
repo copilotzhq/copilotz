@@ -8,6 +8,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import process from "node:process";
 import { type Actor, createRuntime, defineAction, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
@@ -104,12 +105,13 @@ test("the program connects to the plugin; agents work on it once their person sa
     // A command waits for her; in this conversation, yes: it runs in her space's folder.
     assertStringIncludes(String(await tool("terminal", { stdin: "pwd" })), "Waiting for ana");
     await answer("thread");
-    const ran = await tool("terminal", { stdin: "echo hi > made.txt && pwd" }) as {
-      stdout: string;
-      exitCode: number;
-    };
+    // In the computer's shell: PowerShell on Windows.
+    const stdin = process.platform === "win32"
+      ? 'Set-Content -NoNewline made.txt "hi`n"; (Get-Location).Path'
+      : "echo hi > made.txt && pwd";
+    const ran = await tool("terminal", { stdin }) as { stdout: string; exitCode: number };
     assertEquals(ran.exitCode, 0);
-    assert(ran.stdout.trim().endsWith("/personal"), ran.stdout);
+    assert(/[\\/]personal$/.test(ran.stdout.trim()), ran.stdout);
     assertEquals(await readFile(join(root, "personal", "made.txt"), "utf8"), "hi\n");
 
     // Writes, always: then they just happen.

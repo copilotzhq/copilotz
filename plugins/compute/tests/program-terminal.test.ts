@@ -12,7 +12,11 @@ import { setup } from "./program-setup.ts";
 
 const scope = (who: string, folder = "alpha"): Scope => ({ space: `space-${folder}`, folder, who });
 
-test("two agents in one space keep their own working directory and environment", async () => {
+/** bash's contract: a Windows computer's shell is PowerShell, whose is program-powershell.test.ts. */
+const posix = (name: string, fn: () => Promise<void>) =>
+  test({ name, ignore: process.platform === "win32", fn });
+
+posix("two agents in one space keep their own working directory and environment", async () => {
   await setup(async ({ work }) => {
     const run = (who: string, stdin: string) =>
       work<TerminalResult>(WORK.terminal, { scope: scope(who), stdin });
@@ -31,7 +35,7 @@ test("two agents in one space keep their own working directory and environment",
   });
 });
 
-test("two spaces have folders of their own", async () => {
+posix("two spaces have folders of their own", async () => {
   await setup(async ({ work, root }) => {
     const pwd = (folder: string) =>
       work<TerminalResult>(WORK.terminal, {
@@ -50,7 +54,7 @@ test("two spaces have folders of their own", async () => {
   });
 });
 
-test("a long command answers while running, then polls to completion", async () => {
+posix("a long command answers while running, then polls to completion", async () => {
   await setup(async ({ work }) => {
     const started = Date.now();
     const first = await work<TerminalResult>(WORK.terminal, {
@@ -81,7 +85,7 @@ test("a long command answers while running, then polls to completion", async () 
   });
 });
 
-test("a running command reads stdin sent to it, and is interrupted", async () => {
+posix("a running command reads stdin sent to it, and is interrupted", async () => {
   await setup(async ({ work }) => {
     const asking = await work<TerminalResult>(WORK.terminal, {
       scope: scope("agent:a"),
@@ -115,7 +119,7 @@ test("a running command reads stdin sent to it, and is interrupted", async () =>
   });
 });
 
-test("a command times out, and a shell unused for a while goes", async () => {
+posix("a command times out, and a shell unused for a while goes", async () => {
   await setup(async ({ work }) => {
     const slow = await work<TerminalResult>(WORK.terminal, {
       scope: scope("agent:a"),
@@ -141,7 +145,7 @@ test("a command times out, and a shell unused for a while goes", async () => {
   }, { shells: { runtimeMs: 400, shellIdleMs: 300 } });
 });
 
-test("children see the person's environment, not the program's own settings", async () => {
+posix("children see the person's environment, not the program's own settings", async () => {
   const env = process.env;
   env.COPILOTZ_TEST_HIDDEN = "hidden";
   env.PERSON_TEST_SHOWN = "shown";

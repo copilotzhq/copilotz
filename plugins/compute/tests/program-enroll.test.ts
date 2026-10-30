@@ -6,6 +6,7 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import process from "node:process";
 import { createRuntime } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { runtime, tempDir, test } from "../../../testing/mod.ts";
@@ -21,11 +22,13 @@ test("a computer enrolls with a code, keeps its id and secret, and connects as i
     await until(async () => !!(await loadState(statePath))?.secret, "it was told its secret");
     const state = await loadState(statePath);
     assertEquals([state?.id, state?.url, state?.root, state?.name], ["c2", url, root, "laptop"]);
-    assertEquals(statSync(statePath).mode & 0o777, 0o600);
+    // Only its person reads it (Windows has no such modes: its folder is the person's).
+    if (process.platform !== "win32") assertEquals(statSync(statePath).mode & 0o777, 0o600);
     assert(!readFileSync(statePath, "utf8").includes(CODE), "the code isn't kept");
     const info = await work<Info & { name: string }>(WORK.info, {}, "c2");
     assertEquals([info.version, info.browser, info.name], [VERSION, null, "laptop"]);
-    assert(info.shell.endsWith("bash") && info.root.endsWith("Copilotz"));
+    const shell = process.platform === "win32" ? /pwsh(\.exe)?$|powershell\.exe$/i : /bash$/;
+    assert(shell.test(info.shell) && info.root.endsWith("Copilotz"), info.shell);
 
     // It stops; run again, it connects as itself, not with its code.
     await computer.stop();

@@ -91,7 +91,8 @@ export function serviceOf(options: ServiceOptions): Service {
   if (platform === "darwin") {
     const plist = join(home, "Library", "LaunchAgents", `${LABEL}.plist`);
     const log = join(home, "Library", "Logs", "Copilotz", "computer.log");
-    const domain = `gui/${process.getuid!()}`;
+    // Its person's session (planned elsewhere, as tests do, there's no uid: 0 stands in).
+    const domain = `gui/${process.getuid?.() ?? 0}`;
     return {
       kind: "launchd",
       files: [{

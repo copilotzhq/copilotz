@@ -82,6 +82,28 @@ const run = (text: string) =>
 const CODE =
   "$(if ($global:__copilotz_ok) { 0 } elseif ($LASTEXITCODE) { $LASTEXITCODE } else { 1 })";
 
+/**
+ * What a shell writes, with "\n" ending its lines: PowerShell on Windows ends
+ * them "\r\n". Chunk by chunk (a "\r" ending one waits for the next); `end`
+ * gives back what's held.
+ */
+export function newlines(shell: Shell): { text(chunk: string): string; end(): string } {
+  if (shell.kind === "bash") return { text: (chunk) => chunk, end: () => "" };
+  let held = "";
+  return {
+    text(chunk) {
+      const text = (held + chunk).replaceAll("\r\n", "\n");
+      held = text.endsWith("\r") ? "\r" : "";
+      return held ? text.slice(0, -1) : text;
+    },
+    end() {
+      const rest = held;
+      held = "";
+      return rest;
+    },
+  };
+}
+
 /** The extension of its command scripts. */
 export const scriptExtension = (shell: Shell): string => shell.kind === "bash" ? ".sh" : ".ps1";
 

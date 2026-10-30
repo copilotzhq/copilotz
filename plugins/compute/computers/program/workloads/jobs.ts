@@ -17,7 +17,7 @@ import type {
 import { fail } from "./answer.ts";
 import { checkScope, type Spaces } from "./spaces.ts";
 import { childEnv, exitCode, OWN, signalGroup } from "./processes.ts";
-import { commandArgs, type Shell } from "./shell.ts";
+import { commandArgs, newlines, type Shell } from "./shell.ts";
 
 const KEPT = 256 * 1024;
 /** Finished jobs kept per who and space, newest first. */
@@ -99,8 +99,10 @@ export function createJobs(spaces: Spaces, shell: Shell, options: { stopGraceMs?
         exited: Promise.resolve(),
       };
       for (const stream of ["stdout", "stderr"] as const) {
+        const lines = newlines(shell);
         child[stream]!.setEncoding("utf8");
-        child[stream]!.on("data", (text: string) => keep(entry, stream, text));
+        child[stream]!.on("data", (text: string) => keep(entry, stream, lines.text(text)));
+        child[stream]!.on("end", () => keep(entry, stream, lines.end()));
         child[stream]!.on("error", () => {});
       }
       entry.exited = new Promise<void>((resolve) => {

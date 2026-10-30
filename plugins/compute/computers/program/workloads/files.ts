@@ -53,6 +53,8 @@ function segments(path: unknown, folderItself = false): string[] {
 
 /** Whether `path` is the folder or inside it. */
 const within = (folder: string, path: string) => path === folder || path.startsWith(folder + sep);
+/** A path within a space's folder as the contract has it: "/" between its parts (Windows' too). */
+const inside = (folder: string, path: string) => relative(folder, path).split(sep).join("/");
 
 /** A Node error, as a failure the agent can act on. */
 function explain(error: unknown, path: string): never {
@@ -207,7 +209,7 @@ export function createFiles(spaces: Spaces) {
       const real = await writable(folder, parts, shown);
       if ((await stat(real).catch(() => undefined))?.isDirectory()) fail(`${shown} is a folder`);
       await replace(real, bytes).catch((error) => explain(error, shown));
-      return { path: relative(folder, real), size: bytes.length };
+      return { path: inside(folder, real), size: bytes.length };
     },
 
     async edit(input: FilesEditInput): Promise<Written> {
@@ -238,7 +240,7 @@ export function createFiles(spaces: Spaces) {
         content.slice(0, at) + input.new + content.slice(at + input.old.length),
       );
       await replace(real, bytes);
-      return { path: relative(folder, real), size: bytes.length };
+      return { path: inside(folder, real), size: bytes.length };
     },
   };
 }

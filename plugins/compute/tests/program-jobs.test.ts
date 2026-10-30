@@ -4,6 +4,7 @@
  * lists them all).
  */
 import { assert, assertEquals } from "@std/assert";
+import process from "node:process";
 import { test } from "../../../testing/mod.ts";
 import { type Job, type JobsLogs, type Scope, WORK } from "../computers/shared/workloads.ts";
 import { setup, until } from "./program-setup.ts";
@@ -11,7 +12,14 @@ import { setup, until } from "./program-setup.ts";
 const scope = (who: string, folder = "alpha"): Scope => ({ space: `space-${folder}`, folder, who });
 type Failed = { error: { code: string; message: string } };
 
-test("a job runs on, its output kept, until it's stopped", async () => {
+// bash's redirections and signals (143: ended by SIGTERM); PowerShell's jobs are program-powershell.test.ts's.
+test({
+  name: "a job runs on, its output kept, until it's stopped",
+  ignore: process.platform === "win32",
+  fn: () => jobRunsOn(),
+});
+
+async function jobRunsOn() {
   await setup(async ({ work }) => {
     const job = await work<Job>(WORK.jobsStart, {
       scope: scope("agent:a"),
@@ -47,7 +55,7 @@ test("a job runs on, its output kept, until it's stopped", async () => {
     const ended = await work<JobsLogs>(WORK.jobsLogs, { scope: scope("agent:a"), id: quick.id });
     assertEquals(ended.job.exitCode, 7);
   });
-});
+}
 
 test("another agent neither sees nor stops a job; its person's panel lists them all", async () => {
   await setup(async ({ work }) => {

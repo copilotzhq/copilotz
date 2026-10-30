@@ -22,7 +22,7 @@ import type { TerminalInput, TerminalResult } from "../../shared/workloads.ts";
 import { fail } from "./answer.ts";
 import type { Spaces } from "./spaces.ts";
 import { childEnv, exitCode, OWN, signalGroup } from "./processes.ts";
-import { scriptExtension, type Shell as Program, shellArgs } from "./shell.ts";
+import { newlines, scriptExtension, type Shell as Program, shellArgs } from "./shell.ts";
 
 export type ShellLimits = {
   /** The longest an answer waits for its command (a command done sooner answers at once). */
@@ -85,7 +85,9 @@ type Command = {
 function where(folder: string, cwd: string) {
   const path = relative(folder, cwd);
   if (!path) return ".";
-  return path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path) ? cwd : path;
+  if (path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)) return cwd;
+  // With "/" between its parts, as everywhere in the contract (Windows' paths too).
+  return path.split(sep).join("/");
 }
 
 /** The shells of every space on this computer, each a `program` (bash, or PowerShell). */
@@ -143,10 +145,11 @@ export function createShells(spaces: Spaces, program: Program, limits: ShellLimi
   function pump(shell: Shell, stream: "stdout" | "stderr") {
     const prefix = `\x1e${shell.token}:`;
     let pending = "";
+    const lines = newlines(program);
     const readable = shell.child[stream]!;
     readable.setEncoding("utf8");
     readable.on("data", (chunk: string) => {
-      pending += chunk;
+      pending += lines.text(chunk);
       while (pending) {
         const start = pending.indexOf(prefix);
         if (start < 0) {
@@ -169,7 +172,7 @@ export function createShells(spaces: Spaces, program: Program, limits: ShellLimi
         if (++command.markers === 2) finish(command, Number(code));
       }
     });
-    readable.on("end", () => append(shell, stream, pending));
+    readable.on("end", () => append(shell, stream, pending + lines.end()));
     readable.on("error", () => {});
   }
 

@@ -6,7 +6,7 @@
  * it reaps everything it started.
  */
 import { execFile, spawn } from "node:child_process";
-import { access, constants, readlink } from "node:fs/promises";
+import { access, constants, open, readlink } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { delimiter, join } from "node:path";
 import process from "node:process";
@@ -96,11 +96,20 @@ const commandOf = (pid: number) =>
   });
 
 /**
- * The pid of another Chrome running on `profile`, if there is one. Chrome
- * locks its profile (`SingletonLock`, a link to `<host>-<pid>`); a second one
- * started on it would hand its work to the first, and end.
+ * The pid of another Chrome running on `profile`, if there is one (0 when
+ * it's there but its pid isn't known). Chrome locks its profile
+ * (`SingletonLock`, a link to `<host>-<pid>`); a second one started on it
+ * would hand its work to the first, and end. On Windows it holds the
+ * profile's `lockfile` open, others only reading it, while it runs.
  */
 export async function profileOwner(profile: string): Promise<number | undefined> {
+  if (WINDOWS) {
+    const held = await open(join(profile, "lockfile"), "r+").then(
+      async (file) => (await file.close(), false),
+      (error: NodeJS.ErrnoException) => ["EBUSY", "EPERM", "EACCES"].includes(error.code ?? ""),
+    );
+    return held ? 0 : undefined;
+  }
   const lock = await readlink(join(profile, "SingletonLock")).catch(() => "");
   const match = /^(.*)-(\d+)$/.exec(lock);
   if (!match || match[1] !== hostname()) return undefined;
@@ -186,10 +195,12 @@ export async function launch(options: LaunchOptions, signal: AbortSignal): Promi
   const window = options.window ?? "hidden";
   const shown = window === "shown";
   const owner = await profileOwner(options.profile);
-  if (owner) {
+  if (owner !== undefined) {
     throw browserError(
       "busy",
-      `Another Chrome (pid ${owner}) has this browser's profile, ${options.profile}: ` +
+      `Another Chrome${
+        owner ? ` (pid ${owner})` : ""
+      } has this browser's profile, ${options.profile}: ` +
         "close it, or stop the other computer program using this root",
     );
   }

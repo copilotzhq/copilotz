@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
+import process from "node:process";
 import { env, serve, tempDir, test } from "../../../testing/mod.ts";
 import {
   cannotShow,
@@ -32,8 +33,15 @@ const scope = (who: string): Scope => ({ space: "space-alpha", folder: "alpha", 
 
 /** Every running command line that names `text`. */
 const running = (text: string) =>
-  execFileSync("/bin/ps", ["-axww", "-o", "command="], { encoding: "utf8" })
-    .split("\n").filter((line) => line.includes(text));
+  (process.platform === "win32"
+    ? execFileSync("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }",
+    ], { encoding: "utf8" })
+    : execFileSync("/bin/ps", ["-axww", "-o", "command="], { encoding: "utf8" }))
+    .split(/\r?\n/).filter((line) => line.includes(text));
 
 /** The Chrome on `profile` (its browser process, not its helpers). */
 const chromeOn = (profile: string) =>

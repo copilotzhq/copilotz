@@ -59,8 +59,23 @@ seconds. Also previews of what a job serves, and publishing a job as an app that
 - **Sizing:** every minute the app sets each group's size to the wakes it expects before a
   replacement is ready (about 2 minutes), plus a floor. The floor follows the hour, and can be 0: a
   wake then boots a VM (34–45 s measured).
-- **Updates:** each release builds the image, and the groups roll it out. Pool VMs don't update
-  themselves; computers on people's machines still do.
+- **Updates:** the image (family `cz-computer`) carries the tools and a program. Each VM checks the
+  release its template names when it boots, and downloads that program if it's newer. A new release
+  or app address is a new template version, and the groups roll it out.
+- **Leases:** a VM serves its computer while the computer's app renews its lease (every minute, for
+  10 minutes). The pool deletes a VM whose lease lapses: its app stopped, or forgot it. Its disk
+  stays, and the computer wakes again on its next use.
+
+### In a multi-org app (Compass)
+
+- **The pool is the app's, not an org's** (plugin `cloudPool`). It runs where pool VMs connect:
+  - in an app of one runtime, that runtime;
+  - in Compass, the directory, at its own socket (`wss://<app>/__pool/oxian`).
+- **Each org's cloud computers** (plugin `cloud`) reach the pool only through its Actions:
+  `pool.take`, `pool.serve`, `pool.stop`, `pool.drop` and `pool.renew`. In Compass these are
+  forwarded to the directory (`remotePool`), which records whose org each VM serves.
+- **Assigned, a VM's computer connects to its org's address** (`PoolAssign.app`: `<app>/o/<org>`),
+  as a person's computer does. Its pool connection stays with the directory, for its release.
 
 ## The program
 
@@ -76,14 +91,15 @@ seconds. Also previews of what a job serves, and publishing a job as an app that
 
 ## The app's side
 
-- **In the computers plugin:**
-  - actions `computer.cloud.create`, `wake`, `release`, `destroy`;
+- **Plugin `cloud`** (each org):
+  - actions `cloud.create`, `wake`, `release`, `destroy`, `touch`, `org`;
   - records for a cloud computer (its disk, zone, project, and
-    `cold | asleep | waking | awake |
-    releasing`) and for pool VMs (`free | assigned`, and to
-    whom);
-  - a dispatch hook: work for a computer that's asleep wakes it first;
-  - schedules: pool sizes and idle releases each minute, cold snapshots daily.
+    `cold | asleep | waking | awake | releasing`);
+  - the computers plugin's wake hook (`computerWake`): work for a computer that's asleep wakes it
+    first;
+  - schedules: idle releases, metering and lease renewals each minute; cold snapshots daily.
+- **Plugin `cloudPool`** (the app's): pool VMs (`free | assigned | gone`, and whose), their
+  admission, sizing each minute, and leases.
 - **The host is a port** (`cloudHost`), with these adapters:
   - Compute Engine: disks, attach and detach, snapshots, instance groups;
   - Docker, for development and tests.
@@ -95,12 +111,23 @@ seconds. Also previews of what a job serves, and publishing a job as an app that
 ## Isolation
 
 - **Each wake gets its own VM,** deleted when it's done. Nothing is reused across computers.
-- **Pool VMs have no service account and no inbound ports.** Everything runs over their outbound
-  connection.
+- **Pool VMs run as a service account with no roles and no scopes** (`cz-pool`: its identity tokens
+  prove which VM it is, and nothing more), with no inbound ports. Everything runs over their
+  outbound connection.
 - **Egress** reaches the internet. Firewall rules block private ranges, so a computer can't reach
   other VMs or internal services.
 - **Secrets:** a computer's secret lives on its own disk. A pool token can only register a free VM
   and take assignments.
+- **Re-admission:** a VM that served a computer never serves another. While it serves one, it may
+  connect again as itself (Cloud Run drops sockets hourly), and is only ever sent that computer's
+  release.
+- **Apps' builds** run the app's own Dockerfile, so they run as `cz-build` (push to the apps'
+  repository, read the sources, write logs), never the project's default service account. Apps run
+  as `cz-apps` (no roles), and their services are named `cz-app-<name>`, so an app never replaces
+  another service in the project.
+- **The user-content domain:** previews and apps are on `copilotz.app`, never the app's domain. A
+  preview's `Set-Cookie` loses its `Domain`, so no preview sets cookies for the others. Listing
+  `copilotz.app` in the Public Suffix List would do the same for apps (to do).
 - **Abuse** (mining, attacks from our IPs) calls for per-org limits and budgets, and egress
   metering. These come before the broad release.
 
@@ -264,7 +291,7 @@ What keeps the first open, at little cost now:
 - cost books are per placement;
 - nothing in the plugin names our project.
 
-## Proposed defaults (to confirm)
+## Defaults (confirmed 2026-10-30)
 
 - **Margins:**
   - compute: 90%, ten times its cost (~$0.40/h for small);
@@ -279,7 +306,8 @@ What keeps the first open, at little cost now:
   pool follows the wake rate as use grows, and gains zones when capacity or failover needs them.
 - **Sizes:**
   - small: e2-medium, 2 shared vCPU, 4 GB;
-  - standard: 2 dedicated vCPU, 8 GB (n4-standard-2 or c4a-standard-2).
+  - standard: 2 dedicated vCPU, 8 GB (n2-standard-2: N4 and C4A take Hyperdisk only, and computers'
+    disks are pd-balanced).
 
   Large (4 vCPU, 16 GB) comes when builds need it.
 - **Who creates them:** org admins by default; an org setting opens it to members. A monthly budget

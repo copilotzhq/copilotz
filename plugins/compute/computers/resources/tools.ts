@@ -40,6 +40,7 @@ async function on(
       desk: where.desk._id,
       computer: where.desk.computer,
       ...(where.desk.name ? { name: where.desk.name } : {}),
+      ...(where.desk.approve ? { approve: where.desk.approve } : {}),
       agent: ctx.agent,
       thread: ctx.thread,
       in: where.scope.space,

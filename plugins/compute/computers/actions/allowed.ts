@@ -34,6 +34,7 @@ export const allowedAction = defineAction({
       desk: where.desk._id,
       computer: where.desk.computer,
       ...(where.desk.name ? { name: where.desk.name } : {}),
+      ...(where.desk.approve ? { approve: where.desk.approve } : {}),
       agent: input.agent,
       thread: input.thread,
       in: where.scope.space,

@@ -375,3 +375,45 @@ test("a computer shared into a space: its members' agents use it, and they answe
     await computer.worker.stop();
   });
 });
+
+test("a computer the app makes asking nothing (a cloud computer): its agents work on it at once", async () => {
+  await setup(async (rt, topic) => {
+    const { space } = await rt.call<{ space: string }>("space.personal", {}, { actor: ana });
+    const { thread } = await rt.call<{ thread: string }>("chat.send", {
+      text: "hello",
+      in: space,
+    }, { actor: ana });
+    await rt.idle();
+    const { id } = await rt.call<{ id: string }>("computer.provision", {
+      owner: "ana",
+      name: "cloudbox",
+      approve: [],
+    });
+    const { code } = await rt.call<{ code: string }>("computer.enrollment", { computer: id });
+    const computer = fakeComputer(topic, `code:${code}`);
+    await computer.worker.ready;
+    await until(
+      async () => (await rt.query<Computer[]>("computer.mine", {}, { actor: ana }))[0]?.online,
+      "it came",
+    );
+    const [desk] = await rt.query<Desk[]>("desk.here", { in: space }, { actor: ana });
+    assertEquals(desk.approve, []);
+
+    // The agent isn't told to wait for a yes, and its command runs at once.
+    const prompt = await rt.query<Prompt>("thread.prompt", { thread, agent: "assistant" }, {
+      actor: ana,
+    });
+    const knows = prompt.turn.find((text) => text.startsWith('<context name="computer">')) ?? "";
+    assertStringIncludes(knows, "You work on this space's computer, cloudbox");
+    assert(!knows.includes("answered with /approve"), "nothing to approve");
+    const ran = await rt.call<{ stdout?: string }>("test.tool", {
+      tool: "terminal",
+      thread,
+      input: { stdin: "ls" },
+    }, { actor: ana });
+    assertEquals(ran.stdout, "ran ls");
+    assertEquals(await rt.query("approval.pending", {}, { actor: ana }), []);
+
+    await computer.worker.stop();
+  });
+});

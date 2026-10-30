@@ -1,10 +1,12 @@
 /**
- * `computer.provision` `{ owner, name, in? }`: a computer made by the app,
+ * `computer.provision` `{ owner, name, in?, approve? }`: a computer made by the app,
  * not connected with a code (a cloud computer, which the cloud plugin makes;
  * only the system calls this). Its record and secret are made as a code's
  * first connection makes them (the secret kept as a hash, and in the clear
  * until the computer's been told it), with its desk in a space its owner may
- * work in (their Personal space unless it says). Answers `{ id }`.
+ * work in (their Personal space unless it says). `approve`: what its agents
+ * ask their person before doing, in place of the settings' (a cloud
+ * computer: nothing). Answers `{ id }`.
  */
 import { type Actor, defineAction } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
@@ -18,6 +20,7 @@ export const provisionAction = defineAction({
       owner: { type: "string" },
       name: { type: "string", minLength: 1 },
       in: { type: "string" },
+      approve: { type: "array", items: { enum: ["terminal", "jobs", "writes"] } },
     },
     required: ["owner", "name"],
     additionalProperties: false,
@@ -37,6 +40,7 @@ export const provisionAction = defineAction({
       owner: input.owner,
       name: input.name,
       online: false,
+      ...(input.approve ? { approve: input.approve } : {}),
       at: new Date().toISOString(),
     };
     const { insertedId } = await ctx.as().db.collection<Omit<Computer, "_id">>("computer")

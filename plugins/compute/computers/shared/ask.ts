@@ -1,6 +1,6 @@
 /**
  * Whether an agent may do something at a desk (a computer, in one space):
- * what the settings don't ask about, or what the one who answers there
+ * what neither its computer nor the settings ask about, or what the one who answers there
  * (`owner`: the person it works for, or the computer's owner) let it do:
  * always, in this conversation, or this once, used up now. Otherwise they're
  * asked (an approval, waiting), and the agent is told to wait for them.
@@ -26,11 +26,14 @@ export type Ask = {
   detail: string;
   /** What a write or an edit would do, shortly. */
   preview?: string;
+  /** What its computer asks about, when it says (the desk's `approve`); else the settings'. */
+  approve?: Asked[];
 };
 
 /** True: go ahead. A string: what the agent is told instead (it waits for its person). */
 export async function allowed(ctx: Context, ask: Ask): Promise<true | string> {
-  if (ask.work !== "publish" && !settingsOf(ctx).approve.includes(ask.work)) return true;
+  const approve = ask.approve ?? settingsOf(ctx).approve;
+  if (ask.work !== "publish" && !approve.includes(ask.work)) return true;
   const system = ctx.as();
   const grants = system.db.collection<Grant>("grant");
   const found = await grants.findOne({

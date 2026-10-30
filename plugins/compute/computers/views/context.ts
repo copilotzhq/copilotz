@@ -56,7 +56,7 @@ export const contextViews = {
         | { os?: string; root?: string; windows?: string; shell?: string }
         | undefined;
       const sep = info?.os === "win32" ? "\\" : "/";
-      const asked = settingsOf(ctx).approve.map((work) => ASKED[work]);
+      const asked = (desk.approve ?? settingsOf(ctx).approve).map((work) => ASKED[work]);
       const answerer = desk.answers === "owner" ? desk.owner : person;
       return [
         `You work on this space's computer, ${desk.name ?? "theirs"} (${owned}${

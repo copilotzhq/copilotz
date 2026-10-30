@@ -46,9 +46,6 @@ const VM_MS = 150_000;
 /** How long an awake computer that isn't connected has to come back before its VM is taken for dead. */
 const BACK_MS = 15_000;
 
-/** `pool.assign`'s input; the first wake's code too (the computer connects with it). */
-type Assign = PoolAssign & { code?: string };
-
 const failure = (message: string, code = "failed") => Object.assign(new Error(message), { code });
 
 /** What a pool VM's answer says went wrong, if it does. */
@@ -143,7 +140,7 @@ async function wakeNow(ctx: Context, rec: CloudComputer) {
         });
     }
     const name = (await computerOf(ctx, rec._id))?.name;
-    const assign: Assign = {
+    const assign: PoolAssign = {
       computer: rec._id,
       device: seen || `/dev/disk/by-id/google-${device}`,
       ...(name ? { name } : {}),

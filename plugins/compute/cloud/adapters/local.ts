@@ -4,9 +4,9 @@
  * - **disks** are folders under its directory (`<dir>/<account>/<project>/<zone>/disks/<disk>`),
  *   and **snapshots** copies of them;
  * - **VMs** are processes it starts, each running the computer program in
- *   pool mode (`deno run -A …/computers/program/main.ts pool --app <url> --vm <name>
- *   --token local:<name>.<secret>`), or whatever `launch` starts instead (a
- *   test's in-process worker);
+ *   pool mode (`deno run -A …/computers/program/main.ts pool --app <url> --vm <name>`,
+ *   with its token, `local:<name>.<secret>`, in `COPILOTZ_POOL_TOKEN`), or
+ *   whatever `launch` starts instead (a test's in-process worker);
  * - **pools** keep as many such VMs as they're asked to; taking one starts
  *   another;
  * - **attaching** a disk gives the VM its folder (what `PoolAssign.device`
@@ -69,7 +69,10 @@ function appOf(resources: Record<string, Record<string, unknown>>): string | und
   return url ? url.replace(/\/+$/, "") + base : undefined;
 }
 
-/** The program, as a process of its own: `deno run -A main.ts pool …`. */
+/**
+ * The program, as a process of its own: `deno run -A main.ts pool --app <url> --vm <name>`,
+ * its token in its environment (`COPILOTZ_POOL_TOKEN`), where other processes don't list it.
+ */
 function programLauncher(program: string | undefined): LocalLaunch {
   return async ({ name, token, app }) => {
     const { spawn } = await import("node:child_process");
@@ -77,11 +80,14 @@ function programLauncher(program: string | undefined): LocalLaunch {
     const main = program ??
       fileURLToPath(new URL("../../computers/program/main.ts", import.meta.url));
     // deno-lint-ignore no-explicit-any
-    const deno = (globalThis as any).Deno?.execPath?.() ?? "deno";
+    const g = globalThis as any;
     const child = spawn(
-      deno,
-      ["run", "-A", main, "pool", "--app", app, "--vm", name, "--token", token],
-      { stdio: "inherit" },
+      g.Deno?.execPath?.() ?? "deno",
+      ["run", "-A", main, "pool", "--app", app, "--vm", name],
+      {
+        stdio: "inherit",
+        env: { ...(g.process?.env ?? g.Deno?.env?.toObject?.() ?? {}), COPILOTZ_POOL_TOKEN: token },
+      },
     );
     return { stop: () => void child.kill("SIGTERM") };
   };

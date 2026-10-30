@@ -114,13 +114,13 @@ export function fakePoolProgram(
   disk: (device: string) => FakeDisk | undefined,
   options: { jobs?: () => Job[] } = {},
 ) {
-  const assigned: (PoolAssign & { code?: string })[] = [];
+  const assigned: PoolAssign[] = [];
   const vm = {
     assigned,
     computer: undefined as ReturnType<typeof fakeCloudComputer> | undefined,
     worker: worker(topic, `pool:${token}`, {
       [POOL.assign]: async (input) => {
-        const given = input as PoolAssign & { code?: string };
+        const given = input as PoolAssign;
         assigned.push(given);
         const found = disk(given.device);
         if (!found) return { error: { message: `nothing at ${given.device}`, code: "failed" } };

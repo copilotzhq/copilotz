@@ -23,17 +23,30 @@
  *   people choose from, priced with `usage.quote`), `cloud.org` (the org's,
  *   for its admins).
  * - **The host** is an adapter (`adapters.cloudHost.<name>`, named by the
- *   settings' `host`): `local` for development and tests (adapters/local.ts),
- *   Compute Engine (adapters/gce) for production.
+ *   settings' `host`), made per placement account (see `CloudHostAdapter`):
+ *   `local` for development and tests (adapters/local.ts), `gce` (Compute
+ *   Engine, adapters/gce) for production.
  * - **Metering** (meter `computer`): VM seconds as `cloud/<size>`, disk and
  *   snapshot GB-hours as `cloud/disk` and `cloud/snapshot`, priced by the
- *   app's cost and price books.
+ *   app's cost and price books (storage's rates per GB-hour: `per: 1`).
  *
  * ```ts
  * plugins: [models, chat, ...access, usage, computers, cloud, {
  *   name: "app",
- *   adapters: { cloudHost: { gce: gceHost(…) } },
- *   resources: { cloud: { host: "gce", placements: [{ project: "p", zone: "us-central1-a" }] } },
+ *   // Compute Engine as the app's controller (the plugin's own `gce` uses the runtime's account).
+ *   adapters: {
+ *     cloudHost: {
+ *       gce: (account, { resources }) =>
+ *         gceHost({
+ *           impersonate: account ?? "cz-controller@<project>.iam.gserviceaccount.com",
+ *           placements: () => cloudSettings({ resources }).placements,
+ *         }),
+ *     },
+ *   },
+ *   resources: {
+ *     cloud: { host: "gce", placements: [{ project: "<project>", zone: "us-central1-a" }] },
+ *     computers: { url: "https://compass.copilotz.com" },
+ *   },
  * }]
  * ```
  */
@@ -47,12 +60,13 @@ import { releaseAction } from "./actions/release.ts";
 import { tickAction } from "./actions/tick.ts";
 import { touchAction } from "./actions/touch.ts";
 import { wakeAction } from "./actions/wake.ts";
+import { gceHost } from "./adapters/gce/index.ts";
 import { localHost } from "./adapters/local.ts";
 import { cloudComputer } from "./collections/cloud-computer.ts";
 import { poolVm } from "./collections/pool-vm.ts";
-import { POOL, POOL_KIND } from "./contract.ts";
+import { type CloudHostAdapter, POOL, POOL_KIND } from "./contract.ts";
 import { personOf } from "./shared/people.ts";
-import { DEFAULTS } from "./shared/settings.ts";
+import { DEFAULTS, settingsOf } from "./shared/settings.ts";
 
 export * from "./contract.ts";
 export {
@@ -100,7 +114,22 @@ export const cloud: Plugin = definePlugin({
     // Work for a computer that's asleep wakes it; every piece of work keeps it warm.
     computerWake: { wake: "cloud.wake", touch: "cloud.touch" },
   },
-  adapters: { cloudHost: { local: localHost() } },
+  adapters: {
+    cloudHost: {
+      local: localHost(),
+      // Compute Engine, as the runtime's own Google account (or a placement's account, a service
+      // account it impersonates), its VMs verified against the settings' placements for that
+      // account. An app impersonating its controller replaces it (see the module's doc).
+      gce: (account, { resources }) =>
+        gceHost({
+          ...(account ? { impersonate: account } : {}),
+          placements: () =>
+            settingsOf({ resources }).placements.filter((p) =>
+              (p.account ?? "") === (account ?? "")
+            ),
+        }),
+    } satisfies Record<string, CloudHostAdapter>,
+  },
   // Each person reaches their own cloud computers; pool VMs, only the system.
   guard: (actor, { collection }) => {
     if (collection === "poolVm") return { _id: { $in: [] } };

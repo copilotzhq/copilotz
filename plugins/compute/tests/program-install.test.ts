@@ -75,10 +75,13 @@ test({
       assertEquals(readFileSync(bin, "utf8"), program);
       assertEquals(readFileSync(join(home, "ran"), "utf8"), `install ${url} --code K7Q-4MZ\n`);
       assertStringIncludes(readFileSync(join(home, ".zshrc"), "utf8"), ".copilotz/bin:$PATH");
+      // This terminal read its .zshrc before: it's told how to get `computer` here, last.
+      assert(first.said.trimEnd().endsWith("In this one, run first: . ~/.zshrc"), first.said);
       // Again: it's there already, and the PATH line isn't added twice.
       const again = await install(home, [`${url}/some/page`, "--code", "K7Q-4MZ"]);
       assertEquals(again.code, 0, again.said);
       assertStringIncludes(again.said, "already installed");
+      assertStringIncludes(again.said, "In this one, run first: . ~/.zshrc");
       assertEquals(readFileSync(join(home, ".zshrc"), "utf8").split(".copilotz/bin").length, 2);
     }),
 });

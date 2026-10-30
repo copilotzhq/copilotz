@@ -1,3 +1,14 @@
+## 1.0.0-rc.3 — 2026-10-30
+
+- **Computers:** connecting one more app (`computer install <app> --code`) no longer stops the
+  computer running in the background: it enrolls beside it, then that one starts again with every
+  app. Turned away, the background one runs on as it was (before, a code refused while it was
+  stopping left it stopped). The state's lock waits a moment for one that's stopping.
+- **Computers:** a new app's folder never takes the name of a space folder kept in the root by a
+  computer from before apps had folders of their own.
+- **Install script:** it always says, last, how the terminal it ran in gets `computer` (new ones
+  have it).
+
 ## 1.0.0-rc.2 — 2026-10-30
 
 - **Orgs:** an org's socket is in its own address (`/o/<org>/oxian`), beside the shared `/oxian`, so

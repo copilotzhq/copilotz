@@ -12,7 +12,7 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
@@ -151,7 +151,7 @@ test("kept running at login: a launchd agent, a systemd user unit, a scheduled t
   assertStringIncludes(script, "& ''C:\\Users\\O''''Neil\\Copilotz\\computer.exe'' run --log");
 });
 
-test("one computer runs on a state at a time; one that ended without letting go is taken over", async () => {
+test("one computer runs on a state at a time; one that ended, or is ending, is taken over", async () => {
   const path = join(tempDir(), "computer.json");
   const release = await holdState(path);
   assertEquals(readFileSync(`${path}.lock`, "utf8"), String(process.pid));
@@ -163,6 +163,19 @@ test("one computer runs on a state at a time; one that ended without letting go 
   writeFileSync(`${path}.lock`, String(spawnSync(process.execPath, ["--version"]).pid));
   const again = await holdState(path);
   await again();
+  // One stopping (a service restarting it): waited for, then taken over.
+  const script = "setTimeout(() => {}, 800)";
+  const stopping = spawn(
+    process.execPath,
+    "Deno" in globalThis ? ["eval", script] : ["-e", script],
+    { stdio: "ignore" },
+  );
+  const gone = new Promise((resolve) => stopping.once("exit", resolve));
+  writeFileSync(`${path}.lock`, String(stopping.pid));
+  const after = await holdState(path);
+  assertEquals(readFileSync(`${path}.lock`, "utf8"), String(process.pid));
+  await gone;
+  await after();
   await release();
   assert(!existsSync(`${path}.lock`), "let go of");
 });

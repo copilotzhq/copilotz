@@ -168,11 +168,15 @@ export async function holdState(path = statePath()): Promise<() => Promise<void>
     } catch (error) {
       if ((error as { code?: string })?.code !== "EEXIST" || tries === 3) throw error;
       const pid = Number(await readFile(lock, "utf8").catch(() => ""));
-      if (pid && pid !== process.pid && alive(pid)) {
-        throw Object.assign(
-          new Error(`This computer is already running (pid ${pid}): stop that one first`),
-          { code: "running" },
-        );
+      // One stopping (a service restarting it) has a moment to be gone.
+      for (let waited = 0; pid && pid !== process.pid && alive(pid); waited += 250) {
+        if (waited >= 5_000) {
+          throw Object.assign(
+            new Error(`This computer is already running (pid ${pid}): stop that one first`),
+            { code: "running" },
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
       }
       await rm(lock, { force: true });
     }

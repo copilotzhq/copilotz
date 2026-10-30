@@ -7,7 +7,7 @@
  */
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Actor, createRuntime, definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
@@ -15,7 +15,8 @@ import models from "../../models/mod.ts";
 import { chat } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { type Computer, computers } from "../mod.ts";
-import { computerDownloads } from "../computers/resources/downloads.ts";
+import { computerDownloads, releaseOf } from "../computers/resources/downloads.ts";
+import { VERSION } from "../computers/program/version.ts";
 import { type Manifest, UPDATE } from "../computers/program/release.ts";
 import { createTickets } from "../../../hosts/web/tickets.ts";
 import { webServer } from "../../../hosts/web/server.ts";
@@ -128,6 +129,17 @@ test("a release at a URL is read once, as the app starts; a folder that isn't on
     () => computerDownloads({ dir: bad }),
     Error,
     "isn't a computer release's manifest",
+  );
+});
+
+test("by default, the program is this Copilotz's release on GitHub: the program's version is the package's", () => {
+  const root = new URL("../../../", import.meta.url);
+  for (const file of ["deno.json", "package.json"]) {
+    assertEquals(JSON.parse(readFileSync(new URL(file, root), "utf8")).version, VERSION, file);
+  }
+  assertEquals(
+    releaseOf(),
+    `https://github.com/copilotzhq/copilotz/releases/download/v${VERSION}/`,
   );
 });
 

@@ -27,8 +27,12 @@ export type Platform = { os: string; arch: string };
 /** One platform's binary in a release. */
 export type Binary = Platform & { file: string; size: number; sha256: string };
 
-/** What `manifest.json` says. */
-export type Manifest = { version: string; binaries: Binary[] };
+/**
+ * What `manifest.json` says: the program's version, its binaries, and what
+ * the program is (`source`: a SHA-256 of what it's built from, its version
+ * left out; the same program, the same `source`).
+ */
+export type Manifest = { version: string; source?: string; binaries: Binary[] };
 
 /**
  * The platforms it's built for, with Bun's target for each. The x64 ones are

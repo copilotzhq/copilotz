@@ -5,14 +5,17 @@
  * connect flow shows the install command and the binaries from it; a
  * computer older than it updates itself to it (`computer.ready`).
  *
- * `computerDownloads` gives an app both, as a plugin: a release folder of its
+ * `computerDownloads` gives an app both, as a plugin: by default this
+ * Copilotz's own release on GitHub (`v<version>`: every release has the
+ * program, built again only when it changed); or a release folder of its
  * own, served from its origin at `/computer/download/` (a `routes` entry of
- * the web host: only the release's files, as they are), or one at a URL (a
- * GitHub release, a bucket), whose manifest it reads once, as it starts.
+ * the web host: only the release's files, as they are); or one at a URL (a
+ * bucket, another release). It reads the manifest once, as it starts.
  *
  * ```ts
+ * plugins: [...plugins, await computerDownloads()]
  * plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.2" })]
- * plugins: [...plugins, await computerDownloads({ url: "https://github.com/…/releases/download/…/" })]
+ * plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })]
  * ```
  */
 import { createReadStream } from "node:fs";
@@ -21,6 +24,13 @@ import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { definePlugin, type Plugin } from "../../../../runtime/mod.ts";
 import { DOWNLOADS, type Manifest } from "../program/release.ts";
+import { VERSION } from "../program/version.ts";
+
+/** Where Copilotz's releases are: each one's computer program, at `v<version>/`. */
+export const RELEASES = "https://github.com/copilotzhq/copilotz/releases/download/";
+
+/** This Copilotz's release of the computer program (the default `computerDownloads`). */
+export const releaseOf = (version = VERSION): string => `${RELEASES}v${version}/`;
 
 /**
  * What the resource says: where the release is (absolute, or on the app's
@@ -82,8 +92,10 @@ function serveRelease(dir: string, manifest: Manifest) {
   };
 }
 
-/** The app's downloads (see above), from a release folder of its own or at a URL. */
-export async function computerDownloads(from: { dir: string } | { url: string }): Promise<Plugin> {
+/** The app's downloads (see above): this Copilotz's release, a release folder of its own, or at a URL. */
+export async function computerDownloads(
+  from: { dir: string } | { url: string } = { url: releaseOf() },
+): Promise<Plugin> {
   if ("url" in from) {
     const base = from.url.endsWith("/") ? from.url : `${from.url}/`;
     const response = await fetch(new URL("manifest.json", base));

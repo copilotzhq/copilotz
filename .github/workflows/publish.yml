@@ -1,13 +1,19 @@
 # Publishes a Copilotz 1.x release. Pushing a tag `v1.*` (`v1.0.0-rc.1`,
-# `v1.0.0`, `v1.2.3`) checks that it names the version deno.json and
-# package.json say, runs the whole test workflow, then publishes that version
-# to JSR (`@copilotz/copilotz`) and to npm (`copilotz`, built from the
-# sources, with provenance), both through GitHub's OIDC: no token. On npm that
-# is trusted publishing: the package's settings trust this repository's
-# publish.yml. A version already on npm (published by hand) is left as it is.
-# A version with a pre-release part (`-rc.1`) goes to npm's `next` tag, so
-# `npm install copilotz` keeps the last stable one. Nothing else publishes:
-# not a push, not a pull request, not a tag outside 1.x.
+# `v1.0.0`, `v1.2.3`) checks that it names the version deno.json,
+# package.json and the computer program say, runs the whole test workflow,
+# then makes the tag's GitHub release with the computer program (its binaries,
+# install scripts and manifest: built on a Mac, or, when the program is the
+# same as the last release's, that release's, so computers don't update to
+# what they have; `scripts/computer/build.ts --reuse`), and then publishes
+# that version to JSR (`@copilotz/copilotz`) and to npm (`copilotz`, built
+# from the sources, with provenance), both through GitHub's OIDC: no token.
+# On npm that is trusted publishing: the package's settings trust this
+# repository's publish.yml. A version already on npm (published by hand) is
+# left as it is. A version with a pre-release part (`-rc.1`) goes to npm's
+# `next` tag, so `npm install copilotz` keeps the last stable one. The
+# package's `computerDownloads()` reads its own release, so it's published
+# after it. Nothing else publishes: not a push, not a pull request, not a tag
+# outside 1.x.
 name: Publish
 
 on:
@@ -35,8 +41,9 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           deno=$(jq -r .version deno.json)
           npm=$(jq -r .version package.json)
-          if [ "$version" != "$deno" ] || [ "$version" != "$npm" ]; then
-            echo "::error::tag $GITHUB_REF_NAME, deno.json $deno, package.json $npm: they must agree"
+          program=$(sed -n 's/^export const VERSION = "\(.*\)";$/\1/p' plugins/compute/computers/program/version.ts)
+          if [ "$version" != "$deno" ] || [ "$version" != "$npm" ] || [ "$version" != "$program" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, deno.json $deno, package.json $npm, the computer program $program: they must agree"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -46,9 +53,50 @@ jobs:
     needs: version
     uses: ./.github/workflows/test.yml
 
+  computer:
+    name: The release, with the computer program
+    needs: [version, test]
+    # macOS binaries are signed (ad hoc) on a Mac; Bun builds the others there too.
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --no-audit --no-fund
+      - name: Build it, or take the last release's when it's the same program
+        run: |
+          last=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq "[.[]
+            | select(.draft | not) | select(.tag_name != \"$TAG\")
+            | select(.tag_name | startswith(\"v1.\"))
+            | select(any(.assets[]; .name == \"manifest.json\"))][0].tag_name // empty")
+          if [ -n "$last" ]; then
+            node scripts/computer/build.ts --reuse "https://github.com/$GITHUB_REPOSITORY/releases/download/$last/"
+          else
+            node scripts/computer/build.ts
+          fi
+      - name: The tag's release, its notes the changelog's
+        run: |
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            awk -v heading="## $VERSION " 'index($0, heading) == 1 { on = 1; next } on && /^## / { exit } on' \
+              CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+            [ -s "$RUNNER_TEMP/notes.md" ] || echo "See CHANGELOG.md." > "$RUNNER_TEMP/notes.md"
+            gh release create "$TAG" --verify-tag --title "Copilotz $VERSION" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              $([ "${{ needs.version.outputs.tag }}" = next ] && echo --prerelease)
+          fi
+          gh release upload "$TAG" "dist/computer/$VERSION"/* --clobber
+          gh release edit "$TAG" --draft=false
+
   jsr:
     name: JSR
-    needs: [version, test]
+    needs: [version, test, computer]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -62,7 +110,7 @@ jobs:
 
   npm:
     name: npm
-    needs: [version, test]
+    needs: [version, test, computer]
     runs-on: ubuntu-latest
     permissions:
       contents: read

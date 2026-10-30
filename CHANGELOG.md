@@ -10,6 +10,10 @@
   connection. `computer list` says which and where; `computer disconnect <app-url>` leaves one. An
   org's spaces go in a folder named for the org (`~/Copilotz/acme-studio`, `~/Copilotz/personal`): a
   code made on an org says it (`folder`), and the install lines pass it on (`--folder`).
+- **The computer program's release:** each release on GitHub has it, made by the publish workflow on
+  a Mac. When the program is the same as the last release's (`source` in its manifest), the release
+  has that one's binaries, version and all, so computers don't download what they have.
+  `computerDownloads()` serves this Copilotz's own release by default.
 
 ## 1.0.0-rc.1 — 2026-10-30
 

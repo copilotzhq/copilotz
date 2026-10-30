@@ -234,10 +234,6 @@ export async function installService(service: Service) {
 }
 
 /** Uninstalls `service`; false when there was nothing to remove (its logs stay). */
-/** Stops it, if it runs, without uninstalling it (it starts again at login, or with `installService`). */
-export async function stopService(service: Service): Promise<void> {
-  for (const command of service.stop) await exec(command).catch(() => {});
-}
 
 /** Whether it's installed: its files are there. */
 export async function serviceInstalled(service: Service): Promise<boolean> {

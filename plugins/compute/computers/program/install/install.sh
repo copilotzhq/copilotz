@@ -15,7 +15,7 @@ set -eu
 say() { printf '%s\n' "$*"; }
 fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
-app="" code="" from="" folder=""
+app="" code="" from="" folder="" hint=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --code) [ $# -ge 2 ] || fail "--code needs a code"; code=$2; shift 2 ;;
@@ -94,11 +94,20 @@ case ":$PATH:" in
     if ! grep -qs '.copilotz/bin' "$rc"; then
       mkdir -p "$(dirname "$rc")"
       printf '\n# Copilotz computer\n%s\n' "$line" >>"$rc"
-      say "  added ~/.copilotz/bin to your PATH in ${rc#"$HOME"/}: new terminals have \`computer\`"
+      say "  added ~/.copilotz/bin to your PATH in ${rc#"$HOME"/}"
     fi
+    # This terminal read it before it was there: new ones have `computer`, this one once it reads it.
+    case $rc in */config.fish) load=source ;; *) load=. ;; esac
+    hint="New terminals have \`computer\`. In this one, run first: $load ~/${rc#"$HOME"/}"
     ;;
 esac
 
 say ""
-if [ -n "$folder" ]; then exec "$bin" install "$app" --code "$code" --folder "$folder"; fi
-exec "$bin" install "$app" --code "$code"
+status=0
+if [ -n "$folder" ]; then
+  "$bin" install "$app" --code "$code" --folder "$folder" || status=$?
+else
+  "$bin" install "$app" --code "$code" || status=$?
+fi
+if [ -n "$hint" ]; then say ""; say "$hint"; fi
+exit "$status"

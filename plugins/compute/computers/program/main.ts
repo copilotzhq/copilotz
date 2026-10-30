@@ -28,9 +28,9 @@
  */
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { realpath } from "node:fs/promises";
+import { readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { type Computer, type ComputerOptions, startComputer } from "./computer.ts";
@@ -39,7 +39,6 @@ import {
   installService,
   serviceInstalled,
   serviceOf,
-  stopService,
   uninstallService,
 } from "./service.ts";
 import {
@@ -201,7 +200,7 @@ async function serve(list: ComputerOptions[], again: string[], away: number) {
  * again when it next comes).
  */
 async function enroll(options: ComputerOptions) {
-  const release = await holdState(options.statePath);
+  // Not holding the state: what runs in the background does, and keeps serving the other apps.
   const late = setTimeout(() => console.log("still connecting…"), 10_000);
   let computer: Computer | undefined;
   try {
@@ -211,7 +210,6 @@ async function enroll(options: ComputerOptions) {
   } finally {
     clearTimeout(late);
     await computer?.stop();
-    await release();
   }
 }
 
@@ -295,9 +293,16 @@ async function main(argv: string[]) {
     // as the app says (--folder, its org's name), else for its org or host.
     const before = await loadState(path);
     const known = connectionOf(before, url);
+    const base = rootPath(values.root ?? defaultRoot());
+    const connections = before?.connections ?? [];
+    // One kept from before apps had folders of their own has its spaces' folders right in the
+    // base: their names are taken too.
+    const inBase = connections.some((c) => resolve(c.root) === resolve(base))
+      ? await readdir(base).catch(() => [] as string[])
+      : [];
     const root = known?.root ?? join(
-      rootPath(values.root ?? defaultRoot()),
-      folderFor(url, (before?.connections ?? []).map((c) => basename(c.root)), values.folder),
+      base,
+      folderFor(url, [...connections.map((c) => basename(c.root)), ...inBase], values.folder),
     );
     // A new enrollment there: its old id and secret go; the other apps' stay.
     const state = await updateState(path, (state) => ({
@@ -315,10 +320,20 @@ async function main(argv: string[]) {
         1,
       );
     }
-    // Running in the background, it holds the state: it stops while this enrolls, and starts
-    // again with every app (`install`).
-    await stopService(serviceOf({ program: installedPath() }));
-    await enroll(added);
+    // Running in the background, it keeps running while this one enrolls beside it (by its code:
+    // a computer of its own there), then starts again with every app (`install`). Turned away,
+    // it's as it was, and a new app goes again.
+    try {
+      await enroll(added);
+    } catch (error) {
+      if (!known) {
+        await updateState(path, (state) => ({
+          ...state!,
+          connections: state!.connections.filter((c) => !sameApp(c.url, url)),
+        }));
+      }
+      throw error;
+    }
     return await install();
   }
 
@@ -387,10 +402,9 @@ async function main(argv: string[]) {
     if (!url) throw new Error("Usage: computer disconnect <app-url>");
     const gone = connectionOf(await loadState(path), url);
     if (!gone) return console.log(`Not connected to ${url} (\`computer list\` says to which).`);
-    // Running in the background, it holds the state: it stops, and starts again without it.
+    // Running in the background, it starts again without it (`install` stops it first).
     const service = serviceOf({ program: installedPath() });
     const background = await serviceInstalled(service);
-    if (background) await stopService(service);
     const state = await updateState(path, (state) => ({
       ...state!,
       connections: state!.connections.filter((c) => !sameApp(c.url, url)),

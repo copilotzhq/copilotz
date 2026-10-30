@@ -15,9 +15,11 @@ export type ComputersSettings = { approve?: Asked[]; codeMinutes?: number; url?:
 
 export const settingsOf = (ctx: { resources: Resources }) => {
   const set = (ctx.resources.computers ?? {}) as ComputersSettings;
+  // An org of a host serving many is reached under its own path (`/o/<org>`).
+  const base = (ctx.resources.org as { base?: string } | undefined)?.base ?? "";
   return {
     approve: set.approve ?? ["terminal", "jobs", "writes"],
     codeMinutes: set.codeMinutes ?? 10,
-    url: set.url,
+    url: set.url ? set.url.replace(/\/+$/, "") + base : undefined,
   };
 };

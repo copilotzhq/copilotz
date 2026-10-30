@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Connecting a computer, in a dialog: a one-time code (`computer.code`) in
  * the one line that installs the computer program and connects it, for the
@@ -15,6 +14,7 @@
  */
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
+  appBase,
   Button,
   bytes,
   clock,
@@ -34,6 +34,10 @@ import { type Binary, installCommand, OS_NAMES } from "../../program/release.ts"
 import type { Info } from "../../shared/workloads.ts";
 import { nameOf, systemOf, tilde } from "./names.ts";
 import { archName, type System, SYSTEMS, visitorArch, visitorSystem } from "./platform.ts";
+
+/** A path the app serves, under the app's address (which may be an org's: `/o/<org>`). */
+const within = (path: string, app: string) =>
+  new URL(path.replace(/^\//, ""), app.endsWith("/") ? app : `${app}/`).href;
 
 /** A release of the program, as `computer.code` says it: its base, version and binaries. */
 type Release = { base: string; version: string; binaries: Binary[] };
@@ -125,7 +129,7 @@ export function ConnectDialog(
   const arrived = came ? computers.find((c) => c._id === came) : undefined;
   const left = code ? Math.max(0, Date.parse(code.expires) - now) : 0;
   const expired = !!code && !arrived && left <= 0;
-  const app = code?.url ?? location.origin;
+  const app = code?.url ?? appBase();
   const release = code?.downloads;
   const info = arrived?.info as Partial<Info> | undefined;
 
@@ -334,7 +338,7 @@ function Command(
       />
     );
   }
-  const base = new URL(release.base, app).href;
+  const base = within(release.base, app);
   const windows = system === "win32";
   const command = installCommand(windows ? "powershell" : "sh", { app, code: code.code, base });
   return (
@@ -364,7 +368,7 @@ function Direct(
     spent: boolean;
   },
 ): ReactNode {
-  const base = new URL(release.base, app).href;
+  const base = within(release.base, app);
   const binaries = release.binaries.filter((b) => b.os === system)
     .sort((a, b) => Number(mine && b.arch === arch) - Number(mine && a.arch === arch));
   if (!binaries.length) return null;

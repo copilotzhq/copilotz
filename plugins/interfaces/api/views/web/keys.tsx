@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A space's developer keys (kind `api.keys`: its API tab, item `{ _id }`,
  * the space; spaces' `spaceTabs`): what keys are for, the person's own keys
@@ -10,6 +9,7 @@
 import { type ReactNode, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
+  appBase,
   Button,
   Card,
   CodeBlock,
@@ -254,7 +254,7 @@ function Revoke(
 
 /** Trying a key with curl, the key in a variable. */
 function TryIt({ allowed }: { allowed: Allowed }): ReactNode {
-  const origin = globalThis.location?.origin ?? "";
+  const origin = appBase();
   return (
     <section className="api-try" aria-labelledby="api-try-title">
       <h3 className="api-sub" id="api-try-title">Try it</h3>

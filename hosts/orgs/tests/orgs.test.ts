@@ -86,7 +86,7 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     assertEquals(await acmeRt.call("org.me", {}, { actor: asAna }), {
       role: "owner",
       staff: false,
-      org: { id: acme.id, name: "Acme", kind: "team" },
+      org: { id: acme.id, name: "Acme", kind: "team", base: `/o/${acme.id}` },
     });
 
     // She invites Bob; he signs in, sees it, accepts, and is in Acme as a member.
@@ -104,7 +104,7 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     assertEquals(await acmeRt.call("org.me", {}, { actor: asBob }), {
       role: "member",
       staff: false,
-      org: { id: acme.id, name: "Acme", kind: "team" },
+      org: { id: acme.id, name: "Acme", kind: "team", base: `/o/${acme.id}` },
     });
     const people = await acmeRt.call<{ people: { person: string; role: string }[] }>(
       "org.people",
@@ -286,6 +286,65 @@ test("orgs: a page in an org no longer yours lands you in one that is", async ()
       ),
     );
     assertEquals((await ana.send("POST", "/connect")).status, 403);
+  } finally {
+    await host.close();
+    await dir.close();
+  }
+});
+
+test("orgs: an org's address reaches it without a session; inviting an outsider to a space invites them to the org", async () => {
+  const dir = await createRuntime({ store: memoryStore(), plugins: [identity, directory] });
+  const host = orgsHost({
+    directory: dir,
+    open: async (_org, given) =>
+      await createRuntime({
+        store: memoryStore(),
+        plugins: [
+          ...access,
+          ...given.plugins,
+          definePlugin({
+            name: "probe",
+            actions: {
+              "probe.where": {
+                input: { type: "object" },
+                allow: () => true,
+                run: (ctx) => ({ body: { org: (ctx.resources.org as { id: string }).id } }),
+              },
+            },
+            resources: { routes: { probe: { path: "/probe", action: "probe.where" } } },
+          }),
+        ],
+        admit: given.admit,
+      }),
+    upgrade: () => new Response(null, { status: 299 }),
+    code: { entry: "app.js", files: { "app.js": "" } },
+    dev: true,
+  });
+  try {
+    const ana = browser(host.serve);
+    await ana.send("POST", "/signin/dev", { name: "ana@example.com" });
+    const { org: acme } = await (await ana.send("POST", "/orgs", { name: "Acme" })).json();
+    // No cookies at all: the address says which org.
+    const probed = await host.serve(new Request(`${BASE}/o/${acme.id}/probe`, { method: "POST" }));
+    assertEquals(await probed.json(), { org: acme.id });
+    assertEquals((await host.serve(new Request(`${BASE}/o/nope/probe`))).status, 404);
+    // Its page says where it is, so the addresses it shows work.
+    const page = await (await ana.send("GET", "/")).text();
+    assert(page.includes(`"base":"/o/${acme.id}"`));
+    // Bob isn't in Acme: a space's invitation brings him to the org too, as a guest.
+    const acmeRt = (await host.runtime(acme.id)) as Runtime;
+    const asAna: Actor = { kind: "person", id: "ana@example.com" };
+    const { space } = await acmeRt.call<{ space: string }>("space.create", { name: "Launch" }, {
+      actor: asAna,
+    });
+    await acmeRt.call("invitation.send", { space, email: "bob@example.com" }, { actor: asAna });
+    const bob = browser(host.serve);
+    await bob.send("POST", "/signin/dev", { name: "bob@example.com" });
+    const { invites } = await (await bob.send("GET", "/orgs")).json();
+    assertEquals(invites.map((i: { name: string; role: string }) => [i.name, i.role]), [[
+      "Acme",
+      "guest",
+    ]]);
   } finally {
     await host.close();
     await dir.close();

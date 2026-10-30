@@ -120,7 +120,9 @@ export async function forgetState(path = statePath()): Promise<boolean> {
 
 /**
  * The socket a computer connects to: `ws(s)://…` as it is; `http(s)://host`
- * becomes `ws(s)://host/oxian`, the web host's.
+ * becomes `ws(s)://host/oxian`, the web host's, under the app's path when it
+ * is an org's (of a host serving many: `https://host/o/acme` connects to
+ * `wss://host/o/acme/oxian`).
  */
 export function socketUrl(app: string): string {
   let url: URL;
@@ -133,7 +135,9 @@ export function socketUrl(app: string): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`"${app}" isn't an http(s) or ws(s) URL`);
   }
-  return `${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}/oxian`;
+  // Of a path, only an org's address counts (a page's link pasted whole doesn't).
+  const org = /^\/o\/[^/]+/.exec(url.pathname)?.[0] ?? "";
+  return `${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}${org}/oxian`;
 }
 
 /** A root as given (`~` is home), made absolute. */

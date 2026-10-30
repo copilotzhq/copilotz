@@ -17,6 +17,9 @@
  * - `POST /orgs/invites/answer` `{ invite, accept }`: joins (and enters) or
  *   declines.
  * - `POST /signout`: out of the directory and every org.
+ * - `/o/<org>/…`: that org, by its address, for what reaches it without a
+ *   browser's session: its API (a key), its webhooks (signed), its
+ *   computers' socket and downloads. The org's own handlers say who may.
  * - Staff's console: `GET /console/orgs`; `POST /console/orgs/<id>`
  *   `{ suspended?, name? }`; `POST …/<id>/move` `{ schema }` (its rows to
  *   another schema); `GET …/<id>/export` (its rows, as SQL); `POST
@@ -79,6 +82,13 @@ const DIRECTORY = "dir";
 const CURRENT = "org";
 const MONTH = 30 * 86_400;
 const sessionOf = (org: string) => `s_${org}`;
+/** Where an org is reached by its address: `/o/<org>`. */
+const baseOf = (org: string) => `/o/${encodeURIComponent(org)}`;
+/** The org a path addresses (`/o/<org>/…`), and the path within it. */
+const addressed = (path: string) => {
+  const found = /^\/o\/([^/]+)(\/.*)?$/.exec(path);
+  return found ? { org: decodeURIComponent(found[1]), path: found[2] ?? "/" } : undefined;
+};
 
 const json = (value: unknown, init: ResponseInit & { cookies?: string[] } = {}) => {
   const headers = new Headers({ "content-type": "application/json" });
@@ -121,7 +131,7 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     definePlugin({
       name: "org-here",
       resources: {
-        org: { id: org.id, name: org.name, kind: org.kind },
+        org: { id: org.id, name: org.name, kind: org.kind, base: baseOf(org.id) },
         directory: {
           invite: (invite: { email: string; role: string; by: string; from?: string }) =>
             directory.call("invite.send", { org: org.id, ...invite }).then(() => {}),
@@ -160,6 +170,7 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
           ...(options.assets ? { assets: options.assets } : {}),
           cookie: sessionOf(org.id),
           signIn: false,
+          base: baseOf(org.id),
         });
         const made = { org, runtime, tickets, serve, last: Date.now() };
         live.set(org.id, made);
@@ -401,6 +412,17 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;
     try {
+      const at = addressed(url.pathname);
+      if (at) {
+        const org = await orgInfo(at.org);
+        if (!org) return json({ error: "No such org" }, { status: 404 });
+        if (org.suspended) return json({ error: "This org is suspended." }, { status: 403 });
+        const cell = await cellOf(org);
+        cell.last = Date.now();
+        const inner = new URL(url);
+        inner.pathname = at.path;
+        return await cell.serve(new Request(inner, request));
+      }
       switch (route) {
         case "POST /signin/google": {
           if (!options.google) break;
@@ -578,8 +600,15 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
      * before its socket connects; one not open yet is a retry for the client.
      */
     openRuntime(request: Request): Runtime | undefined {
-      const org = cookieOf(request, CURRENT);
+      const at = addressed(new URL(request.url).pathname);
+      const org = at?.org ?? cookieOf(request, CURRENT);
       const cell = org ? live.get(org) : undefined;
+      // An org addressed but closed (a computer connecting first) opens for its retry.
+      if (!cell && at) {
+        void orgInfo(at.org).then((info) => {
+          if (info && !info.suspended) void cellOf(info).catch(() => {});
+        }).catch(() => {});
+      }
       if (cell) cell.last = Date.now();
       return cell?.runtime;
     },

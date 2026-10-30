@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Making a developer key, in a dialog: a name to know it by, then what it
  * can do: a preset (the `apiPresets` resource: chatting, reading), or a
@@ -8,6 +7,7 @@
  */
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
+  appBase,
   Button,
   Checkbox,
   Chip,
@@ -341,7 +341,7 @@ function Custom(
 
 /** The key, once: copy it, and try it. */
 function Made({ secret, allowed }: { secret: string; allowed: Allowed }): ReactNode {
-  const origin = globalThis.location?.origin ?? "";
+  const origin = appBase();
   return (
     <div className="api-made">
       <Notice tone="warning" icon="lock" title="Copy your key now">

@@ -77,6 +77,13 @@ export type WebServerOptions = {
    */
   signIn?: boolean;
   /**
+   * Where this app is under its host, when it isn't the root: a host serving
+   * many orgs serves each also under `/o/<org>` (`hosts/orgs`), for what
+   * reaches it without a browser's session (a key, a webhook, a computer).
+   * The page tells its code (`appBase()`), so the addresses it shows work.
+   */
+  base?: string;
+  /**
    * The app's theme, as its front ends give it (`themeOf(plugins)`, of those
    * with a `theme` resource): the page carries it for its first paint.
    */
@@ -122,14 +129,19 @@ const json = (value: unknown, init: ResponseInit = {}) =>
   });
 
 /** A cookie a request carries, by name. */
-export const cookieOf = (request: Request, name = COOKIE) =>
+export const cookieOf = (request: Request, name: string = COOKIE): string | undefined =>
   request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${name}=`))
     ?.slice(name.length + 1);
 
-const loopback = (url: URL) => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+const loopback = (url: URL): boolean => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 
 /** A session, as an httpOnly cookie: Secure unless this is the machine itself, over http. */
-export const setCookie = (url: URL, value: string, maxAge: number, name = COOKIE) =>
+export const setCookie = (
+  url: URL,
+  value: string,
+  maxAge: number,
+  name: string = COOKIE,
+): string =>
   `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${
     url.protocol === "https:" || !loopback(url) ? "; Secure" : ""
   }`;
@@ -217,7 +229,11 @@ const page = (options: WebServerOptions, entry: string) =>
 ${look(options.theme)}${installable(options)}<title>${options.title ?? "Copilotz"}</title>
 <script id="copilotz-config" type="application/json">${
     // Escaped, so nothing in it can end the script.
-    JSON.stringify({ google: options.google ?? null, dev: options.dev ?? false })
+    JSON.stringify({
+      google: options.google ?? null,
+      dev: options.dev ?? false,
+      ...(options.base ? { base: options.base } : {}),
+    })
       .replaceAll("<", "\\u003c")}</script>
 </head>
 <body>

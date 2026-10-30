@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Connecting a WhatsApp Business number to a space, in a dialog, by hand:
  * where in Meta's dashboard each thing is, then its phone number id, an
@@ -9,6 +8,7 @@
  */
 import { type ReactNode, useEffect, useState } from "react";
 import {
+  appBase,
   Button,
   CodeBlock,
   Dialog,
@@ -29,7 +29,7 @@ const META = "https://developers.facebook.com/apps/";
 
 /** The webhook to give Meta: where it is and its verify token, to copy. */
 export function Webhook({ hook }: { hook?: Hook }): ReactNode {
-  const origin = globalThis.location?.origin ?? "";
+  const origin = appBase();
   return (
     <div className="wa-hook">
       <p className="wa-note">

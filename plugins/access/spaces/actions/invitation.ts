@@ -8,7 +8,8 @@
 import { type Context, defineAction } from "../../../../runtime/mod.ts";
 import type { Invitation } from "../collections/invitation.ts";
 import { joinable } from "../shared/personal.ts";
-import { memberKey, reachOf, ROLES } from "../shared/reach.ts";
+import { memberKey, orgRoleOf, reachOf, ROLES } from "../shared/reach.ts";
+import type { DirectoryPort } from "./org.ts";
 
 /** An email address, as invitations hold it. */
 const EMAIL = /^[^\s@]+@[^\s@]+$/;
@@ -66,9 +67,24 @@ export const sendInvitationAction = defineAction({
       by: memberKey(ctx.actor!),
       at: new Date().toISOString(),
     }, { upsert: true });
+    await joinsTheOrg(ctx, email);
     return { invitation };
   },
 });
+
+/**
+ * In an app serving many orgs, someone not in this org yet gets there by an
+ * invitation to it too: as a guest, who reaches only the spaces they're let
+ * into (an invitation of the org's own, waiting already, stays as it is).
+ */
+async function joinsTheOrg(ctx: Context, email: string) {
+  const directory = ctx.resources.directory as DirectoryPort | undefined;
+  if (!directory?.invite) return;
+  const known = await ctx.as().db.collection("person").findOne({ email });
+  if (known && await orgRoleOf({ kind: "person", id: String(known._id) }, ctx.as())) return;
+  if ((await directory.invites()).some((waiting) => waiting.email === email)) return;
+  await directory.invite({ email, role: "guest", by: ctx.actor!.id });
+}
 
 export const acceptInvitationAction = defineAction({
   description: "Joins the space an invitation to your email is for",

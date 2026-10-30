@@ -14,7 +14,14 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
 import { chat } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
-import { cloud, type CloudComputer, computers, createLocalHost, type LocalLaunch } from "../mod.ts";
+import {
+  cloud,
+  type CloudComputer,
+  cloudPool,
+  computers,
+  createLocalHost,
+  type LocalLaunch,
+} from "../mod.ts";
 import { tempDir, test } from "../../../testing/mod.ts";
 import { fakePoolProgram } from "./fake-cloud.ts";
 
@@ -109,6 +116,7 @@ test("a cloud computer on the local cloud: its state in its folder, woken again 
       ...access,
       computers,
       cloud,
+      cloudPool,
       definePlugin({
         name: "app",
         adapters: {

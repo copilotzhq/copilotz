@@ -112,7 +112,7 @@ export function fakePoolProgram(
   topic: string,
   token: string,
   disk: (device: string) => FakeDisk | undefined,
-  options: { jobs?: () => Job[] } = {},
+  options: { jobs?: () => Job[]; topics?: Record<string, string> } = {},
 ) {
   const assigned: PoolAssign[] = [];
   const vm = {
@@ -127,7 +127,11 @@ export function fakePoolProgram(
         if (given.format) await found.format();
         const credential = given.code ? `code:${given.code}` : await found.read();
         if (!credential) return { error: { message: "no state on the disk", code: "failed" } };
-        vm.computer = fakeCloudComputer(topic, credential, {
+        const at = given.app ? options.topics?.[given.app] : undefined;
+        if (given.app && !at) {
+          return { error: { message: `no app at ${given.app}`, code: "failed" } };
+        }
+        vm.computer = fakeCloudComputer(at ?? topic, credential, {
           jobs: options.jobs,
           onEnrolled: (told) => void found.write(told),
         });
@@ -160,7 +164,10 @@ type FakeVm = ReturnType<typeof fakePoolProgram> & {
 /** Where a disk keeps a computer's state: its id and secret, once it's been told them. */
 type Disk = { gb: number; state?: string };
 
-export function fakeCloud(topic: string, options: { jobs?: () => Job[] } = {}) {
+export function fakeCloud(
+  topic: string,
+  options: { jobs?: () => Job[]; topics?: Record<string, string> } = {},
+) {
   const disks = new Map<string, Disk>();
   const snapshots = new Map<string, Disk>();
   const vms = new Map<string, FakeVm>();

@@ -21,7 +21,7 @@
  * ```
  */
 import type { CloudHost, CloudHostAdapter, Placement } from "../contract.ts";
-import { placeKey } from "../shared/settings.ts";
+import { appOf, placeKey } from "../shared/settings.ts";
 
 /** A VM it started: what stops it. */
 export type LocalVm = { stop(): void | Promise<void> };
@@ -61,13 +61,6 @@ const failure = (message: string, code = "failed") => Object.assign(new Error(me
 const random = (bytes: number) =>
   [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-
-/** The app's address its VMs connect to, as the computers plugin's settings say it. */
-function appOf(resources: Record<string, Record<string, unknown>>): string | undefined {
-  const url = (resources.computers as { url?: string } | undefined)?.url;
-  const base = (resources.org as { base?: string } | undefined)?.base ?? "";
-  return url ? url.replace(/\/+$/, "") + base : undefined;
-}
 
 /**
  * The program, as a process of its own: `deno run -A main.ts pool --app <url> --vm <name>`,

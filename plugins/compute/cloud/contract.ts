@@ -1,6 +1,6 @@
 /**
  * Cloud computers' contract (see design/cloud-computers.md): what the cloud
- * plugin, its hosts (adapters: Compute Engine, a local one for development
+ * plugins, their hosts (adapters: Compute Engine, a local one for development
  * and tests) and the computer program's pool mode agree on. Plain types and
  * names only.
  *
@@ -8,6 +8,22 @@
  * its work) whose machine the app keeps: its disk holds it (its spaces'
  * folders, its state, the jobs it keeps running), and a VM from a pool
  * serves it for one wake, then goes.
+ *
+ * Two plugins:
+ *
+ * - **`cloud`**, where the computers are (each org's runtime): their records,
+ *   disks and snapshots, waking, releasing, metering. It reaches the pools
+ *   only through the pool's Actions (`POOL_ACTIONS`).
+ * - **`cloudPool`**, where pool VMs connect (the app's one runtime, or, in
+ *   an app of many orgs, one runtime for them all: the directory's): the
+ *   pools' VMs, their admission (the `pool` worker kind), taking one for a
+ *   computer, telling it to serve and stop, deleting it, the pools' sizes.
+ *   Each VM it gives is leased: whoever took it renews it while the computer
+ *   uses it (`pool.renew`, each minute), and one whose lease ran out is
+ *   deleted, so a VM nobody answers for never runs on.
+ *
+ * In one runtime, both plugins; in many, `cloud` in each org's with
+ * `remotePool`, whose Actions forward to the runtime that has `cloudPool`.
  */
 
 /** Where a computer's disk and its VMs are: whose cloud account, its project, its zone. */
@@ -82,11 +98,17 @@ export type PoolVm = {
   placement: Placement;
   size: string;
   state: "free" | "assigned" | "gone";
-  /** The computer it serves, once assigned. */
+  /** The computer it serves, once assigned, and whose it is (its org, in an app of many). */
   computer?: string;
+  org?: string;
   at: string;
   /** When it last connected. */
   seen?: string;
+  /** When it was taken for its computer, and until when it's leased (renewed while it's used). */
+  taken?: string;
+  until?: string;
+  /** When it was told to stop serving its computer: it never connects again. */
+  released?: string;
 };
 
 /**
@@ -174,8 +196,40 @@ export type PoolAssign = {
   code?: string;
   /** Format the disk first (its first wake). */
   format?: boolean;
+  /**
+   * The app's URL as the computer connects to it (its org's address, in an
+   * app of many: `https://app/o/<org>`); the program's own `--app` when absent.
+   */
+  app?: string;
 };
 export type PoolRelease = { computer: string };
+
+/**
+ * The pool's Actions (plugin `cloudPool`, or `remotePool`'s forwarding
+ * them), run as the system. `org` is whose the computer is, in an app of
+ * many (`remotePool` adds it): a VM taken for one org is only its.
+ *
+ * - `pool.take` `PoolTake` → `{ vm }`: a free VM of a size in a placement,
+ *   taken out of its pool for a computer (none free: the pool grows by one,
+ *   and it waits for it), leased.
+ * - `pool.serve` `{ vm, assign: PoolAssign }` → the VM's answer to `pool.assign`.
+ * - `pool.stop` `{ vm, computer }` → its answer to `pool.release` (`{ error }`
+ *   when it gives none).
+ * - `pool.drop` `{ vm, placement? }`: the VM is deleted.
+ * - `pool.renew` `{ vms, now? }`: their leases go on.
+ * - `pool.tick` `{ now? }` (each minute, where `cloudPool` is): pools sized,
+ *   VMs whose lease ran out deleted.
+ */
+export const POOL_ACTIONS = {
+  take: "pool.take",
+  serve: "pool.serve",
+  stop: "pool.stop",
+  drop: "pool.drop",
+  renew: "pool.renew",
+  tick: "pool.tick",
+} as const;
+
+export type PoolTake = { placement: Placement; size: string; computer: string; org?: string };
 
 /** The usage subjects cloud computers are metered under (meter `computer`). */
 export const SUBJECTS = {

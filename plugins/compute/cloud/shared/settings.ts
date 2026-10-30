@@ -18,6 +18,9 @@
  * - `create`: who makes cloud computers: the org's owners and admins, or its
  *   members too; `budgetUsd`: what cloud computers may spend in a month,
  *   past which nobody makes more;
+ * - `approve`: what agents on a cloud computer ask their person before doing
+ *   (`terminal`, `jobs`, `writes`), in place of the computers plugin's:
+ *   nothing by default (publishing an app is always asked);
  * - `audience`: what pool VMs' identity tokens are for: the app's origin, as
  *   the program asks for it (by default, the origin of the computers plugin's
  *   `url`).
@@ -47,6 +50,7 @@ export type CloudSettings = {
   coldDays: number;
   pool: { floor: Floor[]; max: number };
   create: "admins" | "members";
+  approve: ("terminal" | "jobs" | "writes")[];
   budgetUsd?: number;
   audience?: string;
 };
@@ -65,6 +69,7 @@ export const DEFAULTS: CloudSettings = {
   coldDays: 7,
   pool: { floor: [{ from: 9, to: 21, tz: "America/Sao_Paulo", count: 1, size: "small" }], max: 10 },
   create: "admins",
+  approve: [],
 };
 
 /** The settings as the app patched them; sizes it removed (`null`) aren't there. */
@@ -86,6 +91,16 @@ export function audienceOf(ctx: { resources: Resources }): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * The app's address as computers connect to it, as the computers plugin's
+ * settings say it: its `url`, plus the org's base in an app of many orgs.
+ */
+export function appOf(resources: Resources): string | undefined {
+  const url = (resources.computers as { url?: string } | undefined)?.url;
+  const base = (resources.org as { base?: string } | undefined)?.base ?? "";
+  return url ? url.replace(/\/+$/, "") + base : undefined;
 }
 
 /** The same placement: its account, project and zone. */

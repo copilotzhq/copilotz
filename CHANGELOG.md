@@ -6,14 +6,25 @@
   the settings say, under the org's monthly `budgetUsd`); work for one that's asleep wakes it (a few
   seconds; about 30 from cold); unused for `warmMinutes` (10) it's released, and after `coldDays`
   (7) it goes cold, kept as a snapshot. A person with it open (`computer.view`, every few minutes
-  from its panel) keeps it awake up to `viewMinutes` (120). `cloud.destroy`, `cloud.org`, queries
-  `cloudComputer.mine` and `cloudComputer.sizes` (each size priced an hour). Hosts are adapters:
-  Compute Engine (`gceHost`: managed instance groups as pools, pd-balanced disks, VMs admitted by
-  their Google identity tokens) and a local one for development and tests. Metered under `computer`
-  as `cloud/<size>` (VM seconds), `cloud/disk` and `cloud/snapshot` (GB-hours).
+  from its panel) keeps it awake up to `viewMinutes` (120). Its agents ask their person nothing
+  first (the `cloud` settings' `approve`, `[]` by default, in place of the computers plugin's;
+  publishing an app is always asked). `cloud.destroy`, `cloud.org`, queries `cloudComputer.mine` and
+  `cloudComputer.sizes` (each size priced an hour). Hosts are adapters: Compute Engine (`gceHost`:
+  managed instance groups as pools, pd-balanced disks, VMs admitted by their Google identity tokens)
+  and a local one for development and tests. Metered under `computer` as `cloud/<size>` (VM
+  seconds), `cloud/disk` and `cloud/snapshot` (GB-hours).
+- **Cloud pools** (plugin `cloudPool`): the pools' VMs, where they connect (the `pool` worker kind),
+  and the Actions `cloud` reaches them through: `pool.take`, `pool.serve`, `pool.stop`, `pool.drop`,
+  `pool.renew`, and `pool.tick` each minute (pools sized by the hour). Each VM given is leased:
+  renewed each minute while its computer uses it, deleted once nobody does. A VM serving a computer
+  connects again as itself when its socket drops, until it's told to stop; then, or gone, never
+  again. One runtime has both plugins; an app of many orgs runs `cloudPool` once (its directory's
+  runtime, needing nothing else) and gives each org's runtime `remotePool(call, org)`, the same
+  Actions forwarded there, each org touching only its own VMs.
 - **Computer program:** `computer pool --app <url>`, a free VM of an app's pool: it waits to serve a
-  computer, mounts its disk, and runs it. scripts/cloud has a Google Cloud project's setup and the
-  pool VMs' startup script.
+  computer, mounts its disk, and runs it, connected at the address it's told (its org's). Given the
+  app's socket (`wss://…`), its identity is still for the app's https origin. scripts/cloud has a
+  Google Cloud project's setup and the pool VMs' startup script.
 - **Previews:** what a job serves, at `https://<computer>-preview.<domain>`, carried to the computer
   over its own connection (no inbound network), streamed both ways (`computer.http`). For a space's
   members (a signed cookie, given by the app) or anyone with the link. `computer.preview`,

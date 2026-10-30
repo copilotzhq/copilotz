@@ -5,8 +5,9 @@
  * VM goes, and the next work takes another; unused for days, its disk
  * becomes a snapshot, and waking makes the disk again. Its VM's seconds and
  * its storage are metered and priced; pools follow their floor by the hour;
- * only VMs of the app's pools, never taken, connect; and only those who may
- * make cloud computers do, each seeing their own.
+ * only VMs of the app's pools, never taken, connect; a VM nobody renews goes;
+ * the pool can be another runtime's (an app of many orgs); and only those
+ * who may make cloud computers do, each seeing their own.
  */
 import { assert, assertAlmostEquals, assertEquals, assertStringIncludes } from "@std/assert";
 import {
@@ -21,7 +22,15 @@ import models from "../../models/mod.ts";
 import { chat, type ToolContext } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { usage, type UsageRecord } from "../../billing/mod.ts";
-import { cloud, type CloudComputer, type Computer, computers, type PoolVm } from "../mod.ts";
+import {
+  cloud,
+  type CloudComputer,
+  cloudPool,
+  type Computer,
+  computers,
+  type PoolVm,
+  remotePool,
+} from "../mod.ts";
 import { tools } from "../computers/resources/tools.ts";
 import type { Job } from "../computers/shared/workloads.ts";
 import { test } from "../../../testing/mod.ts";
@@ -88,7 +97,16 @@ async function setup(
   const world = fakeCloud(topic, { jobs: options.jobs });
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, usage, computers, cloud, app(world.host, options.settings)],
+    plugins: [
+      models,
+      chat,
+      ...access,
+      usage,
+      computers,
+      cloud,
+      cloudPool,
+      app(world.host, options.settings),
+    ],
     transports: [{ type: "in-process", config: { topic } }],
     // Time moves only when a test says (no tick fires on its own).
     clock: manualClock(Date.now()),
@@ -131,10 +149,11 @@ test("a cloud computer: made, woken by an agent's work, released when idle, cold
     ]);
     assert(world.disks.has(`cz-d-${id}`), "its disk");
     const [computer] = await rt.query<Computer[]>("computer.mine", {}, { actor: ana });
-    assertEquals([computer._id, computer.name, computer.online], [
+    assertEquals([computer._id, computer.name, computer.online, computer.approve], [
       id,
       "Small cloud computer",
       false,
+      [],
     ]);
 
     // An agent's command, in Ana's Personal space: it wakes, on a VM the pool grew for it.
@@ -254,7 +273,7 @@ test("a cloud computer: made, woken by an agent's work, released when idle, cold
   }, { jobs: () => jobs });
 });
 
-test("pool VMs connect only from the app's pools, and never again once taken", async () => {
+test("pool VMs connect only from the app's pools; one serving a computer, again as itself until released", async () => {
   await setup(async (rt, world) => {
     const refused = async (w: { ready: Promise<unknown>; stop(): Promise<void> }) => {
       const no = await w.ready.then(() => false, () => true);
@@ -264,16 +283,38 @@ test("pool VMs connect only from the app's pools, and never again once taken", a
     assert(await refused(world.stranger()), "a token nobody issued");
     assert(await refused(world.outsider().worker), "a VM outside the app's placements");
 
-    // One of the pool's connects, free; taken by a wake, its own token no longer gets in.
-    await rt.call("cloud.tick", {});
+    // One of the pool's connects, free, and a wake takes it.
+    await rt.call("pool.tick", {});
     const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
       size: "small",
     }, { actor: ana });
     await rt.call("cloud.wake", { computer: id });
-    const vms = await recordsOf<PoolVm>(rt, "poolVm");
-    const taken = vms.find((vm) => vm.computer === id)!;
+    const vmOf = async (name: string) =>
+      (await recordsOf<PoolVm>(rt, "poolVm")).find((vm) => vm._id === name)!;
+    const taken = (await recordsOf<PoolVm>(rt, "poolVm")).find((vm) => vm.computer === id)!;
     assertEquals(taken.state, "assigned");
-    assert(await refused(world.again(taken._id)), "a VM once taken");
+
+    // Its pool connection drops (Cloud Run ends sockets hourly) and comes back: still its computer's.
+    await world.vms.get(taken._id)!.worker.stop();
+    const back = world.again(taken._id);
+    await back.ready;
+    assertEquals([(await vmOf(taken._id)).state, (await vmOf(taken._id)).computer], [
+      "assigned",
+      id,
+    ]);
+    // It's told to stop serving only its own computer.
+    const other = await rt.call("pool.stop", { vm: taken._id, computer: "another" })
+      .then(() => undefined, (error) => (error as { code?: string }).code);
+    assertEquals(other, "invalid");
+    // Told to stop (it answers, over that connection), it never connects again, though it's there.
+    assertEquals(await rt.call("pool.stop", { vm: taken._id, computer: id }), { ok: true });
+    assert(world.vms.has(taken._id));
+    assert(await refused(world.again(taken._id)), "a VM once released");
+    // Released: it answers again (no force), then it's deleted.
+    await rt.call("cloud.release", { computer: id });
+    assert(world.calls.includes(`detach ${taken._id} cz-d-${id}`), "detached, not by force");
+    assert(!world.vms.has(taken._id));
+    await back.stop();
     // Nobody but the system reads pool VMs.
     const read = await rt.query("cloudComputer.mine", {}, { actor: bob });
     assertEquals(read, []);
@@ -283,9 +324,9 @@ test("pool VMs connect only from the app's pools, and never again once taken", a
 test("pools keep their floor by the hour, plus the wakes of the last minutes, up to max", async () => {
   await setup(async (rt, world) => {
     const target = async (size: string) => (await world.host.pool(PLACE, size)).target;
-    await rt.call("cloud.tick", { now: "2026-11-02T10:00:00.000Z" });
+    await rt.call("pool.tick", { now: "2026-11-02T10:00:00.000Z" });
     assertEquals([await target("small"), await target("standard")], [2, 0]);
-    await rt.call("cloud.tick", { now: "2026-11-02T22:30:00.000Z" });
+    await rt.call("pool.tick", { now: "2026-11-02T22:30:00.000Z" });
     assertEquals([await target("small"), await target("standard")], [0, 0]);
     // A wake just now: one more expected; never past max.
     const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
@@ -293,7 +334,7 @@ test("pools keep their floor by the hour, plus the wakes of the last minutes, up
     }, { actor: ana });
     await rt.call("cloud.wake", { computer: id });
     const now = (await cloudOf(rt, id)).woke!;
-    const { pools } = await rt.call<{ pools: Record<string, number> }>("cloud.tick", { now });
+    const { pools } = await rt.call<{ pools: Record<string, number> }>("pool.tick", { now });
     const hour = new Date(now).getUTCHours();
     const floor = hour >= 9 && hour < 21 ? 2 : 0;
     assertEquals(pools["test-a/small"], floor + 1);
@@ -304,7 +345,7 @@ test("pools keep their floor by the hour, plus the wakes of the last minutes, up
     },
   });
   await setup(async (rt, world) => {
-    await rt.call("cloud.tick", { now: "2026-11-02T03:00:00.000Z" });
+    await rt.call("pool.tick", { now: "2026-11-02T03:00:00.000Z" });
     assertEquals((await world.host.pool(PLACE, "small")).target, 3, "capped at max");
   }, { settings: { pool: { floor: [{ from: 22, to: 6, count: 5 }], max: 3 } } });
 });
@@ -406,4 +447,142 @@ test("a computer whose VM died is woken again on another, its disk detached by f
     assertEquals(await rt.call("cloud.wake", { computer: "a-laptop" }), null);
     assertStringIncludes(id, "-");
   });
+});
+
+test("a VM nobody renews goes once its lease runs out; one its computer uses is renewed", async () => {
+  await setup(async (rt, world) => {
+    const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
+      size: "small",
+    }, { actor: ana });
+    await rt.call("cloud.wake", { computer: id });
+    const vm = (await cloudOf(rt, id)).vm!;
+    const pooled = async () => (await recordsOf<PoolVm>(rt, "poolVm")).find((v) => v._id === vm)!;
+    const { taken, until: leased } = await pooled();
+    assert(taken && leased && leased > taken, "taken, and leased");
+
+    // Its computer is awake (woken 5 minutes ago: still warm), so its VM's lease goes on.
+    await rt.call("cloud.tick", { now: later(taken, 5 * MIN) });
+    assert((await pooled()).until! > leased, "renewed");
+    const kept = await rt.call<{ lapsed: string[] }>("pool.tick", { now: later(taken, 12 * MIN) });
+    assertEquals(kept.lapsed, []);
+    assert(world.vms.has(vm));
+
+    // Nobody renews it: past its lease, it's deleted, and its disk stays.
+    const lapsed = await rt.call<{ lapsed: string[] }>("pool.tick", {
+      now: later(taken, 16 * MIN),
+    });
+    assertEquals(lapsed.lapsed, [vm]);
+    assert(world.calls.includes(`deleteVm ${vm}`) && !world.vms.has(vm), "its VM is deleted");
+    assertEquals((await pooled()).state, "gone");
+    assert(world.disks.has(`cz-d-${id}`), "its disk stays");
+
+    // Its computer, which still says it's awake, wakes again on another VM.
+    await until(
+      async () => !(await rt.query<Computer[]>("computer.mine", {}, { actor: ana }))[0].online,
+      "it went",
+    );
+    assertEquals(await rt.call("cloud.wake", { computer: id }), { state: "awake" });
+    const again = (await cloudOf(rt, id)).vm;
+    assert(again && again !== vm, "another VM");
+    await rt.call("cloud.release", { computer: id });
+  });
+});
+
+test("the pool in a runtime of its own: an org's computers wake and go through remotePool", async () => {
+  const poolTopic = `cloud-pool.${crypto.randomUUID()}`;
+  const orgTopic = `cloud-org.${crypto.randomUUID()}`;
+  // Where the org's computers connect: its own address, its runtime's topic here.
+  const orgApp = "http://app.test/o/acme";
+  const world = fakeCloud(poolTopic, { topics: { [orgApp]: orgTopic } });
+  const clock = manualClock(Date.now());
+  // The pool's runtime: nothing but cloudPool, its cloud and its settings (as a directory's).
+  const pool = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      cloudPool,
+      definePlugin({
+        name: "pool-app",
+        adapters: { cloudHost: { fake: world.host } },
+        resources: {
+          cloud: {
+            host: "fake",
+            placements: [PLACE],
+            pool: { floor: [{ from: 0, to: 24, count: 1, size: "small" }], max: 3 },
+            audience: "http://app.test",
+          },
+        },
+        actions: {
+          "test.records": defineAction({
+            input: { type: "object", properties: { collection: { type: "string" } } },
+            run: (ctx, input) => ctx.as().db.collection(input.collection!).find({}),
+          }),
+        },
+      }),
+    ],
+    transports: [{ type: "in-process", config: { topic: poolTopic } }],
+    clock,
+  });
+  const forwarded: string[] = [];
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      models,
+      chat,
+      ...access,
+      usage,
+      computers,
+      cloud,
+      remotePool((action, input) => {
+        forwarded.push(action);
+        return pool.call(action, input);
+      }, "acme"),
+      app(world.host),
+      definePlugin({ name: "org-address", resources: { computers: { url: orgApp } } }),
+    ],
+    transports: [{ type: "in-process", config: { topic: orgTopic } }],
+    clock: manualClock(Date.now()),
+  });
+  const vmsOf = () => pool.call<PoolVm[]>("test.records", { collection: "poolVm" });
+  try {
+    await rt.call("org.join", { person: "ana", role: "owner" });
+
+    // Its own schedule keeps the pool's floor: a free VM connects to it.
+    clock.advance(61_000);
+    await until(async () => (await vmsOf()).some((v) => v.state === "free"), "a free VM");
+    assert(world.calls.includes("resize small 1"));
+
+    // An org's computer wakes on it: taken for the org, served, connected to the org's runtime.
+    const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
+      size: "small",
+    }, { actor: ana });
+    assertEquals(await rt.call("cloud.wake", { computer: id }), { state: "awake" });
+    const vm = (await cloudOf(rt, id)).vm!;
+    const taken = (await vmsOf()).find((v) => v._id === vm)!;
+    assertEquals([taken.state, taken.computer, taken.org], ["assigned", id, "acme"]);
+    assertEquals(world.vms.get(vm)!.assigned[0].app, orgApp);
+    assertEquals((await rt.query<Computer[]>("computer.mine", {}, { actor: ana }))[0].online, true);
+    assertEquals(forwarded.slice(0, 2), ["pool.take", "pool.serve"]);
+
+    // Its ticks renew the VM's lease, at the pool.
+    await rt.call("cloud.tick", { now: later(taken.taken, 5 * MIN) });
+    assert(forwarded.includes("pool.renew"));
+    assert((await vmsOf()).find((v) => v._id === vm)!.until! > taken.until!, "renewed");
+
+    // A VM another org has isn't this one's to touch.
+    const other = (await vmsOf()).find((v) => v._id !== vm)!;
+    const refused = await pool.call("pool.drop", { vm: other._id, org: "other" })
+      .then(() => undefined, (error) => (error as { code?: string }).code);
+    assertEquals(refused, "not_found");
+
+    // Released: told to stop, its disk detached, the VM deleted, at the pool.
+    await rt.call("cloud.release", { computer: id });
+    assert(forwarded.includes("pool.stop") && forwarded.includes("pool.drop"));
+    assert(world.calls.includes(`detach ${vm} cz-d-${id}`), "detached, not by force");
+    assert(!world.vms.has(vm), "its VM is deleted");
+    assertEquals((await vmsOf()).find((v) => v._id === vm)!.state, "gone");
+  } finally {
+    await world.close();
+    await rt.close();
+    await pool.close();
+  }
 });

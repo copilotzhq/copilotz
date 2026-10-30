@@ -8,41 +8,27 @@
  *   to come back, else its VM died: it's released by force, and woken anew.
  * - Waking or releasing: it waits for that to end, then goes on from there.
  * - Asleep or cold: this call wakes it (only one call does). Cold, its disk
- *   is made from its snapshot first. Then a free VM of its size in its
- *   placement is taken (none free: its pool grows by one, and it waits for
- *   that VM), its disk is attached, and the VM is told to serve it
- *   (`pool.assign`): the first time, to format the disk and connect with a
- *   one-time code, as a person's computer would. Once it's connected, it's
- *   awake.
- * - Failing, the VM goes (or goes back, if it was never taken), the computer
- *   is back asleep (or cold), and the call fails saying why.
+ *   is made from its snapshot first. Then the pool gives it a VM of its size
+ *   in its placement (`pool.take`), its disk is attached, and the VM is told
+ *   to serve it (`pool.serve`), connecting to the app at its address (its
+ *   org's): the first time, to format the disk and connect with a one-time
+ *   code, as a person's computer would. Once it's connected, it's awake.
+ * - Failing, the VM goes (`pool.drop`), the computer is back asleep (or
+ *   cold), and the call fails saying why.
  */
 import { type Context, defineAction } from "../../../../runtime/mod.ts";
-import {
-  type CloudComputer,
-  type CloudHost,
-  POOL,
-  POOL_KIND,
-  type PoolAssign,
-} from "../contract.ts";
+import type { CloudComputer, PoolAssign, PoolTake } from "../contract.ts";
 import { hostFor } from "../shared/host.ts";
 import { meterStorage } from "../shared/meter.ts";
 import { deviceOf } from "../shared/names.ts";
-import { computerOf, onlineOf, poolsOf, recordsOf } from "../shared/records.ts";
-import { samePlace } from "../shared/settings.ts";
+import { computerOf, onlineOf, recordsOf } from "../shared/records.ts";
+import { appOf } from "../shared/settings.ts";
 import { poll } from "../shared/time.ts";
 
 /** How long a call waits for a wake or release already under way. */
 const SETTLE_MS = 240_000;
-/**
- * How long a VM has to serve it (`pool.assign` answers once the computer's
- * connected: up to a minute for the disk to appear, formatting, up to a
- * minute to connect), and then how long its record has to say it's online.
- */
-const ASSIGN_MS = 150_000;
+/** How long its record has to say it's online, once its VM serves it. */
 const CONNECT_MS = 60_000;
-/** How long a wake waits for a VM when none was free. */
-const VM_MS = 150_000;
 /** How long an awake computer that isn't connected has to come back before its VM is taken for dead. */
 const BACK_MS = 15_000;
 
@@ -110,10 +96,8 @@ export const wakeAction = defineAction({
 /** Wakes one this call has claimed (it's `waking`), from asleep or cold. */
 async function wakeNow(ctx: Context, rec: CloudComputer) {
   const records = recordsOf(ctx);
-  const pools = poolsOf(ctx);
   const host = await hostFor(ctx, rec.placement);
   let vm: string | undefined;
-  let taken = false;
   try {
     if (rec.state === "cold" && rec.snapshot) {
       await host.restore(rec.placement, rec.snapshot, rec.disk, rec.diskGb);
@@ -123,10 +107,9 @@ async function wakeNow(ctx: Context, rec: CloudComputer) {
         .catch(log(`deleting ${rec.snapshot} once restored`));
       await records.updateOne({ _id: rec._id }, { $unset: { snapshot: "" } });
     }
-    vm = await takeVm(ctx, host, rec);
+    const take: PoolTake = { placement: rec.placement, size: rec.size, computer: rec._id };
+    vm = (await ctx.call<{ vm: string }>("pool.take", take)).vm;
     await records.updateOne({ _id: rec._id }, { $set: { vm } });
-    await host.take(rec.placement, rec.size, vm);
-    taken = true;
     const device = deviceOf(rec._id);
     const seen = await host.attach(rec.placement, vm, rec.disk, device);
     // The first wake formats its disk and connects with a code; one told its secret already
@@ -140,15 +123,15 @@ async function wakeNow(ctx: Context, rec: CloudComputer) {
         });
     }
     const name = (await computerOf(ctx, rec._id))?.name;
+    const app = appOf(ctx.resources);
     const assign: PoolAssign = {
       computer: rec._id,
       device: seen || `/dev/disk/by-id/google-${device}`,
       ...(name ? { name } : {}),
       ...(code ? { format: true, code } : {}),
+      ...(app ? { app } : {}),
     };
-    const answer = await ctx.workers.call(POOL_KIND, vm, POOL.assign, assign, {
-      signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(ASSIGN_MS)]),
-    });
+    const answer = await ctx.call("pool.serve", { vm, assign });
     const error = failedIn(answer);
     if (error) throw error;
     const online = await poll(
@@ -163,17 +146,10 @@ async function wakeNow(ctx: Context, rec: CloudComputer) {
     });
     return { state: "awake" as const };
   } catch (error) {
-    if (vm && !taken) {
-      // Never taken from its pool: free again, for another wake.
-      await pools.updateOne(
-        { _id: vm, computer: rec._id },
-        { $set: { state: "free" }, $unset: { computer: "" } },
-      ).catch(log(`freeing ${vm}`));
-    } else if (vm) {
+    if (vm) {
       // Taken: it served this computer (or nearly), so it goes.
       await host.detach(rec.placement, vm, rec.disk, true).catch(() => {});
-      await host.deleteVm(rec.placement, vm)
-        .then(() => pools.updateOne({ _id: vm }, { $set: { state: "gone" } }))
+      await ctx.call("pool.drop", { vm, placement: rec.placement })
         .catch(log(`deleting ${vm} after a failed wake`));
     }
     const now = await records.findOne({ _id: rec._id });
@@ -184,30 +160,4 @@ async function wakeNow(ctx: Context, rec: CloudComputer) {
     const message = error instanceof Error ? error.message : String(error);
     throw failure(`The computer couldn't wake: ${message}`, (error as { code?: string }).code);
   }
-}
-
-/**
- * A free VM of its size in its placement, taken for it (only one wake takes
- * each). None free: its pool grows by one, and it waits for one to connect.
- */
-async function takeVm(ctx: Context, host: CloudHost, rec: CloudComputer): Promise<string> {
-  const pools = poolsOf(ctx);
-  const claim = async () => {
-    const free = await pools.find({ state: "free", size: rec.size }, { sort: { at: 1 } });
-    for (const vm of free.filter((v) => samePlace(v.placement, rec.placement))) {
-      const { modifiedCount } = await pools.updateOne(
-        { _id: vm._id, state: "free" },
-        { $set: { state: "assigned", computer: rec._id } },
-      );
-      if (modifiedCount) return vm._id;
-    }
-    return undefined;
-  };
-  const found = await claim();
-  if (found) return found;
-  const { target } = await host.pool(rec.placement, rec.size);
-  await host.resize(rec.placement, rec.size, target + 1);
-  const started = await poll(claim, VM_MS, { every: 500, signal: ctx.signal });
-  if (!started) throw failure(`no VM was free, and none started within ${VM_MS / 1000} s`);
-  return started;
 }

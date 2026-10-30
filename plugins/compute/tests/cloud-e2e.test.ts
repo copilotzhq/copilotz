@@ -15,7 +15,7 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
 import { chat, type ToolContext } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
-import { cloud, type CloudComputer, computers, type Desk, localHost } from "../mod.ts";
+import { cloud, type CloudComputer, cloudPool, computers, type Desk, localHost } from "../mod.ts";
 import { tools } from "../computers/resources/tools.ts";
 import { type Pool, startPool } from "../computers/program/pool.ts";
 import type { Job, TerminalResult } from "../computers/shared/workloads.ts";
@@ -42,6 +42,7 @@ test({
         ...access,
         computers,
         cloud,
+        cloudPool,
         definePlugin({
           name: "app",
           adapters: {

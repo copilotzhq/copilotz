@@ -77,6 +77,13 @@ type Serving = {
   released?: Promise<void>;
 };
 
+/**
+ * What its identity tokens are for: the app's origin, as the app checks them
+ * (`https://host`), also when it's given the app's socket (`wss://host/…`).
+ */
+export const audienceOf = (app: string): string =>
+  new URL(app.replace(/^ws(s?):/i, "http$1:")).origin;
+
 /** Waits `ms`, or until `signal` aborts. */
 const wait = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve) => {
@@ -137,7 +144,7 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
   const url = socketUrl(options.app);
   const base = options.metadata ?? METADATA;
   const vm = options.vm ?? await metadata(base, "instance/name");
-  const audience = new URL(options.app).origin;
+  const audience = audienceOf(options.app);
   /** What it registers with: its token, or a fresh identity token for the app. */
   const credential = async () =>
     options.token ? `pool:${options.token}` : `pool:gce:${await metadata(
@@ -173,9 +180,11 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
     }
     const statePath = join(root, ".copilotz", "computer.json");
     const spaces = join(root, "spaces");
+    // Where it connects: the app's address for it (its org's, in an app of many), else the pool's.
+    const app = input.app ?? options.app;
     // The disk is this app's computer: kept under another of its URLs (it moved), it's this one's.
     const state = await loadState(statePath);
-    const kept = connectionOf(state, options.app) ??
+    const kept = connectionOf(state, app) ??
       (state?.connections.length === 1 ? state.connections[0] : undefined);
     if (kept?.id && kept.id !== input.computer) {
       fail(`This disk is computer ${kept.id}'s, not ${input.computer}'s`, "invalid");
@@ -183,15 +192,15 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
     if (!(kept?.id && kept.secret) && !input.code) {
       fail(`${input.computer} isn't enrolled yet: its first wake needs a code`);
     }
-    if (kept && (!sameApp(kept.url, options.app) || kept.root !== spaces)) {
+    if (kept && (!sameApp(kept.url, app) || kept.root !== spaces)) {
       await updateState(statePath, (state) => ({
         ...state,
-        connections: [{ ...kept, url: options.app, root: spaces }],
+        connections: [{ ...kept, url: app, root: spaces }],
       }));
     }
     halted();
     const computer = current.running = await startComputer({
-      url: options.app,
+      url: app,
       root: spaces,
       statePath,
       ...(input.code ? { code: input.code } : {}),
@@ -245,7 +254,7 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
     [POOL.assign]: answer(async (input: PoolAssign) => {
       if (typeof input?.computer !== "string" || !input.computer) fail("computer is required");
       if (typeof input.device !== "string" || !input.device) fail("device is required");
-      for (const key of ["code", "name"] as const) {
+      for (const key of ["code", "name", "app"] as const) {
         if (input[key] !== undefined && typeof input[key] !== "string") {
           fail(`${key} must be a string`);
         }

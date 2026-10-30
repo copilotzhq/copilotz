@@ -6,8 +6,9 @@
  * (`create: "members"`), and anyone in their own personal org; and only
  * while the org's cloud spend this month is under its budget (`budgetUsd`),
  * when it has one. Its record and secret are made directly (`computer.provision`),
- * then its disk, in the first placement; its first wake formats it. Answers
- * `{ computer }`.
+ * its agents asking their person only what the settings' `approve` says
+ * (nothing by default: publishing is always asked), then its disk, in the
+ * first placement; its first wake formats it. Answers `{ computer }`.
  */
 import { type Context, defineAction } from "../../../../runtime/mod.ts";
 import { hostFor } from "../shared/host.ts";
@@ -64,6 +65,7 @@ export const createAction = defineAction({
       owner,
       name: input.name ?? `${size.label} cloud computer`,
       ...(input.in ? { in: input.in } : {}),
+      approve: set.approve,
     });
     const disk = diskOf(id);
     try {

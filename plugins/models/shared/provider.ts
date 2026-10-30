@@ -6,14 +6,30 @@
  * - `apiKey` fills the provider's usual auth header.
  * - `headers` add to, or replace, any header (a gateway's auth, Azure's
  *   `api-key`, a proxy's routing header…). They are applied last. A function
- *   computes them for each request: an OAuth token that refreshes.
+ *   computes them for each request, hearing whom the call is for: an OAuth
+ *   token that refreshes, the token of the person an agent works for.
  */
+import type { Actor, ReadContext } from "../../../runtime/mod.ts";
+
 export type Endpoint = {
   baseURL?: string;
   apiKey?: string;
   headers?:
     | Record<string, string>
-    | (() => Record<string, string> | Promise<Record<string, string>>);
+    | ((caller: Caller) => Record<string, string> | Promise<Record<string, string>>);
+};
+
+/**
+ * Whom a call is for, as a `headers` function hears it: the actor it runs as
+ * (in an agent's turn, the agent, `for` its person) and Actions to ask (a
+ * person's token, from the plugin that keeps it). Empty outside a job.
+ */
+export type Caller = { actor?: Actor; call?: ReadContext["call"] };
+
+/** The endpoint for one call: its `headers` function, if it has one, hears whom it's for. */
+export const calledBy = (endpoint: Endpoint, caller: Caller): Endpoint => {
+  const { headers } = endpoint;
+  return typeof headers === "function" ? { ...endpoint, headers: () => headers(caller) } : endpoint;
 };
 
 /**
@@ -72,7 +88,7 @@ export async function post(
   const raw = body instanceof FormData || body instanceof Uint8Array || typeof body === "string";
   if (!raw) headers.set("content-type", "application/json");
   const extra = typeof endpoint.headers === "function"
-    ? await endpoint.headers()
+    ? await endpoint.headers({})
     : endpoint.headers;
   for (const [name, value] of Object.entries(extra ?? {})) headers.set(name, value);
   const response = await fetch(url, {

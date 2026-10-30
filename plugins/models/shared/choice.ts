@@ -66,6 +66,10 @@ export type Provider = Endpoint & {
   adapter?: string;
   /** The catalog provider its models are looked up in (default: its own name); false for none. */
   catalog?: string | false;
+  /** What every request to it sends, under a model's own `options` (`{ store: false }`). */
+  options?: Record<string, unknown>;
+  /** What every use of it is tagged with, for whoever hears `modelUse` (`{ paid: "subscription" }`). */
+  tags?: Record<string, string>;
   /** How long (ms) a model may send nothing before its connection counts as dropped (2 minutes). */
   silence?: number;
   /**
@@ -104,6 +108,8 @@ export type Resolved = {
   catalog?: string;
   info?: ModelInfo;
   settings: Record<string, unknown>;
+  /** What its uses are tagged with: its provider's `tags`. */
+  tags?: Record<string, string>;
 };
 
 type Resources = Record<string, Record<string, unknown> | undefined>;
@@ -169,7 +175,7 @@ export function resolve(resources: Resources, ref: ModelRef): Resolved[] {
         `No provider "${provider}" for "${id}": declare resources.provider.${provider}`,
       );
     }
-    const { adapter, catalog: from, ...endpoint } = declared;
+    const { adapter, catalog: from, options, tags, ...endpoint } = declared;
     const listed = from === false ? undefined : catalog.providers[from ?? provider];
     const entry = typeof settings.catalog === "string"
       ? settings.catalog
@@ -193,7 +199,9 @@ export function resolve(resources: Resources, ref: ModelRef): Resolved[] {
       },
       ...(entry ? { catalog: entry } : {}),
       ...(info ? { info } : {}),
-      settings: rest,
+      // The provider's options go under the model's own.
+      settings: options ? over({ options }, rest) : rest,
+      ...(tags ? { tags } : {}),
     };
   });
 }

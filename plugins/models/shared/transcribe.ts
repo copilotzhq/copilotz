@@ -1,6 +1,6 @@
 /** Transcribing: the model choice resolved, fallbacks, and its use told. */
-import type { Context, ReadContext } from "../../../runtime/mod.ts";
-import type { Endpoint, Usage } from "./provider.ts";
+import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
+import { calledBy, type Endpoint, type Usage } from "./provider.ts";
 import { adapterFor, type ModelInfo, type ModelRef, resolve, type Resolved } from "./choice.ts";
 import { used } from "./use.ts";
 import { measure } from "./telemetry.ts";
@@ -34,6 +34,7 @@ export type TranscriptionAdapter = {
 };
 
 type Reach = Pick<Context, "resources" | "adapters" | "signal"> & {
+  actor?: Actor;
   call?: ReadContext["call"];
   record?: Context["record"];
   metrics?: Context["metrics"];
@@ -61,7 +62,7 @@ export async function transcribe(
       const { options } = m.settings as TranscriptionSettings;
       const transcript = await adapterFor<TranscriptionAdapter>(ctx.adapters, "transcription", m)
         .transcribe({
-          connection: { ...m.endpoint, model: m.model },
+          connection: { ...calledBy(m.endpoint, ctx), model: m.model },
           options,
           info: m.info,
           audio: request.audio,
@@ -75,7 +76,7 @@ export async function transcribe(
         subject: m.id,
         catalog: m.catalog,
         quantities: { ...transcript.usage, model: undefined },
-        tags: request.tags,
+        tags: m.tags ? { ...m.tags, ...request.tags } : request.tags,
       });
       return { ...transcript, usage: { ...transcript.usage, model: m.id } };
     } catch (error) {

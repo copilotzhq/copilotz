@@ -1,5 +1,5 @@
 /** Calling a model: the model choice resolved, fallbacks, state, and its use told. */
-import type { Context, ReadContext } from "../../../runtime/mod.ts";
+import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
 import {
   adapterFor,
   type Media,
@@ -9,6 +9,7 @@ import {
   type Resolved,
 } from "./choice.ts";
 import { filesFor } from "./files.ts";
+import { calledBy } from "./provider.ts";
 import { backoff, quietly, RETRY, SILENCE, transient, wait } from "./retry.ts";
 import { used } from "./use.ts";
 import { measure } from "./telemetry.ts";
@@ -24,8 +25,12 @@ import {
   type Usage,
 } from "./types.ts";
 
-/** What a call needs: providers, adapters, cancellation, and (to meter it) where to record. */
+/**
+ * What a call needs: providers, adapters, cancellation, who it's for (a
+ * provider's `headers` hear it), and (to meter it) where to record.
+ */
 type Reach = Pick<Context, "resources" | "adapters" | "signal"> & {
+  actor?: Actor;
   call?: ReadContext["call"];
   record?: Context["record"];
   metrics?: Context["metrics"];
@@ -137,7 +142,7 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
         for await (
           const chunk of quietly(
             adapter.generate({
-              connection: { ...m.endpoint, model: m.model },
+              connection: { ...calledBy(m.endpoint, ctx), model: m.model },
               effort,
               maxTokens,
               temperature,
@@ -163,7 +168,7 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
               subject: m.id,
               catalog: m.catalog,
               quantities,
-              tags: request.tags,
+              tags: m.tags ? { ...m.tags, ...request.tags } : request.tags,
             });
             yield { ...chunk, model: m.id };
           } else {

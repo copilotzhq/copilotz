@@ -1,6 +1,6 @@
 /** Embedding: the model choice resolved (one model only), and its use told. */
-import type { Context, ReadContext } from "../../../runtime/mod.ts";
-import type { Endpoint, Usage } from "./provider.ts";
+import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
+import { calledBy, type Endpoint, type Usage } from "./provider.ts";
 import { adapterFor, type ModelInfo, type ModelRef, resolve, type Resolved } from "./choice.ts";
 import { used } from "./use.ts";
 import { measure } from "./telemetry.ts";
@@ -25,6 +25,7 @@ export type Embedding = { vectors: number[][]; usage?: Usage & { model?: string 
 export type EmbeddingsAdapter = { embed(request: EmbeddingRequest): Promise<Embedding> };
 
 type Reach = Pick<Context, "resources" | "adapters" | "signal"> & {
+  actor?: Actor;
   call?: ReadContext["call"];
   record?: Context["record"];
   metrics?: Context["metrics"];
@@ -59,7 +60,7 @@ export async function embed(
   let embedding: Embedding;
   try {
     embedding = await adapterFor<EmbeddingsAdapter>(ctx.adapters, "embeddings", m).embed({
-      connection: { ...m.endpoint, model: m.model },
+      connection: { ...calledBy(m.endpoint, ctx), model: m.model },
       dimensions,
       options,
       info: m.info,
@@ -78,7 +79,7 @@ export async function embed(
     subject: m.id,
     catalog: m.catalog,
     quantities: { ...embedding.usage, model: undefined },
-    tags: request.tags,
+    tags: m.tags ? { ...m.tags, ...request.tags } : request.tags,
   });
   return { ...embedding, usage: { ...embedding.usage, model: m.id } };
 }

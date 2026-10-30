@@ -23,6 +23,7 @@ export type {
   Provider,
   Resolved,
 } from "./shared/choice.ts";
+export type { Caller } from "./shared/provider.ts";
 export type { Completion, Generate } from "./shared/generate.ts";
 export type { Embedding } from "./shared/embed.ts";
 export type { Transcript } from "./shared/transcribe.ts";

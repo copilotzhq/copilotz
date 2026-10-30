@@ -5,7 +5,10 @@
  *   shares its documents keeps to;
  * - `identity`: people, sessions and keys, and who a secret proves;
  * - `googleSignIn`: sign-in with a Google ID token (the `google` resource
- *   names your client).
+ *   names your client);
+ * - `accounts`: outside accounts people connect for their agents to use (a
+ *   ChatGPT plan, as a model provider); its front end is `accountsWeb`
+ *   (accounts/web.tsx).
  *
  *   plugins: [...access, googleSignIn, { name: "app", resources: { shared: { note: {} } } }]
  */
@@ -16,6 +19,7 @@ import { spaces } from "./spaces/mod.ts";
 export * from "./spaces/mod.ts";
 export * from "./identity/mod.ts";
 export * from "./google/mod.ts";
+export * from "./accounts/mod.ts";
 
 /** Spaces and identity, which every app with people has; Google sign-in is added beside them. */
 export const access: Plugin[] = [spaces, identity];

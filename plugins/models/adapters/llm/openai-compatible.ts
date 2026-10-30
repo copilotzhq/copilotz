@@ -103,13 +103,19 @@ export const openaiCompletions: LlmAdapter = {
         }
       }
       if (chunk.usage) {
+        const usage = chunk.usage;
         yield {
           type: "usage",
           ...usageOf({
-            input: chunk.usage.prompt_tokens ?? 0,
-            output: chunk.usage.completion_tokens ?? 0,
-            cached: chunk.usage.prompt_tokens_details?.cached_tokens,
-            reasoning: chunk.usage.completion_tokens_details?.reasoning_tokens,
+            input: usage.prompt_tokens ?? 0,
+            output: usage.completion_tokens ?? 0,
+            // Read from the cache, as each says it: OpenAI and most (in the details),
+            // DeepSeek (cache hits), Moonshot (on its own).
+            cached: usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens ??
+              usage.cached_tokens,
+            // Written to it, where writing costs (OpenRouter, for models with explicit caching).
+            cacheWrite: usage.prompt_tokens_details?.cache_write_tokens,
+            reasoning: usage.completion_tokens_details?.reasoning_tokens,
           }),
         };
       }

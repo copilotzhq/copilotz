@@ -38,6 +38,17 @@ export function personOf(actor: Actor | undefined): string | undefined {
   return undefined;
 }
 
+/**
+ * A record's price: as rated, or, for a use recorded before every use had a
+ * price (nothing rated it), its cost: a margin of 0.
+ */
+export function priceOf(
+  record: { price?: number; cost?: number; rated?: { price?: unknown }; kind?: string },
+): number | undefined {
+  if (record.price !== undefined) return record.price;
+  return record.kind !== "adjustment" && !record.rated?.price ? record.cost : undefined;
+}
+
 /** Rates a use and appends it to the ledger; its cost and price are counted as metrics too. */
 export async function recordUse(ctx: UseContext, use: Use): Promise<void> {
   // Where nothing can record (a plain call outside a job), there's no ledger to write.

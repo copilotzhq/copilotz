@@ -5,7 +5,7 @@
  * no filter of theirs reaches anyone else's. An app without org roles has
  * nobody who sees everyone's.
  */
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { type Actor, createRuntime, defineAction, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
@@ -152,6 +152,31 @@ test("without org roles, everyone sees their own; outside callers are refused", 
     await assertRejects(() =>
       runtime.call("usage.org", {}, { actor: { kind: "key", id: "k1" } as Actor })
     );
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("everyone sees prices; what it cost, and so the margin, only platform staff", async () => {
+  const runtime = await started({ ana: "owner", carol: "member" });
+  try {
+    type Seen = { totals: Record<string, unknown>[]; costs: boolean };
+    type Calls = { calls: Record<string, unknown>[]; costs: boolean };
+    for (const [who, sees] of [[person("ana"), false], [person("carol"), false]] as const) {
+      const org = await runtime.call<Seen>("usage.org", {}, { actor: who });
+      assertEquals(org.costs, sees);
+      assertEquals([org.totals[0].cost, org.totals[0].costs], [undefined, undefined]);
+      assert((org.totals[0].price as number) > 0, "the price");
+      const calls = await runtime.call<Calls>("usage.calls", {}, { actor: who });
+      assertEquals(calls.costs, false);
+      assert(calls.calls.every((c) => c.cost === undefined && (c.price as number) > 0));
+    }
+    const staff = await runtime.call<Seen>("usage.org", {}, { actor: person("sam", true) });
+    assertEquals(staff.costs, true);
+    // No price book: the price is the cost.
+    assertEquals(staff.totals[0].price, staff.totals[0].cost);
+    const calls = await runtime.call<Calls>("usage.calls", {}, { actor: person("sam", true) });
+    assert(calls.calls.every((c) => c.cost === c.price));
   } finally {
     await runtime.close();
   }

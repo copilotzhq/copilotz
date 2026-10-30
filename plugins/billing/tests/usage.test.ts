@@ -6,7 +6,6 @@
  */
 import { assertAlmostEquals, assertEquals } from "@std/assert";
 import {
-  type Context,
   createRuntime,
   defineAction,
   definePlugin,
@@ -48,7 +47,12 @@ test("cost from the catalog: each kind of token at its own price", async () => {
   );
   // Reasoning has no price of its own: it's output.
   assertAlmostEquals(rated.cost!, 0.6 * 0.75 + 0.4 * 0.075 + 4.5);
-  assertEquals(rated.rated, { cost: `models.dev ${catalog.fetched}` });
+  assertEquals(rated.costs, { input: 0.45, cached: 0.03, output: 4.5 });
+  // No price book: the price is the cost (a margin of 0).
+  assertEquals([rated.price, rated.prices], [rated.cost, rated.costs]);
+  assertEquals(rated.rated, { cost: `models.dev ${catalog.fetched}`, price: "cost" });
+  // Its cached tokens at input's price would have come to 0.3, not 0.03.
+  assertEquals(rated.saved, { cost: 0.27, price: 0.27 });
   assertEquals(rated.unpriced, undefined);
 });
 
@@ -99,10 +103,13 @@ test("the app's rates win, by subject, then provider, and from their date", asyn
   assertEquals((await rate(books(cost), use("mine/model", q))).cost, 18);
 });
 
-test("price is the app's: its own rates or a markup; what nothing prices is flagged", async () => {
+test("price: the cost, a margin on it, or the app's own rates; what nothing prices is flagged", async () => {
   const price = {
-    "openai/*": { markup: 0.25 },
+    // A gross margin of 20%: the cost is 80% of the price.
+    "openai/*": { margin: 0.2 },
     "compute/terminal": { seconds: 0.12, per: 60 },
+    // 90%: ten times the cost.
+    "cloud/*": { margin: 0.9 },
   };
   const q = { input: MILLION, output: 0 };
   const marked = await rate(
@@ -110,6 +117,27 @@ test("price is the app's: its own rates or a markup; what nothing prices is flag
     use("openai/gpt-5.4-mini", q, "openai/gpt-5.4-mini"),
   );
   assertEquals([marked.cost, marked.price, marked.rated.price], [0.75, 0.9375, "app"]);
+  assertEquals(marked.prices, { input: 0.9375 });
+  const cloud = await rate(books({ "cloud/*": { seconds: 0.36, per: 3600 } }, price), {
+    ...use("cloud/small", { seconds: 600 }),
+    meter: "compute",
+  });
+  assertEquals([cloud.cost, cloud.price], [0.06, 0.6]);
+  // Nothing in the price book for it: at cost.
+  const atCost = await rate(
+    books(undefined, price),
+    use("anthropic/claude-haiku-5-5", q, "anthropic/claude-haiku-5-5"),
+  );
+  assertEquals([atCost.price, atCost.rated.price], [atCost.cost, "cost"]);
+  // A margin of 100% or more can't be: unpriced.
+  assertEquals(
+    (await rate(
+      books(undefined, { "*": { margin: 1 } }),
+      use("openai/gpt-5.4-mini", q, "openai/gpt-5.4-mini"),
+    ))
+      .unpriced,
+    ["price"],
+  );
   const terminal = await rate(books({ "compute/*": { seconds: 0.06, per: 60 } }, price), {
     ...use("compute/terminal", { seconds: 60 }),
     meter: "compute",
@@ -120,10 +148,10 @@ test("price is the app's: its own rates or a markup; what nothing prices is flag
     "cost",
     "price",
   ]);
-  // A unit with no price can't be priced either.
+  // A unit with no price can't be priced either (nor its price, at cost).
   assertEquals(
     (await rate(books({ "x/y": { input: 1 } }), use("x/y", { input: 1, seconds: 3 }))).unpriced,
-    ["cost"],
+    ["cost", "price"],
   );
 });
 
@@ -142,7 +170,8 @@ async function started(store: Store, more: Plugin[] = []) {
     resources: {
       provider: { script: { adapter: "script" } },
       cost: { "script/*": { input: 1, cached: 0.1, output: 2 } },
-      price: { "*": { markup: 1 } },
+      // Half the price is margin: twice the cost.
+      price: { "*": { margin: 0.5 } },
       agents: { lead: { instructions: "Roll.", model: "script/lead" } },
       tools: { roll: { description: "Roll.", run: () => 4 } },
     },
@@ -296,5 +325,82 @@ test("re-rating appends adjustments, so totals follow new rates", async () => {
     assertEquals(records.filter((r) => r.adjusts).length, 2);
   } finally {
     await second.close();
+  }
+});
+
+test("a use recorded before every use had a price is priced at its cost, and re-rated as such", async () => {
+  const path = tempFile();
+  // As the ledger kept one before: a cost, no price, nothing rated its price.
+  const old = definePlugin({
+    name: "old",
+    actions: {
+      "old.add": defineAction({
+        input: { type: "object" },
+        run: (ctx) =>
+          ctx.record("usage", {
+            meter: "llm",
+            subject: "script/lead",
+            quantities: { input: 1000, output: 100, cached: 600 },
+            cost: 660 / MILLION,
+            rated: { cost: "app" },
+            at: "2026-10-29T12:00:00.000Z",
+          }),
+      }),
+    },
+  });
+  const runtime = await started(await sqliteStore({ path }), [old]);
+  try {
+    await runtime.call("old.add", {});
+    const [total] = await runtime.query<{ cost: number; price: number; uses: number }[]>(
+      "usage.totals",
+      { filter: { meter: "llm" } },
+    );
+    assertEquals(total.uses, 1);
+    assertAlmostEquals(total.price, total.cost);
+    // Re-rated, it's at the app's price now (twice its cost), and once.
+    assertEquals(await runtime.call("usage.rerate", { filter: { meter: "llm" } }), { adjusted: 1 });
+    const [after] = await runtime.query<{ cost: number; price: number }[]>("usage.totals", {
+      filter: { meter: "llm" },
+    });
+    assertAlmostEquals(after.cost, 660 / MILLION);
+    assertAlmostEquals(after.price, 1320 / MILLION);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("totals sum cost and price by part, and what caching saved; people see prices only", async () => {
+  const runtime = await started(await sqliteStore({ path: tempFile() }));
+  const ana = { kind: "person", id: "ana" };
+  try {
+    await runtime.call("chat.send", { text: "roll" }, { actor: ana });
+    await runtime.idle();
+    const [all] = await runtime.query<
+      {
+        cost: number;
+        price: number;
+        costs: Record<string, number>;
+        prices: Record<string, number>;
+        saved: { cost: number; price: number };
+      }[]
+    >("usage.totals", {});
+    // Two calls of 400 uncached × 1, 600 cached × 0.1 and 100 output × 2, per million.
+    assertEquals(all.costs, { input: 800 / MILLION, cached: 120 / MILLION, output: 400 / MILLION });
+    assertEquals(all.prices, {
+      input: 1600 / MILLION,
+      cached: 240 / MILLION,
+      output: 800 / MILLION,
+    });
+    // Cached at input's price, 2 × 600 × (1 − 0.1).
+    assertEquals(all.saved, { cost: 1080 / MILLION, price: 2160 / MILLION });
+    const [mine] = await runtime.query<Record<string, unknown>[]>("usage.totals", {}, {
+      actor: ana,
+    });
+    assertEquals([mine.cost, mine.costs, mine.saved], [undefined, undefined, {
+      price: 2160 / MILLION,
+    }]);
+    assertAlmostEquals(mine.price as number, 2640 / MILLION);
+  } finally {
+    await runtime.close();
   }
 });

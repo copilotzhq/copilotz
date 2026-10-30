@@ -6,7 +6,7 @@ import {
   type ReadCollection,
 } from "../../../../runtime/mod.ts";
 import { rollupsOf } from "../shared/settings.ts";
-import { totals } from "../shared/totals.ts";
+import { priceOnly, totals } from "../shared/totals.ts";
 
 export const usageSchema = {
   type: "object",
@@ -20,7 +20,19 @@ export const usageSchema = {
     /** USD. */
     cost: { type: "number" },
     price: { type: "number" },
-    /** Where each came from: `app`, or the catalog and its date. */
+    /** Each by part (USD): the units, `input` and `output` less the parts priced apart. */
+    costs: { type: "object", additionalProperties: { type: "number" } },
+    prices: { type: "object", additionalProperties: { type: "number" } },
+    /** What caching saved (USD), less what writing the cache cost more. */
+    saved: {
+      type: "object",
+      properties: { cost: { type: "number" }, price: { type: "number" } },
+    },
+    /**
+     * Who rated each: `app`, or the catalog and its date; `cost` for a price at
+     * cost. A record without a price's (from before every use had one) is
+     * priced at its cost.
+     */
     rated: { type: "object" },
     /** What nothing priced: `cost`, `price`. */
     unpriced: { type: "array", items: { type: "string" } },
@@ -53,20 +65,23 @@ export const usage = defineCollection({
      * days come from their rollups when those hold what's asked.
      */
     totals: {
-      // A person sees their own usage; the system, everyone's.
+      // A person sees their own usage, at its price; the system, everyone's, cost too.
       allow: (actor) => actor.kind === "person",
-      run: (
+      run: async (
         records,
         params: { filter?: Filter; by?: string[]; units?: string[] } = {},
         ctx,
-      ) =>
-        totals(
+      ) => {
+        const person = ctx.actor?.kind === "person";
+        const found = await totals(
           records as ReadCollection<UsageRecord>,
-          ctx.actor?.kind === "person"
-            ? { ...params, filter: { ...params.filter, "tags.person": ctx.actor.id } }
+          person
+            ? { ...params, filter: { ...params.filter, "tags.person": ctx.actor!.id } }
             : params,
           { db: ctx.db, rollups: rollupsOf(ctx) },
-        ),
+        );
+        return person ? found.map(priceOnly) : found;
+      },
     },
     /** The records matching `filter`, newest first. */
     list: (records, params: { filter?: Filter; limit?: number } = {}) =>

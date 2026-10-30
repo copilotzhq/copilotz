@@ -1,3 +1,20 @@
+## Unreleased
+
+- **Usage: every use has a price.** It's the cost (a margin of 0) unless the app's price book says
+  otherwise: rates of its own, or a gross `margin` on the cost (`{ margin: 0.9 }` is ten times the
+  cost), from its `since` date on. `markup` is gone: a margin says it. Uses recorded before count at
+  their cost, in totals and when re-rated.
+- **Usage: by part.** Each record keeps its cost and price by part (input, cache reads, cache
+  writes, output, reasoning…) and what caching saved; totals and rollups sum them.
+- **Usage: people see prices.** `usage.totals`, `usage.org` and `usage.calls` give people prices
+  only; costs (and so margins) only platform staff and the system. Each of `usage.org` and
+  `usage.calls` says whether it shows costs (`costs`).
+- **Usage page and `/usage`:** spend (the price) everywhere, with caching visible: hit rate, what
+  reading and writing the cache was charged, and what it saved, overall and by model; cached tokens
+  in the chart and in each call. Platform staff also see cost and gross margin, marked staff-only.
+- **Models:** OpenAI-compatible providers' cache reads and writes are read as each reports them
+  (DeepSeek's cache hits, Moonshot's cached tokens, OpenRouter's cache writes).
+
 ## 1.0.0-rc.3 — 2026-10-30
 
 - **Computers:** connecting one more app (`computer install <app> --code`) no longer stops the

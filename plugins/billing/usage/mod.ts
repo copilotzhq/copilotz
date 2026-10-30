@@ -11,9 +11,14 @@
  *   - its **cost** comes from `resources.cost` (the app's rates: negotiated,
  *     a subscription at 0, a terminal's seconds), else from the models.dev
  *     catalog for models it knows;
- *   - its **price** (what the app charges) comes from `resources.price` only:
- *     rates of its own, or a `markup` on the cost. Nothing ships one.
- *   - A use nothing prices is recorded all the same, and flagged `unpriced`.
+ *   - its **price** (what the app charges) is its cost (a margin of 0) unless
+ *     `resources.price` says: rates of its own, or a gross `margin` on the
+ *     cost (`{ "*": { margin: 0.2 } }`; 0.9 is ten times the cost);
+ *   - each is kept by part (input, cached, cacheWrite, output, reasoning,
+ *     seconds…), with what caching saved;
+ *   - a use nothing prices is recorded all the same, and flagged `unpriced`.
+ * - **Who sees what:** people see prices (what they're charged); costs, and
+ *   so margins, only platform staff and the system.
  * - **Totals** by any field or tag: `runtime.query("usage.totals", { filter, by })`.
  *   Whole closed days come from rollups (`usage.close`, scheduled daily),
  *   the rest from the records, with the same result.
@@ -21,7 +26,7 @@
  *   adjustments for what new rates would change, so totals follow.
  * - **Across an org** (where the app serves many): `usage.org` (totals) and
  *   `usage.calls` (the latest uses) give its owners and admins everyone's,
- *   and anyone else their own. Its web front end (web.tsx) is the org
+ *   and anyone else their own, at their price (cost too for staff). Its web front end (web.tsx) is the org
  *   page's Usage section.
  *
  * Rates are keyed by subject (`"openai/gpt-6.1-sol"`), then by provider
@@ -43,7 +48,15 @@ import { ledger } from "./resources/ledger.ts";
 
 export type { Use } from "./shared/use.ts";
 export type { UsageRecord } from "./collections/usage.ts";
-export { priced, type PriceRate, type Quantities, type Rate, rate } from "./shared/rate.ts";
+export {
+  type Parts,
+  partsOf,
+  priced,
+  type PriceRate,
+  type Quantities,
+  type Rate,
+  rate,
+} from "./shared/rate.ts";
 export { type Rollups, type Totals, totals, UNITS } from "./shared/totals.ts";
 
 export type { UsageSettings } from "./shared/settings.ts";

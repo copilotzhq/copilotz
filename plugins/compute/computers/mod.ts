@@ -23,11 +23,14 @@ import { admitAction } from "./actions/admit.ts";
 import { approveAction } from "./actions/approve.ts";
 import { codeAction } from "./actions/code.ts";
 import { defaultAction } from "./actions/default.ts";
+import { enrollmentAction } from "./actions/enrollment.ts";
 import { forgetAction } from "./actions/forget.ts";
 import { moveAction } from "./actions/move.ts";
 import { goneAction } from "./actions/gone.ts";
+import { provisionAction } from "./actions/provision.ts";
 import { readyAction } from "./actions/ready.ts";
 import { renameAction } from "./actions/rename.ts";
+import { runningAction } from "./actions/running.ts";
 import { shareAction } from "./actions/share.ts";
 import { unshareAction } from "./actions/unshare.ts";
 import { workAction } from "./actions/work.ts";
@@ -46,6 +49,7 @@ export type { Approval } from "./collections/approval.ts";
 export type { Computer } from "./collections/computer.ts";
 export type { Desk } from "./collections/desk.ts";
 export type { ComputersSettings } from "./shared/settings.ts";
+export type { ComputerWake } from "./shared/wake.ts";
 
 /** Collections a person reaches only their own of. */
 const OWNED = new Set(["computer", "enrollment", "approval", "grant"]);
@@ -76,6 +80,10 @@ export const computers: Plugin = definePlugin({
     "computer.move": moveAction,
     "computer.approve": approveAction,
     "computer.work": workAction,
+    // Computers the app makes (cloud computers): the system's.
+    "computer.provision": provisionAction,
+    "computer.enrollment": enrollmentAction,
+    "computer.running": runningAction,
   },
   // Agents with computer tools know, each turn, whose computer they work on and what waits for a yes.
   views: contextViews,

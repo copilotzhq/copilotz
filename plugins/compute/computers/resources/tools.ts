@@ -9,7 +9,7 @@ import type { Tool, ToolContext } from "../../../agents/chat/contract.ts";
 import { tool } from "../../../agents/chat/contract.ts";
 import { allowed } from "../shared/ask.ts";
 import type { Asked } from "../shared/settings.ts";
-import { whereFor } from "../shared/where.ts";
+import { touch, whereAwake } from "../shared/wake.ts";
 import { browserActionSchema, browserDescription } from "../shared/browser.ts";
 import { WORK } from "../shared/workloads.ts";
 
@@ -30,7 +30,8 @@ async function on(
   input: Record<string, unknown>,
   asked?: { kind: Asked; detail: string; preview?: string },
 ): Promise<unknown> {
-  const where = await whereFor(ctx, ctx.thread, `agent:${ctx.agent}`);
+  // A computer that sleeps (a cloud computer) is woken first.
+  const where = await whereAwake(ctx, ctx.thread, `agent:${ctx.agent}`);
   if ("missing" in where) return where.missing;
   if (asked) {
     const may = await allowed(ctx, {
@@ -48,6 +49,8 @@ async function on(
     });
     if (may !== true) return may;
   }
+  // It was used: it stays awake a while (alongside the work, which doesn't wait on it).
+  const touched = touch(ctx, where.desk.computer);
   try {
     return await ctx.workers.call("computer", where.desk.computer, work, {
       ...input,
@@ -55,6 +58,8 @@ async function on(
     });
   } catch (error) {
     return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    await touched;
   }
 }
 

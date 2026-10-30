@@ -139,6 +139,13 @@ export type PoolAssign = {
   /** Its secret, the first time (written to its state on the disk), and its name. */
   secret?: string;
   name?: string;
+  /**
+   * An enrollment code, the first time: the computer connects with it
+   * (`computer:code:<code>`), and the app's `computer.enrolled` gives it its
+   * id and secret, which it keeps on the disk. The program uses this, not
+   * `secret`.
+   */
+  code?: string;
   /** Format the disk first (its first wake). */
   format?: boolean;
 };

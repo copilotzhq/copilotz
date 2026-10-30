@@ -11,10 +11,22 @@
  */
 import { definePlugin } from "../../runtime/mod.ts";
 import { models } from "../../plugins/models/mod.ts";
-import { chat, history, memory, memoryExtraction, team, tool } from "../../plugins/agents/mod.ts";
+import {
+  chat,
+  history,
+  memory,
+  memoryExtraction,
+  planning,
+  routines,
+  skills,
+  team,
+  tool,
+} from "../../plugins/agents/mod.ts";
 import { usage } from "../../plugins/billing/mod.ts";
 import { terminalPlugin } from "../../plugins/interfaces/terminal/mod.ts";
-import { access } from "../../plugins/access/mod.ts";
+import { api } from "../../plugins/interfaces/api/mod.ts";
+import { whatsapp } from "../../plugins/interfaces/whatsapp/mod.ts";
+import { access, accounts } from "../../plugins/access/mod.ts";
 import { computers } from "../../plugins/compute/mod.ts";
 import { notes } from "./notes.ts";
 
@@ -31,6 +43,9 @@ const main = apiKey
   ? Deno.env.get("MODEL") ?? "openai/gpt-6.1-sol"
   : { model: "fake/echo", input: ["image", "pdf"] };
 const cheap = apiKey ? Deno.env.get("CHEAP_MODEL") ?? "openai/gpt-5.4-mini" : "fake/echo";
+// On the ChatGPT plan of whom an agent works for, once they connect it (Connected accounts);
+// else on the app's own model.
+const onPlan = ["chatgpt/gpt-6.1-sol", main];
 
 /** What agents do on the person's computer (the computers plugin's tools). */
 const COMPUTER = [
@@ -80,7 +95,7 @@ const app = definePlugin({
           "Before anything that can't be undone, or when only the user can decide, ask the user " +
           "with send_message and wait for their answer.",
         ].join("\n"),
-        model: main,
+        model: onPlan,
         ...(apiKey ? { effort: "low" } : {}),
         tools: [
           "clock",
@@ -99,9 +114,37 @@ const app = definePlugin({
           "bullet points of findings and say what you're unsure about. Search the web and " +
           "read pages with web_search and browser when the user's computer is connected; " +
           "otherwise say you couldn't look.",
-        model: main,
+        model: onPlan,
         ...(apiKey ? { effort: "medium" } : {}),
         tools: ["clock", "web_search", "browser"],
+      },
+    },
+    // Know-how agents read only when a task needs it: the planning skill the skills plugin
+    // ships, and one of the app's own, with a file it reads when it's used.
+    skills: {
+      planning,
+      "dice-games": {
+        description: "Run a quick dice game with the people here: pick one, explain it in a " +
+          "line, roll for each turn and keep score. Use it when someone wants to play.",
+        instructions: [
+          "# Dice games",
+          "",
+          "1. Read `games.md` and offer two games that suit how many are playing, or play the " +
+          "one asked for.",
+          "2. Say the rules in one or two lines.",
+          "3. Roll with roll_dice on each turn, saying whose it is and what came up.",
+          "4. Keep the score in every message, as a short table, and say who won at the end.",
+        ].join("\n"),
+        files: {
+          "games.md": [
+            "# Games",
+            "",
+            "- **Pig** (2+): roll a die as often as you like; a 1 loses the turn's points. First " +
+            "to 50 wins.",
+            "- **High roll** (2+): everyone rolls a 20-sided die once; highest wins. Ties roll again.",
+            "- **Twenty-one** (1+): roll a die and add it up; stop when you like. Over 21 loses.",
+          ].join("\n"),
+        },
       },
     },
     tools: {
@@ -139,13 +182,21 @@ export const plugins = [
   ...(apiKey ? [memoryExtraction] : []),
   // Who reaches what: spaces, members (people and agents), and the rules conversations keep to.
   ...access,
+  // Outside accounts people connect for their agents: a ChatGPT plan they run on.
+  accounts,
   // Agents people make, beside the app's (below).
   team,
+  // Know-how agents read when a task needs it, and messages sent to them on a schedule.
+  skills,
+  routines,
   // Notes in spaces, and the tools agents use them with.
   notes,
   // People's computers, where agents run commands, browse and search (deno task computer).
   computers,
   // The terminal's data: where each person is, what their commands printed.
   terminalPlugin,
+  // Code calls the app with developer keys (/api/); people message their agents on WhatsApp.
+  api,
+  whatsapp,
   app,
 ];

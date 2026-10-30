@@ -6,7 +6,9 @@
  * default look (its fonts and icons served by the host itself);
  * `BRAND=harbor` serves the same app as another brand (harbor.tsx: one theme
  * resource, with its own logo), with its fonts from this server (fonts/, as
- * the app's assets), not Google's. People connect their computers here too
+ * the app's assets), not Google's. People connect their computers here too:
+ * with the computer program's release built (`node scripts/computer/build.ts`),
+ * the app serves it, and the connect flow installs it; else from this code
  * (`deno task computer connect http://127.0.0.1:<port> --code <code>`).
  *
  *   [BRAND=harbor] deno task web [--port=8790] [--sqlite[=path]]
@@ -20,6 +22,8 @@ import { googleSignIn } from "../../plugins/access/mod.ts";
 import { createTickets } from "../../hosts/web/tickets.ts";
 import { type Asset, type Code, socket, webServer } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
+import { computerDownloads } from "../../plugins/compute/computers/resources/downloads.ts";
+import { VERSION } from "../../plugins/compute/computers/program/version.ts";
 import { plugins } from "./app.ts";
 import { harbor } from "./brands.ts";
 
@@ -56,6 +60,12 @@ const assets: Record<string, Asset> = Object.fromEntries(
   ),
 );
 
+/** The computer program's release, when it's been built: served at /computer/download/. */
+const release = new URL(`../../dist/computer/${VERSION}/`, import.meta.url);
+const downloads = await Deno.stat(release).then(() => true, () => false)
+  ? [await computerDownloads({ dir: release.pathname })]
+  : [];
+
 const tickets = createTickets();
 const runtime = await createRuntime({
   store: sqlite ? await sqliteStore({ path: sqlite }) : memoryStore(),
@@ -69,6 +79,7 @@ const runtime = await createRuntime({
       name: "computers-here",
       resources: { computers: { url: `http://127.0.0.1:${port}` } },
     }),
+    ...downloads,
   ],
   executors: 2,
   transports: [socket],

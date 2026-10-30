@@ -11,8 +11,8 @@
   Compute Engine (`gceHost`: managed instance groups as pools, pd-balanced disks, VMs admitted by
   their Google identity tokens) and a local one for development and tests. Metered under `computer`
   as `cloud/<size>` (VM seconds), `cloud/disk` and `cloud/snapshot` (GB-hours).
-- **Computer program:** `computer pool --app <url>`, a free VM of an app's pool: it waits to serve
-  a computer, mounts its disk, and runs it. scripts/cloud has a Google Cloud project's setup and the
+- **Computer program:** `computer pool --app <url>`, a free VM of an app's pool: it waits to serve a
+  computer, mounts its disk, and runs it. scripts/cloud has a Google Cloud project's setup and the
   pool VMs' startup script.
 - **Previews:** what a job serves, at `https://<computer>-preview.<domain>`, carried to the computer
   over its own connection (no inbound network), streamed both ways (`computer.http`). For a space's

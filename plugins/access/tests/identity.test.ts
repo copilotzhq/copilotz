@@ -153,3 +153,17 @@ test("Google sign-in refuses tokens for another app, expired, unverified, forged
     await rt.close();
   }
 });
+
+test("a session's or a key's secret never lands in the log", async () => {
+  const store = memoryStore();
+  const rt = await createRuntime({ store, plugins: [...access] });
+  try {
+    const { session } = await rt.call<{ session: string }>("session.start", { person: "ana" });
+    const ana = (await rt.query("credential.actor", { secret: session })) as Actor;
+    const { key } = await rt.call<{ key: string }>("key.create", { name: "ci" }, { actor: ana });
+    const logged = JSON.stringify(await store.events(0, 1000));
+    assertEquals([logged.includes(session), logged.includes(key)], [false, false]);
+  } finally {
+    await rt.close();
+  }
+});

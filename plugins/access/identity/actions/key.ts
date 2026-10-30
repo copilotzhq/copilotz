@@ -7,6 +7,8 @@ import { hash, secret } from "../collections/credential.ts";
 
 export const createKey = defineAction({
   description: "Makes a key that acts as you; its secret is shown once",
+  // Unrecorded: its result is the secret, which must never land in the log.
+  record: false,
   input: {
     type: "object",
     properties: { name: { type: "string", minLength: 1 } },

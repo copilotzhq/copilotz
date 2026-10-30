@@ -11,6 +11,8 @@ const LASTS = 30 * 86_400_000;
 
 export const startSession = defineAction({
   description: "Starts a session for a verified person; its secret is returned once",
+  // Unrecorded: its result is the secret, which must never land in the log.
+  record: false,
   input: {
     type: "object",
     // `staff`: platform staff entering an org, who reach all of it (on the record as them).

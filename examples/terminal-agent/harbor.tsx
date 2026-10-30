@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The terminal agent in a browser, as another brand, "Harbor": the same
  * front ends, and one `theme` resource (brands.ts: its colours, fonts and

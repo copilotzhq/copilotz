@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The gallery's sound: the toolkit's `AudioPlayer` on each surface and its
  * `Waveform` (to seek, and live), then chat's voice messages: the

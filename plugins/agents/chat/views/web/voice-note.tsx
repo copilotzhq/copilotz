@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A voice message, or audio sent with a message: its player (in the
  * reader's bubble when it's theirs, muted when it's someone else's) and,

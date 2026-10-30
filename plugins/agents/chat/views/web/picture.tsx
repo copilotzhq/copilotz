@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * An image on a message, from where it's served (`src`): a preview that
  * opens larger, over the page, until Escape or a click. One that won't load

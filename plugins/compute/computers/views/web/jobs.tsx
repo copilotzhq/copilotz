@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Jobs in a space's folder: commands that keep running (a dev server, a
  * watcher, a long build), everyone's, the agents' too (`jobs.list` with

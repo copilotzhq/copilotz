@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The web host, in the browser: it connects as the signed-in person (a
  * ticket from `/connect`, which trades the session cookie), observes the web

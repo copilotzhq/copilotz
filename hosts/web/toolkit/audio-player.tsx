@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A recording to listen to: play and pause, its waveform (from `peaks`,
  * flat without) as the progress bar, which seeks by a click, a drag or the

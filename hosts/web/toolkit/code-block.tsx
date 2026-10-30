@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Code or output, in mono, on a quiet surface: a `title` row over it (a
  * command, a file's path) with `actions` at its end, the text, and a

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Your phone and a number: linking it (a code to send from WhatsApp, with a
  * link that opens WhatsApp with it typed in, and how long it has left; it

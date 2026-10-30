@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The form a skill is written with, new or changed: from a SKILL.md
  * (dropped, uploaded with its folder, or pasted: its name, purpose and

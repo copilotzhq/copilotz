@@ -1,16 +1,52 @@
 {
   "name": "@copilotz/copilotz",
   "version": "1.0.0-rc.1",
-  "exports": "./runtime/mod.ts",
+  "exports": {
+    ".": "./runtime/mod.ts",
+    "./stores/memory": "./stores/memory/mod.ts",
+    "./stores/sqlite": "./stores/sql/sqlite/mod.ts",
+    "./stores/postgres": "./stores/sql/postgres/mod.ts",
+    "./stores/latency": "./stores/latency/mod.ts",
+    "./blobs/files": "./stores/blobs/files/mod.ts",
+    "./blobs/http": "./stores/blobs/http/mod.ts",
+    "./plugins/models": "./plugins/models/mod.ts",
+    "./plugins/agents": "./plugins/agents/mod.ts",
+    "./plugins/agents/web": "./plugins/agents/web.tsx",
+    "./plugins/agents/terminal": "./plugins/agents/terminal.ts",
+    "./plugins/access": "./plugins/access/mod.ts",
+    "./plugins/access/web": "./plugins/access/web.tsx",
+    "./plugins/access/terminal": "./plugins/access/terminal.ts",
+    "./plugins/billing": "./plugins/billing/mod.ts",
+    "./plugins/billing/web": "./plugins/billing/usage/web.tsx",
+    "./plugins/billing/terminal": "./plugins/billing/terminal.ts",
+    "./plugins/compute": "./plugins/compute/mod.ts",
+    "./plugins/compute/web": "./plugins/compute/computers/web.tsx",
+    "./plugins/compute/terminal": "./plugins/compute/computers/terminal.ts",
+    "./plugins/compute/downloads": "./plugins/compute/computers/resources/downloads.ts",
+    "./plugins/interfaces": "./plugins/interfaces/mod.ts",
+    "./plugins/interfaces/web": "./plugins/interfaces/web.tsx",
+    "./plugins/interfaces/terminal": "./plugins/interfaces/terminal/terminal.ts",
+    "./web": "./hosts/web/mod.ts",
+    "./web/server": "./hosts/web/server.ts",
+    "./web/tickets": "./hosts/web/tickets.ts",
+    "./web/theme": "./hosts/web/theme/css.ts",
+    "./web/node": "./hosts/web/node/mod.ts",
+    "./orgs": "./hosts/orgs/mod.ts",
+    "./terminal": "./hosts/terminal/mod.ts",
+    "./exporters": "./exporters/mod.ts",
+    "./testing": "./testing/mod.ts"
+  },
   "tasks": {
     "chat": "deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/chat.ts",
     "test": "deno test -A --unstable-no-legacy-abort",
-    "check": "deno check scripts/catalog.ts runtime/mod.ts stores/memory/mod.ts stores/sql/postgres/mod.ts plugins/models/mod.ts plugins/agents/mod.ts plugins/billing/mod.ts plugins/access/mod.ts plugins/access/terminal.ts exporters/mod.ts hosts/terminal/mod.ts plugins/agents/terminal.ts plugins/billing/terminal.ts plugins/interfaces/terminal/terminal.ts examples/terminal-agent/chat.ts examples/terminal-agent/executor.ts examples/terminal-agent/bench.ts examples/terminal-agent/web.ts examples/terminal-agent/browser.tsx examples/terminal-agent/harbor.tsx plugins/compute/computers/program/main.ts",
+    "check": "deno check .",
     "computer": "deno run -A plugins/compute/computers/program/main.ts",
     "executor": "deno run -A --env-file=.env examples/terminal-agent/executor.ts",
     "bench": "deno run -A --unstable-no-legacy-abort examples/terminal-agent/bench.ts",
     "catalog": "deno run --allow-net=models.dev --allow-read=plugins/models/shared/catalog.json --allow-write=plugins/models/shared/catalog.json scripts/catalog.ts",
-    "web": "deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/web.ts"
+    "web": "deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/web.ts",
+    "web:node": "node examples/web-node/server.ts",
+    "build:npm": "node scripts/npm/build.ts"
   },
   "imports": {
     "@cfworker/json-schema": "npm:@cfworker/json-schema@4.1.1",
@@ -29,12 +65,35 @@
     "@inkjs/ui": "npm:@inkjs/ui@2.0.0",
     "temml": "npm:temml@0.14.0",
     "@xterm/xterm": "npm:@xterm/xterm@6.0.0",
-    "@xterm/addon-fit": "npm:@xterm/addon-fit@0.11.0"
+    "@xterm/addon-fit": "npm:@xterm/addon-fit@0.11.0",
+    "esbuild": "npm:esbuild@0.28.2"
   },
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "react",
-    "jsxImportSourceTypes": "@types/react"
+    "jsxImportSourceTypes": "@types/react",
+    "lib": [
+      "deno.window",
+      "dom",
+      "dom.iterable",
+      "dom.asynciterable"
+    ]
+  },
+  "exclude": [
+    "dist/"
+  ],
+  "publish": {
+    "exclude": [
+      "**/tests/",
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "examples/",
+      "scripts/",
+      ".github/",
+      "package.json",
+      "package-lock.json",
+      ".npmrc"
+    ]
   },
   "fmt": {
     "lineWidth": 100,

@@ -1,13 +1,19 @@
 # The same suite on every runtime Copilotz supports, against PostgreSQL (with
-# pgvector), PGlite, SQLite and memory stores.
+# pgvector), PGlite, SQLite and memory stores; Node's also on macOS and Windows,
+# where the computer program runs too. The publish workflow runs this one before
+# it publishes a release.
 name: Test
 
 on:
+  # Branches only: a release tag runs it through the publish workflow.
   push:
+    branches: ["**"]
   pull_request:
+  workflow_call:
 
 jobs:
   test:
+    name: ${{ matrix.runtime }}
     strategy:
       fail-fast: false
       matrix:
@@ -38,9 +44,53 @@ jobs:
         if: matrix.runtime == 'bun'
       - run: npm ci
         if: matrix.runtime != 'deno'
-      - run: deno task check && deno task test
+      - name: Format, types, tests, and the JSR package
         if: matrix.runtime == 'deno'
-      - run: npm test
+        run: |
+          deno fmt --check
+          deno task check
+          deno task test
+          deno publish --dry-run
+      - name: Tests, and the npm package (built, installed from its tarball, used)
         if: matrix.runtime == 'node'
+        run: |
+          npm test
+          npm run build
+          node scripts/npm/smoke.ts
       - run: bun test --timeout 60000
         if: matrix.runtime == 'bun'
+
+  # Node on the desktops people run the computer program on. GitHub runs service
+  # containers on Linux only, so these run without PostgreSQL (its tests skip).
+  node:
+    name: node (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm test
+        if: runner.os != 'Windows'
+      # Every test file but these, which can't run on Windows yet. Each finds files by
+      # `new URL(…, import.meta.url).pathname`, which is "/D:/…" there, not a path:
+      # `fileURLToPath` fixes it, and then its line goes.
+      # - testing/boundaries.test.ts, testing/styles.test.ts: the tree they read;
+      # - runtime/tests/runtime.test.ts: the remote executor it starts (one test of many).
+      # The computer program's tests mark what's POSIX-only themselves.
+      - name: npm test, on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          NOT_YET: |
+            testing/boundaries.test.ts
+            testing/styles.test.ts
+            runtime/tests/runtime.test.ts
+        run: |
+          files=$(git ls-files '*.test.ts' | grep -vxF -f <(printf '%s\n' "$NOT_YET" | sed '/^$/d'))
+          node --test --test-concurrency=1 $files

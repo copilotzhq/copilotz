@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The visitor's computer, as well as its browser says: its system, as the
  * program's releases name them (`darwin`, `linux`, `win32`), and, when it can

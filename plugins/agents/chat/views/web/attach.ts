@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /** Files chosen to send: read as `chat.send` takes them (base64), with a preview for images. */
 
 export type Attached = {

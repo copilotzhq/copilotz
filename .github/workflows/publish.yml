@@ -1,0 +1,80 @@
+# Publishes a Copilotz 1.x release. Pushing a tag `v1.*` (`v1.0.0-rc.1`,
+# `v1.0.0`, `v1.2.3`) checks that it names the version deno.json and
+# package.json say, runs the whole test workflow, then publishes that version
+# to JSR (`@copilotz/copilotz`, through GitHub's OIDC: no token) and to npm
+# (`copilotz`, built from the sources, with the `NPM_TOKEN` secret and
+# provenance). A version with a pre-release part (`-rc.1`) goes to npm's `next`
+# tag, so `npm install copilotz` keeps the last stable one. Nothing else
+# publishes: not a push, not a pull request, not a tag outside 1.x.
+name: Publish
+
+on:
+  push:
+    tags: ["v1.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: The tag is the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          deno=$(jq -r .version deno.json)
+          npm=$(jq -r .version package.json)
+          if [ "$version" != "$deno" ] || [ "$version" != "$npm" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, deno.json $deno, package.json $npm: they must agree"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then echo "tag=next" >> "$GITHUB_OUTPUT"; else echo "tag=latest" >> "$GITHUB_OUTPUT"; fi
+
+  test:
+    needs: version
+    uses: ./.github/workflows/test.yml
+
+  jsr:
+    name: JSR
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno publish
+
+  npm:
+    name: npm
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/npm/smoke.ts
+      - run: npm publish --provenance --access public --tag ${{ needs.version.outputs.tag }}
+        working-directory: dist/npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

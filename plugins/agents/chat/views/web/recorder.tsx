@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A voice message in the composer, as `record` has it (`state`). While it
  * records: a red dot, the time and how long it may run (how long it has

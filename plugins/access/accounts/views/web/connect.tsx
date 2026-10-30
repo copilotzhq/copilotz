@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Connecting an account, in a dialog. It starts the sign-in as it opens
  * (`account.connect`), so the link to it is a plain link: no popup to

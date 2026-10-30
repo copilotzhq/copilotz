@@ -1,15 +1,16 @@
 {
-  "name": "@copilotz/copilotz",
+  "name": "copilotz",
   "version": "1.0.0-rc.1",
   "private": true,
   "type": "module",
   "description": "Copilotz: one runtime for Node, Deno, Bun, Cloudflare Workers and the browser.",
   "engines": {
-    "node": ">=22.18"
+    "node": ">=24"
   },
   "scripts": {
     "test": "node --test --test-concurrency=1 \"**/*.test.ts\"",
-    "test:bun": "bun test --timeout 60000"
+    "test:bun": "bun test --timeout 60000",
+    "build": "node scripts/npm/build.ts"
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",
@@ -20,14 +21,17 @@
     "@xterm/xterm": "6.0.0",
     "croner": "10.0.1",
     "ink": "8.0.0",
+    "json-schema-to-ts": "3.1.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "temml": "0.14.0"
   },
   "devDependencies": {
     "@std/assert": "npm:@jsr/std__assert@1.0.19",
+    "@types/node": "24.19.2",
     "@types/react": "19.3.0",
-    "json-schema-to-ts": "3.1.1",
-    "@types/react-dom": "19.3.0"
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3"
   }
 }

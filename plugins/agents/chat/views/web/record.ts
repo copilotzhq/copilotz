@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Recording a voice message, started from the click that asks to (some
  * browsers, Safari among them, let sound start only from one). It asks for

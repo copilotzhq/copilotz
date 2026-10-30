@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Sound as bars, in the text's colour: a recording's `peaks` (its loudness,
  * 0 to 1) as `bars` bars (as many as fit, unless given) scaled to the

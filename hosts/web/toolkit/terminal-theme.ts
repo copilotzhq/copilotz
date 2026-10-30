@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A terminal's colours, from the theme's tokens: its surface and text, the
  * cursor and selection, and the sixteen ANSI colours, each a CSS value over

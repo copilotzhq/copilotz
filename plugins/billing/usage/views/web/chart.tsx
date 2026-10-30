@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A period, day by day: one column per day of what's measured (cost,
  * tokens, calls), in the theme's first chart colour, on hairline gridlines

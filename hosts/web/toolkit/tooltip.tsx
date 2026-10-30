@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A short line about the one element it wraps: shown after a moment under
  * the pointer, at once when Tab brings focus to it (not when a dialog or a

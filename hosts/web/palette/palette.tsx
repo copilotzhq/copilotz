@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The command palette: a field over a list, in a modal `<dialog>` near the
  * top of the page (the page behind it inert, focus kept in it and given

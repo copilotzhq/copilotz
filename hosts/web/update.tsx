@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * "A new version is ready": a quiet card at the foot of the page once the
  * service worker has a new version of the app (see `install.ts`), to

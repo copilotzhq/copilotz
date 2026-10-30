@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The terminal agent, in a browser: the web host with the app's front ends
  * (front.ts), in the default theme, Copilotz's. Bundled by web.ts.

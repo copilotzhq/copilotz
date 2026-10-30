@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Files in a space's folder: a folder at a time, with breadcrumbs back up;
  * folders first, then files, each with its size and when it changed, and a

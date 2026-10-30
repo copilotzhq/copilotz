@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * What skills offer in the command palette (kind `skill.palette`, the web
  * shell's `palette` resource), for where the person is and what's typed:

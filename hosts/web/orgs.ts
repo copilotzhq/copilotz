@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Orgs, for the browser: what the server says of the orgs the signed-in
  * person belongs to, when it serves many behind one address (`hosts/orgs`),

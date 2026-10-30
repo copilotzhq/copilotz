@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A space's WhatsApp (kind `whatsapp.space`: its WhatsApp tab, item
  * `{ _id }`, the space; spaces' `spaceTabs`): the number connected to it,

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Choices that pop over a field as someone types (an `@name` in a message):
  * a listbox in the top layer, placed by script beside what it's for

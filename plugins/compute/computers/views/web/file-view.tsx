@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A file, open: its name, size and when it changed; text with its lines
  * numbered, an image to look at (an SVG too, its text a tap away), or, for

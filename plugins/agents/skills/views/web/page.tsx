@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A skill's page (kind `skill`, at `/skill/<id>`; the app's are
  * `app:<name>`): its name, where it's from and what it's for, then what it

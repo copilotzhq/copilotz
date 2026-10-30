@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A new routine in a space: the form, starting from what's usual (every
  * weekday at nine, where the person is; the agent that answers new chats

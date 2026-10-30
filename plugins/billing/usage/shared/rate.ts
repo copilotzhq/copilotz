@@ -79,8 +79,16 @@ export function priced(quantities: Quantities, rate: Rate): number | undefined {
   return total / (rate.per ?? 1_000_000);
 }
 
+/** A use, rated: its cost and price (USD), who rated each, and what wasn't. */
+export type Rating = {
+  cost?: number;
+  price?: number;
+  rated: { cost?: string; price?: string };
+  unpriced?: string[];
+};
+
 /** Rates a use with the books in force at its time. */
-export async function rate(ctx: Books, use: Use & { at: string }) {
+export async function rate(ctx: Books, use: Use & { at: string }): Promise<Rating> {
   const costs = ctx.resources.cost as Record<string, unknown> | undefined;
   const prices = ctx.resources.price as Record<string, unknown> | undefined;
   let cost: number | undefined;

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A menu of actions behind a button: an icon button (`icon`, "more" by
  * default) named by `label`, a button that says `text`, or one of the front

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The org's usage (kind `usage.org`, a section of the org's page, the web
  * shell's `orgSettings`), where the app serves many orgs: for a period (7,

@@ -15,7 +15,7 @@ const day = (date: Date, now: number) =>
     ...(date.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }),
   });
 
-export function ago(date: Date, now = Date.now(), long = false): string {
+export function ago(date: Date, now: number = Date.now(), long: boolean = false): string {
   const seconds = (now - date.getTime()) / 1000;
   if (seconds < -45) return ahead(date, now, long);
   if (seconds < 45) return long ? "just now" : "now";

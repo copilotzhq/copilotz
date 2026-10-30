@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A computer's page: its header (the name, renamed in place; online, or
  * when it was last seen; what it is; a menu to rename or forget it, which

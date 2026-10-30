@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The page's side of the app being installable: it registers the service
  * worker (`/sw.js`, see `pwa.ts`), asks it now and then whether a new

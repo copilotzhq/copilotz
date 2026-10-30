@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Where you type. Enter sends, Shift+Enter starts a new line, Escape stops
  * the agents working. It grows with what you write, and takes files from the

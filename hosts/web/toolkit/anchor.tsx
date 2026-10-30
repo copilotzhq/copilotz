@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Keeps a popover beside what it belongs to while it's open (a menu under
  * its button, a tooltip over what it explains), by script: placed when it

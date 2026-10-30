@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The platform console (kind `console`, at `/console`), for staff where the
  * app serves many orgs: every org, with what it last reported (its people,

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Signing in, before anyone is connected: with Google, or by name on this
  * machine when the server allows it (`dev`). Either sets the session cookie;

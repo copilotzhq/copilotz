@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A space's computers (its desks), as its Computer tab lists them: each with
  * whether it's online, whose it is, and whether it's the one agents use

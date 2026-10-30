@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A terminal, for a shell that runs a line at a time (not a PTY): xterm.js
  * in the theme's colours (`terminal-theme.ts`, light and dark), filling its

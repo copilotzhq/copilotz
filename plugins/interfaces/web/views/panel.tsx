@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The side panel, for a page that offers it (the `panel` resource): its
  * button at the page's top right, and the panel itself, its View shown only

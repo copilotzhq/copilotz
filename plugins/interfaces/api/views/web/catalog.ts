@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Every Action the app has, as the API's reference says them (`GET /api/`
  * from the app's own page, signed in): each one's description and input,

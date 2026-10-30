@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The line between two parts of a page that a person drags to share the
  * room differently: a side panel's edge. It's the browser's separator, so a

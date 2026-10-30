@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A key's reference, as `GET /api/` says it with the key: each Action it may
  * call (where, what it does, its input's fields), its queries and Views,

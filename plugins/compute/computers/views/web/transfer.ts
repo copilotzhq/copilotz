@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Files off the computer, for the browser: what kind a file is by its name
  * (an image, and which), a whole file read in parts (`files.read` answers

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A `<dialog>` shown modally while `open` (the page behind it inert, focus
  * kept inside and given back after), for `Dialog` and `Drawer`. Opened, focus

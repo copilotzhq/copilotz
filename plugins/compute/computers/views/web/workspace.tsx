@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A computer's workspace, in one space's folder: which of the spaces it's
  * in (its desks: the one the person works in, unless they pick another; one

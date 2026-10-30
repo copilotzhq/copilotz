@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Orgs in the shell, when the app serves many (`useOrgs`): the switcher at
  * the top of the sidebar, where the app's identity sits (the org you're in,

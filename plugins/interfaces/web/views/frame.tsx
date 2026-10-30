@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The shell's frame: the sidebar beside the main area; on a phone, the
  * sidebar is a drawer (the toolkit's, modal) that the menu button opens.

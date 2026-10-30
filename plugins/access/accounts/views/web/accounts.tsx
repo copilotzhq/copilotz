@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Connected accounts (kind `accounts`, at `/accounts`): each provider the
  * app offers, as a card (`account.providers`), with the person's account

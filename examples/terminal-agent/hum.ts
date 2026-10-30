@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A few seconds of sound for the gallery to play: a hum that swells and
  * fades as speech does, as a WAV, with its peaks (64, 0 to 1) as a

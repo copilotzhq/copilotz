@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Something that opens beside its button and holds more than a menu's
  * items: an org switcher (orgs with their faces, invitations to answer in

@@ -1,0 +1,35 @@
+# Weekly: refresh the models.dev snapshot (plugins/models/shared/catalog.json) and
+# open a pull request when prices, models or limits changed. Nothing changed:
+# the script leaves the file as it is, and no pull request opens.
+name: Catalog
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno task catalog
+      - name: Tests that read the catalog
+        run: deno test -A --unstable-no-legacy-abort plugins/models/tests/choice.test.ts plugins/billing/tests/usage.test.ts
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: catalog/refresh
+          commit-message: "Catalog: refresh from models.dev"
+          title: "Catalog: refresh from models.dev"
+          body: |
+            Prices, models, reasoning levels or limits changed on models.dev.
+            Records already made keep the cost they were rated at; `usage.rerate`
+            appends adjustments if past usage should follow.
+          add-paths: plugins/models/shared/catalog.json

@@ -1,0 +1,142 @@
+/**
+ * Enrolling a computer: it connects with a one-time code, is told its id and
+ * secret, keeps them (readable only by its user), and connects as itself from
+ * then on. A code the app doesn't take is said so; so is a computer it forgot.
+ */
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { createRuntime } from "../../../runtime/mod.ts";
+import { memoryStore } from "../../../stores/memory/mod.ts";
+import { runtime, tempDir, test } from "../../../testing/mod.ts";
+import { startComputer } from "../computers/program/computer.ts";
+import { loadState, saveState, socketUrl, windowsSetting } from "../computers/program/state.ts";
+import { VERSION } from "../computers/program/version.ts";
+import { type Info, WORK } from "../computers/shared/workloads.ts";
+import { CODE, computers, SECRET, setup, until } from "./program-setup.ts";
+
+test("a computer enrolls with a code, keeps its id and secret, and connects as itself after", async () => {
+  await setup(async ({ rt, computer, statePath, start, work, url, root }) => {
+    await computer.ready;
+    await until(async () => !!(await loadState(statePath))?.secret, "it was told its secret");
+    const state = await loadState(statePath);
+    assertEquals([state?.id, state?.url, state?.root, state?.name], ["c2", url, root, "laptop"]);
+    assertEquals(statSync(statePath).mode & 0o777, 0o600);
+    assert(!readFileSync(statePath, "utf8").includes(CODE), "the code isn't kept");
+    const info = await work<Info & { name: string }>(WORK.info, {}, "c2");
+    assertEquals([info.version, info.browser, info.name], [VERSION, null, "laptop"]);
+    assert(info.shell.endsWith("bash") && info.root.endsWith("Copilotz"));
+
+    // It stops; run again, it connects as itself, not with its code.
+    await computer.stop();
+    const again = await start({ code: undefined });
+    await again.ready;
+    const presented = await rt.call<string[]>("test.presented", {});
+    assertEquals(presented, [`code:${CODE}`, `c2.${state!.secret}`]);
+    assertEquals((await work<Info>(WORK.info, {}, "c2")).version, VERSION);
+  }, { enrolled: false, code: CODE, name: "laptop" });
+});
+
+test("enrolling keeps what connect kept: its name, and whether windows may be shown", async () => {
+  await setup(async ({ start, url, root }) => {
+    const statePath = join(tempDir(), "computer.json");
+    // As `connect --name desk --windows never` keeps it, before the app answers.
+    await saveState({ url, root, name: "desk", windows: "never" }, statePath);
+    await (await start({ code: CODE, statePath })).ready;
+    await until(async () => !!(await loadState(statePath))?.secret, "it was told its secret");
+    const state = await loadState(statePath);
+    assertEquals([state?.id, state?.name, state?.windows], ["c2", "desk", "never"]);
+  }, { enrolled: false, code: "NOT-THIS-ONE" });
+});
+
+test("--windows is allow or never", () => {
+  assertEquals(windowsSetting("never", "--windows"), "never");
+  assertEquals(windowsSetting("allow", "--windows"), "allow");
+  assertEquals(windowsSetting(undefined, "--windows"), undefined);
+  const error = assertThrows(() => windowsSetting("sometimes", "COPILOTZ_BROWSER_WINDOWS"));
+  assert(
+    String((error as Error).message).includes('COPILOTZ_BROWSER_WINDOWS is "allow" or "never"'),
+  );
+});
+
+test("a code the app doesn't take, or a computer it doesn't know, is turned away", async () => {
+  await setup(async ({ start }) => {
+    const wrong = await start({ code: "WRONG", statePath: join(tempDir(), "computer.json") });
+    const error = await assertRejects(() => wrong.closed);
+    assertEquals((error as { code?: string }).code, "refused");
+    assert(String((error as Error).message).includes("code"));
+    await assertRejects(() => wrong.ready);
+
+    const forgotten = join(tempDir(), "computer.json");
+    await saveState({ url: "http://unused", root: tempDir(), id: "c9", secret: "old" }, forgotten);
+    const unknown = await start({ statePath: forgotten });
+    const gone = await assertRejects(() => unknown.closed);
+    assertEquals((gone as { code?: string }).code, "refused");
+    assert(String((gone as Error).message).includes("doesn't know this computer"));
+  }, { enrolled: false, code: "ALSO-WRONG" });
+});
+
+/** Serves `hypervisor` on `port` (0: any), as testing's `host` does. */
+async function serveOn(hypervisor: unknown, port: number) {
+  const adapter = runtime === "deno"
+    ? "@oxian/oxian-js/adapters/deno"
+    : "@oxian/oxian-js/adapters/node";
+  const { serve } = await import(adapter);
+  return await serve({ hypervisor, hostname: "127.0.0.1", port }) as {
+    url: string | URL;
+    shutdown(): Promise<void>;
+  };
+}
+
+test("when the app restarts, the computer connects again as itself", async () => {
+  const transports = [{ type: "websocket" as const, config: { path: "/oxian" } }];
+  const first = await createRuntime({ store: memoryStore(), plugins: [computers], transports });
+  let listener = await serveOn(first.hypervisor, 0);
+  const port = Number(new URL(String(listener.url)).port);
+  const statePath = join(tempDir(), "computer.json");
+  const url = `http://127.0.0.1:${port}`;
+  await saveState({ url, root: tempDir(), id: "c1", secret: SECRET }, statePath);
+  const computer = await startComputer({
+    url,
+    root: tempDir(),
+    statePath,
+    chromium: null,
+    log: () => {},
+  });
+  let second: Awaited<ReturnType<typeof createRuntime>> | undefined;
+  try {
+    await computer.ready;
+    await listener.shutdown();
+    await first.close();
+    // The new app knows nothing of the old one's sessions.
+    second = await createRuntime({ store: memoryStore(), plugins: [computers], transports });
+    listener = await serveOn(second.hypervisor, port);
+    const app = second;
+    await until(
+      async () => {
+        const info = await app.call("test.work", { workload: WORK.info, input: {} }).catch(() =>
+          null
+        );
+        return (info as Info | null)?.version === VERSION;
+      },
+      "it's back",
+      20_000,
+    );
+    assertEquals(await app.call("test.presented", {}), [`c1.${SECRET}`]);
+  } finally {
+    await computer.stop();
+    await listener.shutdown().catch(() => {});
+    await first.close().catch(() => {});
+    await second?.close();
+  }
+});
+
+test("an app's URL becomes its socket; a socket stays as it is", () => {
+  assertEquals(socketUrl("http://127.0.0.1:8790"), "ws://127.0.0.1:8790/oxian");
+  assertEquals(socketUrl("https://app.example.com/some/page"), "wss://app.example.com/oxian");
+  assertEquals(
+    socketUrl("ws://127.0.0.1:8787/core/executors"),
+    "ws://127.0.0.1:8787/core/executors",
+  );
+  assertEquals(socketUrl("wss://app.example.com/oxian"), "wss://app.example.com/oxian");
+});

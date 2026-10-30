@@ -1,0 +1,46 @@
+# The same suite on every runtime Copilotz supports, against PostgreSQL (with
+# pgvector), PGlite, SQLite and memory stores.
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [deno, node, bun]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: copilotz_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      COPILOTZ_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/copilotz_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        if: matrix.runtime == 'deno'
+        with:
+          deno-version: v2.x
+      - uses: actions/setup-node@v4
+        if: matrix.runtime != 'deno'
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.runtime == 'bun'
+      - run: npm ci
+        if: matrix.runtime != 'deno'
+      - run: deno task check && deno task test
+        if: matrix.runtime == 'deno'
+      - run: npm test
+        if: matrix.runtime == 'node'
+      - run: bun test --timeout 60000
+        if: matrix.runtime == 'bun'

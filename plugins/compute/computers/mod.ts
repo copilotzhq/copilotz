@@ -29,17 +29,18 @@ import { codeAction } from "./actions/code.ts";
 import { defaultAction } from "./actions/default.ts";
 import { enrollmentAction } from "./actions/enrollment.ts";
 import { forgetAction } from "./actions/forget.ts";
-import { moveAction } from "./actions/move.ts";
 import { goneAction } from "./actions/gone.ts";
+import { moveAction } from "./actions/move.ts";
+import { previewAction, previewsAction, unpreviewAction } from "./actions/preview.ts";
 import { provisionAction } from "./actions/provision.ts";
 import { readyAction } from "./actions/ready.ts";
 import { renameAction } from "./actions/rename.ts";
-import { scopeAction } from "./actions/scope.ts";
 import { runningAction } from "./actions/running.ts";
+import { scopeAction } from "./actions/scope.ts";
 import { shareAction } from "./actions/share.ts";
 import { unshareAction } from "./actions/unshare.ts";
+import { viewAction } from "./actions/view.ts";
 import { workAction } from "./actions/work.ts";
-import { previewAction, previewsAction, unpreviewAction } from "./actions/preview.ts";
 import { approval } from "./collections/approval.ts";
 import { computer } from "./collections/computer.ts";
 import { desk } from "./collections/desk.ts";
@@ -89,6 +90,7 @@ export const computers: Plugin = definePlugin({
     "computer.move": moveAction,
     "computer.approve": approveAction,
     "computer.work": workAction,
+    "computer.view": viewAction,
     "computer.preview": previewAction,
     "computer.previews": previewsAction,
     "computer.unpreview": unpreviewAction,

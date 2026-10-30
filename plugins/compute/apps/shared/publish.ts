@@ -8,7 +8,7 @@
  * name the space already has publishes a new revision of that app.
  */
 import type { Actor, Context } from "../../../../runtime/mod.ts";
-import { type Failed, type Job, WORK } from "../../computers/shared/workloads.ts";
+import { type Failed, type Job, WORK } from "../../computers/contract.ts";
 import type { AppDoc } from "../collections/app.ts";
 import type { Where } from "./archive.ts";
 import { codeOf, failure } from "./errors.ts";

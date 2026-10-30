@@ -19,7 +19,16 @@
  *   the preview are gone back to (`to`).
  */
 import type { Actor, Resources, Runtime } from "../../../../runtime/mod.ts";
-import type { Route, Served } from "../../../../hosts/web/routes.ts";
+
+/**
+ * The web host's routes, as its `routes` resource takes them (hosts/web/routes.ts,
+ * which plugins don't import): by host or path, and what a `serve` route is given.
+ */
+type Served = { runtime: Runtime; whom(): Promise<Actor | null>; host: string };
+type Route =
+  & ({ path: string } | { host: string | ((resources: Resources) => string | undefined) })
+  & { methods?: string[] }
+  & { serve(request: Request, served: Served): Response | Promise<Response> };
 import { previewUrl, schemeOf } from "../actions/preview.ts";
 import type { Preview } from "../collections/preview.ts";
 import { personOf } from "../shared/person.ts";

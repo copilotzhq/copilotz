@@ -50,17 +50,21 @@ export async function wake(ctx: Context, computer: string): Promise<boolean | st
 
 /**
  * Says `computer` was used, alongside the work (fire and forget: the work
- * doesn't wait on it). What fails is logged. Await what it returns to know
+ * doesn't wait on it), or, `view`, that a person has it open (which keeps
+ * it awake longer). What fails is logged. Await what it returns to know
  * it's done.
  */
-export function touch(ctx: Context, computer: string): Promise<void> {
+export function touch(ctx: Context, computer: string, view?: boolean): Promise<void> {
   const hook = hookOf(ctx);
   if (!hook?.touch) return Promise.resolve();
-  return ctx.call(hook.touch, { computer }).then(() => {}, (error) =>
-    console.error(
-      `${hook.touch} ${computer}:`,
-      error instanceof Error ? error.message : error,
-    ));
+  return ctx.call(hook.touch, view ? { computer, view } : { computer }).then(
+    () => {},
+    (error) =>
+      console.error(
+        `${hook.touch} ${computer}:`,
+        error instanceof Error ? error.message : error,
+      ),
+  );
 }
 
 /**

@@ -63,7 +63,7 @@ export const DEFAULTS: CloudSettings = {
   warmMinutes: 10,
   viewMinutes: 120,
   coldDays: 7,
-  pool: { floor: [{ from: 9, to: 21, tz: "America/Sao_Paulo", count: 1 }], max: 10 },
+  pool: { floor: [{ from: 9, to: 21, tz: "America/Sao_Paulo", count: 1, size: "small" }], max: 10 },
   create: "admins",
 };
 

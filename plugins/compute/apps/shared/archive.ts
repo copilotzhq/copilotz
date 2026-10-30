@@ -6,12 +6,7 @@
  * a failure (JSON) instead of gzip, told apart by its first byte.
  */
 import type { Context } from "../../../../runtime/mod.ts";
-import {
-  type ArchiveInput,
-  type Failed,
-  type Scope,
-  WORK,
-} from "../../computers/shared/workloads.ts";
+import { type ArchiveInput, type Failed, type Scope, WORK } from "../../computers/contract.ts";
 import type { AppDoc } from "../collections/app.ts";
 import { failure, messageOf } from "./errors.ts";
 

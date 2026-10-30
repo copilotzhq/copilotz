@@ -208,6 +208,7 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     >("org.enter", { org, person: who.person, ...(who.email ? { email: who.email } : {}) });
     const cell = await cellOf(info);
     cell.last = Date.now();
+    report(cell);
     const profile = await directory.query<{ name?: string; picture?: string } | null>(
       "person.profile",
       { person: who.person },
@@ -242,12 +243,19 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     };
   };
 
-  /** The org someone goes back to: the one they were in last, or their personal one. */
-  const landing = async (person: string, name: string) => {
-    const { orgs } = await directory.call<{ orgs: { id: string; kind: string }[] }>("org.mine", {
-      person,
-    });
-    if (orgs.length) return orgs[0].id;
+  /** Whether a request's session for an org's cell is still good there. */
+  const heldIn = async (cell: Cell, request: Request) => {
+    const secret = cookieOf(request, sessionOf(cell.org.id));
+    return !!secret && !!await cell.runtime.query("credential.actor", { secret }).catch(() => null);
+  };
+
+  /** The org someone goes back to: the one they were in last (not `not`), or their personal one. */
+  const landing = async (person: string, name: string, not?: string) => {
+    const { orgs } = await directory.call<
+      { orgs: { id: string; kind: string; suspended?: true }[] }
+    >("org.mine", { person });
+    const open = orgs.filter((o) => o.id !== not && !o.suspended);
+    if (open.length) return open[0].id;
     const { org } = await directory.call<{ org: string }>("org.create", {
       name,
       kind: "personal",
@@ -287,21 +295,23 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     signIn: false,
   });
 
+  /** Tells the directory how an org is (its people, spaces, when it was last used). */
+  const report = (cell: Cell) =>
+    cell.runtime.call<{ people: number; spaces: number }>("org.summary").then((summary) =>
+      directory.call("org.report", {
+        org: cell.org.id,
+        ...summary,
+        active: new Date(cell.last).toISOString(),
+      })
+    ).catch(() => {});
+
   /** Closes orgs nobody has used for a while, and reports how they are to the directory. */
   const sweep = setInterval(async () => {
     const now = Date.now();
     for (const [id, pending] of cells) {
       const cell = await pending.catch(() => undefined);
       if (!cell) continue;
-      const summary = await cell.runtime.call<{ people: number; spaces: number }>("org.summary")
-        .catch(() => undefined);
-      if (summary) {
-        await directory.call("org.report", {
-          org: id,
-          ...summary,
-          active: new Date(cell.last).toISOString(),
-        }).catch(() => {});
-      }
+      await report(cell);
       const stats = cell.runtime.stats();
       if (now - cell.last > idleMs && stats.browsers === 0 && stats.pending === 0) {
         cells.delete(id);
@@ -522,8 +532,30 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
       }
       const org = await orgInfo(current);
       if (!org) return await lobby(request);
-      if (org.suspended) return json({ error: "This org is suspended." }, { status: 403 });
-      const cell = await cellOf(org);
+      const cell = org.suspended ? undefined : await cellOf(org);
+      // A page asked for in an org no longer theirs (suspended, or its session ended: taken
+      // out, signed out there) lands them in one that is, rather than on an error.
+      const page = request.method === "GET" &&
+        /text\/html/.test(request.headers.get("accept") ?? "");
+      if (!cell || (page && !cookies.length && !await heldIn(cell, request))) {
+        if (!page) return json({ error: "This org is suspended." }, { status: 403 });
+        const who = await signedIn(request);
+        if (!who) return await lobby(request);
+        const elsewhere = await enter(
+          request,
+          url,
+          who,
+          org.suspended ? await landing(who.person, who.person, org.id) : org.id,
+        )
+          .catch(async () =>
+            await enter(request, url, who, await landing(who.person, who.person, org.id))
+          );
+        const headers = new Headers({
+          location: url.pathname === "/" ? "/" : url.pathname + url.search,
+        });
+        for (const cookie of elsewhere.cookies) headers.append("set-cookie", cookie);
+        return new Response(null, { status: 302, headers });
+      }
       cell.last = Date.now();
       const answered = await cell.serve(forwarded);
       if (!cookies.length) return answered;

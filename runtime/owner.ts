@@ -1691,6 +1691,9 @@ export async function createOwner(
       closing.abort();
       timers.close();
       clearTimeout(flushing);
+      // A browser's session is a stream that never ends on its own: end them, so the
+      // shutdown's drain doesn't wait them out.
+      browsers.closeAll();
       await hypervisor.shutdown();
       if (unsaved.size) await commit(async () => {});
       await store.close();

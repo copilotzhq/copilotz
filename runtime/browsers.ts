@@ -219,6 +219,10 @@ export function createBrowsers(env: {
   return {
     /** How many browsers are connected. */
     count: () => connections.size,
+    /** Ends every browser's session stream: closing the runtime doesn't wait them out. */
+    closeAll: () => {
+      for (const connection of [...connections.values()]) connection.close();
+    },
     /** A connection's provider config at admission: who it is. */
     config: (actor: Actor): JsonObject => ({ actor: actor as unknown as JsonObject }),
     /** A resume credential for a browser just admitted. */

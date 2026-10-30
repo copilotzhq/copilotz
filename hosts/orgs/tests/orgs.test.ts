@@ -86,6 +86,7 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     assertEquals(await acmeRt.call("org.me", {}, { actor: asAna }), {
       role: "owner",
       staff: false,
+      org: { id: acme.id, name: "Acme", kind: "team" },
     });
 
     // She invites Bob; he signs in, sees it, accepts, and is in Acme as a member.
@@ -103,6 +104,7 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     assertEquals(await acmeRt.call("org.me", {}, { actor: asBob }), {
       role: "member",
       staff: false,
+      org: { id: acme.id, name: "Acme", kind: "team" },
     });
     const people = await acmeRt.call<{ people: { person: string; role: string }[] }>(
       "org.people",
@@ -214,6 +216,76 @@ test("orgs: staff move an org's rows, export them, and delete the org", async ()
     const orgs = await (await ana.send("GET", "/orgs")).json();
     assertEquals(orgs.orgs.map((o: { name: string }) => o.name), ["ana"]);
     assertEquals((await ana.send("POST", "/orgs/enter", { org: acme.id })).status, 403);
+  } finally {
+    await host.close();
+    await dir.close();
+  }
+});
+
+test("orgs: a page in an org no longer yours lands you in one that is", async () => {
+  const dir = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      identity,
+      directory,
+      definePlugin({ name: "d", resources: { directory: { staff: ["sam@example.com"] } } }),
+    ],
+  });
+  const host = orgsHost({
+    directory: dir,
+    open: async (_org, given) =>
+      await createRuntime({
+        store: memoryStore(),
+        plugins: [...access, ...given.plugins],
+        admit: given.admit,
+      }),
+    upgrade: () => new Response(null, { status: 299 }),
+    code: { entry: "app.js", files: { "app.js": "" } },
+    dev: true,
+  });
+  try {
+    const ana = browser(host.serve);
+    const { org: personal } =
+      await (await ana.send("POST", "/signin/dev", { name: "ana@example.com" }))
+        .json();
+    const { org: acme } = await (await ana.send("POST", "/orgs", { name: "Acme" })).json();
+    const acmeRt = (await host.runtime(acme.id)) as Runtime;
+    await acmeRt.call("org.invite", { email: "bob@example.com" }, {
+      actor: { kind: "person", id: "ana@example.com" },
+    });
+    const bob = browser(host.serve);
+    await bob.send("POST", "/signin/dev", { name: "bob@example.com" });
+    const { invites } = await (await bob.send("GET", "/orgs")).json();
+    await bob.send("POST", "/orgs/invites/answer", { invite: invites[0].id, accept: true });
+    assertEquals(bob.jar.get("org"), acme.id);
+    // Taken out of Acme, his next page lands him in his own org.
+    await acmeRt.call("org.remove", { person: "bob@example.com" }, {
+      actor: { kind: "person", id: "ana@example.com" },
+    });
+    const page = (who: ReturnType<typeof browser>) =>
+      host.serve(
+        new Request(BASE + "/thread/t1", {
+          headers: {
+            accept: "text/html",
+            cookie: [...who.jar].map(([n, v]) => `${n}=${v}`).join("; "),
+          },
+        }),
+      );
+    const moved = await page(bob);
+    assertEquals([moved.status, moved.headers.get("location")], [302, "/thread/t1"]);
+    assert(moved.headers.getSetCookie().some((c) => c.startsWith("org=p-")));
+    // Acme suspended: Ana's page lands her in her personal org; a non-page call is refused.
+    const sam = browser(host.serve);
+    await sam.send("POST", "/signin/dev", { name: "sam@example.com" });
+    await sam.send("POST", `/console/orgs/${acme.id}`, { suspended: true });
+    const landed = await page(ana);
+    assertEquals(landed.status, 302);
+    assert(
+      landed.headers.getSetCookie().some((c) =>
+        c === `org=${personal.id}` || c.startsWith(`org=${personal.id};`)
+      ),
+    );
+    assertEquals((await ana.send("POST", "/connect")).status, 403);
   } finally {
     await host.close();
     await dir.close();

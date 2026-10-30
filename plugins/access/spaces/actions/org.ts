@@ -143,12 +143,17 @@ export const removeFromOrgAction = defineAction({
 });
 
 export const orgMeAction = defineAction({
-  description: "Your standing in the org: your role, and whether you're platform staff",
+  description:
+    "Your standing in the org: your role, whether you're platform staff, and the org (in an app " +
+    "serving many)",
   input: { type: "object", additionalProperties: false },
   allow: (actor) => actor.kind === "person",
   run: async (ctx) => ({
     role: await orgRoleOf(ctx.actor!, ctx.as()) ?? null,
     staff: ctx.actor?.staff === true,
+    ...(ctx.resources.org
+      ? { org: ctx.resources.org as { id: string; name: string; kind: string } }
+      : {}),
   }),
 });
 

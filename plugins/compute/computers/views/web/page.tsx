@@ -208,7 +208,7 @@ function Forget(
               , in <code>{tilde(root)}</code>
             </>
           )
-          : null}.
+          : null}. On it, <code>computer uninstall</code> removes the program from its login items.
       </p>
       {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
     </Dialog>

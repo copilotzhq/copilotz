@@ -16,7 +16,8 @@ import type {
 } from "../../shared/workloads.ts";
 import { fail } from "./answer.ts";
 import { checkScope, type Spaces } from "./spaces.ts";
-import { childEnv, exitCode, signalGroup } from "./processes.ts";
+import { childEnv, exitCode, OWN, signalGroup } from "./processes.ts";
+import { commandArgs, type Shell } from "./shell.ts";
 
 const KEPT = 256 * 1024;
 /** Finished jobs kept per who and space, newest first. */
@@ -33,8 +34,8 @@ type Entry = {
   exited: Promise<void>;
 };
 
-/** The jobs of every space on this computer. */
-export function createJobs(spaces: Spaces, options: { stopGraceMs?: number } = {}) {
+/** The jobs of every space on this computer, each a command in its `shell`. */
+export function createJobs(spaces: Spaces, shell: Shell, options: { stopGraceMs?: number } = {}) {
   const entries = new Map<string, Entry>();
   const stopGraceMs = options.stopGraceMs ?? 3000;
   let closed = false;
@@ -72,12 +73,12 @@ export function createJobs(spaces: Spaces, options: { stopGraceMs?: number } = {
       if (typeof input.command !== "string" || !input.command.trim()) fail("command is required");
       const cwd = await spaces.folder(input.scope);
       const id = `job-${randomBytes(6).toString("hex")}`;
-      const child = spawn("bash", ["--noprofile", "--norc", "-c", input.command], {
+      const child = spawn(shell.path, commandArgs(shell, input.command), {
         cwd,
         env: childEnv(),
         stdio: ["ignore", "pipe", "pipe"],
-        // Its own process group, so stopping it reaches everything it starts.
-        detached: true,
+        // Its own process group (see processes.ts), so stopping it reaches everything it starts.
+        ...OWN,
       });
       const entry: Entry = {
         job: {

@@ -60,10 +60,11 @@ async function on(
 
 const terminal = tool({
   description: "Runs a command in your own shell on your person's computer, in this space's " +
-    "folder (your working directory and environment persist between calls). It answers within " +
-    'about a second: if the command is still "running", call again with its commandId and empty ' +
-    "stdin to see more, or with stdin to answer a prompt; operation interrupt stops it. For " +
-    "servers and other long-running commands, use start_job instead.",
+    "folder: bash on macOS and Linux, PowerShell on Windows (your context says which this " +
+    "computer has). Your working directory and environment persist between calls. It " +
+    'answers within about a second: if the command is still "running", call again with its ' +
+    "commandId and empty stdin to see more, or with stdin to answer a prompt; operation " +
+    "interrupt stops it. For servers and other long-running commands, use start_job instead.",
   input: {
     type: "object",
     properties: {
@@ -84,7 +85,8 @@ const terminal = tool({
 const startJob = tool({
   description:
     "Starts a command that keeps running in the background (a dev server, a watcher, a " +
-    "long build), in this space's folder. Read its output with job_logs; stop it with stop_job.",
+    "long build), in this space's folder, in the terminal's shell (bash, or PowerShell on " +
+    "Windows). Read its output with job_logs; stop it with stop_job.",
   input: {
     type: "object",
     properties: { command: { type: "string", minLength: 1 }, name: { type: "string" } },

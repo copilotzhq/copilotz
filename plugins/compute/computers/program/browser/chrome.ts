@@ -1,14 +1,17 @@
 /**
- * Finding and running Chrome (or Chromium): hidden (headless) or shown (a
- * window on the person's screen), always muted, on a profile of its own
- * (never the person's), driven over a pipe rather than a debugging port. It
- * runs in its own process group, and stopping it reaps everything it started.
+ * Finding and running Chrome (or Chromium, or Edge): hidden (headless) or
+ * shown (a window on the person's screen), always muted, on a profile of its
+ * own (never the person's), driven over a pipe rather than a debugging port.
+ * It runs in its own process group (on Windows, its own tree), and stopping
+ * it reaps everything it started.
  */
 import { execFile, spawn } from "node:child_process";
 import { access, constants, readlink } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { delimiter, join } from "node:path";
 import process from "node:process";
+import type { Readable, Writable } from "node:stream";
+import { OWN, signalGroup, WINDOWS } from "../workloads/processes.ts";
 import { browserError, deadline, race } from "./async.ts";
 import { type Client, createClient, pipeWire } from "./cdp.ts";
 
@@ -23,25 +26,35 @@ const runnable = (path: string) => access(path, constants.X_OK).then(() => true,
 
 /**
  * The Chrome or Chromium this machine has, or null: `COPILOTZ_CHROMIUM` if
- * set, else the usual places (macOS apps; on Linux, by name on the PATH).
+ * set, else the usual places: macOS apps; on Linux, by name on the PATH; on
+ * Windows, where Chrome, Chromium and Edge install, for this person or all.
  */
-export async function findChrome(env: Record<string, string | undefined> = process.env) {
+export async function findChrome(
+  env: Record<string, string | undefined> = process.env,
+  platform: string = process.platform,
+) {
   const configured = env.COPILOTZ_CHROMIUM;
   if (configured) return await runnable(configured) ? configured : null;
-  const candidates = process.platform === "darwin"
+  const candidates = platform === "darwin"
     ? ["", homedir()].flatMap((home) => [
       join(home, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
       join(home, "/Applications/Chromium.app/Contents/MacOS/Chromium"),
     ])
+    : platform === "win32"
+    ? [
+      ["Google", "Chrome", "Application", "chrome.exe"],
+      ["Chromium", "Application", "chrome.exe"],
+      ["Microsoft", "Edge", "Application", "msedge.exe"],
+    ].flatMap((path) =>
+      [env.LOCALAPPDATA, env.ProgramFiles, env["ProgramFiles(x86)"]]
+        .filter((dir): dir is string => !!dir).map((dir) => join(dir, ...path))
+    )
     : ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"].flatMap((name) =>
       (env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, name))
     );
   for (const path of candidates) if (await runnable(path)) return path;
   return null;
 }
-
-/** Puts DevTools' fds 3 and 4 on the child's stdin and stdout. */
-const PIPE_SHIM = 'exec "$@" 3<&0 4>&1 0</dev/null 1>/dev/null';
 
 /**
  * Why a window can't be shown on this computer, or undefined when it can: its
@@ -126,8 +139,9 @@ export type Chrome = {
   close(): Promise<void>;
 };
 
-/** Every process descending from `pid` (ps may be denied; then none). */
+/** Every process descending from `pid` (ps may be denied; then none; on Windows, a kill ends them). */
 function descendants(pid: number): Promise<number[]> {
+  if (WINDOWS) return Promise.resolve([]);
   return new Promise((resolve) => {
     execFile("/bin/ps", ["-axo", "pid=,ppid="], { cwd: "/" }, (error, stdout) => {
       if (error) return resolve([]);
@@ -201,12 +215,19 @@ export async function launch(options: LaunchOptions, signal: AbortSignal): Promi
     `--window-size=${width},${height}`,
     "about:blank",
   ];
-  const child = spawn("/bin/sh", ["-c", PIPE_SHIM, "browser-fds", options.chromium, ...args], {
+  const child = spawn(options.chromium, args, {
     cwd: "/",
     env: options.env,
-    stdio: ["pipe", "pipe", process.env.COPILOTZ_BROWSER_DEBUG === "1" ? "inherit" : "ignore"],
-    // Its own process group: stopping it reaches its helpers and renderers.
-    detached: true,
+    // DevTools' pipe, as Puppeteer gives it: Chrome reads commands on fd 3 and writes on fd 4.
+    stdio: [
+      "ignore",
+      "ignore",
+      process.env.COPILOTZ_BROWSER_DEBUG === "1" ? "inherit" : "ignore",
+      "pipe",
+      "pipe",
+    ],
+    // Its own process group (see processes.ts): stopping it reaches its helpers and renderers.
+    ...OWN,
   });
   const exited = new Promise<void>((resolve) => {
     child.on("exit", () => resolve());
@@ -215,26 +236,27 @@ export async function launch(options: LaunchOptions, signal: AbortSignal): Promi
   const pid = child.pid ?? 0;
   if (pid) notify(options, pid, "started");
 
+  /** Ends it: SIGTERM to its group, then SIGKILL (on Windows, its whole tree at once). */
   const stop = async (children?: number[]) => {
     if (!pid) return;
     children ??= await descendants(pid);
-    kill(-pid, "SIGTERM");
+    signalGroup(pid, WINDOWS ? "SIGKILL" : "SIGTERM");
     const limit = deadline(1500);
     try {
       await race(exited, limit.signal);
     } catch {
-      kill(-pid, "SIGKILL");
+      signalGroup(pid, "SIGKILL");
       await exited;
     } finally {
       limit.dispose();
     }
     // Its group, or what left it, can outlive the browser itself.
-    kill(-pid, "SIGKILL");
+    signalGroup(pid, "SIGKILL");
     for (const descendant of children) kill(descendant, "SIGKILL");
   };
 
   const startup = deadline(options.launchTimeoutMs ?? 20_000, signal);
-  const client = createClient(pipeWire(child.stdout!, child.stdin!));
+  const client = createClient(pipeWire(child.stdio[4] as Readable, child.stdio[3] as Writable));
   let version: { product: string; userAgent: string };
   try {
     version = await client.send("Browser.getVersion", {}, startup.signal);

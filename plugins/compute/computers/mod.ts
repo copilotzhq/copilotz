@@ -38,6 +38,7 @@ import { enrollment } from "./collections/enrollment.ts";
 import { grant } from "./collections/grant.ts";
 import { tools } from "./resources/tools.ts";
 import { contextViews } from "./views/context.ts";
+import { UPDATE } from "./program/release.ts";
 import { personOf } from "./shared/person.ts";
 import { WORK } from "./shared/workloads.ts";
 
@@ -58,7 +59,8 @@ export const computers: Plugin = definePlugin({
       admit: "computer.admit",
       ready: "computer.ready",
       gone: "computer.gone",
-      workloads: Object.values(WORK),
+      // The work it serves, and a newer release when the app has one (the program updates itself).
+      workloads: [...Object.values(WORK), UPDATE],
     },
   },
   actions: {

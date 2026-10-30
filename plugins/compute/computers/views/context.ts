@@ -7,11 +7,20 @@
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import { agentsShown, type Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
+import { OS_NAMES } from "../program/release.ts";
 import { tools } from "../resources/tools.ts";
 import { personOf } from "../shared/person.ts";
 import { settingsOf } from "../shared/settings.ts";
 
 const ASKED = { terminal: "run commands", jobs: "start jobs", writes: "write or edit files" };
+
+/** A shell, by its path: bash, PowerShell 7 (`pwsh`) or Windows PowerShell. */
+const shellOf = (path: string) =>
+  /pwsh(\.exe)?$/i.test(path)
+    ? "PowerShell 7 (pwsh): write PowerShell"
+    : /powershell(\.exe)?$/i.test(path)
+    ? "Windows PowerShell 5.1: write PowerShell"
+    : "bash";
 
 export const contextViews = {
   "context:computer": {
@@ -36,14 +45,19 @@ export const contextViews = {
             "/computer share; on the web: the space's Computer tab).";
       }
       const owned = desk.owner === person ? `${person}'s own` : `${desk.owner}'s`;
-      const info = desk.info as { os?: string; root?: string; windows?: string } | undefined;
+      const info = desk.info as
+        | { os?: string; root?: string; windows?: string; shell?: string }
+        | undefined;
+      const sep = info?.os === "win32" ? "\\" : "/";
       const asked = settingsOf(ctx).approve.map((work) => ASKED[work]);
       const answerer = desk.answers === "owner" ? desk.owner : person;
       return [
         `You work on this space's computer, ${desk.name ?? "theirs"} (${owned}${
-          info?.os ? `, ${info.os}` : ""
+          info?.os ? `, ${OS_NAMES[info.os] ?? info.os}` : ""
         }), not on a machine of yours: your terminal, jobs and files are in its folder for ` +
-        `this space (${info?.root ? `${info.root}/${desk.folder}` : desk.folder}), and your ` +
+        `this space (${info?.root ? `${info.root}${sep}${desk.folder}` : desk.folder}${
+          info?.shell ? `; its shell is ${shellOf(info.shell)}` : ""
+        }), and your ` +
         `browser and web searches run there too (${
           info?.windows === "never"
             ? "the browser hidden: its owner doesn't let it show windows"

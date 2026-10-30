@@ -8,7 +8,9 @@
  * it connects as itself (`computer:<id>.<secret>`). Oxian carries it across
  * dropped connections; when the app forgets that session (it restarted), it
  * connects again as itself, with the same attempt identity. It asks the app
- * for nothing.
+ * for nothing. Built (not run from source), it also takes newer versions
+ * the app offers (`UPDATE`): it updates itself (update.ts) and stops, to be
+ * started again as it.
  */
 import { createWorker, type Worker } from "@oxian/oxian-js";
 import { randomUUID } from "node:crypto";
@@ -16,7 +18,10 @@ import { mkdir, realpath } from "node:fs/promises";
 import process from "node:process";
 import { type Enrolled, type Info, WORK } from "../shared/workloads.ts";
 import { createBrowsers, findChrome, type Windows } from "./browser/mod.ts";
+import { newer, type Offer, UPDATE } from "./release.ts";
 import { loadState, saveState, socketUrl } from "./state.ts";
+import { checkOffer, PROGRAM, updateProgram } from "./update.ts";
+import { VERSION } from "./version.ts";
 import { answer, fail } from "./workloads/answer.ts";
 import { createBrowserWork } from "./workloads/browser.ts";
 import { createFiles } from "./workloads/files.ts";
@@ -25,6 +30,7 @@ import { createJobs } from "./workloads/jobs.ts";
 import { createSpaces } from "./workloads/spaces.ts";
 import { childEnv } from "./workloads/processes.ts";
 import { search } from "./workloads/search.ts";
+import { findShell, type Shell } from "./workloads/shell.ts";
 import { createShells, type ShellLimits } from "./workloads/terminal.ts";
 
 export type ComputerOptions = {
@@ -40,6 +46,13 @@ export type ComputerOptions = {
   name?: string;
   /** The Chrome to drive: found unless given; null for none. */
   chromium?: string | null;
+  /** The shell its terminal and jobs run: this computer's (shell.ts) unless given. */
+  shell?: Shell;
+  /**
+   * The executable an update replaces: this program's own when it runs as
+   * one, unless given; null for none (run from source, it isn't updated).
+   */
+  program?: string | null;
   /** Whether agents may show a browser window on this screen ("never": always hidden). */
   windows?: Windows;
   /** Where searches go (DuckDuckGo's HTML page unless set, or `COPILOTZ_SEARCH_URL`). */
@@ -56,8 +69,13 @@ export type ComputerOptions = {
 export type Computer = {
   /** When it's first connected and admitted. */
   ready: Promise<void>;
-  /** When it's stopped; fails when the app turns it away. */
-  closed: Promise<void>;
+  /** When it has its id and secret: at once if it had them, else once the app enrolls it. */
+  enrolled: Promise<void>;
+  /**
+   * When it's stopped: `updated` when it stopped to be started again as a
+   * newer version (installed). It fails when the app turns it away.
+   */
+  closed: Promise<"stopped" | "updated">;
   info: Info;
   /** Disconnects, and stops every shell, job and browser it started. */
   stop(): Promise<void>;
@@ -83,11 +101,13 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
   await mkdir(options.root, { recursive: true });
   const root = await realpath(options.root);
   const chromium = options.chromium === undefined ? await findChrome() : options.chromium;
+  const shell = options.shell ?? await findShell();
+  const program = options.program === undefined ? PROGRAM : options.program;
   const searchUrl = options.searchUrl ?? process.env.COPILOTZ_SEARCH_URL;
 
   const spaces = createSpaces(root);
-  const shells = createShells(spaces, options.shells);
-  const jobs = createJobs(spaces, { stopGraceMs: options.jobStopGraceMs });
+  const shells = createShells(spaces, shell, options.shells);
+  const jobs = createJobs(spaces, shell, { stopGraceMs: options.jobStopGraceMs });
   const files = createFiles(spaces);
   const browsers = createBrowsers({
     root,
@@ -98,7 +118,40 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     idleMs: options.browserIdleMs,
   });
   const browser = createBrowserWork(browsers, spaces);
-  const info = await machineInfo(root, chromium, options.name, options.windows);
+  const info = machineInfo(root, shell, chromium, options.name, options.windows);
+  const halt = new AbortController();
+  let reason: "stopped" | "updated" = "stopped";
+  let enrolledNow!: () => void;
+  let unenrolled!: (error: unknown) => void;
+  const enrolled = new Promise<void>((resolve, reject) => {
+    enrolledNow = resolve;
+    unenrolled = reject;
+  });
+  enrolled.catch(() => {});
+  const known = await loadState(options.statePath);
+  if (known?.id && known.secret) enrolledNow();
+
+  /** Updates `program` to what the app offers, when it's newer, then stops, to start again as it. */
+  let updating: string | undefined;
+  const update = (program: string) => (input: unknown) => {
+    const offer: Offer = checkOffer(input, options.url);
+    if (updating || !newer(offer.version, VERSION)) return { updating: !!updating };
+    updating = offer.version;
+    log(`updating to ${offer.version}…`);
+    void updateProgram(program, offer, halt.signal).then(() => {
+      log(`updated to ${offer.version}; starting again`);
+      reason = "updated";
+      return computer.stop();
+    }, (error) => {
+      updating = undefined;
+      if (!halt.signal.aborted) {
+        log(
+          `couldn't update to ${offer.version}: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    });
+    return { updating: true };
+  };
 
   const workloads = {
     [WORK.enrolled]: answer(async (input: Enrolled) => {
@@ -116,9 +169,12 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
         secret: input.secret,
       }, options.statePath);
       log(`enrolled as ${input.id}`);
+      enrolledNow();
       return { ok: true };
     }),
     [WORK.info]: answer(() => info),
+    // Run from source, there's nothing to update: it doesn't take the work.
+    ...(program ? { [UPDATE]: answer(update(program)) } : {}),
     [WORK.terminal]: answer(shells.submit),
     [WORK.jobsStart]: answer(jobs.start),
     [WORK.jobsList]: answer(jobs.list),
@@ -138,7 +194,6 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
   const attempt = { attemptId: randomUUID(), epoch: Date.now() };
   const workerId = `computer-${randomUUID()}`;
   let stopping = false;
-  const halt = new AbortController();
   let current: Worker | undefined;
   let connected = false;
   let readied!: () => void;
@@ -238,18 +293,21 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
             { code: "refused" as const },
           );
           unready(refused);
+          unenrolled(refused);
           throw refused;
         }
         log(`connection failed (${error instanceof Error ? error.message : error}); retrying…`);
       }
       await wait(Math.min(30_000, 500 * 2 ** failures++), halt.signal);
     }
+    return reason;
   })();
   closed.catch(() => {});
 
   let stopped: Promise<void> | undefined;
-  return {
+  const computer: Computer = {
     ready,
+    enrolled,
     closed,
     info,
     stop() {
@@ -257,10 +315,12 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
         stopping = true;
         halt.abort();
         unready(new Error("The computer stopped"));
+        unenrolled(new Error("The computer stopped"));
         await current?.stop().catch(() => {});
         await closed.catch(() => {});
         await Promise.allSettled([shells.stopAll(), jobs.stopAll(), browsers.close()]);
       })();
     },
   };
+  return computer;
 }

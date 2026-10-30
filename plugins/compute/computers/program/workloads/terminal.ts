@@ -6,10 +6,11 @@
  * keeps its working directory, environment and history while it lives, and
  * goes after 30 minutes unused.
  *
- * A shell is a bash reading script paths, one per line, and sourcing each:
- * commands can be megabytes, and a command reading stdin reads what's sent
- * to it, not the next command. After each, it prints a marker on stdout (with
- * its working directory) and on stderr, so both are drained before it's done.
+ * A shell is this computer's (bash, or PowerShell on Windows: see shell.ts),
+ * running each command's script as it's sent its id: commands can be
+ * megabytes, and a command reading stdin reads what's sent to it, not the
+ * next command. After each, it marks stdout and stderr, so both are drained
+ * before it's done.
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -20,7 +21,8 @@ import { setInterval } from "node:timers";
 import type { TerminalInput, TerminalResult } from "../../shared/workloads.ts";
 import { fail } from "./answer.ts";
 import type { Spaces } from "./spaces.ts";
-import { childEnv, exitCode, signalGroup } from "./processes.ts";
+import { childEnv, exitCode, OWN, signalGroup } from "./processes.ts";
+import { scriptExtension, type Shell as Program, shellArgs } from "./shell.ts";
 
 export type ShellLimits = {
   /** The longest an answer waits for its command (a command done sooner answers at once). */
@@ -79,25 +81,6 @@ type Command = {
   waiters: Set<() => void>;
 };
 
-/** Single quotes for bash. */
-const quote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
-
-/** The loop a shell runs: source each script it's sent, then mark it done. */
-function driver(directory: string, token: string) {
-  return [
-    // Signals stop the command, not the shell (SIGKILL, after a grace, stops both).
-    "trap ':' INT TERM",
-    "while IFS= read -r __copilotz_script; do",
-    `  case "$__copilotz_script" in ${quote(directory)}/*.sh) ;; *) continue ;; esac`,
-    "  __copilotz_id=${__copilotz_script##*/}; __copilotz_id=${__copilotz_id%.sh}",
-    '  if source "$__copilotz_script"; then __copilotz_code=0; else __copilotz_code=$?; fi',
-    "  set +e +u; set +o pipefail",
-    `  builtin printf '\\036%s:%s:%d:%s\\037' ${token} "$__copilotz_id" "$__copilotz_code" "$PWD"`,
-    `  builtin printf '\\036%s:%s:%d:\\037' ${token} "$__copilotz_id" "$__copilotz_code" >&2`,
-    "done",
-  ].join("\n");
-}
-
 /** Where a shell is, relative to its space's folder (absolute when it's outside it). */
 function where(folder: string, cwd: string) {
   const path = relative(folder, cwd);
@@ -105,8 +88,8 @@ function where(folder: string, cwd: string) {
   return path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path) ? cwd : path;
 }
 
-/** The shells of every space on this computer. */
-export function createShells(spaces: Spaces, limits: ShellLimits = {}) {
+/** The shells of every space on this computer, each a `program` (bash, or PowerShell). */
+export function createShells(spaces: Spaces, program: Program, limits: ShellLimits = {}) {
   const yieldMs = limits.yieldMs ?? 1000;
   const idleMs = limits.idleMs ?? 5 * 60_000;
   const runtimeMs = limits.runtimeMs ?? 10 * 60_000;
@@ -193,12 +176,12 @@ export function createShells(spaces: Spaces, limits: ShellLimits = {}) {
   async function open(key: string, folder: string): Promise<Shell> {
     const directory = await mkdtemp(join(tmpdir(), "copilotz-shell-"));
     const token = randomBytes(8).toString("hex");
-    const child = spawn("bash", ["--noprofile", "--norc", "-c", driver(directory, token)], {
+    const child = spawn(program.path, shellArgs(program, directory, token), {
       cwd: folder,
       env: childEnv(),
       stdio: ["pipe", "pipe", "pipe"],
-      // Its own process group: signals reach everything a command starts.
-      detached: true,
+      // Its own process group (see processes.ts): signals reach everything a command starts.
+      ...OWN,
     });
     const shell: Shell = {
       key,
@@ -373,7 +356,7 @@ export function createShells(spaces: Spaces, limits: ShellLimits = {}) {
           started,
           lastActivity: started,
           markers: 0,
-          script: join(shell.directory, `${id}.sh`),
+          script: join(shell.directory, `${id}${scriptExtension(program)}`),
           waiters: new Set(),
         };
         shell.active = command;
@@ -381,7 +364,7 @@ export function createShells(spaces: Spaces, limits: ShellLimits = {}) {
         commands.set(id, command);
         try {
           await writeFile(command.script, input.stdin, { mode: 0o600 });
-          shell.child.stdin!.write(`${command.script}\n`);
+          shell.child.stdin!.write(`${id}\n`);
         } catch (error) {
           signalGroup(shell.child.pid, "SIGKILL");
           throw error;

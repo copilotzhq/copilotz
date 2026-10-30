@@ -3,9 +3,12 @@
  * their Personal space unless they say): the signed-in person gets it here
  * and types it into the computer program (`connect <app> --code <code>`),
  * which is them saying yes. It works once, for minutes. With it, where the
- * computer connects, when the app says (`computers.url`).
+ * computer connects, when the app says (`computers.url`), and where the
+ * program is downloaded from, when it says (`downloads`: the release's base,
+ * on the app's origin unless absolute, its version and binaries).
  */
 import { defineAction } from "../../../../runtime/mod.ts";
+import type { Downloads } from "../resources/downloads.ts";
 import { mustBeAble } from "../shared/desks.ts";
 import { code, hash } from "../shared/secret.ts";
 import { settingsOf } from "../shared/settings.ts";
@@ -31,6 +34,13 @@ export const codeAction = defineAction({
       expires,
       in: space,
     });
-    return { code: made, expires, in: space, ...(url ? { url } : {}) };
+    const downloads = ctx.resources.downloads as Downloads | undefined;
+    return {
+      code: made,
+      expires,
+      in: space,
+      ...(url ? { url } : {}),
+      ...(downloads ? { downloads: { base: downloads.base, ...downloads.manifest } } : {}),
+    };
   },
 });

@@ -42,6 +42,41 @@ export const STYLE = `
   background: var(--success-soft); color: var(--success-text); }
 .connect-done-name { margin: 0; font-size: 16px; font-weight: 650; }
 .connect-done-facts { margin: 2px 0 0; color: var(--muted-foreground); font-size: 13.5px; }
+.connect-step-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.connect-step .connect-step-title { font-weight: 620; }
+.connect-systems { flex: none; }
+.connect-systems .copilotz-tab { height: 28px; padding: 0 10px; font-size: 13px; }
+.connect-direct { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
+.connect-direct > summary { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; white-space: nowrap;
+  list-style: none; color: var(--secondary-foreground); font-size: 13.5px; font-weight: 560; border-radius: var(--radius-lg); }
+.connect-direct > summary::-webkit-details-marker { display: none; }
+.connect-direct > summary:hover { color: var(--foreground); }
+.connect-direct-chevron { transition: transform .15s; color: var(--muted-foreground); }
+.connect-direct[open] .connect-direct-chevron { transform: rotate(90deg); }
+.connect-direct-version { margin-left: auto; color: var(--muted-foreground); font-size: 12.5px; font-weight: 450;
+  font-variant-numeric: tabular-nums; }
+.connect-direct-body { display: grid; gap: 10px; padding: 2px 12px 12px; }
+.connect-direct-body > p { font-size: 13.5px; }
+.connect-binaries { list-style: none; display: grid; gap: 1px; margin: 0; padding: 0; border-radius: var(--radius-md);
+  overflow: hidden; background: var(--border); }
+.connect-binary { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: var(--card); }
+.connect-binary-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.connect-binary-name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; }
+.connect-binary-yours { padding: 1px 7px; border-radius: var(--radius-full); background: var(--primary-soft);
+  color: var(--primary-text); font-size: 11.5px; font-weight: 600; }
+.connect-binary-facts, .connect-binary-sha { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px;
+  color: var(--muted-foreground); font-size: 12.5px; min-width: 0; }
+.connect-binary-facts code, .connect-binary-sha code { font-size: 12px; overflow-wrap: anywhere; }
+.connect-binary-sha .copilotz-copy { height: 22px; padding: 0 5px; }
+.connect-unsigned, .connect-stop { display: flex; align-items: flex-start; gap: 8px; margin: 0;
+  color: var(--muted-foreground); font-size: 12.5px; line-height: 1.5; }
+.connect-unsigned svg, .connect-stop svg { flex: none; margin-top: 2px; }
+.connect-stop { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 13px; }
+.connect-stop code, .connect-unsigned code { font-size: .92em; }
+@media (max-width: 560px) {
+  .connect-binary { flex-wrap: wrap; }
+  .connect-binary .copilotz-button { width: 100%; justify-content: center; }
+}
 
 /* A space's computers: its tab */
 .space-computers { display: grid; gap: 16px; }

@@ -20,6 +20,7 @@ import {
   startComputer,
 } from "../computers/program/computer.ts";
 import { saveState } from "../computers/program/state.ts";
+import { UPDATE } from "../computers/program/release.ts";
 import { WORK } from "../computers/shared/workloads.ts";
 
 export const SECRET = "s3cret";
@@ -39,7 +40,11 @@ export const computers = definePlugin({
     presented: defineCollection({ schema: secret }),
   },
   workers: {
-    computer: { admit: "test.admit", ready: "test.ready", workloads: Object.values(WORK) },
+    computer: {
+      admit: "test.admit",
+      ready: "test.ready",
+      workloads: [...Object.values(WORK), UPDATE],
+    },
   },
   actions: {
     "test.admit": defineAction({

@@ -1,2 +1,2 @@
-/** The computer program's version, as `computer.info` and `--version` say it. */
-export const VERSION = "0.0.1";
+/** The computer program's version, as `computer.info` and `--version` say it, and its builds are named. */
+export const VERSION = "1.0.0-rc.1";

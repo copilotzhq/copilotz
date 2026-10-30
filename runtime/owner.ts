@@ -1057,8 +1057,12 @@ export async function createOwner(
         definition: {
           workerId: identity.workerId,
           providerId: `worker:${worker.kind}`,
-          // What it's sent: its kind's work, as far as it serves it.
-          workloads: registry.workers[worker.kind].workloads.filter((w) => workloads.includes(w)),
+          // What it may say it serves: its kind's work, and any newer work named for its kind (a
+          // newer program, before the app knows that work: it's never sent any). Never anything
+          // else, such as the runtime's jobs.
+          workloads: workloads.filter((w) =>
+            registry.workers[worker.kind].workloads.includes(w) || w.startsWith(`${worker.kind}.`)
+          ),
           capacity,
           providerConfig: { kind: worker.kind, id: worker.id },
           labels: {},

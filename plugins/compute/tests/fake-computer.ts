@@ -3,6 +3,7 @@
  * the secret it's told, as the computer program does.
  */
 import { createWorker } from "@oxian/oxian-js";
+import { UPDATE } from "../computers/program/release.ts";
 import { WORK } from "../computers/shared/workloads.ts";
 
 const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
@@ -12,9 +13,15 @@ const read = async <T>(input: ReadableStream<Uint8Array>) =>
 /**
  * One connecting on `topic` (in-process) with `first` (`code:<code>`, or
  * `<id>.<secret>`); `lose` answers `enrolled` with a failure, keeping
- * nothing, as a program that stopped before it saved its secret.
+ * nothing, as a program that stopped before it saved its secret; `info` says
+ * more of what it is (its version, system); `updates`: it takes updates, as
+ * the built program does.
  */
-export function fakeComputer(topic: string, first: string, options: { lose?: boolean } = {}) {
+export function fakeComputer(
+  topic: string,
+  first: string,
+  options: { lose?: boolean; info?: Record<string, unknown>; updates?: boolean } = {},
+) {
   const asked: { work: string; input: Record<string, unknown> }[] = [];
   let credential = first;
   const attempt = { attemptId: crypto.randomUUID(), epoch: Date.now() };
@@ -49,7 +56,9 @@ export function fakeComputer(topic: string, first: string, options: { lose?: boo
         shell: "bash",
         browser: null,
         version: "test",
+        ...options.info,
       })),
+      ...(options.updates ? answer(UPDATE, () => ({ updating: true })) : {}),
       ...answer(WORK.terminal, (input) => ({
         state: "idle",
         commandId: "c1",

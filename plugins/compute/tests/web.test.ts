@@ -2,7 +2,8 @@
  * Computers on the web, their logic: what an agent waits on you for, in
  * words; the person's shell as the web terminal drives it (a command, its
  * output as it comes, input, Ctrl+C, where it is); what changed in an
- * edit; what a computer tool's call came to; and how things are named.
+ * edit; what a computer tool's call came to; how things are named; and the
+ * visitor's own computer, for the connect flow.
  */
 import { assertEquals } from "@std/assert";
 import type { TerminalOutput } from "../../../hosts/web/mod.ts";
@@ -12,6 +13,7 @@ import { ending, shellSession, where } from "../computers/views/web/shell.ts";
 import { lineDiff } from "../computers/views/web/diff.ts";
 import { listOf, outcome, terminalCall, took } from "../computers/views/web/calls.ts";
 import { folderPath, nameOf, systemOf, tilde, whose } from "../computers/views/web/names.ts";
+import { archName, visitorArch, visitorSystem } from "../computers/views/web/platform.ts";
 import { test } from "../../../testing/mod.ts";
 
 test("what an agent waits on you for, in words", () => {
@@ -307,4 +309,40 @@ test("how computers and what's on them are named", () => {
   assertEquals(whose("agent:assistant", "ana"), { name: "assistant", agent: true, mine: false });
   assertEquals(whose("person:ana", "ana"), { name: "you", agent: false, mine: true });
   assertEquals(whose("person:bob", "ana"), { name: "bob", agent: false, mine: false });
+});
+
+test("the visitor's system and architecture, as their browser says them", async () => {
+  const nav = (userAgent: string, more: Record<string, unknown> = {}) =>
+    ({ userAgent, platform: "", maxTouchPoints: 0, ...more }) as unknown as Navigator;
+  const mac = nav("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15");
+  assertEquals(visitorSystem(mac), "darwin");
+  assertEquals(visitorSystem(nav("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")), "win32");
+  assertEquals(visitorSystem(nav("Mozilla/5.0 (X11; Linux x86_64)")), "linux");
+  // A phone or a tablet isn't the computer being connected (an iPad says it's a Mac).
+  assertEquals(
+    visitorSystem(nav("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)")),
+    undefined,
+  );
+  assertEquals(visitorSystem(nav("Mozilla/5.0 (Linux; Android 15; Pixel 9)")), undefined);
+  assertEquals(
+    visitorSystem(nav("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", { maxTouchPoints: 5 })),
+    undefined,
+  );
+  // Chromium says the architecture; a user agent sometimes does.
+  const arm = nav("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", {
+    userAgentData: {
+      platform: "macOS",
+      mobile: false,
+      getHighEntropyValues: () => Promise.resolve({ architecture: "arm", bitness: "64" }),
+    },
+  });
+  assertEquals(await visitorArch(arm), "arm64");
+  assertEquals(await visitorArch(nav("Mozilla/5.0 (X11; Linux aarch64)")), "arm64");
+  assertEquals(await visitorArch(nav("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")), "x64");
+  assertEquals(
+    ["darwin-arm64", "darwin-x64", "linux-arm64", "win32-x64"].map((p) =>
+      archName(...(p.split("-") as [string, string]))
+    ),
+    ["Apple silicon", "Intel", "Arm (64-bit)", "64-bit (x64; Windows on Arm runs it too)"],
+  );
 });

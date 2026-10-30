@@ -11,10 +11,10 @@
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import { EmptyState } from "../../../../hosts/web/mod.ts";
+import { userMenuOf } from "../shared/menu.ts";
 import { pageOf, sourcesOf } from "../shared/palette.ts";
 import { offered, type Panel } from "../shared/panel.ts";
 import { Frame } from "./frame.tsx";
-import { Me } from "./me.tsx";
 
 /** The app's name, which its logo says: the title the page came with. */
 const app = globalThis.document?.title || "Copilotz";
@@ -52,7 +52,8 @@ export const shellView = (
           ...(where.query ? { query: where.query } : {}),
         },
       }}
-      me={ctx.viewer ? <Me name={ctx.viewer.name} /> : null}
+      menu={userMenuOf(ctx.resources.userMenu)}
+      call={ctx.call}
       panel={offered(panel, kind ?? "home", space) ? { ...panel, space: space! } : undefined}
       sidebar={sections.map(([key, section]) => (
         <section

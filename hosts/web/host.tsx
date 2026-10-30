@@ -12,7 +12,9 @@
  * front ends' `theme` resources merged over the defaults, as CSS variables
  * for light and dark, with the fonts it names (Google's, or the app's own)
  * and its logo, which the toolkit's `Logo` draws. What the server put in the
- * page for its first paint (`webServer({ theme })`) gives way to it.
+ * page for its first paint (`webServer({ theme })`) gives way to it. It
+ * registers the app's service worker, and offers a new version once one is
+ * ready (`install.ts`).
  *
  * ```ts
  * await web({ plugins: [webShell, chatWeb], root: document.getElementById("app")! });
@@ -23,12 +25,15 @@ import { preconnect, preinit, preload } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { type Client, connect } from "../../runtime/client.ts";
 import type { Observation, Plugins } from "../../runtime/mod.ts";
+import { registerWorker } from "./install.ts";
+import { loadOrgs, reenter } from "./orgs.ts";
 import { Part } from "./part.tsx";
 import { session } from "./session.ts";
 import { SignIn } from "./signin.tsx";
 import { BASE } from "./style.ts";
 import { ThemeContext } from "./theme/context.ts";
 import { fontsOf, fromGoogle, preloadsOf, themeCss, themeOf } from "./theme/css.ts";
+import { UpdateReady } from "./update.tsx";
 
 export type WebOptions = {
   plugins: Plugins;
@@ -108,14 +113,21 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
         <style href="copilotz-base" precedence="copilotz">{BASE}</style>
         <Painted />
         {root}
+        <UpdateReady />
       </ThemeContext>,
     );
   draw(null);
+  // Installable, and told when a new version is ready (see pwa.ts).
+  registerWorker();
   const first = await ticket();
   if (!first) {
+    // Still signed in, but no longer in this org (with many): into another of theirs.
+    if (await reenter()) return undefined;
     draw(<SignIn config={config()} />);
     return undefined;
   }
+  // The person's orgs (when the server serves many), asked while the connection is made.
+  void loadOrgs();
   let fresh: string | undefined = first.ticket;
   const url = options.url ??
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/oxian`;

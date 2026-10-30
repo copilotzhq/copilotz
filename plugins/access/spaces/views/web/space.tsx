@@ -78,13 +78,13 @@ export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
       call={ctx.call}
     >
       {style}
-      <Title text={spaceName(space)} />
+      <Title text={spaceName(space, ctx.viewer?.name)} />
       {space.archived ? <Archived space={space} manage={manage} call={ctx.call} /> : null}
       {tabs.length
         ? (
           <>
             <Tabs
-              label={`${spaceName(space)}'s tabs`}
+              label={`${spaceName(space, ctx.viewer?.name)}'s tabs`}
               variant="line"
               className="space-tabs"
               value={tab?.key ?? ""}

@@ -144,7 +144,7 @@ export const spacesPaletteView = (
     limit: searching ? SHOWN.searching : SHOWN.idle,
     items: [...active, ...(searching ? archived : [])].map((s) => ({
       key: `space:${s._id}`,
-      label: spaceName(s),
+      label: spaceName(s, ctx.viewer?.name),
       ...markOf(s),
       description: s.archived
         ? "Archived"

@@ -66,7 +66,7 @@ function SpacePanel(
   }, [tab?.key]);
   const id = useId();
   const personal = space.kind === "personal";
-  const name = spaceName(space);
+  const name = spaceName(space, viewer);
   return (
     <section className="space-panel" aria-label={`${name}, beside this chat`}>
       <header className="space-panel-head">

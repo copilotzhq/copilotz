@@ -26,6 +26,10 @@
  *   (see `files.ts`).
  * - Plugins' own paths, their `routes` resource: a webhook, an OAuth callback,
  *   an API, a download (see `routes.ts`).
+ * - `GET /manifest.webmanifest` and `GET /sw.js`: the app, installable: its
+ *   manifest (name, colours, icons drawn from the theme's mark) and its
+ *   service worker, which keeps the code at hand and offers new versions
+ *   (see `pwa.ts`).
  * - Anything else: the page, which loads the entry. Given the app's `theme`, the
  *   page carries it (its variables and the page's base), so the first paint
  *   is in it, dark included, before the code loads; the host takes over. Its
@@ -40,6 +44,7 @@
 import type { Actor, Runtime } from "../../runtime/mod.ts";
 import { type Asset, assetServer } from "./assets.ts";
 import { fileServer } from "./files.ts";
+import { MANIFEST, manifestOf, precacheOf, versionOf, WORKER, workerOf } from "./pwa.ts";
 import { BASE } from "./style.ts";
 import { fontsOf, fromGoogle, plainColour, preloadsOf, themeCss } from "./theme/css.ts";
 import type { Theme } from "./theme/default.ts";
@@ -86,7 +91,14 @@ export type WebServerOptions = {
 };
 
 export type { Asset };
-export { type HttpAnswer, type HttpRequest, httpRequest, type Route, VISITOR } from "./routes.ts";
+export {
+  type HttpAnswer,
+  type HttpRequest,
+  httpRequest,
+  type Route,
+  type Served,
+  VISITOR,
+} from "./routes.ts";
 
 /**
  * Bundled code: its files by name (`deno bundle --code-splitting --outdir`'s),
@@ -177,13 +189,32 @@ const look = (theme: Theme | undefined) => {
   ].join("\n");
 };
 
+/** Text that can't end the attribute it goes in. */
+const quoted = (text: string) =>
+  text.replaceAll("&", "&amp;").replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;");
+
+/** The app as an installed one: its manifest, and its name and bar on phones' home screens. */
+const installable = (options: WebServerOptions) => {
+  const title = quoted(options.title ?? "Copilotz");
+  return [
+    `<link rel="manifest" href="${MANIFEST}">`,
+    `<meta name="application-name" content="${title}">`,
+    `<meta name="apple-mobile-web-app-title" content="${title}">`,
+    '<meta name="mobile-web-app-capable" content="yes">',
+    '<meta name="apple-mobile-web-app-capable" content="yes">',
+    '<meta name="apple-mobile-web-app-status-bar-style" content="default">',
+    "",
+  ].join("\n");
+};
+
 const page = (options: WebServerOptions, entry: string) =>
   `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-${look(options.theme)}<title>${options.title ?? "Copilotz"}</title>
+${look(options.theme)}${installable(options)}<title>${options.title ?? "Copilotz"}</title>
 <script id="copilotz-config" type="application/json">${
     // Escaped, so nothing in it can end the script.
     JSON.stringify({ google: options.google ?? null, dev: options.dev ?? false })
@@ -228,6 +259,20 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
   const files = fileServer(runtime, whom);
   const routes = routeServer(runtime, whom);
 
+  /** The service worker, for this version of the code: its version is the code's own. */
+  let worker: Promise<string> | undefined;
+  const serviceWorker = () =>
+    worker ??= code().then(async (made) =>
+      workerOf({
+        version: await versionOf(made.files),
+        code: CODE,
+        entry: made.entry,
+        precache: [`${CODE}${made.entry}`, ...precacheOf(options.theme)],
+        ...(options.theme ? { theme: options.theme } : {}),
+        ...(options.title ? { title: options.title } : {}),
+      })
+    );
+
   const signedIn = (url: URL, session: string, person: string) =>
     json({ person }, {
       headers: { "set-cookie": setCookie(url, session, 30 * 86_400, name) },
@@ -251,6 +296,21 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
         });
       }
       switch (route) {
+        case `GET ${MANIFEST}`:
+          return new Response(JSON.stringify(manifestOf(options.theme, options.title)), {
+            headers: {
+              "content-type": "application/manifest+json; charset=utf-8",
+              "cache-control": "no-cache",
+            },
+          });
+        case `GET ${WORKER}`:
+          return new Response(await serviceWorker(), {
+            headers: {
+              "content-type": "text/javascript; charset=utf-8",
+              "cache-control": "no-cache",
+              "service-worker-allowed": "/",
+            },
+          });
         case "POST /connect": {
           const actor = await whom(request);
           if (!actor) return json({ error: "Not signed in" }, { status: 401 });

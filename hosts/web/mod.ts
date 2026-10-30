@@ -2,7 +2,8 @@
  * The web host, for the browser: `web()` runs the app there, as the signed-in
  * person, in the app's theme. What features' web front ends use, as they'd
  * use React: `Part`, `LazyView` (a View shown only while a component is),
- * `go` (moving on without reloading), `signOut`, the command palette's
+ * `go` (moving on without reloading), `signOut`, the person's orgs when the
+ * server serves many (`useOrgs`, `enterOrg`…), the command palette's
  * items and steps (`openPalette`, at a step, from anywhere), and the toolkit
  * (`toolkit/`), whose pieces take their look from the theme's variables
  * (`theme/`): a front end composes them, and its own CSS is only its layout,
@@ -10,6 +11,30 @@
  * `tickets.ts`), for the process that serves the page.
  */
 export { go, signOut, web, type WebOptions, type Where } from "./host.tsx";
+// Orgs, when the server serves many (`hosts/orgs`): the person's, and going between them.
+export {
+  answerOrgInvite,
+  arrived,
+  asStaff,
+  type ConsoleOrg,
+  consoleOrgs,
+  createOrg,
+  currentOrg,
+  deleteOrg,
+  enterOrg,
+  exportOrgUrl,
+  moveOrg,
+  type Org,
+  type OrgInvite,
+  orgName,
+  type Orgs,
+  type OrgsState,
+  refreshOrgs,
+  type Switching,
+  updateOrg,
+  useOrgs,
+  useSwitching,
+} from "./orgs.ts";
 export { message, node, Part } from "./part.tsx";
 export { LazyView } from "./lazy.tsx";
 // The command palette: the page's (the shell shows it), and opening it at a step from anywhere.
@@ -45,7 +70,8 @@ export { Avatar } from "./toolkit/avatar.tsx";
 export { Icon, type IconName, ICONS } from "./toolkit/icon.tsx";
 export { Logo } from "./toolkit/logo.tsx";
 // Overlays and navigation.
-export { Menu, type MenuItem } from "./toolkit/menu.tsx";
+export { Menu, type MenuItem, type MenuTrigger } from "./toolkit/menu.tsx";
+export { Popover, type PopoverTrigger } from "./toolkit/popover.tsx";
 export { Dialog } from "./toolkit/dialog.tsx";
 export { Drawer } from "./toolkit/drawer.tsx";
 export { type Tab, Tabs } from "./toolkit/tabs.tsx";

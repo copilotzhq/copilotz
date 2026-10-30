@@ -8,9 +8,23 @@
  */
 import type { Member, Reached, Space } from "../../contract.ts";
 
-/** What a space is called where it shows: yours is "Personal". */
-export const spaceName = (space: Pick<Space, "name" | "kind">) =>
-  space.kind === "personal" ? "Personal" : space.name;
+/** Someone, as a space's name says them: an email's name part, or their id. */
+const short = (person: string) => person.includes("@") ? person.split("@")[0] : person;
+
+/**
+ * What a space is called where it shows: yours is "Personal"; someone
+ * else's (which an org's owners and admins reach), theirs: "bob's Personal".
+ */
+export const spaceName = (space: Pick<Space, "name" | "kind" | "owner">, viewer?: string) =>
+  space.kind !== "personal"
+    ? space.name
+    : viewer && space.owner && space.owner !== viewer
+    ? `${short(space.owner)}'s Personal`
+    : "Personal";
+
+/** Whether a space is someone else's Personal one. */
+export const theirsAlone = (space: Pick<Space, "kind" | "owner">, viewer?: string) =>
+  space.kind === "personal" && !!viewer && !!space.owner && space.owner !== viewer;
 
 /** Personal first, then the others by name. */
 export const bySpace = <S extends Pick<Space, "name" | "kind">>(spaces: S[]): S[] =>

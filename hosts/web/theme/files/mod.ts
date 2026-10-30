@@ -5,7 +5,8 @@
  * stylesheet (Manrope and Space Grotesk, from Google Fonts, under the SIL
  * Open Font License 1.1: `OFL-*.txt`), Temml's font for math in messages
  * (MIT, as Temml is), Copilotz's PNG icon, and the page's SVG icon, drawn
- * from the app's own theme's mark (`icon.ts`).
+ * from the app's own theme's mark (`icon.ts`), with the installed app's PNG
+ * icons drawn from it too (192 and 512 px, and a maskable one: `png.ts`).
  *
  * They're data, not files on disk, so the server reads nothing and runs
  * wherever `Request` does; each is decoded on its first request. Only the
@@ -15,6 +16,7 @@
 import type { Asset } from "../../assets.ts";
 import type { Theme } from "../default.ts";
 import { iconSvg } from "../icon.ts";
+import { iconPng } from "../png.ts";
 import { FACES } from "./faces.ts";
 import { ICON_PNG } from "./icon-png.ts";
 import { MANROPE_LATIN } from "./manrope-v23-latin.ts";
@@ -40,6 +42,14 @@ export function hostFiles(theme?: Theme): Record<string, Asset> {
     [`${HOST_ASSETS}space-grotesk-v22-latin-ext.woff2`]: decoded(SPACE_GROTESK_LATIN_EXT),
     [`${HOST_ASSETS}temml-v0140.woff2`]: decoded(TEMML_FONT),
     [`${HOST_ASSETS}icon.png`]: decoded(ICON_PNG),
-    ...(icon ? { [`${HOST_ASSETS}icon.svg`]: icon } : {}),
+    ...(icon
+      ? {
+        [`${HOST_ASSETS}icon.svg`]: icon,
+        // Drawn on their first request, from the same mark.
+        [`${HOST_ASSETS}icon-192.png`]: async () => (await iconPng(theme!, 192))!,
+        [`${HOST_ASSETS}icon-512.png`]: async () => (await iconPng(theme!, 512))!,
+        [`${HOST_ASSETS}icon-maskable.png`]: async () => (await iconPng(theme!, 512, "maskable"))!,
+      }
+      : {}),
   };
 }

@@ -19,6 +19,10 @@
  *   the rest from the records, with the same result.
  * - **Re-rating** (`usage.rerate`) never changes a record: it appends
  *   adjustments for what new rates would change, so totals follow.
+ * - **Across an org** (where the app serves many): `usage.org` (totals) and
+ *   `usage.calls` (the latest uses) give its owners and admins everyone's,
+ *   and anyone else their own. Its web front end (web.tsx) is the org
+ *   page's Usage section.
  *
  * Rates are keyed by subject (`"openai/gpt-6.1-sol"`), then by provider
  * (`"chatgpt/*"`), then the catalog, then `"*"`. A rate prices units per
@@ -34,6 +38,7 @@ import { usageRollup } from "./collections/rollup.ts";
 import { usage } from "./collections/usage.ts";
 import { DEFAULTS, rollupsOf } from "./shared/settings.ts";
 import { recordAction } from "./actions/record.ts";
+import { orgUsageAction, usageCallsAction } from "./actions/org.ts";
 import { ledger } from "./resources/ledger.ts";
 
 export type { Use } from "./shared/use.ts";
@@ -52,6 +57,8 @@ export const usagePlugin: Plugin = definePlugin({
     "usage.record": recordAction,
     "usage.rerate": rerateAction,
     "usage.close": closeAction,
+    "usage.org": orgUsageAction,
+    "usage.calls": usageCallsAction,
   },
   schedules: { "usage.close": { cron: "10 0 * * *", call: "usage.close", input: {} } },
   check(merged) {

@@ -51,7 +51,7 @@ export function SpaceHeader(
   const [renaming, setRenaming] = useState(false);
   const [inviting, setInviting] = useState(false);
   const personal = space.kind === "personal";
-  const name = spaceName(space);
+  const name = spaceName(space, me);
   const people = peopleIn(members);
   const agents = members.filter((m) => whoOf(m.member).kind === "agent").length;
   const role = members.find((m) => m.member === `person:${me}`)?.role;
@@ -185,9 +185,7 @@ export function SpaceHeader(
             href={fresh}
             className="space-narrow"
           />
-          {more.length
-            ? <Menu label={`${spaceName(space)}: more`} items={more} align="end" />
-            : null}
+          {more.length ? <Menu label={`${name}: more`} items={more} align="end" /> : null}
         </>
       }
     >

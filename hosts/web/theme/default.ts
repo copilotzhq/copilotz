@@ -19,9 +19,10 @@
  * are: `background`/`foreground`, `card`, `popover`, `primary`, `secondary`,
  * `muted`, `accent` and `destructive` (each with its `-foreground`), `border`,
  * `input`, `ring`, `sidebar-*`, `radius`, `font-sans`, `font-mono` and
- * `shadow-*`. To them the toolkit adds `font-display` (headings), `success`,
- * `warning` and `info`, and `bubble`/`bubble-foreground` (the reader's own
- * messages). Each colour role (`primary`, `destructive`, `success`,
+ * `shadow-*`, and `chart-1` to `chart-5` (series in charts, in that order:
+ * a chart of one series uses `chart-1`). To them the toolkit adds
+ * `font-display` (headings), `success`, `warning` and `info`, and
+ * `bubble`/`bubble-foreground` (the reader's own messages). Each colour role (`primary`, `destructive`, `success`,
  * `warning`, `info`) is a fill (and icons), its `-foreground` (text on the
  * fill), `-text` (the role as text on the page), `-soft` (a tinted surface)
  * and `-border` (a tinted border). They derive from their role
@@ -170,6 +171,12 @@ export const DEFAULT_THEME: Theme = {
     "warning-border": "color-mix(in oklab, var(--warning) 40%, var(--background))",
     "info-soft": "color-mix(in oklab, var(--info) 7%, var(--background))",
     "info-border": "color-mix(in oklab, var(--info) 28%, var(--background))",
+    // Charts' series: blue, orange, aqua, yellow, magenta, apart for colour-blind eyes too.
+    "chart-1": "#2a78d6",
+    "chart-2": "#eb6834",
+    "chart-3": "#1baf7a",
+    "chart-4": "#eda100",
+    "chart-5": "#e87ba4",
     "shadow-sm": "0 1px 2px rgb(19 27 47 / .06)",
     "shadow-md": "0 1px 2px rgb(19 27 47 / .04), 0 6px 20px rgb(19 27 47 / .07)",
     "shadow-lg": "0 18px 60px rgb(19 27 47 / .22)",
@@ -216,6 +223,11 @@ export const DEFAULT_THEME: Theme = {
     "warning-border": "color-mix(in oklab, var(--warning) 32%, var(--background))",
     "info-soft": "color-mix(in oklab, var(--info) 10%, var(--background))",
     "info-border": "color-mix(in oklab, var(--info) 28%, var(--background))",
+    "chart-1": "#3987e5",
+    "chart-2": "#d95926",
+    "chart-3": "#199e70",
+    "chart-4": "#c98500",
+    "chart-5": "#d55181",
     "shadow-sm": "0 1px 2px rgb(0 0 0 / .45)",
     "shadow-md": "0 1px 2px rgb(0 0 0 / .3), 0 8px 24px rgb(0 0 0 / .32)",
     "shadow-lg": "0 18px 64px rgb(0 0 0 / .6)",

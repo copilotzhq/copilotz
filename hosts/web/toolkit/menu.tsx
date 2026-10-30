@@ -1,7 +1,8 @@
 /// <reference lib="dom" />
 /**
  * A menu of actions behind a button: an icon button (`icon`, "more" by
- * default) named by `label`, or a button that says `text`. Items are data:
+ * default) named by `label`, a button that says `text`, or one of the front
+ * end's own (`trigger`, given the props that open it). Items are data:
  * a `label`, an `icon`, what selecting it does (`onSelect`) or where it goes
  * (`href`), `tone: "destructive"`, `disabled`, a `shortcut` to show; and
  * `"separator"` between groups.
@@ -23,6 +24,7 @@
 import {
   type KeyboardEvent,
   type ReactNode,
+  type Ref,
   type ToggleEvent,
   useEffect,
   useId,
@@ -76,15 +78,39 @@ const itemsOf = (
   menu: HTMLElement | null,
 ) => [...menu?.querySelectorAll<HTMLElement>(".copilotz-menu-item:not(:disabled)") ?? []];
 
+/** What a menu's own button is given: spread them on a button. */
+export type MenuTrigger = {
+  ref: Ref<HTMLButtonElement>;
+  popoverTarget: string;
+  "aria-haspopup": "menu";
+  "aria-expanded": boolean;
+  "aria-controls": string;
+  onKeyDown(event: KeyboardEvent<HTMLElement>): void;
+};
+
 export function Menu(
-  { label, icon = "more", text, items, align = "start", variant, size }: {
+  {
+    label,
+    icon = "more",
+    text,
+    trigger: own,
+    items,
+    align = "start",
+    side = "bottom",
+    variant,
+    size,
+  }: {
     /** What the menu is, said to screen readers (and the icon button's tooltip). */
     label: string;
     icon?: IconName;
     /** A button with words instead of an icon. */
     text?: string;
+    /** A button of the front end's own instead (a person's row), given what opens the menu. */
+    trigger?(props: MenuTrigger): ReactNode;
     items: (MenuItem | "separator")[];
     align?: "start" | "end";
+    /** Under its button (or over it, when there's no room), or over it first. */
+    side?: "top" | "bottom";
     variant?: "ghost" | "outline" | "secondary";
     size?: "sm" | "md" | "lg";
   },
@@ -97,7 +123,7 @@ export function Menu(
 
   useEffect(() => {
     if (!open || !menu.current || !trigger.current) return;
-    return anchor(menu.current, trigger.current, { side: "bottom", align });
+    return anchor(menu.current, trigger.current, { side, align });
   }, [open]);
 
   const focus = (which: "first" | "last" | number) => {
@@ -162,7 +188,9 @@ export function Menu(
     <>
       {SHEET}
       {ANCHORED}
-      {text
+      {own
+        ? own(opener)
+        : text
         ? (
           <Button {...opener} variant={variant ?? "outline"} size={size} iconEnd="chevron-down">
             {text}

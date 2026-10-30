@@ -28,26 +28,50 @@
  * and 30 for where to go ("Spaces", "Chats"), 40 for making something
  * ("Create"), 90 for the shell's own ("General": the panel, signing out).
  *
+ * Who's signed in has a menu of what front ends put there (the `userMenu`
+ * resource: `{ label, icon?, href, order? }`, pages of the person's own,
+ * such as Connected accounts), then signing out.
+ *
+ * Where the app serves many orgs (`hosts/orgs`; the web host's `useOrgs`),
+ * the shell is where you are among them: the org switcher at the top of the
+ * sidebar (your orgs, Personal first; invitations, answered in place; a new
+ * org; going into one shows a short transition, then its home), the user
+ * menu at its foot, and orgs in the palette. In an org as platform staff, a
+ * line in the warning colour runs along the top, and the switcher says so.
+ * The org's page (`/org`) is made of sections front ends add (the
+ * `orgSettings` resource: `{ title, view, icon?, order?, roles? }`, each a
+ * View given item `{ _id }` and hints `{ org, role, staff, mode }`), and
+ * staff's console (`/console`) lists every org, to enter, rename, suspend,
+ * move, export or delete. The resource kinds' shapes are in contract.ts.
+ *
  * ```ts
  * resources: {
  *   sidebar: { spaces: { title: "Spaces", view: "spaces" } },
  *   panel: { view: "space.panel", on: ["thread"], title: "Space" },
  *   palette: { spaces: { view: "spaces.palette", order: 10 } },
+ *   orgSettings: { members: { title: "Members", view: "org.members", icon: "users", order: 20 } },
+ *   userMenu: { accounts: { label: "Connected accounts", icon: "lock", href: "/accounts" } },
  * }
  * ```
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { consoleView } from "./views/console.tsx";
 import { defaultView } from "./views/default.tsx";
+import { orgView } from "./views/org.tsx";
 import { shellView } from "./views/shell.tsx";
 
 export type { Section } from "./views/shell.tsx";
 export type { Panel } from "./shared/panel.ts";
 export type { PaletteSource } from "./shared/palette.ts";
+export type { OrgSection } from "./shared/orgs.ts";
+export type { UserMenuEntry } from "./shared/menu.ts";
 
 export const webShell: Plugin = definePlugin({
   name: "web-shell",
   views: {
     shell: { web: shellView },
+    org: { web: orgView },
+    console: { web: consoleView },
     "*": { web: defaultView },
   },
 });

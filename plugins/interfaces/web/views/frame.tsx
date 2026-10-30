@@ -11,6 +11,11 @@
  * the top of the sidebar, over whatever page is open; the same key closes
  * it. Besides what front ends list there, the shell offers its own: the
  * side panel, going home, signing out.
+ *
+ * Where the app serves many orgs (see orgs.tsx), the top of the sidebar is
+ * the org switcher beside the app's mark, the foot is the user menu, and
+ * the palette lists orgs too; in an org as staff, a line in the warning
+ * colour runs along the top of the window, all the time.
  */
 import {
   type CSSProperties,
@@ -21,6 +26,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  asStaff,
   Button,
   closePalette,
   Drawer,
@@ -32,11 +38,18 @@ import {
   Palette,
   type PaletteGroup,
   signOut,
+  useOrgs,
 } from "../../../../hosts/web/mod.ts";
 import { apple, opens, type PaletteSource, shortcutOf } from "../shared/palette.ts";
 import { toggleLabel } from "../shared/panel.ts";
+import type { UserMenuEntry } from "../shared/menu.ts";
+import { useStanding } from "../shared/standing.ts";
 import { STYLE } from "../shared/style.ts";
+import { Me } from "./me.tsx";
+import { NewOrg, orgsPalette, OrgSwitcher, Switching } from "./orgs.tsx";
 import { type Offered, PanelSheet, PanelToggle, SidePanel, usePanel } from "./panel.tsx";
+
+type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 /** Where the sidebar becomes a drawer (as the style says). */
 const PHONE = "(max-width: 760px)";
@@ -51,7 +64,7 @@ const phone = {
 };
 
 export function Frame(
-  { path, brand, viewer, sidebar, me, panel, palette, children }: {
+  { path, brand, viewer, sidebar, menu, call, panel, palette, children }: {
     /** Where the page is: going elsewhere closes the drawer, and the panel's sheet. */
     path: string;
     /** The app's name, which its logo says (or shows). */
@@ -59,7 +72,10 @@ export function Frame(
     /** Who's looking: the panel is kept as they left it. */
     viewer: string;
     sidebar: ReactNode;
-    me: ReactNode;
+    /** What front ends put in the person's menu (the `userMenu` resource). */
+    menu: UserMenuEntry[];
+    /** How the shell calls Actions (the person's standing in their org: `org.me`). */
+    call: Call;
     /** The side panel, when the page offers it. */
     panel?: Offered;
     /** What fills the command palette, and where the person is, for its Views. */
@@ -73,6 +89,12 @@ export function Frame(
   const side = usePanel(viewer, path, narrow);
   const panelId = useId();
   const mac = apple();
+  const orgsState = useOrgs();
+  const orgs = orgsState.status === "ready" ? orgsState.value : undefined;
+  const here = orgsState.status === "ready" ? orgsState.here : undefined;
+  const staff = orgs ? asStaff(orgs) : false;
+  const standing = useStanding(call, !!orgs);
+  const [making, setMaking] = useState(false);
 
   // ⌘K (Ctrl+K) opens the palette over any page, and closes it; not over another dialog.
   // Heard first (capturing), so a field that keeps its keys (a terminal's) doesn't swallow it.
@@ -94,7 +116,7 @@ export function Frame(
     setOpen(false);
     openPalette();
   };
-  const own: PaletteGroup[] = [{
+  const own: PaletteGroup[] = [...(orgs ? orgsPalette(orgs, here, standing) : []), {
     title: "General",
     order: 90,
     items: [
@@ -121,10 +143,30 @@ export function Frame(
 
   const content = (
     <>
-      <div className="copilotz-sidebar-head">
-        <a className="copilotz-brand" href="/">
-          <Logo variant="full" name={brand} size={32} />
-        </a>
+      <div className="copilotz-sidebar-head" data-orgs={orgs ? "" : undefined}>
+        {orgs
+          ? (
+            <>
+              <a className="copilotz-brand copilotz-brand-mark" href="/" title={`${brand}: home`}>
+                <Logo name={brand} size={24} />
+              </a>
+              <OrgSwitcher
+                orgs={orgs}
+                here={here}
+                standing={standing}
+                staff={staff}
+                onNew={() => {
+                  setOpen(false);
+                  setMaking(true);
+                }}
+              />
+            </>
+          )
+          : (
+            <a className="copilotz-brand" href="/">
+              <Logo variant="full" name={brand} size={32} />
+            </a>
+          )}
         {narrow
           ? <IconButton icon="close" label="Close sidebar" onClick={() => setOpen(false)} />
           : null}
@@ -141,13 +183,31 @@ export function Frame(
         </NavItem>
       </div>
       <nav className="copilotz-sections" aria-label="Spaces and chats">{sidebar}</nav>
-      {me}
+      {viewer
+        ? (
+          <Me
+            name={viewer}
+            email={orgs?.email}
+            menu={menu}
+            {...(orgs ? { orgs: { here: !!here, standing, staff: orgs.staff } } : {})}
+          />
+        )
+        : null}
     </>
   );
 
   return (
-    <div className="copilotz-shell">
+    <div className="copilotz-shell" data-staff={staff || undefined}>
       <style href="web-shell" precedence="copilotz">{STYLE}</style>
+      {staff
+        ? (
+          <div className="copilotz-staff-line" role="note">
+            <span className="copilotz-sr">
+              You're in this org as platform staff: what you do is on its record.
+            </span>
+          </div>
+        )
+        : null}
       <Button
         className="copilotz-skip"
         onClick={() => document.getElementById("copilotz-main")?.focus()}
@@ -199,6 +259,8 @@ export function Frame(
       </div>
       {panel && narrow ? <PanelSheet panel={panel} state={side} id={panelId} /> : null}
       <Palette sources={palette.sources} hints={palette.hints} own={own} />
+      {orgs ? <NewOrg open={making} onClose={() => setMaking(false)} /> : null}
+      <Switching />
     </div>
   );
 }

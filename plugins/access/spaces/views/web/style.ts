@@ -2,8 +2,9 @@
  * Spaces' layout on the web, on the theme's variables: the sidebar's tree
  * (each space, its fold, what's under it, making one, those archived) and
  * invitations to you, a space's page (its header, an archived space's note,
- * tabs, members, inviting and invitations, settings) and the side panel.
- * Only layout: the pieces are the toolkit's.
+ * tabs, members, inviting and invitations, settings), the side panel, and
+ * the org's sections (About, Members). Only layout: the pieces are the
+ * toolkit's.
  */
 export const STYLE = `
 /* The sidebar: spaces as a tree */
@@ -206,5 +207,26 @@ export const STYLE = `
   .space-panel-tabs .copilotz-tab[aria-selected=false] { padding: 0 9px; }
   .space-panel-tabs .copilotz-tab[aria-selected=false] .space-panel-tab-label { position: absolute; width: 1px;
     height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+
+/* The org's sections: its people, and what it is */
+.org-row { grid-template-columns: 34px minmax(0, 1fr) auto; }
+.org-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-row-spacer { width: 30px; }
+.org-row .space-row-end > .copilotz-badge { min-width: 116px; justify-content: center; }
+.org-note { margin: -8px 0 0; }
+.org-remove { display: grid; gap: 18px; }
+.org-remove-means { list-style: none; display: grid; gap: 10px; margin: 0; padding: 0; color: var(--secondary-foreground);
+  font-size: 14px; line-height: 1.5; }
+.org-remove-means li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; }
+.org-remove-means .copilotz-icon { margin-top: 3px; color: var(--muted-foreground); }
+.org-about-role { display: inline-flex; padding-top: 4px; }
+.org-about-role .copilotz-badge { gap: 4px; font-size: 12.5px; padding: 3px 10px; }
+.org-about-roles { display: grid; gap: 6px; color: var(--secondary-foreground); line-height: 1.5; }
+.org-about-roles b { color: var(--foreground); font-weight: 620; }
+.org-about-sees .copilotz-notice-body { line-height: 1.55; }
+@container space-tab (max-width: 520px) {
+  .org-row { grid-template-columns: 34px minmax(0, 1fr); }
+  .org-row .space-row-end { grid-column: 2; }
 }
 `;

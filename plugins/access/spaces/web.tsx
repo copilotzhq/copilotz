@@ -19,6 +19,14 @@
  * to do with the one you're in, a new one, and invitations; and the space
  * picker every "Move to…" opens (`space.pick`, a step's View). The resource
  * kinds are in contract.ts. Add it beside the web shell.
+ *
+ * Where the app serves many orgs, two sections of the org's page (the web
+ * shell's `orgSettings`): About (its name, renamed by its owners; your role;
+ * what its owners and admins can see) and Members (its people and their
+ * roles; for its owners and admins, inviting by email, the invitations
+ * waiting, changing roles and taking someone out, handing over the spaces
+ * only they managed). Owners and admins reach every space; the sidebar
+ * lists the ones they're in, and the rest of the org's apart.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { invitationsView } from "./views/web/invitations.tsx";
@@ -26,6 +34,8 @@ import { invitedView } from "./views/web/invited.tsx";
 import { invitingView } from "./views/web/inviting.tsx";
 import { membersView } from "./views/web/members.tsx";
 import { notHereView } from "./views/web/not-here.tsx";
+import { orgAboutView } from "./views/web/org-about.tsx";
+import { orgMembersView } from "./views/web/org-members.tsx";
 import { spacesPaletteView } from "./views/web/palette.tsx";
 import { spacePanelView } from "./views/web/panel.tsx";
 import { spacePickView } from "./views/web/pick.tsx";
@@ -48,6 +58,8 @@ export const spacesWeb: Plugin = definePlugin({
     invitations: { web: invitationsView },
     "invitations.home": { web: invitedView },
     "space.not-here": { web: notHereView },
+    "org.about": { web: orgAboutView },
+    "org.members": { web: orgMembersView },
   },
   resources: {
     sidebar: {
@@ -62,5 +74,15 @@ export const spacesWeb: Plugin = definePlugin({
     palette: { spaces: { view: "spaces.palette", order: 10 } },
     home: { invitations: { view: "invitations.home", order: 10 } },
     refusals: { not_here: { view: "space.not-here" } },
+    orgSettings: {
+      about: { title: "About", view: "org.about", icon: "info", order: 10 },
+      members: {
+        title: "Members",
+        view: "org.members",
+        icon: "users",
+        order: 20,
+        roles: ["owner", "admin", "member"],
+      },
+    },
   },
 });

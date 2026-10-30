@@ -1,11 +1,13 @@
 # Publishes a Copilotz 1.x release. Pushing a tag `v1.*` (`v1.0.0-rc.1`,
 # `v1.0.0`, `v1.2.3`) checks that it names the version deno.json and
 # package.json say, runs the whole test workflow, then publishes that version
-# to JSR (`@copilotz/copilotz`, through GitHub's OIDC: no token) and to npm
-# (`copilotz`, built from the sources, with the `NPM_TOKEN` secret and
-# provenance). A version with a pre-release part (`-rc.1`) goes to npm's `next`
-# tag, so `npm install copilotz` keeps the last stable one. Nothing else
-# publishes: not a push, not a pull request, not a tag outside 1.x.
+# to JSR (`@copilotz/copilotz`) and to npm (`copilotz`, built from the
+# sources, with provenance), both through GitHub's OIDC: no token. On npm that
+# is trusted publishing: the package's settings trust this repository's
+# publish.yml. A version already on npm (published by hand) is left as it is.
+# A version with a pre-release part (`-rc.1`) goes to npm's `next` tag, so
+# `npm install copilotz` keeps the last stable one. Nothing else publishes:
+# not a push, not a pull request, not a tag outside 1.x.
 name: Publish
 
 on:
@@ -71,10 +73,16 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - run: npm ci
-      - run: npm run build
-      - run: node scripts/npm/smoke.ts
-      - run: npm publish --provenance --access public --tag ${{ needs.version.outputs.tag }}
+      - id: npm
+        name: Whether npm has this version already
+        run: |
+          if npm view "copilotz@${{ needs.version.outputs.version }}" version > /dev/null 2>&1; then
+            echo "::notice::copilotz@${{ needs.version.outputs.version }} is on npm already"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.npm.outputs.published != 'true'
+        run: npm ci && npm run build && node scripts/npm/smoke.ts
+      # Trusted publishing (npm 11.5.1 or later, as Node 24 has): no token, provenance included.
+      - if: steps.npm.outputs.published != 'true'
+        run: npm publish --access public --tag ${{ needs.version.outputs.tag }}
         working-directory: dist/npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

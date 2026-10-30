@@ -217,7 +217,7 @@ test("Cloud Run builds a folder without a Dockerfile with buildpacks, uploaded i
     assertEquals([create.method, create.path], ["POST", "/v1/projects/p/builds"]);
     const body = JSON.parse(create.body);
     const stamp = object.slice("src/shop/".length, -".tgz".length);
-    const image = `us-central1-docker.pkg.dev/p/cz-apps/shop:${stamp}`;
+    const image = `us-central1-docker.pkg.dev/p/cz-apps/cz-app-shop:${stamp}`;
     assertEquals(body.source, { storageSource: { bucket: "p-cz-apps", object } });
     assertEquals(body.steps, [{
       name: "gcr.io/k8s-skaffold/pack",
@@ -257,7 +257,7 @@ test("Cloud Run builds a folder with a Dockerfile with it, then pushes; a failed
       { name: "gcr.io/cloud-builders/docker", args: ["build", "-t", image, "."] },
       { name: "gcr.io/cloud-builders/docker", args: ["push", image] },
     ]);
-    assertMatch(image, /^us-central1-docker\.pkg\.dev\/p\/cz-apps\/api:\d{8}-\d{6}-\d{3}$/);
+    assertMatch(image, /^us-central1-docker\.pkg\.dev\/p\/cz-apps\/cz-app-api:\d{8}-\d{6}-\d{3}$/);
   } finally {
     await g.close();
   }
@@ -291,22 +291,22 @@ test("Cloud Run deploys: creates the service, public and scaling to zero, then p
     const host = hostFor(g.urls);
     const first = await host.deploy({ app: "shop", image: "img:1", port: 3000, env: { A: "1" } });
     assertEquals(first, {
-      service: "projects/p/locations/us-central1/services/shop",
-      target: "https://shop-xyz-uc.a.run.app",
-      revision: "shop-00001-abc",
+      service: "projects/p/locations/us-central1/services/cz-app-shop",
+      target: "https://cz-app-shop-xyz-uc.a.run.app",
+      revision: "cz-app-shop-00001-abc",
     });
     const [read, create, poll] = g.run.seen;
     assertEquals([read.method, read.path], [
       "GET",
-      "/v2/projects/p/locations/us-central1/services/shop",
+      "/v2/projects/p/locations/us-central1/services/cz-app-shop",
     ]);
     assertEquals([create.method, create.path, create.query.get("serviceId")], [
       "POST",
       "/v2/projects/p/locations/us-central1/services",
-      "shop",
+      "cz-app-shop",
     ]);
     assertEquals(JSON.parse(create.body), {
-      labels: { "copilotz-app": "shop", "managed-by": "copilotz" },
+      labels: { "copilotz-app": "cz-app-shop", "managed-by": "copilotz" },
       ingress: "INGRESS_TRAFFIC_ALL",
       invokerIamDisabled: true,
       template: {
@@ -328,9 +328,9 @@ test("Cloud Run deploys: creates the service, public and scaling to zero, then p
 
     g.run.seen.length = 0;
     const second = await host.deploy({ app: "shop", image: "img:2", port: 3000 });
-    assertEquals(second.revision, "shop-00002-abc");
+    assertEquals(second.revision, "cz-app-shop-00002-abc");
     const patch = g.run.seen.find((s) => s.method === "PATCH")!;
-    assertEquals(patch.path, "/v2/projects/p/locations/us-central1/services/shop");
+    assertEquals(patch.path, "/v2/projects/p/locations/us-central1/services/cz-app-shop");
     assertEquals(JSON.parse(patch.body).template.containers[0].image, "img:2");
     assertEquals(g.run.seen.filter((s) => s.method === "POST"), []);
 
@@ -355,7 +355,7 @@ test("Cloud Run's usage sums Monitoring's series: instance seconds by size, and 
     assertEquals(used, { vcpuSeconds: 100, gibSeconds: 50, requests: 12 });
     const [first] = g.monitoring.seen;
     assertEquals(first.path, "/v3/projects/p/timeSeries");
-    assertStringIncludes(first.query.get("filter")!, 'resource.labels.service_name="shop"');
+    assertStringIncludes(first.query.get("filter")!, 'resource.labels.service_name="cz-app-shop"');
     assertEquals(first.query.get("interval.startTime"), "2026-10-29T00:00:00.000Z");
     assertEquals(first.query.get("aggregation.alignmentPeriod"), "86400s");
     // The second page was asked for.

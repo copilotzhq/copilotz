@@ -91,10 +91,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const stampOf = (date: Date) =>
   date.toISOString().replace(/[-:]/g, "").replace("T", "-").replace(".", "-").replace("Z", "");
 
-/** A Cloud Run service's name for an app: lowercase, a letter first, at most 49 characters. */
+/**
+ * What every app's service (and image) is named after: apps share their
+ * project with whatever else runs there, and an app's name never is another
+ * service's (an app called `compass` never replaces the app's own service).
+ */
+export const SERVICE_PREFIX = "cz-app-";
+
+/** A Cloud Run service's name for an app: `cz-app-` and its name, lowercase, at most 49 characters. */
 export const serviceOf = (app: string): string => {
-  const name = app.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^[^a-z]+/, "");
-  return (name || "app").slice(0, 49).replace(/-+$/, "");
+  const name = app.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+/, "");
+  return `${SERVICE_PREFIX}${name || "app"}`.slice(0, 49).replace(/-+$/, "");
 };
 
 /** CPU as a number of vCPUs ("1", "2", "500m"). */

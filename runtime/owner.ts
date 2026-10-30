@@ -10,7 +10,15 @@ import { type Clock, type Scheduled, systemClock, TIMERS } from "./schedules.ts"
 import { createTimers } from "./timers.ts";
 import type { IndexSpec, ScalarType } from "./store.ts";
 import { createHypervisor, type Hypervisor, type HypervisorOptions } from "@oxian/oxian-js";
-import type { Guard, Plugins, ProcessorDef, RenderOptions, Resources, ViewDef } from "./define.ts";
+import type {
+  Guard,
+  Plugins,
+  ProcessorDef,
+  RenderOptions,
+  Resources,
+  ViewDef,
+  WorkerJob,
+} from "./define.ts";
 import { type Blobs, hydrate, offload } from "./blobs.ts";
 import { createCache } from "./cache.ts";
 import { createObservers, type Observation, type ObserveOptions } from "./observe.ts";
@@ -162,6 +170,22 @@ export type Owner = {
   stats(): Stats;
   /** The Oxian Hypervisor executors connect to; serve it to accept remote executors. */
   hypervisor: Hypervisor;
+  /**
+   * Plugins' workers, for trusted host code (a route streaming a request to a
+   * computer): what `ctx.workers.dispatch` sends from an Action, with the
+   * job's input as bytes (`body`, streamed) rather than JSON. Fails with code
+   * `offline` when none with that id is connected, `invalid` for a workload
+   * its kind doesn't serve.
+   */
+  workers: {
+    dispatch(
+      kind: string,
+      id: string,
+      workload: string,
+      body?: ReadableStream<Uint8Array> | Uint8Array,
+      options?: { signal?: AbortSignal },
+    ): Promise<WorkerJob>;
+  };
   close(): Promise<void>;
 };
 
@@ -1606,6 +1630,33 @@ export async function createOwner(
   await timers.recover();
 
   const api: Owner = {
+    workers: {
+      async dispatch(kind, id, workload, body, options = {}) {
+        const def = registry.workers[kind];
+        if (!def || !def.workloads.includes(workload)) {
+          throw invalid(`No ${kind} work "${workload}"`);
+        }
+        const workerId = connected.get(workerKey(kind, String(id)));
+        if (!workerId) {
+          throw Object.assign(new Error(`${kind} ${id} isn't connected`), { code: "offline" });
+        }
+        const input = body instanceof Uint8Array
+          ? new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(body);
+              controller.close();
+            },
+          })
+          : body ?? new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+        const handle = await hypervisor.dispatch({
+          workload,
+          target: { workerId },
+          body: input,
+          ...(options.signal ? { signal: options.signal } : {}),
+        });
+        return { output: handle.output, done: handle.completed.then(() => {}) };
+      },
+    },
     call(action, input, options = {}) {
       const def = registry.actions[action];
       if (!def) return Promise.reject(invalid(`Unknown action "${action}"`));

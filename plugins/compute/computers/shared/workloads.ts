@@ -53,6 +53,10 @@ export const WORK = {
   browser: "computer.browser",
   /** A web search, from the computer. */
   search: "computer.search",
+  /** One HTTP exchange with a port the computer serves (a job's), streamed both ways: `HttpRequestHead`. */
+  http: "computer.http",
+  /** A folder of a space, as a gzipped tar, streamed: `ArchiveInput`. */
+  archive: "computer.archive",
 } as const;
 
 export type Enrolled = { id: string; secret: string };
@@ -113,9 +117,23 @@ export type Job = {
   exitCode: number | null;
   startedAt: string;
   endedAt?: string;
+  /** The port it said it serves (`JobsStartInput.port`). */
+  port?: number;
+  /** The TCP ports it (or what it started) listens on now, found by the program. */
+  ports?: number[];
+  /** Started again whenever the computer starts (a cloud computer's wake): a server, say. */
+  keep?: boolean;
 };
 
-export type JobsStartInput = { scope: Scope; command: string; name?: string };
+export type JobsStartInput = {
+  scope: Scope;
+  command: string;
+  name?: string;
+  /** The port it serves, when it's a server (for previews). */
+  port?: number;
+  /** Start it again whenever the computer starts. */
+  keep?: boolean;
+};
 /** `all`: every job in the space's folder, whoever's (for its person's panel); else only whose's. */
 export type JobsListInput = { scope: Scope; all?: boolean };
 export type JobsLogsInput = {
@@ -203,4 +221,30 @@ export type BrowserResult = {
 };
 
 export type SearchInput = { scope: Scope; query: string; limit?: number };
+
+/**
+ * `computer.http`: one HTTP exchange with `127.0.0.1:<port>` on the computer.
+ * Its input is a byte stream: the request's head (this, as one JSON line),
+ * then its body, raw. Its output is the same: the response's head
+ * (`HttpResponseHead`, one JSON line), then its body as it comes, so a
+ * streamed answer streams. A port nothing listens on answers 502. Only ports
+ * of the computer's own loopback; WebSocket upgrades aren't carried (yet).
+ */
+export type HttpRequestHead = {
+  scope: Scope;
+  port: number;
+  method: string;
+  /** Path and query, as asked (`/a/b?c=d`). */
+  path: string;
+  headers: [string, string][];
+};
+export type HttpResponseHead = { status: number; headers: [string, string][] };
+
+/**
+ * `computer.archive`: a folder under the space's folder (`path`, or the
+ * folder itself) as a gzipped tar, streamed out, its paths relative to it.
+ * `.git`, `node_modules` and other dependency and build caches are left out
+ * unless `all`; it fails with `too_large` past `maxBytes` (default 512 MiB).
+ */
+export type ArchiveInput = { scope: Scope; path?: string; all?: boolean; maxBytes?: number };
 export type SearchResult = { title: string; url: string; snippet: string };

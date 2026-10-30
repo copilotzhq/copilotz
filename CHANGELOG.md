@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.3 — 2026-10-30
 
 - **Computers:** connecting one more app (`computer install <app> --code`) no longer stops the
   computer running in the background: it enrolls beside it, then that one starts again with every

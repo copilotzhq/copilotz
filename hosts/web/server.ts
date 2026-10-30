@@ -84,6 +84,13 @@ export type WebServerOptions = {
    */
   base?: string;
   /**
+   * Where the page's socket connects, when it isn't the runtime's own
+   * `/oxian`: a host serving many orgs gives each org its address there
+   * (`/o/<org>/oxian`), so the socket finds it without cookies, which Safari
+   * doesn't send with a socket.
+   */
+  socket?: string;
+  /**
    * The app's theme, as its front ends give it (`themeOf(plugins)`, of those
    * with a `theme` resource): the page carries it for its first paint.
    */
@@ -233,6 +240,7 @@ ${look(options.theme)}${installable(options)}<title>${options.title ?? "Copilotz
       google: options.google ?? null,
       dev: options.dev ?? false,
       ...(options.base ? { base: options.base } : {}),
+      ...(options.socket ? { socket: options.socket } : {}),
     })
       .replaceAll("<", "\\u003c")}</script>
 </head>

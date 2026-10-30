@@ -69,7 +69,9 @@ export async function serve(options: ServeOptions): Promise<Listener> {
 export async function listen(options: ListenOptions): Promise<Listener> {
   const { hostname = "127.0.0.1", port = 0, signal } = options;
   const prepare = (request: Request): HypervisorRequestDecision => {
-    const to = new URL(request.url).pathname === socket.config.path
+    // The socket's path, or a runtime's own under it (an org's: `/o/<org>/oxian`).
+    const path = new URL(request.url).pathname;
+    const to = path === socket.config.path || path.endsWith(socket.config.path)
       ? options.hypervisor(request)
       : undefined;
     return to ? to.prepare(request) : { kind: "response", response: options.fetch(request) };

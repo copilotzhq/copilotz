@@ -82,6 +82,8 @@ const config = () =>
   JSON.parse(document.getElementById("copilotz-config")?.textContent ?? "{}") as {
     google: { clientId: string } | null;
     dev: boolean;
+    /** Where the socket connects, when not `/oxian` (see `WebServerOptions.socket`). */
+    socket?: string;
   };
 
 /** A ticket for one connection, or nothing when nobody is signed in. */
@@ -129,7 +131,9 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   void loadOrgs();
   let fresh: string | undefined = first.ticket;
   const url = options.url ??
-    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/oxian`;
+    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${
+      config().socket ?? "/oxian"
+    }`;
   const client = connect({
     transport: { type: "websocket", config: { url, allowInsecureLoopback: true } },
     // The first connection takes the ticket in hand; a new one asks again.

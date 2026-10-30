@@ -22,7 +22,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.1"`), and
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.2"`), and
 the imports below are the same everywhere. Some pieces need a package of their own, installed beside
 it: `esbuild` to bundle the web host on Node, `@electric-sql/pglite` for PostgreSQL in the process,
 and `@types/react` for the front ends' types.
@@ -196,18 +196,26 @@ each socket to the runtime of the org its request is for:
 ## Installing a computer
 
 People's computers run the computer program (`plugins/compute/computers/program/`), a single
-executable for macOS, Linux and Windows that an app serves from its own origin once it's built:
-
-```sh
-node scripts/computer/build.ts      # dist/computer/<version>/: a binary per platform (by Bun),
-                                    # install.sh, install.ps1, manifest.json (sizes, SHA-256)
-```
+executable for macOS, Linux and Windows. Each Copilotz release on GitHub has it (`v<version>`: a
+binary per platform, `install.sh`, `install.ps1`, and `manifest.json` with their sizes and SHA-256),
+and an app serves it from there by default:
 
 ```ts
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.1" })], // /computer/download/
-plugins: [...plugins, await computerDownloads({ url: "https://…/releases/download/…/" })], // or elsewhere
+plugins: [...plugins, await computerDownloads()], // this Copilotz's release
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.2" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
+```
+
+The publish workflow makes it when a `v1.*` tag is pushed, on a Mac (the macOS binaries are signed
+there). A release whose program is the same as the last one's (`source` in the manifest: a hash of
+its code, without its version, its install scripts and the Bun that builds it) has that release's
+binaries, version and all, so computers don't update to what they have. To build one yourself:
+
+```sh
+node scripts/computer/build.ts                 # dist/computer/<version>/
+node scripts/computer/build.ts --reuse <url>   # that release's, when it's the same program
 ```
 
 A space's Computer tab (or `/computer connect`) then gives the one line to run on the machine, for

@@ -239,7 +239,10 @@ test("a state kept before a machine served many apps is its one connection, its 
   });
 });
 
-test("an app's folder: its org, else its host, numbered when taken; the same app, by its socket", () => {
+test("an app's folder: as the app names it, else its org, else its host, numbered when taken; the same app, by its socket", () => {
+  assertEquals(folderFor("https://app.example.com/o/o-1a2b", [], "Acme Studio"), "acme-studio");
+  assertEquals(folderFor("https://app.example.com/o/o-1a2b", ["acme"], "acme"), "acme-2");
+  assertEquals(folderFor("https://app.example.com/o/o-1a2b", [], "../.."), "o-1a2b");
   assertEquals(folderFor("https://app.example.com/o/acme"), "acme");
   assertEquals(folderFor("https://app.example.com"), "app.example.com");
   assertEquals(folderFor("https://app.example.com/o/acme", ["acme"]), "acme-2");

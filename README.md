@@ -232,6 +232,11 @@ and its binary's URL, size and SHA-256; it checks them, and that the new one run
 starts again. The binaries aren't signed yet, so macOS and Windows warn about one downloaded with a
 browser; the line doesn't need that.
 
+One machine can serve several apps, or several orgs of one: run the line from each, and each is a
+computer of its own there, in one program. Each one's spaces go in a folder of its own under
+`~/Copilotz`, named for the org (the line from an org says it: `--folder acme`), else for the app's
+host. `computer list` says which and where; `computer disconnect <app-url>` leaves one.
+
 ## Plugins
 
 Plugins come in themes. Every plugin is a plain object, and its settings are a resource under its

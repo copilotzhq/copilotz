@@ -2,7 +2,8 @@
  * The computer program: run it once on a machine to let an app's agents
  * (and people) use it, each space in a folder of its own under its root.
  * One machine serves many apps (or orgs of one): each is a computer of its
- * own there, its spaces under a folder of its own (`~/Copilotz/<org>`).
+ * own there, its spaces under a folder of its own (`~/Copilotz/<org>`, named
+ * as the app says with `--folder`, its org's name).
  *
  *   computer install <app-url> --code <CODE> [--root <dir>] [--name <label>] [--windows <w>]
  *                                      connect it (adding this app), then keep it running
@@ -71,7 +72,8 @@ const USAGE = `Copilotz computer ${VERSION}
   computer connect <app-url> --code <CODE> [--root <dir>] [--name <label>] [--windows allow|never]
       Connects this machine to an app with a code from it, then keeps running here.
       Each app's spaces go in a folder of its own under --root (${defaultRoot()}
-      unless given).
+      unless given): --folder <name> (as the app's command says), else its org's
+      id or its host.
   computer [run] [--root <dir>] [--windows allow|never] [--log <file>]
       Runs as the computer it was connected as, to every app (--log: also what it
       says, to <file>).
@@ -249,6 +251,7 @@ async function main(argv: string[]) {
     options: {
       code: { type: "string" },
       root: { type: "string" },
+      folder: { type: "string" },
       name: { type: "string" },
       windows: { type: "string" },
       log: { type: "string" },
@@ -288,12 +291,13 @@ async function main(argv: string[]) {
     if (!url || !values.code) throw new Error(`Usage: computer ${command} <app-url> --code <CODE>`);
     if (command === "install") installed();
     socketUrl(url);
-    // Connected to it already, its folder stays; else a folder of its own under the root.
+    // Connected to it already, its folder stays; else a folder of its own under the root, named
+    // as the app says (--folder, its org's name), else for its org or host.
     const before = await loadState(path);
     const known = connectionOf(before, url);
     const root = known?.root ?? join(
       rootPath(values.root ?? defaultRoot()),
-      folderFor(url, (before?.connections ?? []).map((c) => basename(c.root))),
+      folderFor(url, (before?.connections ?? []).map((c) => basename(c.root)), values.folder),
     );
     // A new enrollment there: its old id and secret go; the other apps' stay.
     const state = await updateState(path, (state) => ({

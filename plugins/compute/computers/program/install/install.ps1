@@ -3,6 +3,8 @@
 #
 #   & ([scriptblock]::Create((irm https://app.example.com/computer/download/install.ps1))) https://app.example.com -Code K7Q-4MZ
 #
+# (-Folder <name>: the folder its spaces go in, under ~\Copilotz, as the app's command says.)
+#
 # It downloads the binary from the app's /computer/download/ (or -From <base>, where the release
 # is), checks its SHA-256 against the release's manifest, puts it in %LOCALAPPDATA%\Copilotz\bin
 # (and that on your PATH), then runs `computer install <app> --code <code>`: connected, the
@@ -11,7 +13,8 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)][string]$App,
   [Parameter(Mandatory = $true)][string]$Code,
-  [string]$From
+  [string]$From,
+  [string]$Folder
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -68,5 +71,5 @@ if (-not (($userPath -split ';') -contains $dir)) {
 $env:Path = "$dir;$env:Path"
 
 Write-Host ''
-& $exe install $App --code $Code
+if ($Folder) { & $exe install $App --code $Code --folder $Folder } else { & $exe install $App --code $Code }
 if ($LASTEXITCODE) { Write-Error "The computer program couldn't connect (exit code $LASTEXITCODE)" }

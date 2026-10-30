@@ -13,6 +13,7 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { plainName } from "../shared/folder.ts";
 import type { Windows } from "./browser/chrome.ts";
 import { alive } from "./workloads/processes.ts";
 
@@ -119,14 +120,16 @@ export function updateState(
 }
 
 /**
- * The folder an app's spaces go in under the root: its org (`/o/acme` is
- * `acme`), else its host; one already taken is numbered (`acme-2`).
+ * The folder an app's spaces go in under the root: `name`, as the app says
+ * (its org's, `acme`), plain; else its org's id (`/o/o-1a2b` is `o-1a2b`),
+ * else its host. One already taken is numbered (`acme-2`).
  */
-export function folderFor(url: string, taken: string[] = []): string {
+export function folderFor(url: string, taken: string[] = [], name?: string): string {
   const parsed = new URL(url);
   const org = /^\/o\/([^/]+)/.exec(parsed.pathname)?.[1];
-  const base = (org ? decodeURIComponent(org) : parsed.hostname).replace(/[^\w.-]+/g, "-") ||
-    "app";
+  const base = name && plainName(name, "")
+    ? plainName(name)
+    : (org ? decodeURIComponent(org) : parsed.hostname).replace(/[^\w.-]+/g, "-") || "app";
   let folder = base;
   for (let n = 2; taken.includes(folder); n++) folder = `${base}-${n}`;
   return folder;

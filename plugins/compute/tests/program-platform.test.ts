@@ -222,4 +222,17 @@ test("releases: a binary per platform, by name; which version is newer; the line
     installCommand("powershell", { app, code: "K", base: elsewhere }),
     `-From ${elsewhere}`,
   );
+  // The folder its spaces go in, plain: nothing in the line to quote.
+  assertEquals(
+    installCommand("sh", { app, code: "K", base: own, folder: "acme" }),
+    `curl -fsSL ${own}install.sh | sh -s -- ${app} --code K --folder acme`,
+  );
+  assertEquals(
+    installCommand("powershell", { app, code: "K", base: own, folder: "Acme; rm -rf ~" }),
+    `& ([scriptblock]::Create((irm ${own}install.ps1))) ${app} -Code K -Folder acme-rm-rf`,
+  );
+  assertEquals(
+    installCommand("sh", { app, code: "K", base: own, folder: "$(x)" }),
+    `curl -fsSL ${own}install.sh | sh -s -- ${app} --code K --folder x`,
+  );
 });

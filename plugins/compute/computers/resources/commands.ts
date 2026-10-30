@@ -94,8 +94,14 @@ export const commands: Commands = {
       const [what, n, ...name] = rest.trim().split(/\s+/);
       const { space, all } = await listed(term);
       if (what === "connect") {
-        const { code, expires, url, downloads } = await term.runtime.call<
-          { code: string; expires: string; url?: string; downloads?: { base: string } }
+        const { code, expires, url, folder, downloads } = await term.runtime.call<
+          {
+            code: string;
+            expires: string;
+            url?: string;
+            folder?: string;
+            downloads?: { base: string };
+          }
         >("computer.code", space ? { in: space } : {});
         const minutes = Math.round((Date.parse(expires) - Date.now()) / 60_000);
         const app = url ?? "<app url>";
@@ -104,14 +110,16 @@ export const commands: Commands = {
         return await term.print(
           `On the computer this space's agents should use, run:\n\n` +
             (base
-              ? `  ${installCommand("sh", { app, code, base })}\n\n` +
+              ? `  ${installCommand("sh", { app, code, base, folder })}\n\n` +
                 `On Windows, in PowerShell:\n\n` +
-                `  ${installCommand("powershell", { app, code, base })}\n\n` +
+                `  ${installCommand("powershell", { app, code, base, folder })}\n\n` +
                 dim(
                   "It installs the computer program, connects it, and keeps it running (from " +
                     "login on). Their folders go under ~/Copilotz there. ",
                 )
-              : `  deno task computer connect ${app} --code ${code}\n\n` +
+              : `  deno task computer connect ${app} --code ${code}${
+                folder ? ` --folder ${folder}` : ""
+              }\n\n` +
                 dim("Their folders go under ~/Copilotz there (--root puts them elsewhere). ")) +
             dim(`The code works once, for ${minutes} minutes.`),
         );

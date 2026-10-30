@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.4 — 2026-10-30
 
 - **Usage: every use has a price.** It's the cost (a margin of 0) unless the app's price book says
   otherwise: rates of its own, or a gross `margin` on the cost (`{ margin: 0.9 }` is ten times the

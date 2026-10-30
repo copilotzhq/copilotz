@@ -19,6 +19,8 @@ export type Agent = {
   temperature?: number;
   /** Names of `tools` resources it may call, and `send_message` to talk to others. */
   tools?: string[];
+  /** The skills it may read (the skills plugin's), by name; all of them when not said. */
+  skills?: string[];
   /** What it does, for other agents deciding whom to message. */
   description?: string;
   /**

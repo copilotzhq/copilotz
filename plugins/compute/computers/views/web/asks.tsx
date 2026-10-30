@@ -24,13 +24,18 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import { agentsShown } from "../../../../agents/chat/contract.ts";
 import type { Approval } from "../../collections/approval.ts";
-import { asked, previewOf, reach, sentence } from "./asked.ts";
+import { addressOf, asked, previewOf, publishOf, reach, sentence } from "./asked.ts";
 import { STYLE } from "./style.ts";
 
 type Answer = "once" | "thread" | "always" | "deny";
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
-const ICONS: Record<string, IconName> = { terminal: "terminal", jobs: "play", writes: "pencil" };
+const ICONS: Record<string, IconName> = {
+  terminal: "terminal",
+  jobs: "play",
+  writes: "pencil",
+  publish: "globe",
+};
 
 export const asksView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
   const thread = typeof ctx.hints.thread === "string" ? ctx.hints.thread : undefined;
@@ -101,7 +106,7 @@ function Ask(
             <Time at={a.at} />
           </span>
         </p>
-        {a.work === "writes" && preview
+        {a.work === "publish" ? <Publish approval={a} /> : a.work === "writes" && preview
           ? (
             <CodeBlock
               className="ask-what ask-preview"
@@ -137,5 +142,29 @@ function Ask(
         {error ? <p role="alert" className="ask-error">{error}</p> : null}
       </div>
     </Card>
+  );
+}
+
+/** What publishing would do: the app, where it'll be, what it's built from, and that it runs on its own. */
+function Publish({ approval: a }: { approval: Approval }): ReactNode {
+  const { name, job, port, path } = publishOf(a.detail);
+  const at = addressOf(a);
+  const from = [
+    path ? `the folder ${path}` : "the space's folder",
+    job ? `job ${job}` : undefined,
+    port ? `port ${port}` : undefined,
+  ].filter(Boolean).join(" · ");
+  return (
+    <div className="ask-publish">
+      <p className="ask-publish-name">
+        <b>{name}</b>
+        {at ? <code className="ask-publish-at">{at.replace(/^https?:\/\//, "")}</code> : null}
+      </p>
+      <p className="ask-publish-from">
+        From{" "}
+        {from}. It's built and runs on its own, without this computer, at an address anyone can
+        open.
+      </p>
+    </div>
   );
 }

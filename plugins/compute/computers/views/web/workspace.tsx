@@ -5,14 +5,26 @@
  * and files, as tabs. A tab, once opened, stays open while the page is (the
  * terminal keeps what it showed); the one last used opens next time.
  * `compact` in a side panel. Offline, it says how to bring the computer
- * back instead (or, someone else's, who can).
+ * back instead (or, someone else's, who can); a cloud computer asleep, its
+ * kind's View says so, and wakes it (at once, as its page opens: `wake`).
  */
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CodeBlock, Icon, Notice, Select, Tabs } from "../../../../../hosts/web/mod.ts";
+import {
+  CodeBlock,
+  Icon,
+  LazyView,
+  Notice,
+  Select,
+  Skeleton,
+  Tabs,
+} from "../../../../../hosts/web/mod.ts";
 import type { Computer } from "../../collections/computer.ts";
 import type { Desk } from "../../collections/desk.ts";
+import type { Preview } from "../../collections/preview.ts";
 import { FilesTab } from "./files.tsx";
 import { JobsTab, useJobs } from "./jobs.tsx";
+import type { JobAction, Kind } from "./kinds.ts";
+import { previewsAt } from "./previews.ts";
 import { folderPath, type Named, nameOf, workOn } from "./names.ts";
 import type { Space } from "./page.tsx";
 import { TerminalTab } from "./terminal-tab.tsx";
@@ -31,11 +43,59 @@ const lastTab = (): Shown => {
   }
 };
 
+/** How often the person says they have a computer open, while its page shows. */
+const VIEW_MS = 120_000;
+
+/**
+ * Says the person has the computer open (`computer.view`): once it shows
+ * (online), then every two minutes while the page is visible, and when it
+ * becomes visible again after a while. A computer that sleeps (a cloud
+ * computer) stays awake while it's viewed, up to the app's limit; it wakes
+ * nothing, and means nothing to a person's own computer.
+ */
+function useViewing(
+  desk: string,
+  online: boolean,
+  call: { current: Call },
+): void {
+  useEffect(() => {
+    if (!desk || !online || typeof document === "undefined") return;
+    let last = 0;
+    const view = () => {
+      if (document.visibilityState !== "visible" || Date.now() - last < VIEW_MS / 2) return;
+      last = Date.now();
+      call.current("computer.view", { desk }).catch(() => {});
+    };
+    view();
+    const timer = setInterval(view, VIEW_MS);
+    document.addEventListener("visibilitychange", view);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", view);
+    };
+  }, [desk, online]);
+}
+
 /** A space as the picker says it: Personal, or the space's name. */
 export const spaceName = (p: Space) => p.kind === "personal" ? "Personal" : p.name;
 
 export function Workspace(
-  { computer, spaces, desks, here, me, agents, call, fixed, compact, theirs }: {
+  {
+    computer,
+    spaces,
+    desks,
+    here,
+    me,
+    agents,
+    call,
+    fixed,
+    compact,
+    theirs,
+    kind,
+    wake,
+    previews = [],
+    jobActions = [],
+  }: {
     computer: Computer;
     spaces: Space[];
     desks: Desk[];
@@ -49,6 +109,14 @@ export function Workspace(
     compact?: boolean;
     /** Whose it is, when it isn't the person's: they bring it back online. */
     theirs?: string;
+    /** Its kind (a cloud computer's): asleep, its kind's View shows in place of the tabs. */
+    kind?: Kind;
+    /** Wake it now, if it's asleep (its page opened). */
+    wake?: boolean;
+    /** What it serves, at addresses of their own (the spaces' previews). */
+    previews?: Preview[];
+    /** What a job that serves a port can become, beyond a preview (published). */
+    jobActions?: JobAction[];
   },
 ): ReactNode {
   const named = useMemo(() => new Map(spaces.map((p) => [p._id, p])), [spaces]);
@@ -75,7 +143,9 @@ export function Workspace(
     () => workOn((action, input) => latest.current(action, input), deskId),
     [deskId],
   );
-  const jobs = useJobs(work, computer.online && !!deskId, tab === "jobs");
+  // A computer that sleeps isn't asked about its jobs while they don't show: asking is using it.
+  const jobs = useJobs(work, computer.online && !!deskId, tab === "jobs", !!kind);
+  useViewing(deskId, computer.online, latest);
   const desk = sorted.find((d) => d._id === deskId);
   const space = desk?.in ?? "";
   const chosen = named.get(space);
@@ -180,6 +250,14 @@ export function Workspace(
                       me={me}
                       agents={agents}
                       active={tab === "jobs"}
+                      served={{
+                        call: (action, input) => latest.current(action, input),
+                        space,
+                        computer: computer._id,
+                        ...(path ? { folder: path } : {}),
+                        previews: previewsAt(previews, computer._id, space),
+                        actions: jobActions,
+                      }}
                     />
                   </div>
                 )
@@ -192,6 +270,16 @@ export function Workspace(
                 )
                 : null}
             </div>
+          )
+          : kind
+          ? (
+            // Asleep (or waking): its kind says so, and wakes it.
+            <LazyView
+              kind={kind.view}
+              item={{ _id: computer._id, desk: deskId, name: nameOf(computer) }}
+              hints={{ mode: "asleep", ...(wake ? { wake: true } : {}) }}
+              fallback={<Skeleton height={compact ? 180 : 240} radius="xl" />}
+            />
           )
           : <Offline name={nameOf(computer)} theirs={theirs} />}
       </div>

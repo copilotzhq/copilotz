@@ -43,7 +43,12 @@ export type CloudRunOptions = {
   bucket?: string;
   /** What apps run as (`cz-apps@<project>.iam.gserviceaccount.com`). */
   serviceAccount?: string;
-  /** What Cloud Build runs as (an email); the project's default when absent. */
+  /**
+   * What Cloud Build runs as (an email): one that may only push to the
+   * repository, read the sources and write logs (the apps settings default it
+   * to `cz-build@<project>`). Absent, the project's default, which may do
+   * much more: only for a project of the apps alone.
+   */
   buildServiceAccount?: string;
   /** An OAuth access token for Google's APIs (`cloud-platform` scope), as it's needed. */
   token(): string | Promise<string>;

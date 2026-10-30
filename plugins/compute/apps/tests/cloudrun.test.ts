@@ -377,6 +377,8 @@ test("cloudRun makes the host from the apps settings: its bucket, repository and
       repository: "cz-apps",
       bucket: "p-cz-apps",
       serviceAccount: "cz-apps@p.iam.gserviceaccount.com",
+      // Builds run the app's own Dockerfile: never as the project's default service account.
+      buildServiceAccount: "cz-build@p.iam.gserviceaccount.com",
     });
     const host = cloudRun({ token: () => "tok", pollMs: 5, urls: g.urls })(settings);
     await host.deploy({ app: "shop", image: "img:1", port: 3000 });

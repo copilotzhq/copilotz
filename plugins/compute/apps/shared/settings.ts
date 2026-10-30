@@ -21,6 +21,13 @@ export type CloudRunSettings = {
   bucket?: string;
   /** What apps run as (`cz-apps@<project>.iam.gserviceaccount.com`): a service account allowed nothing. */
   serviceAccount?: string;
+  /**
+   * What builds run as (`cz-build@<project>.iam.gserviceaccount.com`): a
+   * build runs the app's own Dockerfile, so its service account may only push
+   * to the repository, read the sources and write logs; never the project's
+   * default one, which may do much more.
+   */
+  buildServiceAccount?: string;
 };
 
 export type AppsSettings = {
@@ -53,6 +60,8 @@ export function settingsOf(ctx: { resources: Resources }): Settings {
           repository: run.repository ?? "cz-apps",
           bucket: run.bucket ?? `${run.project}-cz-apps`,
           serviceAccount: run.serviceAccount ?? `cz-apps@${run.project}.iam.gserviceaccount.com`,
+          buildServiceAccount: run.buildServiceAccount ??
+            `cz-build@${run.project}.iam.gserviceaccount.com`,
         },
       }
       : {}),

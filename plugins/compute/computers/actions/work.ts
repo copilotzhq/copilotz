@@ -3,6 +3,11 @@
  * panel: their own shell and files in the space's folder, and its agents'
  * jobs there (`as`: whose, for the logs or to stop one). Only where they may
  * work: a member who can write in the space.
+ *
+ * A computer that sleeps (a cloud computer) is woken by what does something
+ * (a command, a job, a write) or by `wake` (its page opened), and kept awake
+ * a while by it; what only reads (a panel polling its jobs) neither wakes it
+ * nor keeps it awake, so a page left open lets it sleep.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Desk } from "../collections/desk.ts";
@@ -25,13 +30,16 @@ const PANEL: Record<string, string> = {
   search: WORK.search,
 };
 
+/** What only reads: it doesn't say the computer was used. */
+const READS = new Set(["jobs.list", "jobs.logs", "files.list", "files.read", "search"]);
+
 export const workAction = defineAction({
   description: "Works on a space's computer, in its folder there",
   input: {
     type: "object",
     properties: {
       desk: { type: "string" },
-      work: { enum: Object.keys(PANEL) },
+      work: { enum: [...Object.keys(PANEL), "wake"] },
       input: { type: "object" },
       /** Whose jobs: `agent:<name>` (default: yours). */
       as: { type: "string", pattern: "^agent:[\\w.-]+$" },
@@ -47,13 +55,21 @@ export const workAction = defineAction({
     await mustBeAble(ctx, desk.in, "write");
     const who = input.as && input.work.startsWith("jobs.") ? input.as : `person:${ctx.actor!.id}`;
     // A computer that sleeps (a cloud computer) is woken first; used, it stays awake a while.
-    if (!desk.online) {
+    if (!desk.online && !READS.has(input.work)) {
       const woke = await wake(ctx, desk.computer);
       if (typeof woke === "string") {
         throw Object.assign(new Error(woke), { code: "unavailable" });
       }
+      if (!woke && input.work === "wake") {
+        throw Object.assign(new Error("The computer is offline: its owner starts it again."), {
+          code: "offline",
+        });
+      }
     }
-    const touched = touch(ctx, desk.computer);
+    // What changes something keeps it awake a while; reading (a panel polling its jobs) doesn't:
+    // a person with it open keeps it awake with computer.view, up to the app's limit.
+    const touched = READS.has(input.work) ? Promise.resolve() : touch(ctx, desk.computer);
+    if (input.work === "wake") return await touched.then(() => ({ awake: true }));
     const answer = await ctx.workers.call("computer", desk.computer, PANEL[input.work], {
       ...input.input,
       scope: { space: desk.in, folder: desk.folder, who },

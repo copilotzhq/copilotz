@@ -219,7 +219,7 @@ function Asleep(
     // Any work wakes it; still waking when asked, it's asked again in a moment.
     for (let tries = 0; tries < 8 && alive.current; tries++) {
       try {
-        await call("computer.work", { desk, work: "jobs.list", input: { all: true } });
+        await call("computer.work", { desk, work: "wake" });
         return;
       } catch (e) {
         if (!stillWaking(e)) {

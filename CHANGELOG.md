@@ -36,8 +36,27 @@
   scales to zero. `app.publish` (and the agents' `publish` tool, always asked), `app.list`,
   `app.redeploy`, `app.remove`; builds and running metered under `app`. Hosts: Cloud Run
   (`cloudRun`) and a local one (`localApps`).
+- **Apps' safety:** services and images are named `cz-app-<name>` (an app never replaces another
+  service in its project); builds run as `cz-build@<project>` (`buildServiceAccount`), never the
+  project's default service account, as they run the app's own Dockerfile. `app.publish`'s `port`
+  wins over its job's.
+- **Previews' safety:** a preview's `Set-Cookie` loses its `Domain` (no preview sets cookies for the
+  domain's other hosts); a request with several `cz_preview` cookies gets in when any is its host's.
 - **Jobs** can say their `port` (a preview's) and be kept (`keep`): a kept job runs again when its
   computer wakes.
+- **A person's panel** (`computer.work`): `wake` wakes a computer that sleeps (its page opened);
+  what only reads (`jobs.list`, `jobs.logs`, `files.list`, `files.read`, `search`) neither wakes it
+  nor keeps it awake, so a page left open lets it sleep (`computer.view` keeps it awake while
+  viewed, up to the limit). A computer the app makes says what its agents ask about
+  (`computer.provision`'s `approve`, kept on it and its desks).
+- **On the web** (`copilotz/plugins/compute/web`: `computersWeb`, `cloudWeb`, `appsWeb`):
+  - adding a computer is one choice: a cloud computer (its sizes, priced an hour), your own machine,
+    or one of yours;
+  - a cloud computer shows its state, how long it's been awake and about what that came to; asleep,
+    waking it, with honest progress; deleting it, asked first;
+  - a job serving a port can be previewed (members, or anyone with the link), opened, copied and
+    published as an app (live as it builds), and a space has an Apps tab;
+  - jobs can be kept running.
 - **Web host:** routes by host (`{ host }` beside `{ path }`); a trusted front (`front`: a secret
   header and the host it forwards) for apps behind a proxy; orgs claim hosts in the directory
   (`orgHost`), resolved at `/__copilotz/hosts/resolve`.

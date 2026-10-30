@@ -9,7 +9,13 @@
  * the pool can be another runtime's (an app of many orgs); and only those
  * who may make cloud computers do, each seeing their own.
  */
-import { assert, assertAlmostEquals, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertAlmostEquals,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import {
   type Actor,
   createRuntime,
@@ -77,6 +83,21 @@ const app = (host: unknown, cloudSettings: Record<string, unknown> = {}) =>
             thread: input.thread!,
             trigger: "test",
           } as ToolContext),
+      }),
+      // What the plugin keeps, for the test to change.
+      "test.set": defineAction({
+        input: {
+          type: "object",
+          properties: {
+            collection: { type: "string" },
+            id: { type: "string" },
+            set: { type: "object" },
+          },
+        },
+        run: (ctx, input) =>
+          ctx.as().db.collection(input.collection!).updateOne({ _id: input.id! }, {
+            $set: input.set!,
+          }),
       }),
       // What the plugin keeps, for the test to look at.
       "test.records": defineAction({
@@ -585,4 +606,33 @@ test("the pool in a runtime of its own: an org's computers wake and go through r
     await rt.close();
     await pool.close();
   }
+});
+
+test("a person's panel: reading neither wakes a cloud computer nor keeps it awake; wake and work do", async () => {
+  await setup(async (rt) => {
+    const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
+      size: "small",
+    }, { actor: ana });
+    const { space } = await rt.call<{ space: string }>("space.personal", {}, { actor: ana });
+    const [desk] = await rt.query<{ _id: string }[]>("desk.here", { in: space }, { actor: ana });
+    const work = (what: string, input: Record<string, unknown> = {}) =>
+      rt.call("computer.work", { desk: desk._id, work: what, input }, { actor: ana });
+
+    // Asleep, a panel polling its jobs doesn't wake it: the computer is offline.
+    await assertRejects(() => work("jobs.list", { all: true }));
+    assertEquals((await cloudOf(rt, id)).state, "asleep");
+
+    // Its page opened: it wakes.
+    assertEquals(await work("wake"), { awake: true });
+    assertEquals((await cloudOf(rt, id)).state, "awake");
+
+    // Reading doesn't say it was used; a command does.
+    const before = new Date(Date.now() - MIN).toISOString();
+    await rt.call("test.set", { collection: "cloudComputer", id, set: { used: before } });
+    await work("jobs.list", { all: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assertEquals((await cloudOf(rt, id)).used, before);
+    await work("terminal", { stdin: "ls" });
+    await until(async () => (await cloudOf(rt, id)).used !== before, "used, by the command");
+  });
 });

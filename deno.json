@@ -20,7 +20,7 @@
     "./plugins/billing/web": "./plugins/billing/usage/web.tsx",
     "./plugins/billing/terminal": "./plugins/billing/terminal.ts",
     "./plugins/compute": "./plugins/compute/mod.ts",
-    "./plugins/compute/web": "./plugins/compute/computers/web.tsx",
+    "./plugins/compute/web": "./plugins/compute/web.tsx",
     "./plugins/compute/terminal": "./plugins/compute/computers/terminal.ts",
     "./plugins/compute/downloads": "./plugins/compute/computers/resources/downloads.ts",
     "./plugins/interfaces": "./plugins/interfaces/mod.ts",

@@ -56,8 +56,8 @@ const buildNow = (app: string) => ({
 });
 
 /**
- * What the app is built from: the job's command and port (else the ports it
- * listens on, else the one given), on the space's computer.
+ * What the app is built from: the job's command, and the port given (else
+ * the job's, else the first it listens on), on the space's computer.
  */
 async function sourceOf(
   ctx: Context,
@@ -80,7 +80,7 @@ async function sourceOf(
     if (!Array.isArray(jobs)) throw failure(jobs.error.message, jobs.error.code);
     const job = jobs.find((j) => j.id === input.job) ?? jobs.find((j) => j.name === input.job);
     if (!job) throw failure(`There's no job "${input.job}" in this space's folder.`, "invalid");
-    port = job.port ?? job.ports?.[0] ?? input.port;
+    port = input.port ?? job.port ?? job.ports?.[0];
     command = job.command;
   }
   if (!port) {

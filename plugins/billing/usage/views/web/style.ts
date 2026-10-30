@@ -81,7 +81,7 @@ export const STYLE = `
 .usage-legend li { display: inline-flex; align-items: center; gap: 6px; }
 
 /* What a colour stands for: input read from a cache, written to one, neither (and other tokens) */
-.usage-key { display: inline-block; flex: none; width: 10px; height: 10px; border-radius: 3px;
+.usage-key { display: inline-block; flex: none; width: 10px; height: 10px; border-radius: var(--radius-sm);
   background: var(--chart-1, var(--primary)); }
 .usage-c-cached, .usage-key-cached { background: var(--chart-3, var(--success)); }
 .usage-c-written { background: var(--chart-4, var(--warning)); }
@@ -136,7 +136,7 @@ export const STYLE = `
 .usage-stat-value { font-size: 20px; font-weight: 680; letter-spacing: -.015em; line-height: 1.25; }
 .usage-stat-note { color: var(--muted-foreground); font-size: 12px; line-height: 1.4; }
 .usage-split { display: grid; gap: 12px; padding-top: 2px; }
-.usage-split-bar { display: flex; gap: 2px; height: 10px; border-radius: 4px; overflow: hidden; }
+.usage-split-bar { display: flex; gap: 2px; height: 10px; border-radius: var(--radius-sm); overflow: hidden; }
 .usage-split-bar > span { flex-basis: 0; min-width: 3px; }
 .usage-split-legend { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 16px; margin: 0;
   padding: 0; list-style: none; }

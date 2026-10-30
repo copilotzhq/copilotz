@@ -13,6 +13,7 @@
  */
 import type { Hypervisor, HypervisorRequestDecision } from "@oxian/oxian-js";
 import { serve as oxian } from "@oxian/oxian-js/adapters/node";
+import { hostRouted } from "../routes.ts";
 import { socket, webServer, type WebServerOptions } from "../server.ts";
 
 /** Where to listen. */
@@ -55,10 +56,12 @@ export type Listener = {
 export async function serve(options: ServeOptions): Promise<Listener> {
   const { hostname, port, signal, ...web } = options;
   const hypervisor: Hypervisor = web.runtime.hypervisor;
+  const routed = hostRouted(web.runtime, web.front ? { front: web.front } : {});
   return await listen({
-    // Every request for the socket goes to the Hypervisor, so `webServer` never upgrades one.
+    // Every request for the socket goes to the Hypervisor, so `webServer` never upgrades one;
+    // a host a route takes (a preview's) has no socket of the app's, though.
     fetch: webServer({ ...web, upgrade: () => new Response(null, { status: 426 }) }),
-    hypervisor: () => hypervisor,
+    hypervisor: (request) => routed(request) ? undefined : hypervisor,
     hostname,
     port,
     signal,

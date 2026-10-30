@@ -44,12 +44,17 @@ const running = (text: string) =>
     .split(/\r?\n/).filter((line) => line.includes(text));
 
 /** The Chrome on `profile` (its browser process, not its helpers), by the path it was given. */
-const chromeOn = (profile: string) =>
-  // Windows' temporary folders have short names (RUNNER~1) that Chrome is given long.
-  running(
-    `--user-data-dir=${process.platform === "win32" ? realpathSync.native(profile) : profile} `,
-  )
-    .filter((line) => !line.includes("--type="));
+const chromeOn = (profile: string) => {
+  // Windows' temporary folders have a short name too (RUNNER~1): Chrome is given one or the other.
+  const names = new Set([
+    profile,
+    process.platform === "win32" ? realpathSync.native(profile) : profile,
+  ]);
+  return running("--user-data-dir=").filter((line) =>
+    !line.includes("--type=") &&
+    [...names].some((name) => line.includes(`--user-data-dir=${name} `))
+  );
+};
 
 /**
  * A site to sign in to: `/set` gives a cookie that lasts, and `/session` one

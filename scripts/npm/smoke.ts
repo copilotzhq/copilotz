@@ -13,7 +13,9 @@
  *
  *   npm run build && node scripts/npm/smoke.ts [--ominipg=path/to/ominipg-x.y.z.tgz]
  *
- * `--ominipg` installs Ominipg from a tarball, before it's on npm.
+ * `--ominipg` installs Ominipg from a tarball. Without it, Ominipg comes from
+ * npm, or, while the version the package names isn't there yet, from JSR's
+ * npm registry (`@jsr/oxian__ominipg`, the same code), as this repo installs it.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -118,6 +120,23 @@ const TSCONFIG = {
   include: ["*.ts", "*.tsx"],
 };
 
+/** Where Ominipg comes from: a tarball given, npm, or JSR's npm registry until it's on npm. */
+const ominipgFrom = (() => {
+  if (ominipg) return `file:${resolve(ominipg)}`;
+  const version = (manifest as { dependencies?: Record<string, string> }).dependencies?.ominipg;
+  if (!version) return undefined;
+  try {
+    execFileSync("npm", ["view", `ominipg@${version}`, "version"], {
+      stdio: "ignore",
+      shell: windows,
+    });
+    return undefined;
+  } catch {
+    console.log(`smoke: ominipg@${version} isn't on npm yet; installing it from JSR's registry`);
+    return `npm:@jsr/oxian__ominipg@${version}`;
+  }
+})();
+
 const dir = mkdtempSync(join(tmpdir(), "copilotz-npm-"));
 try {
   step(`packing ${manifest.name}@${manifest.version}`);
@@ -132,12 +151,15 @@ try {
         type: "module",
         dependencies: { [manifest.name]: `file:./${tarball}` },
         devDependencies: dev,
-        ...(ominipg ? { overrides: { ominipg: `file:${resolve(ominipg)}` } } : {}),
+        ...(ominipgFrom ? { overrides: { ominipg: ominipgFrom } } : {}),
       },
       null,
       2,
     ),
   );
+  if (ominipgFrom?.startsWith("npm:@jsr/")) {
+    writeFileSync(join(dir, ".npmrc"), "@jsr:registry=https://npm.jsr.io\n");
+  }
   writeFileSync(join(dir, "app.ts"), APP);
   writeFileSync(join(dir, "browser.tsx"), BROWSER);
   writeFileSync(join(dir, "bundle.ts"), BUNDLE);

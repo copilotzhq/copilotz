@@ -36,14 +36,13 @@ jobs:
         if: matrix.runtime == 'deno'
         with:
           deno-version: v2.x
+      # Every runtime gets node_modules: the Node web host's tests bundle with esbuild, which reads it.
       - uses: actions/setup-node@v4
-        if: matrix.runtime != 'deno'
         with:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         if: matrix.runtime == 'bun'
       - run: npm ci
-        if: matrix.runtime != 'deno'
       - name: Format, types, tests, and the JSR package
         if: matrix.runtime == 'deno'
         run: |

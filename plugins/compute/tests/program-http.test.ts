@@ -145,7 +145,10 @@ test("an exchange goes to the port, its headers but those of one hop, and comes 
       // A path that looks like another host's stays this port's path.
       const tricky = await exchange(rt, request(server.port, { path: "//evil.example/x" }));
       assertEquals(tricky.head.status, 201);
-      assertEquals(JSON.parse(await rest(tricky.reader)).url, "//evil.example/x");
+      // It reached this port's server (Bun's collapses the leading slashes; Node's and Deno's don't).
+      assert(
+        ["//evil.example/x", "/evil.example/x"].includes(JSON.parse(await rest(tricky.reader)).url),
+      );
     });
   } finally {
     await server.close();

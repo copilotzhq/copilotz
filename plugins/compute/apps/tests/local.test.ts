@@ -39,7 +39,10 @@ test("the local host extracts the folder, runs its command on PORT, and removes 
     });
     assert(image.startsWith(dir), "built in its folder");
     assertEquals(readFileSync(join(image, long), "utf8"), "far down");
-    assert(statSync(join(image, "bin/run.sh")).mode & 0o100, "still executable");
+    // Windows has no executable bit to keep.
+    if (process.platform !== "win32") {
+      assert(statSync(join(image, "bin/run.sh")).mode & 0o100, "still executable");
+    }
     assert(!existsSync(join(image, "..", "escape.txt")), "nothing outside it");
 
     const deployed = await host.deploy({

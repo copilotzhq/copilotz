@@ -559,3 +559,36 @@ test("llm, embeddings and transcription actions, through the runtime", async () 
     await mock.close();
   }
 });
+
+test("openai-compatible: each provider's way of saying what came from the cache, or went to it", async () => {
+  // As DeepSeek, Moonshot and OpenRouter (an explicit cache, written) report it.
+  const usages = [
+    [{ prompt_tokens: 100, completion_tokens: 5, prompt_cache_hit_tokens: 60 }, { cached: 60 }],
+    [{ prompt_tokens: 100, completion_tokens: 5, cached_tokens: 40 }, { cached: 40 }],
+    [
+      {
+        prompt_tokens: 100,
+        completion_tokens: 5,
+        prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 90 },
+      },
+      { cacheWrite: 90 },
+    ],
+  ] as const;
+  for (const [usage, cache] of usages) {
+    const http = await serve(() =>
+      new Response(
+        sse([{ choices: [{ delta: { content: "ok" } }] }, { choices: [], usage }, "[DONE]"]),
+      )
+    );
+    try {
+      const chunks = await run(openaiCompletions, {
+        model: "m",
+        baseURL: `${http.url}/v1`,
+        apiKey: "k",
+      });
+      assertEquals(answer(chunks).usage, { type: "usage", input: 100, output: 5, ...cache });
+    } finally {
+      await http.close();
+    }
+  }
+});

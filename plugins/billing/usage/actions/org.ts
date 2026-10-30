@@ -9,22 +9,28 @@
  *   by day, person (`tags.person`), agent (`tags.agent`), model (`subject`).
  * - `usage.calls`: the latest uses, newest first (`{ filter, limit }`).
  *
- * Both only read, so neither is recorded.
+ * People see prices: what they're charged. What it cost (and so the margin)
+ * only platform staff see; each says whether it shows them (`costs`). Both
+ * only read, so neither is recorded.
  */
 import { type Context, defineAction, type Filter } from "../../../../runtime/mod.ts";
 import type { UsageRecord } from "../collections/usage.ts";
 import { rollupsOf } from "../shared/settings.ts";
-import { totals, UNITS } from "../shared/totals.ts";
-import { personOf } from "../shared/use.ts";
+import { priceOnly, totals, UNITS } from "../shared/totals.ts";
+import { personOf, priceOf } from "../shared/use.ts";
 
 const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
 
-/** Whether the caller runs the org: an owner or an admin there, or platform staff. */
-async function runsOrg(ctx: Context): Promise<boolean> {
+/**
+ * What the caller sees: everyone's (`all`) when they run the org (an owner or
+ * an admin there, or platform staff), and costs only as staff.
+ */
+async function sight(ctx: Context): Promise<{ all: boolean; costs: boolean }> {
   const me = await ctx.call<{ role?: string | null; staff?: boolean }>("org.me", {})
     // An app without org roles has nobody who runs one.
     .catch(() => undefined);
-  return !!me && (me.staff === true || me.role === "owner" || me.role === "admin");
+  const staff = me?.staff === true;
+  return { all: staff || me?.role === "owner" || me?.role === "admin", costs: staff };
 }
 
 const filter = { type: "object" } as const;
@@ -43,24 +49,22 @@ export const orgUsageAction = defineAction({
   },
   allow: (actor) => actor.kind === "person",
   run: async (ctx, input) => {
-    const all = await runsOrg(ctx);
+    const { all, costs } = await sight(ctx);
     const person = personOf(ctx.actor);
     if (!all && !person) throw forbidden("Only people see usage.");
     // The ledger is read as the system: everyone's once the org says they run it, else theirs.
     const system = ctx.as();
     const asked = (input.filter ?? {}) as Filter;
-    return {
-      totals: await totals(
-        system.db.collection<UsageRecord>("usage"),
-        {
-          filter: all ? asked : { ...asked, "tags.person": person! },
-          by: input.by ?? [],
-          units: input.units ?? UNITS,
-        },
-        { db: system.db, rollups: rollupsOf(ctx) },
-      ),
-      all,
-    };
+    const found = await totals(
+      system.db.collection<UsageRecord>("usage"),
+      {
+        filter: all ? asked : { ...asked, "tags.person": person! },
+        by: input.by ?? [],
+        units: input.units ?? UNITS,
+      },
+      { db: system.db, rollups: rollupsOf(ctx) },
+    );
+    return { totals: costs ? found : found.map(priceOnly), all, costs };
   },
 });
 
@@ -79,7 +83,7 @@ export const usageCallsAction = defineAction({
   },
   allow: (actor) => actor.kind === "person",
   run: async (ctx, input) => {
-    const all = await runsOrg(ctx);
+    const { all, costs } = await sight(ctx);
     const person = personOf(ctx.actor);
     if (!all && !person) throw forbidden("Only people see usage.");
     const asked = (input.filter ?? {}) as Filter;
@@ -89,17 +93,26 @@ export const usageCallsAction = defineAction({
       { sort: { at: -1 }, limit: input.limit ?? 20 },
     );
     return {
-      calls: found.map((r) => ({
-        _id: r._id,
-        meter: r.meter,
-        subject: r.subject,
-        quantities: r.quantities,
-        ...(r.tags ? { tags: r.tags } : {}),
-        ...(r.cost !== undefined ? { cost: r.cost } : {}),
-        ...(r.unpriced?.length ? { unpriced: r.unpriced } : {}),
-        at: r.at,
-      })),
+      calls: found.map((r) => {
+        const price = priceOf(r);
+        const saved = r.saved && (costs ? r.saved : { price: r.saved.price });
+        return {
+          _id: r._id,
+          meter: r.meter,
+          subject: r.subject,
+          quantities: r.quantities,
+          ...(r.tags ? { tags: r.tags } : {}),
+          ...(price !== undefined ? { price } : {}),
+          ...(r.prices ? { prices: r.prices } : {}),
+          ...(costs && r.cost !== undefined ? { cost: r.cost } : {}),
+          ...(costs && r.costs ? { costs: r.costs } : {}),
+          ...(saved && Object.values(saved).some((v) => v !== undefined) ? { saved } : {}),
+          ...(r.unpriced?.length ? { unpriced: r.unpriced } : {}),
+          at: r.at,
+        };
+      }),
       all,
+      costs,
     };
   },
 });

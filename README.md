@@ -22,7 +22,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.3"`), and
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.4"`), and
 the imports below are the same everywhere. Some pieces need a package of their own, installed beside
 it: `esbuild` to bundle the web host on Node, `@electric-sql/pglite` for PostgreSQL in the process,
 and `@types/react` for the front ends' types.
@@ -204,7 +204,7 @@ and an app serves it from there by default:
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.3" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.4" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 
@@ -382,9 +382,15 @@ name, never by importing its code.
     billing; billing builds on models. An app records its own uses with `usage.record`.
   - **Rated as recorded,** so a record keeps what applied. Cost comes from `resources.cost` (the
     app's rates: negotiated, a subscription at 0, compute by the second), else from the catalog's
-    prices; price comes from `resources.price` only (rates of its own, or a `markup` on cost). Rates
-    are keyed by subject, then `provider/*`, then the catalog, then `*`, and dated lists apply each
-    rate from its `since`. A use nothing prices is kept and flagged `unpriced`.
+    prices (each kind of token at its own: input, cache reads and writes, output, reasoning). The
+    price is the cost, a margin of 0, unless `resources.price` says otherwise: rates of its own, or
+    a gross margin on the cost (`{ "*": { margin: 0.2 }, "cloud/*": { margin: 0.9 } }`: 0.9 is ten
+    times the cost). Rates are keyed by subject, then `provider/*`, then the catalog, then `*`, and
+    dated lists apply each rate from its `since`, so a new margin applies from its date on. Each
+    record keeps its cost and price by part too, and what caching saved. A use nothing prices is
+    kept and flagged `unpriced`.
+  - **People see prices** (what they're charged); costs, and so margins, only platform staff and the
+    system.
   - **Totals** by any field or tag, summed by the store (`aggregate`) over indexed fields (time,
     meter, subject, thread; more from the app:
     `collections: { usage: { indexes: [["tags.tenant", "at"]] } }`):
@@ -399,7 +405,8 @@ name, never by importing its code.
   - **Re-rating** (`usage.rerate`) never changes a record: it appends adjustments, dated when made,
     and totals follow.
   - **On the web** (`usageWeb`): an org's Usage page, day by day and against the period before, by
-    person, agent and model; owners and admins see everyone's, anyone else their own.
+    person, agent and model, with what the cache read, wrote and saved; owners and admins see
+    everyone's, anyone else their own.
 
 **`compute/`**: **`computers`**, machines people connect (the computer program in
 `computers/program/`, a worker of the plugin's `computer` kind) and their desks, one per space

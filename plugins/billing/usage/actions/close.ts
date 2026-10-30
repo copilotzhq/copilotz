@@ -81,18 +81,31 @@ async function close(
     // Each day's rollups, as the records hold their fields.
     const byDay = new Map<string, Doc[]>();
     for (const group of groups) {
-      const { day, meter, subject, _kind, _unpriced, ...dims } = group._id;
+      const { day, meter, subject, _kind, _unpriced, _rated, ...dims } = group._id;
       const doc: Doc = { _id: "", day, meter, subject, quantities: {}, n: group.n };
       rollups.dimensions.forEach((d, i) => {
         if (dims[`d${i}`] !== null && dims[`d${i}`] !== undefined) put(doc, d, dims[`d${i}`]);
       });
       if (_kind !== null) doc.kind = _kind;
       if (_unpriced !== null) doc.unpriced = _unpriced;
+      const costs: Record<string, number> = {};
+      const prices: Record<string, number> = {};
       for (const unit of rollups.units) {
         if (group[unit]) (doc.quantities as Record<string, number>)[unit] = group[unit] as number;
+        if (group[`cost_${unit}`]) costs[unit] = group[`cost_${unit}`] as number;
+        if (group[`price_${unit}`]) prices[unit] = group[`price_${unit}`] as number;
       }
       if (group.cost) doc.cost = group.cost;
       if (group.price) doc.price = group.price;
+      if (Object.keys(costs).length) doc.costs = costs;
+      if (Object.keys(prices).length) doc.prices = prices;
+      const saved = {
+        ...(group.savedCost ? { cost: group.savedCost } : {}),
+        ...(group.savedPrice ? { price: group.savedPrice } : {}),
+      };
+      if (Object.keys(saved).length) doc.saved = saved;
+      // Who rated the price, as the records say (none: priced at cost, as they were before).
+      if (_rated !== null && _rated !== undefined) doc.rated = { price: _rated };
       const list = byDay.get(day as string) ?? [];
       doc._id = `${day}#${list.length}`;
       list.push(doc);

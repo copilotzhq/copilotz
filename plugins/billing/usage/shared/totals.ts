@@ -28,13 +28,26 @@ export type Totals = {
   /** The values grouped by. */
   key: Record<string, unknown>;
   quantities: Quantities;
+  /** USD, in all and by part (the units summed). */
   cost: number;
   price: number;
+  costs: Quantities;
+  prices: Quantities;
+  /** What caching saved (USD), less what writing the cache cost more. */
+  saved: { cost: number; price: number };
   /** Uses counted (adjustments aren't uses). */
   uses: number;
   /** Uses with no cost or price. */
   unpriced: number;
 };
+
+/** Totals as people see them: what they're charged (the price), not what it cost. */
+export type PriceTotals = Omit<Totals, "cost" | "costs" | "saved"> & { saved: { price: number } };
+
+export const priceOnly = ({ cost: _cost, costs: _costs, saved, ...rest }: Totals): PriceTotals => ({
+  ...rest,
+  saved: { price: saved.price },
+});
 
 /** How usage is rolled up by day. */
 export type Rollups = {
@@ -62,9 +75,10 @@ const ofRollups = (field: string): Expr =>
 
 /**
  * Sums what `filter` matches, grouped by `key`, and also by whether it's a
- * use or an adjustment and what it left unpriced (few kinds of each), so
- * `fold` can count uses. Records and rollups are summed alike; `count` is
- * how a group counts what it holds.
+ * use or an adjustment, what it left unpriced and who rated its price (few
+ * kinds of each), so `fold` can count uses and price at cost what was
+ * recorded before every use had a price. Records and rollups are summed
+ * alike; `count` is how a group counts what it holds.
  */
 export const summing = (
   filter: Filter,
@@ -75,10 +89,16 @@ export const summing = (
   { $match: filter },
   {
     $group: {
-      _id: { ...key, _kind: "$kind", _unpriced: "$unpriced" },
-      ...Object.fromEntries(units.map((unit) => [unit, { $sum: `$quantities.${unit}` }])),
+      _id: { ...key, _kind: "$kind", _unpriced: "$unpriced", _rated: "$rated.price" },
+      ...Object.fromEntries(units.flatMap((unit) => [
+        [unit, { $sum: `$quantities.${unit}` }],
+        [`cost_${unit}`, { $sum: `$costs.${unit}` }],
+        [`price_${unit}`, { $sum: `$prices.${unit}` }],
+      ])),
       cost: { $sum: "$cost" },
       price: { $sum: "$price" },
+      savedCost: { $sum: "$saved.cost" },
+      savedPrice: { $sum: "$saved.price" },
       n: count,
     },
   },
@@ -88,16 +108,35 @@ export const summing = (
 function fold(groups: Group[], units: string[]): Totals[] {
   const out = new Map<string, Totals>();
   for (const group of groups) {
-    const { _kind, _unpriced, ...key } = group._id;
+    const { _kind, _unpriced, _rated, ...key } = group._id;
     const id = JSON.stringify(key);
-    const sum = out.get(id) ??
-      { key, quantities: {}, cost: 0, price: 0, uses: 0, unpriced: 0 } as Totals;
+    const sum = out.get(id) ?? {
+      key,
+      quantities: {},
+      cost: 0,
+      price: 0,
+      costs: {},
+      prices: {},
+      saved: { cost: 0, price: 0 },
+      uses: 0,
+      unpriced: 0,
+    } as Totals;
+    const add = (into: Quantities, unit: string, value: unknown) => {
+      const n = Number(value ?? 0);
+      if (n) into[unit] = round((into[unit] ?? 0) + n);
+    };
     for (const unit of units) {
-      const n = Number(group[unit] ?? 0);
-      if (n) sum.quantities[unit] = round((sum.quantities[unit] ?? 0) + n);
+      add(sum.quantities, unit, group[unit]);
+      add(sum.costs, unit, group[`cost_${unit}`]);
+      add(sum.prices, unit, group[`price_${unit}`]);
     }
-    sum.cost = round(sum.cost + Number(group.cost ?? 0));
-    sum.price = round(sum.price + Number(group.price ?? 0));
+    const cost = Number(group.cost ?? 0);
+    // Uses recorded before every use had a price are priced at their cost.
+    const atCost = _kind !== "adjustment" && (_rated === null || _rated === undefined);
+    sum.cost = round(sum.cost + cost);
+    sum.price = round(sum.price + Number(group.price ?? 0) + (atCost ? cost : 0));
+    sum.saved.cost = round(sum.saved.cost + Number(group.savedCost ?? 0));
+    sum.saved.price = round(sum.saved.price + Number(group.savedPrice ?? 0));
     if (_kind !== "adjustment") {
       sum.uses += Number(group.n);
       if (Array.isArray(_unpriced) && _unpriced.length) sum.unpriced += Number(group.n);

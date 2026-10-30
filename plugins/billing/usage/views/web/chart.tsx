@@ -1,9 +1,11 @@
 /**
- * A period, day by day: one column per day of what's measured (cost,
+ * A period, day by day: one column per day of what's measured (spend,
  * tokens, calls), in the theme's first chart colour, on hairline gridlines
- * at round values. Hovering or focusing a day (arrow keys move) shows its
- * numbers; the same numbers are a table a press away. Plain SVG, drawn at
- * the width it has.
+ * at round values. Measuring tokens, each column's foot is the input read
+ * from a cache (the third chart colour, a legend under it), the rest above
+ * it. Hovering or focusing a day (arrow keys move) shows its numbers; the
+ * same numbers are a table a press away. Plain SVG, drawn at the width it
+ * has.
  */
 import {
   type KeyboardEvent,
@@ -16,7 +18,7 @@ import {
   useState,
 } from "react";
 import { Button } from "../../../../../hosts/web/mod.ts";
-import { compact, type Day, type Measure, niceMax, said, usd } from "./numbers.ts";
+import { compact, type Day, type Measure, niceMax, percent, said, usd } from "./numbers.ts";
 
 const PAD = { top: 14, right: 6, bottom: 28, left: 46 };
 
@@ -63,7 +65,7 @@ export function DailyChart(
   { days, measure, label, height = 210 }: {
     days: Day[];
     measure: Measure;
-    /** What it shows, for screen readers: "Cost per day". */
+    /** What it shows, for screen readers: "Spend per day". */
     label: string;
     height?: number;
   },
@@ -78,10 +80,13 @@ export function DailyChart(
   const plot = { w: Math.max(0, width - PAD.left - PAD.right), h: height - PAD.top - PAD.bottom };
   const slot = days.length ? plot.w / days.length : 0;
   const bar = Math.max(2, Math.min(24, slot * 0.72, slot - 2));
-  const y = (v: number) => PAD.top + plot.h - (v / top) * plot.h;
+  const base = PAD.top + plot.h;
+  const y = (v: number) => base - (v / top) * plot.h;
   const ticks = [0, top / 2, top];
   const few = days.length <= 7;
   const every = few ? 1 : Math.ceil(days.length / (width < 480 ? 4 : 6));
+  // Tokens, with what came from a cache at each column's foot.
+  const stacked = measure === "tokens" && days.some((d) => d.cached > 0);
   const shownDay = at === undefined ? undefined : days[at];
   const keys = (event: KeyboardEvent<SVGSVGElement>) => {
     const last = days.length - 1;
@@ -95,6 +100,29 @@ export function DailyChart(
     event.preventDefault();
     setAt(next[event.key]);
   };
+  /** A day's column: whole, or (tokens) its cached foot and the rest above, a gap between. */
+  const marks = (d: Day, x: number): ReactNode => {
+    const v = d[measure];
+    if (!(v > 0)) return null;
+    const h = Math.max(1, (v / top) * plot.h);
+    const foot = stacked ? Math.min(h, (d.cached / top) * plot.h) : 0;
+    if (foot < 1) return <path d={column(x, y(v), bar, h)} />;
+    if (h - foot < 3) return <path className="usage-cached" d={column(x, y(v), bar, h)} />;
+    return (
+      <>
+        <rect className="usage-cached" x={x} y={base - foot} width={bar} height={foot} />
+        <path d={column(x, y(v), bar, h - foot - 2)} />
+      </>
+    );
+  };
+  const rest = (d: Day) =>
+    [
+      measure !== "spend" ? usd(d.spend) : null,
+      measure !== "tokens" ? `${compact(d.tokens)} tokens` : null,
+      measure !== "calls"
+        ? `${d.calls.toLocaleString()} ${d.calls === 1 ? "call" : "calls"}`
+        : null,
+    ].filter(Boolean).join(" · ");
   return (
     <div className="usage-chart">
       <div className="usage-chart-plot" ref={box} style={{ height }}>
@@ -115,41 +143,38 @@ export function DailyChart(
                 <g key={t} className="usage-tick">
                   <line x1={PAD.left} x2={width - PAD.right} y1={y(t)} y2={y(t)} />
                   <text x={PAD.left - 8} y={y(t)} dy="0.32em" textAnchor="end">
-                    {measure === "cost" ? usd(t) : compact(t)}
+                    {measure === "spend" ? usd(t) : compact(t)}
                   </text>
                 </g>
               ))}
-              {days.map((d, i) => {
-                const v = d[measure];
-                const h = (v / top) * plot.h;
-                const x = PAD.left + i * slot + (slot - bar) / 2;
-                return (
-                  <g key={d.day} className="usage-day" data-on={i === at || undefined}>
-                    {v > 0 ? <path d={column(x, y(v), bar, Math.max(1, h))} /> : null}
-                    <rect
-                      className="usage-hit"
-                      x={PAD.left + i * slot}
-                      y={PAD.top}
-                      width={slot}
-                      height={plot.h + 6}
-                      onPointerEnter={() => setAt(i)}
-                      onPointerDown={() => setAt(i)}
-                    />
-                    {i % every === (days.length - 1) % every
-                      ? (
-                        <text
-                          className="usage-axis"
-                          x={PAD.left + i * slot + slot / 2}
-                          y={height - 8}
-                          textAnchor="middle"
-                        >
-                          {shortDay(d.day, few)}
-                        </text>
-                      )
-                      : null}
-                  </g>
-                );
-              })}
+              {days.map((d, i) => (
+                <g key={d.day} className="usage-day" data-on={i === at || undefined}>
+                  {marks(d, PAD.left + i * slot + (slot - bar) / 2)}
+                  <rect
+                    className="usage-hit"
+                    x={PAD.left + i * slot}
+                    y={PAD.top}
+                    width={slot}
+                    height={plot.h + 6}
+                    onPointerEnter={() =>
+                      setAt(i)}
+                    onPointerDown={() =>
+                      setAt(i)}
+                  />
+                  {i % every === (days.length - 1) % every
+                    ? (
+                      <text
+                        className="usage-axis"
+                        x={PAD.left + i * slot + slot / 2}
+                        y={height - 8}
+                        textAnchor="middle"
+                      >
+                        {shortDay(d.day, few)}
+                      </text>
+                    )
+                    : null}
+                </g>
+              ))}
             </svg>
           )
           : null}
@@ -168,25 +193,45 @@ export function DailyChart(
             >
               <span className="usage-tip-day">{longDay(shownDay.day)}</span>
               <span className="usage-tip-value">{said(shownDay[measure], measure)}</span>
-              <span className="usage-tip-rest">
-                {measure !== "cost" ? `${usd(shownDay.cost)} · ` : ""}
-                {measure !== "tokens" ? `${compact(shownDay.tokens)} tokens · ` : ""}
-                {measure !== "calls"
-                  ? `${shownDay.calls} ${shownDay.calls === 1 ? "call" : "calls"}`
-                  : `${compact(shownDay.tokens)} tokens`}
-              </span>
+              {stacked && shownDay.cached
+                ? (
+                  <span className="usage-tip-cache">
+                    <i className="usage-key usage-key-cached" />
+                    {compact(shownDay.cached)} read from cache
+                    <span className="usage-quiet">
+                      {percent(shownDay.input ? shownDay.cached / shownDay.input : undefined)}{" "}
+                      of input
+                    </span>
+                  </span>
+                )
+                : null}
+              <span className="usage-tip-rest">{rest(shownDay)}</span>
             </div>
           )
           : null}
         <span id={`${id}-now`} className="usage-sr" aria-live="polite">
           {shownDay
-            ? `${longDay(shownDay.day)}: ${usd(shownDay.cost)}, ${
+            ? `${longDay(shownDay.day)}: ${usd(shownDay.spend)}, ${
               compact(shownDay.tokens)
-            } tokens, ${shownDay.calls} calls`
+            } tokens${
+              shownDay.cached ? ` (${compact(shownDay.cached)} read from cache)` : ""
+            }, ${shownDay.calls} calls`
             : ""}
         </span>
       </div>
       <div className="usage-chart-foot">
+        {stacked
+          ? (
+            <ul className="usage-legend" aria-label="Key">
+              <li>
+                <i className="usage-key usage-key-cached" />Read from cache
+              </li>
+              <li>
+                <i className="usage-key" />Other tokens
+              </li>
+            </ul>
+          )
+          : null}
         <Button
           size="sm"
           variant="ghost"
@@ -205,8 +250,9 @@ export function DailyChart(
               <thead>
                 <tr>
                   <th scope="col">Day</th>
-                  <th scope="col" className="usage-num">Cost</th>
+                  <th scope="col" className="usage-num">Spend</th>
                   <th scope="col" className="usage-num">Tokens</th>
+                  <th scope="col" className="usage-num">From cache</th>
                   <th scope="col" className="usage-num">Calls</th>
                 </tr>
               </thead>
@@ -214,8 +260,9 @@ export function DailyChart(
                 {[...days].reverse().map((d) => (
                   <tr key={d.day}>
                     <th scope="row">{longDay(d.day)}</th>
-                    <td className="usage-num">{usd(d.cost)}</td>
+                    <td className="usage-num">{usd(d.spend)}</td>
                     <td className="usage-num">{d.tokens.toLocaleString()}</td>
+                    <td className="usage-num">{d.cached.toLocaleString()}</td>
                     <td className="usage-num">{d.calls.toLocaleString()}</td>
                   </tr>
                 ))}

@@ -69,7 +69,7 @@ const app = definePlugin({
   name: "app",
   resources: {
     cost: { "m/a": { input: 1, output: 2, seconds: 0.001, per: 1 } },
-    price: { "*": { markup: 0.5 } },
+    price: { "*": { margin: 0.5 } },
   },
   actions: {
     "seed.uses": defineAction({

@@ -19,6 +19,14 @@ export const rollupSchema = {
     quantities: { type: "object", additionalProperties: { type: "number" } },
     cost: { type: "number" },
     price: { type: "number" },
+    costs: { type: "object", additionalProperties: { type: "number" } },
+    prices: { type: "object", additionalProperties: { type: "number" } },
+    saved: {
+      type: "object",
+      properties: { cost: { type: "number" }, price: { type: "number" } },
+    },
+    /** Who rated the price (`rated.price`), as the records say: none for those priced at cost before. */
+    rated: { type: "object", properties: { price: { type: "string" } } },
     /** Records rolled up. */
     n: { type: "integer" },
   },

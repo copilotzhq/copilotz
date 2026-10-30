@@ -646,11 +646,25 @@ export async function createOwner(
     if (!recorded(collection)) return;
     const { cause } = by;
     const actor = by.actor ? { actor: by.actor } : {};
+    // The log keeps no private field: a token or key never lands in an event.
+    const kept = registry.collections[collection]?.private ?? [];
+    const open = <D extends Record<string, unknown>>(doc: D): D =>
+      kept.length ? unprivate(doc, kept) as D : doc;
     for (const { _id, before, after } of changes) {
       if (!before) {
-        tx.emit({ type: `${collection}.created`, data: { _id, doc: after }, cause, ...actor });
+        tx.emit({
+          type: `${collection}.created`,
+          data: { _id, doc: open(after!) },
+          cause,
+          ...actor,
+        });
       } else if (!after) {
-        tx.emit({ type: `${collection}.deleted`, data: { _id, doc: before }, cause, ...actor });
+        tx.emit({
+          type: `${collection}.deleted`,
+          data: { _id, doc: open(before) },
+          cause,
+          ...actor,
+        });
       } else {
         const changed = Object.keys(after).filter((key) =>
           canonical(after[key]) !== canonical(before[key])
@@ -658,7 +672,7 @@ export async function createOwner(
         const removed = Object.keys(before).filter((key) => !(key in after)).sort();
         tx.emit({
           type: `${collection}.updated`,
-          data: { _id, doc: after, changed, removed },
+          data: { _id, doc: open(after), changed, removed },
           cause,
           ...actor,
         });
@@ -817,16 +831,7 @@ export async function createOwner(
   const hidden = (op: ReadOp, value: unknown): unknown => {
     const fields = "collection" in op ? registry.collections[op.collection]?.private : undefined;
     if (!fields?.length || value === null || typeof value !== "object") return value;
-    const without = (doc: Record<string, unknown>) => {
-      const copy = structuredClone(doc);
-      for (const path of fields) {
-        const keys = path.split(".");
-        let at: Record<string, unknown> | undefined = copy;
-        for (const key of keys.slice(0, -1)) at = at?.[key] as Record<string, unknown> | undefined;
-        if (at && typeof at === "object") delete at[keys.at(-1)!];
-      }
-      return copy;
-    };
+    const without = (doc: Record<string, unknown>) => unprivate(doc, fields);
     return Array.isArray(value)
       ? value.map((doc) => without(doc as Record<string, unknown>))
       : without(value as Record<string, unknown>);
@@ -1691,6 +1696,18 @@ export async function createOwner(
 }
 
 /** The scalar type a schema gives a dot path (through properties and additionalProperties), if one. */
+/** A copy of `doc` without the private fields at these (dotted) paths. */
+function unprivate(doc: Record<string, unknown>, fields: string[]): Record<string, unknown> {
+  const copy = structuredClone(doc);
+  for (const path of fields) {
+    const keys = path.split(".");
+    let at: Record<string, unknown> | undefined = copy;
+    for (const key of keys.slice(0, -1)) at = at?.[key] as Record<string, unknown> | undefined;
+    if (at && typeof at === "object") delete at[keys.at(-1)!];
+  }
+  return copy;
+}
+
 function scalarOf(schema: unknown, path: string): ScalarType | undefined {
   let node = schema as Record<string, unknown> | undefined;
   for (const key of path.split(".")) {

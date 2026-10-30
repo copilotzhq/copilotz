@@ -82,3 +82,22 @@ for (const [name, make] of Object.entries(stores)) {
     }
   });
 }
+
+test("the event log never holds a private field: not when made, changed or deleted", async () => {
+  const store = memoryStore();
+  const rt = await createRuntime({ store, plugins: [plugin] });
+  try {
+    await rt.call("account.add", {});
+    const events = (await store.events(0, 100)).filter((e) => e.type.startsWith("account."));
+    assertEquals(events.map((e) => e.type), ["account.created"]);
+    const logged = JSON.stringify(events);
+    assertEquals([logged.includes("tok_123"), logged.includes("s3cr3t")], [false, false]);
+    assertEquals((events[0].data as { doc: unknown }).doc, {
+      _id: "a1",
+      name: "mail",
+      owner: { id: "ana" },
+    });
+  } finally {
+    await rt.close();
+  }
+});

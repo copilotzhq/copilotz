@@ -7,7 +7,9 @@
  *   visitor (`{ kind: "visitor", id: "" }`): the Action's `allow` decides.
  *   It answers with an `HttpAnswer`. Webhooks, OAuth callbacks, an API.
  * - `{ path, serve }`: a function that answers the request itself, here in
- *   the host's process, for files as they are (downloads), never for data.
+ *   the host's process: files as they are (downloads), or an API that must
+ *   stream, choose call ids or keep a request's secrets out of the log. It's
+ *   given the runtime and who the request's session signs in (`Served`).
  *
  * `methods` limits which methods it takes (all by default). Paths the host
  * serves itself can't be taken.
@@ -20,7 +22,10 @@ import type { Actor, Infer, Runtime } from "../../runtime/mod.ts";
 
 export type Route =
   & { path: string; methods?: string[] }
-  & ({ action: string } | { serve(request: Request): Response | Promise<Response> });
+  & ({ action: string } | { serve(request: Request, host: Served): Response | Promise<Response> });
+
+/** What a `serve` route is given: the runtime, and who the request's session signs in. */
+export type Served = { runtime: Runtime; whom(): Promise<Actor | null> };
 
 /**
  * What an Action a route calls is given, the request read: its schema, for
@@ -160,7 +165,12 @@ export function routeServer(
     if (!found) return undefined;
     const [name, route] = found;
     return (async () => {
-      if ("serve" in route) return await route.serve(request);
+      if ("serve" in route) {
+        return await route.serve(request, {
+          runtime,
+          whom: () => whom(request),
+        });
+      }
       const asked = await read(request, url);
       if (asked instanceof Response) return asked;
       const actor = (await whom(request).catch(() => null)) ?? VISITOR;

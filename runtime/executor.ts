@@ -550,8 +550,10 @@ export function createExecutor(
             throw error;
           }
         };
+        // What's left goes as the job's own actor: the owner checks every op against it.
+        const own = request.kind === "process" ? request.event.actor : request.actor;
         const flush = async () => {
-          if (pending.size) await timed({ ops: riding() });
+          if (pending.size) await timed({ ops: riding(), ...(own ? { actor: own } : {}) });
         };
         const job: Reach = {
           send,

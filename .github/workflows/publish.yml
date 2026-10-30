@@ -1,145 +1,80 @@
-name: Validate and Publish
+# Publishes a Copilotz 1.x release. Pushing a tag `v1.*` (`v1.0.0-rc.1`,
+# `v1.0.0`, `v1.2.3`) checks that it names the version deno.json and
+# package.json say, runs the whole test workflow, then publishes that version
+# to JSR (`@copilotz/copilotz`, through GitHub's OIDC: no token) and to npm
+# (`copilotz`, built from the sources, with the `NPM_TOKEN` secret and
+# provenance). A version with a pre-release part (`-rc.1`) goes to npm's `next`
+# tag, so `npm install copilotz` keeps the last stable one. Nothing else
+# publishes: not a push, not a pull request, not a tag outside 1.x.
+name: Publish
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
-
-concurrency:
-  group: copilotz-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    tags: ["v1.*"]
 
 permissions:
   contents: read
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  deno-postgres:
-    if: github.ref == 'refs/heads/main'
-    name: Deno, PGlite, and PostgreSQL
+  version:
+    name: The tag is the version
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    services:
-      postgres:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_DB: copilotz_test
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d copilotz_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      COPILOTZ_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/copilotz_test
-      COPILOTZ_OWNER_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/copilotz_test
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.9.2
-          cache: true
-          cache-hash: ${{ hashFiles('deno.json', 'dependencies/*.ts') }}
-      # The bundle CLI test runs its worker artifact on native Node 24.
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.14.0
-          package-manager-cache: false
-      # Owner bundle export needs a pg_dump at least as new as the pg17 service.
-      - name: Install the PostgreSQL 17 client
+      - uses: actions/checkout@v4
+      - id: version
         run: |
-          sudo apt-get install -y -qq --no-install-recommends postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y -qq --no-install-recommends postgresql-client-17
-          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
-      - name: Architecture and package-surface checks
-        run: deno task check
-      - name: Complete retained suite with PostgreSQL
-        run: deno task test
+          version="${GITHUB_REF_NAME#v}"
+          deno=$(jq -r .version deno.json)
+          npm=$(jq -r .version package.json)
+          if [ "$version" != "$deno" ] || [ "$version" != "$npm" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, deno.json $deno, package.json $npm: they must agree"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then echo "tag=next" >> "$GITHUB_OUTPUT"; else echo "tag=latest" >> "$GITHUB_OUTPUT"; fi
 
-  runtimes:
-    if: github.ref == 'refs/heads/main'
-    name: Deno, Node, Bun, and browser isolate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.9.2
-          cache: true
-          cache-hash: ${{ hashFiles('deno.json', 'dependencies/*.ts') }}
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.14.0
-          package-manager-cache: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-      - run: deno task smoke:authoring
-      - run: deno task bundle:runtime-smoke
-      - run: deno task smoke:deno
-      - run: deno task smoke:node
-      - run: deno task smoke:bun
-      - run: deno task smoke:browser
+  test:
+    needs: version
+    uses: ./.github/workflows/test.yml
 
-  cloudflare:
-    if: github.ref == 'refs/heads/main'
-    name: Cloudflare Worker isolate and dry run
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.9.2
-          cache: true
-          cache-hash: ${{ hashFiles('deno.json', 'dependencies/*.ts') }}
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.14.0
-          package-manager-cache: false
-      - run: deno task bundle:edge-smoke
-      - run: deno task smoke:cloudflare
-      - run: deno task smoke:cloudflare-build
-
-  package:
-    if: github.ref == 'refs/heads/main'
-    name: Formatting and JSR dry run
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.9.2
-          cache: true
-          cache-hash: ${{ hashFiles('deno.json', 'dependencies/*.ts') }}
-      - run: deno fmt --check
-      - run: deno task publish:dry-run
-
-  publish:
-    name: Publish to JSR
-    if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [deno-postgres, runtimes, cloudflare, package]
+  jsr:
+    name: JSR
+    needs: [version, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.9.2
-      - name: Validate release tag
-        run: >-
-          deno run --allow-read=deno.json scripts/validate_publish_release.ts
-          "${{ github.ref_name }}" "${{ github.ref }}"
-      - name: Require successful checks for this exact main revision
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yml/runs?head_sha=${GITHUB_SHA}&event=push&per_page=100" \
-            | jq --exit-status --arg sha "$GITHUB_SHA" \
-              'any(.workflow_runs[]; .head_sha == $sha and .head_branch == "main" and .status == "completed" and .conclusion == "success")'
+          deno-version: v2.x
       - run: deno publish
+
+  npm:
+    name: npm
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/npm/smoke.ts
+      - run: npm publish --provenance --access public --tag ${{ needs.version.outputs.tag }}
+        working-directory: dist/npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

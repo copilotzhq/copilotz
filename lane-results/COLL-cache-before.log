@@ -1,9 +1,0 @@
-Check runtime/collections/reads.test.ts
-running 4 tests from ./runtime/collections/reads.test.ts
-PGlite reads are batched, memoized in a snapshot and bounded once ... ok (1s)
-PostgreSQL reads are batched, memoized in a snapshot and bounded once ... ok (295ms)
-PGlite a handler reads through a view of its own ... ok (865ms)
-PostgreSQL a handler reads through a view of its own ... ok (208ms)
-
-ok | 4 passed | 0 failed (2s)
-

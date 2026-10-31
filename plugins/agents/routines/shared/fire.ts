@@ -13,6 +13,7 @@ import type { Thread } from "../../chat/contract.ts";
 import type { Routine } from "../collections/routine.ts";
 import type { RoutineRun } from "../collections/run.ts";
 import { asMaker, timing } from "./routines.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 export type Ran = Pick<RoutineRun, "outcome" | "thread" | "error"> & { run: string };
 
@@ -39,7 +40,8 @@ export async function fire(
   });
   if (!can) {
     outcome = "forbidden";
-    error = `${routine.by} can't write in this space anymore, and the routine sends as them.`;
+    const maker = nameOf(routine.by, await namesFor(system, [routine.by]));
+    error = `${maker} can't write in this space anymore, and the routine sends as them.`;
   } else {
     // The same chat, while it's still there and still in this space.
     const same = routine.post === "same" && routine.thread

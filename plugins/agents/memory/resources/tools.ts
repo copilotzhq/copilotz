@@ -3,7 +3,8 @@ import type { Resources } from "../../../../runtime/mod.ts";
 import { tool } from "../../chat/contract.ts";
 import type { Message } from "../../chat/contract.ts";
 import type { Memory } from "../collections/memory.ts";
-import { aboutOf, LIMIT, line, now, readable, scopeFor } from "../shared/scope.ts";
+import { aboutOf, LIMIT, line, now, peopleOf, readable, scopeFor } from "../shared/scope.ts";
+import { namesFor } from "../../../access/spaces/contract.ts";
 import { keep, search } from "../shared/search.ts";
 import { applies } from "../shared/settings.ts";
 
@@ -16,10 +17,10 @@ const remember = tool({
   description:
     "Remember something worth knowing in later conversations: one self-contained statement " +
     "naming who it is about, and why it matters if that isn't obvious. about: the person it " +
-    'concerns (by default, the person you\'re talking with), "me" for a note to yourself, ' +
-    '"thread" for this conversation only, or "everyone". core: true for what you should ' +
-    "always have in mind about them (who they are, strong preferences). Remembering something " +
-    "you already know updates it; give the id to correct a specific memory.",
+    'concerns, by name (by default, the person you\'re talking with), "me" for a note to ' +
+    'yourself, "thread" for this conversation only, or "everyone". core: true for what you ' +
+    "should always have in mind about them (who they are, strong preferences). Remembering " +
+    "something you already know updates it; give the id to correct a specific memory.",
   input: {
     type: "object",
     properties: {
@@ -70,9 +71,10 @@ const recall = tool({
     const found = await search(ctx, scope, input.query, input.limit ?? LIMIT.recall, {
       core: true,
     });
-    return found.length
-      ? found.map((m) => line(m, ctx.agent)).join("\n")
-      : "Nothing remembered about that.";
+    if (!found.length) return "Nothing remembered about that.";
+    // People by name (notes from before names were known say ids).
+    const names = { ...here.names, ...await namesFor(ctx, found.flatMap(peopleOf)) };
+    return found.map((m) => line(m, ctx.agent, names)).join("\n");
   },
 });
 

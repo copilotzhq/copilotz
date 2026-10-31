@@ -1,5 +1,6 @@
 /** Summary nodes' ids, sizes in bytes, and messages as one line of text. */
 import type { Message, Thread } from "../../chat/contract.ts";
+import { nameOf } from "../../../access/spaces/contract.ts";
 
 /** A thread whose older history is summarized says so, so others never look for an outline. */
 export type Outlined = Thread & { outlined?: boolean };
@@ -8,9 +9,19 @@ export const node = (thread: string, level: number, index: number) => `${thread}
 const encoder = new TextEncoder();
 export const size = (text: string) => encoder.encode(text).length;
 
-/** A message as one piece of text: who wrote it, to whom, and what. */
-export const lineOf = (m: Pick<Message, "from" | "to" | "text">) =>
-  `${m.from}${m.to.length ? ` → ${m.to.join(", ")}` : ""}: ${m.text ?? ""}`;
+/**
+ * A message as one piece of text: who wrote it, to whom (people by name,
+ * from `names`), and what.
+ */
+export const lineOf = (
+  m: Pick<Message, "from" | "to" | "text">,
+  names: Record<string, string> = {},
+) => {
+  const shown = (who: string) => nameOf(who, names);
+  return `${shown(m.from)}${m.to.length ? ` → ${m.to.map(shown).join(", ")}` : ""}: ${
+    m.text ?? ""
+  }`;
+};
 
 /** Cuts text to at most `limit` UTF-8 bytes, on a character boundary. */
 export function cut(text: string, limit: number) {

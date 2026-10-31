@@ -3,6 +3,7 @@ import type { LlmFile, LlmMessage, LlmState } from "../../../models/contract.ts"
 import { type File, text, textual } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
 import type { Step } from "../shared/types.ts";
+import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
 
 /** How much of a text file an agent is sent. */
 const FILE_CHARS = 20_000;
@@ -47,11 +48,15 @@ function attached(m: Message, ctx: ViewContext): { text: string; files: LlmFile[
 export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
   const me = ctx.viewer?.name;
   if (m.from !== me) {
-    const to = !me || m.to.includes(me) || !m.to.length ? "" : ` → ${m.to.join(", ")}`;
+    // People by name (an agent's own name is as it is).
+    const names = namesIn(ctx, [m.from, ...m.to]);
+    const to = !me || m.to.includes(me) || !m.to.length
+      ? ""
+      : ` → ${m.to.map((who) => nameOf(who, names)).join(", ")}`;
     const { text: notes, files } = attached(m, ctx);
     return [{
       role: "user",
-      text: `${m.from}${to}: ${m.text ?? ""}${notes}`,
+      text: `${nameOf(m.from, names)}${to}: ${m.text ?? ""}${notes}`,
       ...(files.length ? { files } : {}),
     }];
   }

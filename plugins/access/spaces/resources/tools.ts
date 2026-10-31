@@ -6,6 +6,7 @@
 import type { Tool } from "../../../agents/chat/contract.ts";
 import { PERSONAL } from "../shared/personal.ts";
 import { memberKey } from "../shared/reach.ts";
+import { nameOf, namesFor } from "../shared/names.ts";
 
 export const tools: Record<string, Tool> = {
   request_access: {
@@ -40,7 +41,8 @@ export const tools: Record<string, Tool> = {
         },
         { upsert: true },
       );
-      return `Asked ${found.name}'s managers to let ${who.id} in. They'll decide; nothing ` +
+      const named = who.kind === "person" ? nameOf(who.id, await namesFor(ctx, [who.id])) : who.id;
+      return `Asked ${found.name}'s managers to let ${named} in. They'll decide; nothing ` +
         "changes until they do.";
     },
   },

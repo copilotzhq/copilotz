@@ -11,6 +11,7 @@ import { OS_NAMES } from "../program/release.ts";
 import { tools } from "../resources/tools.ts";
 import { personOf } from "../shared/person.ts";
 import { settingsOf } from "../shared/settings.ts";
+import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
 
 const ASKED = { terminal: "run commands", jobs: "start jobs", writes: "write or edit files" };
 
@@ -36,28 +37,35 @@ export const contextViews = {
       if (desks.status !== "ready") return undefined;
       const here = [...desks.value].sort((a, b) => Number(!!b.default) - Number(!!a.default));
       const desk = here.find((d) => d.online);
+      // People by name.
+      const names = namesIn(ctx, [person, ...here.map((d) => d.owner)]);
+      const shown = (id: string) => nameOf(id, names);
       if (!desk) {
         // Where something wakes computers (cloud computers), using one that's asleep wakes it.
         if (here.length && (ctx.resources.computerWake as { wake?: string } | undefined)?.wake) {
           return `This space's computer, ${here[0].name ?? "theirs"}, is offline or asleep. ` +
             "If the app hosts it (a cloud computer), your computer tools wake it: the first " +
-            `call waits a few seconds. If not, they won't work until ${here[0].owner} starts ` +
+            `call waits a few seconds. If not, they won't work until ${
+              shown(here[0].owner)
+            } starts ` +
             "it again.";
         }
         return here.length
           ? `This space's computer, ${here[0].name ?? "theirs"}, is offline, so your computer ` +
-            `tools won't work until ${here[0].owner} starts it again (on it: deno task computer).`
+            `tools won't work until ${
+              shown(here[0].owner)
+            } starts it again (on it: deno task computer).`
           : "This space has no computer, so your computer tools won't work until someone " +
             "connects one, or adds one of theirs (in the terminal: /computer connect or " +
             "/computer share; on the web: the space's Computer tab).";
       }
-      const owned = desk.owner === person ? `${person}'s own` : `${desk.owner}'s`;
+      const owned = desk.owner === person ? `${shown(person)}'s own` : `${shown(desk.owner)}'s`;
       const info = desk.info as
         | { os?: string; root?: string; windows?: string; shell?: string }
         | undefined;
       const sep = info?.os === "win32" ? "\\" : "/";
       const asked = (desk.approve ?? settingsOf(ctx).approve).map((work) => ASKED[work]);
-      const answerer = desk.answers === "owner" ? desk.owner : person;
+      const answerer = shown(desk.answers === "owner" ? desk.owner : person);
       return [
         `You work on this space's computer, ${desk.name ?? "theirs"} (${owned}${
           info?.os ? `, ${OS_NAMES[info.os] ?? info.os}` : ""

@@ -10,6 +10,7 @@ import type { Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
 import { personOf } from "./person.ts";
 import type { Scope } from "./workloads.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 export type Where = { desk: Desk; person: string; answerer: string; scope: Scope };
 
@@ -41,12 +42,16 @@ export async function whereFor(
   const desks = await desksIn(ctx, space);
   const desk = desks.find((d) => d.online);
   if (!desk) {
+    // People by name.
+    const names = await namesFor(ctx, [person, ...(desks[0] ? [desks[0].owner] : [])]);
     return {
       missing: desks.length
         ? `This space's computer, ${desks[0].name ?? "theirs"}, is offline: ${
-          desks[0].owner
+          nameOf(desks[0].owner, names)
         } can start it again (on it: deno task computer).`
-        : `There's no computer in this space: ${person} can connect one, or add one of ` +
+        : `There's no computer in this space: ${
+          nameOf(person, names)
+        } can connect one, or add one of ` +
           "theirs, from the space (in the terminal: /computer connect or /computer share).",
     };
   }

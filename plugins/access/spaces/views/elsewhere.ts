@@ -7,6 +7,7 @@
  */
 import type { Actor, ViewContext } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
+import { nameOf, namesIn } from "../shared/names.ts";
 
 type Space = { _id: string; name: string; kind: string; owner?: string; archived?: string };
 
@@ -28,12 +29,17 @@ export const elsewhereView = (thread: { in?: string }, ctx: ViewContext<string>)
   const others = spaces.filter((s) => !near.has(s._id) && !s.archived)
     .sort((a, b) => Number(b.kind === "personal") - Number(a.kind === "personal"));
   if (!others.length) return undefined;
+  // People by name.
+  const names = namesIn(ctx, [person.id, ...others.flatMap((s) => s.owner ? [s.owner] : [])]);
+  const who = nameOf(person.id, names);
   const line = (s: Space) =>
-    `- ${s.name}${s.kind === "personal" ? ` (${s.owner}'s own)` : ""} [in: ${s._id}]`;
+    `- ${s.name}${
+      s.kind === "personal" && s.owner ? ` (${nameOf(s.owner, names)}'s own)` : ""
+    } [in: ${s._id}]`;
   return [
-    `Other spaces you can read for ${person.id}, for tools that take a space (\`in\`) when ` +
+    `Other spaces you can read for ${who}, for tools that take a space (\`in\`) when ` +
     `what you need isn't here. What you read in one marks your answer: here, only those who ` +
-    `can see that space read it, until ${person.id} shares it.`,
+    `can see that space read it, until ${who} shares it.`,
     ...others.slice(0, LISTED).map(line),
     ...(others.length > LISTED ? [`- and ${others.length - LISTED} more`] : []),
   ].join("\n");

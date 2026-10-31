@@ -5,6 +5,7 @@
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
+import { nameOf, namesIn } from "../shared/names.ts";
 
 type Space = { _id: string; name: string; kind: string; owner?: string };
 
@@ -24,16 +25,23 @@ export const whereView = (thread: { in?: string }, ctx: ViewContext<string>) => 
     ctx.db.collection<Member>("member").find({ member: `space:${thread.in}` }).value ??
       [];
   if (!space) return undefined;
+  // People by name.
+  const names = namesIn(ctx, [
+    ...(space.owner ? [space.owner] : []),
+    ...members.filter((m) => m.member.startsWith("person:")).map((m) => m.member),
+  ]);
   if (space.kind === "personal") {
-    return `This conversation is in ${space.owner}'s Personal space: only ${space.owner} sees ` +
-      `what's here.`;
+    const owner = nameOf(space.owner ?? "", names);
+    return `This conversation is in ${owner}'s Personal space: only ${owner} sees what's here.`;
   }
   const people = members.map((m) => ({ ...who(m.member), role: m.role }))
     .filter((m) => m.kind !== "space")
     .map((m) =>
       m.kind === "agent" && m.id === "*"
         ? `every agent (${m.role})`
-        : `${m.id} (${m.kind === "person" ? "" : `${m.kind}, `}${m.role})`
+        : `${m.kind === "person" ? nameOf(m.id, names) : m.id} (${
+          m.kind === "person" ? "" : `${m.kind}, `
+        }${m.role})`
     );
   return [
     `This conversation is in ${space.name} (${kindOf(space.kind)}). What you write here, its ` +

@@ -130,7 +130,7 @@ test("a person connects a computer and answers their agent at the terminal", asy
     );
     assertStringIncludes(seen, "deno task computer connect http://127.0.0.1:8790 --code ");
     assertStringIncludes(seen, "Their folders go under ~/Copilotz there");
-    assertStringIncludes(seen, "[1] testbox ● online · testos · yours · used here");
+    assertStringIncludes(seen, "[1] testbox ● online · testos · yours · default");
     assertStringIncludes(seen, "Renamed it laptop.");
     assertStringIncludes(asking, "? lead wants to run ls");
     assertStringIncludes(asking, "/approve once · /approve thread (this conversation)");

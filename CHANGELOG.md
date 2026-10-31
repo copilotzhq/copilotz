@@ -1,5 +1,19 @@
 ## 1.0.0-rc.7 — 2026-10-30
 
+- **Agents choose among a space's computers.** Every computer tool (the terminal, jobs, files, the
+  browser, web search, `preview`, and the apps' `publish`) takes `computer`: one of the space's
+  computers by its name (any case, or part of it when only one has it) or its id; the space's
+  default otherwise. An unknown or ambiguous name, or a computer that's offline, is told with the
+  ones to choose from; naming a cloud computer that's asleep wakes it. Each turn, an agent's context
+  lists the space's computers (whose, a cloud computer or a machine, how it is now, its system, what
+  it asks first, the default marked) when there are several; one stays as it was. In a space with
+  several, an answer says the computer it came from (`computer`), and the web's tool steps show it.
+- **A job is found on whichever computer runs it:** `computer.preview` and `computer.scope` (and so
+  `app.publish` and the agents' `preview` and `publish`) take a job without a computer and look for
+  it on the space's computers that are online, the default first. `computer.preview`,
+  `computer.scope`, `computer.allowed` and `app.publish` take `computer` (a name or an id).
+- **The default computer** is named so on the web (a "Default" badge, "Make it the default") and in
+  `/computers`.
 - **Apps: what serves a preview serves the app.** A folder with no Dockerfile is built into an image
   made for it (no more buildpacks, which found nothing to build in a plain folder): the computer's
   system (Debian 12) with Node.js 24 and Python, the folder as it was sent, its dependencies

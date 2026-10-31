@@ -64,7 +64,7 @@ const line = (l: Listed, i: number, me: string) => {
       [
         info?.os,
         l.computer.owner === me ? "yours" : `${l.computer.owner}'s`,
-        l.desk?.default ? "used here" : undefined,
+        l.desk?.default ? "default" : undefined,
         l.desk ? undefined : "not in this space",
       ].filter(Boolean).map((part) => ` · ${part}`).join(""),
     )

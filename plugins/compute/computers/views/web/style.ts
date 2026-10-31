@@ -395,6 +395,8 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* Agents' calls, in the conversation */
 .step-computer { min-width: 0; }
+.step-on { display: inline-flex; align-items: center; gap: 5px; margin: 0 0 6px; padding: 2px 8px;
+  border-radius: var(--radius-sm); background: var(--muted); color: var(--muted-foreground); font-size: 12px; }
 .step-block .copilotz-code-head { font-weight: 560; }
 .step-block .copilotz-code-title > span, .step-file { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 6px;
   min-width: 0; font-family: var(--font-sans); font-size: 13px; }

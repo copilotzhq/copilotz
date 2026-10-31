@@ -4,7 +4,7 @@
  * a machine of someone's (or a cloud computer: `computerKinds`) with a
  * folder for this space, and adding one (a cloud computer, connecting a
  * computer here, or putting one of yours here); then the one
- * picked (the one agents use, at first) to work on: its terminal, jobs and
+ * picked (the default, at first) to work on: its terminal, jobs and
  * files in this space's folder (agents' jobs by their names: chat's
  * `thread.agents`). A viewer sees them; those who may write here
  * work on them. In a side panel (`hints.mode: "panel"`), the same, compact,
@@ -127,7 +127,7 @@ function SpaceComputers(
   },
 ): ReactNode {
   const [picked, setPicked] = useState<string>();
-  // The one picked while it's here; else the one agents use (the query lists it first).
+  // The one picked while it's here; else the default (the query lists it first).
   const desk = desks.find((d) => d._id === picked) ?? desks[0];
   const write = space.can.includes("write");
   return (

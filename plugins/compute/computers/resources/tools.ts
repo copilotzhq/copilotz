@@ -1,9 +1,10 @@
 /**
- * What agents do on the computer of the conversation's space (its desk
- * there): the terminal (their own shell), background jobs, files, the
- * browser and web search, in the space's folder. Running commands, starting
- * jobs and writing files wait for a yes, unless it's been given (see
- * shared/ask.ts). Listed in an agent's `tools` by name.
+ * What agents do on a computer of the conversation's space (its desk there:
+ * the space's default, or the one a tool's `computer` names): the terminal
+ * (their own shell), background jobs, files, the browser and web search, in
+ * the space's folder. Running commands, starting jobs and writing files wait
+ * for a yes, unless it's been given (see shared/ask.ts). Listed in an
+ * agent's `tools` by name.
  */
 import type { Tool, ToolContext } from "../../../agents/chat/contract.ts";
 import { tool } from "../../../agents/chat/contract.ts";
@@ -13,6 +14,13 @@ import { touch, whereAwake } from "../shared/wake.ts";
 import { browserActionSchema, browserDescription } from "../shared/browser.ts";
 import { WORK } from "../shared/workloads.ts";
 
+/** Every tool's choice of computer, when the space has more than one. */
+export const computerChoice = {
+  type: "string",
+  description: "Which of this space's computers to use (its name): the space's default " +
+    "unless you say. Your context lists them.",
+} as const;
+
 /** What a write or an edit would do, shortly: what its person sees when they're asked. */
 const preview = (text: string, lines = 12, chars = 1200) => {
   const kept = text.split("\n").slice(0, lines).join("\n").slice(0, chars);
@@ -20,18 +28,24 @@ const preview = (text: string, lines = 12, chars = 1200) => {
 };
 
 /**
- * Does `work` on the computer of the conversation's space: where it goes,
- * whether it may (`asked`: what kind, and what exactly), then the computer's
- * answer.
+ * Does `work` on a computer of the conversation's space (the one `computer`
+ * names, else the default): where it goes, whether it may (`asked`: what
+ * kind, and what exactly), then the computer's answer.
  */
 async function on(
   ctx: ToolContext,
   work: string,
-  input: Record<string, unknown>,
+  given: Record<string, unknown>,
   asked?: { kind: Asked; detail: string; preview?: string },
 ): Promise<unknown> {
+  const { computer, ...input } = given;
   // A computer that sleeps (a cloud computer) is woken first.
-  const where = await whereAwake(ctx, ctx.thread, `agent:${ctx.agent}`);
+  const where = await whereAwake(
+    ctx,
+    ctx.thread,
+    `agent:${ctx.agent}`,
+    typeof computer === "string" && computer ? computer : undefined,
+  );
   if ("missing" in where) return where.missing;
   if (asked) {
     const may = await allowed(ctx, {
@@ -53,10 +67,15 @@ async function on(
   // It was used: it stays awake a while (alongside the work, which doesn't wait on it).
   const touched = touch(ctx, where.desk.computer);
   try {
-    return await ctx.workers.call("computer", where.desk.computer, work, {
+    const answer = await ctx.workers.call("computer", where.desk.computer, work, {
       ...input,
       scope: where.scope,
     });
+    // Where the space has several, an answer says which computer it came from.
+    return (where.computers ?? 1) > 1 && answer && typeof answer === "object" &&
+        !Array.isArray(answer)
+      ? { ...answer, computer: where.desk.name ?? where.desk.computer }
+      : answer;
   } catch (error) {
     return `Error: ${error instanceof Error ? error.message : String(error)}`;
   } finally {
@@ -77,6 +96,7 @@ const terminal = tool({
       stdin: { type: "string", description: "A command, or input for the running one." },
       commandId: { type: "string" },
       operation: { enum: ["interrupt"] },
+      computer: computerChoice,
     },
   },
   run: (input, ctx) =>
@@ -95,23 +115,32 @@ const startJob = tool({
     "Windows). Read its output with job_logs; stop it with stop_job.",
   input: {
     type: "object",
-    properties: { command: { type: "string", minLength: 1 }, name: { type: "string" } },
+    properties: {
+      command: { type: "string", minLength: 1 },
+      name: { type: "string" },
+      computer: computerChoice,
+    },
     required: ["command"],
   },
   run: (input, ctx) => on(ctx, WORK.jobsStart, input, { kind: "jobs", detail: input.command }),
 });
 
 const listJobs = tool({
-  description: "Your background jobs in this space: running and finished.",
-  input: { type: "object", properties: {} },
-  run: (_input, ctx) => on(ctx, WORK.jobsList, {}),
+  description: "Your background jobs in this space, on one of its computers: running and " +
+    "finished.",
+  input: { type: "object", properties: { computer: computerChoice } },
+  run: (input, ctx) => on(ctx, WORK.jobsList, input),
 });
 
 const jobLogs = tool({
   description: "What one of your background jobs wrote (the end of it, with tail: characters).",
   input: {
     type: "object",
-    properties: { id: { type: "string" }, tail: { type: "integer", minimum: 1 } },
+    properties: {
+      id: { type: "string" },
+      tail: { type: "integer", minimum: 1 },
+      computer: computerChoice,
+    },
     required: ["id"],
   },
   run: (input, ctx) => on(ctx, WORK.jobsLogs, input),
@@ -119,14 +148,18 @@ const jobLogs = tool({
 
 const stopJob = tool({
   description: "Stops one of your background jobs.",
-  input: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  input: {
+    type: "object",
+    properties: { id: { type: "string" }, computer: computerChoice },
+    required: ["id"],
+  },
   run: (input, ctx) => on(ctx, WORK.jobsStop, input),
 });
 
 const listFiles = tool({
   description:
     "Lists a directory in this space's folder (path relative to it; default: the folder).",
-  input: { type: "object", properties: { path: { type: "string" } } },
+  input: { type: "object", properties: { path: { type: "string" }, computer: computerChoice } },
   run: (input, ctx) => on(ctx, WORK.filesList, input),
 });
 
@@ -139,6 +172,7 @@ const readFile = tool({
       path: { type: "string", minLength: 1 },
       offset: { type: "integer", minimum: 0 },
       length: { type: "integer", minimum: 1 },
+      computer: computerChoice,
     },
     required: ["path"],
   },
@@ -153,6 +187,7 @@ const writeFile = tool({
       path: { type: "string", minLength: 1 },
       content: { type: "string" },
       encoding: { enum: ["utf8", "base64"] },
+      computer: computerChoice,
     },
     required: ["path", "content"],
   },
@@ -173,6 +208,7 @@ const editFile = tool({
       path: { type: "string", minLength: 1 },
       old: { type: "string", minLength: 1 },
       new: { type: "string" },
+      computer: computerChoice,
     },
     required: ["path", "old", "new"],
   },
@@ -198,6 +234,7 @@ const browser = tool({
         description:
           "Shown: on your person's screen, for them to watch or use. Default: as it was.",
       },
+      computer: computerChoice,
     },
     required: ["actions"],
   },
@@ -212,6 +249,7 @@ const webSearch = tool({
     properties: {
       query: { type: "string", minLength: 1 },
       limit: { type: "integer", minimum: 1, maximum: 20 },
+      computer: computerChoice,
     },
     required: ["query"],
   },
@@ -239,13 +277,15 @@ export const tools: Record<string, Tool> = {
  */
 tools.preview = tool({
   description: "Makes a link to what one of your background jobs serves (a dev server, a site), " +
-    "for the people of this space to open in their browser: give the job (its id or name) or " +
-    "the port it serves. Start the server with start_job first.",
+    "for the people of this space to open in their browser: give the job (its id or name; " +
+    "it's found on whichever computer runs it) or the port it serves (and the computer, when " +
+    "not the default). Start the server with start_job first.",
   input: {
     type: "object",
     properties: {
       job: { type: "string" },
       port: { type: "integer", minimum: 1, maximum: 65535 },
+      computer: computerChoice,
     },
   },
   run: async (input, ctx) => {
@@ -257,6 +297,7 @@ tools.preview = tool({
         in: thread.in,
         ...(input.job ? { job: input.job } : {}),
         ...(input.port ? { port: input.port } : {}),
+        ...(input.computer ? { computer: input.computer } : {}),
       });
       return `${url}\nOnly this space's members can open it, signed in to the app.`;
     } catch (error) {

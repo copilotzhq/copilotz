@@ -28,7 +28,10 @@ export function outcome(call: Pick<ShownCall, "output">): Outcome {
   if (typeof value === "string") {
     // "Waiting for ana's yes to run this…" (shared/ask.ts): its start is what stays.
     if (/^Waiting for \S/.test(value)) return { kind: "waiting", text: value };
-    if (/has no computer connected|no person this work is for/.test(value)) {
+    if (
+      /has no computer connected|no person this work is for|^There's no computer|is offline[:,]|is still waking|^More than one of this space's computers/
+        .test(value)
+    ) {
       return { kind: "missing", text: value };
     }
     if (value.startsWith("Error: ")) return { kind: "failed", text: value.slice(7) };

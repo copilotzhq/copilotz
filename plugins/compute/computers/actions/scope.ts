@@ -1,13 +1,17 @@
 /**
  * `computer.scope`: where a space's work goes on its computer, for trusted
  * code that sends it work of its own (the apps plugin archiving a folder):
- * the desk given (`desk`, one of the space's), or the desk of `computer`
- * there, else one online, else the space's first. It answers the computer, whether it's online, and the
- * scope, `who` as given. Nobody calls it from outside: the caller checks
- * the person first, and calls it as the system.
+ * the desk given (`desk`, one of the space's), or the one `computer` names
+ * (its id, its desk's, or its name, as an agent says it), else the one
+ * running `job`, else one online, else the space's first. It answers the
+ * computer, whether it's online, and the scope, `who` as given. Nobody calls
+ * it from outside: the caller checks the person first, and calls it as the
+ * system.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
-import { desksIn } from "../shared/where.ts";
+import type { Desk } from "../collections/desk.ts";
+import { jobOn } from "../shared/jobs.ts";
+import { desksIn, named } from "../shared/where.ts";
 import type { Scope } from "../shared/workloads.ts";
 
 export const scopeAction = defineAction({
@@ -18,8 +22,10 @@ export const scopeAction = defineAction({
       in: { type: "string" },
       /** Whose shell and jobs: `agent:<name>` or `person:<id>`. */
       who: { type: "string", pattern: "^(agent|person):.+$" },
-      /** This computer's desk there, rather than the space's default. */
+      /** This computer's desk there (its id, or its name), rather than the space's default. */
       computer: { type: "string" },
+      /** The computer running this job (its id or name), when neither says. */
+      job: { type: "string" },
       /** This desk (one of the space's), rather than the space's default. */
       desk: { type: "string" },
     },
@@ -28,11 +34,20 @@ export const scopeAction = defineAction({
   },
   run: async (ctx, input): Promise<{ computer: string; online: boolean; scope: Scope }> => {
     const desks = await desksIn(ctx, input.in);
-    const desk = input.desk
-      ? desks.find((d) => d._id === input.desk)
-      : input.computer
-      ? desks.find((d) => d.computer === input.computer)
-      : desks.find((d) => d.online) ?? desks[0];
+    let desk: Desk | undefined;
+    if (input.desk) desk = desks.find((d) => d._id === input.desk);
+    else if (input.computer) {
+      const chosen = named(desks, input.computer);
+      if ("missing" in chosen) {
+        throw Object.assign(new Error(chosen.missing), { code: "not_found" });
+      }
+      desk = chosen.desk;
+    } else {
+      const running = input.job
+        ? (await jobOn(ctx, desks, input.in, input.job, input.who))?.desk
+        : undefined;
+      desk = running ?? desks.find((d) => d.online) ?? desks[0];
+    }
     if (!desk) {
       throw Object.assign(
         new Error(

@@ -2,10 +2,11 @@
  * Previews of what a space's computer serves (see collections/preview.ts),
  * made by a person or, through the `preview` tool, by an agent for one:
  *
- * - `computer.preview` `{ in?, desk?, job?, port?, visibility? }`: the port a
- *   job serves (`port`; else the job's, or the first it listens on), on the
- *   space's computer (`desk`, one of the space's; else one online first, as
- *   agents pick),
+ * - `computer.preview` `{ in?, desk?, computer?, job?, port?, visibility? }`:
+ *   the port a job serves (`port`; else the job's, or the first it listens
+ *   on), on a computer of the space (`desk`, one of the space's, or
+ *   `computer`, by its name or id; else the job's, whichever runs it; else
+ *   one online first, as agents pick),
  *   at `https://<label>.<domain>/`. Where many orgs are served, the host is
  *   claimed for the org (its `directory` resource's `claimHost`), so its
  *   requests come here. Only who may work in the space makes one.
@@ -16,13 +17,15 @@
  * `in` is the space; a person's own Personal space when they give none.
  */
 import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import type { Desk } from "../collections/desk.ts";
 import type { Preview } from "../collections/preview.ts";
 import { failed } from "../shared/failed.ts";
 import { previewUrl } from "../shared/preview-url.ts";
 import { may, mustBeAble } from "../shared/desks.ts";
 import { personOf } from "../shared/person.ts";
 import { settingsOf } from "../shared/settings.ts";
-import { desksIn } from "../shared/where.ts";
+import { jobOn } from "../shared/jobs.ts";
+import { desksIn, named } from "../shared/where.ts";
 import { type Job, WORK } from "../shared/workloads.ts";
 
 const fail = (message: string, code = "invalid") => Object.assign(new Error(message), { code });
@@ -67,6 +70,8 @@ export const previewAction = defineAction({
       in: space,
       /** The space's computer to preview from (its desk there); else one online first. */
       desk: { type: "string" },
+      /** Or that computer by its name (an agent's choice), or its id. */
+      computer: { type: "string" },
       /** A job's id (or name), as the computer lists them: its port, unless `port` says. */
       job: { type: "string" },
       port: { type: "integer", minimum: 1, maximum: 65535 },
@@ -81,11 +86,24 @@ export const previewAction = defineAction({
     if (!person) throw fail("A preview is made for a person.", "forbidden");
     const where = await spaceOf(ctx, input.in);
     await mustBeAble(ctx, where, "write");
-    // As agents pick: one online first, else the space's own (asleep, it wakes when asked).
+    // The computer named; else the job's (whichever runs it); else one online first, else the
+    // space's own (asleep, it wakes when asked).
     const desks = await desksIn(ctx, where);
-    const desk = input.desk
-      ? desks.find((d) => d._id === input.desk)
-      : desks.find((d) => d.online) ?? desks[0];
+    let who = ctx.actor?.kind === "agent" ? `agent:${ctx.actor.id}` : `person:${person}`;
+    let found: Desk | undefined;
+    let located: Job | undefined;
+    if (input.computer) {
+      const chosen = named(desks, input.computer);
+      if ("missing" in chosen) throw fail(chosen.missing, "not_found");
+      found = chosen.desk;
+    } else if (input.desk) {
+      found = desks.find((d) => d._id === input.desk);
+    } else if (input.job) {
+      const on = await jobOn(ctx, desks, where, input.job, who);
+      found = on?.desk;
+      located = on?.job;
+    }
+    const desk = found ?? (input.desk ? undefined : desks.find((d) => d.online) ?? desks[0]);
     if (!desk) {
       throw fail(
         input.desk
@@ -95,9 +113,11 @@ export const previewAction = defineAction({
       );
     }
     let port = input.port;
-    let who = ctx.actor?.kind === "agent" ? `agent:${ctx.actor.id}` : `person:${person}`;
-    let job: Job | undefined;
-    if (input.job) {
+    let job: Job | undefined = located;
+    if (located) {
+      who = located.who;
+      port ??= located.port ?? located.ports?.[0];
+    } else if (input.job) {
       if (!desk.online) {
         throw fail(`${desk.name ?? "This space's computer"} is offline: give the port instead.`);
       }

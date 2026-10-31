@@ -20,6 +20,8 @@ export type PublishInput = {
   in: string;
   /** The space's computer (its desk there), when the person says which. */
   desk?: string;
+  /** Or that computer by its name or id (an agent's choice). */
+  computer?: string;
   name: string;
   job?: string;
   port?: number;
@@ -135,6 +137,9 @@ export async function publish(
     in: input.in,
     who: input.who,
     ...(input.desk ? { desk: input.desk } : {}),
+    ...(input.computer ? { computer: input.computer } : {}),
+    // Else the computer running the job, whichever that is.
+    ...(input.job ? { job: input.job } : {}),
   });
   const source = await sourceOf(ctx, where, input);
   const apps = ctx.as().db.collection<AppDoc>("app");

@@ -67,7 +67,12 @@ provider):
 | ------- | -------------------------- | ------------------------------------------------------------------------------------------ |
 | system  | the request's instructions | agent instructions, who is in the conversation, `system` contexts; stable, so cached       |
 | history | the messages               | the thread through its lineage, each message through its View; grows at its end, so cached |
-| turn    | the messages, at the end   | `turn` contexts, new every turn                                                            |
+| turn    | the messages, at the end   | `turn` contexts that say something new, then kept where they were said                     |
+
+A turn context is sent when its text isn't what the agent was last told in the conversation, and the
+turn's first message keeps it (`told`, a field only trusted code reads): later turns are sent it
+there, so each call starts with the whole call before it, and the provider's prompt cache keeps all
+of it (OpenAI's newer models are given a breakpoint at the end of the history, as Anthropic is).
 
 Other plugins add to it with **contexts**, the prompt layout's counterpart of a UI layout's
 navigation entries. A `context` resource says where one goes; its content is a View:

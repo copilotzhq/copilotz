@@ -83,10 +83,13 @@ const turn = async (ctx: Context, event: Event) => {
   const history = composed.history.map((m, i, all) =>
     i === all.length - 1 ? { ...m, cache: true as const } : m
   );
+  // What's new this turn, after it; kept on the turn's first message, to be sent there again.
+  const told = composed.turn;
   const conversation: LlmMessage[] = [
     ...history,
-    ...(composed.turn.length ? [{ role: "user" as const, text: composed.turn.join("\n\n") }] : []),
+    ...(told.length ? [{ role: "user" as const, text: told.map((c) => c.text).join("\n\n") }] : []),
   ];
+  const first = step;
   const offered = composed.tools;
   const messaging = (agent.tools ?? []).includes(SEND);
   // Whom it may message, read only when it messages someone: the agents
@@ -135,7 +138,7 @@ const turn = async (ctx: Context, event: Event) => {
     }
     if (!calls.length) {
       await live.settle();
-      return await answer(ctx, t, run, text, {}, current);
+      return await answer(ctx, t, run, text, step === first ? { told } : {}, current);
     }
 
     // Ids derive from the run, so a retry rewrites nothing it already committed.
@@ -197,6 +200,8 @@ const turn = async (ctx: Context, event: Event) => {
     const deliveries = await Promise.all(
       sends.map((s) => delivery(ctx, s.message!, s.message!.subthread)),
     );
+    // The turn's first message keeps what it was told.
+    const kept = told.length && step === first ? { told } : {};
     await live.settle();
     await ctx.transaction(async (tx) => {
       // What showed live becomes the step.
@@ -211,6 +216,7 @@ const turn = async (ctx: Context, event: Event) => {
         ...(text ? { text } : {}),
         toolCalls: done,
         ...(state ? { state } : {}),
+        ...kept,
         turn: run,
         at,
       };

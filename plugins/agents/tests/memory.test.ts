@@ -121,17 +121,27 @@ each("remembering writes a memory about the person, and updates what it repeats"
   await runtime.close();
 });
 
+/** Everything an agent was told in a conversation (its contexts there), and what it would be now. */
+const toldIn = (p: Prompt) =>
+  [
+    ...p.history.flatMap((m) => m.role === "user" && m.text.startsWith("<context") ? [m.text] : []),
+    ...p.turn.map((c) => c.text),
+  ].join("\n");
+
 each("core memories are in mind in every conversation with the person", async (make) => {
   const { runtime, say, prompt } = await start(make);
   await say("remember! Ana is a landscape architect");
-  // A different conversation with Ana: it's in the system text, stable across turns.
+  // A different conversation with Ana: told when it begins. The system text says how to remember,
+  // the same in every conversation (so cached across them).
   const other = await say("hello again");
-  const system = (await prompt(other)).system.join("\n");
-  assertStringIncludes(system, '<context name="memory">');
-  assertStringIncludes(system, "Ana is a landscape architect");
+  const p = await prompt(other);
+  assertStringIncludes(p.system.join("\n"), '<context name="memory">');
+  assert(!p.system.join("\n").includes("landscape"));
+  assertStringIncludes(toldIn(p), '<context name="remembered">');
+  assertStringIncludes(toldIn(p), "Ana is a landscape architect");
   // Not in a conversation without her.
   const bobs = await say("hi", undefined, "bob");
-  assert(!(await prompt(bobs)).system.join("\n").includes("landscape"));
+  assert(!toldIn(await prompt(bobs)).includes("landscape"));
   await runtime.close();
 });
 
@@ -139,15 +149,41 @@ each("relevant memories come up on their own, in the turn after the conversation
   const { runtime, say, prompt } = await start(make);
   await say("remember Ana's dog is called Rex");
   const thread = await say("what is my dog called?");
+  // It came up after the question, and stays there.
   const p = await prompt(thread);
-  assertEquals(p.turn.length, 1);
-  assertStringIncludes(p.turn[0], '<context name="recall">');
-  assertStringIncludes(p.turn[0], "Ana's dog is called Rex");
+  const told = p.history.flatMap((m) =>
+    m.role === "user" && m.text.startsWith('<context name="recall">') ? [m.text] : []
+  );
+  assertEquals(told.length, 1);
+  assertStringIncludes(told[0], "Ana's dog is called Rex");
+  assertEquals(p.turn, []);
   // Unrelated talk brings nothing up.
   const other = await say("the weather looks fine today");
-  assertEquals((await prompt(other)).turn, []);
+  const q = await prompt(other);
+  assertEquals(q.turn, []);
+  assert(!q.history.some((m) => "text" in m && m.text?.includes('<context name="recall">')));
   await runtime.close();
 });
+
+each(
+  "a core memory learned in a conversation leaves its system text as it began: it comes up there, and is in mind in the next",
+  async (make) => {
+    const { runtime, say, prompt } = await start(make);
+    const thread = await say("hello");
+    const system = (await prompt(thread)).system;
+    await say("remember! Ana's dog is called Rex", thread);
+    assertEquals((await prompt(thread)).system, system, "the cached system text stays");
+    await say("what is my dog called?", thread);
+    assert(
+      (await prompt(thread)).history.some((m) =>
+        m.role === "user" && m.text.startsWith('<context name="recall">') && m.text.includes("Rex")
+      ),
+    );
+    const next = await say("hi again");
+    assertStringIncludes(toldIn(await prompt(next)), "Ana's dog is called Rex");
+    await runtime.close();
+  },
+);
 
 each("forgetting hides a memory from recall and from every prompt", async (make) => {
   const { runtime, tools, say, prompt } = await start(make);

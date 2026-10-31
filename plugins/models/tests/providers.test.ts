@@ -141,6 +141,30 @@ async function server() {
       Response.json({ text: "hello there", usage: { type: "duration", seconds: 3 } }),
     "/v1/fail/chat/completions": () => new Response("nope", { status: 401 }),
   };
+  // A server whose model takes no cache breakpoints (OpenAI's before GPT-5.6), and that reports
+  // what it wrote to the cache otherwise.
+  const pointless = (body: string) =>
+    body.includes("prompt_cache_breakpoint")
+      ? Response.json({
+        error: {
+          message: "prompt_cache_breakpoint is not supported on this model",
+          param: "prompt_cache_breakpoint",
+          code: "invalid_parameter",
+        },
+      }, { status: 400 })
+      : new Response(sse([
+        { type: "response.output_text.delta", delta: "Hi" },
+        {
+          type: "response.completed",
+          response: {
+            usage: {
+              input_tokens: 11,
+              output_tokens: 2,
+              input_tokens_details: { cached_tokens: 6, cache_write_tokens: 3 },
+            },
+          },
+        },
+      ], true));
   const http = await serve(async (request) => {
     const url = new URL(request.url);
     const multipart = request.headers.get("content-type")?.startsWith("multipart/");
@@ -155,6 +179,7 @@ async function server() {
       form,
       raw,
     });
+    if (url.pathname === "/v1/pointless/responses") return pointless(text);
     return (replies[url.pathname] ?? (() => new Response("unknown", { status: 404 })))();
   });
   return { url: http.url, seen, close: () => http.close() };
@@ -167,7 +192,7 @@ const conversation: LlmMessage[] = [
     text: "Rolling.",
     toolCalls: [{ id: "c0", name: "roll", input: { sides: 6 } }],
   },
-  // A cache point: providers that cache only where told (Anthropic) mark it.
+  // A cache point: providers that cache where told (Anthropic, OpenAI's newer models) mark it.
   { role: "tool", toolCallId: "c0", text: "4", cache: true },
   { role: "user", text: "again" },
 ];
@@ -266,7 +291,16 @@ test("openai (Responses): request and streamed answer", async () => {
       { role: "user", content: "roll a die" },
       { role: "assistant", content: "Rolling." },
       { type: "function_call", call_id: "c0", name: "roll", arguments: '{"sides":6}' },
-      { type: "function_call_output", call_id: "c0", output: "4" },
+      // The cache point: a breakpoint, so the next call finds this prefix.
+      {
+        type: "function_call_output",
+        call_id: "c0",
+        output: [{
+          type: "input_text",
+          text: "4",
+          prompt_cache_breakpoint: { mode: "explicit" },
+        }],
+      },
       { role: "user", content: "again" },
     ]);
     // Not strict: optional fields stay optional.
@@ -276,6 +310,56 @@ test("openai (Responses): request and streamed answer", async () => {
         ["roll", false],
       ],
     );
+  } finally {
+    await mock.close();
+  }
+});
+
+test("openai (Responses): a model that takes no breakpoints is asked again without, from then on", async () => {
+  const mock = await server();
+  try {
+    const connection = { model: "old", baseURL: `${mock.url}/v1/pointless`, apiKey: "k" };
+    const chunks = await run(openaiResponses, connection);
+    // What it wrote to the cache is counted apart.
+    assertEquals(answer(chunks).usage, {
+      type: "usage",
+      input: 11,
+      output: 2,
+      cached: 6,
+      cacheWrite: 3,
+    });
+    await run(openaiResponses, connection);
+    const marked = mock.seen.map((s) => JSON.stringify(s.body).includes("prompt_cache_breakpoint"));
+    assertEquals(marked, [true, false, false]);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("openai (Responses): a cache point on the model's own message goes on the input before it", async () => {
+  const mock = await server();
+  try {
+    const messages: LlmMessage[] = [
+      { role: "user", text: "hi" },
+      { role: "assistant", text: "Hello.", cache: true },
+    ];
+    for await (
+      const _ of openaiResponses.generate({
+        connection: { model: "m", baseURL: `${mock.url}/v1/`, apiKey: "k" },
+        messages,
+      })
+    ) { /* drained */ }
+    assertEquals((mock.seen[0].body as { input: unknown[] }).input, [
+      {
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: "hi",
+          prompt_cache_breakpoint: { mode: "explicit" },
+        }],
+      },
+      { role: "assistant", content: "Hello." },
+    ]);
   } finally {
     await mock.close();
   }

@@ -600,14 +600,43 @@ each("contexts add to the system or the turn, for every agent or the ones listed
     "instructions.",
     '<context name="rules">\nAnswer in English.\n</context>',
   ]);
-  assertEquals(prompt.turn, ['<context name="notes">\n- ana likes gardens\n</context>']);
+  const gardens = '<context name="notes">\n- ana likes gardens\n</context>';
   // The turn block went to the model after the conversation.
-  assertEquals(calls[0].messages.at(-1), {
+  assertEquals(calls[0].messages.at(-1), { role: "user", text: gardens });
+  // Told, it stays where it was: nothing new to tell now.
+  assertEquals(prompt.turn, []);
+  assertEquals(prompt.history.map((m) => [m.role, "text" in m ? m.text : ""]), [
+    ["user", "ana: hi"],
+    ["user", gardens],
+    ["assistant", "ok"],
+  ]);
+  // So each call sends the one before it whole (what the prompt cache keeps), then what's new:
+  // a context again only once it says something else.
+  await send({ text: "and now?", from: "ana", thread });
+  const unmarked = (ms: LlmMessage[]) => ms.map(({ cache: _, ...m }) => m);
+  assertEquals(unmarked(calls[1].messages).slice(0, 2), unmarked(calls[0].messages));
+  assertEquals(calls[1].messages.length, 4);
+  await runtime.call("note.add", { text: "ana has a dog" });
+  await send({ text: "and now?", from: "ana", thread });
+  assertEquals(
+    unmarked(calls[2].messages).slice(0, 4),
+    [
+      ...unmarked(calls[1].messages),
+      { role: "assistant", text: "ok" },
+    ].slice(0, 4),
+  );
+  assertEquals(calls[2].messages.at(-1), {
     role: "user",
-    text: '<context name="notes">\n- ana likes gardens\n</context>',
+    text: '<context name="notes">\n- ana likes gardens\n- ana has a dog\n</context>',
   });
+  // B was told nothing yet.
   const forB = await runtime.query<Prompt>("thread.prompt", { thread, agent: "b" });
   assertEquals(forB.turn.length, 2);
+  // People never read what agents were told.
+  const seen = await runtime.query<Message[]>("message.history", { thread }, {
+    actor: { kind: "person", id: "ana" },
+  });
+  assert(seen.some((m) => m.from === "a") && seen.every((m) => !("told" in m)));
   await runtime.close();
 });
 

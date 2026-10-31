@@ -1,4 +1,4 @@
-/** The compactor: every shared message, in each thread's order, gets its line and moves the outline. */
+/** The compactor: every shared message, in each thread's order, is numbered and moves the outline; it gets its line when it leaves the tail. */
 import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
 import type { Completion, LlmMessage } from "../../../models/contract.ts";
 import type { Message } from "../../chat/contract.ts";
@@ -72,7 +72,63 @@ async function write(
   return cut(best ?? "", config.line);
 }
 
-/** Numbers a shared message, summarizes it, merges what it completes, and moves the outline. */
+/**
+ * A message's line, and the merges it completes up the tree, once it leaves
+ * the tail: only then is its line ever read (in the outline, or by zoom), so a
+ * conversation that stays short never calls the summarizer.
+ */
+async function summarize(
+  ctx: Context,
+  config: HistorySettings,
+  thread: string,
+  index: number,
+  m: Message,
+  get: (level: number, i: number) => Promise<Summary | null | undefined>,
+  put: (level: number, i: number, line: string, message?: string) => Summary,
+) {
+  if (await get(0, index)) return; // Summarized when it came (before summaries waited).
+  // People by name in what's kept.
+  const text = lineOf(m, await namesFor(ctx, [m.from, ...m.to]));
+  // The message's own line: itself when short, else compressed with the lines before it.
+  let own = text;
+  if (size(text) > config.line) {
+    const before = (await Promise.all(
+      [4, 3, 2, 1].filter((k) => index - k >= 0).map((k) => get(0, index - k)),
+    )).flatMap((n) => n ? [`${n.index}+1|${n.text}`] : []);
+    own = await write(
+      ctx,
+      config,
+      `Compaction: compress message ${index} into one line of at most ${config.line} bytes ` +
+        `(about ${Math.round(config.line / 7)} words), the length of this ruler:\n{ruler}\n` +
+        (before.length ? `<chat>\n${before.join("\n")}\n</chat>\n` : "") +
+        `<input>\n${text}\n</input>`,
+      thread,
+    );
+  }
+  put(0, index, own, m._id);
+
+  // Each pair this message completes merges into its parent, up the tree.
+  for (let [level, i] = [0, index]; i % 2 === 1; [level, i] = [level + 1, (i - 1) / 2]) {
+    const [left, right] = [await get(level, i - 1), await get(level, i)];
+    if (!left || !right) break;
+    const joined = `${left.text}\n${right.text}`;
+    const n = 2 ** level;
+    const line = size(joined) <= config.line ? joined : await write(
+      ctx,
+      config,
+      `Compaction: merge lines ${(i - 1) * n}+${n} and ${i * n}+${n}, adjacent, into one line of ` +
+        `at most ${config.line} bytes (about ${Math.round(config.line / 7)} words), the length ` +
+        `of this ruler:\n{ruler}\n<input>\n${left.text}\n${right.text}\n</input>`,
+      thread,
+    );
+    put(level + 1, (i - 1) / 2, line);
+  }
+}
+
+/**
+ * Numbers a shared message and moves the outline: past the tail's maximum,
+ * the oldest messages leave it, each summarized as it does.
+ */
 async function compact(ctx: Context, m: Message, config: HistorySettings) {
   const outlines = ctx.db.collection<Outline>("outline");
   const nodes = ctx.db.collection<Summary>("summary");
@@ -88,28 +144,9 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
   if (state.last === m._id) return; // Committed before this delivery was retried.
   const at = new Date().toISOString();
   const index = state.count;
-  // People by name in what's kept.
-  const text = lineOf(m, await namesFor(ctx, [m.from, ...m.to]));
   const made = new Map<string, Summary>();
   const get = async (level: number, i: number) =>
     made.get(node(m.thread, level, i)) ?? await nodes.findOne({ _id: node(m.thread, level, i) });
-
-  // The message's own line: itself when short, else compressed with the lines before it.
-  let own = text;
-  if (size(text) > config.line) {
-    const before = (await Promise.all(
-      [4, 3, 2, 1].filter((k) => index - k >= 0).map((k) => get(0, index - k)),
-    )).flatMap((n) => n ? [`${n.index}+1|${n.text}`] : []);
-    own = await write(
-      ctx,
-      config,
-      `Compaction: compress message ${index} into one line of at most ${config.line} bytes ` +
-        `(about ${Math.round(config.line / 7)} words), the length of this ruler:\n{ruler}\n` +
-        (before.length ? `<chat>\n${before.join("\n")}\n</chat>\n` : "") +
-        `<input>\n${text}\n</input>`,
-      m.thread,
-    );
-  }
   const put = (level: number, i: number, line: string, message?: string) => {
     const doc: Summary = {
       _id: node(m.thread, level, i),
@@ -124,29 +161,13 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
     made.set(doc._id, doc);
     return doc;
   };
-  put(0, index, own, m._id);
-
-  // Each pair this message completes merges into its parent, up the tree.
-  for (let [level, i] = [0, index]; i % 2 === 1; [level, i] = [level + 1, (i - 1) / 2]) {
-    const [left, right] = [await get(level, i - 1), await get(level, i)];
-    if (!left || !right) break;
-    const joined = `${left.text}\n${right.text}`;
-    const n = 2 ** level;
-    const line = size(joined) <= config.line ? joined : await write(
-      ctx,
-      config,
-      `Compaction: merge lines ${(i - 1) * n}+${n} and ${i * n}+${n}, adjacent, into one line of ` +
-        `at most ${config.line} bytes (about ${Math.round(config.line / 7)} words), the length ` +
-        `of this ruler:\n{ruler}\n<input>\n${left.text}\n${right.text}\n</input>`,
-      m.thread,
-    );
-    put(level + 1, (i - 1) / 2, line);
-  }
 
   // The tail grows by this message; past its maximum, the oldest become lines.
   const count = index + 1;
-  const tail = [...state.tail, size(text)];
+  const tail = [...state.tail, size(lineOf(m, await namesFor(ctx, [m.from, ...m.to])))];
   const tailAt = [...state.tailAt, m.at];
+  // Which messages they are (before summaries waited, every one had its line already).
+  const tailIds = [...(state.tailIds ?? state.tail.map(() => "")), m._id];
   let tailBytes = tail.reduce((a, b) => a + b, 0);
   const lines = [...state.lines] as [number, number, number][];
   let bytes = state.bytes;
@@ -156,9 +177,16 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
     while (tailBytes > config.tail[0] && tail.length > 1) {
       tailBytes -= tail.shift()!;
       tailAt.shift();
-      const line = (await get(0, boundary))!;
-      lines.push([0, boundary, line.bytes]);
-      bytes += line.bytes + 1;
+      const id = tailIds.shift()!;
+      if (!await get(0, boundary)) {
+        const left = await ctx.db.collection<Message>("message").findOne({ _id: id });
+        if (left) await summarize(ctx, config, m.thread, boundary, left, get, put);
+      }
+      const line = await get(0, boundary);
+      if (line) {
+        lines.push([0, boundary, line.bytes]);
+        bytes += line.bytes + 1;
+      }
       boundary++;
     }
   }
@@ -206,6 +234,7 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
       ...(tailAt[0] ? { since: tailAt[0] } : {}),
       tail,
       tailAt,
+      tailIds,
       last: m._id,
     }, { upsert: true, ...w0 });
   });

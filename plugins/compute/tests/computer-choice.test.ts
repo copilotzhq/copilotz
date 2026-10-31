@@ -191,7 +191,9 @@ test("the agent's context lists the space's computers, the default first, and ho
       thread: s.thread,
       agent: "assistant",
     }, { actor: ana });
-    const context = prompt.turn.find((t) => t.startsWith('<context name="computer">')) ?? "";
+    const context = prompt.turn.map((c) =>
+      c.text
+    ).find((t) => t.startsWith('<context name="computer">')) ?? "";
     assertStringIncludes(context, "This space has 2 computers");
     assertStringIncludes(context, "each takes `computer` (its name)");
     assertStringIncludes(
@@ -206,7 +208,9 @@ test("the agent's context lists the space's computers, the default first, and ho
       thread: s.thread,
       agent: "assistant",
     }, { actor: ana });
-    const context = prompt.turn.find((t) => t.startsWith('<context name="computer">')) ?? "";
+    const context = prompt.turn.map((c) =>
+      c.text
+    ).find((t) => t.startsWith('<context name="computer">')) ?? "";
     assertStringIncludes(context, "You work on this space's computer, laptop (ana's own");
   });
 });

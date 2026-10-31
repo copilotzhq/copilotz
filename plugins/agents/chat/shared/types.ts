@@ -151,13 +151,22 @@ export type Turn = { thread: string; agent: string; trigger: string; hops: numbe
  * What an agent is sent: its tools, then the zones the prompt cache wants
  * (stable, then growing, then new).
  */
-export type Prompt = { tools: LlmTool[]; system: string[]; history: LlmMessage[]; turn: string[] };
+export type Prompt = { tools: LlmTool[]; system: string[]; history: LlmMessage[]; turn: Told[] };
+
+/**
+ * A `turn` context an agent was told: its name and its text. Kept on the
+ * first message its turn writes, so later turns are sent it where it was, and
+ * the conversation only grows (the prompt cache keeps all of it).
+ */
+export type Told = { name: string; text: string };
 
 /**
  * A `context` resource: where text a plugin or app adds to agents' prompts
  * goes. The text is the `context:<name>` View of the thread. `system` text must
  * be stable (it is cached across turns); `turn` text comes after the
- * conversation, new each turn. It goes to every agent unless `agents` says.
+ * conversation when it says something new (when it's not what the agent was
+ * last told there), and stays in the conversation where it came. It goes to
+ * every agent unless `agents` says.
  */
 export type ContextEntry = { place: "system" | "turn"; agents?: string[] };
 

@@ -21,6 +21,6 @@ export const agentPromptView = (p: Prompt & { agent: string }, _ctx: ViewContext
         : "";
       return `${dim(m.role.padEnd(9))} ${short(text, 160)}`;
     }),
-    accent("── turn (new every turn)"),
-    p.turn.length ? p.turn.join("\n") : dim("(nothing)"),
+    accent("── turn (what's new, then kept in the history)"),
+    p.turn.length ? p.turn.map((c) => c.text).join("\n") : dim("(nothing new)"),
   ].join("\n");

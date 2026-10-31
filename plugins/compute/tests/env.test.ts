@@ -236,7 +236,9 @@ test("jobs and shells run with the space's environment, and what's given over it
       const prompt = await rt.query<Prompt>("thread.prompt", { thread, agent: "assistant" }, {
         actor: ana,
       });
-      const context = prompt.turn.find((t) => t.startsWith('<context name="computer">')) ?? "";
+      const context = prompt.turn.map((c) =>
+        c.text
+      ).find((t) => t.startsWith('<context name="computer">')) ?? "";
       assertStringIncludes(context, "this space's environment: API_KEY (a secret), API_URL");
       assert(!context.includes("sk-live"), "no secret's value");
       assert(!context.includes("DEPLOY_TOKEN"), "only what computers get");

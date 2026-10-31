@@ -1,3 +1,35 @@
+## Unreleased
+
+- **Agents' prompts only grow, so the prompt cache keeps them whole.** A turn context (the
+  computers', the spaces elsewhere, memories, an app's) is sent after the conversation only when it
+  says something new: when its text isn't what the agent was last told there. The turn's first
+  message keeps what it was told (`told`, `[{ name, text }]`, a private field: people's reads come
+  without it), and later turns are sent it there. So each model call starts with the whole call
+  before it, tool steps and earlier contexts included, where before a turn's context, dropped the
+  next turn, cut the cached prefix at the turn's start. `Prompt.turn` is now `{ name, text }[]`:
+  what's new this turn.
+- **OpenAI's newer models keep the prefix where told.** Since GPT-5.6, OpenAI caches only at
+  breakpoints: its implicit one falls at the end of the latest user message, the turn's context,
+  which the next turn didn't send, so a conversation reused only its system text. The Responses
+  adapter now marks a message with `cache` (the end of the history) with an explicit
+  `prompt_cache_breakpoint`, on the user's or tool's input at or before it. A model that refuses
+  breakpoints (earlier ones, other servers) is asked again without, and never again. What OpenAI
+  wrote to the cache is metered as `cacheWrite` (billed at a premium by models that report it).
+- **Memory: the system text says how to remember; what's remembered is told.** The `memory`
+  context (system) is the guide alone, the same in every conversation, so the system text is cached
+  across all of an agent's conversations in a space. Core memories about who's here are the new
+  `remembered` turn context: those learned before the conversation began, told at its start and
+  kept there. Core memories learned since come up in `recall` when relevant (query `relevant` takes
+  `since`; `core` takes `before`), so a memory learned mid-conversation never rewrites its prompt.
+- **History summarizes a message when it leaves the tail**, not when it comes: only then is its
+  line read (in the outline, or by `zoom`). A conversation that stays within the tail never calls
+  the summarizer; a longer one builds the same tree, in batches, as its tail shrinks. The outline
+  keeps the tail's message ids (`tailIds`); threads summarized before keep the lines they have.
+- Measured on Compass's own plugins with real OpenAI calls (gpt-6.1-sol; a 12-turn conversation,
+  then a 4-turn one with tool steps, the same agent in the same space): the agent's calls read
+  95.5% of their input from the prompt cache, up from 59.3%, and every model call in the run
+  (memory extraction included) 92.4%, up from 44.4%, with no summarizer call (101 before).
+
 ## 1.0.0-rc.7 — 2026-10-30
 
 - **Agents choose among a space's computers.** Every computer tool (the terminal, jobs, files, the

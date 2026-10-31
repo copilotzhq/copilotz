@@ -36,6 +36,12 @@ const app = definePlugin({
     },
   },
   actions: {
+    // What another plugin asks for its agent (the apps plugin, publishing), as its turn would.
+    "test.allowed": defineAction({
+      input: { type: "object" },
+      allow: () => true,
+      run: (ctx, input) => ctx.call("computer.allowed", input),
+    }),
     "test.tool": defineAction({
       input: {
         type: "object",
@@ -237,6 +243,22 @@ test("a job is found on whichever computer runs it: its preview, and where its a
         computer: "desktop",
       });
       assertEquals(named.computer, desktop.computer);
+
+      // Publishing it is asked of whoever answers on that computer, its desk the approval's.
+      const asked = await s.rt.call("test.allowed", {
+        thread: s.thread,
+        agent: "assistant",
+        kind: "publish",
+        detail: "site",
+        computer: where.computer,
+      }, { actor: ana });
+      assertStringIncludes(String(asked), "yes");
+      const [approval] = await s.rt.query<{ desk: string; work: string }[]>(
+        "approval.pending",
+        {},
+        { actor: ana },
+      );
+      assertEquals([approval.work, approval.desk], ["publish", desktop._id]);
     },
   );
 });

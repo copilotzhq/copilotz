@@ -11,6 +11,10 @@ const SHEET = sheet(
   font-size: 12px; cursor: pointer; transition: background-color .15s, color .15s; }
 .copilotz-copy:hover { background: var(--accent); color: var(--accent-foreground); }
 .copilotz-copy span:empty { display: none; }
+/* Touch screens: a target a finger finds */
+@media (pointer: coarse) {
+  .copilotz-copy { height: 40px; min-width: 40px; justify-content: center; }
+}
 `,
 );
 

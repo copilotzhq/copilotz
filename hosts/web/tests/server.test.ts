@@ -88,6 +88,18 @@ test("a page, its code, and the socket", async () => {
   });
 });
 
+test("on phones the page is an app's: it spans the screen, and pinching still zooms", async () => {
+  await setup(async (serve) => {
+    const html = await (await serve(new Request("http://localhost:8790/"))).text();
+    const viewport = html.match(/<meta name="viewport" content="([^"]*)">/)?.[1] ?? "";
+    assertMatch(viewport, /width=device-width, initial-scale=1/);
+    assertMatch(viewport, /viewport-fit=cover/);
+    assertMatch(viewport, /interactive-widget=resizes-content/);
+    // Nothing caps the zoom: people who need larger text pinch.
+    assert(!/maximum-scale|user-scalable/.test(viewport), viewport);
+  });
+});
+
 test("given the app's theme, the page carries it for its first paint", async () => {
   const brand = definePlugin({
     name: "brand",

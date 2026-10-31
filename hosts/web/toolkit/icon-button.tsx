@@ -47,6 +47,12 @@ const SHEET = sheet(
 .copilotz-icon-button:disabled { opacity: .5; cursor: default; }
 .copilotz-icon-button-sm { width: 28px; height: 28px; border-radius: var(--radius-sm); }
 .copilotz-icon-button-lg { width: 38px; height: 38px; }
+/* Touch screens: targets a finger finds (44px, as phones' own guidelines ask) */
+@media (pointer: coarse) {
+  .copilotz-icon-button { width: 44px; height: 44px; }
+  .copilotz-icon-button-sm { width: 40px; height: 40px; }
+  .copilotz-icon-button-lg { width: 48px; height: 48px; }
+}
 .copilotz-icon-button-outline { background: var(--card); color: var(--card-foreground); border-color: var(--input);
   box-shadow: var(--shadow-sm); }
 .copilotz-icon-button-outline:hover:not(:disabled) { background: var(--muted); color: var(--card-foreground); }

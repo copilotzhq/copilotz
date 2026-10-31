@@ -120,7 +120,7 @@ function offlinePage(theme: Theme | undefined, title: string) {
     }}button{background:${dark.button ?? dark.fg};color:${dark.on ?? dark.bg}}}`
     : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
-    `<meta name="viewport" content="width=device-width, initial-scale=1">` +
+    `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">` +
     `<title>${safe(title)}: offline</title><style>` +
     `body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.55 ui-sans-serif,system-ui,sans-serif;` +
     `background:${light.bg};color:${light.fg}}main{max-width:360px;padding:24px;text-align:center}` +

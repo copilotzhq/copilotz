@@ -3,8 +3,10 @@
  * renamed in place by those who manage it; Personal or shared; its people;
  * inviting someone; a new chat there), then its tabs, which front ends add
  * (`spaceTabs`, see contract.ts): the one the address asks for
- * (`?tab=computer`), the first otherwise, each a link. The tab's View gets
- * the space (`{ _id }`) and hints `{ in, mode: "page" }`. An archived space
+ * (`?tab=computer`), the first otherwise, each a link. A tab with sections
+ * (its settings, its computer) shows them around the one asked for
+ * (`?tab=memories` opens Settings at Memories; see sections.tsx). The View
+ * shown gets the space (`{ _id }`) and hints `{ in, mode: "page" }`. An archived space
  * says so, calmly, over its tabs, with Restore for those who manage it. A
  * space the person doesn't reach says so.
  */
@@ -24,7 +26,8 @@ import {
 import type { Member, Reached, Request } from "../../contract.ts";
 import { SpaceHeader } from "./header.tsx";
 import { STYLE } from "./style.ts";
-import { chosen, spacePath, tabsOf } from "./tabs.ts";
+import { TabSections } from "./sections.tsx";
+import { chosen, sectionOf, spacePath, tabsOf } from "./tabs.ts";
 import { ownersOf, spaceName } from "./who.ts";
 import { namesIn } from "../../shared/names.ts";
 
@@ -68,8 +71,13 @@ export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
   const tabs = tabsOf(ctx.resources.spaceTabs);
   const query = (ctx.hints.query ?? {}) as Record<string, string>;
   const tab = chosen(tabs, query.tab);
+  const section = sectionOf(tab, query.tab);
   const manage = space.can.includes("manage");
   const waiting = manage ? (requests ?? []).length : 0;
+  // Who's waiting to join, on what lets them in (and on the tab it's in).
+  const counts: Record<string, number> = waiting ? { members: waiting } : {};
+  const countOf = (t: (typeof tabs)[number]) =>
+    (counts[t.key] ?? 0) + t.sections.reduce((n, s) => n + (counts[s.key] ?? 0), 0);
   // Its people by name, and whose it is (someone else's Personal).
   const names = namesIn(ctx, [
     ...members.map((m) => m.member),
@@ -101,13 +109,34 @@ export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
                 value: t.key,
                 label: t.title,
                 ...(t.icon ? { icon: t.icon } : {}),
-                // Who's waiting to join, on the tab that lets them in.
-                ...(t.key === "members" && waiting ? { count: waiting } : {}),
+                ...(countOf(t) ? { count: countOf(t) } : {}),
                 href: spacePath(id, t.key),
               }))}
             />
-            <div id="space-tab" role="tabpanel" className="space-tab" data-tab={tab?.key}>
-              {tab ? ctx.show(tab.view, { _id: id }, { in: id, mode: "page" }) : null}
+            <div
+              id="space-tab"
+              role="tabpanel"
+              className="space-tab"
+              data-tab={section?.key ?? tab?.key}
+            >
+              {tab && tab.sections.length
+                ? (
+                  <TabSections
+                    tab={tab}
+                    {...(section ? { section } : {})}
+                    picked={!!section || query.open === "1"}
+                    menu={tab.menu ?? "top"}
+                    href={(key) => spacePath(id, key, key === tab.key)}
+                    back={spacePath(id, tab.key)}
+                    onPick={(key) => go(spacePath(id, key, key === tab.key))}
+                    counts={counts}
+                  >
+                    {ctx.show((section ?? tab).view, { _id: id }, { in: id, mode: "page" })}
+                  </TabSections>
+                )
+                : tab
+                ? ctx.show(tab.view, { _id: id }, { in: id, mode: "page" })
+                : null}
             </div>
           </>
         )

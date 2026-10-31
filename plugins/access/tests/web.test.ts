@@ -8,7 +8,7 @@
  */
 import { assertEquals } from "@std/assert";
 import type { Member } from "../spaces/contract.ts";
-import { chosen, kindsOf, spacePath, tabsOf } from "../spaces/views/web/tabs.ts";
+import { chosen, kindsOf, sectionOf, spacePath, tabsOf } from "../spaces/views/web/tabs.ts";
 import type { Reached } from "../spaces/contract.ts";
 import {
   addressesOf,
@@ -47,6 +47,42 @@ test("a space's tabs: in their order, without those taken away, the one asked fo
   assertEquals(tabsOf(undefined), []);
   assertEquals(spacePath("a b"), "/space/a%20b");
   assertEquals(spacePath("s1", "computer"), "/space/s1?tab=computer");
+});
+
+test("a tab's sections: under it, in their order; a section's key opens its tab there", () => {
+  const tabs = tabsOf({
+    settings: {
+      title: "Settings",
+      view: "space.settings",
+      order: 90,
+      own: "General",
+      menu: "side",
+    },
+    chats: { title: "Chats", view: "chats", order: 10 },
+    memories: { title: "Memories", view: "memories", under: "settings", order: 20 },
+    members: { title: "Members", view: "space.members", under: "settings", order: 10 },
+    whatsapp: {
+      title: "WhatsApp",
+      view: "whatsapp",
+      under: "settings",
+      group: "Channels",
+      order: 40,
+    },
+    // Its tab isn't there: a tab of its own.
+    orphan: { title: "Orphan", view: "orphan", under: "gone", order: 50 },
+    taken: null,
+  });
+  assertEquals(tabs.map((t) => t.key), ["chats", "orphan", "settings"]);
+  assertEquals(tabs[2].sections.map((s) => s.key), ["members", "memories", "whatsapp"]);
+  assertEquals(tabs[0].sections, []);
+  const settings = chosen(tabs, "memories");
+  assertEquals(settings?.key, "settings");
+  assertEquals(sectionOf(settings, "memories")?.key, "memories");
+  // The tab itself: its own View.
+  assertEquals(sectionOf(chosen(tabs, "settings"), "settings"), undefined);
+  assertEquals(sectionOf(chosen(tabs, "gone"), "gone"), undefined);
+  assertEquals(spacePath("s1", "settings", true), "/space/s1?tab=settings&open=1");
+  assertEquals(spacePath("s1", "memories"), "/space/s1?tab=memories");
 });
 
 test("who can be added: People first, then the kinds front ends add; Personal takes agents only", () => {

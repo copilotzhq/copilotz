@@ -21,7 +21,8 @@ export const STYLE = `
 
 /* What was said */
 .chat-body { position: relative; flex: 1; min-height: 0; display: flex; }
-.chat-transcript { flex: 1; min-width: 0; overflow-y: auto; overscroll-behavior: contain;
+/* It scrolls up and down only: what's wider (a table, code) scrolls in its own box, text wraps. */
+.chat-transcript { flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
   scrollbar-width: thin; scrollbar-color: var(--input) transparent; }
 .chat-log { max-width: 800px; margin: 0 auto; padding: 28px 24px 36px; display: flex; flex-direction: column; }
 .chat-jump { position: absolute; z-index: 5; bottom: 14px; left: 50%; transform: translateX(-50%);
@@ -100,6 +101,7 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 /* Being written */
 .live-calls { list-style: none; display: grid; gap: 6px; margin: 2px 0 8px; padding: 0; }
 .live-calls li { display: flex; align-items: center; gap: 8px; color: var(--secondary-foreground); font-size: 13px; }
+.live-calls li > span { min-width: 0; overflow-wrap: anywhere; }
 .live-calls li[data-done] .copilotz-icon { color: var(--success); }
 .live-spinner { color: var(--primary-text); }
 .chat-thinking { height: 26px; color: var(--muted-foreground); }
@@ -127,7 +129,7 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .file-view img { display: block; max-width: 100%; max-height: calc(92vh - 52px); margin: 0 auto; object-fit: contain; }
 .file-view figcaption { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 16px; font-size: 13.5px; }
 .file-view figcaption span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-chip { display: inline-flex; align-items: center; gap: 10px; max-width: 300px; padding: 8px 10px 8px 8px; }
+.file-chip { display: inline-flex; align-items: center; gap: 10px; max-width: min(300px, 100%); padding: 8px 10px 8px 8px; }
 .file-chip-icon { display: grid; place-items: center; flex: none; width: 36px; height: 36px;
   border-radius: var(--radius-md); background: var(--primary-soft); color: var(--primary-text); }
 .file-chip-text { display: grid; min-width: 0; line-height: 1.3; }
@@ -157,12 +159,14 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   overflow-wrap: anywhere; }
 
 /* Over where you type: what other front ends ask here (the conversation resource) */
-.chat-asks { flex: none; display: grid; gap: 8px; width: 100%; max-width: 848px; margin: 0 auto;
-  padding: 2px 24px 10px; }
+/* However much it asks, the conversation keeps some room, and what's asked scrolls in its own. */
+.chat-asks { flex: none; display: grid; gap: 8px; width: 100%; max-width: 848px; max-height: 60%; margin: 0 auto;
+  padding: 2px 24px 10px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
+  scrollbar-color: var(--input) transparent; }
 .chat-asks:empty, .chat-asks .copilotz-loading { display: none; }
 
 /* Where you type */
-.chat-composer { flex: none; padding: 0 24px 14px;
+.chat-composer { flex: none; padding: 0 24px max(14px, env(safe-area-inset-bottom));
   background: linear-gradient(to bottom, transparent, var(--background) 18px); }
 .chat-composer-inner { max-width: 800px; margin: 0 auto; }
 .chat-status { display: flex; align-items: center; gap: 10px; margin: 0 6px 8px; color: var(--muted-foreground);
@@ -323,7 +327,7 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .msg-gutter .copilotz-avatar { --size: 26px !important; }
   .msg-mine { grid-template-columns: minmax(0, 1fr); }
   .msg-aside { margin-left: 10px; padding-left: 10px; }
-  .chat-composer { padding: 0 10px 10px; }
+  .chat-composer { padding: 0 10px max(10px, env(safe-area-inset-bottom)); }
   .chat-asks { padding: 2px 10px 8px; }
   .voice-rec-meter { gap: 10px; padding: 0 6px 0 8px; }
   .voice-error { flex-wrap: wrap; }

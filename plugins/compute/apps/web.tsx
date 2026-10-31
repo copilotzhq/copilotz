@@ -29,6 +29,8 @@ export const appsWeb: Plugin = definePlugin({
   resources: {
     jobActions: { publish: { view: "app.publish", order: 10 } },
     envActions: { apps: { view: "app.env-apply", order: 10 } },
-    spaceTabs: { apps: { title: "Apps", view: "app.space", icon: "globe", order: 35 } },
+    spaceTabs: {
+      apps: { title: "Apps", view: "app.space", icon: "globe", under: "computer", order: 20 },
+    },
   },
 });

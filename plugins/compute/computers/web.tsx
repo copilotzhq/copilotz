@@ -71,8 +71,15 @@ export const computersWeb: Plugin = definePlugin({
   resources: {
     sidebar: { waiting: { view: "computer.waiting", order: 5 } },
     spaceTabs: {
-      computer: { title: "Computer", view: "computer.space", icon: "computer", order: 30 },
-      env: { title: "Environment", view: "env.space", icon: "lock", order: 32 },
+      // The computer, then what goes with it: its environment (and the apps', apps/web.tsx).
+      computer: {
+        title: "Computer",
+        view: "computer.space",
+        icon: "computer",
+        order: 40,
+        own: "Computers",
+      },
+      env: { title: "Environment", view: "env.space", icon: "lock", under: "computer", order: 10 },
     },
     conversation: { "computer.asks": { view: "computer.asks", order: 10 } },
     palette: { computers: { view: "computer.palette", order: 30 } },

@@ -27,6 +27,8 @@ const PATHS = {
     "M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16M16 9h2a2 2 0 0 1 2 2v10M2 21h20M8 7h4M8 11h4M8 15h4",
   chart: "M3 3v18h18M8 17v-5M13 17V8M18 17v-8",
   chat: "M21 12a8.5 8.5 0 0 1-12.4 7.6L3 21l1.4-5.4A8.5 8.5 0 1 1 21 12z",
+  // A round bubble: a messaging app's channel (WhatsApp).
+  "chat-round": "M7.9 20A9 9 0 1 0 4 16.1L2 22z",
   check: "M5 12.5 9.5 17 19 7.5",
   "check-circle": "M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0zM8 12.5l2.7 2.7L16 9.8",
   chevron: "M9 6l6 6-6 6",

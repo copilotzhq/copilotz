@@ -5,7 +5,9 @@
  * on which computer, with Allow once · Allow in this conversation · Always
  * allow · Deny (`computer.approve`, whose answer goes into the
  * conversation, and the agent carries on). A write shows what it will write
- * first (its `preview`: a new file's first lines, or an edit's change). The
+ * first (its `preview`: a new file's first lines, or an edit's change). What
+ * it shows scrolls in a few lines of its own, however long (a command can
+ * wrap into dozens), so the answers always show under it. The
  * cards wait for the agent's turn to be over (`working` false), so they
  * come once it has said why, gently; answered, one goes: `approval.pending`
  * is live. The agent shows as it's named (chat's `agentsShown`).
@@ -112,7 +114,7 @@ function Ask(
               className="ask-what ask-preview"
               title={<code>{what}</code>}
               code={previewOf(preview, verb)}
-              lines={8}
+              height={8}
               label={`What it will write in ${what}`}
             />
           )
@@ -120,7 +122,8 @@ function Ask(
             <CodeBlock
               className="ask-what"
               code={a.work === "writes" ? what : [{ text: "$ ", tone: "muted" }, { text: what }]}
-              lines={6}
+              height={6}
+              copy={what}
               label={a.work === "writes" ? "The file" : "The command"}
             />
           )}

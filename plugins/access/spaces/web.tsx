@@ -67,8 +67,22 @@ export const spacesWeb: Plugin = definePlugin({
       spaces: { title: "Spaces", view: "spaces", order: 10 },
     },
     spaceTabs: {
-      members: { title: "Members", view: "space.members", icon: "users", order: 80 },
-      settings: { title: "Settings", view: "space.settings", icon: "settings", order: 90 },
+      // Settings: the space itself ("General"), then its sections, in a menu beside them.
+      settings: {
+        title: "Settings",
+        view: "space.settings",
+        icon: "settings",
+        order: 90,
+        own: "General",
+        menu: "side",
+      },
+      members: {
+        title: "Members",
+        view: "space.members",
+        icon: "users",
+        under: "settings",
+        order: 10,
+      },
     },
     panel: { view: "space.panel", on: ["thread"], title: "Space" },
     palette: { spaces: { view: "spaces.palette", order: 10 } },

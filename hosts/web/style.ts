@@ -18,6 +18,10 @@ export const BASE = `
 }
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #app { height: 100%; }
+/* An app's page: it never scrolls sideways or bounces as a whole (its panes scroll); a tap is a
+   tap (no double-tap zoom, no grey flash), and pinching still zooms. */
+html, body { overflow-x: clip; overscroll-behavior: none; }
+html { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 body { margin: 0; background: var(--background); color: var(--foreground); }
 button, input, textarea, select { font: inherit; color: inherit; letter-spacing: inherit; }
 a { color: inherit; }
@@ -26,6 +30,12 @@ code, kbd, pre, samp { font-family: var(--font-mono); font-variant-ligatures: no
 ::selection { background: color-mix(in oklab, var(--primary-text) 28%, transparent); }
 .copilotz-sr { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* Touch screens: text a little larger, and fields at 16px at least, so phones never zoom in on
+   one you type in (Safari does under 16px). Important, so every field's size gives way. */
+@media (pointer: coarse) {
+  :root { font-size: 16px; }
+  input, textarea, select { font-size: max(16px, 1em) !important; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important;
     transition-duration: .01ms !important; scroll-behavior: auto !important; }

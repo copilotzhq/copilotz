@@ -48,6 +48,12 @@ const SHEET = sheet(
 .copilotz-button[aria-busy=true] { cursor: progress; }
 .copilotz-button-sm { min-height: 30px; padding: 0 11px; gap: 6px; font-size: 13px; }
 .copilotz-button-lg { min-height: 44px; padding: 0 18px; font-size: 15px; }
+/* Touch screens: targets a finger finds (44px, as phones' own guidelines ask) */
+@media (pointer: coarse) {
+  .copilotz-button { min-height: 44px; }
+  .copilotz-button-sm { min-height: 40px; }
+  .copilotz-button-lg { min-height: 48px; }
+}
 .copilotz-button-outline { background: var(--card); color: var(--card-foreground); border-color: var(--input);
   box-shadow: var(--shadow-sm); }
 .copilotz-button-outline:hover:not(:disabled) { background: var(--muted); }

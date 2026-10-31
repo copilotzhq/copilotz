@@ -120,11 +120,13 @@ test("a space's Environment tab: its variables, a secret only as there, who may 
   assertStringIncludes(empty, "No variables yet");
   assertStringIncludes(empty, "agents see only their names");
 
+  // A section of the space's Computer tab.
   assertEquals(computersWeb.resources?.spaceTabs?.env, {
     title: "Environment",
     view: "env.space",
     icon: "lock",
-    order: 32,
+    under: "computer",
+    order: 10,
   });
   assertEquals(envActionsOf(appsWeb.resources?.envActions), [
     { key: "apps", view: "app.env-apply", order: 10 },

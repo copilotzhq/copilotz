@@ -29,7 +29,9 @@ export const skillsWeb: Plugin = definePlugin({
     "skill.step": { web: skillStepView },
   },
   resources: {
-    spaceTabs: { skills: { title: "Skills", view: "skills", icon: "tool", order: 60 } },
+    spaceTabs: {
+      skills: { title: "Skills", view: "skills", icon: "tool", under: "settings", order: 30 },
+    },
     palette: { skills: { view: "skill.palette", order: 45 } },
     toolViews: { read_skill: "skill.step" },
   },

@@ -31,6 +31,7 @@ import { Pending } from "./pending.tsx";
 import { STYLE } from "./style.ts";
 import { kindsOf } from "./tabs.ts";
 import { byKind, byMember, lastManager, roleName, ROLES, type Who, whoOf } from "./who.ts";
+import { namesIn } from "../../shared/names.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -57,6 +58,12 @@ export const membersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
     ? ctx.db.collection<Invitation>("invitation").find({ space: id }, { sort: { at: -1 } })
       .value ?? []
     : [];
+  // People by name: members, who asked to join (and for whom), who invited whom.
+  const names = namesIn(ctx, [
+    ...members.map((m) => m.member),
+    ...requests.flatMap((r) => [r.member, ...(r.by ? [r.by] : [])]),
+    ...invitations.map((i) => i.by),
+  ]);
   // Agents can be added where the app has them (chat adds the invite surface's Agents).
   const adds = kindsOf(ctx.resources.spaceInvite, space.kind === "personal")
     .some((k) => k.key === "agents");
@@ -70,7 +77,7 @@ export const membersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
       <Members
         space={space}
         spaces={spaces}
-        members={byMember(members, ctx.viewer?.name)}
+        members={byMember(members, ctx.viewer?.name, names)}
         roster={roster}
         adds={adds}
         requests={requests}
@@ -78,13 +85,26 @@ export const membersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
         me={ctx.viewer?.name}
         compact={compact}
         call={ctx.call}
+        names={names}
       />
     </>
   );
 };
 
 function Members(
-  { space, spaces: reached, members, roster, adds, requests, invitations, me, compact, call }: {
+  {
+    space,
+    spaces: reached,
+    members,
+    roster,
+    adds,
+    requests,
+    invitations,
+    me,
+    compact,
+    call,
+    names,
+  }: {
     space: Reached;
     spaces: Reached[];
     members: Member[];
@@ -95,6 +115,7 @@ function Members(
     me?: string;
     compact: boolean;
     call: Call;
+    names: Record<string, string>;
   },
 ): ReactNode {
   const [adding, setAdding] = useState(false);
@@ -111,6 +132,7 @@ function Members(
         manage={manage && !personal}
         last={lastManager(members, m.member)}
         call={call}
+        names={names}
       />
     ));
   return (
@@ -130,7 +152,7 @@ function Members(
               Waiting to join <Badge tone="warning">{requests.length}</Badge>
             </h3>
             <ul className="space-rows">
-              {requests.map((r) => <Asking key={r._id} request={r} call={call} />)}
+              {requests.map((r) => <Asking key={r._id} request={r} call={call} names={names} />)}
             </ul>
           </section>
         )
@@ -149,7 +171,9 @@ function Members(
         </h3>
         <ul className="space-rows">{rows(people)}</ul>
       </section>
-      {!personal && manage ? <Pending invitations={invitations} me={me} call={call} /> : null}
+      {!personal && manage
+        ? <Pending invitations={invitations} me={me} call={call} names={names} />
+        : null}
       <Agents
         space={space}
         spaces={reached}
@@ -186,23 +210,24 @@ function Members(
 
 /** How someone shows in the list: their face. */
 function Face({ who }: { who: Who }): ReactNode {
-  return <Avatar name={who.id} kind={who.kind === "space" ? "space" : "person"} size={32} />;
+  return <Avatar name={who.name} kind={who.kind === "space" ? "space" : "person"} size={32} />;
 }
 
 const whatOf = (who: Who) =>
   who.kind === "space" ? "A space whose members are in this one" : "Person";
 
 function Row(
-  { member: m, space, me, manage, last, call }: {
+  { member: m, space, me, manage, last, call, names }: {
     member: Member;
     space: Reached;
     me?: string;
     manage: boolean;
     last: boolean;
     call: Call;
+    names: Record<string, string>;
   },
 ): ReactNode {
-  const who = whoOf(m.member);
+  const who = whoOf(m.member, names);
   const mine = who.kind === "person" && who.id === me;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -222,7 +247,7 @@ function Row(
       <Face who={who} />
       <div className="space-row-text">
         <p className="space-row-name">
-          {who.id}
+          {who.name}
           {mine ? <Badge tone="primary">You</Badge> : null}
         </p>
         <p className="space-row-what">{error ?? whatOf(who)}</p>
@@ -234,7 +259,7 @@ function Row(
               size="sm"
               value={m.role}
               disabled={busy}
-              aria-label={`${who.id}'s role`}
+              aria-label={`${who.name}'s role`}
               onChange={(event) => void act("member.set", { role: event.target.value })}
             >
               {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
@@ -247,7 +272,7 @@ function Row(
           ? (
             <IconButton
               icon="close"
-              label={mine ? "Leave this space" : `Take ${who.id} out`}
+              label={mine ? "Leave this space" : `Take ${who.name} out`}
               size="sm"
               loading={busy}
               onClick={() => void act("member.remove", {})}
@@ -260,8 +285,10 @@ function Row(
 }
 
 /** Someone who asked to join, and why: let them in (with a role) or turn them down. */
-function Asking({ request: r, call }: { request: Request; call: Call }): ReactNode {
-  const who = whoOf(r.member);
+function Asking(
+  { request: r, call, names }: { request: Request; call: Call; names: Record<string, string> },
+): ReactNode {
+  const who = whoOf(r.member, names);
   const [role, setRole] = useState("viewer");
   const [busy, setBusy] = useState<"grant" | "deny">();
   const [error, setError] = useState<string>();
@@ -275,13 +302,14 @@ function Asking({ request: r, call }: { request: Request; call: Call }): ReactNo
       setBusy(undefined);
     }
   };
-  const asker = r.by && r.by !== who.id ? `${r.by} asked for them` : "They asked";
+  const by = r.by ? whoOf(r.by, names) : undefined;
+  const asker = by && by.id !== who.id ? `${by.name} asked for them` : "They asked";
   return (
     <Card as="li" padding="none" className="space-row space-row-asking">
-      <Avatar name={who.id} size={32} />
+      <Avatar name={who.name} size={32} />
       <div className="space-row-text">
         <p className="space-row-name">
-          {who.id}
+          {who.name}
           <Time at={r.at} />
         </p>
         <p className="space-row-what">
@@ -292,7 +320,7 @@ function Asking({ request: r, call }: { request: Request; call: Call }): ReactNo
         <Select
           size="sm"
           value={role}
-          aria-label={`${who.id}'s role`}
+          aria-label={`${who.name}'s role`}
           onChange={(event) => setRole(event.target.value)}
         >
           {ROLES.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}

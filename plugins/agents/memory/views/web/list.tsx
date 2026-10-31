@@ -8,6 +8,7 @@ import { type ReactNode, useId, useState } from "react";
 import { Avatar, Button, EmptyState, Icon, Input, Tabs } from "../../../../../hosts/web/mod.ts";
 import type { Memory } from "../../collections/memory.ts";
 import { MemoryCard } from "./card.tsx";
+import { nameOf, withNames } from "../../../../access/spaces/contract.ts";
 
 type Group = { key: string; label: string; avatar: ReactNode; rank: number; items: Memory[] };
 
@@ -19,13 +20,20 @@ function groupOf(
   about: string,
   me?: string,
   agents: Record<string, Named> = {},
+  names: Record<string, string> = {},
 ): Omit<Group, "items"> {
   const at = about.indexOf(":");
   const [kind, name] = at < 0 ? [about, ""] : [about.slice(0, at), about.slice(at + 1)];
   if (kind === "person") {
+    const person = nameOf(name, names);
     return name === me
-      ? { key: about, label: "About you", avatar: <Avatar name={name} size={26} />, rank: 0 }
-      : { key: about, label: `About ${name}`, avatar: <Avatar name={name} size={26} />, rank: 1 };
+      ? { key: about, label: "About you", avatar: <Avatar name={person} size={26} />, rank: 0 }
+      : {
+        key: about,
+        label: `About ${person}`,
+        avatar: <Avatar name={person} size={26} />,
+        rank: 1,
+      };
   }
   if (kind === "agent") {
     const agent = agents[name];
@@ -63,12 +71,14 @@ function groupOf(
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export function MemoryList(
-  { memories, spaces, agents = {}, me, fresh = "/", compact, call }: {
+  { memories, spaces, agents = {}, names = {}, me, fresh = "/", compact, call }: {
     memories: Memory[];
     /** Spaces' names, to say where each was learned (none: they're all from one). */
     spaces: Record<string, string>;
     /** Agents they're about or by, as each is named. */
     agents?: Record<string, Named>;
+    /** People by name (`namesIn`): whom they're about, who wrote them, whom they name. */
+    names?: Record<string, string>;
     me?: string;
     fresh?: string;
     compact?: boolean;
@@ -98,14 +108,17 @@ export function MemoryList(
     );
   }
   const words = search.trim().toLowerCase();
-  const shown = memories.filter((m) =>
-    (!core || m.core) &&
-    (!words || m.text.toLowerCase().includes(words) || m.about.toLowerCase().includes(words) ||
-      m.by.toLowerCase().includes(words))
-  );
+  // What they say, whom about and by whom, as they show (people by name).
+  const said = (m: Memory) =>
+    [
+      withNames(m.text, names),
+      groupOf(m.about, me, agents, names).label,
+      agents[m.by]?.name ?? nameOf(m.by, names),
+    ].join(" ").toLowerCase();
+  const shown = memories.filter((m) => (!core || m.core) && (!words || said(m).includes(words)));
   const groups = new Map<string, Group>();
   for (const m of shown) {
-    const of = groupOf(m.about, me, agents);
+    const of = groupOf(m.about, me, agents, names);
     if (!groups.has(of.key)) groups.set(of.key, { ...of, items: [] });
     groups.get(of.key)!.items.push(m);
   }
@@ -160,7 +173,8 @@ export function MemoryList(
                   <MemoryCard
                     key={m._id}
                     memory={m}
-                    by={agents[m.by]?.name}
+                    by={agents[m.by]?.name ?? (m.by === "memory" ? undefined : nameOf(m.by, names))}
+                    names={names}
                     space={m.in ? spaces[m.in] : undefined}
                     call={call}
                   />

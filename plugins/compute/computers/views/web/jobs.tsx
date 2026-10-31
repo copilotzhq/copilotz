@@ -80,12 +80,14 @@ const newest = (a: Job, b: Job) =>
   (b.endedAt ?? b.startedAt).localeCompare(a.endedAt ?? a.startedAt);
 
 export function JobsTab(
-  { work, jobs, me, agents, active, served }: {
+  { work, jobs, me, agents, names, active, served }: {
     work: Work;
     jobs: Jobs;
     me?: string;
     /** Agents as they're named, for whose each job is. */
     agents?: Record<string, Named>;
+    /** People by name (`namesIn`): whose each is, who started each job. */
+    names?: Record<string, string>;
     active: boolean;
     /** Where they run, for what they serve: previews, and what else a server can become. */
     served?: Served;
@@ -104,7 +106,7 @@ export function JobsTab(
           setOpen(job.id);
         }}
       />
-      {served ? <Previews served={served} jobs={list ?? []} me={me} /> : null}
+      {served ? <Previews served={served} jobs={list ?? []} me={me} names={names} /> : null}
       {jobs.error && list === undefined
         ? (
           <Notice tone="destructive" role="alert" title="Couldn't list the jobs">
@@ -142,6 +144,7 @@ export function JobsTab(
                           job={job}
                           me={me}
                           agents={agents}
+                          names={names}
                           work={work}
                           open={open === job.id}
                           toggle={() => setOpen(open === job.id ? undefined : job.id)}
@@ -263,10 +266,11 @@ function Start({ work, started }: { work: Work; started(job: Job): Promise<void>
 }
 
 function JobRow(
-  { job, me, agents, work, open, toggle, stopped, active, served }: {
+  { job, me, agents, names, work, open, toggle, stopped, active, served }: {
     job: Job;
     me?: string;
     agents?: Record<string, Named>;
+    names?: Record<string, string>;
     work: Work;
     open: boolean;
     toggle(): void;
@@ -277,7 +281,7 @@ function JobRow(
 ): ReactNode {
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string>();
-  const who = whose(job.who, me, agents);
+  const who = whose(job.who, me, agents, names);
   const failed = !job.running && job.exitCode !== 0;
   // Without a name of its own, a job goes by its command.
   const title = job.name && job.name !== job.id ? job.name : job.command;

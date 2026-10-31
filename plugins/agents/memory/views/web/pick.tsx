@@ -9,12 +9,19 @@ import type { ViewContext } from "../../../../../runtime/mod.ts";
 import type { PaletteGroup } from "../../../../../hosts/web/mod.ts";
 import { type Agent, agentsShown } from "../../../chat/contract.ts";
 import type { Memory } from "../../collections/memory.ts";
+import { peopleOf } from "../../shared/scope.ts";
 import { moveStep } from "./move.ts";
+import { nameOf, namesIn, withNames } from "../../../../access/spaces/contract.ts";
 
 /** Whom a memory is about, as a line says it. */
-const aboutOf = (about: string, me?: string, agents: Record<string, Agent> = {}) => {
+const aboutOf = (
+  about: string,
+  me?: string,
+  agents: Record<string, Agent> = {},
+  names: Record<string, string> = {},
+) => {
   const [kind, name] = about.split(/:(.*)/);
-  if (kind === "person") return name === me ? "About you" : `About ${name}`;
+  if (kind === "person") return name === me ? "About you" : `About ${nameOf(name, names)}`;
   if (kind === "agent") return `About ${agents[name]?.name || name}`;
   if (kind === "thread") return "About a chat";
   return "About everyone";
@@ -31,15 +38,16 @@ export const memoryPickView = (_: unknown, ctx: ViewContext<ReactNode>): Palette
     memories.flatMap((m) => m.about.startsWith("agent:") ? [m.about.slice(6)] : []),
   );
   if (!agents) return null;
+  const names = namesIn(ctx, memories.flatMap(peopleOf));
   return [{
     title: "Memories",
     limit: 12,
     items: memories.map((m) => ({
       key: `memory:${m._id}`,
-      label: m.text,
+      label: withNames(m.text, names),
       icon: m.core ? "star" as const : "sparkles" as const,
-      description: aboutOf(m.about, ctx.viewer?.name, agents),
-      keywords: [m.about, m.by],
+      description: aboutOf(m.about, ctx.viewer?.name, agents, names),
+      keywords: [m.about, m.by, nameOf(m.about.replace(/^person:/, ""), names)],
       step: moveStep(m, ctx.call),
     })),
   }];

@@ -11,11 +11,13 @@ import { roleName, whoOf } from "./who.ts";
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export function Pending(
-  { invitations, me, call, heading = "h3" }: {
+  { invitations, me, call, heading = "h3", names = {} }: {
     invitations: Invitation[];
     me?: string;
     call: Call;
     heading?: "h3" | "h4";
+    /** People by name (`namesIn`): who invited them. */
+    names?: Record<string, string>;
   },
 ): ReactNode {
   if (!invitations.length) return null;
@@ -26,16 +28,31 @@ export function Pending(
         Invited <span className="space-count">{invitations.length}</span>
       </Heading>
       <ul className="space-rows">
-        {invitations.map((i) => <Row key={i._id} invitation={i} me={me} call={call} />)}
+        {invitations.map((i) => (
+          <Row
+            key={i._id}
+            invitation={i}
+            me={me}
+            call={call}
+            names={names}
+          />
+        ))}
       </ul>
     </section>
   );
 }
 
-function Row({ invitation: i, me, call }: { invitation: Invitation; me?: string; call: Call }) {
+function Row(
+  { invitation: i, me, call, names }: {
+    invitation: Invitation;
+    me?: string;
+    call: Call;
+    names: Record<string, string>;
+  },
+) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const by = whoOf(i.by).id;
+  const by = whoOf(i.by, names);
   return (
     <Card as="li" padding="none" className="space-row space-row-invited">
       <span className="space-row-mark space-row-mail">
@@ -49,7 +66,7 @@ function Row({ invitation: i, me, call }: { invitation: Invitation; me?: string;
         <p className="space-row-what">
           {error ?? (
             <>
-              Invited by {by === me ? "you" : by} <Time at={i.at} long />
+              Invited by {by.id === me ? "you" : by.name} <Time at={i.at} long />
             </>
           )}
         </p>

@@ -23,6 +23,7 @@ import {
   useOrgs,
 } from "../../../../../hosts/web/mod.ts";
 import type { Member, Reached, SpaceSidebar } from "../../contract.ts";
+import { nameOf } from "../../shared/names.ts";
 import { ORG } from "../../shared/reach.ts";
 import { NewSpace } from "./new-space.tsx";
 import { spacePath } from "./tabs.ts";
@@ -44,7 +45,7 @@ const ARCHIVED = "copilotz:archived";
 const ACROSS = "copilotz:across";
 
 export function SpaceTree(
-  { spaces: reached, archived: shelved, joined = [], here, path, under, viewer, create }: {
+  { spaces: reached, archived: shelved, joined = [], here, path, under, viewer, names, create }: {
     spaces: Reached[];
     /** Those archived, listed apart. */
     archived: Reached[];
@@ -57,6 +58,8 @@ export function SpaceTree(
     /** What a space shows under it, unfolded. */
     under: SpaceSidebar[];
     viewer: string;
+    /** Whose other people's Personal spaces are, by name (`namesIn`). */
+    names: Record<string, string>;
     create(name: string): Promise<void>;
   },
 ): ReactNode {
@@ -88,6 +91,7 @@ export function SpaceTree(
           key={s._id}
           space={s}
           viewer={viewer}
+          names={names}
           here={s._id === here}
           page={path === spacePath(s._id)}
           open={folds[s._id] ?? s._id === here}
@@ -113,6 +117,7 @@ export function SpaceTree(
             here={here}
             path={path}
             viewer={viewer}
+            names={names}
           />
         )
         : null}
@@ -127,6 +132,7 @@ export function SpaceTree(
             here={here}
             path={path}
             viewer={viewer}
+            names={names}
             archived
           />
         )
@@ -137,7 +143,7 @@ export function SpaceTree(
 
 /** Spaces apart (archived, or the org's others), folded: quieter rows, each a link to its page. */
 function Apart(
-  { title, icon, hint, spaces, open, fold, here, path, viewer, archived }: {
+  { title, icon, hint, spaces, open, fold, here, path, viewer, names, archived }: {
     title: string;
     icon: "archive" | "building";
     hint?: string;
@@ -147,6 +153,7 @@ function Apart(
     here?: string;
     path?: string;
     viewer: string;
+    names: Record<string, string>;
     archived?: boolean;
   },
 ): ReactNode {
@@ -177,7 +184,7 @@ function Apart(
         ? (
           <ul id={id} className="spaces spaces-archived-list" aria-label={`${title}: spaces`}>
             {spaces.map((s) => {
-              const name = spaceName(s, viewer);
+              const name = spaceName(s, viewer, names);
               return (
                 <li key={s._id}>
                   <NavItem
@@ -190,7 +197,7 @@ function Apart(
                       : undefined}
                     title={archived ? `${name} (archived)` : name}
                     leading={theirsAlone(s, viewer)
-                      ? <Avatar name={s.owner ?? name} size={20} />
+                      ? <Avatar name={nameOf(s.owner ?? "", names)} size={20} />
                       : <Avatar name={s.name} kind="space" size={20} />}
                   >
                     {name}
@@ -206,9 +213,10 @@ function Apart(
 }
 
 function SpaceRow(
-  { space, viewer, here, page, open, fold, under, path }: {
+  { space, viewer, names, here, page, open, fold, under, path }: {
     space: Reached;
     viewer: string;
+    names: Record<string, string>;
     here: boolean;
     page: boolean;
     open: boolean;
@@ -217,7 +225,7 @@ function SpaceRow(
     path?: string;
   },
 ): ReactNode {
-  const name = spaceName(space, viewer);
+  const name = spaceName(space, viewer, names);
   const personal = space.kind === "personal";
   const id = useId();
   const what = under.map((u) => u.title).filter(Boolean).join(" and ");

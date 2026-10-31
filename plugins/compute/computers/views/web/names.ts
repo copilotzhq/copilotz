@@ -7,6 +7,7 @@
  */
 import type { Computer } from "../../collections/computer.ts";
 import type { Info } from "../../shared/workloads.ts";
+import { nameOf as personName } from "../../../../access/spaces/contract.ts";
 
 /** What the computer goes by. */
 export const nameOf = (c: Pick<Computer, "name" | "info">): string =>
@@ -43,12 +44,14 @@ export type Named = { name: string; icon?: string };
 
 /**
  * Whose a job or a shell is, by its `who` (`agent:<name>`, `person:<id>`),
- * for `me`: an agent as it's named (`agents`), with its emoji.
+ * for `me`: an agent as it's named (`agents`), with its emoji; a person by
+ * their name (`names`).
  */
 export function whose(
   who: string,
   me?: string,
   agents: Record<string, Named> = {},
+  names: Record<string, string> = {},
 ): { name: string; icon?: string; agent: boolean; mine: boolean } {
   const at = who.indexOf(":");
   const kind = at < 0 ? "" : who.slice(0, at);
@@ -56,7 +59,7 @@ export function whose(
   const mine = kind === "person" && id === me;
   const agent = kind === "agent" ? agents[id] : undefined;
   return {
-    name: mine ? "you" : agent?.name ?? id,
+    name: mine ? "you" : agent?.name ?? (kind === "agent" ? id : personName(id, names)),
     ...(agent?.icon ? { icon: agent.icon } : {}),
     agent: kind === "agent",
     mine,

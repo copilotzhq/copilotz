@@ -16,16 +16,19 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import type { Memory } from "../../collections/memory.ts";
 import { moveStep } from "./move.ts";
+import { nameOf, withNames } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export function MemoryCard(
-  { memory: m, by, space, call }: {
+  { memory: m, by, space, call, names = {} }: {
     memory: Memory;
-    /** The agent that wrote it, as it's named. */
+    /** Who wrote it, as they're named (an agent, a person). */
     by?: string;
     space?: string;
     call: Call;
+    /** People by name, for one that names someone by id (written before names were known). */
+    names?: Record<string, string>;
   },
 ): ReactNode {
   const from = m.source?.thread ?? (m.about.startsWith("thread:") ? m.about.slice(7) : undefined);
@@ -51,16 +54,16 @@ export function MemoryCard(
             </span>
           )
           : null}
-        {m.text}
+        {withNames(m.text, names)}
       </p>
       <footer>
-        <span>{m.by === "memory" ? "Noted from the chat" : `By ${by ?? m.by}`}</span>
+        <span>{m.by === "memory" ? "Noted from the chat" : `By ${by ?? nameOf(m.by, names)}`}</span>
         <span aria-hidden="true">·</span>
         <Time at={m.updated ?? m.at} />
         {m.updated
           ? m.was
             ? (
-              <Tooltip text={`Was: ${m.was}`}>
+              <Tooltip text={`Was: ${withNames(m.was, names)}`}>
                 <Badge tabIndex={0}>updated</Badge>
               </Tooltip>
             )

@@ -7,20 +7,33 @@
  * invitation in words.
  */
 import type { Member, Reached, Space } from "../../contract.ts";
+import { nameOf } from "../../shared/names.ts";
 
-/** Someone, as a space's name says them: an email's name part, or their id. */
-const short = (person: string) => person.includes("@") ? person.split("@")[0] : person;
+/** Someone, as a space's name says them: their name, else an email's name part. */
+const short = (person: string, names: Record<string, string>) => {
+  const name = nameOf(person, names);
+  return name.includes("@") ? name.split("@")[0] : name;
+};
 
 /**
  * What a space is called where it shows: yours is "Personal"; someone
- * else's (which an org's owners and admins reach), theirs: "bob's Personal".
+ * else's (which an org's owners and admins reach), theirs: "Bob's Personal"
+ * (by name: `names`, as `namesIn` gives them).
  */
-export const spaceName = (space: Pick<Space, "name" | "kind" | "owner">, viewer?: string) =>
+export const spaceName = (
+  space: Pick<Space, "name" | "kind" | "owner">,
+  viewer?: string,
+  names: Record<string, string> = {},
+) =>
   space.kind !== "personal"
     ? space.name
     : viewer && space.owner && space.owner !== viewer
-    ? `${short(space.owner)}'s Personal`
+    ? `${short(space.owner, names)}'s Personal`
     : "Personal";
+
+/** Whose Personal spaces these are, but the viewer's: the people to name. */
+export const ownersOf = (spaces: Pick<Space, "kind" | "owner">[], viewer?: string): string[] =>
+  spaces.flatMap((s) => s.kind === "personal" && s.owner && s.owner !== viewer ? [s.owner] : []);
 
 /** Whether a space is someone else's Personal one. */
 export const theirsAlone = (space: Pick<Space, "kind" | "owner">, viewer?: string) =>
@@ -48,12 +61,18 @@ export function apart<S extends Pick<Space, "name" | "kind" | "archived">>(
 export const destinations = (spaces: Reached[], from?: string): Reached[] =>
   apart(spaces).active.filter((s) => s._id !== from && s.can.includes("write"));
 
-export type Who = { kind: "person" | "agent" | "space" | string; id: string };
+/** Who a member is: its kind, its id, and how it shows (a person by their name). */
+export type Who = { kind: "person" | "agent" | "space" | string; id: string; name: string };
 
-/** Who a member is, from its key: `person:ana`, `agent:maya`, `space:launch`. */
-export function whoOf(key: string): Who {
+/**
+ * Who a member is, from its key: `person:ana`, `agent:maya`, `space:launch`
+ * (a person's id may have a colon of its own: `person:google:1139…`), named
+ * from `names` (as `namesIn` gives them).
+ */
+export function whoOf(key: string, names: Record<string, string> = {}): Who {
   const at = key.indexOf(":");
-  return at < 0 ? { kind: "person", id: key } : { kind: key.slice(0, at), id: key.slice(at + 1) };
+  const [kind, id] = at < 0 ? ["person", key] : [key.slice(0, at), key.slice(at + 1)];
+  return { kind, id, name: kind === "person" ? nameOf(id, names) : id };
 }
 
 /** The roles a space's members have, in the order they let more, with what each lets. */
@@ -111,14 +130,21 @@ export const roleName = (role: string) =>
   ROLES.find((r) => r.value === role)?.label ?? role[0]?.toUpperCase() + role.slice(1);
 
 /** Members as a list shows them: you, then people by name, then agents, then spaces. */
-export function byMember(members: Member[], me?: string): Member[] {
+export function byMember(
+  members: Member[],
+  me?: string,
+  names: Record<string, string> = {},
+): Member[] {
   const rank = (m: Member) => {
     const who = whoOf(m.member);
     if (who.kind === "person") return who.id === me ? 0 : 1;
     return who.kind === "agent" ? 2 : 3;
   };
   return [...members].sort((a, b) =>
-    rank(a) - rank(b) || whoOf(a.member).id.localeCompare(whoOf(b.member).id)
+    rank(a) - rank(b) ||
+    whoOf(a.member, names).name.localeCompare(whoOf(b.member, names).name, undefined, {
+      sensitivity: "base",
+    })
   );
 }
 

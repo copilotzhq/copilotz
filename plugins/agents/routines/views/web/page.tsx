@@ -37,6 +37,7 @@ import { useNow } from "./list.tsx";
 import { pickable } from "./new.tsx";
 import { picking, routinePath, routinesTab, standingOf, threadPath } from "./routines.ts";
 import { STYLE } from "./style.ts";
+import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 type Place = { _id: string; name: string; kind: string; can?: string[]; archived?: string };
@@ -88,6 +89,8 @@ export const routineView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
   }
   const place = places.find((p) => p._id === routine.in);
   const query = (ctx.hints.query ?? {}) as Record<string, string>;
+  // Who made it, and who started its runs, by name.
+  const names = namesIn(ctx, [routine.by, ...runs.flatMap((run) => run.by ? [run.by] : [])]);
   return (
     <>
       {style}
@@ -101,13 +104,14 @@ export const routineView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
         me={ctx.viewer?.name}
         editing={query.edit === "1" && routine.editable}
         call={ctx.call}
+        names={names}
       />
     </>
   );
 };
 
 function RoutinePage(
-  { routine: r, runs, team, place, manages, me, editing, call }: {
+  { routine: r, runs, team, place, manages, me, editing, call, names }: {
     routine: Listed;
     runs: RoutineRun[];
     team: Team;
@@ -116,6 +120,7 @@ function RoutinePage(
     me?: string;
     editing: boolean;
     call: Call;
+    names: Record<string, string>;
   },
 ): ReactNode {
   const [busy, setBusy] = useState<string>();
@@ -131,7 +136,7 @@ function RoutinePage(
   const agent = team.agents[r.agent];
   const agentName = agent?.name || r.agent;
   const next = r.paused ? [] : nextRuns(r.schedule, { from: now, count: 3, since: r.since });
-  const maker = r.by === me ? "you" : r.by;
+  const maker = r.by === me ? "you" : nameOf(r.by, names);
   const act = async (what: string, action: string, input: Record<string, unknown>) => {
     setBusy(what);
     setSaid(undefined);
@@ -399,7 +404,7 @@ function RoutinePage(
                           <span>
                             <Time at={run.at} long />
                             {run.by
-                              ? ` · started by ${run.by === me ? "you" : run.by}`
+                              ? ` · started by ${run.by === me ? "you" : nameOf(run.by, names)}`
                               : " · on schedule"}
                             {run.error ? ` · ${run.error}` : ""}
                           </span>

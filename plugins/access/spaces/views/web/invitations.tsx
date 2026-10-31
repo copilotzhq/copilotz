@@ -11,6 +11,7 @@ import { NavItem } from "../../../../../hosts/web/mod.ts";
 import type { Invitation } from "../../contract.ts";
 import { InvitationCard } from "./invitation.tsx";
 import { STYLE } from "./style.ts";
+import { namesIn } from "../../shared/names.ts";
 
 /** At most this many show in the sidebar. */
 const SHOWN = 2;
@@ -19,12 +20,13 @@ export const invitationsView = (_: unknown, ctx: ViewContext<ReactNode>): ReactN
   const mine = ctx.db.collection("invitation").query<Invitation[]>("mine", {}).value ?? [];
   // Home shows them all, over its greeting.
   if (!mine.length || ctx.hints.path === "/") return null;
+  const names = namesIn(ctx, mine.slice(0, SHOWN).map((i) => i.by));
   return (
     <>
       <style href="spaces-web" precedence="copilotz">{STYLE}</style>
       <ul className="invitations invitations-compact" aria-label="Invitations">
         {mine.slice(0, SHOWN).map((i) => (
-          <InvitationCard key={i._id} invitation={i} call={ctx.call} compact />
+          <InvitationCard key={i._id} invitation={i} call={ctx.call} names={names} compact />
         ))}
         {mine.length > SHOWN
           ? (

@@ -59,6 +59,7 @@ import {
   usd,
 } from "./numbers.ts";
 import { STYLE } from "./style.ts";
+import { nameOf as personName } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 type Org = { id: string; name: string; kind: string };
@@ -266,12 +267,12 @@ function Usage(
     : null;
   const per = MEASURES.find((m) => m.value === measure)!;
   const period = `the last ${span} days`;
+  // Never a sign-in's id: someone no longer in the org is "someone".
   const nameOf = (person: string) =>
-    person === me
-      ? "You"
-      : people.get(person)?.name || people.get(person)?.email || person || "The app itself";
+    person === me ? "You" : people.get(person)?.name || people.get(person)?.email ||
+      (person ? personName(person) : "The app itself");
   /** Whose face: their own name's, even when it says "You". */
-  const faceOf = (person: string) => people.get(person)?.name || person;
+  const faceOf = (person: string) => people.get(person)?.name || personName(person);
   return (
     <div className="usage" data-loading={loading || undefined}>
       {filters}

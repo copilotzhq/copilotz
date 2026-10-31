@@ -210,7 +210,13 @@ export function JobServe(
 
 /** The computer's previews in the space: each with who may open it, opening, copying and taking it away. */
 export function Previews(
-  { served, jobs, me }: { served: Served; jobs: Job[]; me?: string },
+  { served, jobs, me, names }: {
+    served: Served;
+    jobs: Job[];
+    me?: string;
+    /** People by name: who made each. */
+    names?: Record<string, string>;
+  },
 ): ReactNode {
   const { previews } = served;
   if (!previews.length) return null;
@@ -230,6 +236,7 @@ export function Previews(
             {...(served.desk ? { desk: served.desk } : {})}
             call={served.call}
             me={me}
+            names={names}
           />
         ))}
       </ul>
@@ -238,7 +245,7 @@ export function Previews(
 }
 
 function PreviewRow(
-  { preview: p, url, job, desk, call, me }: {
+  { preview: p, url, job, desk, call, me, names }: {
     preview: Preview;
     url?: string;
     job?: Job;
@@ -246,11 +253,12 @@ function PreviewRow(
     desk?: string;
     call: Call;
     me?: string;
+    names?: Record<string, string>;
   },
 ): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const by = whose(`person:${p.by}`, me);
+  const by = whose(`person:${p.by}`, me, {}, names);
   const what = job ? (job.name && job.name !== job.id ? job.name : job.command) : undefined;
   const act = async (doing: () => Promise<unknown>) => {
     setBusy(true);

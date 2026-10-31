@@ -87,6 +87,7 @@ export function Workspace(
     here,
     me,
     agents,
+    names,
     call,
     fixed,
     compact,
@@ -103,11 +104,13 @@ export function Workspace(
     me?: string;
     /** Agents as they're named, for whose each job is. */
     agents?: Record<string, Named>;
+    /** People by name (`namesIn`): whose each is, who started each job. */
+    names?: Record<string, string>;
     call: Call;
     /** One space's folder only: no picking another. */
     fixed?: boolean;
     compact?: boolean;
-    /** Whose it is, when it isn't the person's: they bring it back online. */
+    /** Whose it is (by name), when it isn't the person's: they bring it back online. */
     theirs?: string;
     /** Its kind (a cloud computer's): asleep, its kind's View shows in place of the tabs. */
     kind?: Kind;
@@ -249,6 +252,7 @@ export function Workspace(
                       jobs={jobs}
                       me={me}
                       agents={agents}
+                      names={names}
                       active={tab === "jobs"}
                       served={{
                         call: (action, input) => latest.current(action, input),

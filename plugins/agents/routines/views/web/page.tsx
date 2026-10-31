@@ -27,9 +27,10 @@ import {
   Time,
   Title,
 } from "../../../../../hosts/web/mod.ts";
-import type { Team } from "../../../chat/contract.ts";
+import type { Team, Thread } from "../../../chat/contract.ts";
 import type { Listed, Routine } from "../../collections/routine.ts";
 import type { RoutineRun } from "../../collections/run.ts";
+import { chatTitle } from "../../shared/routines.ts";
 import { describe, localZone, moment, nextRuns, soon } from "../../shared/schedule.ts";
 import { DeleteRoutine } from "./delete.tsx";
 import { RoutineForm } from "./form.tsx";
@@ -91,6 +92,12 @@ export const routineView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
   const query = (ctx.hints.query ?? {}) as Record<string, string>;
   // Who made it, and who started its runs, by name.
   const names = namesIn(ctx, [routine.by, ...runs.flatMap((run) => run.by ? [run.by] : [])]);
+  // What each run's own chat is called now: its agent may have named it for what it found.
+  const chats = routine.post === "new" ? runs.flatMap((run) => run.thread ? [run.thread] : []) : [];
+  const named = chats.length
+    ? ctx.db.collection<Thread>("thread").find({ _id: { $in: chats } }).value ?? []
+    : [];
+  const titles = Object.fromEntries(named.flatMap((t) => t.title ? [[t._id, t.title]] : []));
   return (
     <>
       {style}
@@ -98,6 +105,7 @@ export const routineView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
         key={id}
         routine={routine}
         runs={runs}
+        titles={titles}
         team={team}
         place={place}
         manages={!!place?.can?.includes("manage")}
@@ -111,9 +119,11 @@ export const routineView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
 };
 
 function RoutinePage(
-  { routine: r, runs, team, place, manages, me, editing, call, names }: {
+  { routine: r, runs, titles, team, place, manages, me, editing, call, names }: {
     routine: Listed;
     runs: RoutineRun[];
+    /** The names of its runs' own chats, by chat. */
+    titles: Record<string, string>;
     team: Team;
     place?: Place;
     manages: boolean;
@@ -233,7 +243,13 @@ function RoutinePage(
             <RoutineForm
               space={r.in}
               routine={r._id}
-              was={{ name: r.name, text: r.text, agent: r.agent, post: r.post }}
+              was={{
+                name: r.name,
+                text: r.text,
+                agent: r.agent,
+                post: r.post,
+                ...(r.chatName ? { chatName: r.chatName } : {}),
+              }}
               when={picking(zone, r.schedule)}
               agents={pickable(team)}
               call={call}
@@ -364,7 +380,7 @@ function RoutinePage(
                           : ", made on its first run"}
                       </span>
                     )
-                    : <span>In a new chat each time, called “{r.name}”</span>}
+                    : <span>In a new chat each run, like “{chatTitle(r)}”</span>}
                 </dd>
                 <dt>Made by</dt>
                 <dd>
@@ -396,7 +412,8 @@ function RoutinePage(
                         <span className="routine-run-text">
                           <b>
                             {run.outcome === "sent"
-                              ? "Sent"
+                              // A chat of its own says what's in it.
+                              ? (r.post === "new" && run.thread && titles[run.thread]) || "Sent"
                               : run.outcome === "failed"
                               ? "Failed"
                               : "Couldn't run"}
@@ -407,6 +424,7 @@ function RoutinePage(
                               ? ` · started by ${run.by === me ? "you" : nameOf(run.by, names)}`
                               : " · on schedule"}
                             {run.error ? ` · ${run.error}` : ""}
+                            {run.note ? ` · ${run.note}` : ""}
                           </span>
                         </span>
                         {run.thread

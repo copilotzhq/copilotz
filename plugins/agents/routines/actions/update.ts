@@ -47,12 +47,14 @@ export const updateAction = defineAction({
     const schedule = input.schedule ? normalize(input.schedule as Given) : undefined;
     if (input.agent && input.agent !== found.agent) await answersIn(ctx, found.in, input.agent);
     const moved = input.post !== undefined && input.post !== found.post;
+    const unnamed = input.chatName !== undefined && !input.chatName.trim();
     const next: Routine = {
       ...found,
       ...(input.name ? { name: input.name.trim() } : {}),
       ...(input.text ? { text: input.text.trim() } : {}),
       ...(input.agent ? { agent: input.agent } : {}),
       ...(input.post ? { post: input.post } : {}),
+      ...(input.chatName?.trim() ? { chatName: input.chatName.trim() } : {}),
       ...(schedule ? { schedule } : {}),
       ...(adopt ? { by: me } : {}),
     };
@@ -68,13 +70,16 @@ export const updateAction = defineAction({
         post: next.post,
         schedule: next.schedule,
         by: next.by,
+        ...(next.chatName ? { chatName: next.chatName } : {}),
         updated: new Date().toISOString(),
         ...when,
       },
-      ...(moved || (rearm && !("next" in when))
+      // A name left empty goes back to the default.
+      ...(moved || unnamed || (rearm && !("next" in when))
         ? {
           $unset: {
             ...(moved ? { thread: "" } : {}),
+            ...(unnamed ? { chatName: "" } : {}),
             ...(rearm && !("next" in when) ? { next: "" } : {}),
           },
         }

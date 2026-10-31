@@ -12,6 +12,7 @@
  * says so, with a way to send it now (`hints.queued`: their ids; see
  * queued.tsx). One that drew on spaces not everyone here sees says so
  * (`hints.sources`: their names), and someone who sees them can share it.
+ * One sent for someone by what they set up (`via`: a routine) says so.
  * Agents show as they're named, with their emoji (`hints.who`, by id), and
  * an agent's name links to its page; people, by their names.
  */
@@ -109,6 +110,18 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
             )
             : null)
           : head}
+        {m.via
+          ? (
+            <Chip
+              size="sm"
+              icon="refresh"
+              className="msg-via"
+              {...(m.via.path ? { href: m.via.path } : {})}
+            >
+              {m.via.kind[0].toUpperCase() + m.via.kind.slice(1)}: {m.via.name}
+            </Chip>
+          )
+          : null}
         {m.toolCalls
           ? (
             <Steps

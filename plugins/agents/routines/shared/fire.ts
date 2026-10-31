@@ -1,7 +1,8 @@
 /**
  * One run of a routine: as its maker, it sends its message to its agent
- * (`chat.send`), in a new chat named after it, or in the same one as
- * before, and records how it went, on the routine and as a run of its own.
+ * (`chat.send`, marked as the routine's), in its chat, or in a new one named
+ * as it says, and records how it went, on the routine and as a run of its own.
+ * Its chat gone or moved to another space, it starts a new one and says so.
  * A maker who can no longer write where it posts (they left the space) makes
  * the run fail as `forbidden`; a refused send (the agent no longer answers
  * there) fails it with chat's words. Either is recorded, not retried: it
@@ -12,7 +13,7 @@ import type { Context } from "../../../../runtime/mod.ts";
 import type { Thread } from "../../chat/contract.ts";
 import type { Routine } from "../collections/routine.ts";
 import type { RoutineRun } from "../collections/run.ts";
-import { asMaker, timing } from "./routines.ts";
+import { asMaker, chatTitle, routinePath, timing } from "./routines.ts";
 import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 export type Ran = Pick<RoutineRun, "outcome" | "thread" | "error"> & { run: string };
@@ -34,6 +35,7 @@ export async function fire(
   let thread: string | undefined;
   let message: string | undefined;
   let error: string | undefined;
+  let note: string | undefined;
   const { can } = await maker.call<{ can: boolean }>("space.can", {
     space: routine.in,
     verb: "write",
@@ -48,19 +50,23 @@ export async function fire(
       ? await system.db.collection<Thread>("thread").findOne({ _id: routine.thread })
       : null;
     const into = same?.in === routine.in ? same._id : undefined;
+    const each = routine.post === "new";
     try {
       const sent = await maker.call<{ thread: string; message: string }>("chat.send", {
-        ...(into ? { thread: into } : { in: routine.in }),
+        // A new chat each run is named for the run, and its agent may name it for what it found.
+        ...(into ? { thread: into } : {
+          in: routine.in,
+          title: each ? chatTitle(routine, run.due ?? at) : routine.name,
+          ...(each ? { renamable: true } : {}),
+        }),
         text: routine.text,
         to: [routine.agent],
+        via: { kind: "routine", name: routine.name.slice(0, 120), path: routinePath(routine._id) },
       });
       thread = sent.thread;
       message = sent.message;
-      // A new chat is named after the routine.
-      if (!into) {
-        await maker.db.collection("thread").updateOne({ _id: thread }, {
-          $set: { title: routine.name },
-        });
+      if (routine.thread && !each && !into) {
+        note = "Its chat was gone or moved to another space, so it started a new one.";
       }
     } catch (failure) {
       const code = (failure as { code?: string }).code;
@@ -87,6 +93,7 @@ export async function fire(
       ...(thread ? { thread } : {}),
       ...(message ? { message } : {}),
       ...(error ? { error } : {}),
+      ...(note ? { note } : {}),
       ...(run.by ? { by: run.by } : {}),
     });
     await tx.db.collection("routine").updateOne({ _id: routine._id }, {

@@ -5,7 +5,9 @@
  * answers new chats in its space). Only agents answering in its space
  * answer there: naming one that doesn't fails (`not_here`). Audio sent with it is transcribed first
  * (what agents read): if that fails, nothing is sent and the call fails
- * with `transcription_failed`; `transcribe: false` sends it as it is.
+ * with `transcription_failed`; `transcribe: false` sends it as it is. `via`
+ * says what sent it for the person (a routine); a new thread takes `title`
+ * and `renamable` in the same commit, so its first turn already has them.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
@@ -61,6 +63,22 @@ export const sendAction = defineAction({
       },
       /** False: audio goes without a transcript (as when transcribing it failed). */
       transcribe: { type: "boolean" },
+      /** What sent it for the person: a routine. Their own message still, under their name. */
+      via: {
+        type: "object",
+        properties: {
+          kind: { type: "string", minLength: 1, maxLength: 40 },
+          name: { type: "string", minLength: 1, maxLength: 120 },
+          // A path on this app, never another site.
+          path: { type: "string", pattern: "^/[^/\\\\]", maxLength: 300 },
+        },
+        required: ["kind", "name"],
+        additionalProperties: false,
+      },
+      /** What a new thread is called (an existing one keeps its name). */
+      title: { type: "string", minLength: 1, maxLength: 120 },
+      /** A new thread an agent may name, as what it found. */
+      renamable: { type: "boolean" },
     },
     additionalProperties: false,
   },
@@ -157,6 +175,7 @@ export const sendAction = defineAction({
       text: said,
       hops: 0,
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      ...(input.via ? { via: input.via } : {}),
       at: now(),
     };
     const deliver = await delivery(ctx, sent);
@@ -169,6 +188,8 @@ export const sendAction = defineAction({
           _id: threadId,
           agents: joined,
           ...(where ? { in: where } : {}),
+          ...(input.title ? { title: input.title } : {}),
+          ...(input.renamable ? { renamable: true } : {}),
           ...startedWith(sent),
           at: sent.at,
         });

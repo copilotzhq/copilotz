@@ -22,10 +22,10 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.9"`), and
-the imports below are the same everywhere. Some pieces need a package of their own, installed beside
-it: `esbuild` to bundle the web host on Node, `@electric-sql/pglite` for PostgreSQL in the process,
-and `@types/react` for the front ends' types.
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.10"`),
+and the imports below are the same everywhere. Some pieces need a package of their own, installed
+beside it: `esbuild` to bundle the web host on Node, `@electric-sql/pglite` for PostgreSQL in the
+process, and `@types/react` for the front ends' types.
 
 ## A first app
 
@@ -204,7 +204,7 @@ and an app serves it from there by default:
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.9" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.10" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 

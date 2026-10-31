@@ -1,3 +1,24 @@
+## 1.0.0-rc.10 — 2026-10-31
+
+- **A routine made from a chat posts back in that chat.** `schedule_routine` keeps the chat it was
+  called from (`routine.thread`), where before no setting could reach it: `same` meant a new chat
+  made by the first run. `routine.create` takes `thread` (a chat in that space its maker can see),
+  and `post` now defaults to `same`, in the web form too. Its confirmation says where it posts. If
+  the chat is deleted or moved to another space, the run starts a new one and says why
+  (`routineRun.note`).
+- **A new chat each run is a first-class choice,** for runs to open later (a daily analysis):
+  `post:
+  "new"`. Each chat is named by `chatName`, with `{name}`, `{date}`, `{time}` (its
+  timezone) and `{run}` filled in; by default its name and the day (and time, for `hours` and
+  `cron`), so runs no longer all share one name. Its agent may then name it for what it found, with
+  the new `name_chat` tool, offered only in those chats. The routine's page lists runs by their
+  chats' names. The form and the agent's confirmation say how many chats a day it comes to, when it
+  runs at least hourly.
+- **A routine's messages say they're its.** `chat.send` takes `via` (`{ kind, name, path? }`): the
+  message is still its sender's, but shows "Routine: Pricing", linked to the routine, and agents
+  read `ana (via routine "Pricing"): …`, so they know nobody typed it just now. `chat.send` also
+  takes `title` and `renamable` for a new thread, in the same commit as its first message.
+
 ## 1.0.0-rc.9 — 2026-10-31
 
 - **A space's page has a few tabs, and their sections.** A `spaceTabs` entry `under` another tab is

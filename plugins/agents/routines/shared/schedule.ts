@@ -252,6 +252,17 @@ export function clockText(time: string, locale?: string): string {
 const listed = (items: string[]) =>
   items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 
+/**
+ * How many times a day it runs, when that's at least hourly (a new chat each
+ * run gets to be a lot of chats); otherwise undefined.
+ */
+export function oftenPerDay(s: Schedule, from = Date.now()): number | undefined {
+  const [first, second] = nextRuns(s, { from, count: 2 });
+  if (!first || !second) return undefined;
+  const gap = second.getTime() - first.getTime();
+  return gap > 0 && gap <= HOUR ? Math.round(24 * HOUR / gap) : undefined;
+}
+
 /** A timezone, as a place: "Sao Paulo" for America/Sao_Paulo, UTC as UTC. */
 export const zoneName = (zone: string) =>
   zone === "UTC" ? "UTC" : (zone.split("/").at(-1) ?? zone).replace(/_/g, " ");

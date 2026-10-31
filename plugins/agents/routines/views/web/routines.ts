@@ -9,8 +9,7 @@ import type { Listed } from "../../collections/routine.ts";
 import { type Given, type Kind, localOf, type Schedule } from "../../shared/schedule.ts";
 
 /** A routine's page, where the person is; `edit`, open to change it. */
-export const routinePath = (id: string, edit = false) =>
-  `/routine/${encodeURIComponent(id)}${edit ? "?edit=1" : ""}`;
+export { routinePath } from "../../shared/routines.ts";
 
 /** A chat, where its space is. */
 export const threadPath = (thread: string, space?: string) =>
@@ -102,7 +101,13 @@ export function givenOf(p: Picking): Given {
 }
 
 /** A routine as a form holds it. */
-export type Draft = { name: string; text: string; agent: string; post: "new" | "same" };
+export type Draft = {
+  name: string;
+  text: string;
+  agent: string;
+  post: "new" | "same";
+  chatName?: string;
+};
 
 /** An example an empty tab offers: what it would send, when. */
 export type Example = {

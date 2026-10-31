@@ -5,7 +5,9 @@
  * - **A routine** (`routine`) says what to send, to which agent answering
  *   there, when (every day, weekdays or some days at a time, every few
  *   hours, once, or a cron expression, each in a timezone), and where it
- *   posts: a new chat each run, named after it, or always the same one.
+ *   posts: always the same chat (the one it was made from, or its first
+ *   run's), or a new chat each run, to open later, named by `chatName`
+ *   (`{date}`, `{time}`, `{run}`, `{name}`). Its messages say they're its.
  * - **It runs as whoever made it,** reaching only what they reach: its timer
  *   (the runtime's, `routine:<id>`) is always set as its maker, whoever
  *   changes it, and time runs it as whoever set it. Each run calls
@@ -18,7 +20,9 @@
  *   space's routines and a routine's runs.
  * - **From a conversation:** agents have `schedule_routine`, `list_routines`
  *   and `cancel_routine` where the person they work for may make routines,
- *   so "remind me every Monday…" works from chat.
+ *   so "remind me every Monday…" works from chat, and posts back there unless
+ *   each run should be its own chat. In such a chat, `name_chat` lets the
+ *   agent name it for what it found.
  *
  * ```ts
  * plugins: [models, chat, ...access, routines, app]

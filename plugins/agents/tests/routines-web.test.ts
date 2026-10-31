@@ -6,7 +6,8 @@
  * to a routine, its space's tab and its chats.
  */
 import { assertEquals } from "@std/assert";
-import { normalize, type Schedule } from "../routines/shared/schedule.ts";
+import { chatTitle } from "../routines/shared/routines.ts";
+import { normalize, oftenPerDay, type Schedule } from "../routines/shared/schedule.ts";
 import {
   EXAMPLES,
   givenOf,
@@ -17,6 +18,37 @@ import {
   threadPath,
 } from "../routines/views/web/routines.ts";
 import { test } from "../../../testing/mod.ts";
+
+test("a run's chat: named by its template, in its timezone; a frequent one says how many", () => {
+  const at = "2026-11-02T12:30:00.000Z";
+  const daily: Schedule = { kind: "daily", time: "09:30", timezone: "America/Sao_Paulo" };
+  const hourly: Schedule = { kind: "hours", every: 1 };
+  const often: Schedule = { kind: "cron", cron: "*/5 * * * *", timezone: "UTC" };
+  // By default: its name and the day, the time too for what may run more than daily.
+  assertEquals(chatTitle({ name: "News", schedule: daily }, at), "News · 2026-11-02");
+  assertEquals(chatTitle({ name: "News", schedule: hourly }, at), "News · 2026-11-02 12:30");
+  assertEquals(
+    chatTitle({
+      name: "Pricing",
+      schedule: daily,
+      runs: 4,
+      chatName: "{name} {date} {time} #{run}",
+    }, at),
+    "Pricing 2026-11-02 09:30 #5",
+  );
+  // What isn't one of its words stays, and an empty name is the default.
+  assertEquals(chatTitle({ name: "N", schedule: daily, chatName: "{other}" }, at), "{other}");
+  assertEquals(chatTitle({ name: "N", schedule: daily, chatName: "  " }, at), "N · 2026-11-02");
+
+  const now = Date.parse(at);
+  assertEquals(oftenPerDay(often, now), 288);
+  assertEquals(oftenPerDay(hourly, now), 24);
+  assertEquals(oftenPerDay(daily, now), undefined);
+  assertEquals(
+    oftenPerDay({ kind: "once", at: "2026-12-24T18:00:00.000Z", timezone: "UTC" }, now),
+    undefined,
+  );
+});
 
 test("how a routine stands", () => {
   const at = "2026-11-02T09:00:00.000Z";

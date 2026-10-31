@@ -2,8 +2,9 @@
  * Routines: a message sent to an agent on a schedule, in a space ("every
  * weekday at 9:00, ask @researcher for the news on X"). Each is what to
  * send (`text`), to whom (`agent`), when (`schedule`), and where it posts:
- * a new chat each run, or always the same one (`post`, the chat in
- * `thread` once it's made). It runs as whoever made it (`by`), reaching only
+ * always the same chat (`post`: the chat in `thread`, the one it was made
+ * from, or its first run's), or a new one each run, named by `chatName`.
+ * It runs as whoever made it (`by`), reaching only
  * what they reach; it's paused, or not; and it keeps when it runs next and
  * how its last run went. Its queries, for front ends:
  *
@@ -29,10 +30,12 @@ const routineSchema = {
     agent: { type: "string" },
     /** When (see shared/schedule.ts). */
     schedule: { type: "object" },
-    /** Where it posts: a new chat each run, or always the same one. */
+    /** Where it posts: always the same chat, or a new one each run. */
     post: { enum: ["new", "same"] },
-    /** The same chat, once its first run made it. */
+    /** The same chat: the one it was made from, or else its first run's. */
     thread: { type: "string" },
+    /** A new chat's name: `{name}`, `{date}`, `{time}` and `{run}` are filled in each run. */
+    chatName: { type: "string" },
     /** When it was paused: it doesn't run until it's resumed. */
     paused: { type: "string" },
     /** Who made it, a person's id: it runs as them. */
@@ -68,6 +71,7 @@ export type Routine = {
   agent: string;
   schedule: Schedule;
   post: "new" | "same";
+  chatName?: string;
   thread?: string;
   paused?: string;
   by: string;

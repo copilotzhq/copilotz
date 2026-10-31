@@ -1,15 +1,24 @@
 /**
  * Routines from a conversation, for agents: `schedule_routine` ("remind me
- * every Monday…": a routine where the conversation is, made for the person
- * the agent works for, so it runs as them), `list_routines` (this space's)
- * and `cancel_routine`. Offered where that person may make routines: a
- * space they may write in (the access plugin's rules).
+ * every Monday…": a routine posting back in this conversation, or in a new
+ * chat each run, made for the person the agent works for, so it runs as them),
+ * `list_routines` (this space's) and `cancel_routine`. Offered where that
+ * person may make routines: a space they may write in (the access plugin's
+ * rules). And `name_chat`, only in a chat a routine's run started: the agent
+ * names it for what it found, so a list of runs reads at a glance.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import { type Thread, type Tool, tool, type ToolContext } from "../../chat/contract.ts";
 import type { Listed, Routine } from "../collections/routine.ts";
-import { personOf } from "../shared/routines.ts";
-import { describe, type Given, moment, scheduleSchema } from "../shared/schedule.ts";
+import { chatTitle, personOf } from "../shared/routines.ts";
+import {
+  describe,
+  type Given,
+  moment,
+  oftenPerDay,
+  type Schedule,
+  scheduleSchema,
+} from "../shared/schedule.ts";
 import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 type Space = { _id: string; can?: string[] };
@@ -44,13 +53,24 @@ const line = (r: Routine, names: Record<string, string> = {}) => {
     `(${next}${last}; made by ${nameOf(r.by, names)})`;
 };
 
+/** Where a routine posts, as an agent tells it on; and how many chats that is, when it's a lot. */
+function postsIn(r: Routine) {
+  if (r.post !== "new") return "Each run posts in this chat.";
+  const often = oftenPerDay(r.schedule as Schedule);
+  return `Each run starts a new chat, like "${chatTitle(r)}".` +
+    (often ? ` That's about ${often} new chats a day: say so.` : "");
+}
+
 const scheduleRoutine = tool({
   offer,
   description: "Make a routine: a message sent to an agent on a schedule, here, as the person " +
     'you work for ("every weekday at 9:00, ask @researcher for the news on X", "remind me ' +
     "every Monday to send the report\"). text is what's sent each time, written as the person " +
     "would ask it; agent defaults to you. Give the person's timezone when you know it (ask " +
-    "when the time matters and you don't); without one, it's UTC. Tell them what you set up.",
+    "when the time matters and you don't); without one, it's UTC. Where it posts: by default " +
+    "back in this chat (reminders, monitoring, anything that reads as one thread). Use post " +
+    '"new" when each run is its own piece of work to open later (a daily analysis), and give ' +
+    "chat_name. Tell them what you set up, and where it posts.",
   input: {
     type: "object",
     properties: {
@@ -65,7 +85,13 @@ const scheduleRoutine = tool({
       },
       post: {
         enum: ["new", "same"],
-        description: "new (default): a new chat each time; same: always the same chat.",
+        description: "same (default): always this chat; new: a new chat each run.",
+      },
+      chat_name: {
+        type: "string",
+        maxLength: 120,
+        description: 'With post new, what each chat is called: "Pricing response · {date}". ' +
+          "{date}, {time} (its timezone), {run} and {name} are filled in each run.",
       },
     },
     required: ["text", "schedule"],
@@ -80,14 +106,19 @@ const scheduleRoutine = tool({
         text: input.text,
         agent: input.agent ?? ctx.agent,
         schedule: input.schedule as Given,
-        ...(input.post ? { post: input.post } : {}),
+        ...(input.post === "new"
+          ? {
+            post: "new",
+            ...(typeof input.chat_name === "string" ? { chatName: input.chat_name } : {}),
+          }
+          : { post: "same", thread: ctx.thread }),
       });
       const routine = await where.as.db.collection<Routine>("routine").findOne({
         _id: made.routine,
       });
       const names = await namesFor(ctx, [where.person, ...(routine ? [routine.by] : [])]);
       return routine
-        ? `Made it: ${line(routine, names).slice(2)}. It runs as ${
+        ? `Made it: ${line(routine, names).slice(2)}. ${postsIn(routine)} It runs as ${
           nameOf(where.person, names)
         }; they can pause, ` +
           "change or delete it in this space's Routines."
@@ -140,8 +171,29 @@ const cancelRoutine = tool({
   },
 });
 
+const nameChat = tool({
+  // Only in a chat a routine's run started, for its agent to name.
+  offer: (_agent, thread, ctx) => !!thread.renamable && !!personOf(ctx),
+  description: "Name this chat for what you found, once you have: people pick a run from a list " +
+    'by its name ("Nov 2 · Competitor cut 8%, we hold"). One short line, with the conclusion.',
+  input: {
+    type: "object",
+    properties: { name: { type: "string", minLength: 1, maxLength: 120 } },
+    required: ["name"],
+  },
+  run: async ({ name }, ctx) => {
+    const where = await whereFor(ctx);
+    if ("missing" in where) return where.missing;
+    const title = String(name).replace(/\s+/g, " ").trim().slice(0, 120);
+    if (!title) return "A name says something.";
+    await where.as.db.collection("thread").updateOne({ _id: ctx.thread }, { $set: { title } });
+    return `Named it "${title}".`;
+  },
+});
+
 export const tools: Record<string, Tool> = {
   schedule_routine: scheduleRoutine,
   list_routines: listRoutines,
   cancel_routine: cancelRoutine,
+  name_chat: nameChat,
 };

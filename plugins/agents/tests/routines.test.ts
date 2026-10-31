@@ -1,8 +1,9 @@
 /**
  * Routines: a message sent to an agent on a schedule. Time runs one as its
- * maker (its timer is always theirs, whoever changes it), posting in a new
- * chat named after it each run, or always in the same one, and each run is
- * recorded with the chat it made and how it went. Its maker or a manager
+ * maker (its timer is always theirs, whoever changes it), posting always in
+ * the same chat (where an agent made it from, or its first run's), or in a
+ * new chat named for each run, its messages marked as its, and each run is
+ * recorded with the chat it posted in and how it went. Its maker or a manager
  * changes, pauses, resumes, runs or deletes it; a maker who left the space
  * makes its runs fail as forbidden, until a manager takes it over. Agents
  * make, list and cancel them from a conversation. And the schedules
@@ -159,6 +160,7 @@ each(
         text: "What's new on our market?",
         agent: "researcher",
         schedule: daily,
+        post: "new",
       }, { actor: bob });
       const { routine: pulse } = await s.rt.call<{ routine: string }>("routine.create", {
         in: space,
@@ -182,13 +184,13 @@ each(
       const said = await history(s, first.thread!, bob);
       assertEquals(said.map((m) => [m.from, m.text]), [
         ["bob", "What's new on our market?"],
-        ["researcher", "researcher: bob: What's new on our market?"],
+        ["researcher", `researcher: bob (via routine "Morning news"): What's new on our market?`],
       ]);
       assertEquals(said[0].to, ["researcher"]);
       const thread = await s.rt.query<{ title?: string }[]>("thread.recent", { in: space }, {
         actor: bob,
       });
-      assert(thread.some((t) => t.title === "Morning news"));
+      assert(thread.some((t) => t.title === "Morning news · 2026-11-02"));
 
       // The next day, News posts in a new chat; Pulse, hourly, always in its first one.
       await s.advance(24 * HOUR);
@@ -303,6 +305,7 @@ each(
         text: "Status?",
         agent: "lead",
         schedule: daily,
+        post: "new",
       }, { actor: bob });
       await s.rt.call("routine.pause", { routine }, { actor: bob });
       assertEquals((await s.timers()).filter((t) => t._id === `routine:${routine}`), []);
@@ -369,7 +372,9 @@ each("agents make, list and cancel routines for the person they work for", async
     assertStringIncludes(outputs[0], "Mondays at 9:00 AM (Sao Paulo time), asks @lead");
     assertStringIncludes(outputs[0], "It runs as ana");
     const [made] = await list(s, space);
-    assertEquals([made.by, made.agent, made.post], ["ana", "lead", "new"]);
+    // It posts back here unless asked otherwise, and says so.
+    assertEquals([made.by, made.agent, made.post, made.thread], ["ana", "lead", "same", thread]);
+    assertStringIncludes(outputs[0], "Each run posts in this chat.");
     assertEquals((await s.timers()).find((t) => t._id === `routine:${made._id}`)?.actor?.id, "ana");
     await ask(`tool list_routines {}`, thread);
     assertStringIncludes(outputs[1], `"Monday report" [${made._id}]: Mondays at 9:00 AM`);
@@ -381,6 +386,189 @@ each("agents make, list and cancel routines for the person they work for", async
     await ask(`tool cancel_routine ${JSON.stringify({ routine: "monday report" })}`, thread);
     assertEquals(outputs[3], 'Deleted "Monday report". The chats it posted in stay.');
     assertEquals(await list(s, space), []);
+  } finally {
+    await s.rt.close();
+  }
+});
+
+each(
+  "a routine made from a chat posts back there, marked as its, and agents are told",
+  async (make) => {
+    const s = await start(make);
+    try {
+      const space = await launch(s);
+      const said = async (text: string, thread?: string) => {
+        const sent = await s.rt.call<{ thread: string }>(
+          "chat.send",
+          thread ? { thread, text } : { text: `@lead ${text}`, in: space },
+          { actor: ana },
+        );
+        await s.advance(0);
+        return sent.thread;
+      };
+      const origin = await said("hello");
+      await said(
+        `tool schedule_routine ${
+          JSON.stringify({
+            name: "Five",
+            text: "Check the deploy",
+            schedule: { kind: "cron", cron: "*/5 * * * *", timezone: "UTC" },
+          })
+        }`,
+        origin,
+      );
+      const [made] = await list(s, space);
+      assertEquals([made.post, made.thread], ["same", origin]);
+
+      // Every run goes in that chat; none starts another.
+      await s.advance(5 * 60_000);
+      await s.advance(5 * 60_000);
+      const ran = await runs(s, made._id);
+      assertEquals(ran.length, 2);
+      assertEquals(new Set(ran.map((r) => r.thread)), new Set([origin]));
+
+      // It says it's the routine's: people see it, and the agent knows nobody typed it.
+      const sent = (await history(s, origin)).filter((m) => m.text === "Check the deploy");
+      assertEquals(sent.length, 2);
+      assertEquals(sent[0].from, "ana");
+      assertEquals(sent[0].via, { kind: "routine", name: "Five", path: `/routine/${made._id}` });
+      const prompt = await s.rt.query<Prompt>("thread.prompt", { thread: origin, agent: "lead" }, {
+        actor: ana,
+      });
+      assert(
+        prompt.history.some((m) =>
+          text(m).startsWith('ana (via routine "Five"): Check the deploy')
+        ),
+        JSON.stringify(prompt.history.map(text)),
+      );
+      // Its name isn't the agent's to change: it's a conversation of theirs.
+      assert(!prompt.tools.some((t) => t.name === "name_chat"));
+
+      // That chat gone to another space, it starts a new one, and says why.
+      const { space: other } = await s.rt.call<{ space: string }>(
+        "space.create",
+        { name: "Other" },
+        {
+          actor: ana,
+        },
+      );
+      await s.rt.call("chat.move", { thread: origin, to: other }, { actor: ana });
+      await s.advance(5 * 60_000);
+      const [latest] = await runs(s, made._id);
+      assert(latest.thread && latest.thread !== origin);
+      assertStringIncludes(latest.note ?? "", "gone or moved");
+      assertEquals((await list(s, space))[0].thread, latest.thread);
+    } finally {
+      await s.rt.close();
+    }
+  },
+);
+
+each(
+  "a routine's own chat for each run: named by its template, then by its agent",
+  async (make) => {
+    const s = await start(make);
+    try {
+      const space = await launch(s);
+      const { thread: asked } = await s.rt.call<{ thread: string }>("chat.send", {
+        text: `@lead tool schedule_routine ${
+          JSON.stringify({
+            name: "Pricing",
+            text: `tool name_chat ${JSON.stringify({ name: "Competitor cut 8%, we hold" })}`,
+            schedule: { kind: "daily", time: "09:30", timezone: "America/Sao_Paulo" },
+            post: "new",
+            chat_name: "Pricing response {date} at {time} #{run}",
+          })
+        }`,
+        in: space,
+      }, { actor: ana });
+      await s.advance(0);
+      assertStringIncludes(outputs[0], 'Each run starts a new chat, like "Pricing response');
+      assert(!outputs[0].includes("new chats a day"));
+      const [made] = await list(s, space);
+      assertEquals([made.post, made.thread, made.chatName], [
+        "new",
+        undefined,
+        "Pricing response {date} at {time} #{run}",
+      ]);
+      await s.rt.call("routine.update", {
+        routine: made._id,
+        text: "What's our pricing response today?",
+      }, { actor: ana });
+
+      // 9:30 in Sao Paulo: its chat, named at once, with its time there.
+      await s.advance(5 * HOUR);
+      const [run] = await runs(s, made._id);
+      assert(run.thread && run.thread !== asked);
+      const title = async (thread: string) =>
+        (await s.rt.query<{ _id: string; title?: string }[]>("thread.recent", { in: space }, {
+          actor: ana,
+        })).find((t) => t._id === thread)?.title;
+      assertEquals(await title(run.thread), "Pricing response 2026-11-02 at 09:30 #1");
+
+      // Its agent may name that chat, and only that kind.
+      const prompt = await s.rt.query<Prompt>("thread.prompt", {
+        thread: run.thread,
+        agent: "lead",
+      }, {
+        actor: ana,
+      });
+      assert(prompt.tools.some((t) => t.name === "name_chat"));
+      await s.rt.call("chat.send", {
+        thread: run.thread,
+        text: `tool name_chat ${JSON.stringify({ name: "Competitor cut 8%,\n we hold" })}`,
+      }, { actor: ana });
+      await s.advance(0);
+      assertEquals(outputs.at(-1), 'Named it "Competitor cut 8%, we hold".');
+      assertEquals(await title(run.thread), "Competitor cut 8%, we hold");
+
+      // Frequent ones are told what that comes to.
+      await s.rt.call("chat.send", {
+        thread: asked,
+        text: `tool schedule_routine ${
+          JSON.stringify({
+            text: "x",
+            schedule: { kind: "cron", cron: "*/5 * * * *", timezone: "UTC" },
+            post: "new",
+          })
+        }`,
+      }, { actor: ana });
+      await s.advance(0);
+      assertStringIncludes(outputs.at(-1)!, "about 288 new chats a day");
+    } finally {
+      await s.rt.close();
+    }
+  },
+);
+
+each("a routine posts only in a chat of its space that its maker can see", async (make) => {
+  const s = await start(make);
+  try {
+    const space = await launch(s);
+    const { space: other } = await s.rt.call<{ space: string }>("space.create", { name: "Other" }, {
+      actor: ana,
+    });
+    const { thread: there } = await s.rt.call<{ thread: string }>("chat.send", {
+      text: "elsewhere",
+      in: other,
+    }, { actor: ana });
+    const { thread: private_ } = await s.rt.call<{ thread: string }>("chat.send", {
+      text: "ana's own",
+      in: other,
+    }, { actor: ana });
+    await s.advance(0);
+    const made = (thread: string, actor: Actor) =>
+      refused(s.rt.call("routine.create", {
+        in: space,
+        text: "x",
+        agent: "lead",
+        schedule: daily,
+        thread,
+      }, { actor }));
+    assertEquals(await made(there, ana), "invalid", "another space's");
+    assertEquals(await made(private_, bob), "invalid", "one Bob can't see");
+    assertEquals(await made("no-such-chat", ana), "invalid");
+    assertEquals((await list(s, space)).length, 0);
   } finally {
     await s.rt.close();
   }

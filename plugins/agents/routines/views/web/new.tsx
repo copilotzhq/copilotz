@@ -41,7 +41,7 @@ export function NewRoutine(
         name: example?.name ?? "",
         text: example?.text ?? "",
         agent: team.default.find((a) => team.here.includes(a)) ?? agents[0]?.id ?? "",
-        post: "new",
+        post: "same",
       }}
       when={{ ...picking(zone), ...example?.when }}
       agents={agents}

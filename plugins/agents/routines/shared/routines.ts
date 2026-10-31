@@ -7,7 +7,7 @@
  */
 import type { Context } from "../../../../runtime/mod.ts";
 import type { Routine } from "../collections/routine.ts";
-import { nextRuns, type Schedule, scheduleSchema, whenOf } from "./schedule.ts";
+import { localOf, nextRuns, type Schedule, scheduleSchema, whenOf } from "./schedule.ts";
 import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 export const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
@@ -21,7 +21,40 @@ export const fields = {
   agent: { type: "string", minLength: 1 },
   schedule: scheduleSchema,
   post: { enum: ["new", "same"] },
+  chatName: { type: "string", maxLength: 120 },
 } as const;
+
+/** A routine's page, on the web. */
+export const routinePath = (id: string, edit = false) =>
+  `/routine/${encodeURIComponent(id)}${edit ? "?edit=1" : ""}`;
+
+/** A new chat's name, unless the routine says: its name and the day, the time too if it runs more often. */
+export const defaultChatName = (schedule: Schedule) =>
+  schedule.kind === "hours" || schedule.kind === "cron"
+    ? "{name} · {date} {time}"
+    : "{name} · {date}";
+
+/**
+ * What a run's new chat is called: `chatName` (or the default) with `{name}`,
+ * `{date}` (2026-11-02), `{time}` (09:00, in the routine's timezone) and
+ * `{run}` (its number) filled in.
+ */
+export function chatTitle(
+  routine: Pick<Routine, "name" | "chatName" | "schedule" | "runs">,
+  at: string | number = Date.now(),
+): string {
+  const zone = "timezone" in routine.schedule ? routine.schedule.timezone : "UTC";
+  const [date, time] = localOf(at, zone).split("T");
+  const filled: Record<string, string> = {
+    name: routine.name,
+    date,
+    time,
+    run: String((routine.runs ?? 0) + 1),
+  };
+  return (routine.chatName?.trim() || defaultChatName(routine.schedule))
+    .replace(/\{(name|date|time|run)\}/g, (_, token: string) => filled[token])
+    .replace(/\s+/g, " ").trim().slice(0, 120);
+}
 
 /** What Actions on one routine take: which. */
 export const byId = {

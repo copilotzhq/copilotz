@@ -9,6 +9,7 @@
  * either way. An app removed while it built is taken down again.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
+import { environmentOf } from "../shared/environment.ts";
 import type { AppDoc } from "../collections/app.ts";
 import { APP_SUBJECTS } from "../contract.ts";
 import { archiveOf } from "../shared/archive.ts";
@@ -45,10 +46,14 @@ export const buildAction = defineAction({
         throw error;
       });
       minutes = built.minutes;
+      const served = built.port ?? app.source.port;
       const deployed = await appHost.deploy({
         app: app.label,
         image: built.image,
-        port: app.source.port,
+        // The port its image serves on: its front's, for one made for it.
+        port: served,
+        // Its space's environment, its own over it.
+        env: await environmentOf(ctx, app),
       });
       const now = await apps.findOne({ _id: app._id });
       if (now?.status !== "building") {
@@ -67,6 +72,7 @@ export const buildAction = defineAction({
           target: deployed.target,
           revision: deployed.revision,
           image: built.image,
+          served,
           // Live since its first revision: its running is metered from then.
           ...(app.live ? {} : { live: at }),
         },

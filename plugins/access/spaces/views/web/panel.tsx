@@ -21,7 +21,8 @@ import {
 import type { Reached } from "../../contract.ts";
 import { STYLE } from "./style.ts";
 import { chosen, type ShownTab, spacePath, tabsOf } from "./tabs.ts";
-import { spaceName } from "./who.ts";
+import { ownersOf, spaceName } from "./who.ts";
+import { namesIn } from "../../shared/names.ts";
 
 export const spacePanelView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
   const id = item._id ?? "";
@@ -49,13 +50,23 @@ export const spacePanelView = (item: { _id?: string }, ctx: ViewContext<ReactNod
   return (
     <>
       {style}
-      <SpacePanel space={space} tabs={tabsOf(ctx.resources.spaceTabs)} viewer={ctx.viewer?.name} />
+      <SpacePanel
+        space={space}
+        tabs={tabsOf(ctx.resources.spaceTabs)}
+        viewer={ctx.viewer?.name}
+        names={namesIn(ctx, ownersOf([space], ctx.viewer?.name))}
+      />
     </>
   );
 };
 
 function SpacePanel(
-  { space, tabs, viewer = "" }: { space: Reached; tabs: ShownTab[]; viewer?: string },
+  { space, tabs, viewer = "", names }: {
+    space: Reached;
+    tabs: ShownTab[];
+    viewer?: string;
+    names: Record<string, string>;
+  },
 ): ReactNode {
   const key = `copilotz-space-panel-tab:${viewer}`;
   const [asked, setAsked] = useState(() => kept(key) ?? undefined);
@@ -66,7 +77,7 @@ function SpacePanel(
   }, [tab?.key]);
   const id = useId();
   const personal = space.kind === "personal";
-  const name = spaceName(space, viewer);
+  const name = spaceName(space, viewer, names);
   return (
     <section className="space-panel" aria-label={`${name}, beside this chat`}>
       <header className="space-panel-head">

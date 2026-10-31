@@ -21,7 +21,7 @@ import { setInterval } from "node:timers";
 import type { TerminalInput, TerminalResult } from "../../shared/workloads.ts";
 import { fail } from "./answer.ts";
 import type { Spaces } from "./spaces.ts";
-import { childEnv, exitCode, OWN, signalGroup } from "./processes.ts";
+import { childEnv, exitCode, givenEnv, OWN, signalGroup } from "./processes.ts";
 import { newlines, scriptExtension, type Shell as Program, shellArgs } from "./shell.ts";
 
 export type ShellLimits = {
@@ -176,12 +176,16 @@ export function createShells(spaces: Spaces, program: Program, limits: ShellLimi
     readable.on("error", () => {});
   }
 
-  async function open(key: string, folder: string): Promise<Shell> {
+  async function open(
+    key: string,
+    folder: string,
+    env?: Record<string, string>,
+  ): Promise<Shell> {
     const directory = await mkdtemp(join(tmpdir(), "copilotz-shell-"));
     const token = randomBytes(8).toString("hex");
     const child = spawn(program.path, shellArgs(program, directory, token), {
       cwd: folder,
-      env: childEnv(),
+      env: childEnv(env),
       stdio: ["pipe", "pipe", "pipe"],
       // Its own process group (see processes.ts): signals reach everything a command starts.
       ...OWN,
@@ -224,13 +228,13 @@ export function createShells(spaces: Spaces, program: Program, limits: ShellLimi
     return shell;
   }
 
-  /** This key's shell, opened if it has none (or its last one ended). */
-  async function shellOf(key: string, folder: string) {
+  /** This key's shell, opened if it has none (or its last one ended), with `env` when it opens. */
+  async function shellOf(key: string, folder: string, env?: Record<string, string>) {
     const shell = shells.get(key);
     if (shell && !shell.dead) return shell;
     let pending = opening.get(key);
     if (!pending) {
-      pending = open(key, folder).then((value) => {
+      pending = open(key, folder, env).then((value) => {
         shells.set(key, value);
         return value;
       }).finally(() => opening.delete(key));
@@ -314,6 +318,7 @@ export function createShells(spaces: Spaces, program: Program, limits: ShellLimi
       }
       if (input.operation === "interrupt" && !input.commandId) fail("interrupt needs a commandId");
       if (!input.operation && typeof input.stdin !== "string") fail("stdin is required");
+      const env = givenEnv(input.env);
       prune();
       const current = shells.get(key);
       let command: Command | undefined;
@@ -335,7 +340,7 @@ export function createShells(spaces: Spaces, program: Program, limits: ShellLimi
         starting.add(key);
         let shell: Shell;
         try {
-          shell = await shellOf(key, folder);
+          shell = await shellOf(key, folder, env);
         } finally {
           starting.delete(key);
         }

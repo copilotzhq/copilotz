@@ -425,6 +425,9 @@ test("tokens are renewed before they run out: on their timer, and as they're use
   const t = await setup({ expiresIn: 30 });
   try {
     await connect(t, ana);
+    // The renewed token lasts an hour: whichever use comes second, while the renewal runs or after
+    // it, gets that one (one renewal), however the two are timed.
+    t.openai.settings.expiresIn = 3600;
     const both = await Promise.all([
       t.rt.call<{ token: string }>("peek.token", { actor: lead(ana) }),
       t.rt.call<{ token: string }>("peek.token", { actor: ana }),

@@ -11,6 +11,11 @@
  * computer starts (a cloud computer's wake): the list is what was running
  * when it stopped. One that ends otherwise (stopped by whose it is, or on its
  * own) leaves the list.
+ *
+ * A job runs with the environment variables it's given (`env`: its space's,
+ * and its caller's) over the computer's own; a kept job's are kept with it
+ * (the list is readable only by the computer's user), so it starts again
+ * with them.
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -28,7 +33,7 @@ import type {
 import { fail } from "./answer.ts";
 import { portsOf } from "./ports.ts";
 import { checkScope, type Spaces } from "./spaces.ts";
-import { childEnv, exitCode, OWN, signalGroup } from "./processes.ts";
+import { childEnv, exitCode, givenEnv, OWN, signalGroup } from "./processes.ts";
 import { commandArgs, newlines, type Shell } from "./shell.ts";
 
 const KEPT = 256 * 1024;
@@ -36,7 +41,14 @@ const KEPT = 256 * 1024;
 const FINISHED = 100;
 
 /** A job the computer keeps running, as its list has it. */
-export type KeptJob = { folder: string; who: string; name: string; command: string; port?: number };
+export type KeptJob = {
+  folder: string;
+  who: string;
+  name: string;
+  command: string;
+  port?: number;
+  env?: Record<string, string>;
+};
 
 type Entry = {
   job: Job;
@@ -64,6 +76,15 @@ export type JobsOptions = {
 const isPort = (value: unknown): value is number =>
   Number.isInteger(value) && (value as number) > 0 && (value as number) < 65536;
 
+/** A kept job's environment variables, as its list has them (names to text), if any. */
+function envOf(env: unknown): Record<string, string> | undefined {
+  if (!env || typeof env !== "object" || Array.isArray(env)) return undefined;
+  const entries = Object.entries(env).filter((e): e is [string, string] =>
+    typeof e[1] === "string"
+  );
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
 /** The list of kept jobs at `path`, as far as it's readable: none when it isn't there. */
 async function readKept(path: string): Promise<KeptJob[]> {
   let list: unknown;
@@ -83,6 +104,7 @@ async function readKept(path: string): Promise<KeptJob[]> {
         name: kept.name,
         command: kept.command,
         ...(isPort(kept.port) ? { port: kept.port } : {}),
+        ...(envOf(kept.env) ? { env: envOf(kept.env) } : {}),
       }]
       : []
   );
@@ -166,11 +188,12 @@ export function createJobs(spaces: Spaces, shell: Shell, options: JobsOptions = 
     if (typeof input.command !== "string" || !input.command.trim()) fail("command is required");
     if (input.port !== undefined && !isPort(input.port)) fail("port must be from 1 to 65535");
     if (input.keep !== undefined && typeof input.keep !== "boolean") fail("keep is true or false");
+    const env = givenEnv(input.env);
     const cwd = await spaces.folder(scope);
     const id = `job-${randomBytes(6).toString("hex")}`;
     const child = spawn(shell.path, commandArgs(shell, input.command), {
       cwd,
-      env: childEnv(),
+      env: childEnv(env),
       stdio: ["ignore", "pipe", "pipe"],
       // Its own process group (see processes.ts), so stopping it reaches everything it starts.
       ...OWN,
@@ -238,6 +261,7 @@ export function createJobs(spaces: Spaces, shell: Shell, options: JobsOptions = 
         name: entry.job.name,
         command: input.command,
         ...(input.port !== undefined ? { port: input.port } : {}),
+        ...(env && Object.keys(env).length ? { env } : {}),
       };
       keeping.add(entry.kept);
       await save();

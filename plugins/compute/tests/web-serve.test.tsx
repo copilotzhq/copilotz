@@ -29,6 +29,7 @@ import { AddChoices, AddDialog } from "../computers/views/web/add.tsx";
 import { Desks } from "../computers/views/web/desks.tsx";
 import { jobActionsOf, kindsOf } from "../computers/views/web/kinds.ts";
 import { JobServe, Previews, type Served } from "../computers/views/web/serve.tsx";
+import { stepView } from "../computers/views/web/step.tsx";
 import { test } from "../../../testing/mod.ts";
 
 /** A View's context over fixed reads, by `<collection>.<query>`. */
@@ -345,4 +346,28 @@ test("publishing a job, and a space's apps, live", () => {
   assertEquals(appsWeb.resources?.spaceTabs, {
     apps: { title: "Apps", view: "app.space", icon: "globe", order: 35 },
   });
+});
+
+test("a tool step says the computer it ran on, where the space has several; a computer that can't be used says why", () => {
+  const terminal = (input: Record<string, unknown>, output: unknown) =>
+    text(draw(stepView({
+      name: "terminal",
+      input,
+      output: JSON.stringify(output),
+    } as never, ctxOf({}))));
+  const done = { state: "idle", commandId: "c1", stdout: "ok\n", stderr: "", exitCode: 0 };
+  assertStringIncludes(terminal({ stdin: "ls", computer: "builder" }, done), "builder");
+  assertStringIncludes(terminal({ stdin: "ls" }, { ...done, computer: "laptop" }), "laptop");
+  assert(
+    !draw(stepView({
+      name: "terminal",
+      input: { stdin: "ls" },
+      output: JSON.stringify(done),
+    } as never, ctxOf({}))).includes(`class="step-on"`),
+    "one computer: nothing said",
+  );
+  assertStringIncludes(
+    terminal({ stdin: "ls", computer: "desktop" }, "desktop is offline: ana can start it again."),
+    "no computer",
+  );
 });

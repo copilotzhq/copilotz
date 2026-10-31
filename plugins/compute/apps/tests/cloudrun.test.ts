@@ -13,6 +13,7 @@ import {
 } from "@std/assert";
 import { serve, test } from "../../../../testing/mod.ts";
 import { cloudRun, cloudRunHost } from "../adapters/cloudrun.ts";
+import { DOCKERFILE, FRONT } from "../adapters/front.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { streamOf, tgz } from "./tgz.ts";
 
@@ -172,7 +173,7 @@ const joined = (parts: Uint8Array[]) => {
   return out;
 };
 
-test("Cloud Run builds a folder without a Dockerfile with buildpacks, uploaded in chunks", async () => {
+test("Cloud Run builds a folder without a Dockerfile as an image made for it, its job behind a front, uploaded in chunks", async () => {
   const g = await google();
   try {
     // Random bytes don't compress: several chunks of 256 bytes.
@@ -212,32 +213,38 @@ test("Cloud Run builds a folder without a Dockerfile with buildpacks, uploaded i
     assertEquals(chunks.map((c) => c.headers.get("content-range")), ranges);
     assertEquals(joined(g.uploaded), archive);
 
-    // The build: from that source, with buildpacks, its command the entrypoint.
+    // The build: from that source, an image made for it: its job's command behind a front.
     const [create] = g.cloudbuild.seen;
     assertEquals([create.method, create.path], ["POST", "/v1/projects/p/builds"]);
     const body = JSON.parse(create.body);
     const stamp = object.slice("src/shop/".length, -".tgz".length);
     const image = `us-central1-docker.pkg.dev/p/cz-apps/cz-app-shop:${stamp}`;
     assertEquals(body.source, { storageSource: { bucket: "p-cz-apps", object } });
-    assertEquals(body.steps, [{
-      name: "gcr.io/k8s-skaffold/pack",
-      entrypoint: "pack",
-      args: [
-        "build",
-        image,
-        "--builder",
-        "gcr.io/buildpacks/builder:google-22",
-        "--path",
-        ".",
-        "--publish",
-        "--env",
-        "GOOGLE_ENTRYPOINT=npm start",
-      ],
-    }]);
+    const docker = "gcr.io/cloud-builders/docker";
+    const [made, ...rest] = body.steps;
+    assertEquals([made.name, made.entrypoint, made.args[0]], [docker, "sh", "-c"]);
+    // What the first step writes, each from base64 (nothing to quote): the Dockerfile, the front,
+    // the job's command and its port.
+    const written = Object.fromEntries(
+      [...made.args[1].matchAll(/echo (\S+) \| base64 -d > \.cz\/(\S+)/g)].map((
+        [, data, file],
+      ) => [file, new TextDecoder().decode(Uint8Array.from(atob(data), (c) => c.charCodeAt(0)))]),
+    );
+    assertEquals(written, {
+      Dockerfile: DOCKERFILE,
+      "front.mjs": FRONT,
+      command: "npm start",
+    });
+    assertStringIncludes(made.args[1], "echo 3000 > .cz/port");
+    assertEquals(rest, [
+      { name: docker, args: ["build", "-f", ".cz/Dockerfile", "-t", image, "."] },
+      { name: docker, args: ["push", image] },
+    ]);
     // Polled until it ended: 90 s are 2 minutes, as Cloud Build bills them.
     assertEquals(g.polls(), 2);
     assertEquals(g.cloudbuild.seen[1].path, "/v1/projects/p/builds/b1");
-    assertEquals(built, { image, minutes: 2 });
+    // It serves on its front's port.
+    assertEquals(built, { image, minutes: 2, port: 8080 });
   } finally {
     await g.close();
   }
@@ -247,11 +254,13 @@ test("Cloud Run builds a folder with a Dockerfile with it, then pushes; a failed
   const g = await google();
   try {
     const archive = await tgz({ "Dockerfile": "FROM node:24\n", "index.js": "" });
-    const { image } = await hostFor(g.urls).build({
+    const { image, port } = await hostFor(g.urls).build({
       app: "api",
       archive: streamOf(archive),
       port: 8080,
     });
+    // Its own Dockerfile serves the port it says.
+    assertEquals(port, 8080);
     const body = JSON.parse(g.cloudbuild.seen[0].body);
     assertEquals(body.steps, [
       { name: "gcr.io/cloud-builders/docker", args: ["build", "-t", image, "."] },
@@ -275,7 +284,12 @@ test("Cloud Run builds a folder with a Dockerfile with it, then pushes; a failed
     assertStringIncludes(String(error), "can't be read");
     const archive = await tgz({ "index.js": "" });
     const failed = await assertRejects(() =>
-      hostFor(failing.urls).build({ app: "api", archive: streamOf(archive), port: 8080 })
+      hostFor(failing.urls).build({
+        app: "api",
+        archive: streamOf(archive),
+        command: "node index.js",
+        port: 8080,
+      })
     ) as Error & { minutes: number };
     assertStringIncludes(failed.message, "The build failure: step 0 failed");
     assertStringIncludes(failed.message, "https://console.cloud.google.com/build/b1");

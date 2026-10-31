@@ -34,6 +34,7 @@ import {
   type Standing,
 } from "../../../../interfaces/web/contract.ts";
 import type { Member, Reached } from "../../contract.ts";
+import { nameOf } from "../../shared/names.ts";
 import { ORG } from "../../shared/reach.ts";
 import { STYLE } from "./style.ts";
 import { addressesOf, EMAIL, listed } from "./who.ts";
@@ -47,7 +48,7 @@ type Invite = { id: string; email: string; role: string; at: string };
 
 type Org = { id: string; name: string; kind: string };
 
-export const orgMembersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
+export const orgMembersView = (_item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
   const style = <style href="spaces-web" precedence="copilotz">{STYLE}</style>;
   // The org's memberships, as the rules let the person read them: what's followed.
   const members = ctx.db.collection<Member>("member").find({ space: ORG }).value;
@@ -223,8 +224,8 @@ function People(
   );
 }
 
-/** What someone's called where they show: their name, else their email, else their id. */
-const nameOf = (p: Person) => p.name || p.email || p.person;
+/** What someone's called where they show: their name, else their email (never a sign-in's id). */
+const named = (p: Person) => p.name || p.email || nameOf(p.person);
 
 function Row(
   { person: p, mine, standing, lastOwner, call, remove, changed }: {
@@ -245,7 +246,7 @@ function Row(
   const changes = manage && (owner || p.role !== "owner") && !lastOwner;
   const removes = manage && (owner || p.role !== "owner") && !lastOwner && !mine;
   const roles = ORG_ROLES.filter((r) => owner || r.value !== "owner");
-  const name = nameOf(p);
+  const name = named(p);
   const setRole = async (role: string) => {
     setBusy(true);
     setError(undefined);
@@ -267,7 +268,7 @@ function Row(
           {mine ? <Badge tone="primary">You</Badge> : null}
         </p>
         <p className="space-row-what">
-          {error ?? (p.email && p.email !== name ? p.email : p.name ? p.person : "")}
+          {error ?? (p.email && p.email !== name ? p.email : "")}
         </p>
       </div>
       <div className="space-row-end">
@@ -488,7 +489,7 @@ function RemoveDialog(
   }, [person]);
   // Who can take their spaces: anyone who stays, but guests.
   const heirs = people.filter((p) => p.person !== person?.person && p.role !== "guest");
-  const name = person ? nameOf(person) : "";
+  const name = person ? named(person) : "";
   const go = async () => {
     if (!person) return;
     setBusy(true);
@@ -547,7 +548,7 @@ function RemoveDialog(
               {!me || !people.some((p) => p.person === me) ? <option value="">You</option> : null}
               {heirs.map((p) => (
                 <option key={p.person} value={p.person}>
-                  {p.person === me ? `You (${nameOf(p)})` : nameOf(p)}
+                  {p.person === me ? `You (${named(p)})` : named(p)}
                 </option>
               ))}
             </Select>

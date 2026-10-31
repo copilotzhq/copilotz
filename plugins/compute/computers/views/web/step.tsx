@@ -473,13 +473,26 @@ const VIEWS: Record<string, (props: { call: ShownCall; done: Outcome }) => React
   browser: Browser,
 };
 
+/** Which computer it ran on, where the space has several: the one named, or the one that answered. */
+const ranOn = (call: ShownCall, done: Outcome) =>
+  str(call.input?.computer) ||
+  (done.kind === "done" && record(done.value) ? str(done.value.computer) : "");
+
 export const stepView = (call: ShownCall, ctx: ViewContext<ReactNode>): ReactNode => {
   const View = VIEWS[call.name];
   if (!View) return null;
   const done = ctx.hints.running === true ? { kind: "running" as const } : outcome(call);
+  const on = ranOn(call, done);
   return (
     <div className="step-computer" data-tool={call.name}>
       <style href="computers-web" precedence="copilotz">{STYLE}</style>
+      {on
+        ? (
+          <p className="step-on" title="The computer it ran on">
+            <Icon name="computer" size={12} /> {on}
+          </p>
+        )
+        : null}
       <View call={call} done={done} />
     </div>
   );

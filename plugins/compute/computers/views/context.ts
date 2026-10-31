@@ -1,16 +1,22 @@
 /**
  * What an agent with computer tools knows each turn (the `computer`
- * context): that it works on this space's computer (whose it is), not a
- * machine of its own; whether that's online, and where its folder here is;
- * what waits for a yes, from whom, and where they answer.
+ * context): that it works on this space's computers (whose they are), not a
+ * machine of its own; where there are several, each (whose, a cloud computer
+ * or someone's own machine, how it is now, its system, what it asks first)
+ * and which is the default, as its tools take `computer` to use another;
+ * where its folder is; what waits for a yes, from whom, and where they
+ * answer; and the space's environment its shell and jobs have, by name.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import { agentsShown, type Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
+import type { EnvVar } from "../collections/env-var.ts";
 import { OS_NAMES } from "../program/release.ts";
 import { tools } from "../resources/tools.ts";
 import { personOf } from "../shared/person.ts";
 import { settingsOf } from "../shared/settings.ts";
+import { stateOf } from "../shared/where.ts";
+import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
 
 const ASKED = { terminal: "run commands", jobs: "start jobs", writes: "write or edit files" };
 
@@ -21,6 +27,37 @@ const shellOf = (path: string) =>
     : /powershell(\.exe)?$/i.test(path)
     ? "Windows PowerShell 5.1: write PowerShell"
     : "bash";
+
+type Info = { os?: string; root?: string; windows?: string; shell?: string };
+
+/** One of several computers, in a line: what it is, how it is, what it asks first. */
+function lineOf(
+  desk: Desk,
+  person: string,
+  asked: string[],
+  shown: (id: string) => string,
+): string {
+  const info = desk.info as Info | undefined;
+  const whose = desk.owner === person ? `${shown(person)}'s own` : `${shown(desk.owner)}'s`;
+  const kind = desk.status?.kind === "cloud" ? "a cloud computer" : "a machine";
+  const system = info?.os
+    ? `, ${OS_NAMES[info.os] ?? info.os}${info.shell ? ` (${shellOf(info.shell)})` : ""}`
+    : "";
+  const state = stateOf(desk);
+  const how = state === "online"
+    ? "online"
+    : state === "asleep"
+    ? "asleep: using it wakes it, in a few seconds"
+    : state === "waking"
+    ? "waking"
+    : `offline until ${shown(desk.owner)} starts it again`;
+  const answerer = desk.answers === "owner" ? desk.owner : person;
+  const asks = asked.length
+    ? `${shown(answerer)} says yes before you ${asked.join(", ")}`
+    : "nothing needs a yes";
+  return `- ${desk.name ?? desk.computer}${desk.default ? " (the default)" : ""}: ${kind}, ` +
+    `${whose}${system}; ${how}; ${asks}.`;
+}
 
 export const contextViews = {
   "context:computer": {
@@ -35,29 +72,55 @@ export const contextViews = {
       });
       if (desks.status !== "ready") return undefined;
       const here = [...desks.value].sort((a, b) => Number(!!b.default) - Number(!!a.default));
+      const askedOn = (d: Desk) => (d.approve ?? settingsOf(ctx).approve).map((w) => ASKED[w]);
+      // People by name.
+      const names = namesIn(ctx, [person, ...here.map((d) => d.owner)]);
+      const shown = (id: string) => nameOf(id, names);
+      if (here.length > 1) {
+        const asking = here.some((d) => askedOn(d).length);
+        return [
+          `This space has ${here.length} computers, not machines of yours. Your computer tools ` +
+          "use the default unless you name another: each takes `computer` (its name). Choose " +
+          "by what the work needs, or as your person asks:",
+          ...here.map((d) => lineOf(d, person, askedOn(d), shown)),
+          "On each, your terminal, jobs and files are in its folder for this space, and your " +
+          "browser and web searches run there too (the browser hidden, unless you show its " +
+          "window on its owner's screen for them to watch or step in). A job runs on the " +
+          "computer that started it: give that one to its logs, to stop it, or to preview it.",
+          ...(asking
+            ? [
+              "Where a yes is needed, the tool asks, and you wait. They see your request where " +
+              "they talk with you and answer there (on the web, a card in the conversation; in " +
+              "the terminal, a line above where they type, answered with /approve). Reading " +
+              "files, listing and searching need no yes.",
+            ]
+            : []),
+        ].join("\n");
+      }
       const desk = here.find((d) => d.online);
       if (!desk) {
         // Where something wakes computers (cloud computers), using one that's asleep wakes it.
         if (here.length && (ctx.resources.computerWake as { wake?: string } | undefined)?.wake) {
           return `This space's computer, ${here[0].name ?? "theirs"}, is offline or asleep. ` +
             "If the app hosts it (a cloud computer), your computer tools wake it: the first " +
-            `call waits a few seconds. If not, they won't work until ${here[0].owner} starts ` +
-            "it again.";
+            `call waits a few seconds. If not, they won't work until ${
+              shown(here[0].owner)
+            } starts it again.`;
         }
         return here.length
           ? `This space's computer, ${here[0].name ?? "theirs"}, is offline, so your computer ` +
-            `tools won't work until ${here[0].owner} starts it again (on it: deno task computer).`
+            `tools won't work until ${
+              shown(here[0].owner)
+            } starts it again (on it: deno task computer).`
           : "This space has no computer, so your computer tools won't work until someone " +
             "connects one, or adds one of theirs (in the terminal: /computer connect or " +
             "/computer share; on the web: the space's Computer tab).";
       }
-      const owned = desk.owner === person ? `${person}'s own` : `${desk.owner}'s`;
-      const info = desk.info as
-        | { os?: string; root?: string; windows?: string; shell?: string }
-        | undefined;
+      const owned = desk.owner === person ? `${shown(person)}'s own` : `${shown(desk.owner)}'s`;
+      const info = desk.info as Info | undefined;
       const sep = info?.os === "win32" ? "\\" : "/";
-      const asked = (desk.approve ?? settingsOf(ctx).approve).map((work) => ASKED[work]);
-      const answerer = desk.answers === "owner" ? desk.owner : person;
+      const asked = askedOn(desk);
+      const answerer = shown(desk.answers === "owner" ? desk.owner : person);
       return [
         `You work on this space's computer, ${desk.name ?? "theirs"} (${owned}${
           info?.os ? `, ${OS_NAMES[info.os] ?? info.os}` : ""
@@ -79,7 +142,28 @@ export const contextViews = {
             `answered with /approve). Reading files, listing and searching need no yes.`,
           ]
           : []),
+        ...environment(ctx, thread.in),
       ].join("\n");
     },
   },
 };
+
+/**
+ * The space's environment its computers get, by name (never a value): what
+ * the agent's shell and jobs already have.
+ */
+function environment(ctx: ViewContext, space: string): string[] {
+  const vars = ctx.db.collection<EnvVar>("envVar").find({ space, app: { $exists: false } }, {
+    sort: { name: 1 },
+  });
+  if (vars.status !== "ready") return [];
+  const names = vars.value.filter((v) => v.computers).map((v) =>
+    v.secret ? `${v.name} (a secret)` : v.name
+  );
+  return names.length
+    ? [
+      `Your shell and jobs here have this space's environment: ${names.join(", ")}. Use them ` +
+      "by name ($NAME); never print or repeat a secret's value.",
+    ]
+    : [];
+}

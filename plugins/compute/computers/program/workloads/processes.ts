@@ -12,6 +12,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import process from "node:process";
+import { fail } from "./answer.ts";
 
 /** Whether this is Windows. */
 export const WINDOWS = process.platform === "win32";
@@ -21,13 +22,35 @@ export const OWN: { detached?: boolean; windowsHide?: boolean } = WINDOWS
   ? { windowsHide: true }
   : { detached: true };
 
-/** The environment children inherit: the person's, without `COPILOTZ_*`. */
-export function childEnv(): Record<string, string> {
+/** What an environment variable may be named, for the work that says one. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * The environment variables work says (`env`), checked: an object of names
+ * to text, nothing else. Undefined when it says none.
+ */
+export function givenEnv(env: unknown): Record<string, string> | undefined {
+  if (env === undefined) return undefined;
+  if (!env || typeof env !== "object" || Array.isArray(env)) fail("env is an object of names");
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (!ENV_NAME.test(name)) fail(`"${name}" isn't an environment variable's name`);
+    if (typeof value !== "string") fail(`${name}'s value is text`);
+    out[name] = value;
+  }
+  return out;
+}
+
+/**
+ * The environment children inherit: the person's, without `COPILOTZ_*`, and
+ * what the work says over it (`given`: its space's, the caller's).
+ */
+export function childEnv(given?: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && !key.startsWith("COPILOTZ_")) env[key] = value;
   }
-  return env;
+  return given ? { ...env, ...given } : env;
 }
 
 /** Whether process `pid` is running. */

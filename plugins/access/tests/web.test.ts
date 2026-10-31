@@ -78,10 +78,22 @@ test("spaces as the sidebar lists them: Personal first, then by name", () => {
 });
 
 test("who a member is, members in a list's order, and the last manager", () => {
-  assertEquals(whoOf("person:ana"), { kind: "person", id: "ana" });
-  assertEquals(whoOf("agent:maya"), { kind: "agent", id: "maya" });
-  assertEquals(whoOf("space:launch:eu"), { kind: "space", id: "launch:eu" });
-  assertEquals(whoOf("bob"), { kind: "person", id: "bob" });
+  assertEquals(whoOf("person:ana"), { kind: "person", id: "ana", name: "ana" });
+  assertEquals(whoOf("agent:maya"), { kind: "agent", id: "maya", name: "maya" });
+  assertEquals(whoOf("space:launch:eu"), { kind: "space", id: "launch:eu", name: "launch:eu" });
+  assertEquals(whoOf("bob"), { kind: "person", id: "bob", name: "bob" });
+  // A person by their name; a sign-in's id never shows as one.
+  const names = { "google:1139": "Ana Lima" };
+  assertEquals(whoOf("person:google:1139", names), {
+    kind: "person",
+    id: "google:1139",
+    name: "Ana Lima",
+  });
+  assertEquals(whoOf("person:google:2240").name, "someone");
+  assertEquals(
+    spaceName({ name: "personal:x", kind: "personal", owner: "google:1139" }, "me", names),
+    "Ana Lima's Personal",
+  );
   const m = (member: string, role = "editor"): Member => ({
     _id: `s|${member}`,
     space: "s",

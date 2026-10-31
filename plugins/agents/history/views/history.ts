@@ -5,6 +5,7 @@ import type { Outline } from "../collections/outline.ts";
 import type { Summary } from "../collections/summary.ts";
 import { node, type Outlined } from "../shared/lines.ts";
 import { summaryView } from "./summary.ts";
+import { idsIn, namesIn, withNames } from "../../../access/spaces/contract.ts";
 
 const HEADER = "Earlier in this conversation, summarized, oldest first. Each line is id+n|text: " +
   "the n messages from id on. zoom(id, n) opens a line into the two it was made from; " +
@@ -35,8 +36,11 @@ export function historyView(
     return s ? [String(ctx.show("summary", s) ?? summaryView(s))] : [];
   });
   const since = state.value.since ?? "";
+  // Lines kept before names were known say people's ids: each by name now.
+  const outline = lines.join("\n");
+  const named = withNames(outline, namesIn(ctx, idsIn(outline)));
   return [
-    { role: "user", text: `${HEADER}\n<chat>\n${lines.join("\n")}\n</chat>` },
+    { role: "user", text: `${HEADER}\n<chat>\n${named}\n</chat>` },
     ...whole(messages.filter((m) => m.at >= since)),
   ];
 }

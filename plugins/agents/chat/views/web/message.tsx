@@ -13,7 +13,7 @@
  * queued.tsx). One that drew on spaces not everyone here sees says so
  * (`hints.sources`: their names), and someone who sees them can share it.
  * Agents show as they're named, with their emoji (`hints.who`, by id), and
- * an agent's name links to its page.
+ * an agent's name links to its page; people, by their names.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -35,6 +35,7 @@ import { Queued } from "./queued.tsx";
 import { Steps } from "./steps.tsx";
 import { toolView } from "./tool-view.ts";
 import { byAgent } from "./who.ts";
+import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
 
 export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode => {
   const me = ctx.viewer?.name;
@@ -42,9 +43,10 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
   const agent = !mine && byAgent(m);
   const aside = typeof ctx.hints.thread === "string" && m.thread !== ctx.hints.thread;
   const follows = ctx.hints.follows === true;
-  // Agents as they're named (by id), with their emoji; anyone else as themselves.
+  // Agents as they're named (by id), with their emoji; people by their names.
   const who = (ctx.hints.who ?? {}) as Record<string, Shown>;
-  const named = (id: string) => who[id]?.name ?? id;
+  const names = namesIn(ctx, [m.from, ...m.to].filter((id) => !who[id]));
+  const named = (id: string) => who[id]?.name ?? nameOf(id, names);
   const author = named(m.from);
   const queued = Array.isArray(ctx.hints.queued) ? ctx.hints.queued as string[] : [];
   const to = m.to.filter((name) => name !== m.from).map((name) =>

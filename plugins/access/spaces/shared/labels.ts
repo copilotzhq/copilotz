@@ -12,18 +12,43 @@
  */
 import type { Labels, ReadContext } from "../../../../runtime/mod.ts";
 import { reachOf } from "./reach.ts";
+import { nameOf, namesOf, PROFILE } from "./names.ts";
 import type { Shared } from "./rules.ts";
 
 const sharedOf = (ctx: ReadContext) => (ctx.resources.shared ?? {}) as Shared;
 
-const needsShare = (from: string[]) =>
+const needsShare = (from: string[], named: string[]) =>
   Object.assign(
     new Error(
-      `That would show what came from ${from.join(", ")} to people who can't see it: ` +
+      `That would show what came from ${named.join(", ")} to people who can't see it: ` +
         "a person who can has to share it.",
     ),
     { code: "needs_share", sources: from },
   );
+
+/** Spaces as people say them: by name; a Personal space as its owner's (by their name). */
+async function described(ids: string[], ctx: ReadContext): Promise<string[]> {
+  const spaces = await ctx.db.collection<
+    { _id: string; name: string; kind: string; owner?: string }
+  >(
+    "space",
+  ).find({ _id: { $in: ids } });
+  const owners = spaces.flatMap((s) => s.kind === "personal" && s.owner ? [s.owner] : []);
+  const names = owners.length
+    ? namesOf(
+      await ctx.db.collection<{ _id: string; name?: string }>(PROFILE).find({
+        _id: { $in: owners },
+      }),
+    )
+    : {};
+  return ids.map((id) => {
+    const space = spaces.find((s) => s._id === id);
+    if (!space) return "another space";
+    return space.kind === "personal" && space.owner
+      ? `${nameOf(space.owner, names)}'s Personal space`
+      : space.name;
+  });
+}
 
 /** What a space's members all see, besides it: the spaces it draws on. */
 const covered = async (space: string, ctx: ReadContext) =>
@@ -48,7 +73,9 @@ export const labels: Labels = {
     const foreign = read.filter((label) => !seen.has(label));
     if (!foreign.length) return doc;
     const elsewhere = typeof actor.at === "string" && actor.at !== space;
-    if (actor.kind === "agent" && (elsewhere || !shared!.labels)) throw needsShare(foreign);
+    if (actor.kind === "agent" && (elsewhere || !shared!.labels)) {
+      throw needsShare(foreign, await described(foreign, ctx));
+    }
     if (!shared!.labels) return doc;
     const sources = [...new Set([...(doc.sources as string[] ?? []), ...foreign])].sort();
     return { ...doc, sources };

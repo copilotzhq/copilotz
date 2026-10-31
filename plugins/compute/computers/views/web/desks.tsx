@@ -1,8 +1,9 @@
 /**
  * A space's computers (its desks), as its Computer tab lists them: each with
  * whether it's online (a cloud computer: its state, from its kind's View),
- * whose it is, and whether it's the one agents use (when there are
- * several), picked to work on below; its menu (make it the default, ask its
+ * whose it is, and whether it's the default (when there are several: agents
+ * use it unless they name another), picked to work on below; its menu (make
+ * it the default, ask its
  * owner first, open its page, move it to another space, through the command
  * palette's space picker; take it out of the space, which asks first). Then
  * adding one: where the app has kinds of computer that make one (a cloud
@@ -36,6 +37,7 @@ import type { Kind } from "./kinds.ts";
 import { ComputerMark } from "./mark.tsx";
 import { moveStep } from "./move.ts";
 import { folderPath, nameOf } from "./names.ts";
+import { nameOf as personName } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -56,7 +58,7 @@ export function ShareWarning(
 }
 
 export function Desks(
-  { space, desks, mine, chosen, choose, me, call, compact, kinds = [], kindOf = {} }: {
+  { space, desks, mine, chosen, choose, me, call, compact, kinds = [], kindOf = {}, names = {} }: {
     space: Reached;
     desks: Desk[];
     /** The person's computers. */
@@ -70,6 +72,8 @@ export function Desks(
     /** Kinds of computer beyond people's own machines, and the person's computers of one. */
     kinds?: Kind[];
     kindOf?: Record<string, Kind>;
+    /** People by name (`namesIn`): whose each is. */
+    names?: Record<string, string>;
   },
 ): ReactNode {
   const [adding, setAdding] = useState<AddStep>();
@@ -130,6 +134,7 @@ export function Desks(
                 chosen={d._id === chosen}
                 choose={() => choose(d._id)}
                 mine={d.owner === me}
+                owner={personName(d.owner, names)}
                 manage={manage}
                 act={act}
                 remove={() => setRemoving(d)}
@@ -190,7 +195,9 @@ export function Desks(
             </div>
           </div>
         )}
-      {shared && !compact && desks.length ? <Whose desks={desks} space={space} me={me} /> : null}
+      {shared && !compact && desks.length
+        ? <Whose desks={desks} space={space} me={me} names={names} />
+        : null}
       <AddDialog
         {...(adding ? { step: adding } : {})}
         go={setAdding}
@@ -223,7 +230,14 @@ export function Desks(
 }
 
 /** Whose machines these are, and what that means: yours run what others do here as you. */
-function Whose({ desks, space, me }: { desks: Desk[]; space: Reached; me?: string }): ReactNode {
+function Whose(
+  { desks, space, me, names }: {
+    desks: Desk[];
+    space: Reached;
+    me?: string;
+    names: Record<string, string>;
+  },
+): ReactNode {
   const yours = desks.filter((d) => d.owner === me);
   const theirs = desks.filter((d) => d.owner !== me);
   return (
@@ -242,11 +256,12 @@ function Whose({ desks, space, me }: { desks: Desk[]; space: Reached; me?: strin
           </p>
         )
         : null}
-      {[...new Set(theirs.map((d) => d.owner))].map((owner) => {
-        const shown = theirs.filter((d) => d.owner === owner);
+      {[...new Set(theirs.map((d) => d.owner))].map((id) => {
+        const shown = theirs.filter((d) => d.owner === id);
+        const owner = personName(id, names);
         const asks = shown.some((d) => d.answers === "owner");
         return (
-          <p key={owner} className="desks-note">
+          <p key={id} className="desks-note">
             <Icon name="computer" size={13} />
             <span>
               {shown.length === 1 ? `${nameOf(shown[0])} is ${owner}'s` : `These are ${owner}'s`}
@@ -263,13 +278,15 @@ function Whose({ desks, space, me }: { desks: Desk[]; space: Reached; me?: strin
 }
 
 function DeskCard(
-  { desk: d, space, several, chosen, choose, mine, manage, act, remove, move, kind }: {
+  { desk: d, space, several, chosen, choose, mine, owner, manage, act, remove, move, kind }: {
     desk: Desk;
     space: Reached;
     several: boolean;
     chosen: boolean;
     choose(): void;
     mine: boolean;
+    /** Whose it is, by name. */
+    owner: string;
     manage: boolean;
     act(action: string, input: unknown): Promise<void>;
     remove(): void;
@@ -284,7 +301,7 @@ function DeskCard(
   const items: (MenuItem | "separator")[] = [
     ...(several && !d.default && (mine || manage)
       ? [{
-        label: "Make it the one agents use",
+        label: "Make it the default",
         icon: "star" as const,
         onSelect: () => void act("computer.default", { desk: d._id }),
       }]
@@ -324,7 +341,7 @@ function DeskCard(
   ];
   const facts = (
     <span className="desk-meta">
-      <span>{mine ? "Yours" : `${d.owner}'s`}</span>
+      <span>{mine ? "Yours" : `${owner}'s`}</span>
       <span aria-hidden="true">·</span>
       {kind
         ? (
@@ -348,7 +365,7 @@ function DeskCard(
         ? (
           <>
             <span aria-hidden="true">·</span>
-            <span>Asks {mine ? "you" : d.owner} first</span>
+            <span>Asks {mine ? "you" : owner} first</span>
           </>
         )
         : null}
@@ -360,7 +377,13 @@ function DeskCard(
       <span className="desk-text">
         <span className="desk-name">
           <span className="desk-name-text">{name}</span>
-          {several && d.default ? <Badge tone="primary">Agents use it</Badge> : null}
+          {several && d.default
+            ? (
+              <span title="Agents use it unless they name another computer">
+                <Badge tone="primary">Default</Badge>
+              </span>
+            )
+            : null}
         </span>
         {facts}
       </span>

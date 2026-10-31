@@ -4,7 +4,7 @@
  * a machine of someone's (or a cloud computer: `computerKinds`) with a
  * folder for this space, and adding one (a cloud computer, connecting a
  * computer here, or putting one of yours here); then the one
- * picked (the one agents use, at first) to work on: its terminal, jobs and
+ * picked (the default, at first) to work on: its terminal, jobs and
  * files in this space's folder (agents' jobs by their names: chat's
  * `thread.agents`). A viewer sees them; those who may write here
  * work on them. In a side panel (`hints.mode: "panel"`), the same, compact,
@@ -31,6 +31,7 @@ import {
 import { type Named, namedOf } from "./names.ts";
 import { STYLE } from "./style.ts";
 import { Workspace } from "./workspace.tsx";
+import { nameOf as personName, namesIn } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -77,6 +78,12 @@ export const spaceComputersView = (
   }
   const space = spaces.find((s) => s._id === id);
   if (!space) return null;
+  // People by name: its members (who started jobs), whose its computers are.
+  const members = ctx.db.collection<{ member: string }>("member").find({ space: id }).value ?? [];
+  const names = namesIn(ctx, [
+    ...members.map((m) => m.member).filter((m) => m.startsWith("person:")),
+    ...desks.map((d) => d.owner),
+  ]);
   return (
     <>
       {style}
@@ -87,6 +94,7 @@ export const spaceComputersView = (
         mine={mine}
         me={ctx.viewer?.name}
         agents={namedOf(team?.agents)}
+        names={names}
         compact={compact}
         call={ctx.call}
         kinds={offered}
@@ -112,12 +120,13 @@ const machineOf = (desk: Desk, mine: Computer[]): Computer =>
   };
 
 function SpaceComputers(
-  { space, desks, mine, me, agents, compact, call, kinds, kindOf, previews, jobActions }: {
+  { space, desks, mine, me, agents, names, compact, call, kinds, kindOf, previews, jobActions }: {
     space: Reached;
     desks: Desk[];
     mine: Computer[];
     me?: string;
     agents: Record<string, Named>;
+    names: Record<string, string>;
     compact: boolean;
     call: Call;
     kinds: Kind[];
@@ -127,7 +136,7 @@ function SpaceComputers(
   },
 ): ReactNode {
   const [picked, setPicked] = useState<string>();
-  // The one picked while it's here; else the one agents use (the query lists it first).
+  // The one picked while it's here; else the default (the query lists it first).
   const desk = desks.find((d) => d._id === picked) ?? desks[0];
   const write = space.can.includes("write");
   return (
@@ -143,6 +152,7 @@ function SpaceComputers(
         compact={compact}
         kinds={kinds}
         kindOf={kindOf}
+        names={names}
       />
       {desk && write
         ? (
@@ -154,10 +164,11 @@ function SpaceComputers(
             here={space._id}
             me={me}
             agents={agents}
+            names={names}
             call={call}
             fixed
             compact={compact}
-            {...(desk.owner === me ? {} : { theirs: desk.owner })}
+            {...(desk.owner === me ? {} : { theirs: personName(desk.owner, names) })}
             {...(kindOf[desk.computer] ? { kind: kindOf[desk.computer] } : {})}
             previews={previews}
             jobActions={jobActions}

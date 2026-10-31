@@ -1,7 +1,8 @@
 /**
  * Apps' layout on the web, on the theme's variables: publishing a job (its
- * button in the job's row, its dialog, an app as it builds), and a space's
- * apps. Only layout: the pieces are the toolkit's.
+ * button in the job's row, its dialog, an app as it builds), a space's
+ * apps, an app's environment, and the apps under a space's. Only layout:
+ * the pieces are the toolkit's.
  */
 export const STYLE = `
 /* In a job's row */
@@ -90,6 +91,9 @@ export const STYLE = `
 .app-error { margin: 0 14px 10px 62px; color: var(--destructive-text); font-size: 13px; }
 .apps-dialog-text { margin: 0 0 12px; line-height: 1.55; }
 .apps-dialog-text code { font-size: .92em; }
+.app-env-count { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none;
+  color: var(--muted-foreground); font: inherit; cursor: pointer; }
+.app-env-count:hover { color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
 .apps-compact .app-row { grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; padding: 10px; }
 .apps-compact .app-icon { width: 30px; height: 30px; }
 .apps-compact .app-meta { display: none; }
@@ -98,5 +102,54 @@ export const STYLE = `
   .app-actions { grid-column: 2; }
   .app > .app-building, .app-problem, .app-error { margin-left: 14px; padding-left: 0; }
   .app-problem { padding-right: 14px; }
+}
+
+/* An app's environment */
+.app-env { display: grid; gap: 20px; }
+.app-env-section { display: grid; gap: 8px; }
+.app-env-section h3 { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0;
+  color: var(--muted-foreground); font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+.app-env-link { display: inline-flex; align-items: center; gap: 2px; color: var(--primary-text); font-size: 12.5px;
+  font-weight: 560; letter-spacing: 0; text-decoration: none; text-transform: none; }
+.app-env-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.app-env-rows, .app-env-inherited { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; }
+.app-env-row { display: grid; grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) auto auto; align-items: start;
+  gap: 8px; }
+.app-env-row > .copilotz-checkbox { align-self: center; font-size: 13px; white-space: nowrap; }
+.app-env-row > .copilotz-icon-button { align-self: center; }
+.app-env-name-input input, .app-env-value-input { font-family: var(--font-mono); font-size: 13px; }
+.app-env-value-input { min-height: 34px; padding-top: 6px; padding-bottom: 6px; }
+.app-env-problem { grid-column: 1 / -1; margin: -2px 2px 0; color: var(--destructive-text); font-size: 12.5px; }
+.app-env-row-shown, .app-env-inherited > li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  min-height: 36px; padding: 6px 12px; border-radius: var(--radius-lg); background: color-mix(in oklab, var(--muted) 55%, var(--popover)); }
+.app-env-name { font-size: 12.5px; font-weight: 650; color: var(--foreground); }
+.app-env-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--secondary-foreground); font-size: 12.5px; }
+.app-env-sealed { display: inline-flex; align-items: center; gap: 5px; color: var(--muted-foreground);
+  font: 12px var(--font-mono); letter-spacing: .04em; }
+.app-env-inherited > li[data-over] .app-env-value, .app-env-inherited > li[data-over] .app-env-sealed {
+  text-decoration: line-through; opacity: .6; }
+.app-env-none { margin: 0 2px; color: var(--muted-foreground); font-size: 13.5px; line-height: 1.5; }
+.app-env-add { justify-self: start; }
+.app-env-foot { flex: 1 1 200px; align-self: center; color: var(--muted-foreground); font-size: 12.5px; }
+@media (max-width: 560px) {
+  .app-env-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .app-env-row > .app-env-name-input, .app-env-row > .app-env-value-input { grid-column: 1 / -1; }
+}
+
+/* Under a space's environment: its apps */
+.env-apps { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.env-apps-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--radius-lg);
+  background: var(--success-soft); color: var(--success-text); }
+.env-apps[data-stale] { border-color: var(--warning-border); background: color-mix(in oklab, var(--warning-soft) 45%, var(--card)); }
+.env-apps[data-stale] .env-apps-icon { background: var(--warning-soft); color: var(--warning-text); }
+.env-apps-text { display: grid; gap: 2px; min-width: 0; }
+.env-apps-title { margin: 0; font-size: 14px; font-weight: 620; }
+.env-apps-note { margin: 0; color: var(--muted-foreground); font-size: 12.5px; line-height: 1.45; }
+.env-apps-names { color: var(--secondary-foreground); font-weight: 560; }
+.env-apps-failed { margin: 2px 0 0; color: var(--destructive-text); font-size: 12.5px; }
+@media (max-width: 560px) {
+  .env-apps { grid-template-columns: 34px minmax(0, 1fr); }
+  .env-apps > .copilotz-button { grid-column: 2; justify-self: start; }
 }
 `;

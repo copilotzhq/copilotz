@@ -14,6 +14,7 @@ import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
 import { installCommand } from "../program/release.ts";
 import { asker, asks } from "../shared/asks.ts";
+import { nameOf } from "../../../access/spaces/contract.ts";
 
 const ANSWERS: Record<string, string> = {
   once: "once",
@@ -31,12 +32,15 @@ type Listed = {
 };
 
 /** This space's computers (its default first), then yours that aren't in it: what numbers pick. */
-async function listed(term: Terminal): Promise<{ space?: string; all: Listed[] }> {
+async function listed(
+  term: Terminal,
+): Promise<{ space?: string; all: Listed[]; names: Record<string, string> }> {
   const space = (await term.state()).space;
   const here = space ? await term.runtime.query<Desk[]>("desk.here", { in: space }) : [];
   const mine = await term.runtime.query<Computer[]>("computer.mine", {});
   return {
     ...(space ? { space } : {}),
+    names: await namesOf(term, here.map((d) => d.owner)),
     all: [
       ...here.map((desk) => ({
         desk,
@@ -55,7 +59,13 @@ async function listed(term: Terminal): Promise<{ space?: string; all: Listed[] }
   };
 }
 
-const line = (l: Listed, i: number, me: string) => {
+/** People by name, as their spaces' profiles say. */
+const namesOf = (term: Terminal, ids: string[]) =>
+  ids.length
+    ? term.runtime.query<Record<string, string>>("profile.names", { ids: [...new Set(ids)] })
+    : Promise.resolve({});
+
+const line = (l: Listed, i: number, me: string, names: Record<string, string>) => {
   const info = l.computer.info as { os?: string } | undefined;
   return `${dim(`[${i + 1}]`)} ${l.computer.name ?? l.computer._id} ${
     l.computer.online ? "● online" : dim("offline")
@@ -63,8 +73,8 @@ const line = (l: Listed, i: number, me: string) => {
     dim(
       [
         info?.os,
-        l.computer.owner === me ? "yours" : `${l.computer.owner}'s`,
-        l.desk?.default ? "used here" : undefined,
+        l.computer.owner === me ? "yours" : `${nameOf(l.computer.owner, names)}'s`,
+        l.desk?.default ? "default" : undefined,
         l.desk ? undefined : "not in this space",
       ].filter(Boolean).map((part) => ` · ${part}`).join(""),
     )
@@ -75,14 +85,14 @@ export const commands: Commands = {
   "/computers": command({
     description: "This space's computers, where its agents work, and yours",
     async run(_, term) {
-      const { all } = await listed(term);
+      const { all, names } = await listed(term);
       if (!all.length) {
         return await term.print(
           dim("None yet; /computer connect connects this machine or another to this space."),
         );
       }
       await term.print(
-        all.map((l, i) => line(l, i, term.me)).join("\n") + "\n" +
+        all.map((l, i) => line(l, i, term.me, names)).join("\n") + "\n" +
           dim("/computer share <n> · unshare <n> · default <n> · rename <n> <name> · forget <n>"),
       );
     },
@@ -92,7 +102,7 @@ export const commands: Commands = {
     usage: "connect | share <n> | unshare <n> | default <n> | rename <n> <name> | forget <n>",
     async run(rest, term) {
       const [what, n, ...name] = rest.trim().split(/\s+/);
-      const { space, all } = await listed(term);
+      const { space, all, names } = await listed(term);
       if (what === "connect") {
         const { code, expires, url, folder, downloads } = await term.runtime.call<
           {
@@ -149,7 +159,7 @@ export const commands: Commands = {
         );
       }
       if (chosen.computer.owner !== term.me) {
-        return await term.print(dim(`${named} is ${chosen.computer.owner}'s.`));
+        return await term.print(dim(`${named} is ${nameOf(chosen.computer.owner, names)}'s.`));
       }
       if (what === "rename" && name.length) {
         await term.runtime.call("computer.rename", {
@@ -174,9 +184,10 @@ export const commands: Commands = {
     async run(_, term) {
       const waiting = await term.runtime.query<Approval[]>("approval.pending", {});
       if (!waiting.length) return await term.print(dim("Nothing waits on you."));
+      const names = await namesOf(term, waiting.flatMap((a) => a.for ? [a.for] : []));
       await term.print(
         waiting.map((a, i) =>
-          `${dim(`[${i + 1}]`)} ${asker(a, term.me)} wants to ${asks(a)}${
+          `${dim(`[${i + 1}]`)} ${asker(a, term.me, names)} wants to ${asks(a)}${
             a.name ? dim(` on ${a.name}`) : ""
           }`
         ).join("\n") +

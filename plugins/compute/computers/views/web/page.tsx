@@ -35,7 +35,7 @@ export type Space = { _id: string; name: string; kind: string };
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export function ComputerPage(
-  { computer, spaces, desks, here, me, agents, call, kind, previews, jobActions }: {
+  { computer, spaces, desks, here, me, agents, names, call, kind, previews, jobActions }: {
     computer: Computer;
     spaces: Space[];
     desks: Desk[];
@@ -43,6 +43,8 @@ export function ComputerPage(
     me?: string;
     /** Agents as they're named, for whose each job is. */
     agents?: Record<string, Named>;
+    /** People by name (`namesIn`): whose each is, who started each job. */
+    names?: Record<string, string>;
     call: Call;
     /** Its kind, a cloud computer's. */
     kind?: Kind;
@@ -113,6 +115,7 @@ export function ComputerPage(
         here={here}
         me={me}
         agents={agents}
+        names={names}
         call={call}
         {...(kind ? { kind, wake: true } : {})}
         {...(previews ? { previews } : {})}

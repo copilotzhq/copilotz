@@ -17,6 +17,7 @@ import { Pending } from "./pending.tsx";
 import { STYLE } from "./style.ts";
 import { type Kind, kindsOf } from "./tabs.ts";
 import { spaceName } from "./who.ts";
+import { namesIn } from "../../shared/names.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -39,6 +40,7 @@ export const invitingView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
   const space = spaces.find((s) => s._id === id);
   const personal = space?.kind === "personal";
   const kinds = kindsOf(ctx.resources.spaceInvite, personal);
+  const names = namesIn(ctx, invitations.map((i) => i.by));
   if (!space || !space.can.includes("manage") || !kinds.length) {
     return (
       <Notice tone="neutral" icon="lock">
@@ -58,19 +60,21 @@ export const invitingView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
         invitations={invitations}
         me={ctx.viewer?.name}
         call={ctx.call}
+        names={names}
       />
     </>
   );
 };
 
 function Inviting(
-  { space, kinds, first, invitations, me, call }: {
+  { space, kinds, first, invitations, me, call, names }: {
     space: Reached;
     kinds: Kind[];
     first?: string;
     invitations: Invitation[];
     me?: string;
     call: Call;
+    names: Record<string, string>;
   },
 ): ReactNode {
   const [kind, setKind] = useState(() => kinds.find((k) => k.key === first)?.key ?? kinds[0].key);
@@ -103,7 +107,7 @@ function Inviting(
           : (
             <div className="space-inviting-kind">
               <InviteForm space={space} call={call} autoFocus />
-              <Pending invitations={invitations} me={me} call={call} />
+              <Pending invitations={invitations} me={me} call={call} names={names} />
             </div>
           )}
       </div>

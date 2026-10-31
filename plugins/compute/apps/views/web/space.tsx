@@ -3,10 +3,11 @@
  * `{ _id }`, the space): what was published from its computers, live
  * (`app.here`): each app's address (open it, copy it), whether it's live,
  * building or failed (and why, with Try again), what it's built from, who
- * published it and when; publishing it again (`app.redeploy`), and taking
- * it down (`app.remove`, asked first: its publisher or the space's
- * managers). With none yet, how to publish one. In a side panel, the same,
- * compact.
+ * published it and when; publishing it again (`app.redeploy`), its
+ * environment (env.tsx: its own over the space's, `envVar`'s `apps` and
+ * `here`), and taking it down (`app.remove`, asked first: its publisher or
+ * the space's managers). With none yet, how to publish one. In a side
+ * panel, the same, compact.
  */
 import { type ReactNode, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -26,10 +27,13 @@ import {
   Spinner,
   Time,
 } from "../../../../../hosts/web/mod.ts";
+import type { EnvVar } from "../../../computers/contract.ts";
 import type { AppDoc } from "../../collections/app.ts";
 import { lookOf, shown } from "./apps.ts";
+import { AppEnv } from "./env.tsx";
 import { AppStatus } from "./publish.tsx";
 import { STYLE } from "./style.ts";
+import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 type Place = { _id: string; name: string; kind: string; can?: string[] };
@@ -41,6 +45,9 @@ export const appsSpaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode
   const places = ctx.db.collection("space").query<Place[]>("reached", {}).value;
   // Its computers, as they're named: what each app is built from.
   const desks = ctx.db.collection("desk").query<Machine[]>("here", { in: space }).value;
+  // The space's environment, and each app's own over it.
+  const env = ctx.db.collection("envVar").query<EnvVar[]>("here", { in: space }).value;
+  const owns = ctx.db.collection("envVar").query<EnvVar[]>("apps", { in: space }).value;
   const compact = ctx.hints.mode === "panel";
   const style = <style href="apps-web" precedence="copilotz">{STYLE}</style>;
   if (!apps || !places) {
@@ -61,24 +68,32 @@ export const appsSpaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode
         can={place?.can ?? []}
         apps={apps}
         machines={desks ?? []}
+        {...(env ? { env } : {})}
+        {...(owns ? { owns } : {})}
         me={ctx.viewer?.name}
         compact={compact}
         call={ctx.call}
+        names={namesIn(ctx, apps.map((a) => a.by))}
       />
     </>
   );
 };
 
 function Apps(
-  { space, where, can, apps, machines, me, compact, call }: {
+  { space, where, can, apps, machines, env, owns, me, compact, call, names }: {
     space: string;
     where: string;
     can: string[];
     apps: AppDoc[];
     machines: Machine[];
+    /** The space's environment, and its apps' own, once they're read. */
+    env?: EnvVar[];
+    owns?: EnvVar[];
     me?: string;
     compact: boolean;
     call: Call;
+    /** Who published them, by name. */
+    names: Record<string, string>;
   },
 ): ReactNode {
   const [removing, setRemoving] = useState<AppDoc>();
@@ -124,7 +139,11 @@ function Apps(
             key={app._id}
             app={app}
             machine={machines.find((m) => m.computer === app.source.computer)}
+            where={where}
+            {...(env ? { env } : {})}
+            {...(owns ? { own: owns.filter((v) => v.app === app._id) } : {})}
             me={me}
+            names={names}
             write={can.includes("write")}
             manage={can.includes("manage")}
             remove={() => setRemoving(app)}
@@ -138,10 +157,14 @@ function Apps(
 }
 
 function AppRow(
-  { app, machine, me, write, manage, remove, call }: {
+  { app, machine, where, env, own, me, names, write, manage, remove, call }: {
     app: AppDoc;
     machine?: Machine;
+    where: string;
+    env?: EnvVar[];
+    own?: EnvVar[];
     me?: string;
+    names: Record<string, string>;
     write: boolean;
     manage: boolean;
     remove(): void;
@@ -151,6 +174,7 @@ function AppRow(
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [details, setDetails] = useState(false);
+  const [environment, setEnvironment] = useState(false);
   const look = lookOf(app);
   const redeploy = async () => {
     setBusy(true);
@@ -167,6 +191,7 @@ function AppRow(
     ...(write && app.status !== "building"
       ? [{ label: "Publish again", icon: "refresh" as const, onSelect: () => void redeploy() }]
       : []),
+    { label: "Environment", icon: "lock" as const, onSelect: () => setEnvironment(true) },
     ...(app.error
       ? [{ label: "Why it failed", icon: "info" as const, onSelect: () => setDetails(true) }]
       : []),
@@ -213,8 +238,23 @@ function AppRow(
               From {from} · port <code>{app.source.port}</code>
             </span>
             <span>
-              {app.by === me ? "by you" : `by ${app.by}`} · <Time at={app.live ?? app.at} />
+              {app.by === me ? "by you" : `by ${nameOf(app.by, names)}`} ·{" "}
+              <Time at={app.live ?? app.at} />
             </span>
+            {own?.length
+              ? (
+                <button
+                  type="button"
+                  className="app-env-count"
+                  onClick={() => setEnvironment(true)}
+                >
+                  <Icon name="lock" size={11} />
+                  {own.length === 1
+                    ? "1 variable of its own"
+                    : `${own.length} variables of its own`}
+                </button>
+              )
+              : null}
           </p>
         </div>
         <div className="app-actions">
@@ -269,6 +309,16 @@ function AppRow(
       >
         <AppStatus app={app} call={call} />
       </Dialog>
+      <AppEnv
+        app={app}
+        where={where}
+        {...(env ? { space: env } : {})}
+        {...(own ? { own } : {})}
+        editable={app.by === me || manage}
+        open={environment}
+        onClose={() => setEnvironment(false)}
+        call={call}
+      />
     </Card>
   );
 }

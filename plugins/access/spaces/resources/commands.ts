@@ -7,9 +7,16 @@
  * Agents (with the chat plugin): `/agents` lists who works here, `/agent
  * Maya: what it does` makes one here, `/default maya` has it answer new chats.
  */
-import { command, type Commands, dim } from "../../../../hosts/terminal/mod.ts";
+import { command, type Commands, dim, type Terminal } from "../../../../hosts/terminal/mod.ts";
 import type { Invitation } from "../collections/invitation.ts";
 import type { Request } from "../collections/request.ts";
+import { nameOf } from "../shared/names.ts";
+
+/** People by name, as their profiles say. */
+const namesOf = (term: Terminal, ids: string[]) =>
+  ids.length
+    ? term.runtime.query<Record<string, string>>("profile.names", { ids })
+    : Promise.resolve({} as Record<string, string>);
 
 type Space = { _id: string; name: string; kind: string };
 type Here = {
@@ -59,10 +66,11 @@ export const commands: Commands = {
       const open = await term.runtime.query<Request[]>("request.open", {});
       await term.set({ listed: open.map((r) => r._id) });
       if (!open.length) return await term.print(dim("No requests."));
+      const names = await namesOf(term, open.flatMap((r) => [r.member, ...(r.by ? [r.by] : [])]));
       await term.print(
         open.map((r, i) =>
-          `${dim(`[${i + 1}]`)} ${r.member.split(":")[1]} → ${r.space} ${
-            dim(`(${r.by ?? "themselves"}: ${r.reason ?? "no reason given"})`)
+          `${dim(`[${i + 1}]`)} ${nameOf(r.member, names)} → ${r.space} ${
+            dim(`(${r.by ? nameOf(r.by, names) : "themselves"}: ${r.reason ?? "no reason given"})`)
           }`
         ).join("\n") + `\n${dim("/grant <n> [role] lets them in; /deny <n> doesn't.")}`,
       );
@@ -79,7 +87,7 @@ export const commands: Commands = {
         id,
         ...(role ? { role } : {}),
       });
-      await term.print(dim(`${granted.split(":")[1]} is in.`));
+      await term.print(dim(`${nameOf(granted, await namesOf(term, [granted]))} is in.`));
     },
   }),
   "/deny": command({
@@ -119,7 +127,10 @@ export const commands: Commands = {
       const { space } = await term.state();
       const who = rest.trim();
       if (!who || !space) return await term.print(dim("Usage: /remove agent:<name>, in a space."));
-      const [kind, id] = who.includes(":") ? who.split(":", 2) : ["person", who];
+      // A person's own id may have a colon too (`google:1139…`).
+      const [kind, id] = who.startsWith("agent:") || who.startsWith("person:")
+        ? [who.slice(0, who.indexOf(":")), who.slice(who.indexOf(":") + 1)]
+        : ["person", who];
       await term.runtime.call("member.remove", { space, member: { kind, id } });
       await term.print(dim(`${id} is out of this space.`));
     },
@@ -186,9 +197,10 @@ export const commands: Commands = {
       const mine = await term.runtime.query<Invitation[]>("invitation.mine", {});
       await term.set({ listed: mine.map((i) => i._id) });
       if (!mine.length) return await term.print(dim("No invitations."));
+      const names = await namesOf(term, mine.map((i) => i.by));
       await term.print(
         mine.map((i, n) =>
-          `${dim(`[${n + 1}]`)} ${i.name} ${dim(`(${i.role}, from ${i.by.split(":")[1]})`)}`
+          `${dim(`[${n + 1}]`)} ${i.name} ${dim(`(${i.role}, from ${nameOf(i.by, names)})`)}`
         ).join("\n") + `\n${dim("/accept <n> joins; /decline <n> doesn't.")}`,
       );
     },

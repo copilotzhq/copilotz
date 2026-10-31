@@ -9,12 +9,20 @@ import {
   type ToolContext,
 } from "../../chat/contract.ts";
 import type { Memory } from "../collections/memory.ts";
+import { idsIn, nameOf, namesFor, namesIn, withNames } from "../../../access/spaces/contract.ts";
 
 /**
  * Who is in a conversation, for whom memories are read; `in`, the space it's
  * in, keeps what comes up by itself to what was learned there.
  */
-export type Scope = { agent: string; thread: string; people: string[]; in?: string };
+export type Scope = {
+  agent: string;
+  thread: string;
+  people: string[];
+  in?: string;
+  /** The people's names, by id (as agents read and write them). */
+  names?: Record<string, string>;
+};
 
 export const LIMIT = { core: 40, relevant: 5, recall: 8 };
 
@@ -61,13 +69,13 @@ export const readable = (scope: Scope) => ({
   },
 });
 
-/** Who a memory is about, as a reader would say it. */
-export function subject(about: string, agent?: string) {
+/** Who a memory is about, as a reader would say it (a person by name). */
+export function subject(about: string, agent?: string, names: Record<string, string> = {}) {
   if (about === "everyone") return "everyone";
   const [kind, name] = [about.slice(0, about.indexOf(":")), about.slice(about.indexOf(":") + 1)];
   if (kind === "agent") return name === agent ? "you" : name;
   if (kind === "thread") return "this conversation";
-  return name;
+  return nameOf(name, names);
 }
 
 /** People in a thread (who wrote or was addressed, and isn't an agent), from its latest messages. */
@@ -88,10 +96,12 @@ export function scopeOf(
   if (recent.status !== "ready") return undefined;
   const agents = agentsShown(ctx, recent.value.flatMap((m) => [m.from, ...m.to]));
   if (!agents) return undefined;
+  const people = peopleIn(recent.value, agents);
   return {
     agent,
     thread: thread._id,
-    people: peopleIn(recent.value, agents),
+    people,
+    names: namesIn(ctx, people),
     // What comes up by itself was learned here; looking elsewhere is asking (and labels it).
     ...(thread.in ? { in: thread.in } : {}),
     // What was last said to (or around) this agent, not its own words.
@@ -99,10 +109,21 @@ export function scopeOf(
   };
 }
 
-export const line = (m: Memory, agent?: string) =>
-  `- ${m.text}${
-    m.about.startsWith("person:") ? "" : ` (about ${subject(m.about, agent)})`
+export const line = (m: Memory, agent?: string, names: Record<string, string> = {}) =>
+  `- ${withNames(m.text, names)}${
+    m.about.startsWith("person:") ? "" : ` (about ${subject(m.about, agent, names)})`
   } [${m._id}]`;
+
+/**
+ * The people a memory may show: whom it's about, who wrote it, and whom its
+ * words name by id (one written before names were known), to name them.
+ */
+export const peopleOf = (m: Pick<Memory, "about" | "text" | "by"> & { was?: string }) => [
+  ...(m.about.startsWith("person:") ? [m.about.slice("person:".length)] : []),
+  ...(m.by && m.by !== "memory" ? [m.by] : []),
+  ...idsIn(m.text),
+  ...(m.was ? idsIn(m.was) : []),
+];
 
 /** Who `about` names, from what an agent said: a person here, "me", "thread", "everyone". */
 export function aboutOf(given: unknown, scope: Scope, ctx: ToolContext, trigger?: Message | null) {
@@ -110,6 +131,11 @@ export function aboutOf(given: unknown, scope: Scope, ctx: ToolContext, trigger?
   if (name === "me") return `agent:${ctx.agent}`;
   if (name === "thread") return `thread:${ctx.thread}`;
   if (name === "everyone") return "everyone";
+  // A person here by the name agents know them by.
+  const known = scope.people.find((p) =>
+    p === name || (scope.names?.[p] ?? "").toLowerCase() === name.toLowerCase()
+  );
+  if (known) return `person:${known}`;
   if (name.includes(":")) return name;
   if (name) return `person:${name}`;
   // By default, the person it's talking with.
@@ -127,10 +153,12 @@ export async function scopeFor(ctx: ToolContext): Promise<Scope> {
     ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread }),
   ]);
   const agents = await agentsNamed(ctx, recent.flatMap((m) => [m.from, ...m.to]));
+  const people = peopleIn(recent, agents);
   return {
     agent: ctx.agent,
     thread: ctx.thread,
-    people: peopleIn(recent, agents),
+    people,
+    names: await namesFor(ctx, people),
     ...(thread?.in ? { in: thread.in } : {}),
   };
 }

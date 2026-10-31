@@ -27,6 +27,10 @@
  *   a collection with `labels: true`), and only those who reach them all
  *   read it until someone who does `share`s it. An agent writing it
  *   anywhere else is refused (`needs_share`).
+ * - **People by name:** each person's profile (collection `profile`: their
+ *   name and picture, as sign-in verified them, kept as it changes), which
+ *   anyone in the org reads; wherever an id would show, the name does
+ *   (`nameOf`, `withNames` in the contract).
  * - **Where you are:** with the chat plugin, agents are told the space a
  *   conversation is in, its members and what it draws on (`where` context),
  *   and each turn, the other spaces they can read for their person
@@ -76,6 +80,9 @@ import { tools } from "./resources/tools.ts";
 import { space } from "./collections/space.ts";
 import { rules } from "./shared/rules.ts";
 import { agentGoneProcessor } from "./processors/agent-gone.ts";
+import { profileProcessor } from "./processors/profile.ts";
+import { profile } from "./collections/profile.ts";
+import { PROFILE } from "./shared/names.ts";
 import { elsewhereView } from "./views/elsewhere.ts";
 import { whereView } from "./views/where.ts";
 
@@ -85,6 +92,17 @@ export type { Member } from "./collections/member.ts";
 export type { Reached, Space } from "./collections/space.ts";
 export type { SpaceInvite, SpaceSidebar, SpaceTab } from "./contract.ts";
 export type { Request } from "./collections/request.ts";
+// People by name, wherever an id would show (see shared/names.ts).
+export {
+  idsIn,
+  nameOf,
+  namesFor,
+  namesIn,
+  namesOf,
+  type NamesResource,
+  PROFILE,
+  withNames,
+} from "./shared/names.ts";
 export {
   memberKey,
   ORG,
@@ -102,7 +120,7 @@ export const spaces: Plugin = definePlugin({
   name: "spaces",
   // Invitations match people by the email they signed in with.
   requires: ["identity"],
-  collections: { space, member, request, invitation },
+  collections: { space, member, request, invitation, profile },
   actions: {
     "space.create": createAction,
     "space.personal": personalAction,
@@ -144,8 +162,10 @@ export const spaces: Plugin = definePlugin({
     tools,
     // Who works in a space, for chat: its agents.
     roster: { spaces: { action: "space.roster" } },
+    // Where people's names are, for whatever shows a person (pages, agents' prompts).
+    names: { collection: PROFILE },
   },
-  processors: { "spaces.agentGone": agentGoneProcessor },
+  processors: { "spaces.agentGone": agentGoneProcessor, "spaces.profile": profileProcessor },
 });
 
 export default spaces;

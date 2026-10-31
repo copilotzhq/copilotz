@@ -25,7 +25,8 @@ import type { Member, Reached, Request } from "../../contract.ts";
 import { SpaceHeader } from "./header.tsx";
 import { STYLE } from "./style.ts";
 import { chosen, spacePath, tabsOf } from "./tabs.ts";
-import { spaceName } from "./who.ts";
+import { ownersOf, spaceName } from "./who.ts";
+import { namesIn } from "../../shared/names.ts";
 
 export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
   const id = item._id ?? "";
@@ -69,6 +70,11 @@ export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
   const tab = chosen(tabs, query.tab);
   const manage = space.can.includes("manage");
   const waiting = manage ? (requests ?? []).length : 0;
+  // Its people by name, and whose it is (someone else's Personal).
+  const names = namesIn(ctx, [
+    ...members.map((m) => m.member),
+    ...ownersOf([space], ctx.viewer?.name),
+  ]);
   return (
     <SpaceHeader
       space={space}
@@ -76,15 +82,16 @@ export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
       manage={manage}
       me={ctx.viewer?.name}
       call={ctx.call}
+      names={names}
     >
       {style}
-      <Title text={spaceName(space, ctx.viewer?.name)} />
+      <Title text={spaceName(space, ctx.viewer?.name, names)} />
       {space.archived ? <Archived space={space} manage={manage} call={ctx.call} /> : null}
       {tabs.length
         ? (
           <>
             <Tabs
-              label={`${spaceName(space, ctx.viewer?.name)}'s tabs`}
+              label={`${spaceName(space, ctx.viewer?.name, names)}'s tabs`}
               variant="line"
               className="space-tabs"
               value={tab?.key ?? ""}

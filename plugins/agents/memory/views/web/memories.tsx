@@ -13,8 +13,10 @@ import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { Page, Skeleton, Title } from "../../../../../hosts/web/mod.ts";
 import { agentsShown } from "../../../chat/contract.ts";
 import type { Memory } from "../../collections/memory.ts";
+import { peopleOf } from "../../shared/scope.ts";
 import { MemoryList, type Named } from "./list.tsx";
 import { STYLE } from "./style.ts";
+import { namesIn } from "../../../../access/spaces/contract.ts";
 
 type Space = { _id: string; name: string; kind: string };
 
@@ -35,6 +37,11 @@ export const memoriesView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
     ...(m.by !== "memory" ? [m.by] : []),
   ]);
   const met = memories ? agentsShown(ctx, ids) : {};
+  // People by name: whom they're about, who wrote them, and whom older ones name by id.
+  const names = namesIn(
+    ctx,
+    (memories ?? []).flatMap(peopleOf),
+  );
   const agents: Record<string, Named> = Object.fromEntries(
     Object.entries(met ?? {}).map(([id, a]) => [id, { name: a.name || id, icon: a.icon }]),
   );
@@ -50,6 +57,7 @@ export const memoriesView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
         memories={memories}
         spaces={named}
         agents={agents}
+        names={names}
         me={ctx.viewer?.name}
         fresh={space ? `/?in=${encodeURIComponent(space)}` : "/"}
         compact={mode === "panel"}

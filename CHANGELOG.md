@@ -1,3 +1,81 @@
+## 1.0.0-rc.7 — 2026-10-30
+
+- **Agents choose among a space's computers.** Every computer tool (the terminal, jobs, files, the
+  browser, web search, `preview`, and the apps' `publish`) takes `computer`: one of the space's
+  computers by its name (any case, or part of it when only one has it) or its id; the space's
+  default otherwise. An unknown or ambiguous name, or a computer that's offline, is told with the
+  ones to choose from; naming a cloud computer that's asleep wakes it. Each turn, an agent's context
+  lists the space's computers (whose, a cloud computer or a machine, how it is now, its system, what
+  it asks first, the default marked) when there are several; one stays as it was. In a space with
+  several, an answer says the computer it came from (`computer`), and the web's tool steps show it.
+- **A job is found on whichever computer runs it:** `computer.preview` and `computer.scope` (and so
+  `app.publish` and the agents' `preview` and `publish`) take a job without a computer and look for
+  it on the space's computers that are online, the default first. `computer.preview`,
+  `computer.scope`, `computer.allowed` and `app.publish` take `computer` (a name or an id).
+- **The default computer** is named so on the web (a "Default" badge, "Make it the default") and in
+  `/computers`.
+- **Apps: what serves a preview serves the app.** A folder with no Dockerfile is built into an image
+  made for it (no more buildpacks, which found nothing to build in a plain folder): the computer's
+  system (Debian 12) with Node.js 24 and Python, the folder as it was sent, its dependencies
+  installed again (npm, pnpm, yarn; `requirements.txt`) and its `build` script run, then its job's
+  command behind a front that passes the platform's port on to the job's port on localhost,
+  WebSockets included. A job bound to `127.0.0.1` (as previews allow) is served all the same; the
+  job is given its own port as `PORT`. `AppHost.build` answers the port its image serves on. Without
+  a Dockerfile, an app is published from its job (its command).
+- **A space's environment: variables and secrets.** Each space has its own (collection `envVar`,
+  `{ name, value, secret, computers, by, at }`, names like `API_URL`). Its managers change it
+  (`env.set` `{ in, name, value?, secret?, computers? }`, `env.unset`); its members read names and
+  the values of variables. A secret is sealed at rest (AES-GCM, with the new `computers: { key }`
+  resource, else kept as given) and never read back by anyone: people see only that it's there (and
+  a long one's last 4 characters), agents only its name. Every job and shell started in the space,
+  from the web or by an agent, gets the variables with `computers` (true unless said), under its own
+  `env` (`jobs.start` and `terminal` take `env`; the `start_job` tool too); a job kept running keeps
+  its env on the computer's disk and starts again with it. A secret given to computers can be read
+  by any process there, and the web says so where it's given. Agents' computer context lists the
+  names they have (`$NAME`), never a value.
+- **Apps get the space's environment.** An app is deployed with all of its space's variables and
+  secrets, and its own over them (`envVar` with `app`; queries `here` and `apps`), passed to Cloud
+  Run as its env. `app.configure` `{ app, env? }` (its publisher, or the space's managers) changes
+  its own and deploys its image again with them, without a build (the port the image serves is kept
+  as `served`). A change to the space's environment doesn't redeploy anything: it reaches an app
+  when it's published again, or at once with "Apply to apps". Taking an app down removes its own
+  environment (`env.unset` `{ in, app }`).
+- **Web: Environment.** A space's Environment tab lists its variables (a secret masked, whether its
+  computers get it, who set it and when); its managers add, change and remove them, with the honest
+  limit shown beside a secret given to computers. Under it, its live apps and "Apply to apps"
+  (through computers' new `envActions` resource). An app's row opens its environment: the space's
+  shown, its own edited, saved with a redeploy. The job start form takes its own environment
+  (`NAME=value` lines). The toolkit's `Time` also draws on a server.
+- **People by name, everywhere:** agents' prompts, notes, the terminal and the web show a person's
+  name where they showed their id (`google:1139…`). The spaces plugin keeps each person's profile
+  (collection `profile`: their name as sign-in verified it, else their email's name, and picture;
+  never their email), from the identity plugin's `person` as it changes, at `org.join`, and on
+  `space.personal` (each page load), so people known before it get one the next time they come.
+  Anyone in the org reads names through the query `profile.names` `{ ids }` (a browser reads
+  profiles only through it); two people of one name stay apart ("Ana (2762)"). The new `names`
+  resource says where names are (`{ collection: "profile" }`), and the spaces contract (and
+  `copilotz/plugins/access`) gives `nameOf`, `namesOf`, `namesIn` (Views), `namesFor` (Actions,
+  Processors, tools), `withNames`, `idsIn` and `PROFILE`. A sign-in's id is never shown as a name:
+  without a profile, it's "someone".
+- **Agents' prompts:** others' messages read "Ana Lima: …", "People here:" names people, a
+  conversation's space is "Ana Lima's Personal space", the computers context says whose computer it
+  is and who says yes by name, as do waiting asks, routines (who made one, whom it runs as), history
+  summaries and zoom, and recall. Memory extraction writes names, and `remember`'s `about` takes a
+  person by name.
+- **Notes and summaries written before names:** a memory or a summary that says someone's id
+  (`google:1139…'s cloud computer…`) reads with their name wherever it shows (prompts, recall, the
+  Memories page, the terminal), substituted when it's shown: nothing stored is changed, and nothing
+  needs migrating.
+- **The web:** the Members tab (people, requests to join, invitations), the space header's faces,
+  other people's Personal spaces ("Ana Lima's Personal"), invitations ("Ana Lima invited you"), chat
+  messages and the conversation's people, memories (grouped, by whom, search), routines, skills
+  ("Made by"), apps ("by"), computers (whose each is, who asks first, who started a job or made a
+  preview), usage and the org's people show names. **The terminal:** `/computers`, `/approvals`,
+  `/requests`, `/grant`, `/invitations`, memories and messages, likewise; `/remove` takes a person's
+  id with a colon (`google:1139…`).
+- **Share refusals** name the spaces a write would reveal ("Ana Lima's Personal space"), not their
+  ids. An org invitation made by a space invitation says who invited them.
+
 ## 1.0.0-rc.6 — 2026-10-30
 
 - **Computer program:** an app on another machine over plain `ws:` (an `http://` address that isn't

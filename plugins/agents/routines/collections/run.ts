@@ -19,6 +19,8 @@ const runSchema = {
     thread: { type: "string" },
     message: { type: "string" },
     error: { type: "string" },
+    /** Something it went well despite: its chat was gone, so it started a new one. */
+    note: { type: "string" },
     /** Who asked for it now ("Run now"), a person's id; none when time did. */
     by: { type: "string" },
   },

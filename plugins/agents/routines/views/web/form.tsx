@@ -2,13 +2,15 @@
  * The form a routine is made and changed with: what it sends (as the
  * person, each time), to which of the agents answering in the space, when
  * (the schedule picker, with what it says and its next runs), where it
- * posts (a new chat each run, or always the same one), and what it's
- * called (from what it sends, unless they say). Save sends only what
- * changed; what's wrong is said where it is.
+ * posts (always the same chat, or a new one each run: what those are called,
+ * and how many that'd be, when it's a lot), and what it's called (from what
+ * it sends, unless they say). Save sends only what changed; what's wrong is
+ * said where it is.
  */
 import { type ReactNode, useId, useState } from "react";
 import { Avatar, Button, Input, message, Textarea } from "../../../../../hosts/web/mod.ts";
-import { nameFrom } from "../../shared/routines.ts";
+import { chatTitle, defaultChatName, nameFrom } from "../../shared/routines.ts";
+import { oftenPerDay, type Schedule } from "../../shared/schedule.ts";
 import { scheduleOf, SchedulePicker } from "./picker.tsx";
 import { type Draft, givenOf, type Picking } from "./routines.ts";
 
@@ -46,6 +48,10 @@ export function RoutineForm(
     ...("problem" in schedule ? { schedule: schedule.problem } : {}),
   };
   const shown = (field: string) => tried ? problems[field] : undefined;
+  const valid = "problem" in schedule ? undefined : schedule as Schedule;
+  // What a new chat each run comes to.
+  const often = draft.post === "new" && valid ? oftenPerDay(valid) : undefined;
+  const named = draft.name.trim() || nameFrom(draft.text) || "Routine";
   const scheduleChanged = JSON.stringify(givenOf(picking)) !== JSON.stringify(givenOf(when));
   const changed: Record<string, unknown> = {
     ...(draft.name.trim() !== was.name.trim() && draft.name.trim()
@@ -54,6 +60,9 @@ export function RoutineForm(
     ...(draft.text.trim() !== was.text.trim() ? { text: draft.text.trim() } : {}),
     ...(draft.agent !== was.agent ? { agent: draft.agent } : {}),
     ...(draft.post !== was.post ? { post: draft.post } : {}),
+    ...((draft.chatName ?? "").trim() !== (was.chatName ?? "").trim()
+      ? { chatName: (draft.chatName ?? "").trim() }
+      : {}),
     ...(scheduleChanged ? { schedule: givenOf(picking) } : {}),
   };
 
@@ -73,6 +82,9 @@ export function RoutineForm(
           agent: draft.agent,
           schedule: givenOf(picking),
           post: draft.post,
+          ...(draft.post === "new" && draft.chatName?.trim()
+            ? { chatName: draft.chatName.trim() }
+            : {}),
         });
       done(made.routine);
     } catch (e) {
@@ -146,8 +158,12 @@ export function RoutineForm(
         <span className="routine-label" id={`${id}-post`}>Where it posts</span>
         <div className="routine-posts" role="radiogroup" aria-labelledby={`${id}-post`}>
           {([
-            ["new", "A new chat each time", "Each run starts a chat named after the routine."],
             ["same", "Always the same chat", "Runs add to one chat, so it reads like a log."],
+            [
+              "new",
+              "A new chat each run",
+              "Each run is its own chat, to open and follow up later.",
+            ],
           ] as const).map(([value, title, note]) => (
             <label key={value} className="routine-post">
               <input
@@ -165,7 +181,38 @@ export function RoutineForm(
             </label>
           ))}
         </div>
+        {often
+          ? (
+            <p className="routine-warning" role="status">
+              That's about {often}{" "}
+              new chats a day. For something this frequent, the same chat usually reads better.
+            </p>
+          )
+          : null}
       </div>
+
+      {draft.post === "new"
+        ? (
+          <div className="routine-field">
+            <label className="routine-label" htmlFor={`${id}-chat`}>What each chat is called</label>
+            <Input
+              id={`${id}-chat`}
+              value={draft.chatName ?? ""}
+              maxLength={120}
+              disabled={busy}
+              placeholder={valid ? defaultChatName(valid) : "{name} · {date}"}
+              aria-describedby={`${id}-chat-note`}
+              onChange={(event) => set({ chatName: event.target.value })}
+            />
+            <p id={`${id}-chat-note`} className="routine-note">
+              {"{date}, {time}, {run} and {name} are filled in each run"}
+              {valid
+                ? <>: “{chatTitle({ name: named, chatName: draft.chatName, schedule: valid })}”.</>
+                : "."} The agent can rename it for what it found.
+            </p>
+          </div>
+        )
+        : null}
 
       <div className="routine-field">
         <label className="routine-label" htmlFor={`${id}-name`}>Name</label>
@@ -177,7 +224,7 @@ export function RoutineForm(
           placeholder={draft.text.trim() ? nameFrom(draft.text) : "Morning briefing"}
           onChange={(event) => set({ name: event.target.value })}
         />
-        <p className="routine-note">How it's listed, and what its chats are called.</p>
+        <p className="routine-note">How it's listed, and how its messages are marked.</p>
       </div>
 
       <div className="routine-form-end">

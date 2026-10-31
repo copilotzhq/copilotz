@@ -46,6 +46,7 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .msg-writing { color: var(--primary-text); font-size: 12px; font-weight: 560; }
 .msg-writing::after { content: "…"; }
 .msg-body { overflow-wrap: anywhere; }
+.msg-via { margin-bottom: 5px; }
 .msg-bubble { display: inline-block; max-width: min(100%, 640px); padding: 9px 15px; background: var(--muted);
   border-radius: var(--radius-xs) var(--radius-2xl) var(--radius-2xl) var(--radius-2xl);
   white-space: pre-wrap; line-height: 1.5; }

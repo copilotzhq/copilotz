@@ -62,6 +62,22 @@ const messageSchema = {
     sources: { type: "array", items: { type: "string" } },
     /** Its turn was stopped (`chat.stop`): what it had written so far. */
     stopped: { type: "boolean" },
+    /**
+     * How a person's message came, when not typed there: sent for them by what
+     * they set up (a routine). It's still theirs; people and agents are told.
+     */
+    via: {
+      type: "object",
+      properties: {
+        /** What sent it: `routine`. */
+        kind: { type: "string" },
+        /** Which: "Morning news". */
+        name: { type: "string" },
+        /** Where to see it, on this app. */
+        path: { type: "string" },
+      },
+      required: ["kind", "name"],
+    },
     /** A step's model state (its thinking), sent back to that model while its turn goes on. */
     state: { type: "object" },
     /**

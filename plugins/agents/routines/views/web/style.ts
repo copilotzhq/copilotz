@@ -72,6 +72,7 @@ a.routines-row-last:hover { color: var(--foreground); text-decoration: underline
 .routine-form :is(input, textarea, select, button) { scroll-margin-bottom: 84px; }
 .routine-field { display: grid; gap: 7px; min-width: 0; }
 .routine-label { font-size: 13.5px; font-weight: 600; }
+.routine-warning { margin: 2px 0 0; color: var(--warning-text); font-size: 12.5px; line-height: 1.45; }
 .routine-note { margin: 0; color: var(--muted-foreground); font-size: 12.5px; line-height: 1.45; }
 .routine-error { margin: 0; color: var(--destructive-text); font-size: 12.5px; line-height: 1.45; }
 .routine-agents { display: flex; flex-wrap: wrap; gap: 6px; }

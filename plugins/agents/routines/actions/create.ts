@@ -1,14 +1,17 @@
 /**
  * `routine.create`: a routine in a space, made by someone who may write
  * there (an editor): what to send, to which of the agents answering there,
- * when, and where it posts. It runs as them from then on: its timer is set
- * in the same commit.
+ * when, and where it posts: always the same chat (`thread`, one in that space
+ * they can read; else its first run's), or a new one each run (`post: "new"`).
+ * It runs as them from then on: its timer is set in the same commit.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
+import type { Thread } from "../../chat/contract.ts";
 import {
   answersIn,
   fields,
   forbidden,
+  invalid,
   nameFrom,
   personOf,
   timerOf,
@@ -23,6 +26,8 @@ export const createAction = defineAction({
     properties: {
       in: { type: "string", minLength: 1 },
       ...fields,
+      /** The chat it posts in, with `post: "same"`: a chat in this space (where it's made from). */
+      thread: { type: "string", minLength: 1 },
       /** Made paused: it waits until it's resumed. */
       paused: { type: "boolean" },
     },
@@ -42,6 +47,15 @@ export const createAction = defineAction({
     if (!can) throw forbidden("Only those who may write in this space make routines there.");
     const schedule = normalize(input.schedule as Given);
     await answersIn(ctx, input.in, input.agent);
+    const post = input.post ?? "same";
+    // Read as the caller: a chat they can't see is as good as not there.
+    const chat = post === "same" && input.thread
+      ? await ctx.db.collection<Thread>("thread").findOne({ _id: input.thread })
+      : null;
+    if (post === "same" && input.thread && chat?.in !== input.in) {
+      throw invalid("That chat isn't in this space, or isn't yours to see: pick one that is.");
+    }
+    const chatName = input.chatName?.trim();
     const id = crypto.randomUUID();
     const at = new Date().toISOString();
     const when = timing(schedule);
@@ -53,7 +67,9 @@ export const createAction = defineAction({
         text: input.text.trim(),
         agent: input.agent,
         schedule,
-        post: input.post ?? "new",
+        post,
+        ...(chat ? { thread: chat._id } : {}),
+        ...(chatName ? { chatName } : {}),
         by,
         at,
         ...(input.paused ? { paused: at } : when),

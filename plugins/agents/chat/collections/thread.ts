@@ -10,6 +10,8 @@ const threadSchema = {
   type: "object",
   properties: {
     title: { type: "string" },
+    /** An agent working here may name it, as what it found (a routine's run, its own chat). */
+    renamable: { type: "boolean" },
     /** Who a message nobody is mentioned in goes to. */
     agents: names,
     /** Where it came from: a thread, and the message there it started at. */

@@ -57,9 +57,11 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
       ? ""
       : ` → ${m.to.map((who) => nameOf(who, names)).join(", ")}`;
     const { text: notes, files } = attached(m, ctx);
+    // Sent for them, not typed now: they may not be there to answer.
+    const via = m.via ? ` (via ${m.via.kind} "${m.via.name}")` : "";
     return [{
       role: "user",
-      text: `${nameOf(m.from, names)}${to}: ${m.text ?? ""}${notes}`,
+      text: `${nameOf(m.from, names)}${via}${to}: ${m.text ?? ""}${notes}`,
       ...(files.length ? { files } : {}),
     }];
   }

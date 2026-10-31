@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.8 — 2026-10-31
 
 - **Agents' prompts only grow, so the prompt cache keeps them whole.** A turn context (the
   computers', the spaces elsewhere, memories, an app's) is sent after the conversation only when it
@@ -28,7 +28,9 @@
 - Measured on Compass's own plugins with real OpenAI calls (gpt-6.1-sol; a 12-turn conversation,
   then a 4-turn one with tool steps, the same agent in the same space): the agent's calls read 95.5%
   of their input from the prompt cache, up from 59.3%, and every model call in the run (memory
-  extraction included) 92.4%, up from 44.4%, with no summarizer call (101 before).
+  extraction included) 92.4%, up from 44.4%, with no summarizer call (101 before). A 24-turn
+  conversation that outgrew its tail: 92.4% for the agent, its one miss when the outline arrives
+  (the prompt is new from there).
 
 ## 1.0.0-rc.7 — 2026-10-30
 

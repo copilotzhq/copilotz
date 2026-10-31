@@ -10,6 +10,7 @@
 import { type Context, defineAction } from "../../../../runtime/mod.ts";
 import { ORG, ORG_ROLES, type OrgRole, orgRoleOf } from "../shared/reach.ts";
 import { ROLES } from "../shared/reach.ts";
+import { keepProfileOf } from "../shared/profile.ts";
 
 const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
 const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
@@ -58,6 +59,8 @@ export const joinOrgAction = defineAction({
   run: async (ctx, input) => {
     const held = await orgRoleOf({ kind: "person", id: input.person }, ctx.as());
     // The role given is for joining: coming back keeps the role they have (`org.role` changes it).
+    // How they show, kept (people from before profiles, too).
+    await keepProfileOf(ctx, input.person);
     if (held) return { role: held };
     await join(ctx, input.person, input.role ?? "member");
     return { role: input.role ?? "member" };
@@ -76,7 +79,7 @@ export const orgRoleAction = defineAction({
   run: async (ctx, input) => {
     const mine = await runs(ctx);
     const theirs = await orgRoleOf({ kind: "person", id: input.person }, ctx.as());
-    if (!theirs) throw invalid(`${input.person} isn't in this org.`);
+    if (!theirs) throw invalid("They aren't in this org.");
     if ((input.role === "owner" || theirs === "owner") && mine !== "owner" && mine !== "staff") {
       throw forbidden("Only owners make or unmake owners.");
     }
@@ -100,7 +103,7 @@ export const removeFromOrgAction = defineAction({
   run: async (ctx, input) => {
     const mine = await runs(ctx);
     const theirs = await orgRoleOf({ kind: "person", id: input.person }, ctx.as());
-    if (!theirs) throw invalid(`${input.person} isn't in this org.`);
+    if (!theirs) throw invalid("They aren't in this org.");
     if (theirs === "owner" && mine !== "owner" && mine !== "staff") {
       throw forbidden("Only owners take an owner out.");
     }

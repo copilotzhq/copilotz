@@ -48,7 +48,8 @@ export const buildAction = defineAction({
       const deployed = await appHost.deploy({
         app: app.label,
         image: built.image,
-        port: app.source.port,
+        // The port its image serves on: its front's, for one made for it.
+        port: built.port ?? app.source.port,
       });
       const now = await apps.findOne({ _id: app._id });
       if (now?.status !== "building") {

@@ -30,15 +30,16 @@ export type App = {
 export type AppHost = {
   /**
    * Builds an image from a folder (`archive`: a gzipped tar): its Dockerfile,
-   * else buildpacks, `command` and `port` as what runs it. Answers the image
-   * and the build's minutes (metered).
+   * else one made for it running `command`, which serves `port`. Answers the
+   * image, the build's minutes (metered), and the port the image serves on
+   * when it isn't `port` (one made for it: its front's).
    */
   build(input: {
     app: string;
     archive: ReadableStream<Uint8Array>;
     command?: string;
     port: number;
-  }): Promise<{ image: string; minutes: number }>;
+  }): Promise<{ image: string; minutes: number; port?: number }>;
   /** Runs it (a new revision), scaling to zero; answers its service, URL and revision. */
   deploy(input: {
     app: string;

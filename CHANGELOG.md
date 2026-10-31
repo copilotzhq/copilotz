@@ -1,3 +1,14 @@
+## 1.0.0-rc.7 — 2026-10-30
+
+- **Apps: what serves a preview serves the app.** A folder with no Dockerfile is built into an image
+  made for it (no more buildpacks, which found nothing to build in a plain folder): the computer's
+  system (Debian 12) with Node.js 24 and Python, the folder as it was sent, its dependencies
+  installed again (npm, pnpm, yarn; `requirements.txt`) and its `build` script run, then its job's
+  command behind a front that passes the platform's port on to the job's port on localhost,
+  WebSockets included. A job bound to `127.0.0.1` (as previews allow) is served all the same; the
+  job is given its own port as `PORT`. `AppHost.build` answers the port its image serves on. Without
+  a Dockerfile, an app is published from its job (its command).
+
 ## 1.0.0-rc.6 — 2026-10-30
 
 - **Computer program:** an app on another machine over plain `ws:` (an `http://` address that isn't

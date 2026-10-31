@@ -7,9 +7,11 @@
  *   in chunks, since its size isn't known until it's sent: memory stays at
  *   one chunk), as `src/<app>/<time>.tgz`, while it's read for a top-level
  *   Dockerfile. A Cloud Build from that source builds the image with it
- *   (`docker build`, then a push), else with Google's buildpacks (`pack
- *   build --publish`, `GOOGLE_ENTRYPOINT` the command when there is one),
- *   into `<region>-docker.pkg.dev/<project>/<repository>/<app>:<time>`. It's
+ *   (`docker build`, then a push), else with one made for it (front.ts: the
+ *   computer's system, the folder's dependencies installed again and its
+ *   build script run, then its job's command behind a front on the
+ *   platform's port, so what served a preview serves the app), into
+ *   `<region>-docker.pkg.dev/<project>/<repository>/<app>:<time>`. It's
  *   polled until it ends; its minutes come from its start and finish,
  *   rounded up as Cloud Build bills them (a failed build's too, on the
  *   error it throws: `minutes`).
@@ -32,6 +34,7 @@
  */
 import type { AppHost } from "../contract.ts";
 import type { Settings } from "../shared/settings.ts";
+import { DOCKERFILE, FRONT, frontPort } from "./front.ts";
 import { hasDockerfile } from "./tar.ts";
 
 export type CloudRunOptions = {
@@ -57,8 +60,6 @@ export type CloudRunOptions = {
   /** Each instance's CPU and memory, as Cloud Run takes them ("1", "512Mi"). */
   cpu?: string;
   memory?: string;
-  /** The buildpacks builder (`gcr.io/buildpacks/builder:google-22`). */
-  builder?: string;
   /** How long a build may take, in seconds (1200). */
   buildTimeout?: number;
   /** Between polls of a build or an operation (3 s). */
@@ -91,6 +92,13 @@ type Service = { name: string; uri?: string; latestReadyRevision?: string };
 type TimeSeries = { points?: { value?: { doubleValue?: number; int64Value?: string } }[] };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Text as base64, for a build step to write it out (`base64 -d`): no quoting to get wrong. */
+const base64 = (text: string) => {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
 
 /** A time as it names an object and tags an image: `20261030-231502-123`. */
 const stampOf = (date: Date) =>
@@ -313,7 +321,7 @@ export function cloudRunHost(options: CloudRunOptions): AppHost {
   }
 
   return {
-    async build({ app, archive, command }) {
+    async build({ app, archive, command, port }) {
       const stamp = stampOf(new Date());
       const object = `src/${app}/${stamp}.tgz`;
       const image = `${region}-docker.pkg.dev/${project}/${repository}/${serviceOf(app)}:${stamp}`;
@@ -328,25 +336,31 @@ export function cloudRunHost(options: CloudRunOptions): AppHost {
         throw new Error(`The folder's archive can't be read: ${scanned.reason}`);
       }
       const docker = "gcr.io/cloud-builders/docker";
+      // Its own Dockerfile builds it; else an image made for it, running its job's command behind
+      // a front on the platform's port (see front.ts).
+      if (!scanned.value && !command) {
+        throw new Error(
+          "Without a Dockerfile, an app runs its job's command: publish it from its job.",
+        );
+      }
+      const served = scanned.value ? port : frontPort(port);
+      const made = [
+        "mkdir -p .cz",
+        `echo ${base64(DOCKERFILE)} | base64 -d > .cz/Dockerfile`,
+        `echo ${base64(FRONT)} | base64 -d > .cz/front.mjs`,
+        `echo ${base64(command ?? "")} | base64 -d > .cz/command`,
+        `echo ${port} > .cz/port`,
+      ].join(" && ");
       const steps = scanned.value
         ? [
           { name: docker, args: ["build", "-t", image, "."] },
           { name: docker, args: ["push", image] },
         ]
-        : [{
-          name: "gcr.io/k8s-skaffold/pack",
-          entrypoint: "pack",
-          args: [
-            "build",
-            image,
-            "--builder",
-            options.builder ?? "gcr.io/buildpacks/builder:google-22",
-            "--path",
-            ".",
-            "--publish",
-            ...(command ? ["--env", `GOOGLE_ENTRYPOINT=${command}`] : []),
-          ],
-        }];
+        : [
+          { name: docker, entrypoint: "sh", args: ["-c", made] },
+          { name: docker, args: ["build", "-f", ".cz/Dockerfile", "-t", image, "."] },
+          { name: docker, args: ["push", image] },
+        ];
       const operation = await api<Operation>(
         "Starting the build",
         "POST",
@@ -392,7 +406,7 @@ export function cloudRunHost(options: CloudRunOptions): AppHost {
           { code: "build_failed", minutes },
         );
       }
-      return { image, minutes };
+      return { image, minutes, port: served };
     },
 
     async deploy({ app, image, port, env }) {

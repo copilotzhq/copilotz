@@ -1,10 +1,13 @@
 /**
  * A person answers what an agent waits on them for: yes this once, yes in
- * this conversation, yes always, or no. Their answer goes into the
- * conversation as theirs, to the agent, which carries on from it.
+ * this conversation, yes for the routine that set it going, yes always, or
+ * no. Their answer goes into the conversation as theirs, to the agent, which
+ * carries on from it (still as part of that routine's run). Publishing is
+ * asked every time a routine gets there: it reaches outside the computer.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Approval } from "../collections/approval.ts";
+import { letOrigin, told } from "../shared/grants.ts";
 
 const SAID = {
   once: "Yes, this once",
@@ -19,7 +22,7 @@ export const approveAction = defineAction({
     type: "object",
     properties: {
       approval: { type: "string" },
-      answer: { enum: ["once", "thread", "always", "deny"] },
+      answer: { enum: ["once", "thread", "origin", "always", "deny"] },
     },
     required: ["approval", "answer"],
     additionalProperties: false,
@@ -29,6 +32,13 @@ export const approveAction = defineAction({
     // Only theirs to answer: the rules reach only their own.
     const asked = await ctx.db.collection<Approval>("approval").findOne({ _id: input.approval });
     if (!asked || asked.status !== "pending") return { answered: false };
+    if (input.answer === "origin") {
+      if (!asked.origin || asked.work === "publish") {
+        throw Object.assign(new Error("That can't be allowed for a routine."), { code: "invalid" });
+      }
+      await letOrigin(ctx, { ...asked, origin: asked.origin });
+      return { answered: true };
+    }
     const now = new Date().toISOString();
     await ctx.db.collection("approval").updateOne({ _id: asked._id }, {
       $set: {
@@ -49,11 +59,7 @@ export const approveAction = defineAction({
         at: now,
       });
     }
-    await ctx.call("chat.send", {
-      thread: asked.thread,
-      to: [asked.agent],
-      text: `${SAID[input.answer]}: ${asked.detail}`,
-    });
+    await told(ctx, asked, `${SAID[input.answer]}: ${asked.detail}`);
     return { answered: true };
   },
 });

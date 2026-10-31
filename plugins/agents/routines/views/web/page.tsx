@@ -3,7 +3,8 @@
  * it asks, whom, when, with its next runs, where it posts, who made it), how
  * it stands (paused, done, failing, or unable to run because its maker left
  * the space: then those who manage it take it over), and its runs, newest
- * first, each with how it went and its chat. Its maker and those who manage
+ * first, each with how it went and its chat. What other plugins say about it
+ * shows between (`routinePanels`: a computer's, what it may do on its own). Its maker and those who manage
  * the space run it now, pause or resume it, change it in place (`?edit=1`)
  * and delete it.
  */
@@ -18,6 +19,7 @@ import {
   go,
   Icon,
   IconButton,
+  LazyView,
   Menu,
   type MenuItem,
   message,
@@ -31,6 +33,7 @@ import type { Team, Thread } from "../../../chat/contract.ts";
 import type { Listed, Routine } from "../../collections/routine.ts";
 import type { RoutineRun } from "../../collections/run.ts";
 import { chatTitle } from "../../shared/routines.ts";
+import type { RoutinePanel } from "../../contract.ts";
 import { describe, localZone, moment, nextRuns, soon } from "../../shared/schedule.ts";
 import { DeleteRoutine } from "./delete.tsx";
 import { RoutineForm } from "./form.tsx";
@@ -113,13 +116,20 @@ export const routineView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
         editing={query.edit === "1" && routine.editable}
         call={ctx.call}
         names={names}
+        panels={panelsOf(ctx.resources.routinePanels)}
       />
     </>
   );
 };
 
+/** The Views a `routinePanels` resource draws on a routine's page, in order. */
+const panelsOf = (given: unknown) =>
+  Object.entries((given ?? {}) as Record<string, RoutinePanel | null>)
+    .flatMap(([key, panel]) => panel?.view ? [{ ...panel, key }] : [])
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.key.localeCompare(b.key));
+
 function RoutinePage(
-  { routine: r, runs, titles, team, place, manages, me, editing, call, names }: {
+  { routine: r, runs, titles, team, place, manages, me, editing, call, names, panels }: {
     routine: Listed;
     runs: RoutineRun[];
     /** The names of its runs' own chats, by chat. */
@@ -131,6 +141,7 @@ function RoutinePage(
     editing: boolean;
     call: Call;
     names: Record<string, string>;
+    panels: (RoutinePanel & { key: string })[];
   },
 ): ReactNode {
   const [busy, setBusy] = useState<string>();
@@ -390,6 +401,7 @@ function RoutinePage(
                 </dd>
               </dl>
             </Card>
+            {panels.map((p) => <LazyView key={p.key} kind={p.view} item={r} fallback={null} />)}
             <section className="routine-runs" aria-labelledby="routine-runs">
               <h2 id="routine-runs">
                 Runs <span className="routine-runs-count">{r.runs ?? runs.length}</span>

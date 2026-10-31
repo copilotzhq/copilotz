@@ -10,7 +10,14 @@
  * as added and removed).
  */
 
-export type Asking = { agent: string; work: string; detail: string; preview?: string };
+export type Asking = {
+  agent: string;
+  work: string;
+  detail: string;
+  preview?: string;
+  /** What set it going, when no person there did (a routine). */
+  origin?: { kind: string; name: string };
+};
 
 export type Asked = {
   /** "wants to run", "wants to write"… */
@@ -69,9 +76,9 @@ export const sentence = (a: Asking): string => {
   return `${a.agent} ${wants} ${what}${at ? ` at ${at}` : ""}`;
 };
 
-/** What a yes covers, for whoever's deciding: this once, in this conversation, or always. */
+/** What a yes covers, for whoever's deciding: this once, in this conversation, for its routine, or always. */
 export function reach(
-  answer: "once" | "thread" | "always",
+  answer: "once" | "thread" | "origin" | "always",
   a: Asking,
   computer = "this computer",
 ): string {
@@ -83,6 +90,10 @@ export function reach(
     publish: `publish apps from ${computer}`,
   } as Record<string, string>)[a.work] ?? `use ${a.work} on ${computer}`;
   if (answer === "once") return `${a.agent} may ${verb} ${what}, this once.`;
+  if (answer === "origin") {
+    return `${a.agent} may ${doing} without asking again, whenever “${a.origin?.name}” runs, ` +
+      "until it's changed. It won't cover anything you ask it yourself.";
+  }
   const where = answer === "thread" ? "in this conversation" : "in any conversation";
   return `${a.agent} may ${doing} without asking again, ${where}.`;
 }

@@ -20,6 +20,7 @@ const ANSWERS: Record<string, string> = {
   once: "once",
   thread: "thread",
   conversation: "thread",
+  routine: "origin",
   always: "always",
   no: "deny",
   deny: "deny",
@@ -191,13 +192,14 @@ export const commands: Commands = {
             a.name ? dim(` on ${a.name}`) : ""
           }`
         ).join("\n") +
-          `\n${dim("/approve <n> once|thread|always|no")}`,
+          `\n${dim("/approve <n> once|thread|routine|always|no")}`,
       );
     },
   }),
   "/approve": command({
-    description: "Answer what an agent waits on you for (once, this conversation, always, or no)",
-    usage: "[n] [once|thread|always|no]",
+    description: "Answer what an agent waits on you for (once, this conversation, its routine, " +
+      "always, or no)",
+    usage: "[n] [once|thread|routine|always|no]",
     async run(rest, term) {
       const words = rest.trim().split(/\s+/).filter(Boolean);
       const n = /^\d+$/.test(words[0] ?? "") ? Number(words.shift()) : undefined;
@@ -209,9 +211,14 @@ export const commands: Commands = {
         return await term.print(
           dim(
             chosen
-              ? "/approve [n] once|thread|always|no"
-              : "Several wait: /approvals lists them; /approve <n> once|thread|always|no",
+              ? "/approve [n] once|thread|routine|always|no"
+              : "Several wait: /approvals lists them; /approve <n> once|thread|routine|always|no",
           ),
+        );
+      }
+      if (answer === "origin" && (!chosen.origin || chosen.work === "publish")) {
+        return await term.print(
+          dim(chosen.origin ? "Publishing is asked every time." : "No routine set this going."),
         );
       }
       const { answered } = await term.runtime.call<{ answered: boolean }>("computer.approve", {

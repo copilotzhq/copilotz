@@ -33,6 +33,7 @@ export type {
   Turn,
 } from "./shared/types.ts";
 export { tool } from "./shared/types.ts";
+export { type Origin, originKey, originOf } from "./shared/origin.ts";
 export type { AgentSource, Roster, RosterSource, Team } from "./shared/agents.ts";
 /**
  * The app's agents (`agentsOf`), who of them answer new conversations

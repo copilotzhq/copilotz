@@ -6,7 +6,8 @@
  * from, or its first run's), or a new one each run, named by `chatName`.
  * It runs as whoever made it (`by`), reaching only
  * what they reach; it's paused, or not; and it keeps when it runs next and
- * how its last run went. Its queries, for front ends:
+ * how its last run went. `rev` counts changes to what it does (what it asks,
+ * whom, as whom): a yes given for it covers the version it was given for. Its queries, for front ends:
  *
  * - `list`: a space's routines (`{ in }`), each with whether the asker may
  *   change it (`editable`: its maker, or a manager there) and whether its
@@ -40,6 +41,8 @@ const routineSchema = {
     paused: { type: "string" },
     /** Who made it, a person's id: it runs as them. */
     by: { type: "string" },
+    /** Which version of what it does; none yet is 0. */
+    rev: { type: "integer" },
     at: { type: "string" },
     updated: { type: "string" },
     /** When it runs next, while it's set to. */
@@ -75,6 +78,7 @@ export type Routine = {
   thread?: string;
   paused?: string;
   by: string;
+  rev?: number;
   at: string;
   updated?: string;
   next?: string;

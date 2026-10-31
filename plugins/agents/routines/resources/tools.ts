@@ -10,7 +10,7 @@
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import { type Thread, type Tool, tool, type ToolContext } from "../../chat/contract.ts";
 import type { Listed, Routine } from "../collections/routine.ts";
-import { chatTitle, personOf } from "../shared/routines.ts";
+import { chatTitle, personOf, routinePath } from "../shared/routines.ts";
 import {
   describe,
   type Given,
@@ -121,7 +121,10 @@ const scheduleRoutine = tool({
         ? `Made it: ${line(routine, names).slice(2)}. ${postsIn(routine)} It runs as ${
           nameOf(where.person, names)
         }; they can pause, ` +
-          "change or delete it in this space's Routines."
+          "change or delete it in this space's Routines. Whatever a run needs someone's yes " +
+          "for stops that run until they answer: if it will, tell them they can allow it ahead " +
+          `of time on its page (${routinePath(made.routine)}), or answer "for this routine" ` +
+          "when it first asks."
         : "Made it.";
     } catch (error) {
       return `Couldn't make it: ${(error as Error).message}`;

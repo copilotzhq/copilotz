@@ -11,11 +11,12 @@ import { messageOf } from "../shared/errors.ts";
 import { addressFor, can, detailOf, personOf, publish as publishApp } from "../shared/publish.ts";
 
 const publish = tool({
-  description: "Publishes what one of your jobs on this space's computer serves as an app " +
+  description: "Publishes what one of your jobs on this space's computers serves as an app " +
     "that runs on its own, without the computer, at an address of its own (https://<name>." +
-    "copilotz.app, say): its folder is built (its Dockerfile, else buildpacks, running the " +
-    "job's command) and deployed. Give the job (one serving a port), or the port; path: a " +
-    "folder under the space's folder, rather than all of it. Your person says yes first. It " +
+    "copilotz.app, say): its folder is built (its Dockerfile, else an image running the job's " +
+    "command as the computer does) and deployed. Give the job (one serving a port; it's " +
+    "found on whichever computer runs it), or the port and the computer; path: a folder " +
+    "under the space's folder, rather than all of it. Your person says yes first. It " +
     "answers at once with the address while it builds, which takes a few minutes. Publishing " +
     "the same name again publishes a new revision of that app.",
   input: {
@@ -25,6 +26,11 @@ const publish = tool({
       job: { type: "string", description: "The job's id (or name)." },
       port: { type: "integer", minimum: 1, maximum: 65535 },
       path: { type: "string" },
+      computer: {
+        type: "string",
+        description: "Which of this space's computers it's on (its name), when not the " +
+          "default and you give no job.",
+      },
     },
     required: ["name"],
   },
@@ -47,6 +53,7 @@ const publish = tool({
       agent: ctx.agent,
       kind: "publish",
       detail: detailOf(input),
+      ...(input.computer ? { computer: input.computer } : {}),
       ...(address ? { preview: address } : {}),
     });
     if (may !== true) return may;

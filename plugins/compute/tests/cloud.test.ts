@@ -40,9 +40,10 @@ import {
   remotePool,
 } from "../mod.ts";
 import { tools } from "../computers/resources/tools.ts";
-import type { Job } from "../computers/shared/workloads.ts";
+import { type Job, WORK } from "../computers/shared/workloads.ts";
 import { test } from "../../../testing/mod.ts";
 import { fakeCloud } from "./fake-cloud.ts";
+import { fakeComputer } from "./fake-computer.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -113,6 +114,7 @@ async function setup(
   fn: (
     rt: Awaited<ReturnType<typeof createRuntime>>,
     world: ReturnType<typeof fakeCloud>,
+    topic: string,
   ) => Promise<void>,
   options: {
     settings?: Record<string, unknown>;
@@ -141,7 +143,7 @@ async function setup(
   try {
     await rt.call("org.join", { person: "ana", role: "owner" });
     await rt.call("org.join", { person: "bob" });
-    await fn(rt, world);
+    await fn(rt, world, topic);
   } finally {
     await world.close();
     await rt.close();
@@ -711,5 +713,56 @@ test("a person's panel: reading neither wakes a cloud computer nor keeps it awak
     assertEquals((await cloudOf(rt, id)).used, before);
     await work("terminal", { stdin: "ls" });
     await until(async () => (await cloudOf(rt, id)).used !== before, "used, by the command");
+  });
+});
+
+test("an agent names an asleep cloud computer when the default is a person's: it wakes, and works there", async () => {
+  await setup(async (rt, world, topic) => {
+    const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
+      size: "small",
+      name: "builder",
+    }, { actor: ana });
+    const { space } = await rt.call<{ space: string }>("space.personal", {}, { actor: ana });
+    // Ana's own machine joins the space, and is made its default.
+    const { code } = await rt.call<{ code: string }>("computer.code", {}, { actor: ana });
+    const laptop = fakeComputer(topic, `code:${code}`, { info: { hostname: "laptop" } });
+    await laptop.worker.ready;
+    let desks: { _id: string; name?: string; online: boolean }[] = [];
+    await until(async () => {
+      desks = await rt.query("desk.here", { in: space }, { actor: ana });
+      return desks.some((d) => d.name === "laptop" && d.online);
+    }, "the laptop came");
+    await rt.call("computer.default", { desk: desks.find((d) => d.name === "laptop")!._id }, {
+      actor: ana,
+    });
+    const { thread } = await rt.call<{ thread: string }>("chat.send", {
+      text: "hello",
+      in: space,
+    }, { actor: ana });
+    await rt.idle();
+    const tool = (input: Record<string, unknown>) =>
+      rt.call<{ stdout?: string } | string>("test.tool", { tool: "terminal", thread, input }, {
+        actor: ana,
+      });
+    try {
+      // The default: the laptop. The cloud computer sleeps on.
+      assertEquals((await tool({ stdin: "ls" }) as { stdout: string }).stdout, "ran ls");
+      assertEquals((await cloudOf(rt, id)).state, "asleep");
+      // Named, it wakes (its pool grows for it), and the command runs there.
+      assertEquals(
+        (await tool({ stdin: "make", computer: "Builder" }) as { stdout: string }).stdout,
+        "ran make",
+      );
+      const rec = await cloudOf(rt, id);
+      assertEquals(rec.state, "awake");
+      assert(world.vms.get(rec.vm!)!.assigned.some((a) => a.computer === id));
+      assertEquals(
+        laptop.asked.filter((a) => a.work === WORK.terminal).map((a) => a.input.stdin),
+        ["ls"],
+      );
+      await rt.call("cloud.release", { computer: id });
+    } finally {
+      await laptop.worker.stop().catch(() => {});
+    }
   });
 });

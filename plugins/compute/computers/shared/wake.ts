@@ -14,7 +14,7 @@
 import type { Context } from "../../../../runtime/mod.ts";
 import type { Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
-import { desksIn, type Where, whereFor } from "./where.ts";
+import { desksIn, named, type Where, whereFor } from "./where.ts";
 
 export type ComputerWake = { wake?: string; touch?: string };
 
@@ -68,23 +68,26 @@ export function touch(ctx: Context, computer: string, view?: boolean): Promise<v
 }
 
 /**
- * Where an agent works in a thread (see `whereFor`), its space's computer
- * woken first when it's asleep: the space's own (its default, else the one
- * seen last), when something wakes computers and it's offline.
+ * Where an agent works in a thread (see `whereFor`): the computer it names
+ * (`computer`), else its space's own (its default, else the one seen last),
+ * woken first when it's asleep and something wakes computers.
  */
 export async function whereAwake(
   ctx: Context,
   thread: string,
   who: string,
+  computer?: string,
 ): Promise<Where | { missing: string }> {
   if (hookOf(ctx)?.wake) {
     // Read as the agent, as whereFor does: a conversation they don't reach wakes nothing.
-    const found = await ctx.db.collection<Thread>("thread").findOne({ _id: thread });
-    const [first] = found?.in ? await desksIn(ctx, found.in) : [];
-    if (first && !first.online) {
-      const woke = await wake(ctx, first.computer);
+    const talk = await ctx.db.collection<Thread>("thread").findOne({ _id: thread });
+    const desks = talk?.in ? await desksIn(ctx, talk.in) : [];
+    const found = computer ? named(desks, computer) : { desk: desks[0] };
+    const chosen = "desk" in found ? found.desk : undefined;
+    if (chosen && !chosen.online) {
+      const woke = await wake(ctx, chosen.computer);
       if (typeof woke === "string") return { missing: woke };
     }
   }
-  return await whereFor(ctx, thread, who);
+  return await whereFor(ctx, thread, who, computer);
 }

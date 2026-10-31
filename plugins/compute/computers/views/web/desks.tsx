@@ -1,8 +1,9 @@
 /**
  * A space's computers (its desks), as its Computer tab lists them: each with
  * whether it's online (a cloud computer: its state, from its kind's View),
- * whose it is, and whether it's the one agents use (when there are
- * several), picked to work on below; its menu (make it the default, ask its
+ * whose it is, and whether it's the default (when there are several: agents
+ * use it unless they name another), picked to work on below; its menu (make
+ * it the default, ask its
  * owner first, open its page, move it to another space, through the command
  * palette's space picker; take it out of the space, which asks first). Then
  * adding one: where the app has kinds of computer that make one (a cloud
@@ -284,7 +285,7 @@ function DeskCard(
   const items: (MenuItem | "separator")[] = [
     ...(several && !d.default && (mine || manage)
       ? [{
-        label: "Make it the one agents use",
+        label: "Make it the default",
         icon: "star" as const,
         onSelect: () => void act("computer.default", { desk: d._id }),
       }]
@@ -360,7 +361,13 @@ function DeskCard(
       <span className="desk-text">
         <span className="desk-name">
           <span className="desk-name-text">{name}</span>
-          {several && d.default ? <Badge tone="primary">Agents use it</Badge> : null}
+          {several && d.default
+            ? (
+              <span title="Agents use it unless they name another computer">
+                <Badge tone="primary">Default</Badge>
+              </span>
+            )
+            : null}
         </span>
         {facts}
       </span>

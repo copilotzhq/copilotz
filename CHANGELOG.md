@@ -1,5 +1,12 @@
-## Unreleased
+## 1.0.0-rc.6 — 2026-10-30
 
+- **Computer program:** an app on another machine over plain `ws:` (an `http://` address that isn't
+  localhost) fails at once, saying to use https, instead of waiting to connect forever: Oxian
+  refuses plain `ws:` but to this machine.
+- **Cloud pools:** a pool grown for a wake isn't shrunk while its VM boots. `pool.take` records what
+  it waits for (`poolWant`), and `pool.tick` sizes each pool to its floor, the takes of the last 2
+  minutes and the wakes still waiting. Before, the next minute's sizing set the pool back to its
+  floor, deleting the VM a wake had grown it for before it connected.
 - **Cloud computers:** `cloudComputer.sizes` also says whether the person asking may make one now
   (`create`, and `why` not: `admins`, `budget`), and the warm and view minutes; `cloud.may` says
   just that. The web's "Use a cloud computer" choice shows why it can't be picked, and the copy says

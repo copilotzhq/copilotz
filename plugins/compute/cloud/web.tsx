@@ -39,6 +39,12 @@ export const cloudWeb: Plugin = definePlugin({
           description: "Ready in seconds, with nothing to install. It sleeps when it isn't " +
             "used, and you pay only while it's awake.",
           heading: "New cloud computer",
+          // Whether the person may make one now, and why not, from what's offered.
+          available: "cloudComputer.sizes",
+          unavailable: {
+            admins: "Only your org's admins add cloud computers here. Ask one of them.",
+            budget: "This month's budget for cloud computers is spent.",
+          },
         },
         remove: {
           action: "cloud.destroy",

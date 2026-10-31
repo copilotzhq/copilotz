@@ -254,6 +254,7 @@ export function Workspace(
                         call: (action, input) => latest.current(action, input),
                         space,
                         computer: computer._id,
+                        ...(desk ? { desk: desk._id } : {}),
                         ...(path ? { folder: path } : {}),
                         previews: previewsAt(previews, computer._id, space),
                         actions: jobActions,

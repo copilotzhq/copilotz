@@ -1,8 +1,7 @@
 /**
  * Previews and served jobs on the web, their logic: which jobs serve a port
- * (said when started, or found listening), a preview's address (its label
- * on the app's previews domain, learned from an address the app gave), who
- * may open one, in words, a computer's previews in a space, and a job to
+ * (said when started, or found listening), how an address reads, who may
+ * open one, in words, a computer's previews in a space, and a job to
  * start, from the form's fields.
  */
 import type { Preview } from "../../collections/preview.ts";
@@ -16,23 +15,6 @@ export const portsOf = (
 /** Whether a job can be previewed: it runs, and serves a port. */
 export const serves = (job: Pick<Job, "running" | "port" | "ports">): boolean =>
   job.running && portsOf(job).length > 0;
-
-/** How a host is reached: https, but plain http for development's `localhost` (as the app says). */
-const schemeOf = (host: string) => /^(.+\.)?localhost(:\d+)?$/.test(host) ? "http" : "https";
-
-/** A preview's address, on the domain previews are served under. */
-export const previewUrl = (domain: string, label: string): string =>
-  `${schemeOf(domain)}://${label}.${domain}/`;
-
-/** The previews domain, from an address the app gave for a label (`https://<label>.<domain>/`). */
-export function domainOf(url: string, label: string): string | undefined {
-  try {
-    const { host } = new URL(url);
-    return host.startsWith(`${label}.`) ? host.slice(label.length + 1) : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /** An address as it reads: its host and path, without the scheme or a trailing slash. */
 export const shown = (url: string): string => url.replace(/^https?:\/\//, "").replace(/\/$/, "");

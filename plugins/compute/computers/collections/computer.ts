@@ -27,6 +27,16 @@ const computerSchema = {
      * computer, isolated) asks nothing. Publishing is always asked.
      */
     approve: { type: "array", items: { enum: ["terminal", "jobs", "writes"] } },
+    /**
+     * What the app says of a computer it keeps (a cloud computer, set with
+     * `computer.mark`): its kind, how it is (`state`: asleep, awake…) and
+     * its size; every desk of it shows the same, so a space's members see it.
+     */
+    status: {
+      type: "object",
+      properties: { kind: { type: "string" }, state: { type: "string" }, size: { type: "string" } },
+      required: ["kind"],
+    },
     at: { type: "string" },
   },
   required: ["owner", "secret", "online", "at"],

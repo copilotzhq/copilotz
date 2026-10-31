@@ -27,7 +27,7 @@ import { mkdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { POOL, type PoolAssign, type PoolRelease } from "../../cloud/contract.ts";
 import { type Computer, type ComputerOptions, startComputer } from "./computer.ts";
-import { connectionOf, loadState, sameApp, socketUrl, updateState } from "./state.ts";
+import { connectionOf, loadState, reachable, sameApp, socketUrl, updateState } from "./state.ts";
 import { answer, fail } from "./workloads/answer.ts";
 import { WINDOWS } from "./workloads/processes.ts";
 
@@ -141,7 +141,7 @@ async function unmount(path: string) {
 /** Connects this VM to the app's pool, and serves what it's assigned. */
 export async function startPool(options: PoolOptions): Promise<Pool> {
   const log = options.log ?? ((line: string) => console.log(line));
-  const url = socketUrl(options.app);
+  const url = reachable(socketUrl(options.app));
   const base = options.metadata ?? METADATA;
   const vm = options.vm ?? await metadata(base, "instance/name");
   const audience = audienceOf(options.app);

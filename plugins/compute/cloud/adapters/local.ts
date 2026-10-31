@@ -88,7 +88,15 @@ function programLauncher(program: string | undefined): LocalLaunch {
 
 /** A local host: one per account it's made for, each in a folder of its own. */
 export function localHost(options: LocalHostOptions = {}): CloudHostAdapter {
-  return (account, { resources }) => createLocalHost(options, account, resources);
+  // One local cloud per app and account, whichever of its executors asks: each executor has
+  // resources of its own, and a VM one of them started must be the one another verifies.
+  const hosts = new Map<string, CloudHost>();
+  return (account, { resources }) => {
+    const key = `${options.app ?? appOf(resources) ?? ""}|${account ?? ""}`;
+    let host = hosts.get(key);
+    if (!host) hosts.set(key, host = createLocalHost(options, account, resources));
+    return host;
+  };
 }
 
 export function createLocalHost(

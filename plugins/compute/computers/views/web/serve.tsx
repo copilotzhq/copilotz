@@ -8,11 +8,9 @@
  * previews in the space, each with who may open it (changing that makes a
  * new link), opening, copying and taking it away (`computer.unpreview`).
  *
- * A preview's address is its label on the app's previews domain, which the
- * app says in the addresses it gives (`computer.preview`,
- * `computer.previews`): learned once, it's the same for every preview.
+ * Each preview says its address (`url`, as `preview.here` gives it).
  */
-import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
+import { type ReactNode, useState } from "react";
 import {
   Button,
   Card,
@@ -27,15 +25,7 @@ import {
 import type { Preview } from "../../collections/preview.ts";
 import type { Job } from "../../shared/workloads.ts";
 import type { JobAction, JobServed } from "./kinds.ts";
-import {
-  domainOf,
-  portsOf,
-  previewOfJob,
-  previewUrl,
-  shown,
-  VISIBILITY,
-  type Visibility,
-} from "./previews.ts";
+import { portsOf, previewOfJob, shown, VISIBILITY, type Visibility } from "./previews.ts";
 import { whose } from "./names.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
@@ -45,43 +35,14 @@ export type Served = {
   call: Call;
   space: string;
   computer: string;
+  /** Its desk in the space: previews and apps are made from this one, not the space's default. */
+  desk?: string;
   /** The space's folder on the computer, as it shows. */
   folder?: string;
   /** The computer's previews in the space, the newest first. */
   previews: Preview[];
   actions: (JobAction & { key?: string })[];
 };
-
-// The previews domain, once an address the app gave has said it.
-let known: string | undefined;
-const listeners = new Set<() => void>();
-const subscribe = (listener: () => void) => {
-  listeners.add(listener);
-  return () => void listeners.delete(listener);
-};
-const current = () => known;
-
-/** Learns the previews domain from an address the app gave for a label. */
-function learn(url: string, label: string) {
-  const domain = domainOf(url, label);
-  if (!domain || domain === known) return;
-  known = domain;
-  for (const listener of listeners) listener();
-}
-
-/** The previews domain: asked of the app once (`computer.previews`) when it's `needed` and unknown. */
-function useDomain(call: Call, space: string, needed: boolean): string | undefined {
-  const domain = useSyncExternalStore(subscribe, current, current);
-  useEffect(() => {
-    if (!needed || known) return;
-    call<{ previews?: (Preview & { url?: string })[] }>("computer.previews", { in: space })
-      .then((said) => {
-        for (const p of said.previews ?? []) if (p.url) learn(p.url, p._id);
-      })
-      .catch(() => {});
-  }, [needed, space]);
-  return domain;
-}
 
 /**
  * A new tab, opened now (while the click still lets it), then sent where
@@ -123,8 +84,7 @@ export function JobServe(
 ): ReactNode {
   const ports = portsOf(job);
   const preview = previewOfJob(served.previews, job.id);
-  const domain = useDomain(served.call, served.space, !!preview);
-  const url = preview && domain ? previewUrl(domain, preview._id) : undefined;
+  const url = preview?.url;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const make = async (visibility: Visibility, port?: number) => {
@@ -134,11 +94,11 @@ export function JobServe(
     try {
       const made = await served.call<{ url: string; label: string }>("computer.preview", {
         in: served.space,
+        ...(served.desk ? { desk: served.desk } : {}),
         job: job.id,
         ...(port ? { port } : {}),
         visibility,
       });
-      learn(made.url, made.label);
       open(made.url);
     } catch (e) {
       open();
@@ -172,6 +132,7 @@ export function JobServe(
   const item: JobServed = {
     in: served.space,
     computer: served.computer,
+    ...(served.desk ? { desk: served.desk } : {}),
     job: job.id,
     name: title,
     command: job.command,
@@ -252,7 +213,6 @@ export function Previews(
   { served, jobs, me }: { served: Served; jobs: Job[]; me?: string },
 ): ReactNode {
   const { previews } = served;
-  const domain = useDomain(served.call, served.space, previews.length > 0);
   if (!previews.length) return null;
   return (
     <section className="jobs-group previews" aria-label="Previews">
@@ -265,8 +225,9 @@ export function Previews(
           <PreviewRow
             key={p._id}
             preview={p}
-            {...(domain ? { url: previewUrl(domain, p._id) } : {})}
+            {...(p.url ? { url: p.url } : {})}
             job={jobs.find((j) => j.id === p.job)}
+            {...(served.desk ? { desk: served.desk } : {})}
             call={served.call}
             me={me}
           />
@@ -277,10 +238,12 @@ export function Previews(
 }
 
 function PreviewRow(
-  { preview: p, url, job, call, me }: {
+  { preview: p, url, job, desk, call, me }: {
     preview: Preview;
     url?: string;
     job?: Job;
+    /** Its computer's desk in the space, where a new link for it is made. */
+    desk?: string;
     call: Call;
     me?: string;
   },
@@ -302,13 +265,13 @@ function PreviewRow(
   // Who may open it is part of its link: another visibility is a new link, and this one goes.
   const change = (visibility: Visibility) =>
     act(async () => {
-      const made = await call<{ url: string; label: string }>("computer.preview", {
+      await call("computer.preview", {
         in: p.space,
+        ...(desk ? { desk } : {}),
         ...(job?.running ? { job: job.id } : {}),
         port: p.port,
         visibility,
       });
-      learn(made.url, made.label);
       await call("computer.unpreview", { label: p._id });
     });
   const remove = () => act(() => call("computer.unpreview", { label: p._id }));

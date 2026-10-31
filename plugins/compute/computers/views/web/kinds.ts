@@ -10,7 +10,9 @@
  *   in its page's header, and `asleep` in place of its terminal, jobs and
  *   files while it's offline (item `{ _id, desk, name }`; `hints.wake`: wake
  *   it now, as opening its page does). `add` makes one in a space, beside
- *   connecting your own machine (its View, item `{ _id }`, the space), and
+ *   connecting your own machine (its View, item `{ _id }`, the space): when
+ *   the person can't now (its `available` query answers `create: false`),
+ *   the choice shows why (`unavailable`, by its `why`) and can't be picked; and
  *   `remove` takes one away in place of forgetting it (an Action, input
  *   `{ computer }`, and what to say first).
  * - `jobActions`: what else a job that serves a port can become (published
@@ -32,6 +34,10 @@ export type ComputerKind = {
     description: string;
     /** The dialog's title once it's chosen: "New cloud computer". */
     heading?: string;
+    /** A query (`<collection>.<query>`) saying whether the person may make one now: `{ create, why? }`. */
+    available?: string;
+    /** What the choice says when they can't, by the query's `why` (`default` for any other). */
+    unavailable?: Record<string, string>;
   };
   remove?: {
     action: string;
@@ -44,7 +50,20 @@ export type ComputerKind = {
   order?: number;
 };
 
-export type Kind = ComputerKind & { key: string };
+export type Kind = ComputerKind & {
+  key: string;
+  /** Why the person can't make one here now (its `add`'s `available` said so), when they can't. */
+  blocked?: string;
+};
+
+/** Whether a kind can be made now, from what its `available` query answered: why not, else nothing. */
+export function blockedBy(kind: ComputerKind, answer: unknown): string | undefined {
+  const said = answer as { create?: unknown; why?: unknown } | null | undefined;
+  if (!kind.add?.available || !said || said.create !== false) return undefined;
+  const why = typeof said.why === "string" ? said.why : "";
+  return kind.add.unavailable?.[why] ?? kind.add.unavailable?.default ??
+    "You can't make one here now.";
+}
 
 /** A collection's query, by its name (`cloud.mine`): the collection, and the query. */
 export function queryOf(name: string): [string, string] | undefined {
@@ -84,6 +103,8 @@ export type JobServed = {
   /** The space, and its computer. */
   in: string;
   computer: string;
+  /** The computer's desk in the space, when it's known: what's published comes from it. */
+  desk?: string;
   job: string;
   /** What the job goes by (its name, else its command): a name to start from. */
   name: string;

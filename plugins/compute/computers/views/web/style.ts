@@ -90,6 +90,10 @@ export const STYLE = `
 .add-choice-text { display: grid; gap: 3px; min-width: 0; }
 .add-choice-title { font-size: 15px; font-weight: 640; }
 .add-choice-description { color: var(--muted-foreground); font-size: 13px; line-height: 1.45; }
+.add-choice[data-blocked] { cursor: default; background: var(--muted); box-shadow: none; }
+.add-choice[data-blocked] .add-choice-icon { opacity: 0.6; }
+.add-choice-why { display: flex; align-items: flex-start; gap: 6px; }
+.add-choice-why svg { flex: none; margin-top: 2px; }
 .add-choice-go { color: var(--muted-foreground); transition: transform .15s, color .15s; }
 .add-choice:hover .add-choice-go { color: var(--foreground); transform: translateX(2px); }
 .add-yours { display: grid; gap: 8px; }

@@ -35,7 +35,10 @@ async function nameOf(ctx: Context, space: string) {
 /** `computer`'s desk in `space`: the one it has, or a new one (as the system: check first). */
 export async function deskIn(
   ctx: Context,
-  computer: Pick<Computer, "_id" | "owner" | "name" | "online" | "seen" | "info" | "approve">,
+  computer: Pick<
+    Computer,
+    "_id" | "owner" | "name" | "online" | "seen" | "info" | "approve" | "status"
+  >,
   space: string,
   answers: Desk["answers"] = "asker",
 ): Promise<Desk> {
@@ -52,6 +55,7 @@ export async function deskIn(
     ...(computer.seen ? { seen: computer.seen } : {}),
     ...(computer.info ? { info: computer.info } : {}),
     ...(computer.approve ? { approve: computer.approve } : {}),
+    ...(computer.status ? { status: computer.status } : {}),
     folder: folderFor(await nameOf(ctx, space), taken),
     answers,
     // The first computer a space has is the one its agents use.

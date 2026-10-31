@@ -216,6 +216,25 @@ export function socketUrl(app: string): string {
   return `${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}${org}/oxian`;
 }
 
+/** The hosts a computer may reach over plain `ws:`: this machine's own. */
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+/**
+ * A socket a computer can connect to, or why not: over `wss:`, or `ws:` to
+ * this machine only (an app on another, over plain `ws:`, would be refused,
+ * so it fails here, saying so, rather than waiting to connect).
+ */
+export function reachable(socket: string): string {
+  const url = new URL(socket);
+  if (url.protocol === "ws:" && !LOOPBACK.has(url.hostname)) {
+    throw new Error(
+      `${socket}: an app on another machine is reached over https (wss:); plain http (ws:) only ` +
+        "reaches one on this machine (localhost)",
+    );
+  }
+  return socket;
+}
+
 /** A root as given (`~` is home), made absolute. */
 export const rootPath = (root: string): string =>
   resolve(root === "~" ? homedir() : /^~[/\\]/.test(root) ? join(homedir(), root.slice(2)) : root);

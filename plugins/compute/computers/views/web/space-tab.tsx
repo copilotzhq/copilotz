@@ -20,6 +20,7 @@ import type { Desk } from "../../collections/desk.ts";
 import type { Preview } from "../../collections/preview.ts";
 import { Desks } from "./desks.tsx";
 import {
+  blockedBy,
   type JobAction,
   jobActionsOf,
   type Kind,
@@ -51,6 +52,15 @@ export const spaceComputersView = (
     const [collection, query] = queryOf(k.mine)!;
     return ctx.db.collection(collection).query<{ _id: string }[]>(query, {}).value;
   });
+  // Whether the person may make each kind here now (only admins, a budget spent): why not, shown.
+  const makeable = kinds.map((k) => {
+    const named = k.add?.available ? queryOf(k.add.available) : undefined;
+    return named ? ctx.db.collection(named[0]).query<unknown>(named[1], {}).value : undefined;
+  });
+  const offered = kinds.map((k, i) => {
+    const blocked = blockedBy(k, makeable[i]);
+    return blocked ? { ...k, blocked } : k;
+  });
   const compact = ctx.hints.mode === "panel";
   const style = <style href="computers-web" precedence="copilotz">{STYLE}</style>;
   if (
@@ -79,7 +89,7 @@ export const spaceComputersView = (
         agents={namedOf(team?.agents)}
         compact={compact}
         call={ctx.call}
-        kinds={kinds}
+        kinds={offered}
         kindOf={kindByComputer(kinds, records)}
         previews={previews ?? []}
         jobActions={jobActionsOf(ctx.resources.jobActions)}

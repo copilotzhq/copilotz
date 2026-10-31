@@ -30,14 +30,14 @@ import {
   type PoolVm,
 } from "../contract.ts";
 import { hostFor } from "../shared/host.ts";
-import { poolsOf } from "../shared/records.ts";
+import { poolsOf, wantsOf } from "../shared/records.ts";
 import { samePlace } from "../shared/settings.ts";
 import { after, minutes, nowOf, poll } from "../shared/time.ts";
 
 /** How long a VM given to a computer is its without a renewal. */
 export const LEASE_MS = minutes(10);
 /** How long a take waits for a VM when none was free. */
-const VM_MS = 150_000;
+export const VM_MS = 150_000;
 /**
  * How long a VM has to serve a computer (it answers once the computer's
  * connected: up to a minute for the disk to appear, formatting, up to a
@@ -106,9 +106,20 @@ export const takeAction = defineAction({
     };
     let vm = await claim();
     if (!vm) {
-      const { target } = await host.pool(want.placement, want.size);
-      await host.resize(want.placement, want.size, target + 1);
-      vm = await poll(claim, VM_MS, { every: 500, signal: ctx.signal });
+      // Its pool grows by one for it; until the take ends, the pool's sizing counts it.
+      const { insertedId: wanted } = await wantsOf(ctx).insertOne({
+        placement: want.placement,
+        size: want.size,
+        computer: want.computer,
+        at: new Date().toISOString(),
+      });
+      try {
+        const { target } = await host.pool(want.placement, want.size);
+        await host.resize(want.placement, want.size, target + 1);
+        vm = await poll(claim, VM_MS, { every: 500, signal: ctx.signal });
+      } finally {
+        await wantsOf(ctx).deleteOne({ _id: wanted }).catch(() => {});
+      }
       if (!vm) throw failure(`no VM was free, and none started within ${VM_MS / 1000} s`);
     }
     try {

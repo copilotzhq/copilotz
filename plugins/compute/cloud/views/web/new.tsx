@@ -28,11 +28,16 @@ import {
   sizesOf,
   specsOf,
   suggestedName,
-  WARM_MINUTES,
 } from "./cloud.ts";
 import { STYLE } from "./style.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
+
+/** Minutes as a sentence says them: "10 minutes", "1 minute", "2 hours". */
+export const minutes = (n: number): string =>
+  n % 60 === 0 && n >= 60
+    ? `${n / 60} hour${n === 60 ? "" : "s"}`
+    : `${n} minute${n === 1 ? "" : "s"}`;
 
 export const cloudNewView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
   const space = item._id ?? (typeof ctx.hints.in === "string" ? ctx.hints.in : "");
@@ -81,7 +86,10 @@ export function NewCloud(
   const [name, setName] = useState(() => suggestedName(where));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [refused, setRefused] = useState<"forbidden" | "budget">();
+  // Refused before asking, when the app says so (only admins make them, or the budget's spent).
+  const [refused, setRefused] = useState<"forbidden" | "budget" | undefined>(() =>
+    sizes.create ? undefined : sizes.why === "budget" ? "budget" : "forbidden"
+  );
   const [made, setMade] = useState<{ computer: string; name: string }>();
   const chosen = sizes.sizes.find((s) => s.id === size) ?? sizes.sizes[0];
   const here = where && where !== "Personal" ? where : "your Personal space";
@@ -107,7 +115,7 @@ export function NewCloud(
           <p>
             It's in{" "}
             {here}, and agents there can use it now. It wakes the first time it's used, in a few
-            seconds, and sleeps again after {WARM_MINUTES} minutes unused.
+            seconds, and sleeps again after {minutes(sizes.warmMinutes)} unused.
           </p>
           <Button variant="primary" icon="terminal" href={href}>Open {made.name}</Button>
         </div>
@@ -190,9 +198,8 @@ export function NewCloud(
       <p className="cloud-new-how">
         <Icon name="info" size={15} />
         <span>
-          You pay while it's awake; it sleeps after {WARM_MINUTES} minutes unused. Its {disk.gb}
-          {" "}
-          GB disk is kept while it sleeps
+          You pay while it's awake; it sleeps after {minutes(sizes.warmMinutes)} unused. Its{" "}
+          {disk.gb} GB disk is kept while it sleeps
           {disk.gbMonth !== null ? <>, at {money(disk.gbMonth)} per GB-month</> : null}.
         </span>
       </p>

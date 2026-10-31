@@ -21,7 +21,14 @@ import process from "node:process";
 import { type Enrolled, type Info, WORK } from "../shared/workloads.ts";
 import { createBrowsers, findChrome, type Windows } from "./browser/mod.ts";
 import { newer, type Offer, UPDATE } from "./release.ts";
-import { connectionOf, loadState, socketUrl, updateState, withConnection } from "./state.ts";
+import {
+  connectionOf,
+  loadState,
+  reachable,
+  socketUrl,
+  updateState,
+  withConnection,
+} from "./state.ts";
 import { checkOffer, PROGRAM, updateProgram } from "./update.ts";
 import { VERSION } from "./version.ts";
 import { answer, fail } from "./workloads/answer.ts";
@@ -103,7 +110,7 @@ const wait = (ms: number, signal: AbortSignal) =>
 /** Starts a computer: its spaces, its work, and its connection to the app. */
 export async function startComputer(options: ComputerOptions): Promise<Computer> {
   const log = options.log ?? ((line: string) => console.log(line));
-  const url = socketUrl(options.url);
+  const url = reachable(socketUrl(options.url));
   await mkdir(options.root, { recursive: true });
   const root = await realpath(options.root);
   const chromium = options.chromium === undefined ? await findChrome() : options.chromium;

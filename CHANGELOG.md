@@ -1,3 +1,30 @@
+## 1.0.0-rc.6 — 2026-10-30
+
+- **Computer program:** an app on another machine over plain `ws:` (an `http://` address that isn't
+  localhost) fails at once, saying to use https, instead of waiting to connect forever: Oxian
+  refuses plain `ws:` but to this machine.
+- **Cloud pools:** a pool grown for a wake isn't shrunk while its VM boots. `pool.take` records what
+  it waits for (`poolWant`), and `pool.tick` sizes each pool to its floor, the takes of the last 2
+  minutes and the wakes still waiting. Before, the next minute's sizing set the pool back to its
+  floor, deleting the VM a wake had grown it for before it connected.
+- **Cloud computers:** `cloudComputer.sizes` also says whether the person asking may make one now
+  (`create`, and `why` not: `admins`, `budget`), and the warm and view minutes; `cloud.may` says
+  just that. The web's "Use a cloud computer" choice shows why it can't be picked, and the copy says
+  the app's minutes.
+- **Cloud computers shared into a space:** each computer's state is kept on it and its desks
+  (`status`: `{ kind: "cloud", state, size }`, set with the new system Action `computer.mark`, as
+  the cloud plugin sees it change), so the space's members see how anyone's is (asleep, waking,
+  awake), not "offline".
+- **Previews:** `preview.here` records carry their address (`url`); the web no longer works it out.
+  `computer.preview` and `computer.scope` take a `desk` (one of the space's), and so does
+  `app.publish`: the web makes previews and publishes apps from the computer it's on, not the
+  space's default.
+- **Apps:** an agent's `publish` asks its person with where the app will be ("wants to publish Shop
+  at https://shop.copilotz.app").
+- **`org.me`** isn't recorded (it only reads), so reads (queries, Views) ask it too.
+- **The local cloud host** is one per app and account, whichever executor asks: with several
+  executors, a VM one started was turned away by another.
+
 ## 1.0.0-rc.5 — 2026-10-30
 
 - **Cloud computers** (plugin `cloud`, see design/cloud-computers.md): computers the app hosts for

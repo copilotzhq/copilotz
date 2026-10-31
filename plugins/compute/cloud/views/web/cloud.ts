@@ -24,16 +24,28 @@ export type Offered = {
 export type Sizes = {
   sizes: Offered[];
   disk: { gb: number; gbMonth: number | null; snapshotGbMonth: number | null };
+  /** How long one stays awake unused, and while someone has it open (minutes). */
+  warmMinutes: number;
+  viewMinutes: number;
+  /** Whether the person may make one now, and why not: only admins do here, or the budget's spent. */
+  create: boolean;
+  why?: "admins" | "budget";
 };
 
-/** How long a computer sleeps after its last use, unless the app says otherwise. */
+/** How long a computer stays awake after its last use, unless the app says otherwise. */
 export const WARM_MINUTES = 10;
+const VIEW_MINUTES = 120;
+
+const minutesOf = (n: unknown, otherwise: number) =>
+  typeof n === "number" && Number.isFinite(n) && n > 0 ? n : otherwise;
 
 const price = (n: unknown) => typeof n === "number" && Number.isFinite(n) ? n : null;
 
 /** The sizes answer, whatever came: the sizes that make sense, and the disk (10 GB if unsaid). */
 export function sizesOf(answer: unknown): Sizes {
-  const said = (answer ?? {}) as Partial<{ sizes: unknown; disk: Partial<Sizes["disk"]> }>;
+  const said = (answer ?? {}) as Partial<
+    Omit<Sizes, "sizes" | "disk"> & { sizes: unknown; disk: Partial<Sizes["disk"]> }
+  >;
   const sizes = (Array.isArray(said.sizes) ? said.sizes : []).flatMap((s: Partial<Offered>) =>
     s && typeof s.id === "string" && typeof s.vcpu === "number" && typeof s.memory === "number"
       ? [{
@@ -54,6 +66,13 @@ export function sizesOf(answer: unknown): Sizes {
       gbMonth: price(disk.gbMonth),
       snapshotGbMonth: price(disk.snapshotGbMonth),
     },
+    warmMinutes: minutesOf(said.warmMinutes, WARM_MINUTES),
+    viewMinutes: minutesOf(said.viewMinutes, VIEW_MINUTES),
+    // An app that doesn't say lets anyone try: `cloud.create` says if not.
+    create: said.create !== false,
+    ...(said.create === false && (said.why === "admins" || said.why === "budget")
+      ? { why: said.why }
+      : {}),
   };
 }
 

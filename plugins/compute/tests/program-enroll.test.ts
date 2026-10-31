@@ -15,6 +15,7 @@ import {
   connectionOf,
   folderFor,
   loadState,
+  reachable,
   sameApp,
   saveState,
   socketUrl,
@@ -149,6 +150,13 @@ test("when the app restarts, the computer connects again as itself", async () =>
     await first.close().catch(() => {});
     await second?.close();
   }
+});
+
+test("plain ws: reaches only this machine: an app elsewhere is refused at once, saying why", () => {
+  assertEquals(reachable("ws://127.0.0.1:8790/oxian"), "ws://127.0.0.1:8790/oxian");
+  assertEquals(reachable("ws://localhost:8790/oxian"), "ws://localhost:8790/oxian");
+  assertEquals(reachable("wss://app.example.com/oxian"), "wss://app.example.com/oxian");
+  assertThrows(() => reachable("ws://10.80.0.50:8080/oxian"), Error, "over https (wss:)");
 });
 
 test("an app's URL becomes its socket; a socket stays as it is", () => {

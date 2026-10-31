@@ -4,7 +4,8 @@
  *
  * 1. **Sizing:** each placement's pool of each size is asked to keep the
  *    floor for this hour (in its time zone) plus the VMs taken in the last 2
- *    minutes (those expected before a replacement is ready), up to `max`.
+ *    minutes (those expected before a replacement is ready) plus the wakes
+ *    waiting for a VM it grew for them (`poolWant`), up to `max`.
  * 2. **Leases:** a VM given to a computer whose lease ran out (nobody renewed
  *    it: its computer was released and the VM's deletion failed, a wake
  *    ended halfway, the runtime that took it is gone) is deleted. Its disk
@@ -17,10 +18,10 @@
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import { hostFor } from "../shared/host.ts";
-import { poolsOf } from "../shared/records.ts";
+import { poolsOf, wantsOf } from "../shared/records.ts";
 import { type Floor, samePlace, settingsOf } from "../shared/settings.ts";
 import { after, hourIn, minutes, nowOf } from "../shared/time.ts";
-import { LEASE_MS } from "./vms.ts";
+import { LEASE_MS, VM_MS } from "./vms.ts";
 
 const log = (what: string) => (error: unknown) =>
   console.error(`cloud pool: ${what}:`, error instanceof Error ? error.message : error);
@@ -55,6 +56,9 @@ export const poolTickAction = defineAction({
 
     // 1. Each pool, the size it should be now.
     const recent = await pools.find({ taken: { $gte: after(now, -TAKES_MS) } });
+    // Wakes waiting for a VM their pool grew for (a take that ended took its want with it).
+    await wantsOf(ctx).deleteMany({ at: { $lt: after(now, -2 * VM_MS) } });
+    const waiting = await wantsOf(ctx).find({});
     const sized: Record<string, number> = {};
     for (const placement of set.placements) {
       for (const size of Object.keys(set.sizes)) {
@@ -62,9 +66,10 @@ export const poolTickAction = defineAction({
           const takes = recent.filter((vm) =>
             vm.size === size && samePlace(vm.placement, placement)
           );
+          const wants = waiting.filter((w) => w.size === size && samePlace(w.placement, placement));
           const desired = Math.min(
             set.pool.max,
-            floorAt(set.pool.floor, placement.zone, size, now) + takes.length,
+            floorAt(set.pool.floor, placement.zone, size, now) + takes.length + wants.length,
           );
           const host = await hostFor(ctx, placement);
           const { target } = await host.pool(placement, size);

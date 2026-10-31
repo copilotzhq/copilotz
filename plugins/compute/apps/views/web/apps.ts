@@ -17,6 +17,8 @@ import { slugOf } from "../../shared/label.ts";
 export type JobServed = {
   in: string;
   computer: string;
+  /** The computer's desk in the space, when it's known: what's published comes from it. */
+  desk?: string;
   job: string;
   name: string;
   command: string;

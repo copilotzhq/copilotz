@@ -30,6 +30,7 @@ import { defaultAction } from "./actions/default.ts";
 import { enrollmentAction } from "./actions/enrollment.ts";
 import { forgetAction } from "./actions/forget.ts";
 import { goneAction } from "./actions/gone.ts";
+import { markAction } from "./actions/mark.ts";
 import { moveAction } from "./actions/move.ts";
 import { previewAction, previewsAction, unpreviewAction } from "./actions/preview.ts";
 import { provisionAction } from "./actions/provision.ts";
@@ -101,6 +102,7 @@ export const computers: Plugin = definePlugin({
     "computer.provision": provisionAction,
     "computer.enrollment": enrollmentAction,
     "computer.running": runningAction,
+    "computer.mark": markAction,
   },
   // Agents with computer tools know, each turn, whose computer they work on and what waits for a yes.
   views: contextViews,

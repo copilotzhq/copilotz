@@ -2,7 +2,7 @@ import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { LlmFile, LlmMessage, LlmState } from "../../../models/contract.ts";
 import { type File, text, textual } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
-import type { Step } from "../shared/types.ts";
+import type { Step, Told } from "../shared/types.ts";
 import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
 
 /** How much of a text file an agent is sent. */
@@ -43,7 +43,10 @@ function attached(m: Message, ctx: ViewContext): { text: string; files: LlmFile[
   return { text: lines.join(""), files };
 }
 
-/** A message as the viewing agent sees it: its own as its turns, others' as labelled input. */
+/**
+ * A message as the viewing agent sees it: its own as its turns (after what it
+ * was told then), others' as labelled input.
+ */
 
 export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
   const me = ctx.viewer?.name;
@@ -60,9 +63,14 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
       ...(files.length ? { files } : {}),
     }];
   }
-  if (!m.toolCalls?.length) return [{ role: "assistant", text: m.text ?? "" }];
+  // What it was told at the start of the turn, where it was told it.
+  const told: LlmMessage[] = m.told?.length
+    ? [{ role: "user", text: (m.told as Told[]).map((c) => c.text).join("\n\n") }]
+    : [];
+  if (!m.toolCalls?.length) return [...told, { role: "assistant", text: m.text ?? "" }];
   const calls = m.toolCalls as Step[];
   return [
+    ...told,
     {
       role: "assistant",
       text: m.text || undefined,

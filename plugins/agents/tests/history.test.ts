@@ -1,8 +1,8 @@
 /**
- * Summarized chat history: every shared message gets a line, pairs merge up a
- * tree, the tail and the outline shrink in batches, the newest message stays
- * whole, and zoom opens any line back to the message. A scripted summarizer
- * makes every line predictable.
+ * Summarized chat history: every shared message gets a line as it leaves the
+ * tail, pairs merge up a tree, the tail and the outline shrink in batches, the
+ * newest message stays whole, and zoom opens any line back to the message. A
+ * scripted summarizer makes every line predictable.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { createRuntime, definePlugin, type Store } from "../../../runtime/mod.ts";
@@ -83,24 +83,20 @@ const long = (n: number) => `message number ${n} is long enough to need a summar
 
 each("lines, merges and a tail that shrinks in batches; the newest stays whole", async (make) => {
   const { runtime, summarizer, say, prompt, thread } = await start(make);
-  for (let n = 0; n < 4; n++) await say(long(n));
-  // Long messages were compressed; short ones and short pairs needed no call.
-  assertEquals(summarizer.filter((s) => s.includes("compress")).length, 4);
+  // Within the tail (200 bytes), nothing is summarized.
+  for (let n = 0; n < 2; n++) await say(long(n));
+  assertEquals(summarizer, []);
+  for (let n = 2; n < 4; n++) await say(long(n));
+  // The 5th message took the tail past 200 bytes: the 3 oldest left it, each with its line. Long
+  // ones were compressed; short ones and short pairs needed no call.
+  assertEquals(summarizer.filter((s) => s.includes("compress")).length, 2);
   assert(summarizer.every((s) => !s.includes("merge lines 0+1")), "short pairs are joined");
   const nodes = await runtime.query<Summary[]>("summary.of", { thread: thread() });
-  assertEquals(
-    nodes.filter((s) => s.level === 0).map((s) => s.text),
-    [
-      "S0",
-      "agent → ana: ok",
-      "S2",
-      "agent → ana: ok",
-      "S4",
-      "agent → ana: ok",
-      "S6",
-      "agent → ana: ok",
-    ],
-  );
+  assertEquals(nodes.filter((s) => s.level === 0).map((s) => s.text), [
+    "S0",
+    "agent → ana: ok",
+    "S2",
+  ]);
   assertEquals(nodes.find((s) => s.level === 1 && s.index === 0)?.text, "S0\nagent → ana: ok");
   // 8 messages: the tail passed 200 bytes, and the oldest became lines.
   const p = await prompt();

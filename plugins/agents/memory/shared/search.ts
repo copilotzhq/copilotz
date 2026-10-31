@@ -9,17 +9,25 @@ type Scored = Memory & { _score: number };
 
 /**
  * The memories most relevant to `text`, best first: by meaning (with an
- * embedder) and by shared words; `core` ones only when asked.
+ * embedder) and by shared words; `core` ones only when asked (or those
+ * learned since `coreSince`).
  */
 export async function search(
   ctx: ReadContext | ToolContext,
   scope: Scope,
   text: string,
   limit: number,
-  o: { core?: boolean; least?: number } = {},
+  o: { core?: boolean; coreSince?: string; least?: number } = {},
 ): Promise<Scored[]> {
   const memories = ctx.db.collection<Memory>("memory");
-  const filter = { ...readable(scope), ...(o.core ? {} : { core: { $ne: true } }) };
+  const filter = {
+    ...readable(scope),
+    ...(o.core
+      ? {}
+      : o.coreSince
+      ? { $or: [{ core: { $ne: true } }, { at: { $gte: o.coreSince } }] }
+      : { core: { $ne: true } }),
+  };
   const query = words(text);
   const [vector] = await vectors(ctx, [text]) ?? [];
   const candidates: Scored[] = vector

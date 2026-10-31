@@ -39,9 +39,16 @@ export const memoryCollection = defineCollection({
   schema: memorySchema,
   vectors: ["embedding"],
   queries: {
-    /** Core memories a scope can read, oldest first: what agents always have in mind. */
-    core: (memories, scope: Scope) =>
-      memories.find({ ...readable(scope), core: true }, { sort: { at: 1 }, limit: LIMIT.core }),
+    /**
+     * Core memories a scope can read, oldest first: what agents always have
+     * in mind. With `before`, those learned by then (a conversation's start:
+     * what it begins knowing stays the same, so its prompt stays cached).
+     */
+    core: (memories, scope: Scope & { before?: string }) =>
+      memories.find(
+        { ...readable(scope), core: true, ...(scope.before ? { at: { $lt: scope.before } } : {}) },
+        { sort: { at: 1 }, limit: LIMIT.core },
+      ),
     /** Everything remembered (not forgotten), newest first: everywhere, or learned in a space (`in`). */
     list: {
       allow: (actor) => actor.kind === "person",
@@ -51,8 +58,15 @@ export const memoryCollection = defineCollection({
           limit: p.limit ?? 50,
         }),
     },
-    /** The memories most relevant to a text, for a scope (core ones aside). */
-    relevant: (_memories, p: Scope & { text: string }, ctx) =>
-      search(ctx, p, p.text, LIMIT.relevant, { least: RELEVANT }),
+    /**
+     * The memories most relevant to a text, for a scope: core ones aside,
+     * unless learned `since` (after a conversation's start: it has them only
+     * as they come up).
+     */
+    relevant: (_memories, p: Scope & { text: string; since?: string }, ctx) =>
+      search(ctx, p, p.text, LIMIT.relevant, {
+        least: RELEVANT,
+        ...(p.since ? { coreSince: p.since } : {}),
+      }),
   },
 });

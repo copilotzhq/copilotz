@@ -221,8 +221,9 @@ Also built:
   `elsewhere` context (each turn, the other spaces it can read for them, their Personal space
   first). What it brings from there labels the answer, like any read, so it only looks when it needs
   to: searching every space by default would label answers with whatever came up loosely. The list
-  goes each turn, after the cache point, so a new space or member never costs a conversation its
-  cached prompt. Updating a similar memory only matches one learned in the same space.
+  is a turn context (told after the conversation, again only when it changes), so a new space or
+  member never costs a conversation its cached prompt. Updating a similar memory only matches one
+  learned in the same space.
 
 - **Asking for access:** agents have `request_access({ space, reason })`, which leaves a request for
   the space's managers (found by name); they see it (`request.open`, `/requests`) and grant it with

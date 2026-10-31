@@ -91,8 +91,14 @@ test("a memory stays where it was learned; recalled from there, the answer carri
     const prompt = await promptFor(ana);
     assert(!JSON.stringify(prompt).includes("10k"), JSON.stringify(prompt.system));
     assert(!prompt.system.join().includes("finance"), "the list stays out of the cached text");
-    assert(prompt.turn.join().includes("- Finance [in: finance]"), JSON.stringify(prompt.turn));
-    assert(!(await promptFor(bob)).turn.join().includes("Finance"), "Bob doesn't reach it");
+    assert(
+      prompt.turn.map((c) => c.text).join().includes("- Finance [in: finance]"),
+      JSON.stringify(prompt.turn),
+    );
+    assert(
+      !(await promptFor(bob)).turn.map((c) => c.text).join().includes("Finance"),
+      "Bob doesn't reach it",
+    );
 
     // Recalled in Launch, it searches Launch: nothing, and nothing labelled.
     const texts = async (actor: Actor) =>

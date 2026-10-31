@@ -13,16 +13,48 @@ const part = (file: LlmFile) =>
     }
     : { type: "input_image", image_url: `data:${file.type};base64,${file.data}` };
 
-const inputOf = (messages: LlmMessage[]) =>
-  messages.flatMap((message): Record<string, unknown>[] => {
+/** Where the cache keeps a prefix: a breakpoint, on an input text (OpenAI's models since GPT-5.6). */
+const BREAKPOINT = { prompt_cache_breakpoint: { mode: "explicit" } };
+
+/**
+ * The messages that carry the breakpoints: each marked `cache`, or, when that
+ * one is the model's own (which can't), the user's or tool's before it.
+ */
+function pointsOf(messages: LlmMessage[]): Set<number> {
+  const points = new Set<number>();
+  messages.forEach((message, i) => {
+    if (!message.cache) return;
+    let k = i;
+    while (k >= 0 && messages[k].role === "assistant") k--;
+    if (k >= 0) points.add(k);
+  });
+  return points;
+}
+
+/**
+ * The Responses API's input. The messages in `points` (a user's text, a
+ * tool's output) carry a breakpoint: the prefix up to it is kept for the next
+ * call, and found there although what came after it this time doesn't come
+ * again.
+ */
+const inputOf = (messages: LlmMessage[], points: Set<number>) =>
+  messages.flatMap((message, i): Record<string, unknown>[] => {
+    const point = points.has(i);
     if (message.role === "tool") {
-      return [{ type: "function_call_output", call_id: message.toolCallId, output: message.text }];
+      return [{
+        type: "function_call_output",
+        call_id: message.toolCallId,
+        output: point ? [{ type: "input_text", text: message.text, ...BREAKPOINT }] : message.text,
+      }];
     }
     if (message.role === "user") {
-      if (!message.files?.length) return [{ role: "user", content: message.text }];
+      if (!message.files?.length && !point) return [{ role: "user", content: message.text }];
       return [{
         role: "user",
-        content: [{ type: "input_text", text: message.text }, ...message.files.map(part)],
+        content: [
+          { type: "input_text", text: message.text, ...(point ? BREAKPOINT : {}) },
+          ...(message.files ?? []).map(part),
+        ],
       }];
     }
     return [
@@ -35,6 +67,14 @@ const inputOf = (messages: LlmMessage[]) =>
       })),
     ];
   });
+
+/** Models that refused breakpoints (OpenAI's before GPT-5.6, other servers): sent none from then on. */
+const pointless = new Set<string>();
+
+/** Whether a refusal is of the breakpoints themselves. */
+const refusedPoints = (error: unknown) =>
+  (error as { status?: number }).status === 400 &&
+  String((error as Error).message).includes("prompt_cache_breakpoint");
 
 export const openaiResponses: LlmAdapter = {
   media: ["image", "pdf"],
@@ -51,10 +91,10 @@ export const openaiResponses: LlmAdapter = {
       signal,
     },
   ) {
-    const response = await post(connection, OPENAI, "/responses", {
+    const body = (input: Record<string, unknown>[]) => ({
       model: connection.model,
       ...(instructions ? { instructions } : {}),
-      input: inputOf(messages),
+      input,
       ...(tools.length
         ? {
           tools: tools.map((tool) => ({
@@ -73,7 +113,17 @@ export const openaiResponses: LlmAdapter = {
       ...(maxTokens ? { max_output_tokens: maxTokens } : {}),
       ...(temperature !== undefined ? { temperature } : {}),
       ...options,
-    }, signal);
+    });
+    const request = (points: Set<number>) =>
+      post(connection, OPENAI, "/responses", body(inputOf(messages, points)), signal);
+    // Breakpoints, unless this model refused them once: then it's asked again without.
+    const where = `${connection.baseURL ?? OPENAI.baseURL} ${connection.model}`;
+    const points = pointless.has(where) ? new Set<number>() : pointsOf(messages);
+    const response = await request(points).catch((error) => {
+      if (!points.size || !refusedPoints(error)) throw error;
+      pointless.add(where);
+      return request(new Set());
+    });
     for await (const { data } of sse(response.body!)) {
       const event = JSON.parse(data);
       if (event.type === "response.output_text.delta") {
@@ -98,6 +148,8 @@ export const openaiResponses: LlmAdapter = {
               input: usage.input_tokens ?? 0,
               output: usage.output_tokens ?? 0,
               cached: usage.input_tokens_details?.cached_tokens,
+              // Billed apart (at a premium) by the models that report it.
+              cacheWrite: usage.input_tokens_details?.cache_write_tokens,
               reasoning: usage.output_tokens_details?.reasoning_tokens,
             }),
           };

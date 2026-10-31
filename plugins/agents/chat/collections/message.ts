@@ -64,6 +64,19 @@ const messageSchema = {
     stopped: { type: "boolean" },
     /** A step's model state (its thinking), sent back to that model while its turn goes on. */
     state: { type: "object" },
+    /**
+     * What its sender was told before writing it, at the start of its turn
+     * (its `turn` contexts that said something new): sent to it again here,
+     * in later turns. Only trusted code reads it.
+     */
+    told: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { name: { type: "string" }, text: { type: "string" } },
+        required: ["name", "text"],
+      },
+    },
     at: { type: "string" },
   },
   required: ["thread", "from", "to", "at"],
@@ -71,6 +84,7 @@ const messageSchema = {
 
 export const message = defineCollection({
   schema: messageSchema,
+  private: ["told"],
   queries: {
     /**
      * Everything in a thread, oldest first, agents' private steps included.

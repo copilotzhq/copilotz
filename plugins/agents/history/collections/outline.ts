@@ -15,6 +15,8 @@ const outlineSchema = {
     /** The whole messages' sizes, from the boundary on. */
     tail: { type: "array", items: { type: "integer" } },
     tailAt: { type: "array", items: { type: "string" } },
+    /** And their ids: each is summarized as it leaves the tail. */
+    tailIds: { type: "array", items: { type: "string" } },
     /** The last message numbered, so a retried delivery knows it's done. */
     last: { type: "string" },
   },

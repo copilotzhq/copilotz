@@ -155,7 +155,7 @@ test("an agent works on its space's computer, in the space's folder, once its pe
     // What the agent knows of it each turn.
     const knows = async () =>
       (await rt.query<Prompt>("thread.prompt", { thread, agent: "assistant" }, { actor: ana }))
-        .turn.find((text) => text.startsWith('<context name="computer">')) ?? "";
+        .turn.map((c) => c.text).find((text) => text.startsWith('<context name="computer">')) ?? "";
 
     // No computer here yet.
     assertStringIncludes(
@@ -403,7 +403,9 @@ test("a computer the app makes asking nothing (a cloud computer): its agents wor
     const prompt = await rt.query<Prompt>("thread.prompt", { thread, agent: "assistant" }, {
       actor: ana,
     });
-    const knows = prompt.turn.find((text) => text.startsWith('<context name="computer">')) ?? "";
+    const knows = prompt.turn.map((c) =>
+      c.text
+    ).find((text) => text.startsWith('<context name="computer">')) ?? "";
     assertStringIncludes(knows, "You work on this space's computer, cloudbox");
     assert(!knows.includes("answered with /approve"), "nothing to approve");
     const ran = await rt.call<{ stdout?: string }>("test.tool", {

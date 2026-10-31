@@ -5,7 +5,7 @@ import type { Thread } from "../collections/thread.ts";
 import type { Wait } from "../collections/wait.ts";
 import { agentsNamed, NO_ANSWER, now } from "./agents.ts";
 import { noted } from "./summary.ts";
-import { settingsOf, type Turn } from "./types.ts";
+import { settingsOf, type Told, type Turn } from "./types.ts";
 
 /** Whether a message after `hops` agent messages in a row may still start a turn. */
 export const starts = (ctx: { resources: Resources }, hops: number) => {
@@ -69,7 +69,7 @@ export const answer = async (
   t: Turn,
   run: string,
   text: string,
-  how: { failed?: boolean; stopped?: boolean } = {},
+  how: { failed?: boolean; stopped?: boolean; told?: Told[] } = {},
   /** The turn's thread, when it has it already. */
   known?: Pick<Thread, "in">,
 ) => {
@@ -90,6 +90,8 @@ export const answer = async (
     turn: run,
     ...(how.failed ? { failed: true } : {}),
     ...(how.stopped ? { stopped: true } : {}),
+    // What it was told this turn, when it's the turn's first message.
+    ...(how.told?.length ? { told: how.told } : {}),
     at: now(),
   };
   const deliver = await delivery(ctx, reply, reply.thread, !how.stopped);

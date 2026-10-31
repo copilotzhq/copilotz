@@ -8,6 +8,7 @@
 import type { Context } from "../../../../runtime/mod.ts";
 import type { Routine } from "../collections/routine.ts";
 import { nextRuns, type Schedule, scheduleSchema, whenOf } from "./schedule.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 export const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
 export const forbidden = (message: string) =>
@@ -60,8 +61,9 @@ export async function editable(ctx: Context, id: string): Promise<Routine> {
     verb: "manage",
   });
   if (!can) {
+    const maker = nameOf(found.by, await namesFor(ctx, [found.by]));
     throw forbidden(
-      `Only ${found.by}, who made "${found.name}", or those who manage its space change it.`,
+      `Only ${maker}, who made "${found.name}", or those who manage its space change it.`,
     );
   }
   return found;

@@ -6,6 +6,7 @@ import type { Memory } from "../collections/memory.ts";
 import { peopleIn } from "../shared/scope.ts";
 import { keep } from "../shared/search.ts";
 import { settingsOf } from "../shared/settings.ts";
+import { nameOf, namesFor, withNames } from "../../../access/spaces/contract.ts";
 
 const EXTRACT = `You keep the long-term memory of a team of AI agents. Read the conversation
 excerpt and write down what is worth remembering in later, unrelated conversations:
@@ -50,8 +51,11 @@ async function extract(ctx: Context, event: Event) {
     { about: { $in: people.map((p) => `person:${p}`) }, forgotten: { $exists: false } },
     { sort: { at: -1 }, limit: 40 },
   );
+  // People by name, as the model writes about them (and as notes from before said ids).
+  const names = await namesFor(ctx, people);
+  const shown = (who: string) => nameOf(who, names);
   const excerpt = messages.map((x) =>
-    `${x.from}${x.to.length ? ` → ${x.to.join(", ")}` : ""}: ${x.text ?? ""}`
+    `${shown(x.from)}${x.to.length ? ` → ${x.to.map(shown).join(", ")}` : ""}: ${x.text ?? ""}`
   ).join("\n");
   const { text } = await ctx.call<Completion>("llm.generate", {
     model: extractor!,
@@ -59,7 +63,7 @@ async function extract(ctx: Context, event: Event) {
     instructions: EXTRACT,
     messages: [{
       role: "user",
-      text: `<known>\n${known.map((k) => `- ${k.text}`).join("\n")}\n</known>\n` +
+      text: `<known>\n${known.map((k) => `- ${withNames(k.text, names)}`).join("\n")}\n</known>\n` +
         `<excerpt>\n${excerpt}\n</excerpt>`,
     }],
   });
@@ -76,7 +80,7 @@ async function extract(ctx: Context, event: Event) {
     if (typeof item.text !== "string" || !item.text.trim()) continue;
     // The person by name, however the model capitalized it.
     const name = typeof item.about === "string" ? item.about.trim().toLowerCase() : "";
-    const person = people.find((p) => p.toLowerCase() === name);
+    const person = people.find((p) => shown(p).toLowerCase() === name || p.toLowerCase() === name);
     const about = person ? `person:${person}` : "everyone";
     await keep(ctx, {
       text: item.text.trim(),

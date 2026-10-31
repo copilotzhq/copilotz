@@ -9,6 +9,7 @@ import type { Context } from "../../../../runtime/mod.ts";
 import type { Approval } from "../collections/approval.ts";
 import type { Grant } from "../collections/grant.ts";
 import { type Asked, settingsOf } from "./settings.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 export type Ask = {
   /** Who answers. */
@@ -70,9 +71,12 @@ export async function allowed(ctx: Context, ask: Ask): Promise<true | string> {
     writes: "change this file",
     publish: "publish this as an app",
   }[ask.work];
-  const whose = ask.owner === ask.for ? "their" : `${ask.owner}'s`;
-  return `Waiting for ${ask.owner}'s yes to ${what} on ${whose} computer: ${ask.detail}\n` +
-    `${ask.owner === ask.for ? "They see" : `${ask.owner}, whose computer it is, sees`} your ` +
+  // People by name.
+  const names = await namesFor(ctx, [ask.owner, ask.for]);
+  const owner = nameOf(ask.owner, names);
+  const whose = ask.owner === ask.for ? "their" : `${owner}'s`;
+  return `Waiting for ${owner}'s yes to ${what} on ${whose} computer: ${ask.detail}\n` +
+    `${ask.owner === ask.for ? "They see" : `${owner}, whose computer it is, sees`} your ` +
     "request where they talk with you, and answers there (yes once, for this conversation, " +
     "always, or no). Tell them what you want to do and why, then wait: don't try again until " +
     "it's answered.";

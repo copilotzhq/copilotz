@@ -15,7 +15,8 @@ import { OS_NAMES } from "../program/release.ts";
 import { tools } from "../resources/tools.ts";
 import { personOf } from "../shared/person.ts";
 import { settingsOf } from "../shared/settings.ts";
-import { nameOf, stateOf } from "../shared/where.ts";
+import { stateOf } from "../shared/where.ts";
+import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
 
 const ASKED = { terminal: "run commands", jobs: "start jobs", writes: "write or edit files" };
 
@@ -30,9 +31,14 @@ const shellOf = (path: string) =>
 type Info = { os?: string; root?: string; windows?: string; shell?: string };
 
 /** One of several computers, in a line: what it is, how it is, what it asks first. */
-function lineOf(desk: Desk, person: string, asked: string[]): string {
+function lineOf(
+  desk: Desk,
+  person: string,
+  asked: string[],
+  shown: (id: string) => string,
+): string {
   const info = desk.info as Info | undefined;
-  const whose = desk.owner === person ? `${nameOf(person)}'s own` : `${nameOf(desk.owner)}'s`;
+  const whose = desk.owner === person ? `${shown(person)}'s own` : `${shown(desk.owner)}'s`;
   const kind = desk.status?.kind === "cloud" ? "a cloud computer" : "a machine";
   const system = info?.os
     ? `, ${OS_NAMES[info.os] ?? info.os}${info.shell ? ` (${shellOf(info.shell)})` : ""}`
@@ -44,10 +50,10 @@ function lineOf(desk: Desk, person: string, asked: string[]): string {
     ? "asleep: using it wakes it, in a few seconds"
     : state === "waking"
     ? "waking"
-    : `offline until ${nameOf(desk.owner)} starts it again`;
+    : `offline until ${shown(desk.owner)} starts it again`;
   const answerer = desk.answers === "owner" ? desk.owner : person;
   const asks = asked.length
-    ? `${nameOf(answerer)} says yes before you ${asked.join(", ")}`
+    ? `${shown(answerer)} says yes before you ${asked.join(", ")}`
     : "nothing needs a yes";
   return `- ${desk.name ?? desk.computer}${desk.default ? " (the default)" : ""}: ${kind}, ` +
     `${whose}${system}; ${how}; ${asks}.`;
@@ -67,13 +73,16 @@ export const contextViews = {
       if (desks.status !== "ready") return undefined;
       const here = [...desks.value].sort((a, b) => Number(!!b.default) - Number(!!a.default));
       const askedOn = (d: Desk) => (d.approve ?? settingsOf(ctx).approve).map((w) => ASKED[w]);
+      // People by name.
+      const names = namesIn(ctx, [person, ...here.map((d) => d.owner)]);
+      const shown = (id: string) => nameOf(id, names);
       if (here.length > 1) {
         const asking = here.some((d) => askedOn(d).length);
         return [
           `This space has ${here.length} computers, not machines of yours. Your computer tools ` +
           "use the default unless you name another: each takes `computer` (its name). Choose " +
           "by what the work needs, or as your person asks:",
-          ...here.map((d) => lineOf(d, person, askedOn(d))),
+          ...here.map((d) => lineOf(d, person, askedOn(d), shown)),
           "On each, your terminal, jobs and files are in its folder for this space, and your " +
           "browser and web searches run there too (the browser hidden, unless you show its " +
           "window on its owner's screen for them to watch or step in). A job runs on the " +
@@ -95,23 +104,23 @@ export const contextViews = {
           return `This space's computer, ${here[0].name ?? "theirs"}, is offline or asleep. ` +
             "If the app hosts it (a cloud computer), your computer tools wake it: the first " +
             `call waits a few seconds. If not, they won't work until ${
-              nameOf(here[0].owner)
+              shown(here[0].owner)
             } starts it again.`;
         }
         return here.length
           ? `This space's computer, ${here[0].name ?? "theirs"}, is offline, so your computer ` +
             `tools won't work until ${
-              nameOf(here[0].owner)
+              shown(here[0].owner)
             } starts it again (on it: deno task computer).`
           : "This space has no computer, so your computer tools won't work until someone " +
             "connects one, or adds one of theirs (in the terminal: /computer connect or " +
             "/computer share; on the web: the space's Computer tab).";
       }
-      const owned = desk.owner === person ? `${nameOf(person)}'s own` : `${nameOf(desk.owner)}'s`;
+      const owned = desk.owner === person ? `${shown(person)}'s own` : `${shown(desk.owner)}'s`;
       const info = desk.info as Info | undefined;
       const sep = info?.os === "win32" ? "\\" : "/";
       const asked = askedOn(desk);
-      const answerer = nameOf(desk.answers === "owner" ? desk.owner : person);
+      const answerer = shown(desk.answers === "owner" ? desk.owner : person);
       return [
         `You work on this space's computer, ${desk.name ?? "theirs"} (${owned}${
           info?.os ? `, ${OS_NAMES[info.os] ?? info.os}` : ""

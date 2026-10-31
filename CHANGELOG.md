@@ -46,6 +46,35 @@
   (through computers' new `envActions` resource). An app's row opens its environment: the space's
   shown, its own edited, saved with a redeploy. The job start form takes its own environment
   (`NAME=value` lines). The toolkit's `Time` also draws on a server.
+- **People by name, everywhere:** agents' prompts, notes, the terminal and the web show a person's
+  name where they showed their id (`google:1139…`). The spaces plugin keeps each person's profile
+  (collection `profile`: their name as sign-in verified it, else their email's name, and picture;
+  never their email), from the identity plugin's `person` as it changes, at `org.join`, and on
+  `space.personal` (each page load), so people known before it get one the next time they come.
+  Anyone in the org reads names through the query `profile.names` `{ ids }` (a browser reads
+  profiles only through it); two people of one name stay apart ("Ana (2762)"). The new `names`
+  resource says where names are (`{ collection: "profile" }`), and the spaces contract (and
+  `copilotz/plugins/access`) gives `nameOf`, `namesOf`, `namesIn` (Views), `namesFor` (Actions,
+  Processors, tools), `withNames`, `idsIn` and `PROFILE`. A sign-in's id is never shown as a name:
+  without a profile, it's "someone".
+- **Agents' prompts:** others' messages read "Ana Lima: …", "People here:" names people, a
+  conversation's space is "Ana Lima's Personal space", the computers context says whose computer it
+  is and who says yes by name, as do waiting asks, routines (who made one, whom it runs as), history
+  summaries and zoom, and recall. Memory extraction writes names, and `remember`'s `about` takes a
+  person by name.
+- **Notes and summaries written before names:** a memory or a summary that says someone's id
+  (`google:1139…'s cloud computer…`) reads with their name wherever it shows (prompts, recall, the
+  Memories page, the terminal), substituted when it's shown: nothing stored is changed, and nothing
+  needs migrating.
+- **The web:** the Members tab (people, requests to join, invitations), the space header's faces,
+  other people's Personal spaces ("Ana Lima's Personal"), invitations ("Ana Lima invited you"), chat
+  messages and the conversation's people, memories (grouped, by whom, search), routines, skills
+  ("Made by"), apps ("by"), computers (whose each is, who asks first, who started a job or made a
+  preview), usage and the org's people show names. **The terminal:** `/computers`, `/approvals`,
+  `/requests`, `/grant`, `/invitations`, memories and messages, likewise; `/remove` takes a person's
+  id with a colon (`google:1139…`).
+- **Share refusals** name the spaces a write would reveal ("Ana Lima's Personal space"), not their
+  ids. An org invitation made by a space invitation says who invited them.
 
 ## 1.0.0-rc.6 — 2026-10-30
 

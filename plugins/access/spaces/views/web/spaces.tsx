@@ -16,7 +16,8 @@ import type { Member, Reached, SpaceSidebar } from "../../contract.ts";
 import { STYLE } from "./style.ts";
 import { spacePath } from "./tabs.ts";
 import { SpaceTree } from "./tree.tsx";
-import { apart } from "./who.ts";
+import { apart, ownersOf } from "./who.ts";
+import { namesIn } from "../../shared/names.ts";
 
 export const spacesView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
   const spaces = ctx.db.collection("space").query<Reached[]>("reached", {}).value;
@@ -47,6 +48,7 @@ export const spacesView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode =
         path={typeof ctx.hints.path === "string" ? ctx.hints.path : undefined}
         under={under}
         viewer={ctx.viewer?.name ?? ""}
+        names={namesIn(ctx, ownersOf(spaces, ctx.viewer?.name))}
         create={async (name) => {
           const { space } = await ctx.call<{ space: string }>("space.create", { name });
           go(spacePath(space));

@@ -3,6 +3,7 @@ import { defineAction } from "../../../../runtime/mod.ts";
 import { PERSONAL } from "../shared/personal.ts";
 import { seat } from "../shared/agents.ts";
 import { memberKey } from "../shared/reach.ts";
+import { keepProfileOf } from "../shared/profile.ts";
 
 export const personalAction = defineAction({
   description: "Your Personal space, where what you make alone lives",
@@ -30,6 +31,8 @@ export const personalAction = defineAction({
         });
       });
     }
+    // Pages ask this as they open: how they show is kept (from before profiles, too).
+    await keepProfileOf(ctx, ctx.actor!.id);
     return { space: id };
   },
 });

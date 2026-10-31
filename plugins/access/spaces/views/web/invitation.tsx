@@ -13,11 +13,17 @@ import { aRole, whoOf } from "./who.ts";
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export function InvitationCard(
-  { invitation: i, call, compact }: { invitation: Invitation; call: Call; compact?: boolean },
+  { invitation: i, call, compact, names = {} }: {
+    invitation: Invitation;
+    call: Call;
+    compact?: boolean;
+    /** People by name (`namesIn`): who invited them. */
+    names?: Record<string, string>;
+  },
 ): ReactNode {
   const [busy, setBusy] = useState<"accept" | "decline">();
   const [error, setError] = useState<string>();
-  const by = whoOf(i.by).id;
+  const by = whoOf(i.by, names).name;
   const answer = async (how: "accept" | "decline") => {
     setBusy(how);
     setError(undefined);

@@ -14,6 +14,7 @@ import type { Routine } from "../../collections/routine.ts";
 import { describe, localZone } from "../../shared/schedule.ts";
 import { routinePath } from "./routines.ts";
 import { STYLE } from "./style.ts";
+import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
 
 export const routineStepView = (call: ShownCall, ctx: ViewContext<ReactNode>): ReactNode => {
   const style = <style href="routines-web" precedence="copilotz">{STYLE}</style>;
@@ -45,6 +46,7 @@ export const routineStepView = (call: ShownCall, ctx: ViewContext<ReactNode>): R
     );
   }
   const me = ctx.viewer?.name;
+  const names = namesIn(ctx, [routine.by]);
   return (
     <div className="routine-step">
       {style}
@@ -57,7 +59,7 @@ export const routineStepView = (call: ShownCall, ctx: ViewContext<ReactNode>): R
         </b>
         <span>
           {describe(routine.schedule, { here: localZone() })} · runs as{" "}
-          {routine.by === me ? "you" : routine.by}
+          {routine.by === me ? "you" : nameOf(routine.by, names)}
         </span>
       </span>
       <Button size="sm" iconEnd="chevron" href={routinePath(routine._id)}>Open</Button>

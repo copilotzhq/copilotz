@@ -3,6 +3,7 @@ import type { Context } from "../../../../runtime/mod.ts";
 import { type Message, tool } from "../../chat/contract.ts";
 import type { Summary } from "../collections/summary.ts";
 import { lineOf, node, type Outlined } from "../shared/lines.ts";
+import { namesFor } from "../../../access/spaces/contract.ts";
 import { summarized } from "../shared/summarized.ts";
 import { summaryView } from "../views/summary.ts";
 
@@ -42,7 +43,9 @@ async function open(
     const message = line?.message
       ? await ctx.db.collection<Message>("message").findOne({ _id: line.message })
       : null;
-    return message ? `${id}+1|${lineOf(message)}` : `Error: no message ${id} here.`;
+    return message
+      ? `${id}+1|${lineOf(message, await namesFor(ctx, [message.from, ...message.to]))}`
+      : `Error: no message ${id} here.`;
   }
   const level = Math.log2(n) - 1;
   const half = n / 2;

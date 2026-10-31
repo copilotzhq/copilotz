@@ -21,6 +21,7 @@ import { jobActionsOf, kindByComputer, kindsOf, queryOf } from "./kinds.ts";
 import { type Named, namedOf } from "./names.ts";
 import { ComputerPage, type Space } from "./page.tsx";
 import { STYLE } from "./style.ts";
+import { namesIn } from "../../../../access/spaces/contract.ts";
 
 export const computerView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
   const mine = ctx.db.collection("computer").query<Computer[]>("mine", {}).value;
@@ -38,6 +39,13 @@ export const computerView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
     {},
     ...teams.map((team) => namedOf(team?.agents)),
   );
+  // People by name, in the spaces it's in: who started its jobs.
+  const members = desks?.length
+    ? ctx.db.collection<{ member: string }>("member").find({
+      space: { $in: [...new Set(desks.map((d) => d.in))] },
+    }).value ?? []
+    : [];
+  const names = namesIn(ctx, members.map((m) => m.member).filter((m) => m.startsWith("person:")));
   // What it serves, at addresses of their own, in each space it's in.
   const previews = [...new Set((desks ?? []).map((d) => d.in))].flatMap((space) =>
     ctx.db.collection("preview").query<Preview[]>("here", { in: space }).value ?? []
@@ -100,6 +108,7 @@ export const computerView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
         here={here}
         me={ctx.viewer?.name}
         agents={agents}
+        names={names}
         call={ctx.call}
         {...(kind ? { kind } : {})}
         previews={previews}

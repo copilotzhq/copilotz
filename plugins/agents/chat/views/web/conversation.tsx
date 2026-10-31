@@ -32,6 +32,7 @@ import { STYLE } from "./style.ts";
 import { Transcript } from "./transcript.tsx";
 import { waitingOn } from "./waiting.ts";
 import { byAgent, names } from "./who.ts";
+import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
 
 /** Messages this close after the one before, from the same author, go under its name. */
 const GROUP_MS = 5 * 60_000;
@@ -101,9 +102,16 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
     ...said.filter(byAgent).map((m) => m.from),
     ...Object.keys(who),
   ]);
+  // People by name (agents are by theirs): every message shows them so.
+  const humans = [...new Set(everyone)].filter((id) => !agents.has(id));
+  const known = namesIn(ctx, humans);
+  const shown = {
+    ...Object.fromEntries(humans.map((id) => [id, { name: nameOf(id, known) }])),
+    ...who,
+  };
   const people: Someone[] = [...new Set(everyone)]
     .map((name) => ({
-      name: who[name]?.name ?? name,
+      name: shown[name]?.name ?? name,
       agent: agents.has(name),
       ...(who[name]?.icon ? { icon: who[name].icon } : {}),
     }))
@@ -142,7 +150,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
             !before.failed && Date.parse(m.at) - Date.parse(before.at) < GROUP_MS;
           return ctx.show("message", m, {
             thread: t._id,
-            who,
+            who: shown,
             usual: thread.agents ?? [],
             ...(follows ? { follows: true } : {}),
             ...(asked.has(m._id) ? { asked: true } : {}),

@@ -6,6 +6,7 @@ import type { Outline } from "../collections/outline.ts";
 import type { Summary } from "../collections/summary.ts";
 import { type HistorySettings, settingsOf } from "../shared/settings.ts";
 import { cut, lineOf, node, size } from "../shared/lines.ts";
+import { namesFor } from "../../../access/spaces/contract.ts";
 
 const INSTRUCTIONS = `You write the memory of a conversation: one step of a summary tree,
 compressing one message into a line or merging two adjacent lines into one. Your line stands in
@@ -87,7 +88,8 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
   if (state.last === m._id) return; // Committed before this delivery was retried.
   const at = new Date().toISOString();
   const index = state.count;
-  const text = lineOf(m);
+  // People by name in what's kept.
+  const text = lineOf(m, await namesFor(ctx, [m.from, ...m.to]));
   const made = new Map<string, Summary>();
   const get = async (level: number, i: number) =>
     made.get(node(m.thread, level, i)) ?? await nodes.findOne({ _id: node(m.thread, level, i) });

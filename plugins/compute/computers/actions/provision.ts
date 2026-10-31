@@ -12,6 +12,7 @@ import { type Actor, defineAction } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import { deskIn, may } from "../shared/desks.ts";
 import { hash, secret } from "../shared/secret.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 export const provisionAction = defineAction({
   input: {
@@ -31,7 +32,8 @@ export const provisionAction = defineAction({
     const space = input.in ??
       (await ctx.as(owner).call<{ space: string }>("space.personal", {})).space;
     if (input.in && !await may(ctx.as(owner), space, "write")) {
-      throw Object.assign(new Error(`${input.owner} can't work in this space.`), {
+      const named = nameOf(input.owner, await namesFor(ctx, [input.owner]));
+      throw Object.assign(new Error(`${named} can't work in this space.`), {
         code: "forbidden",
       });
     }

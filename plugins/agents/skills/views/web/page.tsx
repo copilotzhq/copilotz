@@ -35,6 +35,7 @@ import { DeleteSkill } from "./delete.tsx";
 import { SkillForm } from "./form.tsx";
 import { markdownish, skillPath, skillsTab } from "./skills.ts";
 import { STYLE } from "./style.ts";
+import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 type Read = { skill: Shown; file: string; text?: string; missing?: true } | null;
@@ -95,6 +96,9 @@ export const skillView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
   }
   const space = main.skill.in ?? (typeof ctx.hints.in === "string" ? ctx.hints.in : undefined);
   const place = places.find((p) => p._id === space);
+  // Who made it, by name (`person:<id>`, or an agent).
+  const by = main.skill.by;
+  const maker = by ? nameOf(by, namesIn(ctx, [by])) : undefined;
   return (
     <>
       {style}
@@ -109,13 +113,14 @@ export const skillView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
         editing={editing}
         files={files}
         call={ctx.call}
+        {...(maker ? { maker } : {})}
       />
     </>
   );
 };
 
 function SkillPage(
-  { skill, instructions, file, shown, space, place, editing: asked, files, call }: {
+  { skill, instructions, file, shown, space, place, editing: asked, files, call, maker }: {
     skill: Shown;
     instructions: string;
     file: string;
@@ -127,6 +132,8 @@ function SkillPage(
     /** Its files' text, while it's being changed. */
     files?: { path: string; text: string }[];
     call: Call;
+    /** Who made it, by name. */
+    maker?: string;
   },
 ): ReactNode {
   const app = skill.source === "app";
@@ -271,7 +278,7 @@ function SkillPage(
                 />
               )}
             <p className="skill-meta">
-              {skill.by ? <span>Made by {skill.by.replace(/^person:/, "")}</span> : null}
+              {maker ? <span>Made by {maker}</span> : null}
               {skill.updated ?? skill.at
                 ? (
                   <span>

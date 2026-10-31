@@ -10,6 +10,7 @@ import type { Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
 import { personOf } from "./person.ts";
 import type { Scope } from "./workloads.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 /** Where work goes: the desk, whom it's for, who answers, its scope, and how many the space has. */
 export type Where = {
@@ -34,9 +35,6 @@ export function stateOf(desk: Desk): "online" | "asleep" | "waking" | "offline" 
   if (desk.status?.kind !== "cloud") return "offline";
   return desk.status.state === "waking" ? "waking" : "asleep";
 }
-
-/** A person, as an agent reads them (their id, until people's names are resolved here). */
-export const nameOf = (person: string): string => person;
 
 /** One computer, for a list to choose from: `Laptop (online)`, `Cloud (asleep: wakes when used)`. */
 const choiceOf = (desk: Desk) => {
@@ -109,7 +107,9 @@ export async function whereFor(
       return {
         missing: `${chosen.name ?? "That computer"} is ${
           stateOf(chosen) === "offline"
-            ? `offline: ${nameOf(chosen.owner)} can start it again`
+            ? `offline: ${
+              nameOf(chosen.owner, await namesFor(ctx, [chosen.owner]))
+            } can start it again`
             : "still waking: try again in a moment"
         }.${others.length ? ` Use another: ${choices(others)}.` : ""}`,
       };
@@ -118,12 +118,16 @@ export async function whereFor(
   }
   const desk = desks.find((d) => d.online);
   if (!desk) {
+    // People by name.
+    const names = await namesFor(ctx, [person, ...(desks[0] ? [desks[0].owner] : [])]);
     return {
       missing: desks.length
         ? `This space's computer, ${desks[0].name ?? "theirs"}, is offline: ${
-          desks[0].owner
+          nameOf(desks[0].owner, names)
         } can start it again (on it: deno task computer).`
-        : `There's no computer in this space: ${person} can connect one, or add one of ` +
+        : `There's no computer in this space: ${
+          nameOf(person, names)
+        } can connect one, or add one of ` +
           "theirs, from the space (in the terminal: /computer connect or /computer share).",
     };
   }

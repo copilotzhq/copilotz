@@ -10,6 +10,7 @@ import { type Thread, type Tool, tool, type ToolContext } from "../../chat/contr
 import type { Listed, Routine } from "../collections/routine.ts";
 import { personOf } from "../shared/routines.ts";
 import { describe, type Given, moment, scheduleSchema } from "../shared/schedule.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 type Space = { _id: string; can?: string[] };
 
@@ -29,8 +30,8 @@ async function whereFor(ctx: ToolContext) {
   return { person, space: thread.in, as: ctx.as({ kind: "person", id: person }) };
 }
 
-/** A routine, as an agent reads it: one line, with its id. */
-const line = (r: Routine) => {
+/** A routine, as an agent reads it: one line, with its id (who made it by name). */
+const line = (r: Routine, names: Record<string, string> = {}) => {
   const zone = "timezone" in r.schedule ? r.schedule.timezone : "UTC";
   const next = r.next
     ? `next ${moment(r.next, zone, "en-US")} ${zone}`
@@ -40,7 +41,7 @@ const line = (r: Routine) => {
   const last = r.last ? `; last ${r.last.outcome}${r.last.error ? ` (${r.last.error})` : ""}` : "";
   return `- "${r.name}" [${r._id}]: ${describe(r.schedule, { locale: "en-US" })}, asks ` +
     `@${r.agent}: "${r.text}" ` +
-    `(${next}${last}; made by ${r.by})`;
+    `(${next}${last}; made by ${nameOf(r.by, names)})`;
 };
 
 const scheduleRoutine = tool({
@@ -84,8 +85,11 @@ const scheduleRoutine = tool({
       const routine = await where.as.db.collection<Routine>("routine").findOne({
         _id: made.routine,
       });
+      const names = await namesFor(ctx, [where.person, ...(routine ? [routine.by] : [])]);
       return routine
-        ? `Made it: ${line(routine).slice(2)}. It runs as ${where.person}; they can pause, ` +
+        ? `Made it: ${line(routine, names).slice(2)}. It runs as ${
+          nameOf(where.person, names)
+        }; they can pause, ` +
           "change or delete it in this space's Routines."
         : "Made it.";
     } catch (error) {
@@ -104,8 +108,9 @@ const listRoutines = tool({
     const found = await where.as.db.collection("routine").query<Listed[]>("list", {
       in: where.space,
     });
+    const names = await namesFor(ctx, found.map((r) => r.by));
     return found.length
-      ? found.map(line).join("\n")
+      ? found.map((r) => line(r, names)).join("\n")
       : "No routines here yet. You can make one with schedule_routine.";
   },
 });

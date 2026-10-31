@@ -10,6 +10,7 @@ import type { Invitation } from "../collections/invitation.ts";
 import { joinable } from "../shared/personal.ts";
 import { memberKey, orgRoleOf, reachOf, ROLES } from "../shared/reach.ts";
 import type { DirectoryPort } from "./org.ts";
+import { namesFor } from "../shared/names.ts";
 
 /** An email address, as invitations hold it. */
 const EMAIL = /^[^\s@]+@[^\s@]+$/;
@@ -83,7 +84,9 @@ async function joinsTheOrg(ctx: Context, email: string) {
   const known = await ctx.as().db.collection("person").findOne({ email });
   if (known && await orgRoleOf({ kind: "person", id: String(known._id) }, ctx.as())) return;
   if ((await directory.invites()).some((waiting) => waiting.email === email)) return;
-  await directory.invite({ email, role: "guest", by: ctx.actor!.id });
+  // Who invited them, by name: what the org's invitation says.
+  const [from] = Object.values(await namesFor(ctx, [ctx.actor!.id]));
+  await directory.invite({ email, role: "guest", by: ctx.actor!.id, ...(from ? { from } : {}) });
 }
 
 export const acceptInvitationAction = defineAction({

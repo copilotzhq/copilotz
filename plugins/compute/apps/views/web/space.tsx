@@ -33,6 +33,7 @@ import { lookOf, shown } from "./apps.ts";
 import { AppEnv } from "./env.tsx";
 import { AppStatus } from "./publish.tsx";
 import { STYLE } from "./style.ts";
+import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 type Place = { _id: string; name: string; kind: string; can?: string[] };
@@ -72,13 +73,14 @@ export const appsSpaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode
         me={ctx.viewer?.name}
         compact={compact}
         call={ctx.call}
+        names={namesIn(ctx, apps.map((a) => a.by))}
       />
     </>
   );
 };
 
 function Apps(
-  { space, where, can, apps, machines, env, owns, me, compact, call }: {
+  { space, where, can, apps, machines, env, owns, me, compact, call, names }: {
     space: string;
     where: string;
     can: string[];
@@ -90,6 +92,8 @@ function Apps(
     me?: string;
     compact: boolean;
     call: Call;
+    /** Who published them, by name. */
+    names: Record<string, string>;
   },
 ): ReactNode {
   const [removing, setRemoving] = useState<AppDoc>();
@@ -139,6 +143,7 @@ function Apps(
             {...(env ? { env } : {})}
             {...(owns ? { own: owns.filter((v) => v.app === app._id) } : {})}
             me={me}
+            names={names}
             write={can.includes("write")}
             manage={can.includes("manage")}
             remove={() => setRemoving(app)}
@@ -152,13 +157,14 @@ function Apps(
 }
 
 function AppRow(
-  { app, machine, where, env, own, me, write, manage, remove, call }: {
+  { app, machine, where, env, own, me, names, write, manage, remove, call }: {
     app: AppDoc;
     machine?: Machine;
     where: string;
     env?: EnvVar[];
     own?: EnvVar[];
     me?: string;
+    names: Record<string, string>;
     write: boolean;
     manage: boolean;
     remove(): void;
@@ -232,7 +238,8 @@ function AppRow(
               From {from} · port <code>{app.source.port}</code>
             </span>
             <span>
-              {app.by === me ? "by you" : `by ${app.by}`} · <Time at={app.live ?? app.at} />
+              {app.by === me ? "by you" : `by ${nameOf(app.by, names)}`} ·{" "}
+              <Time at={app.live ?? app.at} />
             </span>
             {own?.length
               ? (

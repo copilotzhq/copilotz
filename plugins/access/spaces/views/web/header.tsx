@@ -39,19 +39,21 @@ const together = (people: number, agents: number) => {
 };
 
 export function SpaceHeader(
-  { space, members, manage, me, call, children }: {
+  { space, members, manage, me, call, children, names = {} }: {
     space: Reached;
     members: Member[];
     manage: boolean;
     me?: string;
     call: Call;
     children: ReactNode;
+    /** People by name (`namesIn`): its members, whose it is. */
+    names?: Record<string, string>;
   },
 ): ReactNode {
   const [renaming, setRenaming] = useState(false);
   const [inviting, setInviting] = useState(false);
   const personal = space.kind === "personal";
-  const name = spaceName(space, me);
+  const name = spaceName(space, me, names);
   const people = peopleIn(members);
   const agents = members.filter((m) => whoOf(m.member).kind === "agent").length;
   const role = members.find((m) => m.member === `person:${me}`)?.role;
@@ -143,11 +145,11 @@ export function SpaceHeader(
               <a
                 className="space-faces"
                 href={`/space/${encodeURIComponent(space._id)}?tab=members`}
-                aria-label={`Members: ${people.map((p) => whoOf(p.member).id).join(", ")}`}
+                aria-label={`Members: ${people.map((p) => whoOf(p.member, names).name).join(", ")}`}
               >
                 {people.slice(0, FACES).map((p) => {
-                  const id = whoOf(p.member).id;
-                  return <Avatar key={p._id} name={id} size={28} title={id} />;
+                  const { name } = whoOf(p.member, names);
+                  return <Avatar key={p._id} name={name} size={28} title={name} />;
                 })}
                 {people.length > FACES
                   ? <Badge className="space-faces-more">+{people.length - FACES}</Badge>

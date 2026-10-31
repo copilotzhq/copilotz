@@ -18,7 +18,8 @@ import type { Invitation, Reached } from "../../contract.ts";
 import { INVITE_ABOUT, inviteTitle } from "./invite-dialog.tsx";
 import { archiveStep, leaveStep, newSpaceStep, renameStep } from "./steps.ts";
 import { spacePath, tabsOf } from "./tabs.ts";
-import { apart, aRole, spaceName, whoOf } from "./who.ts";
+import { apart, aRole, ownersOf, spaceName, whoOf } from "./who.ts";
+import { namesIn } from "../../shared/names.ts";
 
 /** How many spaces show with nothing typed, and while searching. */
 const SHOWN = { idle: 6, searching: 8 };
@@ -36,6 +37,10 @@ export const spacesPaletteView = (
   const spaces = ctx.db.collection("space").query<Reached[]>("reached", {}).value;
   const invitations = ctx.db.collection("invitation").query<Invitation[]>("mine", {}).value;
   if (!spaces) return null;
+  const names = namesIn(ctx, [
+    ...(invitations ?? []).map((i) => i.by),
+    ...ownersOf(spaces, ctx.viewer?.name),
+  ]);
   const searching = !!String(ctx.hints.search ?? "").trim();
   const here = spaces.find((s) => s._id === ctx.hints.in);
   const call = ctx.call;
@@ -50,7 +55,7 @@ export const spacesPaletteView = (
           key: `invitation:${i._id}`,
           label: `Join ${i.name}`,
           icon: "mail",
-          description: `${whoOf(i.by).id} invited you, as ${aRole(i.role)}`,
+          description: `${whoOf(i.by, names).name} invited you, as ${aRole(i.role)}`,
           keywords: ["invitation", "accept"],
           run: async () => {
             const joined = await call<{ space: string }>("invitation.accept", {
@@ -144,7 +149,7 @@ export const spacesPaletteView = (
     limit: searching ? SHOWN.searching : SHOWN.idle,
     items: [...active, ...(searching ? archived : [])].map((s) => ({
       key: `space:${s._id}`,
-      label: spaceName(s, ctx.viewer?.name),
+      label: spaceName(s, ctx.viewer?.name, names),
       ...markOf(s),
       description: s.archived
         ? "Archived"

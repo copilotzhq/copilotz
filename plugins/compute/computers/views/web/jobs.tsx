@@ -6,9 +6,10 @@
  * runs; and it stops (an agent's, as that agent). One kept running says so.
  * A job that serves a port shows it, with its preview and what else it can
  * become (serve.tsx); the computer's previews come first. A job of your own
- * starts from the top: its command, a name, the port it serves, and whether
- * to keep it running. The list is asked for again every few seconds, more
- * often while it shows, and never while the page is hidden.
+ * starts from the top: its command, a name, the port it serves, whether to
+ * keep it running, and, if you like, its own environment over the space's.
+ * The list is asked for again every few seconds, more often while it shows,
+ * and never while the page is hidden.
  */
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
@@ -25,10 +26,12 @@ import {
   Notice,
   Skeleton,
   Spinner,
+  Textarea,
   Time,
 } from "../../../../../hosts/web/mod.ts";
 import type { Job, JobsLogs } from "../../shared/workloads.ts";
 import { listOf } from "./calls.ts";
+import { envLines } from "./environment.ts";
 import { type Named, whose, type Work } from "./names.ts";
 import { jobToStart, serves } from "./previews.ts";
 import { JobServe, Previews, type Served } from "./serve.tsx";
@@ -39,6 +42,8 @@ const HIDDEN_MS = 10_000;
 /** How often a running job's logs are, and how much of their end. */
 const LOGS_MS = 1_500;
 const TAIL = 64 * 1024;
+/** A job's own environment, as an example of how it's typed. */
+const ENV_EXAMPLE = "NODE_ENV=development\nDEBUG=app:*";
 
 export type Jobs = { list?: Job[]; error?: string; refresh(): Promise<void> };
 
@@ -170,17 +175,22 @@ export function JobsTab(
 
 /**
  * Starting a job of your own: its command, a name if you like, the port it
- * serves (for its preview), and whether to keep it running (started again
- * whenever the computer starts: a cloud computer's wake, say).
+ * serves (for its preview), whether to keep it running (started again
+ * whenever the computer starts: a cloud computer's wake, say), and its own
+ * environment (`NAME=value` lines, over the space's, which it gets anyway).
  */
 function Start({ work, started }: { work: Work; started(job: Job): Promise<void> }): ReactNode {
   const [command, setCommand] = useState("");
   const [name, setName] = useState("");
   const [port, setPort] = useState("");
   const [keep, setKeep] = useState(false);
+  const [envShown, setEnvShown] = useState(false);
+  const [envText, setEnvText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const id = useId();
+  const own = envLines(envShown ? envText : "");
+  const envCount = "env" in own && own.env ? Object.keys(own.env).length : 0;
   return (
     <form
       className="jobs-start"
@@ -190,14 +200,17 @@ function Start({ work, started }: { work: Work; started(job: Job): Promise<void>
         if (!command.trim() || busy) return;
         const input = jobToStart({ command, name, port, keep });
         if ("error" in input) return setError(input.error);
+        if ("error" in own) return setError(own.error);
         setBusy(true);
         setError(undefined);
         try {
-          const job = await work<Job>("jobs.start", input);
+          const job = await work<Job>("jobs.start", { ...input, ...own });
           setCommand("");
           setName("");
           setPort("");
           setKeep(false);
+          setEnvText("");
+          setEnvShown(false);
           await started(job);
         } catch (e) {
           setError(message(e));
@@ -244,19 +257,59 @@ function Start({ work, started }: { work: Work; started(job: Job): Promise<void>
       <Button type="submit" variant="primary" icon="play" loading={busy} disabled={!command.trim()}>
         Start
       </Button>
-      <Checkbox
-        className="jobs-keep"
-        checked={keep}
-        onChange={(event) => setKeep(event.target.checked)}
-        label={
-          <>
-            Keep running{" "}
-            <span className="jobs-keep-hint">
-              · started again whenever the computer starts
-            </span>
-          </>
-        }
-      />
+      <div className="jobs-more">
+        <Checkbox
+          className="jobs-keep"
+          checked={keep}
+          onChange={(event) => setKeep(event.target.checked)}
+          label={
+            <>
+              Keep running{" "}
+              <span className="jobs-keep-hint">
+                · started again whenever the computer starts
+              </span>
+            </>
+          }
+        />
+        <Button
+          size="sm"
+          variant="ghost"
+          icon="lock"
+          className="jobs-env-toggle"
+          aria-expanded={envShown}
+          aria-controls={`${id}-env`}
+          onClick={() => setEnvShown(!envShown)}
+        >
+          {envCount ? `Its environment · ${envCount}` : "Its environment"}
+        </Button>
+      </div>
+      {envShown
+        ? (
+          <div className="jobs-env" id={`${id}-env`}>
+            <label className="copilotz-sr" htmlFor={`${id}-env-text`}>
+              Its own environment, one NAME=value a line
+            </label>
+            <Textarea
+              id={`${id}-env-text`}
+              value={envText}
+              rows={2}
+              autoGrow
+              maxHeight={180}
+              placeholder={ENV_EXAMPLE}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              invalid={"error" in own}
+              onChange={(event) => setEnvText(event.target.value)}
+            />
+            <p className="jobs-env-hint">
+              One <code>NAME=value</code>{" "}
+              a line, for this job only, over the space's environment (which it gets anyway). A job
+              kept running keeps it, on the computer.
+            </p>
+          </div>
+        )
+        : null}
       {error ? <p role="alert" className="jobs-error">{error}</p> : null}
     </form>
   );

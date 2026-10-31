@@ -21,18 +21,21 @@
  * once their turn is over (`conversation`'s `working` hint). A job that
  * serves a port gets a preview (`computer.preview`), opened in a tab, its
  * link copied, for the space's members or anyone with the link; the
- * computer's previews list over its jobs.
+ * computer's previews list over its jobs. A space's Environment tab: its
+ * variables and secrets, which its managers add, change and remove.
  *
- * Other front ends add to it through two resources (see
+ * Other front ends add to it through three resources (see
  * views/web/kinds.ts): `computerKinds`, kinds of computer beyond people's
  * own machines (cloud computers: making one is a choice where people add a
- * computer; their state shows wherever they do; asleep, they wake), and
+ * computer; their state shows wherever they do; asleep, they wake),
  * `jobActions`, what else a job that serves a port can become (published
- * as an app).
+ * as an app), and `envActions`, what else a space's environment reaches
+ * (its apps, given it again).
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { asksView } from "./views/web/asks.tsx";
 import { computerView } from "./views/web/computer.tsx";
+import { envSpaceView } from "./views/web/env.tsx";
 import { computerPaletteView } from "./views/web/palette.tsx";
 import { spaceComputersView } from "./views/web/space-tab.tsx";
 import { stepView } from "./views/web/step.tsx";
@@ -63,11 +66,13 @@ export const computersWeb: Plugin = definePlugin({
     "computer.asks": { web: asksView },
     "computer.step": { web: stepView },
     "computer.palette": { web: computerPaletteView },
+    "env.space": { web: envSpaceView },
   },
   resources: {
     sidebar: { waiting: { view: "computer.waiting", order: 5 } },
     spaceTabs: {
       computer: { title: "Computer", view: "computer.space", icon: "computer", order: 30 },
+      env: { title: "Environment", view: "env.space", icon: "lock", order: 32 },
     },
     conversation: { "computer.asks": { view: "computer.asks", order: 10 } },
     palette: { computers: { view: "computer.palette", order: 30 } },

@@ -2,11 +2,13 @@
  * What an agent with computer tools knows each turn (the `computer`
  * context): that it works on this space's computer (whose it is), not a
  * machine of its own; whether that's online, and where its folder here is;
- * what waits for a yes, from whom, and where they answer.
+ * what waits for a yes, from whom, and where they answer; and the space's
+ * environment its shell and jobs have, by name.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import { agentsShown, type Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
+import type { EnvVar } from "../collections/env-var.ts";
 import { OS_NAMES } from "../program/release.ts";
 import { tools } from "../resources/tools.ts";
 import { personOf } from "../shared/person.ts";
@@ -79,7 +81,28 @@ export const contextViews = {
             `answered with /approve). Reading files, listing and searching need no yes.`,
           ]
           : []),
+        ...environment(ctx, thread.in),
       ].join("\n");
     },
   },
 };
+
+/**
+ * The space's environment its computers get, by name (never a value): what
+ * the agent's shell and jobs already have.
+ */
+function environment(ctx: ViewContext, space: string): string[] {
+  const vars = ctx.db.collection<EnvVar>("envVar").find({ space, app: { $exists: false } }, {
+    sort: { name: 1 },
+  });
+  if (vars.status !== "ready") return [];
+  const names = vars.value.filter((v) => v.computers).map((v) =>
+    v.secret ? `${v.name} (a secret)` : v.name
+  );
+  return names.length
+    ? [
+      `Your shell and jobs here have this space's environment: ${names.join(", ")}. Use them ` +
+      "by name ($NAME); never print or repeat a secret's value.",
+    ]
+    : [];
+}

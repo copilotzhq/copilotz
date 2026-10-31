@@ -85,6 +85,8 @@ export type Info = {
  */
 export type TerminalInput = {
   scope: Scope;
+  /** Environment variables a new shell starts with (its space's, for computers). */
+  env?: Record<string, string>;
   stdin?: string;
   commandId?: string;
   operation?: "interrupt";
@@ -133,6 +135,8 @@ export type JobsStartInput = {
   port?: number;
   /** Start it again whenever the computer starts. */
   keep?: boolean;
+  /** Environment variables it runs with, over the computer's own (its space's, and the caller's). */
+  env?: Record<string, string>;
 };
 /** `all`: every job in the space's folder, whoever's (for its person's panel); else only whose's. */
 export type JobsListInput = { scope: Scope; all?: boolean };

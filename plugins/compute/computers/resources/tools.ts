@@ -8,6 +8,7 @@
 import type { Tool, ToolContext } from "../../../agents/chat/contract.ts";
 import { tool } from "../../../agents/chat/contract.ts";
 import { allowed } from "../shared/ask.ts";
+import { jobEnv } from "../shared/env.ts";
 import type { Asked } from "../shared/settings.ts";
 import { touch, whereAwake } from "../shared/wake.ts";
 import { browserActionSchema, browserDescription } from "../shared/browser.ts";
@@ -53,8 +54,13 @@ async function on(
   // It was used: it stays awake a while (alongside the work, which doesn't wait on it).
   const touched = touch(ctx, where.desk.computer);
   try {
+    // Jobs and shells run with the space's environment (its computers'), and what's given over it.
+    const env = work === WORK.jobsStart || work === WORK.terminal
+      ? await jobEnv(ctx, where.scope.space, input.env)
+      : undefined;
     return await ctx.workers.call("computer", where.desk.computer, work, {
       ...input,
+      ...(env ? { env } : {}),
       scope: where.scope,
     });
   } catch (error) {
@@ -92,10 +98,19 @@ const startJob = tool({
   description:
     "Starts a command that keeps running in the background (a dev server, a watcher, a " +
     "long build), in this space's folder, in the terminal's shell (bash, or PowerShell on " +
-    "Windows). Read its output with job_logs; stop it with stop_job.",
+    "Windows), with the space's environment (your context names it). Read its output with " +
+    "job_logs; stop it with stop_job.",
   input: {
     type: "object",
-    properties: { command: { type: "string", minLength: 1 }, name: { type: "string" } },
+    properties: {
+      command: { type: "string", minLength: 1 },
+      name: { type: "string" },
+      env: {
+        type: "object",
+        additionalProperties: { type: "string" },
+        description: "Environment variables for this job, over the space's (names to values).",
+      },
+    },
     required: ["command"],
   },
   run: (input, ctx) => on(ctx, WORK.jobsStart, input, { kind: "jobs", detail: input.command }),

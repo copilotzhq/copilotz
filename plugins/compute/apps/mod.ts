@@ -33,6 +33,7 @@
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { buildAction } from "./actions/build.ts";
+import { configureAction } from "./actions/configure.ts";
 import { listAction } from "./actions/list.ts";
 import { meterAction } from "./actions/meter.ts";
 import { publishAction } from "./actions/publish.ts";
@@ -58,6 +59,7 @@ export const apps: Plugin = definePlugin({
     "app.list": listAction,
     "app.remove": removeAction,
     "app.redeploy": redeployAction,
+    "app.configure": configureAction,
     "app.build": buildAction,
     "app.meter": meterAction,
   },

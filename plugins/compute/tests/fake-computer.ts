@@ -78,6 +78,16 @@ export function fakeComputer(
       })),
       ...answer(WORK.filesWrite, (input) => ({ size: String(input.content).length })),
       ...answer(WORK.filesList, () => []),
+      ...answer(WORK.jobsStart, (input) => ({
+        id: "job-1",
+        who: (input.scope as { who: string }).who,
+        name: input.name ?? "job-1",
+        command: input.command,
+        pid: 1,
+        running: true,
+        exitCode: null,
+        startedAt: new Date().toISOString(),
+      })),
       ...answer(WORK.search, () => [
         { title: "Deno", url: "https://deno.com", snippet: "A runtime" },
       ]),

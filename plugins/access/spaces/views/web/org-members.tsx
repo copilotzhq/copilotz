@@ -48,7 +48,7 @@ type Invite = { id: string; email: string; role: string; at: string };
 
 type Org = { id: string; name: string; kind: string };
 
-export const orgMembersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
+export const orgMembersView = (_item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
   const style = <style href="spaces-web" precedence="copilotz">{STYLE}</style>;
   // The org's memberships, as the rules let the person read them: what's followed.
   const members = ctx.db.collection<Member>("member").find({ space: ORG }).value;

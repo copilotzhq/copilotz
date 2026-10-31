@@ -4,6 +4,9 @@
  * schedule resets its timer (still as its maker); posting somewhere else
  * starts from a new chat. `adopt` (a manager, for a routine whose maker
  * can't run it anymore) makes it theirs: it runs as them from then on.
+ * Changing what it does (what it asks, whom, as whom) makes it a new version,
+ * so a yes given for the old one doesn't cover it: anyone who may change a
+ * routine may not thereby spend someone else's yes.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Routine } from "../collections/routine.ts";
@@ -58,6 +61,7 @@ export const updateAction = defineAction({
       ...(schedule ? { schedule } : {}),
       ...(adopt ? { by: me } : {}),
     };
+    const redone = next.text !== found.text || next.agent !== found.agent || next.by !== found.by;
     // Its timer is set again when its schedule, or who it runs as, changed; unless it's paused.
     const rearm = !found.paused && (!!schedule || adopt);
     // A timer set again starts its beat again (every so long, from now).
@@ -74,6 +78,7 @@ export const updateAction = defineAction({
         updated: new Date().toISOString(),
         ...when,
       },
+      ...(redone ? { $inc: { rev: 1 } } : {}),
       // A name left empty goes back to the default.
       ...(moved || unnamed || (rearm && !("next" in when))
         ? {

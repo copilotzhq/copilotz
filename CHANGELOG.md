@@ -1,3 +1,20 @@
+## 1.0.0-rc.11 — 2026-10-31
+
+- **A routine can run with nobody watching.** What its agent needs a yes for can now be allowed for
+  that routine alone: "Allow for this routine" on the card, or "What it can do without asking" on
+  its page (run commands, start jobs, change files, per computer), ahead of its first run. Allowing
+  it answers every run already stopped on the same thing. What a run waits on shows on the routine's
+  page, with the way to its chat. In the terminal: `/approve <n> routine`.
+- **That yes covers only that routine's runs, as it was.** A run's work carries the routine as its
+  `origin`, on the actor (`originOf`, chat's contract), which only code can set: a person's own
+  message to the same agent still asks, even one claiming `via` a routine. Changing what a routine
+  does (what it asks, whom, as whom) makes a new version (`routine.rev`), which the yes doesn't
+  cover: its page says so and offers "Allow again". Name and schedule don't count. Where a
+  computer's owner keeps the answers, only they can say it (`computer.allowOrigin`). Publishing an
+  app always asks.
+- **Plugins can add to a routine's page:** the `routinePanels` resource (`{ view, order? }`), a View
+  given the routine.
+
 ## 1.0.0-rc.10 — 2026-10-31
 
 - **A routine made from a chat posts back in that chat.** `schedule_routine` keeps the chat it was

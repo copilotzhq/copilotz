@@ -367,6 +367,18 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 }
 
 /* What agents ask, over where you type */
+/* What a routine may do on its own: on its page */
+.routine-allowed-wrap { display: grid; gap: 12px; }
+.routine-allowed-wrap:empty { display: none; }
+.routine-allowed { display: grid; gap: 12px; }
+.routine-allowed h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; font-weight: 650; }
+.routine-allowed h2 .copilotz-icon { color: var(--muted-foreground); }
+.routine-allowed-note { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.routine-allowed-row { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 12px 0 0; border: 0; border-top: 1px solid var(--border); }
+.routine-allowed-row legend { display: contents; font-size: 14px; font-weight: 600; }
+.routine-allowed-row legend small { margin-left: 8px; color: var(--muted-foreground); font-size: 12.5px; font-weight: 500; }
+.routine-allowed-work { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.routine-allowed-what { overflow-wrap: anywhere; font-size: 13px; }
 .asks { display: grid; gap: 8px; }
 .asks > .ask { animation: ask-in .36s cubic-bezier(.2, .8, .2, 1) both; }
 @keyframes ask-in { from { opacity: 0; transform: translateY(8px); } }

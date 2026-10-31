@@ -3,7 +3,7 @@
  * for: a command, a job, a file write. Who answers (`owner`): the person the
  * agent works for (`for`), or the computer's owner when its desk says so;
  * they answer with `computer.approve`: yes once, yes for the conversation,
- * yes always, or no.
+ * yes for the routine that set it going (`origin`), yes always, or no.
  */
 import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
 
@@ -28,9 +28,21 @@ const approvalSchema = {
     detail: { type: "string" },
     /** For a write or an edit: what it would do, shortly (its first lines, or the change). */
     preview: { type: "string" },
+    /** What set the agent going, when it wasn't a person there (chat's `Origin`). */
+    origin: {
+      type: "object",
+      properties: {
+        kind: { type: "string" },
+        id: { type: "string" },
+        name: { type: "string" },
+        rev: { type: "integer" },
+        path: { type: "string" },
+      },
+      required: ["kind", "id", "name", "rev"],
+    },
     status: { type: "string", enum: ["pending", "allowed", "denied"] },
     /** How far a yes goes. */
-    grant: { type: "string", enum: ["once", "thread", "always"] },
+    grant: { type: "string", enum: ["once", "thread", "origin", "always"] },
     at: { type: "string" },
     decided: { type: "string" },
   },

@@ -3,6 +3,8 @@
  * (`chat.send`, marked as the routine's), in its chat, or in a new one named
  * as it says, and records how it went, on the routine and as a run of its own.
  * Its chat gone or moved to another space, it starts a new one and says so.
+ * Its message goes with the routine as its `origin`, on the actor, so its
+ * agent's work can be let for this routine alone (see chat's shared/origin.ts).
  * A maker who can no longer write where it posts (they left the space) makes
  * the run fail as `forbidden`; a refused send (the agent no longer answers
  * there) fails it with chat's words. Either is recorded, not retried: it
@@ -52,7 +54,19 @@ export async function fire(
     const into = same?.in === routine.in ? same._id : undefined;
     const each = routine.post === "new";
     try {
-      const sent = await maker.call<{ thread: string; message: string }>("chat.send", {
+      const path = routinePath(routine._id);
+      const running = ctx.as({
+        kind: "person",
+        id: routine.by,
+        origin: {
+          kind: "routine",
+          id: routine._id,
+          name: routine.name,
+          rev: routine.rev ?? 0,
+          path,
+        },
+      });
+      const sent = await running.call<{ thread: string; message: string }>("chat.send", {
         // A new chat each run is named for the run, and its agent may name it for what it found.
         ...(into ? { thread: into } : {
           in: routine.in,
@@ -61,7 +75,7 @@ export async function fire(
         }),
         text: routine.text,
         to: [routine.agent],
-        via: { kind: "routine", name: routine.name.slice(0, 120), path: routinePath(routine._id) },
+        via: { kind: "routine", name: routine.name.slice(0, 120), path },
       });
       thread = sent.thread;
       message = sent.message;

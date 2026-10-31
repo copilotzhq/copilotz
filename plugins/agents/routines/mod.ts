@@ -14,6 +14,10 @@
  *   `chat.send` and records the chat it posted in, when, and how it went
  *   (`routineRun`). A maker who has left the space can't send there: the
  *   run fails as forbidden, and says so; a manager may take it over.
+ * - **Nobody watching:** a run's work carries the routine as its `origin`, on
+ *   the actor (chat's shared/origin.ts), so what needs a yes can be allowed
+ *   for this routine alone (computers do, on its page through `routinePanels`).
+ *   Changing what it does makes a new version (`rev`): that yes ends.
  * - **Actions:** `routine.create` (those who may write in the space),
  *   `routine.update`, `routine.pause`, `routine.resume`, `routine.delete`
  *   and `routine.run` (now), by its maker or a manager there; queries for a

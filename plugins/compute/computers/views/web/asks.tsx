@@ -4,7 +4,8 @@
  * `{ thread, working }`): a card each, "assistant wants to run `npm test`"
  * on which computer, with Allow once · Allow in this conversation · Always
  * allow · Deny (`computer.approve`, whose answer goes into the
- * conversation, and the agent carries on). A write shows what it will write
+ * conversation, and the agent carries on). What a routine's run asks can also
+ * be allowed for this routine, so its next runs go on their own. A write shows what it will write
  * first (its `preview`: a new file's first lines, or an edit's change). What
  * it shows scrolls in a few lines of its own, however long (a command can
  * wrap into dozens), so the answers always show under it. The
@@ -29,7 +30,7 @@ import type { Approval } from "../../collections/approval.ts";
 import { addressOf, asked, previewOf, publishOf, reach, sentence } from "./asked.ts";
 import { STYLE } from "./style.ts";
 
-type Answer = "once" | "thread" | "always" | "deny";
+type Answer = "once" | "thread" | "origin" | "always" | "deny";
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 const ICONS: Record<string, IconName> = {
@@ -129,6 +130,9 @@ function Ask(
           )}
         <div className="ask-answers">
           {allow("once", "Allow once", "primary")}
+          {a.origin && a.work !== "publish"
+            ? allow("origin", `Allow for this ${a.origin.kind}`, "outline")
+            : null}
           {allow("thread", "Allow in this conversation", "outline")}
           {allow("always", "Always allow", "outline")}
           <Button

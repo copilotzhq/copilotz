@@ -5,7 +5,8 @@
  * whatever the job bound), passes the platform's port (`PORT`) on to it,
  * WebSockets included. So whatever serves a preview serves the app, bound
  * to localhost or not. The job is given `PORT` as its own port (a job that
- * reads it binds the port it said). The front ends when the job does.
+ * reads it binds the port it said). The front ends when the job does, and a
+ * signal to the front reaches all of the job's processes.
  *
  * Its command and port are files beside it (`command`, `port`), or
  * `CZ_COMMAND` and `CZ_PORT`; its folder is `/app` unless `CZ_CWD`.
@@ -23,16 +24,26 @@ const target = Number(process.env.CZ_PORT ?? beside("port"));
 const port = Number(process.env.PORT || 8080);
 const say = (line) => console.error("cz-front: " + line);
 
+// In a group of its own: a signal reaches the whole job, not just its shell (dash doesn't exec it).
 const child = spawn("sh", ["-c", command], {
   cwd: process.env.CZ_CWD ?? "/app",
   stdio: "inherit",
   env: { ...process.env, PORT: String(target) },
+  detached: true,
 });
+const stop = (signal = "SIGTERM") => {
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+};
 child.on("exit", (code, signal) => {
   say("the app ended (" + (signal ?? code) + ")");
+  stop();
   process.exit(code ?? 1);
 });
-for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(signal));
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => stop(signal));
 
 /** Where the job answers, once it does: IPv4's loopback or IPv6's. */
 async function answering() {
@@ -54,7 +65,7 @@ async function answering() {
 
 const host = await answering().catch((error) => {
   say(error.message);
-  child.kill();
+  stop();
   process.exit(1);
 });
 

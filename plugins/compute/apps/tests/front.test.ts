@@ -50,7 +50,11 @@ test({
     const port = await freePort();
     writeFileSync(join(dir, "front.mjs"), FRONT);
     writeFileSync(join(dir, "job.mjs"), JOB);
-    writeFileSync(join(dir, "command"), [...exec, "job.mjs"].map((a) => `"${a}"`).join(" "));
+    // A list, as commands often are: its shell doesn't exec the job, so ending it takes more than ending the shell.
+    writeFileSync(
+      join(dir, "command"),
+      "true && " + [...exec, "job.mjs"].map((a) => `"${a}"`).join(" "),
+    );
     writeFileSync(join(dir, "port"), String(target));
     const front = spawn(exec[0], [...exec.slice(1), join(dir, "front.mjs")], {
       env: { ...process.env, PORT: String(port), CZ_CWD: dir },

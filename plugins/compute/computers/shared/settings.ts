@@ -4,7 +4,8 @@
  * jobs, writing files), how long a connection code lasts, and where computers
  * connect (`url`: the app's address as a computer reaches it, which the
  * connect command names; `http(s)://` for the web host's socket, or a
- * `ws(s)://` socket as is).
+ * `ws(s)://` socket as is). `key` seals spaces' secrets at rest (their
+ * environment; see collections/env-var.ts).
  *
  * `previews`: what jobs serve, at `https://<id>-preview.<domain>/` (see
  * resources/previews.ts): the user-content domain (`copilotz.app`, never the
@@ -25,6 +26,8 @@ export type PreviewsSettings = { domain: string; key: string; app?: string };
 
 export type ComputersSettings = {
   approve?: Exclude<Asked, "publish">[];
+  /** Seals spaces' secrets at rest (their environment): any long secret, from the app's own. */
+  key?: string;
   codeMinutes?: number;
   url?: string;
   previews?: PreviewsSettings;
@@ -37,6 +40,7 @@ export const settingsOf = (ctx: { resources: Resources }) => {
   const app = set.previews?.app ?? (/^https?:\/\//.test(set.url ?? "") ? set.url : undefined);
   return {
     approve: set.approve ?? ["terminal", "jobs", "writes"],
+    key: set.key || undefined,
     codeMinutes: set.codeMinutes ?? 10,
     url: set.url ? set.url.replace(/\/+$/, "") + base : undefined,
     previews: set.previews?.domain && set.previews.key

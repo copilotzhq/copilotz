@@ -2,7 +2,7 @@
  * `app.remove`: takes an app down: its service at the host goes, and the
  * directory lets its host go. Who published it may, and those who manage
  * its space. What it ran since it was last metered is metered first. The
- * record stays, removed.
+ * record stays, removed; its own environment goes.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { AppDoc } from "../collections/app.ts";
@@ -45,6 +45,8 @@ export const removeAction = defineAction({
       $set: { status: "removed" },
       $unset: { target: "" },
     });
+    // Its own environment goes with it (published again, it's another app).
+    await ctx.as().call("env.unset", { in: app.space, app: app._id }).catch(() => {});
     return { removed: true };
   },
 });

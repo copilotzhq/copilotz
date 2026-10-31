@@ -53,8 +53,14 @@ function fakeHost(options: { failBuild?: string } = {}) {
       if (state.fail) throw Object.assign(new Error(state.fail), { minutes: 1 });
       return { image: `fake/${app}:${revisions + 1}`, minutes: 2 };
     },
-    deploy({ app, image, port }) {
-      calls.push({ op: "deploy", app, image, port });
+    deploy({ app, image, port, env }) {
+      calls.push({
+        op: "deploy",
+        app,
+        image,
+        port,
+        ...(env && Object.keys(env).length ? { env } : {}),
+      });
       const revision = `${app}-${String(++revisions).padStart(5, "0")}`;
       return Promise.resolve({
         service: `svc/${app}`,
@@ -293,6 +299,99 @@ test("a person publishes a job: building at once, then live, routed to its targe
       // Nobody else sees it.
       assertEquals(await rt.call("app.list", {}, { actor: bob }), []);
       assertEquals(await rt.query("app.here", { in: space }, { actor: bob }), []);
+    } finally {
+      await computer.worker.stop();
+    }
+  });
+});
+
+test("an app runs with its space's environment, its own over it; configured, it's deployed again, no build", async () => {
+  await setup(async (s) => {
+    const { rt, host } = s;
+    const computer = await connect(s, { jobs: [{ id: "j1", port: 3000, command: "npm start" }] });
+    try {
+      const { space } = await rt.call<{ space: string }>("space.personal", {}, { actor: ana });
+      await rt.call("env.set", { in: space, name: "API_URL", value: "https://api.test" }, {
+        actor: ana,
+      });
+      // A secret its computers don't get: its apps do.
+      await rt.call("env.set", {
+        in: space,
+        name: "API_KEY",
+        value: "sk-live-0123456789abcdef",
+        secret: true,
+        computers: false,
+      }, { actor: ana });
+      const published = await rt.call<Published>("app.publish", {
+        in: space,
+        job: "j1",
+        name: "Shop",
+      }, { actor: ana });
+      await settled(rt, published.app);
+      const deploys = () => host.calls.filter((c) => c.op === "deploy");
+      assertEquals(deploys()[0].env, {
+        API_URL: "https://api.test",
+        API_KEY: "sk-live-0123456789abcdef",
+      });
+
+      // Its own, over its space's: saved, then its image deployed again, with no build.
+      const builds = host.calls.filter((c) => c.op === "build").length;
+      const configured = await rt.call<{ status: string; revision: string }>("app.configure", {
+        app: published.app,
+        env: [
+          { name: "API_URL", value: "https://other.test" },
+          { name: "TOKEN", value: "t-0123456789abcdefgh", secret: true },
+        ],
+      }, { actor: ana });
+      assertEquals(configured, { status: "live", revision: "shop-00002" });
+      assertEquals(deploys().at(-1), {
+        op: "deploy",
+        app: "shop",
+        image: "fake/shop:1",
+        port: 3000,
+        env: {
+          API_URL: "https://other.test",
+          API_KEY: "sk-live-0123456789abcdef",
+          TOKEN: "t-0123456789abcdefgh",
+        },
+      });
+      assertEquals(host.calls.filter((c) => c.op === "build").length, builds, "no build");
+      const app = await appOf(rt, published.app);
+      assertEquals([app.revision, app.revisions?.length], ["shop-00002", 2]);
+      // Its own, as people read them: the secret's value isn't there.
+      const own = await rt.query<Record<string, unknown>[]>("envVar.here", {
+        in: space,
+        app: published.app,
+      }, { actor: ana });
+      assertEquals(own.map((v) => [v.name, v.value, v.secret, v.hint, "sealed" in v]), [
+        ["API_URL", "https://other.test", false, undefined, false],
+        ["TOKEN", undefined, true, "••••efgh", false],
+      ]);
+      // A change taken away: the space's again. Nobody else may.
+      await rt.call("app.configure", {
+        app: published.app,
+        env: [{ name: "API_URL", remove: true }],
+      }, {
+        actor: ana,
+      });
+      assertEquals((deploys().at(-1)!.env as Record<string, string>).API_URL, "https://api.test");
+      const refused = await rt.call("app.configure", { app: published.app }, { actor: bob }).then(
+        () => "done",
+        (error) => (error as { code?: string }).code,
+      );
+      assertEquals(refused, "not_found");
+      // Every app's own in the space, as its Apps tab reads them.
+      const owns = await rt.query<{ app: string; name: string }[]>("envVar.apps", { in: space }, {
+        actor: ana,
+      });
+      assertEquals(owns.map((v) => [v.app, v.name]), [[published.app, "TOKEN"]]);
+      // Taken down, its own go with it.
+      await rt.call("app.remove", { app: published.app }, { actor: ana });
+      assertEquals(await rt.query("envVar.apps", { in: space }, { actor: ana }), []);
+      assertEquals(
+        (await rt.query<unknown[]>("envVar.here", { in: space }, { actor: ana })).length,
+        2,
+      );
     } finally {
       await computer.worker.stop();
     }

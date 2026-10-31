@@ -13,6 +13,7 @@ import { defineAction } from "../../../../runtime/mod.ts";
 import type { Desk } from "../collections/desk.ts";
 import { failed } from "../shared/failed.ts";
 import { mustBeAble } from "../shared/desks.ts";
+import { jobEnv } from "../shared/env.ts";
 import { touch, wake } from "../shared/wake.ts";
 import { WORK } from "../shared/workloads.ts";
 
@@ -70,8 +71,13 @@ export const workAction = defineAction({
     // a person with it open keeps it awake with computer.view, up to the app's limit.
     const touched = READS.has(input.work) ? Promise.resolve() : touch(ctx, desk.computer);
     if (input.work === "wake") return await touched.then(() => ({ awake: true }));
+    // Jobs and shells run with the space's environment (its computers'), and what's given over it.
+    const env = input.work === "jobs.start" || input.work === "terminal"
+      ? await jobEnv(ctx, desk.in, (input.input as { env?: unknown } | undefined)?.env)
+      : undefined;
     const answer = await ctx.workers.call("computer", desk.computer, PANEL[input.work], {
       ...input.input,
+      ...(env ? { env } : {}),
       scope: { space: desk.in, folder: desk.folder, who },
     }).finally(() => touched);
     // What it couldn't do fails the call, saying why (a path outside the folder, a file not there).

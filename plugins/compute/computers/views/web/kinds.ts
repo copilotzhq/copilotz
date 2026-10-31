@@ -1,5 +1,5 @@
 /**
- * What other front ends add to computers' pages, through two resources
+ * What other front ends add to computers' pages, through three resources
  * (data only: their Views do the rest):
  *
  * - `computerKinds`: kinds of computer beyond people's own machines (cloud
@@ -17,6 +17,8 @@
  *   `{ computer }`, and what to say first).
  * - `jobActions`: what else a job that serves a port can become (published
  *   as an app): a View drawn in the job's row (item: `JobServed`).
+ * - `envActions`: what else a space's environment reaches (its apps): a View
+ *   drawn under it on its Environment tab (item: contract.ts's `EnvChanged`).
  */
 import type { IconName } from "../../../../../hosts/web/mod.ts";
 
@@ -121,3 +123,8 @@ export function jobActionsOf(given: unknown): (JobAction & { key: string })[] {
     .flatMap(([key, action]) => action?.view ? [{ ...action, key }] : [])
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.key.localeCompare(b.key));
 }
+
+/** An `envActions` resource: a View drawn under a space's environment. */
+export type EnvAction = { view: string; order?: number };
+
+export const envActionsOf: (given: unknown) => (EnvAction & { key: string })[] = jobActionsOf;

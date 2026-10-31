@@ -119,3 +119,55 @@ test("a job running a server says the port it listens on, where this machine can
     assertEquals(after.ports, undefined);
   });
 });
+
+// bash's `echo`, `sleep` and `$NAME`.
+test({
+  name: "a job runs with the environment it's given; a kept one starts again with it",
+  ignore: process.platform === "win32",
+  fn: () =>
+    setup(async ({ work, computer, start, root }) => {
+      const env = { SPACE_URL: "https://api.test", SPACE_KEY: "s3cret" };
+      const told = await work<Job>(WORK.jobsStart, {
+        scope,
+        command: 'echo "$SPACE_URL $SPACE_KEY"; sleep 30',
+        name: "server",
+        keep: true,
+        env,
+      });
+      const said = async (id: string) =>
+        (await work<JobsLogs>(WORK.jobsLogs, { scope, id })).stdout.trim();
+      await until(async () => await said(told.id) === "https://api.test s3cret", "it has them");
+      // Kept with it, on the computer's disk (readable only by its user).
+      assertEquals((kept(root)[0] as { env?: unknown }).env, env);
+
+      // Started again, it has them again.
+      await computer.stop();
+      await (await start()).ready;
+      const [again] = await work<Job[]>(WORK.jobsList, { scope, all: true });
+      await until(async () => await said(again.id) === "https://api.test s3cret", "again");
+      await work<Job>(WORK.jobsStop, { scope, id: again.id });
+
+      // A name a shell can't take is refused.
+      const bad = await work<{ error: { code: string; message: string } }>(WORK.jobsStart, {
+        scope,
+        command: "true",
+        env: { "no good": "1" },
+      });
+      assertEquals(bad.error.code, "invalid");
+    }),
+});
+
+test({
+  name: "a shell starts with the environment it's given",
+  ignore: process.platform === "win32",
+  fn: () =>
+    setup(async ({ work }) => {
+      const shellScope: Scope = { space: "s", folder: "alpha", who: "agent:shell" };
+      const ran = await work<{ stdout: string }>(WORK.terminal, {
+        scope: shellScope,
+        stdin: 'echo "$SPACE_URL"',
+        env: { SPACE_URL: "https://api.test" },
+      });
+      assertEquals(ran.stdout.trim(), "https://api.test");
+    }),
+});

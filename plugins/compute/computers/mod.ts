@@ -10,7 +10,9 @@
  * they keep that to themselves. What a job serves gets an address of its own
  * for the space's members (`computer.preview`, the `preview` tool), once the
  * app names a domain for previews (`computers: { previews }`: see
- * resources/previews.ts).
+ * resources/previews.ts). A space's environment (variables and secrets, its
+ * managers' `env.set`) is what its jobs and shells run with, and its apps
+ * (see collections/env-var.ts); secrets are sealed with `computers: { key }`.
  *
  * ```ts
  * plugins: [models, chat, ...access, computers],
@@ -28,6 +30,7 @@ import { approveAction } from "./actions/approve.ts";
 import { codeAction } from "./actions/code.ts";
 import { defaultAction } from "./actions/default.ts";
 import { enrollmentAction } from "./actions/enrollment.ts";
+import { envSetAction, envUnsetAction, envValuesAction } from "./actions/env.ts";
 import { forgetAction } from "./actions/forget.ts";
 import { goneAction } from "./actions/gone.ts";
 import { markAction } from "./actions/mark.ts";
@@ -46,6 +49,7 @@ import { approval } from "./collections/approval.ts";
 import { computer } from "./collections/computer.ts";
 import { desk } from "./collections/desk.ts";
 import { enrollment } from "./collections/enrollment.ts";
+import { envVar } from "./collections/env-var.ts";
 import { grant } from "./collections/grant.ts";
 import { preview } from "./collections/preview.ts";
 import { previewRoutes } from "./resources/previews.ts";
@@ -58,6 +62,7 @@ import { WORK } from "./shared/workloads.ts";
 export type { Approval } from "./collections/approval.ts";
 export type { Computer } from "./collections/computer.ts";
 export type { Desk } from "./collections/desk.ts";
+export type { EnvVar } from "./collections/env-var.ts";
 export type { Preview } from "./collections/preview.ts";
 export type { ComputersSettings } from "./shared/settings.ts";
 export type { ComputerWake } from "./shared/wake.ts";
@@ -68,7 +73,7 @@ const OWNED = new Set(["computer", "enrollment", "approval", "grant"]);
 export const computers: Plugin = definePlugin({
   name: "computers",
   requires: ["chat", "spaces"],
-  collections: { computer, desk, enrollment, approval, grant, preview },
+  collections: { computer, desk, enrollment, approval, grant, preview, envVar },
   workers: {
     computer: {
       admit: "computer.admit",
@@ -91,6 +96,10 @@ export const computers: Plugin = definePlugin({
     "computer.move": moveAction,
     "computer.approve": approveAction,
     "computer.work": workAction,
+    // A space's environment: its managers' (env.values: the system's, an app's deploy).
+    "env.set": envSetAction,
+    "env.unset": envUnsetAction,
+    "env.values": envValuesAction,
     "computer.view": viewAction,
     "computer.preview": previewAction,
     "computer.previews": previewsAction,
@@ -111,7 +120,7 @@ export const computers: Plugin = definePlugin({
     computers: {},
     context: { computer: { place: "turn" } },
     // A space's members see its computers (their desks there), as they see its conversations.
-    shared: { desk: {}, preview: { field: "space" } },
+    shared: { desk: {}, preview: { field: "space" }, envVar: { field: "space" } },
     // What jobs serve, at addresses of their own, once the app says where (`previews`).
     routes: previewRoutes,
   },

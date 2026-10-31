@@ -36,7 +36,8 @@ const subscribe = (listener: () => void) => {
 export function Time(
   { at, long, className }: { at: string; long?: boolean; className?: string },
 ): ReactNode {
-  useSyncExternalStore(subscribe, () => tick);
+  // Drawn on a server too (the time as it is then).
+  useSyncExternalStore(subscribe, () => tick, () => tick);
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return null;
   return (

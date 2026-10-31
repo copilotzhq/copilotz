@@ -206,6 +206,14 @@ button.desk-pick { cursor: pointer; }
 .jobs-port input { font-variant-numeric: tabular-nums; }
 .jobs-keep { grid-column: 1 / -1; margin: 2px 2px 0; font-size: 13.5px; }
 .jobs-keep-hint { color: var(--muted-foreground); }
+.jobs-more { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 4px 16px; }
+.jobs-more .jobs-keep { margin-top: 0; }
+.jobs-env-toggle[aria-expanded=true] { color: var(--primary-text); }
+.jobs-env { grid-column: 1 / -1; display: grid; gap: 6px; }
+.jobs-env textarea { font-family: var(--font-mono); font-size: 13px; }
+.jobs-env-hint { margin: 0 2px; color: var(--muted-foreground); font-size: 12.5px; line-height: 1.45; }
+.jobs-env-hint code { font-size: 12px; }
 .jobs-error { grid-column: 1 / -1; margin: 0; color: var(--destructive-text); font-size: 13px; }
 .jobs-group { display: grid; gap: 8px; }
 .jobs-group h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; font-weight: 650;
@@ -424,4 +432,48 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .step-why { margin: 0 0 0 22px; color: var(--muted-foreground); font-size: 13px; }
 .step-page { margin: 0 0 0 22px; font-size: 13.5px; }
 .step-page a { display: inline-flex; align-items: center; gap: 5px; color: var(--primary-text); }
+
+/* A space's environment (its tab) */
+.env { container: env / inline-size; display: grid; gap: 14px; }
+.env-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 18px; }
+.env-intro { flex: 1 1 320px; max-width: 720px; margin: 0 2px; color: var(--muted-foreground); font-size: 13.5px;
+  line-height: 1.5; }
+.env-intro strong { color: var(--foreground); font-weight: 620; }
+.env-table { overflow: hidden; }
+.env-list { list-style: none; margin: 0; padding: 0; }
+.env-row { display: grid; grid-template-columns: minmax(150px, 240px) minmax(0, 1fr) auto auto;
+  grid-template-areas: "key value where actions"; align-items: center; gap: 6px 16px; min-height: 56px;
+  padding: 9px 10px 9px 16px; transition: background-color .12s; }
+.env-row + .env-row { border-top: 1px solid var(--border); }
+.env-row:hover { background: color-mix(in oklab, var(--muted) 40%, var(--card)); }
+.env-key { grid-area: key; display: grid; gap: 1px; min-width: 0; }
+.env-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--foreground);
+  font-size: 13px; font-weight: 650; }
+.env-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground);
+  font-size: 12px; }
+.env-meta .copilotz-time { font-size: 12px; }
+.env-value { grid-area: value; display: flex; align-items: center; gap: 2px; min-width: 0; }
+.env-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--secondary-foreground);
+  font-size: 12.5px; }
+.env-sealed { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 7px; border-radius: var(--radius-full);
+  background: var(--muted); color: var(--muted-foreground); font: 12px var(--font-mono); letter-spacing: .04em; }
+.env-blank { color: var(--muted-foreground); font-size: 12.5px; font-style: italic; }
+.env-where { grid-area: where; display: inline-flex; align-items: center; gap: 5px; color: var(--muted-foreground);
+  font-size: 12.5px; white-space: nowrap; }
+.env-where[data-exposed] { color: var(--warning-text); }
+.env-actions { grid-area: actions; display: flex; align-items: center; gap: 2px; }
+.env-empty { margin-top: 12px; }
+.env-dialog-text { margin: 0 0 12px; line-height: 1.55; }
+.env-form { display: grid; gap: 16px; }
+.env-form-name input, .env-form-value { font-family: var(--font-mono); font-size: 13.5px; }
+.env-form-options { display: grid; gap: 12px; padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: color-mix(in oklab, var(--muted) 40%, var(--popover)); }
+.env-form-options .copilotz-checkbox > span { display: grid; gap: 1px; }
+.env-form-option { font-size: 14px; font-weight: 580; }
+.env-form-option-note { color: var(--muted-foreground); font-size: 12.5px; line-height: 1.45; }
+.env-form-limit { margin-top: -4px; }
+@container env (max-width: 600px) {
+  .env-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "key actions" "value value" "where where";
+    padding-left: 14px; }
+}
 `;

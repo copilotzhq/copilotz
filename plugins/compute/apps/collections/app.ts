@@ -37,6 +37,8 @@ const appSchema = {
     target: { type: "string" },
     revision: { type: "string" },
     image: { type: "string" },
+    /** The port its image serves on (an image made for it: its front's), for a deploy of it again. */
+    served: { type: "integer" },
     error: { type: "string" },
     /** Each revision it went live with, oldest first: `{ revision, image, at }`. */
     revisions: { type: "array", items: { type: "object" } },
@@ -68,6 +70,8 @@ export type AppDoc = App & {
   url: string;
   source: App["source"] & { job?: string };
   image?: string;
+  /** The port its image serves on (an image made for it: its front's). */
+  served?: number;
   revisions?: Revision[];
   live?: string;
   metered?: string;

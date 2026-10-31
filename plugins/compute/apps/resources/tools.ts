@@ -50,13 +50,14 @@ const publish = tool({
     const address = await addressFor(ctx, thread.in, input.name).catch(() => undefined);
     // Asked of whoever answers on the computer that runs the job (not the default's), when only
     // the job says which.
-    const computer = input.computer ?? (input.job
-      ? await ctx.call<{ computer: string }>("computer.scope", {
-        in: thread.in,
-        who: `agent:${ctx.agent}`,
-        job: input.job,
-      }).then((where) => where.computer, () => undefined)
-      : undefined);
+    const computer = input.computer ??
+      (input.job
+        ? await ctx.call<{ computer: string }>("computer.scope", {
+          in: thread.in,
+          who: `agent:${ctx.agent}`,
+          job: input.job,
+        }).then((where) => where.computer, () => undefined)
+        : undefined);
     const may = await ctx.call<true | string>("computer.allowed", {
       thread: ctx.thread,
       agent: ctx.agent,

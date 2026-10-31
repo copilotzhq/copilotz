@@ -22,6 +22,30 @@
   WebSockets included. A job bound to `127.0.0.1` (as previews allow) is served all the same; the
   job is given its own port as `PORT`. `AppHost.build` answers the port its image serves on. Without
   a Dockerfile, an app is published from its job (its command).
+- **A space's environment: variables and secrets.** Each space has its own (collection `envVar`,
+  `{ name, value, secret, computers, by, at }`, names like `API_URL`). Its managers change it
+  (`env.set` `{ in, name, value?, secret?, computers? }`, `env.unset`); its members read names and
+  the values of variables. A secret is sealed at rest (AES-GCM, with the new `computers: { key }`
+  resource, else kept as given) and never read back by anyone: people see only that it's there (and
+  a long one's last 4 characters), agents only its name. Every job and shell started in the space,
+  from the web or by an agent, gets the variables with `computers` (true unless said), under its own
+  `env` (`jobs.start` and `terminal` take `env`; the `start_job` tool too); a job kept running keeps
+  its env on the computer's disk and starts again with it. A secret given to computers can be read
+  by any process there, and the web says so where it's given. Agents' computer context lists the
+  names they have (`$NAME`), never a value.
+- **Apps get the space's environment.** An app is deployed with all of its space's variables and
+  secrets, and its own over them (`envVar` with `app`; queries `here` and `apps`), passed to Cloud
+  Run as its env. `app.configure` `{ app, env? }` (its publisher, or the space's managers) changes
+  its own and deploys its image again with them, without a build (the port the image serves is kept
+  as `served`). A change to the space's environment doesn't redeploy anything: it reaches an app
+  when it's published again, or at once with "Apply to apps". Taking an app down removes its own
+  environment (`env.unset` `{ in, app }`).
+- **Web: Environment.** A space's Environment tab lists its variables (a secret masked, whether its
+  computers get it, who set it and when); its managers add, change and remove them, with the honest
+  limit shown beside a secret given to computers. Under it, its live apps and "Apply to apps"
+  (through computers' new `envActions` resource). An app's row opens its environment: the space's
+  shown, its own edited, saved with a redeploy. The job start form takes its own environment
+  (`NAME=value` lines). The toolkit's `Time` also draws on a server.
 
 ## 1.0.0-rc.6 — 2026-10-30
 

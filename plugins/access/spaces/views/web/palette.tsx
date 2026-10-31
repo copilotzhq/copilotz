@@ -129,14 +129,17 @@ export const spacesPaletteView = (
       step: leaveStep(here, call),
     });
     if (searching) {
+      // Its tabs, and their sections (Memories: in Settings).
       for (const tab of tabsOf(ctx.resources.spaceTabs)) {
-        items.push({
-          key: `space:tab:${tab.key}`,
-          label: tab.title,
-          ...(tab.icon ? { icon: tab.icon } : {}),
-          description: name,
-          href: spacePath(here._id, tab.key),
-        });
+        for (const part of [tab, ...tab.sections]) {
+          items.push({
+            key: `space:tab:${part.key}`,
+            label: part.title,
+            ...(part.icon ? { icon: part.icon } : {}),
+            description: part === tab ? name : `${name} · ${tab.title}`,
+            href: spacePath(here._id, part.key, part === tab && tab.sections.length > 0),
+          });
+        }
       }
     }
     groups.push({ title: "This space", order: 10, items });

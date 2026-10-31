@@ -21,7 +21,15 @@ export const memoryWeb: Plugin = definePlugin({
     "memory.pick": { web: memoryPickView },
   },
   resources: {
-    spaceTabs: { memories: { title: "Memories", view: "memories", icon: "sparkles", order: 20 } },
+    spaceTabs: {
+      memories: {
+        title: "Memories",
+        view: "memories",
+        icon: "sparkles",
+        under: "settings",
+        order: 20,
+      },
+    },
     palette: { memory: { view: "memory.palette", order: 40 } },
   },
 });

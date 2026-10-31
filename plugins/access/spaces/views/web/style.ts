@@ -84,6 +84,38 @@ export const STYLE = `
   .space-tabs { position: static; }
 }
 
+/* A tab's sections (sections.tsx): a menu beside them (settings), or tabs above (the computer's) */
+.space-sections { container: space-sections / inline-size; }
+.space-sections-side { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 36px; align-items: start; }
+.space-sections-menu { position: sticky; top: 60px; display: grid; gap: 2px; }
+.space-sections-group { margin: 14px 0 4px; padding: 0 10px; color: var(--muted-foreground);
+  font-family: var(--font-display); font-size: 11.5px; font-weight: 650; letter-spacing: .08em;
+  text-transform: uppercase; }
+.space-sections-chevron { display: none; color: var(--muted-foreground); }
+.space-sections-body { min-width: 0; }
+.space-sections-back { display: none; }
+.space-sections-back-link { display: inline-flex; align-items: center; gap: 2px; min-height: 44px; margin-left: -6px;
+  padding-right: 8px; color: var(--muted-foreground); font-size: 14px; text-decoration: none; }
+.space-sections-back-link:hover { color: var(--foreground); }
+.space-sections-title { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: 640;
+  letter-spacing: -.01em; }
+.space-sections-top { display: grid; gap: 20px; }
+.space-sections-tabs { justify-self: start; }
+/* Without room for both (a phone): the menu is a list to tap into; a section says how to get back */
+@container space-sections (max-width: 640px) {
+  .space-sections-side { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .space-sections-side[data-picked=false] .space-sections-body,
+  .space-sections-side[data-picked=true] .space-sections-menu { display: none; }
+  .space-sections-menu { position: static; gap: 0; }
+  .space-sections-menu .copilotz-nav-item { min-height: 52px; padding: 8px 12px; font-size: 15px; }
+  .space-sections-chevron { display: inline-flex; }
+  /* Listed, nothing is open yet: none looks chosen */
+  .space-sections-side[data-picked=false] .copilotz-nav-item[aria-current] { border-color: transparent;
+    background: transparent; box-shadow: none; }
+  .space-sections-side[data-picked=false] .copilotz-nav-item[aria-current] .copilotz-nav-label { font-weight: inherit; }
+  .space-sections-side[data-picked=true] .space-sections-back { display: grid; gap: 4px; margin: -12px 0 18px; }
+}
+
 /* Members, and inviting people */
 .space-members, .space-settings, .space-inviting { container: space-tab / inline-size; display: grid; gap: 24px; }
 .space-inviting { gap: 16px; }
@@ -202,6 +234,13 @@ export const STYLE = `
   scrollbar-color: var(--input) transparent; }
 .space-panel-tab { min-height: 100%; padding: 14px 14px 20px; }
 .space-panel-tab[hidden] { display: none; }
+/* A tab with sections, in the panel: its own tabs, under the panel's */
+.space-panel-part { min-height: 100%; display: flex; flex-direction: column; }
+.space-panel-part[hidden] { display: none; }
+.space-panel-part > .space-sections-top { flex: 1; display: flex; flex-direction: column; gap: 0; }
+.space-panel-part .space-sections-tabs { flex: none; max-width: calc(100% - 28px); margin: 12px 14px 0; }
+.space-panel-part .space-sections-body { flex: 1; display: flex; flex-direction: column; }
+.space-panel-part .space-sections-body > .space-panel-tab { flex: 1; min-height: auto; }
 .space-panel-missing { padding: 24px; color: var(--muted-foreground); }
 @container space-panel (max-width: 560px) {
   .space-panel-tabs .copilotz-tab[aria-selected=false] { padding: 0 9px; }

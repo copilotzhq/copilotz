@@ -343,8 +343,9 @@ test("publishing a job, and a space's apps, live", () => {
   const kept = status(appOf({ error: "Build failed" }));
   assertStringIncludes(kept, "Its last publish failed");
   assertStringIncludes(kept, "still live");
+  // A section of the space's Computer tab.
   assertEquals(appsWeb.resources?.spaceTabs, {
-    apps: { title: "Apps", view: "app.space", icon: "globe", order: 35 },
+    apps: { title: "Apps", view: "app.space", icon: "globe", under: "computer", order: 20 },
   });
 });
 

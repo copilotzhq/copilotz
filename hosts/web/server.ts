@@ -239,12 +239,19 @@ const installable = (options: WebServerOptions) => {
   ].join("\n");
 };
 
+/**
+ * The page: on phones, an app's. It spans the whole screen (`viewport-fit=cover`:
+ * the shell keeps its content clear of the notch and the home bar with the
+ * safe-area insets), and the keyboard resizes it rather than covering it
+ * (`interactive-widget`, where browsers take it). Zoom stays: nothing caps
+ * the scale, so people can still pinch to read.
+ */
 const page = (options: WebServerOptions, entry: string) =>
   `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 ${look(options.theme)}${installable(options)}<title>${options.title ?? "Copilotz"}</title>
 <script id="copilotz-config" type="application/json">${
     // Escaped, so nothing in it can end the script.

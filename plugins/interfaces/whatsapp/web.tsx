@@ -24,7 +24,14 @@ export const whatsappWeb: Plugin = definePlugin({
   resources: {
     palette: { whatsapp: { view: "whatsapp.palette", order: 40 } },
     spaceTabs: {
-      whatsapp: { title: "WhatsApp", view: "whatsapp.space", icon: "send", order: 84 },
+      whatsapp: {
+        title: "WhatsApp",
+        view: "whatsapp.space",
+        icon: "chat-round",
+        under: "settings",
+        group: "Channels",
+        order: 40,
+      },
     },
   },
 });

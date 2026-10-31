@@ -21,7 +21,9 @@ export const apiWeb: Plugin = definePlugin({
   requires: ["api", "web-shell"],
   views: { "api.keys": { web: keysView }, "api.palette": { web: apiPaletteView } },
   resources: {
-    spaceTabs: { api: { title: "API", view: "api.keys", icon: "terminal", order: 85 } },
+    spaceTabs: {
+      api: { title: "API", view: "api.keys", icon: "terminal", under: "settings", order: 50 },
+    },
     apiPresets: presets,
     palette: { api: { view: "api.palette", order: 40 } },
   },

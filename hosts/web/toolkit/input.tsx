@@ -33,6 +33,12 @@ const SHEET = sheet(
 .copilotz-input-lg { height: 44px; padding: 0 14px; }
 .copilotz-input-lg > input { font-size: 15px; }
 .copilotz-input-end { display: flex; align-items: center; gap: 2px; }
+/* Touch screens: fields a finger finds (their text is 16px at least: the page's base) */
+@media (pointer: coarse) {
+  .copilotz-input { height: 44px; }
+  .copilotz-input-sm { height: 40px; }
+  .copilotz-input-lg { height: 48px; }
+}
 `,
 );
 

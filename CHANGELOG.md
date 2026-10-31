@@ -1,3 +1,26 @@
+## 1.0.0-rc.9 — 2026-10-31
+
+- **A space's page has a few tabs, and their sections.** A `spaceTabs` entry `under` another tab is
+  a section of it, listed in its menu, with an optional `group` heading; a tab with sections names
+  its own View among them (`own`) and shows them in a menu beside (`menu: "side"`) or as tabs above
+  (`top`, the default). A section's key opens its tab there (`?tab=memories`), so every address
+  still works, and the palette lists sections too. The tabs now: Chats, Board and Documents (an
+  app's), Computer (Computers, Environment, Apps), Routines and Settings (General, Members,
+  Memories, Skills, Channels: WhatsApp, API). Where there's no room for a menu beside (a phone),
+  Settings is a list to tap into, and a section says how to get back; in the side panel, sections
+  are tabs under the panel's. Who's waiting to join shows on Settings and on Members.
+- **On phones, an app's page.** The viewport spans the screen (`viewport-fit=cover`; the composer
+  keeps clear of the home bar) and the keyboard resizes the page where browsers allow
+  (`interactive-widget`); pinching still zooms. The page never scrolls sideways or bounces as a
+  whole, and a tap is a tap (no double-tap zoom, no grey flash). On touch screens, text is 16px,
+  fields too at least (so Safari never zooms in on one you type in), and buttons, icon buttons,
+  fields and copy buttons are 44px targets (40px small).
+- **A conversation scrolls up and down only.** What's wider (a table, code) scrolls in its own box;
+  text wraps; a file's chip and a tool call being written no longer widen it.
+- **What an agent asks you never covers the conversation.** The command or the file it shows scrolls
+  within a few lines (a command can wrap into dozens), with a copy button, so the answers are always
+  in sight; the cards keep to at most 60% of the chat's height and scroll there.
+
 ## 1.0.0-rc.8 — 2026-10-31
 
 - **Agents' prompts only grow, so the prompt cache keeps them whole.** A turn context (the

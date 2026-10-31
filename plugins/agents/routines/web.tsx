@@ -31,7 +31,7 @@ export const routinesWeb: Plugin = definePlugin({
     "routine.step": { web: routineStepView },
   },
   resources: {
-    spaceTabs: { routines: { title: "Routines", view: "routines", icon: "refresh", order: 40 } },
+    spaceTabs: { routines: { title: "Routines", view: "routines", icon: "refresh", order: 50 } },
     palette: { routines: { view: "routine.palette", order: 46 } },
     toolViews: { schedule_routine: "routine.step" },
   },

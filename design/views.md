@@ -204,10 +204,13 @@ resource kinds (no list of tabs or sections anywhere):
   you for in other chats shows above it, only while something does.
 - **A space's page** (`/space/<id>`, spaces' `space` View) is its header (its name, renamed in place
   by managers; Personal or shared; its people; invite; a new chat there) and its tabs: `spaceTabs`
-  (`{ title, view, icon?, order? }`), each a View given `{ _id }` and hints `{ in, mode: "page" }`.
-  Chat adds Chats, memory Memories, computers Computer (its desks, and the terminal, jobs and files
-  in its folder), spaces Members and Settings, and an app its own (the example's Notes). The address
-  says which (`?tab=`). Items open full screen.
+  (`{ title, view, icon?, order?, under?, group?, own?, menu? }`), each a View given `{ _id }` and
+  hints `{ in, mode: "page" }`. A few tabs, by what's used most: Chats, an app's own (Board,
+  Documents), Computer, Routines, Settings. The rest are sections `under` one of them, in its menu:
+  Settings (General, then Members, Memories, Skills, Channels such as WhatsApp, and the API) in a
+  menu beside, which a phone shows as a list to tap into; Computer (Computers, Environment, Apps) as
+  tabs above. The address says which (`?tab=`; a section's key opens its tab there). Items open full
+  screen.
 - **The side panel** belongs to the web shell (`panel: { view, on, title }`): beside a page whose
   kind it's `on` (a chat), the panel's View shows for the space you're in (`{ _id }`, hints
   `{ in, mode: "panel" }`). Spaces' fills it with the space's tabs, compact (the same Views), so a

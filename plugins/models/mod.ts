@@ -20,7 +20,12 @@
  *
  * Other plugins' startup checks ask `models.check` about the models they're
  * configured with; the usage ledger asks `models.price` what the catalog says
- * a model costs.
+ * a model costs. `models.offered` lists what an agent can be given.
+ *
+ * Where another plugin keeps orgs' own keys (the `modelKeys` resource), any
+ * provider in the catalog with an address of its own and a protocol we speak
+ * can be chosen, and an org's key for a provider goes on its calls, over the
+ * app's (`shared/choice.ts`). Those uses are tagged `paid: "own-key"`.
  *
  * A list of models is tried in order. Any plugin adds adapters of its own
  * under `adapters.llm`, `adapters.embeddings` or `adapters.transcription`.
@@ -32,6 +37,7 @@ import { definePlugin, type Plugin } from "../../runtime/mod.ts";
 import { check } from "./actions/check.ts";
 import { embed } from "./actions/embed.ts";
 import { generate } from "./actions/generate.ts";
+import { keyableAction, offered } from "./actions/offered.ts";
 import { price } from "./actions/price.ts";
 import { stream } from "./actions/stream.ts";
 import { transcribe } from "./actions/transcribe.ts";
@@ -62,6 +68,8 @@ export const models: Plugin = definePlugin({
     "transcription.transcribe": transcribe,
     "models.check": check,
     "models.price": price,
+    "models.offered": offered,
+    "models.keyable": keyableAction,
   },
   resources: { provider: providers },
   adapters: {

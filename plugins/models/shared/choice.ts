@@ -29,6 +29,14 @@ export type Cost = Prices & { tiers?: (Prices & { above: number })[] };
 
 /** What the catalog knows about a model. */
 export type ModelInfo = {
+  /** What people call it, and when it came out (`2026-09-22`). */
+  name?: string;
+  released?: string;
+  /** False: it can't call tools. */
+  tools?: false;
+  /** False: it answers in something other than text (an embedder, an image model). */
+  chat?: false;
+  deprecated?: true;
   /** Its protocol and URL, where they differ from its provider's. */
   protocol?: string;
   api?: string;
@@ -53,7 +61,10 @@ export type Catalog = {
   source: string;
   fetched: string;
   etag: string;
-  providers: Record<string, { protocol?: string; api?: string; models: Record<string, ModelInfo> }>;
+  providers: Record<
+    string,
+    { name?: string; protocol?: string; api?: string; models: Record<string, ModelInfo> }
+  >;
 };
 
 export const catalog = catalogJson as unknown as Catalog;
@@ -63,6 +74,9 @@ export const catalog = catalogJson as unknown as Catalog;
  * knows: `deepseek: { apiKey }` is enough.
  */
 export type Provider = Endpoint & {
+  /** What people call it, where the catalog doesn't say; what to know before choosing it. */
+  title?: string;
+  note?: string;
   /** The protocol it speaks, which names each port's adapter: `openai`, `openai-compatible`, `anthropic`, `gemini`, or a plugin's own. */
   adapter?: string;
   /** The catalog provider its models are looked up in (default: its own name); false for none. */
@@ -114,6 +128,36 @@ export type Resolved = {
 };
 
 type Resources = Record<string, Record<string, unknown> | undefined>;
+
+/**
+ * Where an org's own keys for providers are kept (the `modelKeys` resource:
+ * Actions of another plugin). With it, every provider someone can bring a key
+ * for can be chosen, declared or not, and its key is used on each call.
+ */
+export type ModelKeys = {
+  /** `{ provider }` → the org's key, or null. Trusted code only. */
+  open: string;
+  /** `{}` → `{ provider, hint }[]`, what's kept, nothing secret. Trusted code only. */
+  list: string;
+  /** `{}` → `{ set }`: whether the person asking may change them. */
+  may: string;
+};
+
+/** The protocols a key can be brought for: those of the adapters every app has. */
+const KEYED = ["openai", "openai-compatible", "anthropic", "gemini"];
+/** Providers whose adapter has their address built in. */
+const BUILT_IN = ["openai", "anthropic", "google"];
+
+/**
+ * Whether someone can bring a key for this catalog provider. It needs a
+ * protocol we speak, and an address of its own: without one, its adapter's
+ * default would send the key to someone else.
+ */
+export function keyable(provider: string): boolean {
+  if (!Object.hasOwn(catalog.providers, provider)) return false;
+  const { protocol, api } = catalog.providers[provider];
+  return !!protocol && KEYED.includes(protocol) && (!!api || BUILT_IN.includes(provider));
+}
 
 /** Inner settings over outer ones; `options` merge. */
 const over = (outer: Record<string, unknown>, inner: Record<string, unknown>) => {
@@ -168,13 +212,14 @@ export function resolve(resources: Resources, ref: ModelRef): Resolved[] {
     const slash = id.indexOf("/");
     const provider = id.slice(0, slash);
     const model = id.slice(slash + 1);
-    const declared = resources.provider?.[provider] as Provider | undefined;
+    const declared = (resources.provider?.[provider] as Provider | undefined) ??
+      (resources.modelKeys && keyable(provider) ? {} : undefined);
     if (!declared) {
       throw invalid(
         `No provider "${provider}" for "${id}": declare resources.provider.${provider}`,
       );
     }
-    const { adapter, catalog: from, options, tags, ...endpoint } = declared;
+    const { adapter, catalog: from, options, tags, title: _t, note: _n, ...endpoint } = declared;
     const listed = from === false ? undefined : catalog.providers[from ?? provider];
     const entry = typeof settings.catalog === "string"
       ? settings.catalog

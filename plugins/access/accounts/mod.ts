@@ -31,6 +31,11 @@
  *   (resources/models.ts); without a connection the call fails
  *   `account_missing`, and a list of models moves on. Its uses are metered
  *   as the person's plan's (`paid: "subscription"`), at no cost to the app.
+ * - **An org's own keys for model providers** (`modelKey`, the models
+ *   plugin's `modelKeys` resource): its owners and admins add one (`modelKey.set`)
+ *   for any provider that can take one; each is sealed as tokens are, kept per
+ *   org and shows only its last characters; its agents' calls to that provider
+ *   use it (`modelKey.open`, trusted code only), over the app's.
  * - `account.changed` says when an account is connected, lost or
  *   disconnected: the audit trail, with nothing secret in it.
  *
@@ -53,6 +58,14 @@ import { refreshAction } from "./actions/refresh.ts";
 import { tokenAction } from "./actions/token.ts";
 import { account } from "./collections/account.ts";
 import { accountFlow } from "./collections/flow.ts";
+import { modelKey } from "./collections/model-key.ts";
+import {
+  modelKeyList,
+  modelKeyMay,
+  modelKeyOpen,
+  modelKeyRemove,
+  modelKeySet,
+} from "./actions/model-key.ts";
 import { changed } from "./events/changed.ts";
 import { chatgpt } from "./resources/chatgpt.ts";
 import { chatgptCost, chatgptModels } from "./resources/models.ts";
@@ -76,7 +89,7 @@ const sendable = (address: unknown) => {
 
 export const accounts: Plugin = definePlugin({
   name: "accounts",
-  collections: { account, accountFlow },
+  collections: { account, accountFlow, modelKey },
   actions: {
     "account.connect": connectAction,
     "account.complete": completeAction,
@@ -84,6 +97,11 @@ export const accounts: Plugin = definePlugin({
     "account.disconnect": disconnectAction,
     "account.refresh": refreshAction,
     "account.token": tokenAction,
+    "modelKey.set": modelKeySet,
+    "modelKey.remove": modelKeyRemove,
+    "modelKey.may": modelKeyMay,
+    "modelKey.list": modelKeyList,
+    "modelKey.open": modelKeyOpen,
   },
   events: { "account.changed": changed },
   guard: rules,
@@ -91,6 +109,7 @@ export const accounts: Plugin = definePlugin({
     accounts: {},
     accountProviders: { chatgpt },
     provider: { chatgpt: chatgptModels },
+    modelKeys: { open: "modelKey.open", list: "modelKey.list", may: "modelKey.may" },
     cost: { "chatgpt/*": chatgptCost },
     routes: { accounts: { path: CALLBACK, action: "account.callback", methods: ["GET"] } },
   },

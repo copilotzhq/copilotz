@@ -19,6 +19,8 @@ type Change = { name: string; value?: string; secret?: boolean; remove?: boolean
 
 export const configureAction = defineAction({
   description: "Changes a published app's environment, and deploys it again with it",
+  // Unrecorded: its input can hold secrets, which must never land in the log.
+  record: false,
   input: {
     type: "object",
     properties: {

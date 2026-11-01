@@ -41,6 +41,8 @@ const target = {
 
 export const envSetAction = defineAction({
   description: "Sets a variable or secret of a space's environment (or an app's own)",
+  // Unrecorded: its input is the secret, which must never land in the log.
+  record: false,
   input: {
     type: "object",
     properties: {

@@ -77,13 +77,13 @@ async function setup(
           computers: { key: "another-long-enough-secret-for-sealing" },
           provider: { anthropic: { apiKey: "the-apps-key" } },
           modelUse: {
-          test: {
-            used: (_ctx: unknown, use: { subject: string; tags?: Record<string, string> }) => {
-              uses.push(use);
+            test: {
+              used: (_ctx: unknown, use: { subject: string; tags?: Record<string, string> }) => {
+                uses.push(use);
+              },
             },
           },
-        },
-        shared: { thread: {}, message: {} },
+          shared: { thread: {}, message: {} },
           agents: {
             keyed: { instructions: "Hi.", model: "groq/llama-3.3-70b-versatile", default: true },
             app: { instructions: "Hi.", model: "anthropic/claude-opus-5-5" },

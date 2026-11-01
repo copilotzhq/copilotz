@@ -134,10 +134,14 @@ export async function whereFor(
   return { ...placed(desk, person, space, who), computers: desks.length };
 }
 
+/** Who answers what an agent working for `person` asks at this desk. */
+export const answererOf = (desk: Pick<Desk, "answers" | "owner">, person: string): string =>
+  desk.answers === "owner" ? desk.owner : person;
+
 /** Work on this desk: its folder in the space, and who answers. */
 const placed = (desk: Desk, person: string, space: string, who: string): Where => ({
   desk,
   person,
-  answerer: desk.answers === "owner" ? desk.owner : person,
+  answerer: answererOf(desk, person),
   scope: { space, folder: desk.folder, who },
 });

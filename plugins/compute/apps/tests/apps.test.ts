@@ -426,6 +426,14 @@ test("an agent's publish waits for its person's yes, even where nothing else is 
         "https://blog.copilotz.app",
       ]);
 
+      // Publishing is asked every time: nothing wider than this once.
+      for (const answer of ["always", "thread", "origin"]) {
+        const refused = await rt.call("computer.approve", { approval: asked._id, answer }, {
+          actor: ana,
+        }).then(() => "done", (e) => (e as { code?: string }).code);
+        assertEquals(refused, "invalid");
+      }
+
       // Yes, this once: it publishes, answering at once.
       await rt.call("computer.approve", { approval: asked._id, answer: "once" }, { actor: ana });
       await rt.idle();

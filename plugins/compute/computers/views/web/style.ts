@@ -367,6 +367,15 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 }
 
 /* What agents ask, over where you type */
+/* What you've let agents do: on the Computer tab */
+.computer-allowed { display: grid; gap: 10px; margin-top: 14px; }
+.computer-allowed h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 650; }
+.computer-allowed h3 .copilotz-icon { color: var(--muted-foreground); }
+.computer-allowed ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.computer-allowed li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; font-size: 13.5px; }
+.computer-allowed li + li { border-top: 1px solid var(--border); }
+.computer-allowed li span { display: grid; gap: 2px; min-width: 0; }
+.computer-allowed small { color: var(--muted-foreground); font-size: 12.5px; }
 /* What a routine may do on its own: on its page */
 .routine-allowed-wrap { display: grid; gap: 12px; }
 .routine-allowed-wrap:empty { display: none; }

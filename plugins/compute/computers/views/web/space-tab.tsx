@@ -32,6 +32,8 @@ import { type Named, namedOf } from "./names.ts";
 import { STYLE } from "./style.ts";
 import { Workspace } from "./workspace.tsx";
 import { nameOf as personName, namesIn } from "../../../../access/spaces/contract.ts";
+import type { Grant } from "../../collections/grant.ts";
+import { Allowed } from "./allowed.tsx";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -45,6 +47,8 @@ export const spaceComputersView = (
   const spaces = ctx.db.collection("space").query<Reached[]>("reached", {}).value;
   // The agents answering here, as they're named: whose its jobs are.
   const team = ctx.db.collection("thread").query<Team>("agents", { in: id }).value;
+  // What the person has let agents do here.
+  const grants = ctx.db.collection("grant").query<Grant[]>("mine", {}).value ?? [];
   // What its computers serve, at addresses of their own.
   const previews = ctx.db.collection("preview").query<Preview[]>("here", { in: id }).value;
   // Kinds of computer beyond people's own machines (cloud ones), and which of the person's are.
@@ -101,6 +105,12 @@ export const spaceComputersView = (
         kindOf={kindByComputer(kinds, records)}
         previews={previews ?? []}
         jobActions={jobActionsOf(ctx.resources.jobActions)}
+      />
+      <Allowed
+        grants={grants}
+        desks={desks}
+        named={(agent) => team?.agents[agent]?.name || agent}
+        call={ctx.call}
       />
     </>
   );

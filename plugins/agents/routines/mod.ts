@@ -36,6 +36,7 @@ import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { createAction } from "./actions/create.ts";
 import { deleteAction } from "./actions/delete.ts";
 import { fireAction } from "./actions/fire.ts";
+import { originAction } from "./actions/origin.ts";
 import { pauseAction } from "./actions/pause.ts";
 import { resumeAction } from "./actions/resume.ts";
 import { runAction } from "./actions/run.ts";
@@ -59,9 +60,12 @@ export const routines: Plugin = definePlugin({
     "routine.delete": deleteAction,
     "routine.run": runAction,
     "routine.fire": fireAction,
+    "routine.origin": originAction,
   },
   resources: {
     tools,
+    // A routine sets work going: what's let for it asks here what it is.
+    origins: { routine: { action: "routine.origin" } },
     // A space's routines, and their runs, are its members' to see; who changes one, the Actions say.
     shared: { routine: {}, routineRun: {} },
   },

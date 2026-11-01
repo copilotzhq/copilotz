@@ -15,7 +15,7 @@ import type { EnvVar } from "../collections/env-var.ts";
 import { OS_NAMES } from "../program/release.ts";
 import { tools } from "../resources/tools.ts";
 import { settingsOf } from "../shared/settings.ts";
-import { stateOf } from "../shared/where.ts";
+import { answererOf, stateOf } from "../shared/where.ts";
 import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
 
 const ASKED = { terminal: "run commands", jobs: "start jobs", writes: "write or edit files" };
@@ -51,7 +51,7 @@ function lineOf(
     : state === "waking"
     ? "waking"
     : `offline until ${shown(desk.owner)} starts it again`;
-  const answerer = desk.answers === "owner" ? desk.owner : person;
+  const answerer = answererOf(desk, person);
   const asks = asked.length
     ? `${shown(answerer)} says yes before you ${asked.join(", ")}`
     : "nothing needs a yes";
@@ -120,7 +120,7 @@ export const contextViews = {
       const info = desk.info as Info | undefined;
       const sep = info?.os === "win32" ? "\\" : "/";
       const asked = askedOn(desk);
-      const answerer = shown(desk.answers === "owner" ? desk.owner : person);
+      const answerer = shown(answererOf(desk, person));
       return [
         `You work on this space's computer, ${desk.name ?? "theirs"} (${owned}${
           info?.os ? `, ${OS_NAMES[info.os] ?? info.os}` : ""

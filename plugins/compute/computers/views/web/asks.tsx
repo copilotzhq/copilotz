@@ -5,7 +5,8 @@
  * on which computer, with Allow once · Allow in this conversation · Always
  * allow · Deny (`computer.approve`, whose answer goes into the
  * conversation, and the agent carries on). What a routine's run asks can also
- * be allowed for this routine, so its next runs go on their own. A write shows what it will write
+ * be allowed for this routine, so its next runs go on their own. Publishing
+ * is asked every time: only once, or not. A write shows what it will write
  * first (its `preview`: a new file's first lines, or an edit's change). What
  * it shows scrolls in a few lines of its own, however long (a command can
  * wrap into dozens), so the answers always show under it. The
@@ -133,8 +134,12 @@ function Ask(
           {a.origin && a.work !== "publish"
             ? allow("origin", `Allow for this ${a.origin.kind}`, "outline")
             : null}
-          {allow("thread", "Allow in this conversation", "outline")}
-          {allow("always", "Always allow", "outline")}
+          {a.work === "publish" ? null : (
+            <>
+              {allow("thread", "Allow in this conversation", "outline")}
+              {allow("always", "Always allow", "outline")}
+            </>
+          )}
           <Button
             size="sm"
             variant="ghost"

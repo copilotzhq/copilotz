@@ -3,9 +3,9 @@
  * this conversation, yes for the routine that set it going, yes always, or
  * no. Their answer goes into the conversation as theirs, to the agent, which
  * carries on from it (still as part of that routine's run). Publishing is
- * asked every time a routine gets there: it reaches outside the computer.
+ * asked every time: it can only be allowed once.
  */
-import { defineAction, inPerson } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson, invalid } from "../../../../runtime/mod.ts";
 import type { Approval } from "../collections/approval.ts";
 import { letOrigin, told } from "../shared/grants.ts";
 
@@ -32,10 +32,11 @@ export const approveAction = defineAction({
     // Only theirs to answer: the rules reach only their own.
     const asked = await ctx.db.collection<Approval>("approval").findOne({ _id: input.approval });
     if (!asked || asked.status !== "pending") return { answered: false };
+    if (asked.work === "publish" && input.answer !== "once" && input.answer !== "deny") {
+      throw invalid("Publishing is asked every time: allow it once, or not.");
+    }
     if (input.answer === "origin") {
-      if (!asked.origin || asked.work === "publish") {
-        throw Object.assign(new Error("That can't be allowed for a routine."), { code: "invalid" });
-      }
+      if (!asked.origin) throw invalid("Nothing set this going to allow it for.");
       await letOrigin(ctx, { ...asked, origin: asked.origin });
       return { answered: true };
     }

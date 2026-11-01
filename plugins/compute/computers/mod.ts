@@ -27,6 +27,7 @@ import { definePlugin, personOf, type Plugin } from "../../../runtime/mod.ts";
 import { admitAction } from "./actions/admit.ts";
 import { allowedAction } from "./actions/allowed.ts";
 import { allowOriginAction } from "./actions/allow-origin.ts";
+import { forgetGrantAction } from "./actions/forget-grant.ts";
 import { approveAction } from "./actions/approve.ts";
 import { codeAction } from "./actions/code.ts";
 import { defaultAction } from "./actions/default.ts";
@@ -96,6 +97,7 @@ export const computers: Plugin = definePlugin({
     "computer.move": moveAction,
     "computer.approve": approveAction,
     "computer.allowOrigin": allowOriginAction,
+    "computer.forgetGrant": forgetGrantAction,
     "computer.work": workAction,
     // A space's environment: its managers' (env.values: the system's, an app's deploy).
     "env.set": envSetAction,

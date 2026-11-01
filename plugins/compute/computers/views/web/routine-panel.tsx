@@ -17,6 +17,7 @@ import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
 import type { Approval } from "../../collections/approval.ts";
 import type { Desk } from "../../collections/desk.ts";
 import type { Grant } from "../../collections/grant.ts";
+import { answererOf } from "../../shared/where.ts";
 import { asked } from "./asked.ts";
 import { STYLE } from "./style.ts";
 
@@ -45,9 +46,9 @@ export const routinePanelView = (item: Routine, ctx: ViewContext<ReactNode>): Re
   if (!desks || !grants || !pending || !agents) return null;
   const named = (agent: string) => agents[agent]?.name || agent;
   // Whom a computer's asks go to, when this routine runs: its maker, unless its owner keeps that.
-  const answererOf = (d: Desk) => d.answers === "owner" ? d.owner : item.by;
-  const mine = desks.filter((d) => answererOf(d) === me);
-  const others = item.by === me ? desks.filter((d) => answererOf(d) !== me) : [];
+  const answers = (d: Desk) => answererOf(d, item.by);
+  const mine = desks.filter((d) => answers(d) === me);
+  const others = item.by === me ? desks.filter((d) => answers(d) !== me) : [];
   if (!mine.length && !others.length && !waiting.length) return null;
   return (
     <>
@@ -58,7 +59,7 @@ export const routinePanelView = (item: Routine, ctx: ViewContext<ReactNode>): Re
         others={others.map((d) => ({
           id: d._id,
           computer: d.name ?? d.computer,
-          answers: nameOf(answererOf(d), names),
+          answers: nameOf(answers(d), names),
         }))}
         grants={grants}
         waiting={waiting}
@@ -83,13 +84,6 @@ function Allowed(
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const rev = r.rev ?? 0;
-  const origin = {
-    kind: "routine",
-    id: r._id,
-    name: r.name,
-    rev,
-    path: `/routine/${encodeURIComponent(r._id)}`,
-  };
   const now = grants.filter((g) => g.rev === rev);
   const old = grants.filter((g) => g.rev !== rev);
   const has = (desk: string, agent: string, work: Work) =>
@@ -106,7 +100,9 @@ function Allowed(
     setBusy(work);
     setError(undefined);
     try {
-      for (const one of input) await call("computer.allowOrigin", { origin, ...one });
+      for (const one of input) {
+        await call("computer.allowOrigin", { kind: "routine", id: r._id, ...one });
+      }
     } catch (e) {
       setError(message(e));
     } finally {

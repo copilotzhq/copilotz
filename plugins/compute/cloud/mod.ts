@@ -69,7 +69,7 @@
  * plugins: [...orgPlugins, cloud, remotePool((action, input) => directory.call(action, input), org.id)]
  * ```
  */
-import { definePlugin, type Plugin, personOf } from "../../../runtime/mod.ts";
+import { definePlugin, personOf, type Plugin } from "../../../runtime/mod.ts";
 import { createAction } from "./actions/create.ts";
 import { dailyAction } from "./actions/daily.ts";
 import { destroyAction } from "./actions/destroy.ts";

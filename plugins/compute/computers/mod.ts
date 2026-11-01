@@ -23,7 +23,7 @@
  * connects to the owner as a `computer` worker, which `computer.admit` lets
  * in; the plugin sends it work through `ctx.workers` (see shared/workloads.ts).
  */
-import { definePlugin, type Plugin, personOf } from "../../../runtime/mod.ts";
+import { definePlugin, personOf, type Plugin } from "../../../runtime/mod.ts";
 import { admitAction } from "./actions/admit.ts";
 import { allowedAction } from "./actions/allowed.ts";
 import { allowOriginAction } from "./actions/allow-origin.ts";

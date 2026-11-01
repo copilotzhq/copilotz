@@ -6,9 +6,10 @@
  * computer. Listed in an agent's `tools` by name.
  */
 import type { Tool } from "../../../agents/chat/contract.ts";
+import { personOf } from "../../../../runtime/mod.ts";
 import { tool } from "../../../agents/chat/contract.ts";
 import { messageOf } from "../shared/errors.ts";
-import { addressFor, can, detailOf, personOf, publish as publishApp } from "../shared/publish.ts";
+import { addressFor, can, detailOf, publish as publishApp } from "../shared/publish.ts";
 
 const publish = tool({
   description: "Publishes what one of your jobs on this space's computers serves as an app " +

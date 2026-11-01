@@ -1,5 +1,6 @@
 /** A use, as the ledger takes it, and recording one: rated, appended, counted. */
 import type { Actor, Context, ReadContext } from "../../../../runtime/mod.ts";
+import { personOf } from "../../../../runtime/mod.ts";
 import { nonzero, rate } from "./rate.ts";
 
 /** One use of something: a model call, an API call, a machine's seconds. */
@@ -30,14 +31,6 @@ export type UseContext = Pick<Context, "resources"> & {
  * The person a use was for: who acted, or whom an agent (`for`) or trusted
  * code (`via`) acted for. None: the system's own.
  */
-export function personOf(actor: Actor | undefined): string | undefined {
-  for (let a = actor, hops = 0; a && hops < 4; hops++) {
-    if (a.kind === "person") return a.id;
-    a = (a.for ?? a.via) as Actor | undefined;
-  }
-  return undefined;
-}
-
 /**
  * A record's price: as rated, or, for a use recorded before every use had a
  * price (nothing rated it), its cost: a margin of 0.

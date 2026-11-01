@@ -5,18 +5,9 @@
  * they can read; else its first run's), or a new one each run (`post: "new"`).
  * It runs as them from then on: its timer is set in the same commit.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, personOf } from "../../../../runtime/mod.ts";
 import type { Thread } from "../../chat/contract.ts";
-import {
-  answersIn,
-  fields,
-  forbidden,
-  invalid,
-  nameFrom,
-  personOf,
-  timerOf,
-  timing,
-} from "../shared/routines.ts";
+import { answersIn, fields, forbidden, invalid, nameFrom, timerOf, timing } from "../shared/routines.ts";
 import { type Given, normalize, whenOf } from "../shared/schedule.ts";
 
 export const createAction = defineAction({
@@ -36,7 +27,7 @@ export const createAction = defineAction({
   },
   allow: (actor) => actor.kind === "person",
   run: async (ctx, input) => {
-    const by = personOf(ctx);
+    const by = personOf(ctx.actor);
     if (!by || ctx.actor?.kind !== "person") {
       throw forbidden("A routine is a person's: it runs as whoever makes it.");
     }

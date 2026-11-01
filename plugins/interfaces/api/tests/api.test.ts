@@ -489,7 +489,10 @@ test("events end, saying so, once the key is revoked", async () => {
     await runtime.call("api_key.revoke", { key: mine._id }, { actor: ana });
     // The check runs with the ping: here, sooner.
     const { eventStream } = await import("../shared/events.ts");
-    const proven = { key: mine, actor: { kind: "person" as const, id: "ana", key: "k", at: "x" } };
+    const proven = {
+      key: mine,
+      actor: { kind: "person" as const, id: "ana", key: "k", within: "x" },
+    };
     const fast = eventStream(runtime, proven, () => Promise.resolve(false), 10);
     const said = await follow(fast, (seen) => seen.some((e) => e.event === "revoked"));
     assertEquals(said.at(-1)?.data, {

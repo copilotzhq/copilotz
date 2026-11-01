@@ -14,11 +14,10 @@
  * People change it when they manage the space; the system (another
  * plugin's Action, an app's publisher's) always may.
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, personOf } from "../../../../runtime/mod.ts";
 import type { EnvVar } from "../collections/env-var.ts";
 import { may } from "../shared/desks.ts";
 import { ENV_NAME, envId, envOf } from "../shared/env.ts";
-import { personOf } from "../shared/person.ts";
 import { seal } from "../shared/seal.ts";
 import { settingsOf } from "../shared/settings.ts";
 

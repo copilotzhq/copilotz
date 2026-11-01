@@ -123,7 +123,7 @@ export async function serveApi(request: Request, host?: Served): Promise<Respons
       if (
         input && typeof input === "object" && !Array.isArray(input) && !("in" in input) &&
         takesSpace(described, action)
-      ) input = { ...input, in: actor.at };
+      ) input = { ...input, in: actor.within };
       return json(await runtime.call(action, input, { actor, ...(id ? { id } : {}) }));
     }
     if (query !== undefined) {

@@ -6,6 +6,7 @@
  * take them.
  */
 import type { Context } from "../../../../runtime/mod.ts";
+import { personOf } from "../../../../runtime/mod.ts";
 import type { Routine } from "../collections/routine.ts";
 import { localOf, nextRuns, type Schedule, scheduleSchema, whenOf } from "./schedule.ts";
 import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
@@ -67,14 +68,6 @@ export const byId = {
 /** The timer that runs a routine. */
 export const timerOf = (routine: string) => `routine:${routine}`;
 
-/** The person asking: themselves, or the one an agent works for. */
-export function personOf(ctx: Pick<Context, "actor">): string | undefined {
-  const actor = ctx.actor;
-  if (actor?.kind === "person") return actor.id;
-  const principal = actor?.for as { kind?: string; id?: string } | undefined;
-  return principal?.kind === "person" ? principal.id : undefined;
-}
-
 /** This context, acting as the routine's maker (itself, when it already is them). */
 export const asMaker = (ctx: Context, by: string): Context =>
   ctx.actor?.kind === "person" && ctx.actor.id === by && !ctx.actor.for
@@ -88,7 +81,7 @@ export const asMaker = (ctx: Context, by: string): Context =>
 export async function editable(ctx: Context, id: string): Promise<Routine> {
   const found = await ctx.db.collection<Routine>("routine").findOne({ _id: id });
   if (!found) throw invalid("No such routine here: it may have been deleted.");
-  if (found.by === personOf(ctx)) return found;
+  if (found.by === personOf(ctx.actor)) return found;
   const { can } = await ctx.call<{ can: boolean }>("space.can", {
     space: found.in,
     verb: "manage",

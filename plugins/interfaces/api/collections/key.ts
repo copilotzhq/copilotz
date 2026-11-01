@@ -61,7 +61,7 @@ export const apiKey = defineCollection({
       if (!found) return null;
       return {
         key: found as ApiKey,
-        actor: { kind: "person", id: found.person, key: found._id.slice(0, 12), at: found.in },
+        actor: { kind: "person", id: found.person, key: found._id.slice(0, 12), within: found.in },
       };
     },
     /**

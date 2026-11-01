@@ -4,6 +4,7 @@
  * accounts and their timers are named.
  */
 import type { Actor, Resources } from "../../../../runtime/mod.ts";
+import { personOf } from "../../../../runtime/mod.ts";
 import type { AccountProvider } from "../contract.ts";
 import { forbidden, invalid } from "./errors.ts";
 
@@ -44,8 +45,7 @@ export const timerOf = (account: string) => `account.refresh:${account}`;
  */
 export function personFor(actor: Actor | undefined, named?: string): string | undefined {
   if (!actor || actor.kind === "system") return named;
-  const who = actor.kind === "agent" ? actor.for as Actor | undefined : actor;
-  const person = who?.kind === "person" ? who.id : undefined;
+  const person = actor.kind === "person" || actor.kind === "agent" ? personOf(actor) : undefined;
   if (named !== undefined && named !== person) {
     throw forbidden("Only the system asks for another person's account");
   }

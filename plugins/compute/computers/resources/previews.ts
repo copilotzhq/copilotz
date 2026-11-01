@@ -19,6 +19,7 @@
  *   the preview are gone back to (`to`).
  */
 import type { Actor, Resources, Runtime } from "../../../../runtime/mod.ts";
+import { personOf } from "../../../../runtime/mod.ts";
 
 /**
  * The web host's routes, as its `routes` resource takes them (hosts/web/routes.ts,
@@ -31,7 +32,6 @@ type Route =
   & { serve(request: Request, served: Served): Response | Promise<Response> };
 import { previewUrl, schemeOf } from "../actions/preview.ts";
 import type { Preview } from "../collections/preview.ts";
-import { personOf } from "../shared/person.ts";
 import { type PreviewsSettings, settingsOf } from "../shared/settings.ts";
 import { type HttpRequestHead, type HttpResponseHead, WORK } from "../shared/workloads.ts";
 

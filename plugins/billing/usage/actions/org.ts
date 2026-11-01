@@ -13,11 +13,11 @@
  * only platform staff see; each says whether it shows them (`costs`). Both
  * only read, so neither is recorded.
  */
-import { type Context, defineAction, type Filter } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, type Filter, personOf } from "../../../../runtime/mod.ts";
 import type { UsageRecord } from "../collections/usage.ts";
 import { rollupsOf } from "../shared/settings.ts";
 import { priceOnly, totals, UNITS } from "../shared/totals.ts";
-import { personOf, priceOf } from "../shared/use.ts";
+import { priceOf } from "../shared/use.ts";
 
 const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
 

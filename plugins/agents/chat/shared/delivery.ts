@@ -5,7 +5,7 @@ import type { Thread } from "../collections/thread.ts";
 import type { Wait } from "../collections/wait.ts";
 import { agentsNamed, NO_ANSWER, now } from "./agents.ts";
 import { noted } from "./summary.ts";
-import { settingsOf, type Told, type Turn } from "./types.ts";
+import { DELEGATED, settingsOf, type Told, type Turn } from "./types.ts";
 
 /** Whether a message after `hops` agent messages in a row may still start a turn. */
 export const starts = (ctx: { resources: Resources }, hops: number) => {
@@ -20,7 +20,15 @@ export const starts = (ctx: { resources: Resources }, hops: number) => {
  */
 export const delivery = async (
   ctx: Context,
-  m: { _id: string; thread: string; from: string; to: string[]; replyTo?: string; hops: number },
+  m: {
+    _id: string;
+    thread: string;
+    from: string;
+    to: string[];
+    replyTo?: string;
+    hops: number;
+    via?: { kind: string };
+  },
   /** Where the turns it starts run: its thread, or the subthread hanging from it. */
   where = m.thread,
   /** False: it checks off waits but starts no turn (an answer to a stop). */
@@ -30,7 +38,8 @@ export const delivery = async (
   const waits = ctx.db.collection<Wait>("wait");
   const steps: ((tx: TransactionScope) => Promise<unknown> | void)[] = [];
   for (const name of m.to) {
-    if (!agents[name] || name === m.from) continue;
+    // An agent doesn't start itself, where it is; handed between spaces, it's other work.
+    if (!agents[name] || (name === m.from && m.via?.kind !== DELEGATED)) continue;
     // An agent's open waits: one query per agent, which the owner keeps cached.
     const waiting = m.replyTo
       ? (await waits.find({ agent: name, "waitingFor.0": { $exists: true } }))
@@ -106,7 +115,7 @@ export const answer = async (
       ...(back.in ? { in: back.in } : {}),
       to: [trigger!.from],
       via: {
-        kind: "delegated",
+        kind: DELEGATED,
         name: (back.from ?? "Another space").slice(0, 120),
         path: `/thread/${encodeURIComponent(t.thread)}${
           thread?.in ? `?in=${encodeURIComponent(thread.in)}` : ""

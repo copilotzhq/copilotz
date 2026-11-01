@@ -20,6 +20,8 @@ const text = (m: LlmMessage) => "text" in m ? m.text ?? "" : "";
 let seen: Record<string, Actor | undefined> = {};
 let said: string[] = [];
 let told: Record<string, string[]> = {};
+/** Every model call, in order. */
+let calls: { agent: string; messages: LlmMessage[] }[] = [];
 /** Whether its work had been stopped by the time its tool ran. */
 const stoppedBefore: Record<string, boolean> = {};
 /** What an agent told to "hold" waits for before it goes on. */
@@ -30,6 +32,7 @@ const script: LlmAdapter = {
   async *generate({ messages, connection, instructions }) {
     const agent = connection.model;
     (told[agent] ??= []).push(messages.map(text).join("\n") + instructions);
+    calls.push({ agent, messages });
     const last = messages.at(-1)!;
     if (last.role === "tool") {
       said.push(text(last));
@@ -72,7 +75,12 @@ const app = definePlugin({
     provider: { s: { adapter: "s" } },
     tools: { whoami },
     agents: {
-      north: { instructions: "n", model: "s/north", default: true, tools: ["send_message"] },
+      north: {
+        instructions: "n",
+        model: "s/north",
+        default: true,
+        tools: ["send_message", "whoami"],
+      },
       lead: { instructions: "l", model: "s/lead", tools: ["send_message", "whoami"] },
       dev: { instructions: "d", model: "s/dev", tools: ["whoami"] },
     },
@@ -83,6 +91,7 @@ async function setup(fn: (rt: Awaited<ReturnType<typeof createRuntime>>) => Prom
   seen = {};
   said = [];
   told = {};
+  calls = [];
   const rt = await createRuntime({
     store: memoryStore(),
     plugins: [models, chat, ...access, app],
@@ -177,7 +186,7 @@ test("a chain of hand-overs works, each for the same person", async () => {
   });
 });
 
-test("only where its person may write, to who answers there, and never to itself", async () => {
+test("only where its person may write, and to who answers there", async () => {
   await setup(async (rt) => {
     const { space: mine } = await rt.call<{ space: string }>("space.personal", {}, { actor: bob });
     const pm = await team(rt, "Project", "lead");
@@ -194,11 +203,14 @@ test("only where its person may write, to who answers there, and never to itself
     assertStringIncludes(await refused(`hand ${pm}: hello`), "can't write");
     await rt.call("member.set", { space: pm, member: bob, role: "editor" }, { actor: ana });
     assertStringIncludes(await refused(`hand ${pm} dev: hello`), 'nobody called "dev"');
-    // A space where only it answers: nobody to hand to.
-    const { space: solo } = await rt.call<{ space: string }>("space.create", { name: "Solo" }, {
+    // A space with nobody answering: nobody to hand to.
+    const { space: empty } = await rt.call<{ space: string }>("space.create", { name: "Empty" }, {
       actor: bob,
     });
-    assertStringIncludes(await refused(`hand ${solo}: hello`), "no other agent");
+    await rt.call("member.remove", { space: empty, member: { kind: "agent", id: "north" } }, {
+      actor: bob,
+    });
+    assertStringIncludes(await refused(`hand ${empty}: hello`), "no agent answers");
   });
 });
 
@@ -274,5 +286,81 @@ test("stopping a chat stops what it handed over", async () => {
     const after = await history(rt, thread);
     assert(after.at(-1)!.stopped, "north's turn ended as stopped");
     held = Promise.resolve();
+  });
+});
+
+test("the same agent in another space is other work, and reads it as input", async () => {
+  await setup(async (rt) => {
+    const { space: personal } = await rt.call<{ space: string }>("space.personal", {}, {
+      actor: ana,
+    });
+    // North is who answers there: nobody else needs to be.
+    const { space: solo } = await rt.call<{ space: string }>("space.create", { name: "Solo" }, {
+      actor: ana,
+    });
+    const { thread } = await rt.call<{ thread: string }>("chat.send", {
+      text: `hand ${solo}: whoami`,
+      in: personal,
+    }, { actor: ana });
+    await rt.idle();
+
+    // It worked there, as itself, for Ana, with what it was handed as input.
+    assertEquals([seen.north?.id, (seen.north?.for as Actor)?.id, seen.north?.at], [
+      "north",
+      "ana",
+      solo,
+    ]);
+    const there = calls.find((c) =>
+      c.messages.some((m) => text(m).includes('You (via delegated "Personal"): whoami'))
+    );
+    assert(there, "it read what it handed over");
+    assertEquals(there.messages.at(-1)?.role, "user");
+    assert(
+      !there.messages.some((m) => m.role === "assistant" && text(m).includes("whoami")),
+      "not as something it said",
+    );
+
+    // The answer came back, as input too, and it carried on, ending with Ana.
+    const here = await history(rt, thread);
+    const back = here.find((m) => m.via?.kind === "delegated")!;
+    assertEquals([back.from, back.to, back.via?.name, back.text], [
+      "north",
+      ["north"],
+      "Solo",
+      "north done",
+    ]);
+    const resumed = calls.at(-1)!;
+    const last = resumed.messages.at(-1)!;
+    assertEquals(last.role, "user");
+    assertStringIncludes(text(last), 'You (via delegated "Solo"): north done');
+    assertEquals(here.at(-1)!.from, "north");
+    assertEquals(here.at(-1)!.to, ["ana"]);
+    assert(here.at(-1)!.text !== "north done", "its own answer, after what came back");
+  });
+});
+
+test("whoever the space says answers takes it, even the agent that sent it", async () => {
+  await setup(async (rt) => {
+    const { space: personal } = await rt.call<{ space: string }>("space.personal", {}, {
+      actor: ana,
+    });
+    const { space } = await rt.call<{ space: string }>("space.create", { name: "Both" }, {
+      actor: ana,
+    });
+    await rt.call("member.set", { space, member: { kind: "agent", id: "lead" }, role: "editor" }, {
+      actor: ana,
+    });
+    await rt.call("chat.send", { text: `hand ${space}: whoami`, in: personal }, { actor: ana });
+    await rt.idle();
+    assertEquals(seen.north?.at, space);
+    assertEquals(seen.lead, undefined);
+
+    // The context says so; and naming another still reaches them.
+    assertStringIncludes(told.north.join("\n"), `north (you, working there)`);
+    await rt.call("chat.send", { text: `hand ${space} lead: whoami`, in: personal }, {
+      actor: ana,
+    });
+    await rt.idle();
+    assertEquals(seen.lead?.at, space);
   });
 });

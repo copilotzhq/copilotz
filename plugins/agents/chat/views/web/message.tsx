@@ -114,7 +114,11 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
           ? (
             <Chip
               size="sm"
-              icon="refresh"
+              icon={m.via.kind === "routine"
+                ? "refresh"
+                : m.via.kind === "answer"
+                ? "check"
+                : "share"}
               className="msg-via"
               {...(m.via.path ? { href: m.via.path } : {})}
             >

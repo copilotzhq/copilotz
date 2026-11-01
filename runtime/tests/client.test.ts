@@ -24,6 +24,9 @@ const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
 type Note = { _id: string; owner: string; text: string; secret?: string };
 
+/** What the `slow` query waits for. */
+let held: Promise<void> = Promise.resolve();
+
 /** The server's plugin: notes each person reaches only their own of, with a private field. */
 const notes = definePlugin({
   name: "notes",
@@ -51,6 +54,14 @@ const notes = definePlugin({
         },
         // Lets no one from outside.
         all: (tally) => tally.find({}),
+        // Answers once `held` lets it: its batch's answer waits for it.
+        slow: {
+          allow: (actor) => actor.kind === "person",
+          run: async () => {
+            await held;
+            return "slow";
+          },
+        },
       },
     }),
   },
@@ -104,6 +115,22 @@ const front = definePlugin({
     counted: {
       test: (_: unknown, ctx: ViewContext) =>
         ctx.db.collection("note").query<number>("count").value,
+    },
+    // Reads asked for in one batch, the second holding back the answer to both.
+    racing: {
+      test: (_: unknown, ctx: ViewContext) => [
+        ctx.show("texts", { _id: "texts" }),
+        ctx.show("slow", { _id: "slow" }),
+      ],
+    },
+    texts: {
+      test: (_: unknown, ctx: ViewContext) =>
+        (ctx.db.collection<Note>("note").find({}, { sort: { text: 1 } }).value ?? []).map((n) =>
+          n.text
+        ),
+    },
+    slow: {
+      test: (_: unknown, ctx: ViewContext) => ctx.db.collection("tally").query("slow").value,
     },
   },
 });
@@ -226,7 +253,10 @@ test("the same read made twice at once is asked for, and answered, once", async 
   });
 });
 
-test("a client that loses its connection sees what changed meanwhile, and what changes after", async () => {
+/** A client over a real socket, with the sockets it opens, to drop one. */
+async function overSocket(
+  fn: (rt: Runtime, client: ReturnType<typeof connect>, sockets: WebSocket[]) => Promise<void>,
+) {
   const tickets = new Map<string, Actor>();
   const rt = await createRuntime({
     store: memoryStore(),
@@ -246,7 +276,6 @@ test("a client that loses its connection sees what changed meanwhile, and what c
       config: {
         url: `ws://127.0.0.1:${new URL(String(listener.url)).port}/browsers`,
         allowInsecureLoopback: true,
-        // The sockets it opens, to drop one.
         socket: ({ url, protocol }) => {
           const socket = new WebSocket(url, protocol);
           sockets.push(socket);
@@ -263,6 +292,16 @@ test("a client that loses its connection sees what changed meanwhile, and what c
   });
   try {
     await client.ready;
+    await fn(rt, client, sockets);
+  } finally {
+    await client.close().catch(() => {});
+    await listener.shutdown();
+    await rt.close();
+  }
+}
+
+test("a client that loses its connection sees what changed meanwhile, and what changes after", async () => {
+  await overSocket(async (rt, client, sockets) => {
     const view = client.observe<{ texts: string[] }>("test", "notes", {});
     await view.ready;
     const texts = () => (view.get() as { value?: { texts: string[] } }).value?.texts ?? [];
@@ -276,11 +315,62 @@ test("a client that loses its connection sees what changed meanwhile, and what c
     assertEquals(texts(), ["a1", "a2"]);
     assert(sockets.length >= 2, "it connected again");
     view.close();
-  } finally {
-    await client.close().catch(() => {});
-    await listener.shutdown();
-    await rt.close();
-  }
+  });
+});
+
+test("what's pushed while a read's batch is answered isn't lost to the older answer", async () => {
+  await setup(async (rt, as) => {
+    const release = Promise.withResolvers<void>();
+    held = release.promise;
+    try {
+      const client = as(ana);
+      await client.ready;
+      const parts: Observed[] = [];
+      const view = client.observe("test", "racing", {}, {
+        part: (part) => (parts.push(part), part),
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      // The batch's answer waits for its slow read; the notes are already watched.
+      await rt.call("note.add", { text: "a1" }, { actor: ana });
+      await new Promise((r) => setTimeout(r, 100));
+      release.resolve();
+      await view.ready;
+      const texts = () => (parts[0].get() as { value?: string[] }).value ?? [];
+      await until(() => texts().length === 1, "the note shows");
+      view.close();
+    } finally {
+      release.resolve();
+      held = Promise.resolve();
+    }
+  });
+});
+
+test("what's pushed while a new connection asks again isn't lost to the older answer", async () => {
+  await overSocket(async (rt, client, sockets) => {
+    const parts: Observed[] = [];
+    const view = client.observe("test", "racing", {}, {
+      part: (part) => (parts.push(part), part),
+    });
+    await view.ready;
+    const texts = () => (parts[0].get() as { value?: string[] }).value ?? [];
+    const release = Promise.withResolvers<void>();
+    held = release.promise;
+    try {
+      // The connection drops, and comes back asking again; the answer waits for the slow read.
+      sockets.at(-1)!.close();
+      await until(() => sockets.length >= 2, "it connects again", 10_000);
+      await new Promise((r) => setTimeout(r, 300));
+      await rt.call("note.add", { text: "a1" }, { actor: ana });
+      await until(() => texts().length === 1, "the note is pushed");
+      release.resolve();
+      await new Promise((r) => setTimeout(r, 200));
+      assertEquals(texts(), ["a1"]);
+      view.close();
+    } finally {
+      release.resolve();
+      held = Promise.resolve();
+    }
+  });
 });
 
 test("what the owner pushes is read where streams can't be iterated (Safari)", async () => {

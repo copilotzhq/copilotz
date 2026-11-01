@@ -75,6 +75,11 @@ export function connect(options: {
   const asked = new Map<string, Promise<Answer>>();
   /** Every read the Views here are watching, by key: what a new connection asks for again. */
   const watching = new Map<string, Remote>();
+  /**
+   * Reads being asked for, and what each was pushed meanwhile: a batch is answered
+   * once its slowest read is, so what's pushed before the answer is newer than it.
+   */
+  const racing = new Map<string, Answer | undefined>();
   /** Connections the owner has opened to this client (its session streams). */
   let sessions = 0;
   let batch: { key: string; read: Remote; done: PromiseWithResolvers<Answer> }[] = [];
@@ -94,11 +99,15 @@ export function connect(options: {
       // changed. A new connection after the first watches nothing yet: what's
       // shown is asked for again.
       [SESSION]: async ({ input }) => {
-        if (sessions++ > 0) void rewatch();
+        const session = ++sessions;
+        if (session > 1) void rewatch();
         // A line: what one commit changed, shown at once.
         for await (const line of lines<Push[]>(input)) {
+          // A newer connection has asked for everything again: this one's news is older.
+          if (session !== sessions) break;
           const changed: string[] = [];
           for (const { key, ...now } of line) {
+            if (racing.has(key)) racing.set(key, now as Answer);
             if (!known.has(key)) continue;
             known.set(key, now as Answer);
             changed.push(WATCHED + key);
@@ -131,14 +140,23 @@ export function connect(options: {
     return answer.value as R;
   };
 
+  /** Asks for reads; each comes to what it was pushed meanwhile, or else to its answer. */
+  const reading = async (reads: { key: string; read: Remote }[]) => {
+    for (const { key } of reads) if (!racing.has(key)) racing.set(key, undefined);
+    try {
+      const answers = await ask<({ key: string } & Answer)[]>(READ, { reads });
+      return answers.map(({ key, ...answer }) => ({ key, ...(racing.get(key) ?? answer) }));
+    } finally {
+      for (const { key } of reads) racing.delete(key);
+    }
+  };
+
   /** Sends what this pass asked for, in one batch. */
   const flush = async () => {
     const sent = batch;
     batch = [];
     try {
-      const answers = await ask<({ key: string } & Answer)[]>(READ, {
-        reads: sent.map(({ key, read }) => ({ key, read })),
-      });
+      const answers = await reading(sent.map(({ key, read }) => ({ key, read })));
       const byKey = new Map(answers.map(({ key, ...answer }) => [key, answer as Answer]));
       for (const { key, done } of sent) {
         const answer = byKey.get(key) ?? { error: { message: `No answer for ${key}` } };
@@ -164,7 +182,7 @@ export function connect(options: {
     const reads = [...watching].map(([key, read]) => ({ key, read }));
     if (!reads.length) return;
     try {
-      const answers = await ask<({ key: string } & Answer)[]>(READ, { reads });
+      const answers = await reading(reads);
       const changed: string[] = [];
       for (const { key, ...answer } of answers) {
         if (!watching.has(key)) continue;

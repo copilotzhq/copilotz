@@ -1,3 +1,11 @@
+## 1.0.0-rc.13 — 2026-11-01
+
+- **A read's answer no longer overwrites something newer.** The owner answers a batch of reads once
+  its slowest is ready, so a change could be pushed before the answer that didn't include it. The
+  client then showed the older answer until the read next changed: on a page's first load (the push
+  was dropped) and after a reconnect (the push was overwritten). What's pushed while a read is asked
+  for now wins over its answer, and a connection that's been replaced is no longer listened to.
+
 ## 1.0.0-rc.12 — 2026-11-01
 
 - **An agent can hand work to itself in another space.** "Itself" now means the same agent in the

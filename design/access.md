@@ -43,9 +43,23 @@ boundary: the runtime enforces, so agents can be naive and still safe.
 - **Rules are filters.** Reads are ANDed with the actor's reach; inserts, and the result of every
   update or replace, must match it, so nothing is moved out of reach. A collection without a rule is
   invisible to clients and unchecked for trusted code.
-- **Actions say who may call them from outside** (`allow`). Record-level access is never checked
-  there: the rules do it. Two logged escape hatches for trusted code: acting as a person (a webhook
-  mapping a number to its person) and acting as the system (creating a Personal space at sign-up).
+- **Actions say who may call them from outside** (`allow`: the runtime's `people`, or `inPerson` for
+  what a key must never decide). Record-level access is the rules'. Where trusted code goes on as
+  the system, it first asks `may`, `must` or `mustOwnOr` (the spaces contract), which ask reach:
+  nothing else works that out, so every limit on an actor holds everywhere. Two logged escape
+  hatches for trusted code: acting as a person (a webhook mapping a number to its person) and acting
+  as the system (creating a Personal space at sign-up).
+- **Who:** `personOf` (the runtime's) says whose work this is. An actor can be limited to one space
+  (`within`: a key's work), which reach respects, and carry what set it going (`origin`: a routine),
+  which only code can set. A message's `via` is only what people are shown: anyone can claim it.
+- **A space put away** (archived) is read and managed, not written in: reach says so.
+- **Leaving** follows the membership (`member.deleted`), however someone left: their computers'
+  desks, their yeses and keys for that space end; out of the org, all of them and their own
+  computers. A connection stays open but reaches nothing; a preview's cookie asks again on every
+  request.
+- **Asking** is one record for computers (`approval`, answered into `grant`): once, in a
+  conversation, for a routine as it is now, or always. Publishing is only ever once. A request to
+  join stays apart: any manager answers it, and what comes of it is a membership.
 
 ## Agents
 
@@ -57,7 +71,14 @@ boundary: the runtime enforces, so agents can be naive and still safe.
 - **Broader than the person only through code:** elevated Actions and tools run with a grant of
   their own and declare what their output reveals (`salary_band` releases an aggregate). The model
   never holds the grant; the tool's code decides what leaves.
-- **No person:** a WhatsApp contact reaches only their conversation; routines act as their creator.
+- **No person:** a WhatsApp contact reaches only their conversation, unless a linked phone makes
+  them its person; routines act as their creator.
+- **Handing work to another space:** an agent may message the agents of any space its person can
+  write in (`send_message` with `space`), though it doesn't work there itself. A new chat opens
+  there, which its members see, marked as delegated, for the same person, with what set it going;
+  the answer comes back to the chat it came from. This goes around labels on purpose: what's handed
+  over is what the agent chose to say, and the person accepted that it may repeat something private.
+  The agent is told so.
 
 ## Source labels
 
@@ -133,10 +154,10 @@ space.
 - **Browsers** sign in with Google once: a sign-in Action verifies the person, creates a session and
   sets it as an httpOnly, Secure cookie, which the connection presents. Sign-in methods are plugins;
   the runtime knows sessions.
-- **What a browser may do:** read and write directly under the rules (a message's `from` pinned to
-  the person), watch queries, call Actions for what rules can't express (several documents kept
-  consistent, side effects, secrets). It can't hold a transaction open: batches commit in one
-  request. It never receives secret fields.
+- **What a browser may do:** read directly under the rules, watch queries, and call Actions for
+  everything it changes (a message's `from` pinned to the person), including what rules can't
+  express (several documents kept consistent, side effects, secrets). It can't hold a transaction
+  open: batches commit in one request. It never receives secret fields.
 
 ## Built (2026-10-28)
 

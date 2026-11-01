@@ -78,6 +78,15 @@ const messageSchema = {
       },
       required: ["kind", "name"],
     },
+    /**
+     * Where an answer goes, when this was sent from another space: the chat
+     * that handed the work here, which its sender waits in.
+     */
+    back: {
+      type: "object",
+      properties: { thread: { type: "string" }, in: { type: "string" }, from: { type: "string" } },
+      required: ["thread"],
+    },
     /** A step's model state (its thinking), sent back to that model while its turn goes on. */
     state: { type: "object" },
     /**

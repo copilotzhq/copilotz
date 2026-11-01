@@ -18,6 +18,8 @@ export const canAction = defineAction({
     required: ["space", "verb"],
     additionalProperties: false,
   },
+  // A question, asked on every preview request: it records nothing.
+  record: false,
   allow: (actor) => actor.kind === "person" || actor.kind === "agent",
   run: async (ctx, input) => {
     return { can: await may(ctx, input.verb, input.space) };

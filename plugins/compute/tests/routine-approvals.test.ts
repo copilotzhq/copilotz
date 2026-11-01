@@ -436,3 +436,27 @@ test("what's let for a routine is checked against it; an owner's yes keeps the t
     await computer.worker.stop();
   });
 });
+
+test("leaving ends what a person brought and left behind, however they left", async () => {
+  await setup(async (s) => {
+    const { computer, desk } = await connected(s);
+    const { space: launch } = await s.rt.call<{ space: string }>("space.create", {
+      name: "Launch",
+    }, { actor: bob });
+    await join(s.rt, launch, ana, "editor", bob);
+    await s.rt.call("computer.share", { computer: desk.computer, in: launch }, { actor: ana });
+    assertEquals((await s.rt.query<Desk[]>("desk.here", { in: launch }, { actor: bob })).length, 1);
+    // Something of Bob's waits on her computer there.
+    await s.rt.call("chat.send", { text: "run ls", in: launch }, { actor: bob });
+    await s.rt.idle();
+    assertEquals((await s.pending(bob)).length, 1);
+
+    await s.rt.call("space.leave", { space: launch }, { actor: ana });
+    await s.rt.idle();
+    assertEquals(await s.rt.query<Desk[]>("desk.here", { in: launch }, { actor: bob }), []);
+    assertEquals(await s.pending(bob), []);
+    // Her computer is still hers, in her Personal space.
+    assertEquals((await s.rt.query<unknown[]>("computer.mine", {}, { actor: ana })).length, 1);
+    await computer.worker.stop();
+  });
+});

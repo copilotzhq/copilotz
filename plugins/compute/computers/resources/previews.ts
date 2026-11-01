@@ -347,6 +347,11 @@ async function forward(
   return new Response(bodiless ? null : body, { status, headers });
 }
 
+const reads = async (runtime: Served["runtime"], person: string, space: string) =>
+  (await runtime.call<{ can: boolean }>("space.can", { space, verb: "read" }, {
+    actor: { kind: "person", id: person },
+  })).can;
+
 /** Every request to a preview's host. */
 async function servePreview(request: Request, served: Served): Promise<Response> {
   const { runtime, host } = served;
@@ -367,7 +372,9 @@ async function servePreview(request: Request, served: Served): Promise<Response>
   if (preview.visibility !== "link") {
     let allowed = false;
     for (const cookie of cookiesOf(request, COOKIE)) {
-      if (await verify(settings.key, cookie, "cookie", host)) allowed = true;
+      const pass = await verify(settings.key, cookie, "cookie", host);
+      // Who it let in, still a member: leaving ends it at once.
+      if (pass && await reads(runtime, pass.person, preview.space)) allowed = true;
     }
     if (!allowed) {
       if (!settings.app) {

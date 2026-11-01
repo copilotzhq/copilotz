@@ -10,10 +10,36 @@
   message to the same agent still asks, even one claiming `via` a routine. Changing what a routine
   does (what it asks, whom, as whom) makes a new version (`routine.rev`), which the yes doesn't
   cover: its page says so and offers "Allow again". Name and schedule don't count. Where a
-  computer's owner keeps the answers, only they can say it (`computer.allowOrigin`). Publishing an
-  app always asks.
+  computer's owner keeps the answers, only they can say it (`computer.allowOrigin`).
 - **Plugins can add to a routine's page:** the `routinePanels` resource (`{ view, order? }`), a View
   given the routine.
+- **Authorization is one model.** `personOf`, `forbidden`, `invalid`, `failure`, `people` and
+  `inPerson` come from the runtime; `may`, `must` and `mustOwnOr` from the spaces contract,
+  replacing seven `personOf` copies, about 25 hand-written checks and about 30 local error helpers.
+  `reachOf` is the only answer to what someone may do, and respects every limit on them.
+- **Fixed: taking over a space.** A thread named after a space could be used to become its manager.
+  A document's memberships now live under its own name (`note:n1`), and only shared collections can
+  be named.
+- **Fixed: keys left their space.** Actions that checked reach, then wrote as the system, ignored a
+  key's limit. Reach respects it now (`within`, which replaces `at` on a key's actor), and the API's
+  own narrowing rules are gone. Keys can't answer approvals.
+- **Fixed: agents asked by agents ran as the agent that asked.** A turn is always its own agent, for
+  the person the work is for, including where a computer's owner answered.
+- **Publishing is asked every time.** Nothing wider than once is offered or honored.
+- **Approvals can be taken back,** from the Computer tab. What's allowed for a routine comes from
+  the routine (`origins` resource), not from what the caller says.
+- **Roles are given one way** (`seat`): a granted request can't name a role that doesn't exist or
+  make an agent a manager, and custom roles count everywhere.
+- **An archived space isn't written in,** which only views enforced before.
+- **Replacing or rebuilding an app** takes its publisher or a manager. **Where a computer's owner
+  answers,** only they change anything on it directly; others still read it.
+- **Leaving ends what someone left behind,** however they left: desks, yeses and keys for that
+  space, and out of the org, all of them and their own computers. Cloud computers stay for those who
+  run the org. A preview's cookie asks whether its person is still a member on each request.
+- **Agents can hand work to other spaces.** `send_message` takes `space`: any space the person can
+  write in, listed in the agent's context with who answers there. A new chat opens there, visible to
+  its members and marked as delegated, for the same person; the answer comes back to the chat it
+  came from, and stopping that chat stops the work. An agent can't hand work to itself.
 
 ## 1.0.0-rc.10 — 2026-10-31
 

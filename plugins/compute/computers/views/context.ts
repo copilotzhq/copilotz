@@ -15,6 +15,7 @@ import type { EnvVar } from "../collections/env-var.ts";
 import { OS_NAMES } from "../program/release.ts";
 import { tools } from "../resources/tools.ts";
 import { settingsOf } from "../shared/settings.ts";
+import type { ComputerWake } from "../shared/wake.ts";
 import { answererOf, stateOf } from "../shared/where.ts";
 import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
 
@@ -99,6 +100,7 @@ export const contextViews = {
       }
       const desk = here.find((d) => d.online);
       if (!desk) {
+        const make = (ctx.resources.computerWake as ComputerWake | undefined)?.make;
         // Where something wakes computers (cloud computers), using one that's asleep wakes it.
         if (here.length && (ctx.resources.computerWake as { wake?: string } | undefined)?.wake) {
           return `This space's computer, ${here[0].name ?? "theirs"}, is offline or asleep. ` +
@@ -114,7 +116,10 @@ export const contextViews = {
             } starts it again (on it: deno task computer).`
           : "This space has no computer, so your computer tools won't work until someone " +
             "connects one, or adds one of theirs (in the terminal: /computer connect or " +
-            "/computer share; on the web: the space's Computer tab).";
+            "/computer share; on the web: the space's Computer tab)" +
+            (make && agent.tools?.includes(make)
+              ? `, or you make a cloud computer with ${make}.`
+              : ".");
       }
       const owned = desk.owner === person ? `${shown(person)}'s own` : `${shown(desk.owner)}'s`;
       const info = desk.info as Info | undefined;

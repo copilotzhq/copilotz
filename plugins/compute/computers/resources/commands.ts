@@ -14,6 +14,7 @@ import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
 import { installCommand } from "../program/release.ts";
 import { asker, asks } from "../shared/asks.ts";
+import { onlyOnce } from "../shared/settings.ts";
 import { nameOf } from "../../../access/spaces/contract.ts";
 
 const ANSWERS: Record<string, string> = {
@@ -216,8 +217,8 @@ export const commands: Commands = {
           ),
         );
       }
-      if (chosen.work === "publish" && answer !== "once" && answer !== "deny") {
-        return await term.print(dim("Publishing is asked every time: once, or no."));
+      if (onlyOnce(chosen.work) && answer !== "once" && answer !== "deny") {
+        return await term.print(dim("This is asked every time: once, or no."));
       }
       if (answer === "origin" && !chosen.origin) {
         return await term.print(dim("No routine set this going."));

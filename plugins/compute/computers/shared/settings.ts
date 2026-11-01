@@ -20,12 +20,14 @@ import type { Resources } from "../../../../runtime/mod.ts";
  * as an app (the apps plugin) is always asked, whatever `approve` says: it
  * reaches outside the computer.
  */
-export type Asked = "terminal" | "jobs" | "writes" | "publish";
+export type Asked = "terminal" | "jobs" | "writes" | "publish" | "destroy";
+/** What reaches beyond the computer or can't be undone: asked every time, and only once is allowed. */
+export const onlyOnce = (work: string) => work === "publish" || work === "destroy";
 
 export type PreviewsSettings = { domain: string; key: string; app?: string };
 
 export type ComputersSettings = {
-  approve?: Exclude<Asked, "publish">[];
+  approve?: Exclude<Asked, "publish" | "destroy">[];
   /** Seals spaces' secrets at rest (their environment): any long secret, from the app's own. */
   key?: string;
   codeMinutes?: number;

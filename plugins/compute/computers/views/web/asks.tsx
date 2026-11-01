@@ -28,6 +28,7 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import { agentsShown } from "../../../../agents/chat/contract.ts";
 import type { Approval } from "../../collections/approval.ts";
+import { onlyOnce } from "../../shared/settings.ts";
 import { addressOf, asked, previewOf, publishOf, reach, sentence } from "./asked.ts";
 import { STYLE } from "./style.ts";
 
@@ -131,10 +132,10 @@ function Ask(
           )}
         <div className="ask-answers">
           {allow("once", "Allow once", "primary")}
-          {a.origin && a.work !== "publish"
+          {a.origin && !onlyOnce(a.work)
             ? allow("origin", `Allow for this ${a.origin.kind}`, "outline")
             : null}
-          {a.work === "publish" ? null : (
+          {onlyOnce(a.work) ? null : (
             <>
               {allow("thread", "Allow in this conversation", "outline")}
               {allow("always", "Always allow", "outline")}

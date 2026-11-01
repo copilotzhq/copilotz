@@ -8,7 +8,7 @@
  * Shaped to fold into the identity plugin's credentials (a key there, with
  * `in` and the lists), so the two never differ in meaning.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, inPerson } from "../../../../runtime/mod.ts";
 import { hash } from "../shared/secret.ts";
 import { isKey, type KeyActor } from "../shared/actor.ts";
 
@@ -47,7 +47,7 @@ export const apiKey = defineCollection({
   queries: {
     /** The asker's keys (in a space, with `in`), newest first, without their secrets. */
     mine: {
-      allow: (actor) => actor.kind === "person" && !actor.key,
+      allow: inPerson,
       run: (keys, params: { in?: string } = {}) =>
         keys.find(params.in ? { in: params.in } : {}, { sort: { at: -1 } }),
     },

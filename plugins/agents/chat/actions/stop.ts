@@ -5,7 +5,7 @@
  * waiting and answers so. Neither starts a new turn; whoever waited on them
  * resumes.
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, people } from "../../../../runtime/mod.ts";
 import type { Live } from "../collections/live.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
@@ -21,7 +21,7 @@ export const stopAction = defineAction({
     required: ["thread"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     // Someone stops only the conversations they reach (with the access plugin).
     if (ctx.actor && !await ctx.db.collection("thread").findOne({ _id: input.thread })) {

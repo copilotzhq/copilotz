@@ -5,7 +5,7 @@
  * they set up runs (`origin` and `rev`: a routine, as it was when they said
  * yes). It's theirs (`owner`): it lets only what they'd be asked.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const grantSchema = {
   type: "object",
@@ -35,7 +35,7 @@ export const grant = defineCollection({
   queries: {
     /** What the asker lets for what they set up to run, at any version of it. */
     forOrigin: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (grants, params: { origin: string }) => grants.find({ origin: params.origin }),
     },
   },

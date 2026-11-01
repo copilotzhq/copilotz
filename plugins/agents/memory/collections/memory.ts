@@ -1,5 +1,5 @@
 /** Memories: one statement each, with an embedding vector field for semantic recall. */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 import { LIMIT, readable, RELEVANT, type Scope } from "../shared/scope.ts";
 import { search } from "../shared/search.ts";
 
@@ -51,7 +51,7 @@ export const memoryCollection = defineCollection({
       ),
     /** Everything remembered (not forgotten), newest first: everywhere, or learned in a space (`in`). */
     list: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (memories, p: { limit?: number; in?: string } = {}) =>
         memories.find({ forgotten: { $exists: false }, ...(p.in ? { in: p.in } : {}) }, {
           sort: { at: -1 },

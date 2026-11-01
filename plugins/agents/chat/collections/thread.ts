@@ -2,7 +2,7 @@
 import type { Message } from "./message.ts";
 import { teamOf } from "../shared/agents.ts";
 import { said } from "../shared/summary.ts";
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const names = { type: "array", items: { type: "string" } } as const;
 
@@ -45,7 +45,7 @@ export const thread = defineCollection({
      * that's an agent is: for front ends (who `@` offers, how an author shows).
      */
     agents: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (_, params: { in?: string; names?: string[] }, ctx) =>
         teamOf(ctx, params.in, params.names ?? []),
     },
@@ -70,7 +70,7 @@ export const thread = defineCollection({
      * under the message they start at instead.
      */
     recent: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (threads, params: { limit?: number; in?: string } = {}, ctx) => {
         const recent = await threads.find(
           { fork: { $ne: true }, ...(params.in ? { in: params.in } : {}) },

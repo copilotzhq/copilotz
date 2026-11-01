@@ -11,7 +11,7 @@
  * Its computer's name, whether it's online, and what it is are kept here
  * too, for the space's members: the computer itself is its owner's alone.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const deskSchema = {
   type: "object",
@@ -51,13 +51,13 @@ export const desk = defineCollection({
   queries: {
     /** A space's computers: its default first, then those online. */
     here: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (desks, params: { in: string }) =>
         desks.find({ in: params.in }, { sort: { default: -1, online: -1, name: 1 } }),
     },
     /** Where one of the asker's computers works: its desks in the spaces they reach. */
     of: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (desks, params: { computer: string }, ctx) =>
         desks.find({ computer: params.computer, owner: ctx.actor?.id ?? "" }, {
           sort: { at: 1 },

@@ -7,9 +7,10 @@
  * Their agents run commands as you, on your machine: share a computer you
  * mean to share.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
-import { deskIn, mustBeAble } from "../shared/desks.ts";
+import { deskIn } from "../shared/desks.ts";
+import { must } from "../../../access/spaces/contract.ts";
 
 export const shareAction = defineAction({
   description: "Puts one of your computers in a space, for its members and their agents",
@@ -23,12 +24,12 @@ export const shareAction = defineAction({
     required: ["computer", "in"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     // The rules reach only the person's own computers.
     const computer = await ctx.db.collection<Computer>("computer").findOne({ _id: input.computer });
     if (!computer) throw Object.assign(new Error("No such computer of yours"), { code: "invalid" });
-    await mustBeAble(ctx, input.in, "write");
+    await must(ctx, "write", input.in, "You can't work in this space.");
     const desk = await deskIn(ctx, computer, input.in, input.answers);
     if (input.answers && desk.answers !== input.answers) {
       await ctx.as().db.collection("desk").updateOne({ _id: desk._id }, {

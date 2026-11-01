@@ -4,9 +4,8 @@
  * refused until someone else manages it.
  */
 import type { Context } from "../../../../runtime/mod.ts";
+import { forbidden } from "../../../../runtime/mod.ts";
 import { ROLES, type Verb } from "./reach.ts";
-
-const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
 
 /** Throws if `key` (`person:ana`) is `space`'s last manager and `next` (their role after, if any) doesn't manage. */
 export async function keepsAManager(ctx: Context, space: string, key: string, next?: string) {

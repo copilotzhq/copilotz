@@ -7,7 +7,7 @@
  * system, who see costs. Only reads, so it isn't recorded, and queries and
  * Views may ask it.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { nonzero, rate } from "../shared/rate.ts";
 
 export const quoteAction = defineAction({
@@ -24,7 +24,7 @@ export const quoteAction = defineAction({
     required: ["meter", "subject", "quantities"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const rated = await rate(ctx, {
       meter: input.meter,

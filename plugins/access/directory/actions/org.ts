@@ -11,12 +11,10 @@
  * - `org.leave`: someone no longer belongs (their org took them out);
  * - `org.suspend`, `org.rename`, `org.report` (its summary), `org.list`.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, forbidden } from "../../../../runtime/mod.ts";
 import type { Membership } from "../collections/membership.ts";
 import type { Org } from "../collections/org.ts";
 import { isStaff, placementOf } from "../shared/settings.ts";
-
-const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
 
 const person = { type: "string" } as const;
 

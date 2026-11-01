@@ -1,5 +1,5 @@
 /** Names one of the person's computers, as every space it's in shows it. */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { mirror } from "../shared/desks.ts";
 
 export const renameAction = defineAction({
@@ -13,7 +13,7 @@ export const renameAction = defineAction({
     required: ["computer", "name"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const { matchedCount } = await ctx.db.collection("computer").updateOne(
       { _id: input.computer },

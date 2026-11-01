@@ -4,6 +4,7 @@
  * files as documents (its instructions as `SKILL.md`, then the others).
  */
 import type { Context } from "../../../../runtime/mod.ts";
+import { invalid } from "../../../../runtime/mod.ts";
 import type { SkillDoc } from "../collections/skill.ts";
 import { LIMITS, SKILL_MD } from "./check.ts";
 import { appSkills } from "./skills.ts";
@@ -28,7 +29,7 @@ export const fields = {
   },
 } as const;
 
-export const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
+export { invalid };
 
 /** Who may change a space's skills, said when someone else tries. */
 export const managersOnly = () =>

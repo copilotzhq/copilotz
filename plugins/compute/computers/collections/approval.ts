@@ -5,7 +5,7 @@
  * they answer with `computer.approve`: yes once, yes for the conversation,
  * yes for the routine that set it going (`origin`), yes always, or no.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const approvalSchema = {
   type: "object",
@@ -66,7 +66,7 @@ export const approval = defineCollection({
   queries: {
     /** What agents wait on the asker for, oldest first. */
     pending: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (approvals) => approvals.find({ status: "pending" }, { sort: { at: 1 } }),
     },
   },

@@ -7,7 +7,7 @@
  * (nothing by default: publishing is always asked), then its disk, in the
  * first placement; its first wake formats it. Answers `{ computer }`.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { hostFor } from "../shared/host.ts";
 import { diskOf } from "../shared/names.ts";
 import { mayCreate } from "../shared/may.ts";
@@ -27,7 +27,7 @@ export const createAction = defineAction({
     required: ["size"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const set = settingsOf(ctx);
     const size = set.sizes[input.size];

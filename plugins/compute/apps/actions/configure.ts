@@ -8,12 +8,12 @@
  * reaches it so. Its publisher may, and those who manage its space. Answers
  * its status (and its revision, deployed).
  */
-import { defineAction, personOf } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { AppDoc } from "../collections/app.ts";
 import { environmentOf } from "../shared/environment.ts";
 import { failure } from "../shared/errors.ts";
 import { hostOf } from "../shared/host.ts";
-import { can } from "../shared/publish.ts";
+import { mustOwnOr } from "../../../access/spaces/contract.ts";
 
 type Change = { name: string; value?: string; secret?: boolean; remove?: boolean };
 
@@ -42,14 +42,18 @@ export const configureAction = defineAction({
     required: ["app"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     // The rules reach only the apps of spaces the person is in.
     const app = await ctx.db.collection<AppDoc>("app").findOne({ _id: input.app });
     if (!app || app.status === "removed") throw failure("There's no such app here.", "not_found");
-    if (app.by !== personOf(ctx.actor) && !await can(ctx, app.space, "manage")) {
-      throw failure("Only who published it, or those who manage its space, can.", "forbidden");
-    }
+    await mustOwnOr(
+      ctx,
+      app.by,
+      "manage",
+      app.space,
+      "Only who published it, or those who manage its space, can.",
+    );
     for (const change of (input.env ?? []) as Change[]) {
       const at = { in: app.space, app: app._id, name: change.name };
       await (change.remove ? ctx.as().call("env.unset", at) : ctx.as().call("env.set", {

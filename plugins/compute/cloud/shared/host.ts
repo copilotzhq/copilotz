@@ -4,6 +4,7 @@
  * (each with its own credentials: never one client for every account).
  */
 import type { Context, ReadContext } from "../../../../runtime/mod.ts";
+import { invalid } from "../../../../runtime/mod.ts";
 import type { CloudHost, CloudHostAdapter, Placement } from "../contract.ts";
 import { settingsOf } from "./settings.ts";
 
@@ -11,8 +12,6 @@ type Reach = Pick<Context | ReadContext, "resources" | "adapters">;
 
 /** Hosts made, by adapter, then by the runtime's resources (one runtime each), then by account. */
 const made = new WeakMap<object, WeakMap<object, Map<string, Promise<CloudHost>>>>();
-
-const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
 
 /** The host for a placement's account. */
 export function hostFor(ctx: Reach, placement: Placement): Promise<CloudHost> {

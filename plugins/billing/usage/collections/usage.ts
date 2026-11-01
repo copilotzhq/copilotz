@@ -3,6 +3,7 @@ import {
   defineCollection,
   type Filter,
   type Infer,
+  people,
   type ReadCollection,
 } from "../../../../runtime/mod.ts";
 import { rollupsOf } from "../shared/settings.ts";
@@ -66,7 +67,7 @@ export const usage = defineCollection({
      */
     totals: {
       // A person sees their own usage, at its price; the system, everyone's, cost too.
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (
         records,
         params: { filter?: Filter; by?: string[]; units?: string[] } = {},

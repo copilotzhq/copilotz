@@ -8,7 +8,7 @@
  * where the conversation was when it started (a waiting one, resumed, reads
  * it again).
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, people } from "../../../../runtime/mod.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 
@@ -23,7 +23,7 @@ export const moveAction = defineAction({
     required: ["thread", "to"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await ctx.db.collection<Thread>("thread").findOne({ _id: input.thread });
     if (!found) throw refused(`No conversation "${input.thread}" to move.`);

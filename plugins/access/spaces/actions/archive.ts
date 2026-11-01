@@ -5,10 +5,10 @@
  * they can read. Nothing in it changes, and it comes back as it was. A
  * Personal space can't be put away.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Space } from "../collections/space.ts";
 import { PERSONAL } from "../shared/personal.ts";
-import { reachOf } from "../shared/reach.ts";
+import { may } from "../shared/can.ts";
 
 const refuse = (message: string, code = "forbidden") => Object.assign(new Error(message), { code });
 
@@ -20,12 +20,11 @@ export const archiveAction = defineAction({
     required: ["space", "archived"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const system = ctx.as();
     const found = await system.db.collection<Space>("space").findOne({ _id: input.space });
-    const reach = await reachOf(ctx.actor!, system);
-    if (!found || !reach.get(input.space)?.can.has("manage")) {
+    if (!found || !await may(ctx, "manage", input.space)) {
       throw refuse(`You don't manage "${input.space}".`);
     }
     if (found.kind === PERSONAL) throw refuse("A Personal space can't be archived.", "invalid");

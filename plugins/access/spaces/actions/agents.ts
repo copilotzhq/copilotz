@@ -5,9 +5,9 @@
  * that are editors there, and that one. As the asker: a space they don't
  * reach has nobody for them.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { rosterIn } from "../shared/agents.ts";
-import { reachOf } from "../shared/reach.ts";
+import { must } from "../shared/can.ts";
 
 export const agentAction = defineAction({
   description: "Chooses the agent that answers a space's new chats: one working there",
@@ -17,12 +17,9 @@ export const agentAction = defineAction({
     required: ["space", "agent"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
-    const reach = await reachOf(ctx.actor!, ctx.as());
-    if (!reach.get(input.space)?.can.has("manage")) {
-      throw Object.assign(new Error(`You don't manage "${input.space}".`), { code: "forbidden" });
-    }
+    await must(ctx, "manage", input.space, `You don't manage "${input.space}".`);
     const system = ctx.as();
     if (!(await rosterIn(system, input.space)).includes(input.agent)) {
       throw Object.assign(

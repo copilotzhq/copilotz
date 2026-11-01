@@ -1,5 +1,6 @@
 /** Calling a model: the model choice resolved, fallbacks, state, and its use told. */
 import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
+import { invalid } from "../../../runtime/mod.ts";
 import {
   adapterFor,
   type Media,
@@ -53,8 +54,6 @@ export type Completion = {
   usage?: Usage & { model?: string };
   state?: LlmState;
 };
-
-const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
 
 /** Throws when a model can't take its settings: an effort it has no level for. */
 function checkSettings(m: Resolved) {

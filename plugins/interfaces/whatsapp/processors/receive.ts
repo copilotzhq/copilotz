@@ -36,6 +36,7 @@ import { fetchMedia, markRead } from "../shared/graph.ts";
 import { type Connected, connected, send } from "../shared/number.ts";
 import { mediaOf, type WaMessage, wordsOf } from "../shared/payload.ts";
 import { settingsOf } from "../shared/settings.ts";
+import { may } from "../../../access/spaces/contract.ts";
 
 type Received = { number: string; from: string; name?: string; message: WaMessage };
 
@@ -162,11 +163,7 @@ async function linked(
   const phones = system.collection("whatsapp_phone");
   // Still in the number's space. (Asked, not read: what this job reads as them labels what
   // it writes, and their message isn't from there.)
-  const { can } = await as.call<{ can: boolean }>("space.can", {
-    space: on.number.in,
-    verb: "read",
-  });
-  if (!can) {
+  if (!await may(as, "read", on.number.in)) {
     await phones.deleteOne({ _id: phone._id });
     await say(
       ctx,
@@ -341,11 +338,7 @@ async function commanded(
   if (!picked) {
     return void await say(ctx, on, from, `No space called "${command.arg}". Yours: ${list}.`);
   }
-  const { can } = await ctx.as(person).call<{ can: boolean }>("space.can", {
-    space: picked._id,
-    verb: "write",
-  });
-  if (!can) {
+  if (!await may(ctx.as(person), "write", picked._id)) {
     return void await say(
       ctx,
       on,

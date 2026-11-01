@@ -10,7 +10,7 @@
  *   they reach (the rules say);
  * - `options`: what an agent can be made with: the app's tools and models.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 import { type Agent, agentsOf, SEND, type Tool } from "../../chat/contract.ts";
 import { definitionOf } from "../shared/definition.ts";
 
@@ -42,7 +42,7 @@ export const agent = defineCollection({
   schema: agentSchema,
   queries: {
     known: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (agents, _, ctx) => {
         const known: Record<string, Agent> = { ...agentsOf(ctx) };
         for (const doc of await agents.find({}, { sort: { name: 1 } })) {
@@ -52,7 +52,7 @@ export const agent = defineCollection({
       },
     },
     options: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (_, __, ctx) => {
         const tools = (ctx.resources.tools ?? {}) as Record<string, Tool>;
         const declared = Object.values(

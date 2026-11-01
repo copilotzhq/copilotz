@@ -354,3 +354,46 @@ test("only what a routine set going can be allowed for one", async () => {
     await computer.worker.stop();
   });
 });
+
+test("a key can't answer for its person, and nobody works directly on a computer whose owner answers", async () => {
+  await setup(async (s) => {
+    const { space, computer, desk } = await connected(s);
+    await s.rt.call("chat.send", { text: "run ls", in: space }, { actor: ana });
+    await s.rt.idle();
+    const [asked] = await s.pending();
+    const key: Actor = { kind: "person", id: "ana", key: "k1", within: space };
+    const by = (call: Promise<unknown>) =>
+      call.then(() => "done", (e) => (e as { code?: string }).code);
+    assertEquals(
+      await by(s.rt.call("computer.approve", { approval: asked._id, answer: "always" }, {
+        actor: key,
+      })),
+      "forbidden",
+    );
+    assertEquals(
+      await by(s.rt.call("computer.allowOrigin", {
+        origin: { kind: "routine", id: "r", name: "R", rev: 0 },
+        desk: desk._id,
+        agent: "assistant",
+        work: "terminal",
+        allow: true,
+      }, { actor: key })),
+      "forbidden",
+    );
+
+    const { space: launch } = await s.rt.call<{ space: string }>("space.create", {
+      name: "Launch",
+    }, { actor: ana });
+    await join(s.rt, launch, bob, "editor", ana);
+    await s.rt.call("computer.share", { computer: desk.computer, in: launch, answers: "owner" }, {
+      actor: ana,
+    });
+    const [shared] = await s.rt.query<Desk[]>("desk.here", { in: launch }, { actor: bob });
+    const work = (actor: Actor, work: string) =>
+      by(s.rt.call("computer.work", { desk: shared._id, work, input: {} }, { actor }));
+    assertEquals(await work(bob, "files.list"), "done");
+    assertEquals(await work(bob, "jobs.start"), "forbidden");
+    assertEquals(await work(ana, "files.list"), "done");
+    await computer.worker.stop();
+  });
+});

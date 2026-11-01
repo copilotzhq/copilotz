@@ -3,7 +3,7 @@
  * which is yours; and not as its only manager: make someone else one first.
  * What you added there stays, the space's.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { keepsAManager } from "../shared/managers.ts";
 import { PERSONAL } from "../shared/personal.ts";
 import { memberKey } from "../shared/reach.ts";
@@ -16,7 +16,7 @@ export const leaveAction = defineAction({
     required: ["space"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const db = ctx.as().db;
     const found = await db.collection<{ kind?: string }>("space").findOne({ _id: input.space });

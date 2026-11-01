@@ -9,13 +9,13 @@
  * a while by it; what only reads (a panel polling its jobs) neither wakes it
  * nor keeps it awake, so a page left open lets it sleep.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, forbidden, people } from "../../../../runtime/mod.ts";
 import type { Desk } from "../collections/desk.ts";
 import { failed } from "../shared/failed.ts";
-import { mustBeAble } from "../shared/desks.ts";
 import { jobEnv } from "../shared/env.ts";
 import { touch, wake } from "../shared/wake.ts";
 import { WORK } from "../shared/workloads.ts";
+import { must } from "../../../access/spaces/contract.ts";
 
 /** What a person may do on their computer from its panel. */
 const PANEL: Record<string, string> = {
@@ -48,12 +48,16 @@ export const workAction = defineAction({
     required: ["desk", "work"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     // The rules reach only the desks of spaces the person is in; working there takes more.
     const desk = await ctx.db.collection<Desk>("desk").findOne({ _id: input.desk });
     if (!desk) throw Object.assign(new Error("No such computer here"), { code: "invalid" });
-    await mustBeAble(ctx, desk.in, "write");
+    await must(ctx, "write", desk.in, "You can't work in this space.");
+    // Where its owner answers for it, nobody else changes anything on it without them.
+    if (desk.answers === "owner" && desk.owner !== ctx.actor!.id && !READS.has(input.work)) {
+      throw forbidden("Its owner keeps this computer's answers: only they work on it directly.");
+    }
     const who = input.as && input.work.startsWith("jobs.") ? input.as : `person:${ctx.actor!.id}`;
     // A computer that sleeps (a cloud computer) is woken first; used, it stays awake a while.
     if (!desk.online && !READS.has(input.work)) {

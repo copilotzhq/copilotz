@@ -3,7 +3,13 @@
  * space, leave the space a key is limited to, or work as the agent that asked.
  */
 import { assert, assertEquals } from "@std/assert";
-import { type Actor, createRuntime, definePlugin, type Store } from "../../../runtime/mod.ts";
+import {
+  type Actor,
+  createRuntime,
+  defineAction,
+  definePlugin,
+  type Store,
+} from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../models/mod.ts";
 import { chat, tool } from "../../agents/chat/mod.ts";
@@ -42,6 +48,25 @@ const whoami = tool({
 const app = definePlugin({
   name: "app",
   adapters: { llm: { s: script } },
+  actions: {
+    // A request to join, as an agent's `request_access` leaves it.
+    "test.ask": defineAction({
+      input: {
+        type: "object",
+        properties: { space: { type: "string" }, member: { type: "string" } },
+        required: ["space", "member"],
+      },
+      run: (ctx, input) =>
+        ctx.as().db.collection("request").insertOne({
+          _id: `${input.space}|${input.member}`,
+          space: input.space,
+          member: input.member,
+          by: "x",
+          reason: "please",
+          at: new Date().toISOString(),
+        }),
+    }),
+  },
   resources: {
     shared: { thread: {}, message: { labels: true } },
     provider: { s: { adapter: "s" } },
@@ -212,5 +237,69 @@ test("a document shared on its own still reaches its members, and its manager's"
       await rt.query<unknown[]>("thread.recent", {}, { actor: bob }),
       [],
     );
+  });
+});
+
+test("a role is given the same way however it's given", async () => {
+  await setup(async (rt) => {
+    const { space } = await rt.call<{ space: string }>("space.create", { name: "L" }, {
+      actor: ana,
+    });
+    assertEquals(
+      await code(rt.call("member.set", {
+        space,
+        member: { kind: "agent", id: "x" },
+        role: "nonsense",
+      }, { actor: ana })),
+      "invalid",
+    );
+    // A request granted: no role that doesn't exist, and no agent managing.
+    const request = async (member: string) => {
+      await rt.call("test.ask", { space, member });
+      return `${space}|${member}`;
+    };
+    const agent = await request("agent:x");
+    assertEquals(
+      await code(rt.call("request.grant", { id: agent, role: "manager" }, { actor: ana })),
+      "invalid",
+    );
+    const bob = await request("person:bob");
+    assertEquals(
+      await code(rt.call("request.grant", { id: bob, role: "nonsense" }, { actor: ana })),
+      "invalid",
+    );
+    assertEquals(
+      await code(rt.call("request.grant", { id: bob, role: "editor" }, { actor: ana })),
+      "done",
+    );
+    // Asking again can't take the last manager's role away.
+    const again = await request("person:ana");
+    assertEquals(
+      await code(rt.call("request.grant", { id: again, role: "viewer" }, { actor: ana })),
+      "forbidden",
+    );
+  });
+});
+
+test("a space put away is read and managed, not written in, until it's brought back", async () => {
+  await setup(async (rt) => {
+    const { space } = await rt.call<{ space: string }>("space.create", { name: "L" }, {
+      actor: ana,
+    });
+    await rt.call("space.archive", { space, archived: true }, { actor: ana });
+    const can = (verb: string) =>
+      rt.call<{ can: boolean }>("space.can", { space, verb }, { actor: ana }).then((r) => r.can);
+    assertEquals([await can("read"), await can("write"), await can("manage")], [true, false, true]);
+    assertEquals(
+      await code(rt.call("chat.send", { in: space, text: "hi" }, { actor: ana })),
+      "forbidden",
+    );
+    await rt.call("space.archive", { space, archived: false }, { actor: ana });
+    assertEquals(await can("write"), true);
+    assertEquals(
+      await code(rt.call("chat.send", { in: space, text: "hi" }, { actor: ana })),
+      "done",
+    );
+    await rt.idle();
   });
 });

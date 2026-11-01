@@ -3,13 +3,13 @@
  * set again, as its maker, from now; a once whose time has passed needs a
  * new one first.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { arm, byId, editable, invalid, timing } from "../shared/routines.ts";
 
 export const resumeAction = defineAction({
   description: "Resumes a paused routine: it runs on its schedule again, from now",
   input: byId,
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, { routine }) => {
     const found = await editable(ctx, routine);
     if (!found.paused) return { routine, ...(found.next ? { next: found.next } : {}) };

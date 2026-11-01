@@ -4,9 +4,10 @@
  * an app of the space, under `name`. Asking is their own yes. It answers at
  * once, building; the app goes live in a few minutes (see app.build).
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { failure } from "../shared/errors.ts";
-import { can, publish } from "../shared/publish.ts";
+import { publish } from "../shared/publish.ts";
+import { may } from "../../../access/spaces/contract.ts";
 
 export const publishAction = defineAction({
   description: "Publishes what a space's computer serves as an app that runs on its own",
@@ -29,11 +30,11 @@ export const publishAction = defineAction({
     required: ["name"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const person = ctx.actor!.id;
     const space = input.in ?? (await ctx.call<{ space: string }>("space.personal", {})).space;
-    if (!await can(ctx, space, "write")) {
+    if (!await may(ctx, "write", space)) {
       throw failure("You can't publish from this space.", "forbidden");
     }
     return await publish(ctx, { ...input, in: space, who: `person:${person}`, by: person });

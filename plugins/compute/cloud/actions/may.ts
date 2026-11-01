@@ -4,13 +4,13 @@
  * month's budget is spent). Only reads, so it isn't recorded: the sizes
  * people choose from say it too.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { mayCreate } from "../shared/may.ts";
 
 export const mayAction = defineAction({
   description: "Whether you may make a cloud computer now, and why not",
   record: false,
   input: { type: "object", additionalProperties: false },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: (ctx) => mayCreate(ctx),
 });

@@ -5,7 +5,7 @@
  * which must be the person's own sign-in, there, in time. Unrecorded: the
  * code stays out of the log. It answers the account, as its person sees it.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { invalid } from "../shared/errors.ts";
 import { finish, where } from "../shared/flow.ts";
 import { providerOf } from "../shared/settings.ts";
@@ -19,7 +19,7 @@ export const completeAction = defineAction({
     required: ["provider", "address"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: (ctx, input) => {
     const { title } = providerOf(ctx, input.provider);
     let url: URL;

@@ -4,7 +4,7 @@
  * computer has it. Where it works, and for whom, are its desks: one per
  * space, with a folder of its own there (see desk.ts).
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const computerSchema = {
   type: "object",
@@ -48,7 +48,7 @@ export const computer = defineCollection({
   queries: {
     /** The asker's computers, the most recently seen first. */
     mine: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (computers) => computers.find({}, { sort: { seen: -1 } }),
     },
   },

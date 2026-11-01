@@ -3,7 +3,7 @@
  * rules say): its name, when it's for, its instructions and any files, all
  * in one commit.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { checked } from "../shared/check.ts";
 import { fields, fileDoc, free, listed, said, SKILL_MD } from "../shared/write.ts";
 
@@ -15,7 +15,7 @@ export const createAction = defineAction({
     required: ["in", "name", "description", "instructions"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const files = input.files ?? [];
     const name = input.name.trim();

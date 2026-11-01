@@ -7,8 +7,7 @@
  * (`app.build`), so the call answers at once with its address. Publishing a
  * name the space already has publishes a new revision of that app.
  */
-import type { Actor, Context } from "../../../../runtime/mod.ts";
-import { personOf } from "../../../../runtime/mod.ts";
+import type { Context } from "../../../../runtime/mod.ts";
 import { type Failed, type Job, WORK } from "../../computers/contract.ts";
 import type { AppDoc } from "../collections/app.ts";
 import type { Where } from "./archive.ts";
@@ -16,6 +15,7 @@ import { codeOf, failure } from "./errors.ts";
 import { hostOf } from "./host.ts";
 import { claimLabel, kept, slugOf } from "./label.ts";
 import { settingsOf } from "./settings.ts";
+import { mustOwnOr } from "../../../access/spaces/contract.ts";
 
 export type PublishInput = {
   in: string;
@@ -30,10 +30,6 @@ export type PublishInput = {
 };
 
 export type Published = { app: string; url: string; status: AppDoc["status"] };
-
-/** Whether the caller may `verb` in `space`, as the spaces plugin says. */
-export const can = async (ctx: Context, space: string, verb: "write" | "manage") =>
-  (await ctx.call<{ can: boolean }>("space.can", { space, verb })).can;
 
 /** What an agent asks its person to publish, as they read it (and a yes this once covers). */
 export const detailOf = (input: Omit<PublishInput, "in">) =>
@@ -136,7 +132,16 @@ export async function publish(
   const source = await sourceOf(ctx, where, input);
   const apps = ctx.as().db.collection<AppDoc>("app");
   const had = await apps.findOne({ space: input.in, name, status: { $ne: "removed" } });
-  if (had) return await rebuild(ctx, had, source);
+  if (had) {
+    await mustOwnOr(
+      ctx,
+      had.by,
+      "manage",
+      had.space,
+      `${had.name} is someone else's: only who published it, or those who manage this space, can replace it.`,
+    );
+    return await rebuild(ctx, had, source);
+  }
   const { domain } = settingsOf(ctx);
   const label = await claimLabel(ctx, name, domain);
   const id = crypto.randomUUID();

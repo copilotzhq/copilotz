@@ -3,7 +3,7 @@
  * blob, by the hash of what it holds: the same file attached twice is stored
  * once, and a store's blobs can live elsewhere (a directory, a bucket).
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const fileSchema = {
   type: "object",
@@ -39,7 +39,7 @@ export const file = defineCollection({
   queries: {
     /** One file, content and all, as its reader reaches it: what the web serves at `/files/<id>`. */
     content: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (files, params: { id: string }) => files.findOne({ _id: params.id }),
     },
   },

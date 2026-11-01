@@ -5,7 +5,7 @@
  * only by name: computers check it before someone uses a space's computer.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
-import { reachOf } from "../shared/reach.ts";
+import { may } from "../shared/can.ts";
 
 export const canAction = defineAction({
   description: "Whether you may read, write in or manage a space",
@@ -20,8 +20,6 @@ export const canAction = defineAction({
   },
   allow: (actor) => actor.kind === "person" || actor.kind === "agent",
   run: async (ctx, input) => {
-    // Reach is worked out from every membership, as the rules do.
-    const reach = await reachOf(ctx.actor!, ctx.as());
-    return { can: reach.get(input.space)?.can.has(input.verb) ?? false };
+    return { can: await may(ctx, input.verb, input.space) };
   },
 });

@@ -6,14 +6,13 @@
  * take them.
  */
 import type { Context } from "../../../../runtime/mod.ts";
-import { personOf } from "../../../../runtime/mod.ts";
+import { forbidden, invalid, personOf } from "../../../../runtime/mod.ts";
 import type { Routine } from "../collections/routine.ts";
 import { localOf, nextRuns, type Schedule, scheduleSchema, whenOf } from "./schedule.ts";
-import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
+import { may, nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
-export const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
-export const forbidden = (message: string) =>
-  Object.assign(new Error(message), { code: "forbidden" });
+export { invalid };
+export { forbidden };
 
 /** A routine's fields, as `routine.create` and `routine.update` take them. */
 export const fields = {
@@ -81,12 +80,7 @@ export const asMaker = (ctx: Context, by: string): Context =>
 export async function editable(ctx: Context, id: string): Promise<Routine> {
   const found = await ctx.db.collection<Routine>("routine").findOne({ _id: id });
   if (!found) throw invalid("No such routine here: it may have been deleted.");
-  if (found.by === personOf(ctx.actor)) return found;
-  const { can } = await ctx.call<{ can: boolean }>("space.can", {
-    space: found.in,
-    verb: "manage",
-  });
-  if (!can) {
+  if (found.by !== personOf(ctx.actor) && !await may(ctx, "manage", found.in)) {
     const maker = nameOf(found.by, await namesFor(ctx, [found.by]));
     throw forbidden(
       `Only ${maker}, who made "${found.name}", or those who manage its space change it.`,

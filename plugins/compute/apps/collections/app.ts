@@ -7,7 +7,7 @@
  * the image it runs, each revision it went live with, since when it's live,
  * and up to when its use was metered.
  */
-import { defineCollection } from "../../../../runtime/mod.ts";
+import { defineCollection, people } from "../../../../runtime/mod.ts";
 import type { App } from "../contract.ts";
 
 const appSchema = {
@@ -56,7 +56,7 @@ export const app = defineCollection({
   queries: {
     /** A space's apps, newest first (those removed aren't). */
     here: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (apps, params: { in: string }) =>
         apps.find({ space: params.in, status: { $ne: "removed" } }, { sort: { at: -1 } }),
     },

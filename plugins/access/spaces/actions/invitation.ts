@@ -5,10 +5,11 @@
  * in keeps their role) or turns it down. Its managers take one back the same
  * way. Sending answers the same whether the address has an account or not.
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, people } from "../../../../runtime/mod.ts";
 import type { Invitation } from "../collections/invitation.ts";
 import { joinable } from "../shared/personal.ts";
-import { memberKey, orgRoleOf, reachOf, ROLES } from "../shared/reach.ts";
+import { may, must } from "../shared/can.ts";
+import { memberKey, orgRoleOf, ROLES } from "../shared/reach.ts";
 import type { DirectoryPort } from "./org.ts";
 import { namesFor } from "../shared/names.ts";
 
@@ -26,8 +27,7 @@ async function answerable(ctx: Context, id: string): Promise<Invitation & { mine
   const found = await ctx.as().db.collection<Invitation>("invitation").findOne({ _id: id });
   if (found) {
     if (found.email === await emailOf(ctx)) return { ...found, mine: true };
-    const reach = await reachOf(ctx.actor!, ctx.as());
-    if (reach.get(found.space)?.can.has("manage")) return { ...found, mine: false };
+    if (await may(ctx, "manage", found.space)) return { ...found, mine: false };
   }
   throw refused("forbidden", "No such invitation for you.");
 }
@@ -45,7 +45,7 @@ export const sendInvitationAction = defineAction({
     required: ["space", "email"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const email = input.email.trim().toLowerCase();
     if (!EMAIL.test(email)) throw refused("invalid", "That isn't an email address.");
@@ -53,10 +53,7 @@ export const sendInvitationAction = defineAction({
     if (!(role in { ...ROLES, ...(ctx.resources.roles ?? {}) })) {
       throw refused("invalid", `No role "${role}".`);
     }
-    const reach = await reachOf(ctx.actor!, ctx.as());
-    if (!reach.get(input.space)?.can.has("manage")) {
-      throw refused("forbidden", `You don't manage "${input.space}".`);
-    }
+    await must(ctx, "manage", input.space, `You don't manage "${input.space}".`);
     const space = await ctx.as().db.collection("space").findOne({ _id: input.space });
     joinable(space, "person:");
     const invitation = `${input.space}|${email}`;
@@ -97,7 +94,7 @@ export const acceptInvitationAction = defineAction({
     required: ["invitation"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await answerable(ctx, input.invitation);
     if (!found.mine) throw refused("forbidden", "No such invitation for you.");
@@ -122,7 +119,7 @@ export const declineInvitationAction = defineAction({
     required: ["invitation"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await answerable(ctx, input.invitation);
     await ctx.as().db.collection("invitation").deleteOne({ _id: found._id });

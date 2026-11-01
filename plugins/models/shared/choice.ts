@@ -12,6 +12,7 @@
  *   cost, how its reasoning is controlled and its limits.
  */
 import catalogJson from "./catalog.json" with { type: "json" };
+import { invalid } from "../../../runtime/mod.ts";
 import type { Endpoint } from "./provider.ts";
 
 /** USD per million tokens, by what `Usage` counts; `tiers` apply past a prompt size. */
@@ -113,8 +114,6 @@ export type Resolved = {
 };
 
 type Resources = Record<string, Record<string, unknown> | undefined>;
-
-const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
 
 /** Inner settings over outer ones; `options` merge. */
 const over = (outer: Record<string, unknown>, inner: Record<string, unknown>) => {

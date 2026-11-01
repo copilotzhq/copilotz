@@ -9,12 +9,12 @@
  * the folder its spaces go in on that computer (`folder`): the org's name,
  * plain, `personal` for one's own (it's named for them).
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Downloads } from "../resources/downloads.ts";
-import { mustBeAble } from "../shared/desks.ts";
 import { plainName } from "../shared/folder.ts";
 import { code, hash } from "../shared/secret.ts";
 import { settingsOf } from "../shared/settings.ts";
+import { must } from "../../../access/spaces/contract.ts";
 
 export const codeAction = defineAction({
   description: "A one-time code to connect a computer to a space",
@@ -23,11 +23,11 @@ export const codeAction = defineAction({
     properties: { in: { type: "string" } },
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const space = input.in ??
       (await ctx.call<{ space: string }>("space.personal", {})).space;
-    await mustBeAble(ctx, space, "write");
+    await must(ctx, "write", space, "You can't work in this space.");
     const made = code();
     const { codeMinutes, url } = settingsOf(ctx);
     const expires = new Date(Date.now() + codeMinutes * 60_000).toISOString();

@@ -5,7 +5,7 @@
  * carries on from it (still as part of that routine's run). Publishing is
  * asked every time a routine gets there: it reaches outside the computer.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson } from "../../../../runtime/mod.ts";
 import type { Approval } from "../collections/approval.ts";
 import { letOrigin, told } from "../shared/grants.ts";
 
@@ -27,7 +27,7 @@ export const approveAction = defineAction({
     required: ["approval", "answer"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: inPerson,
   run: async (ctx, input) => {
     // Only theirs to answer: the rules reach only their own.
     const asked = await ctx.db.collection<Approval>("approval").findOne({ _id: input.approval });

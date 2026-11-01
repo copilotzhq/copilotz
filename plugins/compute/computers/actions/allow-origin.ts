@@ -4,7 +4,7 @@
  * person's own yes: they can only say it for what they'd be asked, so a desk
  * whose owner answers for it is the owner's to say.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson } from "../../../../runtime/mod.ts";
 import { originKey } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
 import { letOrigin } from "../shared/grants.ts";
@@ -34,7 +34,7 @@ export const allowOriginAction = defineAction({
     required: ["origin", "desk", "agent", "work", "allow"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: inPerson,
   run: async (ctx, input) => {
     const me = ctx.actor!.id;
     const desk = await ctx.db.collection<Desk>("desk").findOne({ _id: input.desk });

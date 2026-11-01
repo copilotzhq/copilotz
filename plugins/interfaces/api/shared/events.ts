@@ -83,7 +83,7 @@ export function eventStream(
             const [, collection, how] = change;
             const field = placed(collection);
             const data = event.data as { _id: string; doc?: Record<string, unknown> };
-            if (!field || data.doc?.[field] !== actor.at) return [];
+            if (!field || data.doc?.[field] !== actor.within) return [];
             if (how !== "deleted") {
               if (!reread.has(collection)) reread.set(collection, new Set());
               reread.get(collection)!.add(data._id);
@@ -170,7 +170,7 @@ export function eventStream(
         unsubscribe();
         clearInterval(ping);
       };
-      send(`retry: 3000\n: following ${actor.at}\n\n`);
+      send(`retry: 3000\n: following ${actor.within}\n\n`);
     },
     cancel() {
       stop();

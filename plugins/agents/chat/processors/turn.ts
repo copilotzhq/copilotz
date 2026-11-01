@@ -1,5 +1,5 @@
 /** An agent's turn: model calls and tool steps until it answers, or waits for replies. */
-import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
+import type { Actor, Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
 import type { LlmChunk, LlmMessage, LlmState, ToolCall } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
@@ -21,15 +21,21 @@ import { noted, startedWith } from "../shared/summary.ts";
 import { type Prompt, settingsOf, type Step, type Tool } from "../shared/types.ts";
 
 /** Runs a turn: started by `turn.requested`, or resumed when its wait is over. */
+/** Whom a turn works for: who started it, or, started by another agent, whom that one works for. */
+const principalOf = (actor: Actor | undefined): Actor | undefined =>
+  actor?.kind === "person" ? actor : actor?.kind === "agent" ? actor.for as Actor : undefined;
+
 /**
  * A turn someone started acts as its agent, for them: with the access
  * plugin, it reaches only what both reach (an agent is a member of spaces,
  * like a person). Without anyone, it runs as the system.
  */
-const asAgent = (ctx: Context, agent: string, at?: string): Context =>
-  ctx.actor?.kind === "person"
-    ? ctx.as({ kind: "agent", id: agent, for: ctx.actor, ...(at ? { at } : {}) })
+const asAgent = (ctx: Context, agent: string, at?: string): Context => {
+  const principal = principalOf(ctx.actor);
+  return principal
+    ? ctx.as({ kind: "agent", id: agent, for: principal, ...(at ? { at } : {}) })
     : ctx;
+};
 
 /** The space a thread is in, where its turns work: what they write elsewhere needs a person. */
 const spaceOf = async (ctx: Context, thread: string) =>
@@ -48,7 +54,7 @@ export const turnProcessor: ProcessorDef = {
   run: async (ctx, event) => {
     const { agent, thread } = turnOf(event);
     // Only someone's turn needs to know where it works.
-    const at = ctx.actor?.kind === "person" ? await spaceOf(ctx, thread) : undefined;
+    const at = principalOf(ctx.actor) ? await spaceOf(ctx, thread) : undefined;
     return await turn(asAgent(ctx, agent, at), event);
   },
 };

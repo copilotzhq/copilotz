@@ -1,14 +1,6 @@
 /** Who acts, and their say in the org (as the spaces plugin's `org.me` tells). */
 import type { Actor, Context } from "../../../../runtime/mod.ts";
-
-/** The person acting, or whom an agent (`for`) or trusted code (`via`) acts for. */
-export function personOf(actor: Actor | undefined): string | undefined {
-  for (let a = actor, hops = 0; a && hops < 4; hops++) {
-    if (a.kind === "person") return a.id;
-    a = (a.for ?? a.via) as Actor | undefined;
-  }
-  return undefined;
-}
+import { personOf } from "../../../../runtime/mod.ts";
 
 export type Standing = { role: string | null; staff: boolean; org?: { kind?: string } };
 

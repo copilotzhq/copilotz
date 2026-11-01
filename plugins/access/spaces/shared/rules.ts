@@ -33,7 +33,7 @@ export const rules: Guard = async (actor, { collection, access, filter }, ctx) =
   const reach = await reachOf(actor, ctx);
   if (collection === "invitation") {
     const managed = { space: { $in: where(reach, "manage") } };
-    if (access === "write" || actor.kind !== "person") return managed;
+    if (access === "write" || actor.kind !== "person" || actor.within) return managed;
     const { email } = await ctx.call<{ email: string | null }>("person.email", {
       person: actor.id,
     });

@@ -6,9 +6,9 @@
  * space's computers only in its conversations, and none when it has none.
  */
 import type { Context } from "../../../../runtime/mod.ts";
+import { personOf } from "../../../../runtime/mod.ts";
 import type { Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
-import { personOf } from "./person.ts";
 import type { Scope } from "./workloads.ts";
 import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 

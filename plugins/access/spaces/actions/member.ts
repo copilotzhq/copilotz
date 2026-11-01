@@ -13,7 +13,7 @@ import { type Context, defineAction } from "../../../../runtime/mod.ts";
 import { mustKnow, unseat } from "../shared/agents.ts";
 import { keepsAManager } from "../shared/managers.ts";
 import { joinable } from "../shared/personal.ts";
-import { memberKey, ORG, reachOf } from "../shared/reach.ts";
+import { docKey, memberKey, ORG, reachOf } from "../shared/reach.ts";
 
 const who = {
   type: "object",
@@ -23,20 +23,26 @@ const who = {
 
 const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
 
-/** Throws unless the caller manages `space` (or, for a document, the space it's in). */
-async function manages(ctx: Context, space: string, on?: string) {
+/**
+ * Throws unless the caller manages `space` (or, for a document of a shared
+ * collection, it or the space it's in). Answers where its members are kept.
+ */
+async function manages(ctx: Context, space: string, on?: string): Promise<string> {
   // Reach is worked out from every membership, as the rules do.
   const reach = await reachOf(ctx.actor!, ctx.as());
-  let where = space;
-  if (on) {
-    const doc = await ctx.as().db.collection(on).findOne({ _id: space });
-    const field = ((ctx.resources.shared ?? {}) as Record<string, { field?: string }>)[on]?.field ??
-      "in";
-    if (!doc) throw forbidden(`No ${on} "${space}".`);
-    if (reach.get(space)?.can.has("manage")) return;
-    where = String(doc[field]);
+  if (!on) {
+    if (!reach.get(space)?.can.has("manage")) throw forbidden(`You don't manage "${space}".`);
+    return space;
   }
-  if (!reach.get(where)?.can.has("manage")) throw forbidden(`You don't manage "${where}".`);
+  const shared = ((ctx.resources.shared ?? {}) as Record<string, { field?: string }>)[on];
+  const doc = shared ? await ctx.as().db.collection(on).findOne({ _id: space }) : null;
+  if (!doc) throw forbidden(`No ${on} "${space}".`);
+  const key = docKey(on, space);
+  const home = String(doc[shared.field ?? "in"]);
+  if (!reach.get(key)?.can.has("manage") && !reach.get(home)?.can.has("manage")) {
+    throw forbidden(`You don't manage "${home}".`);
+  }
+  return key;
 }
 
 export const setMemberAction = defineAction({
@@ -55,18 +61,16 @@ export const setMemberAction = defineAction({
   allow: (actor) => actor.kind === "person",
   run: async (ctx, input) => {
     if (input.space === ORG) throw forbidden("Org roles change with org.role.");
-    await manages(ctx, input.space, input.on);
+    const place = await manages(ctx, input.space, input.on);
     const key = memberKey(input.member);
+    if (input.member.kind === "agent" && input.role === "manager") {
+      throw Object.assign(new Error("Agents work here as viewers or editors."), {
+        code: "invalid",
+      });
+    }
     if (!input.on) {
       joinable(await ctx.as().db.collection("space").findOne({ _id: input.space }), key);
-      if (input.member.kind === "agent") {
-        if (input.role === "manager") {
-          throw Object.assign(new Error("Agents work here as viewers or editors."), {
-            code: "invalid",
-          });
-        }
-        await mustKnow(ctx, input.member.id);
-      }
+      if (input.member.kind === "agent") await mustKnow(ctx, input.member.id);
       if (
         input.member.kind === "person" &&
         !await ctx.as().db.collection("member").findOne({ _id: `${input.space}|${key}` })
@@ -81,10 +85,10 @@ export const setMemberAction = defineAction({
       await keepsAManager(ctx, input.space, key, input.role);
     }
     await ctx.as().db.collection("member").replaceOne(
-      { _id: `${input.space}|${key}` },
+      { _id: `${place}|${key}` },
       {
         member: key,
-        space: input.space,
+        space: place,
         role: input.role,
         ...(input.on ? { on: input.on } : {}),
       },
@@ -108,10 +112,10 @@ export const removeMemberAction = defineAction({
   allow: (actor) => actor.kind === "person",
   run: async (ctx, input) => {
     if (input.space === ORG) throw forbidden("People leave the org with org.remove.");
-    await manages(ctx, input.space, input.on);
+    const place = await manages(ctx, input.space, input.on);
     if (!input.on) await keepsAManager(ctx, input.space, memberKey(input.member));
     await ctx.as().db.collection("member").deleteOne({
-      _id: `${input.space}|${memberKey(input.member)}`,
+      _id: `${place}|${memberKey(input.member)}`,
     });
     if (!input.on && input.member.kind === "agent") {
       await unseat(ctx.as(), input.member.id, [input.space]);

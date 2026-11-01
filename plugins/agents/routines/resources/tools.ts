@@ -8,9 +8,10 @@
  * names it for what it found, so a list of runs reads at a glance.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
+import { personOf } from "../../../../runtime/mod.ts";
 import { type Thread, type Tool, tool, type ToolContext } from "../../chat/contract.ts";
 import type { Listed, Routine } from "../collections/routine.ts";
-import { chatTitle, personOf, routinePath } from "../shared/routines.ts";
+import { chatTitle, routinePath } from "../shared/routines.ts";
 import {
   describe,
   type Given,
@@ -25,14 +26,14 @@ type Space = { _id: string; can?: string[] };
 
 /** Where the person an agent works for may write: its own conversation's space. */
 const offer = (_agent: string, thread: Thread, ctx: ViewContext) => {
-  if (!thread.in || !personOf(ctx)) return false;
+  if (!thread.in || !personOf(ctx.actor)) return false;
   const spaces = ctx.db.collection("space").query<Space[]>("reached", {}).value;
   return !!spaces?.find((s) => s._id === thread.in)?.can?.includes("write");
 };
 
 /** The conversation's space and the person the agent works for, or why there are none. */
 async function whereFor(ctx: ToolContext) {
-  const person = personOf(ctx);
+  const person = personOf(ctx.actor);
   const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread });
   if (!person) return { missing: "Routines are a person's, and you aren't working for one here." };
   if (!thread?.in) return { missing: "This conversation isn't in a space: nowhere to keep it." };
@@ -176,7 +177,7 @@ const cancelRoutine = tool({
 
 const nameChat = tool({
   // Only in a chat a routine's run started, for its agent to name.
-  offer: (_agent, thread, ctx) => !!thread.renamable && !!personOf(ctx),
+  offer: (_agent, thread, ctx) => !!thread.renamable && !!personOf(ctx.actor),
   description: "Name this chat for what you found, once you have: people pick a run from a list " +
     'by its name ("Nov 2 · Competitor cut 8%, we hold"). One short line, with the conclusion.',
   input: {

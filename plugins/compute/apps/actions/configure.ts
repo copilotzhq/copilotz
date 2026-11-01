@@ -8,12 +8,12 @@
  * reaches it so. Its publisher may, and those who manage its space. Answers
  * its status (and its revision, deployed).
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, personOf } from "../../../../runtime/mod.ts";
 import type { AppDoc } from "../collections/app.ts";
 import { environmentOf } from "../shared/environment.ts";
 import { failure } from "../shared/errors.ts";
 import { hostOf } from "../shared/host.ts";
-import { can, personOf } from "../shared/publish.ts";
+import { can } from "../shared/publish.ts";
 
 type Change = { name: string; value?: string; secret?: boolean; remove?: boolean };
 

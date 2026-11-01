@@ -8,7 +8,7 @@
  * so a yes given for the old one doesn't cover it: anyone who may change a
  * routine may not thereby spend someone else's yes.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, personOf } from "../../../../runtime/mod.ts";
 import type { Routine } from "../collections/routine.ts";
 import {
   answersIn,
@@ -17,7 +17,6 @@ import {
   fields,
   forbidden,
   invalid,
-  personOf,
   timing,
 } from "../shared/routines.ts";
 import { type Given, normalize } from "../shared/schedule.ts";
@@ -38,7 +37,7 @@ export const updateAction = defineAction({
   allow: (actor) => actor.kind === "person",
   run: async (ctx, input) => {
     const found = await editable(ctx, input.routine);
-    const me = personOf(ctx)!;
+    const me = personOf(ctx.actor)!;
     const adopt = input.adopt === true && found.by !== me;
     if (adopt) {
       const { can } = await ctx.call<{ can: boolean }>("space.can", {

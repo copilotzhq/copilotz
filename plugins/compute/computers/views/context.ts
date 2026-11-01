@@ -8,12 +8,12 @@
  * answer; and the space's environment its shell and jobs have, by name.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
+import { personOf } from "../../../../runtime/mod.ts";
 import { agentsShown, type Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
 import type { EnvVar } from "../collections/env-var.ts";
 import { OS_NAMES } from "../program/release.ts";
 import { tools } from "../resources/tools.ts";
-import { personOf } from "../shared/person.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { stateOf } from "../shared/where.ts";
 import { nameOf, namesIn } from "../../../access/spaces/contract.ts";

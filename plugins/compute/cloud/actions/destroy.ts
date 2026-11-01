@@ -5,10 +5,10 @@
  * deleted, and the computer is forgotten everywhere it was (`computer.forget`).
  * Answers `{ destroyed: true }`.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, personOf } from "../../../../runtime/mod.ts";
 import { hostFor } from "../shared/host.ts";
 import { meterStorage } from "../shared/meter.ts";
-import { forbidden, notFound, personOf, runs, standingOf } from "../shared/people.ts";
+import { forbidden, notFound, runs, standingOf } from "../shared/people.ts";
 import { recordsOf } from "../shared/records.ts";
 import { poll } from "../shared/time.ts";
 

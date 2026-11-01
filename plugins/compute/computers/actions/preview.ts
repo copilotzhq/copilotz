@@ -16,13 +16,12 @@
  *
  * `in` is the space; a person's own Personal space when they give none.
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, personOf } from "../../../../runtime/mod.ts";
 import type { Desk } from "../collections/desk.ts";
 import type { Preview } from "../collections/preview.ts";
 import { failed } from "../shared/failed.ts";
 import { previewUrl } from "../shared/preview-url.ts";
 import { may, mustBeAble } from "../shared/desks.ts";
-import { personOf } from "../shared/person.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { jobOn } from "../shared/jobs.ts";
 import { desksIn, named } from "../shared/where.ts";

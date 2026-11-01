@@ -1,7 +1,9 @@
 /**
  * What an actor reaches: the spaces they're a member of, and the spaces those
  * draw on, each with what the roles along the path allow (`read`, `write`,
- * `manage`). An agent acting for someone reaches what both reach.
+ * `manage`). An agent acting for someone reaches what both reach, and an actor
+ * limited to one space (`within`: a key's work) reaches only that. Everything
+ * that asks what someone may do asks here, so those limits hold everywhere.
  */
 import type { Actor, ReadContext } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
@@ -9,6 +11,12 @@ import type { Member } from "../collections/member.ts";
 export type Verb = "read" | "write" | "manage";
 /** Each space reached, with what may be done there; documents shared on their own say their collection. */
 export type Reach = Map<string, { can: Set<Verb>; on?: string }>;
+
+/**
+ * Where a document shared on its own is kept among reach and memberships: its
+ * own name, `note:n1`, so a document never passes for a space with the same id.
+ */
+export const docKey = (on: string, id: string) => `${on}:${id}`;
 
 /** Roles by name, each a list of verbs: the `roles` resource, these by default. */
 export const ROLES: Record<string, Verb[]> = {
@@ -88,6 +96,14 @@ async function everything(ctx: ReadContext): Promise<Reach> {
 
 /** What `actor` reaches; an agent acting for someone (`for`), what both reach. */
 export async function reachOf(actor: Actor, ctx: ReadContext): Promise<Reach> {
+  const reach = await unlimited(actor, ctx);
+  const { within } = actor;
+  return typeof within === "string"
+    ? new Map([...reach].filter(([space]) => space === within))
+    : reach;
+}
+
+async function unlimited(actor: Actor, ctx: ReadContext): Promise<Reach> {
   const principal = actor.for as Actor | undefined;
   if (!principal) {
     if (actor.kind === "person" && actor.staff === true) return await everything(ctx);
@@ -113,4 +129,4 @@ export async function reachOf(actor: Actor, ctx: ReadContext): Promise<Reach> {
 /** The spaces (or documents) reached where `verb` is allowed. */
 export const where = (reach: Reach, verb: Verb, on?: string) =>
   [...reach].filter(([, r]) => r.can.has(verb) && (on === undefined ? !r.on : r.on === on))
-    .map(([space]) => space);
+    .map(([space]) => on === undefined ? space : space.slice(on.length + 1));

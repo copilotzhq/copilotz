@@ -26,6 +26,7 @@ import { revokeAction, usedAction } from "./actions/revoke.ts";
 import { apiKey } from "./collections/key.ts";
 import { rules } from "./shared/rules.ts";
 import { serveApi } from "./shared/server.ts";
+import { leftProcessor } from "./processors/left.ts";
 
 export * from "./contract.ts";
 export { serveApi, type Served } from "./shared/server.ts";
@@ -41,6 +42,7 @@ export const api: Plugin = definePlugin({
     "api_key.used": usedAction,
   },
   guard: rules,
+  processors: { "api.left": leftProcessor },
   resources: {
     routes: { api: { path: "/api/", serve: serveApi } },
   },

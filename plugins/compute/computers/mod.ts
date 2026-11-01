@@ -58,6 +58,7 @@ import { previewRoutes } from "./resources/previews.ts";
 import { tools } from "./resources/tools.ts";
 import { contextViews } from "./views/context.ts";
 import { UPDATE } from "./program/release.ts";
+import { leftProcessor } from "./processors/left.ts";
 import { WORK } from "./shared/workloads.ts";
 
 export type { Approval } from "./collections/approval.ts";
@@ -116,6 +117,7 @@ export const computers: Plugin = definePlugin({
     "computer.running": runningAction,
     "computer.mark": markAction,
   },
+  processors: { "computers.left": leftProcessor },
   // Agents with computer tools know, each turn, whose computer they work on and what waits for a yes.
   views: contextViews,
   resources: {

@@ -316,7 +316,7 @@ test("a key reaches its space alone: not its person's others, nor through their 
     assert(!JSON.stringify(read).includes("s3cr3t"));
     // Not on its list.
     assertEquals((await call(secret, "/api/queries/message.history", post({}))).status, 403);
-    // Its person left the space: the key reaches nothing there.
+    // Its person left the space: the key ends with that.
     await runtime.call("person.set", { person: "bob", email: "bob@example.com" });
     const { invitation } = await runtime.call<{ invitation: string }>("invitation.send", {
       space: launch,
@@ -325,7 +325,8 @@ test("a key reaches its space alone: not its person's others, nor through their 
     }, { actor: ana });
     await runtime.call("invitation.accept", { invitation }, { actor: bob });
     await runtime.call("space.leave", { space: launch }, { actor: ana });
-    assertEquals(await (await call(secret, "/api/queries/note.list", post({}))).json(), []);
+    await runtime.idle();
+    assertEquals((await call(secret, "/api/queries/note.list", post({}))).status, 401);
   });
 });
 

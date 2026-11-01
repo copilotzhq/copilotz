@@ -3,8 +3,9 @@
  * of. A shared space, an org or someone's Personal space is a space; so is a
  * single document shared on its own (its members are on it directly).
  */
-import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
-import { reachOf, type Verb } from "../shared/reach.ts";
+import { type Actor, defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
+import { rosterIn } from "../shared/agents.ts";
+import { reachOf, type Verb, where } from "../shared/reach.ts";
 
 const spaceSchema = {
   type: "object",
@@ -36,7 +37,34 @@ export const space = defineCollection({
         const found = await spaces.find({}, { sort: { name: 1 } });
         if (!ctx.actor) return found;
         const reach = await reachOf(ctx.actor, ctx);
-        return found.map((s) => ({ ...s, can: [...reach.get(s._id)?.can ?? []] }));
+        return found.filter((s) => reach.has(s._id)).map((s) => ({
+          ...s,
+          can: [...reach.get(s._id)!.can],
+        }));
+      },
+    },
+    /**
+     * Where an agent can hand work, for the person it works for: the spaces they
+     * may write in (not someone else's Personal one), each with who answers there.
+     */
+    handoffs: {
+      allow: (actor) => actor.kind === "agent",
+      run: async (spaces, _, ctx) => {
+        const person = ctx.actor?.for as Actor | undefined;
+        if (!person) return [];
+        const found = await spaces.find({
+          _id: { $in: where(await reachOf(person, ctx), "write") },
+        }, {
+          sort: { name: 1 },
+        });
+        return await Promise.all(
+          found.filter((s) => s.kind !== "personal" || s.owner === person.id).map(async (s) => ({
+            _id: s._id,
+            name: s.name,
+            kind: s.kind,
+            agents: await rosterIn(ctx, s._id),
+          })),
+        );
       },
     },
   },

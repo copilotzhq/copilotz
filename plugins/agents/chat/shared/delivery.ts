@@ -71,19 +71,22 @@ export const answer = async (
   text: string,
   how: { failed?: boolean; stopped?: boolean; told?: Told[] } = {},
   /** The turn's thread, when it has it already. */
-  known?: Pick<Thread, "in">,
+  known?: Pick<Thread, "in" | "title">,
 ) => {
   const messages = ctx.db.collection<Message>("message");
   const [trigger, thread] = await Promise.all([
     messages.findOne({ _id: t.trigger }),
     known ?? ctx.db.collection<Thread>("thread").findOne({ _id: t.thread }),
   ]);
+  const back = trigger?.back && trigger.expectReply !== false ? trigger.back : undefined;
   const reply = {
     _id: `${run}:reply`,
     thread: t.thread,
     ...(thread?.in ? { in: thread.in } : {}),
     from: t.agent,
-    to: trigger && trigger.expectReply !== false && trigger.from !== t.agent ? [trigger.from] : [],
+    to: !back && trigger && trigger.expectReply !== false && trigger.from !== t.agent
+      ? [trigger.from]
+      : [],
     text,
     replyTo: t.trigger,
     hops: t.hops + 1,
@@ -94,13 +97,42 @@ export const answer = async (
     ...(how.told?.length ? { told: how.told } : {}),
     at: now(),
   };
-  const deliver = await delivery(ctx, reply, reply.thread, !how.stopped);
-  await ctx.transaction(async (tx) => {
+  // Handed over from another space: the answer goes back there too, where its sender waits.
+  const returned = back
+    ? {
+      ...reply,
+      _id: `${run}:back`,
+      thread: back.thread,
+      ...(back.in ? { in: back.in } : {}),
+      to: [trigger!.from],
+      via: {
+        kind: "delegated",
+        name: (thread?.title ?? "Another space").slice(0, 120),
+        path: `/thread/${encodeURIComponent(t.thread)}${
+          thread?.in ? `?in=${encodeURIComponent(thread.in)}` : ""
+        }`,
+      },
+      told: undefined,
+    }
+    : undefined;
+  const writer = returned ? ctx.as() : ctx;
+  const deliver = await delivery(
+    writer,
+    returned ?? reply,
+    (returned ?? reply).thread,
+    !how.stopped,
+  );
+  await writer.transaction(async (tx) => {
     // What showed live while it was written becomes the reply.
     await tx.db.collection("live").deleteOne({ _id: run }, NO_ANSWER);
     if (how.stopped) await tx.db.collection("wait").deleteOne({ _id: `${run}:wait` }, NO_ANSWER);
     await tx.db.collection("message").insertOne(reply);
     await noted(tx, reply);
+    if (returned) {
+      const { told: _, ...copy } = returned;
+      await tx.db.collection("message").insertOne(copy);
+      await noted(tx, copy);
+    }
     await deliver(tx);
   });
 };

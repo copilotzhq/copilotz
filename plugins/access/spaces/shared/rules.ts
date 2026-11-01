@@ -9,7 +9,7 @@
  * changed only by those who manage them; invitations are their managers',
  * and read by whom they're to (by the email they signed in with).
  */
-import type { Filter, Guard } from "../../../../runtime/mod.ts";
+import type { Actor, Filter, Guard } from "../../../../runtime/mod.ts";
 import { membersOf } from "./agents.ts";
 import { memberKey, reachOf, type Verb, where } from "./reach.ts";
 
@@ -44,7 +44,9 @@ export const rules: Guard = async (actor, { collection, access, filter }, ctx) =
     return { $or: [{ space: { $in: where(reach, "manage") } }, { member: memberKey(actor) }] };
   }
   if (collection === "space" || collection === "member") {
-    const spaces = where(reach, access === "read" ? "read" : "manage");
+    // Who's where isn't content: an agent reads it as far as the person it works for reaches.
+    const by = access === "read" && actor.for ? await reachOf(actor.for as Actor, ctx) : reach;
+    const spaces = where(by, access === "read" ? "read" : "manage");
     return collection === "space" ? { _id: { $in: spaces } } : { space: { $in: spaces } };
   }
   const { field = "in", labels, write = "write", member } = shared[collection];

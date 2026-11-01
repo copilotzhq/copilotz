@@ -1,5 +1,5 @@
 /** An agent's turn: model calls and tool steps until it answers, or waits for replies. */
-import type { Actor, Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
+import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
 import type { LlmChunk, LlmMessage, LlmState, ToolCall } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
@@ -16,15 +16,11 @@ import {
 } from "../shared/agents.ts";
 import { answer, delivery } from "../shared/delivery.ts";
 import { liveWriter } from "../shared/live.ts";
-import { prepare, type Send } from "../shared/send.ts";
+import { prepare, principalOf, type Send } from "../shared/send.ts";
 import { noted, startedWith } from "../shared/summary.ts";
 import { type Prompt, settingsOf, type Step, type Tool } from "../shared/types.ts";
 
 /** Runs a turn: started by `turn.requested`, or resumed when its wait is over. */
-/** Whom a turn works for: who started it, or, started by another agent, whom that one works for. */
-const principalOf = (actor: Actor | undefined): Actor | undefined =>
-  actor?.kind === "person" ? actor : actor?.kind === "agent" ? actor.for as Actor : undefined;
-
 /**
  * A turn someone started acts as its agent, for them: with the access
  * plugin, it reaches only what both reach (an agent is a member of spaces,
@@ -203,13 +199,15 @@ const turn = async (ctx: Context, event: Event) => {
     // reply can arrive before the wait it checks off.
     const waitingFor = sends.filter((s) => s.message!.expectReply !== false)
       .map((s) => s.message!._id);
+    // Handing work to another space is trusted code's: the agent doesn't work there.
+    const writer = sends.some((s) => s.across) ? ctx.as() : ctx;
     const deliveries = await Promise.all(
-      sends.map((s) => delivery(ctx, s.message!, s.message!.subthread)),
+      sends.map((s) => delivery(writer, s.message!, s.message!.subthread)),
     );
     // The turn's first message keeps what it was told.
     const kept = told.length && step === first ? { told } : {};
     await live.settle();
-    await ctx.transaction(async (tx) => {
+    await writer.transaction(async (tx) => {
       // What showed live becomes the step.
       await live.done(tx);
       const step = {

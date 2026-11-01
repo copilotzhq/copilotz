@@ -63,6 +63,12 @@ async function stop(
     subthread: { $exists: true },
   });
   for (const m of asked) stopped += await stop(ctx, m.subthread!, undefined, seen);
+  // And what it started apart from here, in another space too.
+  const started = await ctx.db.collection<Thread>("thread").find({
+    "parent.thread": thread,
+    fork: { $exists: false },
+  });
+  for (const t of started) stopped += await stop(ctx, t._id, undefined, seen);
   return stopped;
 }
 

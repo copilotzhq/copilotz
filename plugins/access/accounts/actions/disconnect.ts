@@ -5,7 +5,7 @@
  * timer, saying `account.changed`. Agents working for them then use the
  * app's own models, where it has them.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Changed } from "../contract.ts";
 import type { AccountDoc } from "../collections/account.ts";
 import { revoke } from "../shared/oauth.ts";
@@ -20,7 +20,7 @@ export const disconnectAction = defineAction({
     required: ["provider"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const person = ctx.actor!.id;
     const provider = providerOf(ctx, input.provider);

@@ -3,7 +3,7 @@
  * of. A shared space, an org or someone's Personal space is a space; so is a
  * single document shared on its own (its members are on it directly).
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 import { reachOf, type Verb } from "../shared/reach.ts";
 
 const spaceSchema = {
@@ -31,7 +31,7 @@ export const space = defineCollection({
      * archived ones too, marked (`archived`), for a front end to list apart.
      */
     reached: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (spaces, _, ctx) => {
         const found = await spaces.find({}, { sort: { name: 1 } });
         if (!ctx.actor) return found;

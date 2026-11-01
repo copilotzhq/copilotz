@@ -9,7 +9,7 @@
  * says what sent it for the person (a routine); a new thread takes `title`
  * and `renamable` in the same commit, so its first turn already has them.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
@@ -83,7 +83,7 @@ export const sendAction = defineAction({
     additionalProperties: false,
   },
   // People write as themselves: their own messages.
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const said = input.text ?? "";
     if (!said.trim() && !input.files?.length) {

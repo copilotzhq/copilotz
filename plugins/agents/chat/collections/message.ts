@@ -1,5 +1,5 @@
 /** Messages: what people and agents said, and agents' private steps (their tool calls). */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 import { HISTORY } from "../shared/agents.ts";
 import { lineage } from "../shared/lineage.ts";
 import type { Step } from "../shared/types.ts";
@@ -107,7 +107,7 @@ export const message = defineCollection({
      * With `lineage`, a fork's history starts with what it inherited.
      */
     history: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (messages, params: { thread: string; lineage?: boolean }, ctx) =>
         params.lineage
           ? lineage(ctx.db, params.thread, { limit: 1_000 })
@@ -119,7 +119,7 @@ export const message = defineCollection({
      * its own, the last `limit` (40) of them.
      */
     conversation: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (messages, params: { thread: string; limit?: number }, ctx) => {
         const limit = params.limit ?? 40;
         const own = await lineage(ctx.db, params.thread, { limit });

@@ -2,7 +2,7 @@
  * Keys: a person makes one for code that acts as them (a script, a CI job),
  * sees its secret once, and revokes it by name.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson, people } from "../../../../runtime/mod.ts";
 import { hash, secret } from "../collections/credential.ts";
 
 export const createKey = defineAction({
@@ -15,7 +15,7 @@ export const createKey = defineAction({
     required: ["name"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person" && !actor.key,
+  allow: inPerson,
   run: async (ctx, input) => {
     const made = secret("key");
     await ctx.as().db.collection("credential").insertOne({
@@ -38,7 +38,7 @@ export const revokeKey = defineAction({
     required: ["name"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const removed = await ctx.as().db.collection("credential").deleteMany({
       person: ctx.actor!.id,

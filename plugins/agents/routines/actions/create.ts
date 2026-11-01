@@ -5,7 +5,7 @@
  * they can read; else its first run's), or a new one each run (`post: "new"`).
  * It runs as them from then on: its timer is set in the same commit.
  */
-import { defineAction, personOf } from "../../../../runtime/mod.ts";
+import { defineAction, people, personOf } from "../../../../runtime/mod.ts";
 import type { Thread } from "../../chat/contract.ts";
 import {
   answersIn,
@@ -17,6 +17,7 @@ import {
   timing,
 } from "../shared/routines.ts";
 import { type Given, normalize, whenOf } from "../shared/schedule.ts";
+import { may } from "../../../access/spaces/contract.ts";
 
 export const createAction = defineAction({
   description: "Makes a routine: a message sent to an agent on a schedule, in a space",
@@ -33,17 +34,15 @@ export const createAction = defineAction({
     required: ["in", "text", "agent", "schedule"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const by = personOf(ctx.actor);
     if (!by || ctx.actor?.kind !== "person") {
       throw forbidden("A routine is a person's: it runs as whoever makes it.");
     }
-    const { can } = await ctx.call<{ can: boolean }>("space.can", {
-      space: input.in,
-      verb: "write",
-    });
-    if (!can) throw forbidden("Only those who may write in this space make routines there.");
+    if (!await may(ctx, "write", input.in)) {
+      throw forbidden("Only those who may write in this space make routines there.");
+    }
     const schedule = normalize(input.schedule as Given);
     await answersIn(ctx, input.in, input.agent);
     const post = input.post ?? "same";

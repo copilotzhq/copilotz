@@ -5,7 +5,7 @@
  * (regenerate); to edit a message instead, fork at the one before it and
  * send the new version there.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { agentsNamed, now } from "../shared/agents.ts";
@@ -21,7 +21,7 @@ export const forkAction = defineAction({
     required: ["thread", "message"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const parent = await ctx.db.collection<Thread>("thread").findOne({ _id: input.thread });
     const at = await ctx.db.collection<Message>("message").findOne({ _id: input.message });

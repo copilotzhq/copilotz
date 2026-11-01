@@ -3,7 +3,7 @@
  * `api_key.mine` lists it); calls with it fail from then on.
  * `api_key.used`: the API notes when a key was last used (the system's).
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson } from "../../../../runtime/mod.ts";
 
 export const revokeAction = defineAction({
   description: "Revokes one of your developer keys",
@@ -13,7 +13,7 @@ export const revokeAction = defineAction({
     required: ["key"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person" && !actor.key,
+  allow: inPerson,
   run: async (ctx, input) => {
     // Their own only: the rules keep a person to their keys.
     const removed = await ctx.db.collection("api_key").deleteOne({ _id: input.key });

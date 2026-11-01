@@ -9,11 +9,13 @@
  * An agent joins at once, as a viewer or an editor, if the manager adding
  * it has met it (see agents.ts); taken out, it no longer answers there.
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, forbidden, people } from "../../../../runtime/mod.ts";
 import { mustKnow, unseat } from "../shared/agents.ts";
 import { keepsAManager } from "../shared/managers.ts";
 import { joinable } from "../shared/personal.ts";
-import { docKey, memberKey, ORG, reachOf } from "../shared/reach.ts";
+import { may, must } from "../shared/can.ts";
+import { checkRole, seat } from "../shared/seat.ts";
+import { docKey, memberKey, ORG } from "../shared/reach.ts";
 
 const who = {
   type: "object",
@@ -21,17 +23,13 @@ const who = {
   required: ["kind", "id"],
 } as const;
 
-const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
-
 /**
  * Throws unless the caller manages `space` (or, for a document of a shared
  * collection, it or the space it's in). Answers where its members are kept.
  */
 async function manages(ctx: Context, space: string, on?: string): Promise<string> {
-  // Reach is worked out from every membership, as the rules do.
-  const reach = await reachOf(ctx.actor!, ctx.as());
   if (!on) {
-    if (!reach.get(space)?.can.has("manage")) throw forbidden(`You don't manage "${space}".`);
+    await must(ctx, "manage", space, `You don't manage "${space}".`);
     return space;
   }
   const shared = ((ctx.resources.shared ?? {}) as Record<string, { field?: string }>)[on];
@@ -39,8 +37,8 @@ async function manages(ctx: Context, space: string, on?: string): Promise<string
   if (!doc) throw forbidden(`No ${on} "${space}".`);
   const key = docKey(on, space);
   const home = String(doc[shared.field ?? "in"]);
-  if (!reach.get(key)?.can.has("manage") && !reach.get(home)?.can.has("manage")) {
-    throw forbidden(`You don't manage "${home}".`);
+  if (!await may(ctx, "manage", key)) {
+    await must(ctx, "manage", home, `You don't manage "${home}".`);
   }
   return key;
 }
@@ -58,16 +56,12 @@ export const setMemberAction = defineAction({
     required: ["space", "member", "role"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     if (input.space === ORG) throw forbidden("Org roles change with org.role.");
     const place = await manages(ctx, input.space, input.on);
     const key = memberKey(input.member);
-    if (input.member.kind === "agent" && input.role === "manager") {
-      throw Object.assign(new Error("Agents work here as viewers or editors."), {
-        code: "invalid",
-      });
-    }
+    checkRole(ctx, key, input.role);
     if (!input.on) {
       joinable(await ctx.as().db.collection("space").findOne({ _id: input.space }), key);
       if (input.member.kind === "agent") await mustKnow(ctx, input.member.id);
@@ -82,18 +76,14 @@ export const setMemberAction = defineAction({
           { code: "invalid" },
         );
       }
-      await keepsAManager(ctx, input.space, key, input.role);
+      await seat(ctx, place, key, input.role);
+    } else {
+      await ctx.as().db.collection("member").replaceOne(
+        { _id: `${place}|${key}` },
+        { member: key, space: place, role: input.role, on: input.on },
+        { upsert: true },
+      );
     }
-    await ctx.as().db.collection("member").replaceOne(
-      { _id: `${place}|${key}` },
-      {
-        member: key,
-        space: place,
-        role: input.role,
-        ...(input.on ? { on: input.on } : {}),
-      },
-      { upsert: true },
-    );
     // An agent made a viewer answers there no more.
     if (!input.on && input.member.kind === "agent") {
       await unseat(ctx.as(), input.member.id, [input.space]);
@@ -109,7 +99,7 @@ export const removeMemberAction = defineAction({
     required: ["space", "member"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     if (input.space === ORG) throw forbidden("People leave the org with org.remove.");
     const place = await manages(ctx, input.space, input.on);

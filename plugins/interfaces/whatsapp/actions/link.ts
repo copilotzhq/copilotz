@@ -10,11 +10,10 @@
  * - `whatsapp.move`: where their messages from there go (a space they may
  *   write in); a new conversation starts there with the next one.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
 import type { WhatsAppNumber } from "../collections/number.ts";
 import { settingsOf } from "../shared/settings.ts";
-
-const fault = (code: string, message: string) => Object.assign(new Error(message), { code });
+import { may } from "../../../access/spaces/contract.ts";
 
 const which = {
   type: "object",
@@ -32,12 +31,12 @@ export const linkAction = defineAction({
   input: which,
   // Its answer links a phone to them: kept out of the log.
   record: false,
-  allow: (actor) => actor.kind === "person" && !actor.key,
+  allow: inPerson,
   run: async (ctx, input) => {
     // Only someone who reaches its space: read as them, under the rules.
     const number = await ctx.db.collection<WhatsAppNumber>("whatsapp_number")
       .findOne({ _id: input.number });
-    if (!number) throw fault("not_found", "No such number here.");
+    if (!number) throw failure("not_found", "No such number here.");
     const person = ctx.actor!.id;
     const codes = ctx.db.collection("whatsapp_code");
     await codes.deleteMany({ number: number._id, person });
@@ -65,7 +64,7 @@ export const linkAction = defineAction({
 export const unlinkAction = defineAction({
   description: "Unlinks your phone from a WhatsApp number",
   input: which,
-  allow: (actor) => actor.kind === "person" && !actor.key,
+  allow: inPerson,
   run: async (ctx, input) => {
     // Their own only: the rules keep a person to their phones.
     const gone = await ctx.db.collection("whatsapp_phone").deleteMany({ number: input.number });
@@ -81,19 +80,17 @@ export const moveAction = defineAction({
     required: ["number", "space"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person" && !actor.key,
+  allow: inPerson,
   run: async (ctx, input) => {
-    const { can } = await ctx.call<{ can: boolean }>("space.can", {
-      space: input.space,
-      verb: "write",
-    });
-    if (!can) throw fault("forbidden", "You can't write in that space.");
+    if (!await may(ctx, "write", input.space)) {
+      throw failure("forbidden", "You can't write in that space.");
+    }
     const moved = await ctx.db.collection("whatsapp_phone").updateMany(
       { number: input.number, person: ctx.actor!.id },
       { $set: { space: input.space }, $unset: { thread: "" } },
     );
     if (!moved.acknowledged || !moved.matchedCount) {
-      throw fault("not_found", "Your phone isn't linked to that number.");
+      throw failure("not_found", "Your phone isn't linked to that number.");
     }
     return { space: input.space };
   },

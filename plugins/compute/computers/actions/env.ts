@@ -14,18 +14,16 @@
  * People change it when they manage the space; the system (another
  * plugin's Action, an app's publisher's) always may.
  */
-import { type Context, defineAction, personOf } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, invalid, people, personOf } from "../../../../runtime/mod.ts";
 import type { EnvVar } from "../collections/env-var.ts";
-import { may } from "../shared/desks.ts";
 import { ENV_NAME, envId, envOf } from "../shared/env.ts";
 import { seal } from "../shared/seal.ts";
 import { settingsOf } from "../shared/settings.ts";
-
-const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
+import { may } from "../../../access/spaces/contract.ts";
 
 /** Whether whoever asks may change the space's environment: its managers, or the system. */
 async function mustManage(ctx: Context, space: string) {
-  if (ctx.actor?.kind === "person" && !await may(ctx, space, "manage")) {
+  if (ctx.actor?.kind === "person" && !await may(ctx, "manage", space)) {
     throw Object.assign(new Error("Only those who manage this space can change its environment."), {
       code: "forbidden",
     });
@@ -54,7 +52,7 @@ export const envSetAction = defineAction({
     required: ["in", "name"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     await mustManage(ctx, input.in);
     const vars = ctx.as().db.collection<EnvVar>("envVar");
@@ -107,7 +105,7 @@ export const envUnsetAction = defineAction({
     required: ["in"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     await mustManage(ctx, input.in);
     const vars = ctx.as().db.collection("envVar");

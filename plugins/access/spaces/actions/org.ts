@@ -7,13 +7,9 @@
  * only they managed to someone who stays; their Personal space stays, where
  * the org's admins still reach it.
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
-import { ORG, ORG_ROLES, type OrgRole, orgRoleOf } from "../shared/reach.ts";
-import { ROLES } from "../shared/reach.ts";
+import { type Context, defineAction, forbidden, invalid, people } from "../../../../runtime/mod.ts";
+import { ORG, ORG_ROLES, type OrgRole, orgRoleOf, rolesOf, runsOrg } from "../shared/reach.ts";
 import { keepProfileOf } from "../shared/profile.ts";
-
-const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
-const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
 
 const role = { type: "string", enum: [...ORG_ROLES] } as const;
 
@@ -24,7 +20,7 @@ const standing = async (ctx: Context) =>
 /** Throws unless the caller runs the org (an owner, an admin, staff). */
 async function runs(ctx: Context) {
   const mine = await standing(ctx);
-  if (mine !== "staff" && mine !== "owner" && mine !== "admin") {
+  if (mine !== "staff" && !runsOrg(mine)) {
     throw forbidden("Only the org's owners and admins do that.");
   }
   return mine;
@@ -75,7 +71,7 @@ export const orgRoleAction = defineAction({
     required: ["person", "role"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const mine = await runs(ctx);
     const theirs = await orgRoleOf({ kind: "person", id: input.person }, ctx.as());
@@ -99,7 +95,7 @@ export const removeFromOrgAction = defineAction({
     required: ["person"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const mine = await runs(ctx);
     const theirs = await orgRoleOf({ kind: "person", id: input.person }, ctx.as());
@@ -114,7 +110,7 @@ export const removeFromOrgAction = defineAction({
     const members = ctx.as().db.collection<{ member: string; space: string; role: string }>(
       "member",
     );
-    const manages = (r: string) => (ROLES[r] ?? []).includes("manage");
+    const manages = (r: string) => (rolesOf(ctx)[r] ?? []).includes("manage");
     const handed: string[] = [];
     await ctx.as().transaction(async (tx) => {
       const theirs = tx.db.collection<{ member: string; space: string; role: string }>("member");
@@ -152,7 +148,7 @@ export const orgMeAction = defineAction({
   // Only reads: not recorded, so reads (a query, a View) ask it too.
   record: false,
   input: { type: "object", additionalProperties: false },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx) => ({
     role: await orgRoleOf(ctx.actor!, ctx.as()) ?? null,
     staff: ctx.actor?.staff === true,
@@ -193,7 +189,7 @@ export const inviteToOrgAction = defineAction({
     required: ["email"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const mine = await runs(ctx);
     void mine;
@@ -212,7 +208,7 @@ export const inviteToOrgAction = defineAction({
 export const orgInvitesAction = defineAction({
   description: "The org's invitations waiting to be accepted",
   input: { type: "object", additionalProperties: false },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx) => {
     await runs(ctx);
     return { invites: await directoryOf(ctx).invites() };
@@ -227,7 +223,7 @@ export const uninviteAction = defineAction({
     required: ["email"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     await runs(ctx);
     await directoryOf(ctx).cancel(input.email.toLowerCase());
@@ -238,7 +234,7 @@ export const uninviteAction = defineAction({
 export const orgPeopleAction = defineAction({
   description: "Who's in the org, with their roles, names and emails: for its members",
   input: { type: "object", additionalProperties: false },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx) => {
     const mine = await standing(ctx);
     if (!mine || mine === "guest") throw forbidden("Only the org's members see who's in it.");
@@ -292,7 +288,7 @@ export const renameOrgAction = defineAction({
     required: ["name"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const mine = await standing(ctx);
     if (mine !== "owner" && mine !== "staff") throw forbidden("Only the org's owners rename it.");

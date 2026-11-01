@@ -9,22 +9,6 @@ import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
 import { folderFor } from "./folder.ts";
 
-const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
-
-/** Whether the caller may `verb` in `space`. */
-export async function may(ctx: Context, space: string, verb: "write" | "manage") {
-  return (await ctx.call<{ can: boolean }>("space.can", { space, verb })).can;
-}
-
-/** Throws unless the caller may `verb` in `space`. */
-export async function mustBeAble(ctx: Context, space: string, verb: "write" | "manage") {
-  if (!await may(ctx, space, verb)) {
-    throw forbidden(
-      verb === "manage" ? "Only those who manage this space can." : "You can't work in this space.",
-    );
-  }
-}
-
 /** A space's name for its folder: "personal" for someone's own, else its name. */
 async function nameOf(ctx: Context, space: string) {
   const found = await ctx.as().db.collection<{ name?: string; kind?: string }>("space")

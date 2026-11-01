@@ -6,7 +6,7 @@
  * members see it, as they see its computers; `link` lets anyone with the
  * address open it, `members` only the space's members, signed in.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 import { previewUrl } from "../shared/preview-url.ts";
 import { settingsOf } from "../shared/settings.ts";
 
@@ -35,7 +35,7 @@ export const preview = defineCollection({
   queries: {
     /** A space's previews, the newest first, each with its address (`url`). */
     here: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (previews, params: { in: string }, ctx) => {
         const domain = settingsOf(ctx).previews?.domain;
         const found = await previews.find({ space: params.in }, { sort: { at: -1 } });

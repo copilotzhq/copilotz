@@ -7,7 +7,7 @@
  * Unrecorded: its answer carries the sign-in's state, which stays out of
  * the log.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { start } from "../shared/flow.ts";
 
 export const connectAction = defineAction({
@@ -19,6 +19,6 @@ export const connectAction = defineAction({
     required: ["provider"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: (ctx, input) => start(ctx, input.provider, input.origin),
 });

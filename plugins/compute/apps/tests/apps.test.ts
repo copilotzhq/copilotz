@@ -426,6 +426,14 @@ test("an agent's publish waits for its person's yes, even where nothing else is 
         "https://blog.copilotz.app",
       ]);
 
+      // Publishing is asked every time: nothing wider than this once.
+      for (const answer of ["always", "thread", "origin"]) {
+        const refused = await rt.call("computer.approve", { approval: asked._id, answer }, {
+          actor: ana,
+        }).then(() => "done", (e) => (e as { code?: string }).code);
+        assertEquals(refused, "invalid");
+      }
+
       // Yes, this once: it publishes, answering at once.
       await rt.call("computer.approve", { approval: asked._id, answer: "once" }, { actor: ana });
       await rt.idle();
@@ -571,6 +579,19 @@ test("taking an app down removes it at the host and lets its host go: its publis
       assertEquals(
         (await rt.call<AppDoc[]>("app.list", { in: team }, { actor: cy })).map((a) => a.label),
         ["team-app"],
+      );
+      // Another editor can't rebuild it, or replace it by publishing its name; a manager can.
+      const code = (call: Promise<unknown>) =>
+        call.then(() => "done", (e) => (e as { code?: string }).code);
+      assertEquals(
+        await code(rt.call("app.redeploy", { app: published.app }, { actor: cy })),
+        "forbidden",
+      );
+      assertEquals(
+        await code(
+          rt.call("app.publish", { in: team, name: "Team App", port: 5000 }, { actor: cy }),
+        ),
+        "forbidden",
       );
 
       // Cy neither published it nor manages Team.

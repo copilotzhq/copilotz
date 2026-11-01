@@ -16,16 +16,16 @@
  *
  * `in` is the space; a person's own Personal space when they give none.
  */
-import { type Context, defineAction, personOf } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, people, personOf } from "../../../../runtime/mod.ts";
 import type { Desk } from "../collections/desk.ts";
 import type { Preview } from "../collections/preview.ts";
 import { failed } from "../shared/failed.ts";
 import { previewUrl } from "../shared/preview-url.ts";
-import { may, mustBeAble } from "../shared/desks.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { jobOn } from "../shared/jobs.ts";
 import { desksIn, named } from "../shared/where.ts";
 import { type Job, WORK } from "../shared/workloads.ts";
+import { must, mustOwnOr } from "../../../access/spaces/contract.ts";
 
 const fail = (message: string, code = "invalid") => Object.assign(new Error(message), { code });
 
@@ -78,13 +78,13 @@ export const previewAction = defineAction({
     },
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const settings = previewsOf(ctx);
     const person = personOf(ctx.actor);
     if (!person) throw fail("A preview is made for a person.", "forbidden");
     const where = await spaceOf(ctx, input.in);
-    await mustBeAble(ctx, where, "write");
+    await must(ctx, "write", where, "You can't work in this space.");
     // The computer named; else the job's (whichever runs it); else one online first, else the
     // space's own (asleep, it wakes when asked).
     const desks = await desksIn(ctx, where);
@@ -162,7 +162,7 @@ export const previewAction = defineAction({
 export const previewsAction = defineAction({
   description: "A space's previews: what its computers serve, at addresses of their own",
   input: { type: "object", properties: { in: space }, additionalProperties: false },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const { domain } = previewsOf(ctx);
     // As the asker: the rules keep to the spaces they reach.
@@ -181,14 +181,18 @@ export const unpreviewAction = defineAction({
     required: ["label"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const { domain } = previewsOf(ctx);
     const found = await ctx.db.collection<Preview>("preview").findOne({ _id: input.label });
     if (!found) throw fail("No such preview here.", "not_found");
-    if (found.by !== personOf(ctx.actor) && !await may(ctx, found.space, "manage")) {
-      throw fail("Only who made it, or those who manage this space, can.", "forbidden");
-    }
+    await mustOwnOr(
+      ctx,
+      found.by,
+      "manage",
+      found.space,
+      "Only who made it, or those who manage this space, can.",
+    );
     await ctx.as().db.collection("preview").deleteOne({ _id: found._id });
     await hostsOf(ctx).releaseHost?.(`${found._id}.${domain}`);
     return { removed: found._id };

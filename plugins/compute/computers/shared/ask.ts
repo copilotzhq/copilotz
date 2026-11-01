@@ -4,7 +4,8 @@
  * (`owner`: the person it works for, or the computer's owner) let it do:
  * always, in this conversation, whenever the routine that set it going runs,
  * or this once, used up now. Otherwise they're asked (an approval, waiting),
- * and the agent is told to wait for them.
+ * and the agent is told to wait for them. Publishing reaches outside the
+ * computer: it's asked every time, and only a yes to that one covers it.
  */
 import type { Context } from "../../../../runtime/mod.ts";
 import type { Approval } from "../collections/approval.ts";
@@ -45,7 +46,7 @@ export async function allowed(ctx: Context, ask: Ask): Promise<true | string> {
     owner: ask.owner,
     agent: ask.agent,
     work: ask.work,
-    $or: [
+    $or: ask.work === "publish" ? [{ once: ask.detail, thread: ask.thread }] : [
       { thread: { $exists: false }, once: { $exists: false }, origin: { $exists: false } },
       { thread: ask.thread, once: { $exists: false } },
       { once: ask.detail, thread: ask.thread },
@@ -86,8 +87,12 @@ export async function allowed(ctx: Context, ask: Ask): Promise<true | string> {
   const whose = ask.owner === ask.for ? "their" : `${owner}'s`;
   return `Waiting for ${owner}'s yes to ${what} on ${whose} computer: ${ask.detail}\n` +
     `${ask.owner === ask.for ? "They see" : `${owner}, whose computer it is, sees`} your ` +
-    "request where they talk with you, and answers there (yes once, for this conversation, " +
-    `${origin ? `for this ${origin.kind}, ` : ""}always, or no). Tell them what you want to do ` +
-    "and why, then wait: don't try again until " +
+    "request where they talk with you, and answers there (" +
+    (ask.work === "publish"
+      ? "yes or no"
+      : `yes once, for this conversation, ${
+        origin ? `for this ${origin.kind}, ` : ""
+      }always, or no`) +
+    "). Tell them what you want to do and why, then wait: don't try again until " +
     "it's answered.";
 }

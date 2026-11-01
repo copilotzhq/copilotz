@@ -10,7 +10,7 @@
  * managers change it (`env.set`, `env.unset`). Queries: `here` (the
  * space's, or an app's with `app`) and `apps` (every app's own there).
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const envVarSchema = {
   type: "object",
@@ -41,7 +41,7 @@ export const envVar = defineCollection({
   queries: {
     /** A space's environment (its own, or an app's with `app`), by name. */
     here: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (vars, params: { in: string; app?: string }) =>
         vars.find(
           { space: params.in, app: params.app ?? { $exists: false } },
@@ -50,7 +50,7 @@ export const envVar = defineCollection({
     },
     /** Every app's own in a space (`app` says whose), by name. */
     apps: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (vars, params: { in: string }) =>
         vars.find({ space: params.in, app: { $exists: true } }, { sort: { name: 1 } }),
     },

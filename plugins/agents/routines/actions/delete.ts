@@ -2,13 +2,13 @@
  * `routine.delete`, by its maker or a manager of its space: its timer goes,
  * and it with its runs. The chats it posted in stay, as they are.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { byId, editable, timerOf } from "../shared/routines.ts";
 
 export const deleteAction = defineAction({
   description: "Deletes a routine; the chats it posted in stay",
   input: byId,
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, { routine }) => {
     const found = await editable(ctx, routine);
     await ctx.transaction(async (tx) => {

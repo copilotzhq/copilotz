@@ -1,5 +1,5 @@
 /** `space.personal`: your Personal space (one per person), made the first time it's asked for. */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { PERSONAL } from "../shared/personal.ts";
 import { seat } from "../shared/agents.ts";
 import { memberKey } from "../shared/reach.ts";
@@ -8,7 +8,7 @@ import { keepProfileOf } from "../shared/profile.ts";
 export const personalAction = defineAction({
   description: "Your Personal space, where what you make alone lives",
   input: { type: "object", additionalProperties: false },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx) => {
     const id = `personal:${ctx.actor!.id}`;
     const who = memberKey(ctx.actor!);

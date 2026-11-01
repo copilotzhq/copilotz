@@ -5,10 +5,11 @@
  * did. Only its owner moves it, into a space they may work in. Its old
  * folder stays on the machine.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
-import { deskIn, mustBeAble, removeDesk } from "../shared/desks.ts";
+import { deskIn, removeDesk } from "../shared/desks.ts";
+import { must } from "../../../access/spaces/contract.ts";
 
 export const moveAction = defineAction({
   description: "Moves one of your computers to another space",
@@ -18,7 +19,7 @@ export const moveAction = defineAction({
     required: ["desk", "to"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const desk = await ctx.db.collection<Desk>("desk").findOne({ _id: input.desk });
     // The rules reach only the person's own computers.
@@ -28,7 +29,7 @@ export const moveAction = defineAction({
       throw Object.assign(new Error("No such computer of yours here"), { code: "invalid" });
     }
     if (desk.in === input.to) return { desk: desk._id };
-    await mustBeAble(ctx, input.to, "write");
+    await must(ctx, "write", input.to, "You can't work in this space.");
     const moved = await deskIn(ctx, computer, input.to, desk.answers);
     await removeDesk(ctx, desk);
     return { desk: moved._id };

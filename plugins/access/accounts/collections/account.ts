@@ -10,7 +10,7 @@
  * Queries, for people: `account.providers`, what can be connected and how;
  * `account.uses`, which of some models would run on the asker's accounts.
  */
-import { defineCollection, type Infer, type ReadContext } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people, type ReadContext } from "../../../../runtime/mod.ts";
 import type { ProviderShown, Uses, UsesParams } from "../contract.ts";
 import { providersOf } from "../shared/settings.ts";
 import { usesOf } from "../shared/uses.ts";
@@ -32,8 +32,6 @@ const accountSchema = {
   },
   required: ["person", "provider", "status", "label", "connected"],
 } as const;
-
-const people = (actor: { kind: string }) => actor.kind === "person";
 
 export const account = defineCollection({
   schema: accountSchema,

@@ -13,13 +13,19 @@
  * only platform staff see; each says whether it shows them (`costs`). Both
  * only read, so neither is recorded.
  */
-import { type Context, defineAction, type Filter, personOf } from "../../../../runtime/mod.ts";
+import {
+  type Context,
+  defineAction,
+  type Filter,
+  forbidden,
+  people,
+  personOf,
+} from "../../../../runtime/mod.ts";
 import type { UsageRecord } from "../collections/usage.ts";
 import { rollupsOf } from "../shared/settings.ts";
 import { priceOnly, totals, UNITS } from "../shared/totals.ts";
 import { priceOf } from "../shared/use.ts";
-
-const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
+import { runsOrg } from "../../../access/spaces/contract.ts";
 
 /**
  * What the caller sees: everyone's (`all`) when they run the org (an owner or
@@ -30,7 +36,7 @@ async function sight(ctx: Context): Promise<{ all: boolean; costs: boolean }> {
     // An app without org roles has nobody who runs one.
     .catch(() => undefined);
   const staff = me?.staff === true;
-  return { all: staff || me?.role === "owner" || me?.role === "admin", costs: staff };
+  return { all: staff || runsOrg(me?.role), costs: staff };
 }
 
 const filter = { type: "object" } as const;
@@ -47,7 +53,7 @@ export const orgUsageAction = defineAction({
     },
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const { all, costs } = await sight(ctx);
     const person = personOf(ctx.actor);
@@ -81,7 +87,7 @@ export const usageCallsAction = defineAction({
     },
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const { all, costs } = await sight(ctx);
     const person = personOf(ctx.actor);

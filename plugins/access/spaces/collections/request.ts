@@ -2,7 +2,7 @@
  * Access requests: someone (usually through their agent) asks to be let into
  * a space. Its managers see them and grant or deny them.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const requestSchema = {
   type: "object",
@@ -24,7 +24,7 @@ export const request = defineCollection({
   queries: {
     /** Requests waiting on the actor: for spaces they manage, oldest first. */
     open: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (requests) => requests.find({}, { sort: { at: 1 } }),
     },
   },

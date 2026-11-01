@@ -4,11 +4,9 @@
  * theirs when they sign in, and accepting one makes them belong, with the
  * invitation's role for their first entering. All are the system's.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, forbidden } from "../../../../runtime/mod.ts";
 import type { Invite } from "../collections/invite.ts";
 import type { Org } from "../collections/org.ts";
-
-const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
 
 export const sendInviteAction = defineAction({
   description: "Invites an email to an org, with a role",

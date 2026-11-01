@@ -216,10 +216,11 @@ export const commands: Commands = {
           ),
         );
       }
-      if (answer === "origin" && (!chosen.origin || chosen.work === "publish")) {
-        return await term.print(
-          dim(chosen.origin ? "Publishing is asked every time." : "No routine set this going."),
-        );
+      if (chosen.work === "publish" && answer !== "once" && answer !== "deny") {
+        return await term.print(dim("Publishing is asked every time: once, or no."));
+      }
+      if (answer === "origin" && !chosen.origin) {
+        return await term.print(dim("No routine set this going."));
       }
       const { answered } = await term.runtime.call<{ answered: boolean }>("computer.approve", {
         approval: chosen._id,

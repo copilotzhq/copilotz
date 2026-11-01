@@ -7,10 +7,8 @@
  *   its target changes); refused when it's another org's;
  * - `host.release` `{ org, host }`: it's no longer the org's (if it was).
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, forbidden } from "../../../../runtime/mod.ts";
 import type { OrgHost } from "../collections/org-host.ts";
-
-const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
 
 /** A host, as claims keep it: lowercase letters, digits, dots and hyphens, and a port maybe. */
 const host = { type: "string", pattern: "^[a-z0-9.-]+(:[0-9]{1,5})?$", maxLength: 253 } as const;

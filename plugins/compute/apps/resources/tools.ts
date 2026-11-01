@@ -9,7 +9,8 @@ import type { Tool } from "../../../agents/chat/contract.ts";
 import { personOf } from "../../../../runtime/mod.ts";
 import { tool } from "../../../agents/chat/contract.ts";
 import { messageOf } from "../shared/errors.ts";
-import { addressFor, can, detailOf, publish as publishApp } from "../shared/publish.ts";
+import { addressFor, detailOf, publish as publishApp } from "../shared/publish.ts";
+import { may } from "../../../access/spaces/contract.ts";
 
 const publish = tool({
   description: "Publishes what one of your jobs on this space's computers serves as an app " +
@@ -46,7 +47,7 @@ const publish = tool({
     if (!thread?.in) {
       return "This conversation isn't in a space, so there's no computer to publish from.";
     }
-    if (!await can(ctx, thread.in, "write")) return "You can't publish from this space.";
+    if (!await may(ctx, "write", thread.in)) return "You can't publish from this space.";
     // Its person reads where it'll be: "wants to publish Shop at https://shop.copilotz.app".
     const address = await addressFor(ctx, thread.in, input.name).catch(() => undefined);
     // Asked of whoever answers on the computer that runs the job (not the default's), when only
@@ -59,7 +60,7 @@ const publish = tool({
           job: input.job,
         }).then((where) => where.computer, () => undefined)
         : undefined);
-    const may = await ctx.call<true | string>("computer.allowed", {
+    const asked = await ctx.call<true | string>("computer.allowed", {
       thread: ctx.thread,
       agent: ctx.agent,
       kind: "publish",
@@ -67,7 +68,7 @@ const publish = tool({
       ...(computer ? { computer } : {}),
       ...(address ? { preview: address } : {}),
     });
-    if (may !== true) return may;
+    if (asked !== true) return asked;
     try {
       const published = await publishApp(ctx, {
         ...input,

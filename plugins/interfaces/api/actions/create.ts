@@ -5,10 +5,8 @@
  * result goes in the log), and the key's record (`api_key.created`, who
  * made it, when) holds its hash. A key can't make keys.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson, invalid } from "../../../../runtime/mod.ts";
 import { hash, secret } from "../shared/secret.ts";
-
-const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
 
 /** Names of what a key may do: `chat.send`, `message.conversation`, `thread`. */
 const names = {
@@ -34,7 +32,7 @@ export const createAction = defineAction({
     additionalProperties: false,
   },
   record: false,
-  allow: (actor) => actor.kind === "person" && !actor.key,
+  allow: inPerson,
   run: async (ctx, input) => {
     const name = input.name.trim();
     if (!name) throw invalid("A key needs a name, to know it by.");

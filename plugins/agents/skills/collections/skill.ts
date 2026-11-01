@@ -12,7 +12,7 @@
  *   file of it;
  * - `files`: the text of each of its other files (`{ skill }`), to change them.
  */
-import { defineCollection, type Infer, type ReadContext } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people, type ReadContext } from "../../../../runtime/mod.ts";
 import { appSkills, type Shown, shownApp, shownSpace } from "../shared/skills.ts";
 import { SKILL_MD } from "../shared/check.ts";
 import type { SkillFile } from "./skill-file.ts";
@@ -64,7 +64,7 @@ export const skill = defineCollection({
   indexes: [["in"]],
   queries: {
     list: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (skills, params: { in?: string } = {}, ctx) => {
         const made = params.in ? await skills.find({ in: params.in }, { sort: { name: 1 } }) : [];
         const app = Object.entries(appSkills(ctx)).map(([name, s]) => shownApp(name, s))
@@ -73,7 +73,7 @@ export const skill = defineCollection({
       },
     },
     read: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (skills, params: { skill: string; file?: string }, ctx) => {
         const app = params.skill.startsWith("app:")
           ? appSkills(ctx)[params.skill.slice(4)]
@@ -94,7 +94,7 @@ export const skill = defineCollection({
       },
     },
     files: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (skills, params: { skill: string }, ctx) => {
         if (params.skill.startsWith("app:")) {
           const declared = appSkills(ctx)[params.skill.slice(4)];

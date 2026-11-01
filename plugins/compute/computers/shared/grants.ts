@@ -5,6 +5,7 @@
  * stopped there carries on.
  */
 import type { Context } from "../../../../runtime/mod.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 import { type Origin, originKey } from "../../../agents/chat/contract.ts";
 import type { Approval } from "../collections/approval.ts";
 import type { Grant } from "../collections/grant.ts";
@@ -21,10 +22,21 @@ export type Letting = {
 /** What a person's answer says in the conversation, for this kind of thing. */
 export const saidFor = (origin: Pick<Origin, "kind">) => `Yes, for this ${origin.kind}`;
 
-/** The answer, in the conversation, as part of what set it going. */
+/**
+ * The answer, in the conversation, as part of what set it going. Its next turn
+ * is for whom the agent was working: where the computer's owner answered, the
+ * message is that person's, saying who did.
+ */
 export async function told(ctx: Context, asked: Approval, text: string): Promise<void> {
-  const by = asked.origin ? ctx.as({ ...ctx.actor!, origin: asked.origin }) : ctx;
-  await by.call("chat.send", { thread: asked.thread, to: [asked.agent], text });
+  const me = ctx.actor!.id;
+  const by = ctx.as({
+    ...(asked.for === me ? ctx.actor! : { kind: "person", id: asked.for }),
+    ...(asked.origin ? { origin: asked.origin } : {}),
+  });
+  const answered = asked.for === me
+    ? {}
+    : { via: { kind: "answer", name: nameOf(me, await namesFor(ctx, [me])).slice(0, 120) } };
+  await by.call("chat.send", { thread: asked.thread, to: [asked.agent], text, ...answered });
 }
 
 export async function letOrigin(ctx: Context, l: Letting): Promise<void> {

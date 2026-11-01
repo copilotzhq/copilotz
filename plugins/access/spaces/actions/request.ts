@@ -1,20 +1,16 @@
 /** `request.grant` and `request.deny`: a space's managers decide on a request to join it. */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, forbidden, people } from "../../../../runtime/mod.ts";
 import type { Request } from "../collections/request.ts";
 import { joinable } from "../shared/personal.ts";
-import { reachOf } from "../shared/reach.ts";
-
-const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
+import { must } from "../shared/can.ts";
+import { seat } from "../shared/seat.ts";
 
 /** The request, if the caller manages its space. */
 async function decide(ctx: Context, id: string): Promise<Request> {
   const system = ctx.as();
   const found = await system.db.collection<Request>("request").findOne({ _id: id });
   if (!found) throw forbidden(`No request "${id}".`);
-  const reach = await reachOf(ctx.actor!, system);
-  if (!reach.get(found.space)?.can.has("manage")) {
-    throw forbidden(`You don't manage "${found.space}".`);
-  }
+  await must(ctx, "manage", found.space, `You don't manage "${found.space}".`);
   return found;
 }
 
@@ -26,18 +22,12 @@ export const grantAction = defineAction({
     required: ["id"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await decide(ctx, input.id);
     joinable(await ctx.as().db.collection("space").findOne({ _id: found.space }), found.member);
-    await ctx.as().transaction(async (tx) => {
-      await tx.db.collection("member").replaceOne(
-        { _id: `${found.space}|${found.member}` },
-        { member: found.member, space: found.space, role: input.role ?? "viewer" },
-        { upsert: true },
-      );
-      await tx.db.collection("request").deleteOne({ _id: found._id });
-    });
+    await seat(ctx, found.space, found.member, input.role ?? "viewer");
+    await ctx.as().db.collection("request").deleteOne({ _id: found._id });
     return { granted: found.member, space: found.space };
   },
 });
@@ -50,7 +40,7 @@ export const denyAction = defineAction({
     required: ["id"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await decide(ctx, input.id);
     await ctx.as().db.collection("request").deleteOne({ _id: found._id });

@@ -7,7 +7,7 @@
  * email (`mine`). Every one is an event (`invitation.created`), for whatever
  * sends the email.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const invitationSchema = {
   type: "object",
@@ -31,7 +31,7 @@ export const invitation = defineCollection({
   queries: {
     /** The invitations to the email the person signed in with, newest first. */
     mine: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (invitations, _, ctx) => {
         const { email } = await ctx.call<{ email: string | null }>("person.email", {
           person: ctx.actor!.id,

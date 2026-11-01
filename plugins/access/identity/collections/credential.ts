@@ -4,7 +4,7 @@
  * hash of each secret is kept: the secret is shown once, when it's made.
  * Deleting one revokes it.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const credentialSchema = {
   type: "object",
@@ -44,7 +44,7 @@ export const credential = defineCollection({
     },
     /** A person's keys, without their secrets. */
     keys: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (credentials, params: { person: string }) =>
         credentials.find({ person: params.person, kind: "key" }, { sort: { at: 1 } }),
     },

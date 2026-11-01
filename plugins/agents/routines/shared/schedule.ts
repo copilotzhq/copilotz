@@ -8,6 +8,7 @@
  */
 import { Cron } from "croner";
 import type { When } from "../../../../runtime/mod.ts";
+import { invalid } from "../../../../runtime/mod.ts";
 
 export type Schedule =
   | { kind: "daily"; time: string; timezone: string }
@@ -57,7 +58,6 @@ export type Given = {
 };
 
 const HOUR = 3_600_000;
-const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid" });
 
 /** Whether a timezone is one this platform knows. */
 export function knownZone(zone: string): boolean {

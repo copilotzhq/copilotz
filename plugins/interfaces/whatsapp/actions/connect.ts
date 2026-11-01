@@ -10,19 +10,17 @@
  * a rotated secret). Neither is recorded: their input is credentials, which
  * go only into `whatsapp_secret`.
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
 import type { WhatsAppNumber } from "../collections/number.ts";
 import type { WhatsAppSecret } from "../collections/secret.ts";
 import { type Graph, numberInfo } from "../shared/graph.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { HOOKS } from "./hook.ts";
-
-const fault = (code: string, message: string) => Object.assign(new Error(message), { code });
+import { must } from "../../../access/spaces/contract.ts";
 
 /** Throws unless the caller manages `space`. */
 export async function mustManage(ctx: Context, space: string, what: string) {
-  const { can } = await ctx.call<{ can: boolean }>("space.can", { space, verb: "manage" });
-  if (!can) throw fault("forbidden", `Only those who manage this space ${what}.`);
+  await must(ctx, "manage", space, `Only those who manage this space ${what}.`);
 }
 
 /** What Meta says the number is, with this token: or why it can't. */
@@ -31,7 +29,7 @@ async function checked(ctx: Context, phoneId: string, token: string) {
   try {
     return await numberInfo(graph);
   } catch (error) {
-    throw fault(
+    throw failure(
       "invalid",
       `Meta didn't accept that phone number id and token. ${(error as Error).message}`,
     );
@@ -59,12 +57,12 @@ export const connectAction = defineAction({
     additionalProperties: false,
   },
   record: false,
-  allow: (actor) => actor.kind === "person" && !actor.key,
+  allow: inPerson,
   run: async (ctx, input) => {
     await mustManage(ctx, input.in, "connect a number to it");
     const numbers = ctx.as().db.collection<WhatsAppNumber>("whatsapp_number");
     if (await numbers.findOne({ phoneId: input.phoneId })) {
-      throw fault("invalid", "That number is connected already: disconnect it there first.");
+      throw failure("invalid", "That number is connected already: disconnect it there first.");
     }
     const info = await checked(ctx, input.phoneId, input.token.trim());
     const id = crypto.randomUUID();
@@ -105,11 +103,11 @@ export const credentialsAction = defineAction({
     additionalProperties: false,
   },
   record: false,
-  allow: (actor) => actor.kind === "person" && !actor.key,
+  allow: inPerson,
   run: async (ctx, input) => {
     const found = await ctx.db.collection<WhatsAppNumber>("whatsapp_number")
       .findOne({ _id: input.number });
-    if (!found) throw fault("not_found", "No such number here.");
+    if (!found) throw failure("not_found", "No such number here.");
     await mustManage(ctx, found.in, "change its number");
     const token = input.token?.trim();
     if (token) await checked(ctx, found.phoneId, token);

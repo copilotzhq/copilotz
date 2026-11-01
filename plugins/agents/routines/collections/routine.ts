@@ -14,7 +14,7 @@
  *   maker has left the space (`left`: it can't run as them);
  * - `runs`: a routine's runs (`{ routine, limit? }`), newest first.
  */
-import { defineCollection } from "../../../../runtime/mod.ts";
+import { defineCollection, people } from "../../../../runtime/mod.ts";
 import type { Schedule } from "../shared/schedule.ts";
 import type { RoutineRun } from "./run.ts";
 
@@ -98,7 +98,7 @@ export const routine = defineCollection({
   indexes: [["in"]],
   queries: {
     list: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (routines, params: { in: string }, ctx) => {
         const [found, spaces, members] = await Promise.all([
           routines.find({ in: params.in }, { sort: { at: 1 } }),
@@ -116,7 +116,7 @@ export const routine = defineCollection({
       },
     },
     runs: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (_, params: { routine: string; limit?: number }, ctx) =>
         ctx.db.collection<RoutineRun>("routineRun").find({ routine: params.routine }, {
           sort: { at: -1 },

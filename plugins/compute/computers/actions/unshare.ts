@@ -4,9 +4,10 @@
  * do, go with it; if it was the space's default, another becomes it. Its
  * folder stays on the machine.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Desk } from "../collections/desk.ts";
-import { may, removeDesk } from "../shared/desks.ts";
+import { removeDesk } from "../shared/desks.ts";
+import { mustOwnOr } from "../../../access/spaces/contract.ts";
 
 export const unshareAction = defineAction({
   description: "Takes a computer out of a space",
@@ -16,15 +17,17 @@ export const unshareAction = defineAction({
     required: ["desk"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const desk = await ctx.db.collection<Desk>("desk").findOne({ _id: input.desk });
     if (!desk) return { removed: false };
-    if (desk.owner !== ctx.actor!.id && !await may(ctx, desk.in, "manage")) {
-      throw Object.assign(new Error("Only its owner, or those who manage this space, can."), {
-        code: "forbidden",
-      });
-    }
+    await mustOwnOr(
+      ctx,
+      desk.owner,
+      "manage",
+      desk.in,
+      "Only its owner, or those who manage this space, can.",
+    );
     await removeDesk(ctx, desk);
     return { removed: true };
   },

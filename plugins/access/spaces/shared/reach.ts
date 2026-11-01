@@ -36,12 +36,14 @@ export const ORG = "*";
 export const ORG_ROLES = ["owner", "admin", "member", "guest"] as const;
 export type OrgRole = typeof ORG_ROLES[number];
 const RUN = new Set<string>(["owner", "admin"]);
+/** Whether an org role runs the org. */
+export const runsOrg = (role?: string | null): boolean => !!role && RUN.has(role);
 const ALL: Verb[] = ["read", "write", "manage"];
 
 /** How an actor appears as a member: `person:ana`. */
 export const memberKey = (actor: { kind: string; id: string }) => `${actor.kind}:${actor.id}`;
 
-const rolesOf = (ctx: ReadContext): Record<string, Verb[]> => ({
+export const rolesOf = (ctx: Pick<ReadContext, "resources">): Record<string, Verb[]> => ({
   ...ROLES,
   ...(ctx.resources.roles ?? {}) as Record<string, Verb[]>,
 });
@@ -98,9 +100,20 @@ async function everything(ctx: ReadContext): Promise<Reach> {
 export async function reachOf(actor: Actor, ctx: ReadContext): Promise<Reach> {
   const reach = await unlimited(actor, ctx);
   const { within } = actor;
-  return typeof within === "string"
+  const limited = typeof within === "string"
     ? new Map([...reach].filter(([space]) => space === within))
     : reach;
+  // A space put away is read and managed, not written in, until it's brought back.
+  for (const { _id } of await ctx.db.collection("space").find({ archived: { $exists: true } })) {
+    const held = limited.get(String(_id));
+    if (held?.can.has("write")) {
+      limited.set(String(_id), {
+        ...held,
+        can: new Set([...held.can].filter((v) => v !== "write")),
+      });
+    }
+  }
+  return limited;
 }
 
 async function unlimited(actor: Actor, ctx: ReadContext): Promise<Reach> {
@@ -108,7 +121,7 @@ async function unlimited(actor: Actor, ctx: ReadContext): Promise<Reach> {
   if (!principal) {
     if (actor.kind === "person" && actor.staff === true) return await everything(ctx);
     const role = await orgRoleOf(actor, ctx);
-    if (role && RUN.has(role)) return await everything(ctx);
+    if (runsOrg(role)) return await everything(ctx);
     const own = await walk(memberKey(actor), ctx);
     // Members see who's in the org; guests only the spaces they're in.
     if (role === "member") own.set(ORG, { can: new Set<Verb>(["read"]) });

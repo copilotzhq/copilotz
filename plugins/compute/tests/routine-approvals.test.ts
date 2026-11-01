@@ -178,10 +178,10 @@ test("a yes for a routine lets its runs go on their own, and nothing else", asyn
     assertEquals(s.ran(computer), ["df", "df", "uptime"], "once isn't for the next run");
 
     // Allowing it ahead of time from its page answers what waits, and can be taken back.
-    const origin = { kind: "routine", id: other, name: "Other", rev: 0 };
     const allow = (allow: boolean) =>
       s.rt.call("computer.allowOrigin", {
-        origin,
+        kind: "routine",
+        id: other,
         desk: desk._id,
         agent: "assistant",
         work: "terminal",
@@ -226,14 +226,16 @@ test("changing what a routine does ends the yes given for it, by whoever changes
       (await s.rt.query<{ _id: string; rev?: number }[]>("routine.list", { in: space }, {
         actor: ana,
       })).find((r) => r._id === id)?.rev ?? 0;
-    const origin = { kind: "routine", id, name: "Disk", rev: await rev() };
-    await s.rt.call("computer.allowOrigin", {
-      origin,
-      desk: desk._id,
-      agent: "assistant",
-      work: "terminal",
-      allow: true,
-    }, { actor: ana });
+    const allow = () =>
+      s.rt.call("computer.allowOrigin", {
+        kind: "routine",
+        id,
+        desk: desk._id,
+        agent: "assistant",
+        work: "terminal",
+        allow: true,
+      }, { actor: ana });
+    await allow();
     await s.run(id);
     assertEquals(s.ran(computer), ["df"]);
 
@@ -256,23 +258,10 @@ test("changing what a routine does ends the yes given for it, by whoever changes
     }, { actor: ana });
     assertEquals(grants.map((g) => g.rev), [0]);
 
-    // Allowed again, a card from before the change, answered late, leaves that in place.
-    await s.rt.call("computer.allowOrigin", {
-      origin: { ...origin, rev: 1 },
-      desk: desk._id,
-      agent: "assistant",
-      work: "terminal",
-      allow: true,
-    }, { actor: ana });
+    // Allowed again, it's for the routine as it is now, whatever anyone says.
+    await allow();
     await s.rt.idle();
     assertEquals(s.ran(computer), ["df", "df", "rm -rf /"]);
-    await s.rt.call("computer.allowOrigin", {
-      origin,
-      desk: desk._id,
-      agent: "assistant",
-      work: "terminal",
-      allow: true,
-    }, { actor: ana });
     assertEquals(
       (await s.rt.query<{ rev: number }[]>("grant.forOrigin", { origin: `routine:${id}` }, {
         actor: ana,
@@ -305,10 +294,10 @@ test("where a computer's owner answers, the yes is theirs, and only theirs", asy
 
     // Bob's routine, on Ana's computer: Bob can't let it; it stops and asks Ana.
     const id = await s.routine({ in: launch, name: "Build", text: "run make" }, bob);
-    const origin = { kind: "routine", id, name: "Build", rev: 0 };
     const allow = (actor: Actor) =>
       s.rt.call("computer.allowOrigin", {
-        origin,
+        kind: "routine",
+        id,
         desk: shared._id,
         agent: "assistant",
         work: "terminal",
@@ -351,6 +340,99 @@ test("only what a routine set going can be allowed for one", async () => {
     assertEquals((refused as { code?: string }).code, "invalid");
     assertEquals((await s.pending()).length, 1);
     assertStringIncludes(asked.detail, "ls");
+    await computer.worker.stop();
+  });
+});
+
+test("a key can't answer for its person, and nobody works directly on a computer whose owner answers", async () => {
+  await setup(async (s) => {
+    const { space, computer, desk } = await connected(s);
+    await s.rt.call("chat.send", { text: "run ls", in: space }, { actor: ana });
+    await s.rt.idle();
+    const [asked] = await s.pending();
+    const key: Actor = { kind: "person", id: "ana", key: "k1", within: space };
+    const by = (call: Promise<unknown>) =>
+      call.then(() => "done", (e) => (e as { code?: string }).code);
+    assertEquals(
+      await by(s.rt.call("computer.approve", { approval: asked._id, answer: "always" }, {
+        actor: key,
+      })),
+      "forbidden",
+    );
+    assertEquals(
+      await by(s.rt.call("computer.allowOrigin", {
+        kind: "routine",
+        id: "r",
+        desk: desk._id,
+        agent: "assistant",
+        work: "terminal",
+        allow: true,
+      }, { actor: key })),
+      "forbidden",
+    );
+
+    const { space: launch } = await s.rt.call<{ space: string }>("space.create", {
+      name: "Launch",
+    }, { actor: ana });
+    await join(s.rt, launch, bob, "editor", ana);
+    await s.rt.call("computer.share", { computer: desk.computer, in: launch, answers: "owner" }, {
+      actor: ana,
+    });
+    const [shared] = await s.rt.query<Desk[]>("desk.here", { in: launch }, { actor: bob });
+    const work = (actor: Actor, work: string) =>
+      by(s.rt.call("computer.work", { desk: shared._id, work, input: {} }, { actor }));
+    assertEquals(await work(bob, "files.list"), "done");
+    assertEquals(await work(bob, "jobs.start"), "forbidden");
+    assertEquals(await work(ana, "files.list"), "done");
+    await computer.worker.stop();
+  });
+});
+
+test("what's let for a routine is checked against it; an owner's yes keeps the turn its person's", async () => {
+  await setup(async (s) => {
+    const { computer, desk } = await connected(s);
+    const by = (call: Promise<unknown>) =>
+      call.then(() => "done", (e) => (e as { code?: string }).code);
+    const allow = (id: string) =>
+      by(s.rt.call("computer.allowOrigin", {
+        kind: "routine",
+        id,
+        desk: desk._id,
+        agent: "assistant",
+        work: "terminal",
+        allow: true,
+      }, { actor: ana }));
+    assertEquals(await allow("made-up"), "invalid");
+    // A routine of another space doesn't reach this desk.
+    const { space: other } = await s.rt.call<{ space: string }>("space.create", {
+      name: "Other",
+    }, { actor: ana });
+    assertEquals(
+      await allow(await s.routine({ in: other, name: "There", text: "run df" })),
+      "invalid",
+    );
+
+    // Bob's agent, on Ana's computer, Ana answering: the next turn is still for Bob.
+    const { space: launch } = await s.rt.call<{ space: string }>("space.create", {
+      name: "Launch",
+    }, { actor: ana });
+    await join(s.rt, launch, bob, "editor", ana);
+    await s.rt.call("computer.share", { computer: desk.computer, in: launch, answers: "owner" }, {
+      actor: ana,
+    });
+    const { thread } = await s.rt.call<{ thread: string }>("chat.send", {
+      text: "run make",
+      in: launch,
+    }, { actor: bob });
+    await s.rt.idle();
+    const [asked] = await s.pending(ana);
+    assertEquals([asked.owner, asked.for], ["ana", "bob"]);
+    await s.rt.call("computer.approve", { approval: asked._id, answer: "thread" }, { actor: ana });
+    await s.rt.idle();
+    assertEquals(s.ran(computer), ["make"]);
+    const said = await s.rt.query<Message[]>("message.history", { thread }, { actor: bob });
+    const yes = said.find((m) => m.text === "Yes, in this conversation: make")!;
+    assertEquals([yes.from, yes.via?.kind, yes.via?.name], ["bob", "answer", "ana"]);
     await computer.worker.stop();
   });
 });

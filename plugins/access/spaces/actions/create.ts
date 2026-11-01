@@ -2,7 +2,7 @@
  * `space.create`: a new space (shared by default), managed by whoever makes
  * it, with the app's default agents working there.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { seat } from "../shared/agents.ts";
 import { memberKey, orgRoleOf } from "../shared/reach.ts";
 
@@ -14,7 +14,7 @@ export const createAction = defineAction({
     required: ["name"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     if (await orgRoleOf(ctx.actor!, ctx.as()) === "guest") {
       throw Object.assign(new Error("Guests work in the spaces they're invited to."), {

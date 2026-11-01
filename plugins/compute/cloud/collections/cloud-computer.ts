@@ -5,7 +5,7 @@
  * person reaches their own (the plugin's guard); an org's admins see them
  * all with `cloud.org`.
  */
-import { defineCollection } from "../../../../runtime/mod.ts";
+import { defineCollection, people } from "../../../../runtime/mod.ts";
 import { type CloudComputer, SUBJECTS } from "../contract.ts";
 import type { May } from "../shared/may.ts";
 import { settingsOf } from "../shared/settings.ts";
@@ -65,7 +65,7 @@ export const cloudComputer = defineCollection({
   queries: {
     /** The asker's cloud computers, newest first. */
     mine: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (computers) => computers.find({}, { sort: { at: -1 } }),
     },
     /**
@@ -77,7 +77,7 @@ export const cloudComputer = defineCollection({
      * admins make them here, or this month's budget is spent).
      */
     sizes: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (_computers, _params, ctx) => {
         const set = settingsOf(ctx);
         const quote = (subject: string, quantities: Record<string, number>) =>

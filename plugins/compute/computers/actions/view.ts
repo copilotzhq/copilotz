@@ -5,7 +5,7 @@
  * few minutes while it shows. It wakes nothing: a computer that's asleep
  * stays so until there's work for it.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Desk } from "../collections/desk.ts";
 import { touch } from "../shared/wake.ts";
 
@@ -18,7 +18,7 @@ export const viewAction = defineAction({
     required: ["desk"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     // The rules reach only the desks of spaces the person is in.
     const desk = await ctx.db.collection<Desk>("desk").findOne({ _id: input.desk });

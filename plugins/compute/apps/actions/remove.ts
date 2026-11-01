@@ -4,14 +4,14 @@
  * its space. What it ran since it was last metered is metered first. The
  * record stays, removed; its own environment goes.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { AppDoc } from "../collections/app.ts";
 import { release } from "../shared/claims.ts";
 import { failure } from "../shared/errors.ts";
 import { hostOf } from "../shared/host.ts";
 import { meterRun } from "../shared/meter.ts";
-import { can } from "../shared/publish.ts";
 import { settingsOf } from "../shared/settings.ts";
+import { mustOwnOr } from "../../../access/spaces/contract.ts";
 
 export const removeAction = defineAction({
   description: "Takes a published app down",
@@ -21,18 +21,19 @@ export const removeAction = defineAction({
     required: ["app"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     // The rules reach only the apps of spaces the person is in.
     const app = await ctx.db.collection<AppDoc>("app").findOne({ _id: input.app });
     if (!app) throw failure("There's no such app here.", "not_found");
     if (app.status === "removed") return { removed: true };
-    if (app.by !== ctx.actor!.id && !await can(ctx, app.space, "manage")) {
-      throw failure(
-        "Only who published it, or those who manage this space, can take it down.",
-        "forbidden",
-      );
-    }
+    await mustOwnOr(
+      ctx,
+      app.by,
+      "manage",
+      app.space,
+      "Only who published it, or those who manage this space, can take it down.",
+    );
     const host = hostOf(ctx);
     if (app.target) {
       // Recorded as its publisher's use, whoever takes it down.

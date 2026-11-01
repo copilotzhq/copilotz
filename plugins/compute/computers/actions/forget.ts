@@ -4,7 +4,7 @@
  * agents waited on it for, and what they were let do there, go with it. Its files stay
  * where they are, on the machine.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 
 export const forgetAction = defineAction({
   description: "Forgets one of your computers",
@@ -14,7 +14,7 @@ export const forgetAction = defineAction({
     required: ["computer"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const { deletedCount } = await ctx.db.collection("computer").deleteOne({ _id: input.computer });
     if (deletedCount) {

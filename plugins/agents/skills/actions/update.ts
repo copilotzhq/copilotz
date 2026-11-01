@@ -4,7 +4,7 @@
  * its files (`files`: the whole set it keeps, so those left out go). In one
  * commit.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { SkillDoc } from "../collections/skill.ts";
 import { checked } from "../shared/check.ts";
 import { fields, fileDoc, free, invalid, listed, said, SKILL_MD } from "../shared/write.ts";
@@ -17,7 +17,7 @@ export const updateAction = defineAction({
     required: ["skill"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const { skill: id, files, instructions } = input;
     const found = await ctx.db.collection<SkillDoc>("skill").findOne({ _id: id });

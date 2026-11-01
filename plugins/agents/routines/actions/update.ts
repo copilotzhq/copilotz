@@ -8,7 +8,7 @@
  * so a yes given for the old one doesn't cover it: anyone who may change a
  * routine may not thereby spend someone else's yes.
  */
-import { defineAction, personOf } from "../../../../runtime/mod.ts";
+import { defineAction, people, personOf } from "../../../../runtime/mod.ts";
 import type { Routine } from "../collections/routine.ts";
 import {
   answersIn,
@@ -20,6 +20,7 @@ import {
   timing,
 } from "../shared/routines.ts";
 import { type Given, normalize } from "../shared/schedule.ts";
+import { may } from "../../../access/spaces/contract.ts";
 
 export const updateAction = defineAction({
   description: "Changes a routine: its name, message, agent, schedule or where it posts",
@@ -34,17 +35,15 @@ export const updateAction = defineAction({
     required: ["routine"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await editable(ctx, input.routine);
     const me = personOf(ctx.actor)!;
     const adopt = input.adopt === true && found.by !== me;
     if (adopt) {
-      const { can } = await ctx.call<{ can: boolean }>("space.can", {
-        space: found.in,
-        verb: "manage",
-      });
-      if (!can) throw forbidden("Only those who manage this space take a routine over.");
+      if (!await may(ctx, "manage", found.in)) {
+        throw forbidden("Only those who manage this space take a routine over.");
+      }
     }
     const schedule = input.schedule ? normalize(input.schedule as Given) : undefined;
     if (input.agent && input.agent !== found.agent) await answersIn(ctx, found.in, input.agent);

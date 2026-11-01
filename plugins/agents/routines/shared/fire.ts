@@ -16,7 +16,7 @@ import type { Thread } from "../../chat/contract.ts";
 import type { Routine } from "../collections/routine.ts";
 import type { RoutineRun } from "../collections/run.ts";
 import { asMaker, chatTitle, routinePath, timing } from "./routines.ts";
-import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
+import { may, nameOf, namesFor } from "../../../access/spaces/contract.ts";
 
 export type Ran = Pick<RoutineRun, "outcome" | "thread" | "error"> & { run: string };
 
@@ -38,11 +38,7 @@ export async function fire(
   let message: string | undefined;
   let error: string | undefined;
   let note: string | undefined;
-  const { can } = await maker.call<{ can: boolean }>("space.can", {
-    space: routine.in,
-    verb: "write",
-  });
-  if (!can) {
+  if (!await may(maker, "write", routine.in)) {
     outcome = "forbidden";
     const maker = nameOf(routine.by, await namesFor(system, [routine.by]));
     error = `${maker} can't write in this space anymore, and the routine sends as them.`;

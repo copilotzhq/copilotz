@@ -127,7 +127,7 @@ export function createExecutor(
       return result;
     };
     const scope: TransactionScope = {
-      db: { collection: (name) => collection(name, run, querying(run, job.record)) },
+      db: { collection: (name) => collection(name, run, querying(run, job.record, actor)) },
       graph: {
         link: (from, type, to, data) =>
           run({ op: "link", edge: { from, type, to, data } }).then(() => {}),
@@ -186,7 +186,7 @@ export function createExecutor(
   ): Context => {
     const run: Run = (op) => job.send({ ops: [op], cause, ...(actor ? { actor } : {}) });
     return {
-      db: { collection: (name) => collection(name, run, querying(run, job.record)) },
+      db: { collection: (name) => collection(name, run, querying(run, job.record, actor)) },
       graph: {
         link: (from, type, to, data) =>
           run({ op: "link", edge: { from, type, to, data } }).then(() => {}),

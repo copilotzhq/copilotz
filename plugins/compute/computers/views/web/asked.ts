@@ -40,6 +40,7 @@ export function asked({ work, detail }: Asking): Asked {
   if (work === "publish") {
     return { verb: "publish", wants: "wants to publish", what: publishOf(detail).name };
   }
+  if (work === "destroy") return { verb: "destroy", wants: "wants to destroy", what: detail };
   return { verb: work, wants: `wants to use ${work} for`, what: detail };
 }
 

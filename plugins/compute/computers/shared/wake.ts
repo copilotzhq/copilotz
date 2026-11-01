@@ -16,7 +16,12 @@ import type { Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
 import { desksIn, named, type Where, whereFor } from "./where.ts";
 
-export type ComputerWake = { wake?: string; touch?: string };
+export type ComputerWake = {
+  wake?: string;
+  touch?: string;
+  /** The tool an agent makes one with, for what it's told when its space has no computer. */
+  make?: string;
+};
 
 const hookOf = (ctx: Pick<Context, "resources">) =>
   ctx.resources.computerWake as ComputerWake | undefined;

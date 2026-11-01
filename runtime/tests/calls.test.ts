@@ -4,7 +4,13 @@
  * startup checks may call it, read-only.
  */
 import { assertEquals, assertRejects } from "@std/assert";
-import { createRuntime, defineAction, definePlugin, type ViewContext } from "../mod.ts";
+import {
+  createRuntime,
+  defineAction,
+  defineCollection,
+  definePlugin,
+  type ViewContext,
+} from "../mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { test } from "../../testing/mod.ts";
 
@@ -89,6 +95,52 @@ test("queries and Views call unrecorded Actions, read-only", async () => {
     loud.close();
     await assertRejects(() => rt.query("shout.keeps"), Error, "read-only");
     await assertRejects(() => rt.query("shout.recorded"), Error, "only unrecorded Actions");
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a query an Action runs knows who asks, and so do the Actions it calls", async () => {
+  const who = definePlugin({
+    name: "who",
+    collections: {
+      seen: defineCollection({
+        schema: { type: "object" },
+        queries: {
+          asker: {
+            allow: () => true,
+            run: async (_seen, _params, ctx) => ({
+              actor: ctx.actor?.id,
+              called: await ctx.call("who.am"),
+            }),
+          },
+        },
+      }),
+    },
+    actions: {
+      "who.am": defineAction({
+        record: false,
+        input: { type: "object" },
+        allow: (actor) => actor.kind === "person",
+        run: (ctx) => ctx.actor!.id,
+      }),
+      "who.asks": defineAction({
+        input: { type: "object" },
+        allow: () => true,
+        run: async (ctx) => [
+          await ctx.db.collection("seen").query("asker"),
+          await ctx.transaction((tx) => tx.db.collection("seen").query("asker")),
+        ],
+      }),
+    },
+  });
+  const rt = await createRuntime({ store: memoryStore(), plugins: [who] });
+  try {
+    const ana = { kind: "person", id: "ana" } as const;
+    assertEquals(await rt.call("who.asks", {}, { actor: ana }), [
+      { actor: "ana", called: "ana" },
+      { actor: "ana", called: "ana" },
+    ]);
   } finally {
     await rt.close();
   }

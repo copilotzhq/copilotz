@@ -10,7 +10,7 @@
 import type { Context } from "../../../../runtime/mod.ts";
 import type { Approval } from "../collections/approval.ts";
 import type { Grant } from "../collections/grant.ts";
-import { type Asked, settingsOf } from "./settings.ts";
+import { type Asked, onlyOnce, settingsOf } from "./settings.ts";
 import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 import { originKey, originOf } from "../../../agents/chat/contract.ts";
 
@@ -37,7 +37,7 @@ export type Ask = {
 /** True: go ahead. A string: what the agent is told instead (it waits for its person). */
 export async function allowed(ctx: Context, ask: Ask): Promise<true | string> {
   const approve = ask.approve ?? settingsOf(ctx).approve;
-  if (ask.work !== "publish" && !approve.includes(ask.work)) return true;
+  if (!onlyOnce(ask.work) && !approve.includes(ask.work)) return true;
   const origin = originOf(ctx.actor);
   const system = ctx.as();
   const grants = system.db.collection<Grant>("grant");
@@ -46,7 +46,7 @@ export async function allowed(ctx: Context, ask: Ask): Promise<true | string> {
     owner: ask.owner,
     agent: ask.agent,
     work: ask.work,
-    $or: ask.work === "publish" ? [{ once: ask.detail, thread: ask.thread }] : [
+    $or: onlyOnce(ask.work) ? [{ once: ask.detail, thread: ask.thread }] : [
       { thread: { $exists: false }, once: { $exists: false }, origin: { $exists: false } },
       { thread: ask.thread, once: { $exists: false } },
       { once: ask.detail, thread: ask.thread },
@@ -80,15 +80,19 @@ export async function allowed(ctx: Context, ask: Ask): Promise<true | string> {
     jobs: "start this job",
     writes: "change this file",
     publish: "publish this as an app",
+    destroy: "destroy",
   }[ask.work];
   // People by name.
   const names = await namesFor(ctx, [ask.owner, ask.for]);
   const owner = nameOf(ask.owner, names);
   const whose = ask.owner === ask.for ? "their" : `${owner}'s`;
-  return `Waiting for ${owner}'s yes to ${what} on ${whose} computer: ${ask.detail}\n` +
+  const doing = ask.work === "destroy"
+    ? `destroy ${whose} computer for good, with its files`
+    : `${what} on ${whose} computer`;
+  return `Waiting for ${owner}'s yes to ${doing}: ${ask.detail}\n` +
     `${ask.owner === ask.for ? "They see" : `${owner}, whose computer it is, sees`} your ` +
     "request where they talk with you, and answers there (" +
-    (ask.work === "publish"
+    (onlyOnce(ask.work)
       ? "yes or no"
       : `yes once, for this conversation, ${
         origin ? `for this ${origin.kind}, ` : ""

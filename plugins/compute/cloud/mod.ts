@@ -22,6 +22,8 @@
  *   day (`cloud.daily`) storage is metered, and computers unused for
  *   `coldDays` go cold (a snapshot).
  * - **Destroying:** `cloud.destroy` (its owner, or the org's admins).
+ * - **By agents:** the `list_computers`, `create_computer` and
+ *   `manage_computer` tools, as their person (resources/tools.ts).
  * - **Reading:** `cloudComputer.mine` (yours), `cloudComputer.sizes` (what
  *   people choose from, priced with `usage.quote`, with the warm and view
  *   minutes, and whether the asker may make one now: `create`, `why` not),
@@ -90,6 +92,7 @@ import { markProcessor } from "./processors/mark.ts";
 import { poolVm } from "./collections/pool-vm.ts";
 import { poolWant } from "./collections/pool-want.ts";
 import { type CloudHostAdapter, POOL, POOL_ACTIONS, POOL_KIND } from "./contract.ts";
+import { tools } from "./resources/tools.ts";
 import { DEFAULTS, settingsOf } from "./shared/settings.ts";
 
 export * from "./contract.ts";
@@ -147,7 +150,8 @@ export const cloud: Plugin = definePlugin({
   resources: {
     cloud: DEFAULTS,
     // Work for a computer that's asleep wakes it; every piece of work keeps it warm.
-    computerWake: { wake: "cloud.wake", touch: "cloud.touch" },
+    computerWake: { wake: "cloud.wake", touch: "cloud.touch", make: "create_computer" },
+    tools,
   },
   adapters: { cloudHost: hosts },
   // Each person reaches their own cloud computers.

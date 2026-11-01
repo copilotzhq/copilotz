@@ -1,5 +1,13 @@
 ## 1.0.0-rc.13 — 2026-11-01
 
+- **Agents manage cloud computers.** `list_computers`, `create_computer` and `manage_computer` (add,
+  remove, rename, default, destroy) work in the conversation's space, as the person the agent works
+  for, through the same Actions and rules a person has. Nothing asks first except destroying, which
+  loses the disk: like publishing, it's asked every time and only "once" allows it. A person's own
+  machine isn't an agent's to manage. An agent in a space with no computer is told it can make one.
+- **A query an Action runs knows who asks.** Named queries called from an Action or a transaction
+  lost the actor for what they call themselves, so a query asking another Action could fail, or
+  answer as though nobody asked.
 - **A read's answer no longer overwrites something newer.** The owner answers a batch of reads once
   its slowest is ready, so a change could be pushed before the answer that didn't include it. The
   client then showed the older answer until the read next changed: on a page's first load (the push

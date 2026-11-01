@@ -8,6 +8,7 @@
 import { defineAction, inPerson, invalid } from "../../../../runtime/mod.ts";
 import type { Approval } from "../collections/approval.ts";
 import { letOrigin, told } from "../shared/grants.ts";
+import { onlyOnce } from "../shared/settings.ts";
 
 const SAID = {
   once: "Yes, this once",
@@ -32,8 +33,8 @@ export const approveAction = defineAction({
     // Only theirs to answer: the rules reach only their own.
     const asked = await ctx.db.collection<Approval>("approval").findOne({ _id: input.approval });
     if (!asked || asked.status !== "pending") return { answered: false };
-    if (asked.work === "publish" && input.answer !== "once" && input.answer !== "deny") {
-      throw invalid("Publishing is asked every time: allow it once, or not.");
+    if (onlyOnce(asked.work) && input.answer !== "once" && input.answer !== "deny") {
+      throw invalid("This is asked every time: allow it once, or not.");
     }
     if (input.answer === "origin") {
       if (!asked.origin) throw invalid("Nothing set this going to allow it for.");

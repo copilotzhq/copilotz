@@ -17,7 +17,7 @@ export const allowedAction = defineAction({
     properties: {
       thread: { type: "string" },
       agent: { type: "string" },
-      kind: { enum: ["terminal", "jobs", "writes", "publish"] },
+      kind: { enum: ["terminal", "jobs", "writes", "publish", "destroy"] },
       /** The computer it's for (its name), when not the space's default. */
       computer: { type: "string" },
       /** What exactly, as its person reads it (and a yes this once covers). */
@@ -28,7 +28,9 @@ export const allowedAction = defineAction({
     additionalProperties: false,
   },
   run: async (ctx, input): Promise<true | string> => {
-    const where = await whereFor(ctx, input.thread, `agent:${input.agent}`, input.computer);
+    const where = await whereFor(ctx, input.thread, `agent:${input.agent}`, input.computer, {
+      asleep: input.kind === "destroy",
+    });
     if ("missing" in where) return where.missing;
     return await allowed(ctx, {
       owner: where.answerer,

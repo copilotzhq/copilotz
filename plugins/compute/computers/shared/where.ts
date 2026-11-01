@@ -85,6 +85,8 @@ export async function whereFor(
   thread: string,
   who: string,
   computer?: string,
+  /** What's being done doesn't need the computer running (asking to destroy it). */
+  options: { asleep?: boolean } = {},
 ): Promise<Where | { missing: string }> {
   const person = personOf(ctx.actor);
   if (!person) return { missing: "There's no person this work is for, so no computer to use." };
@@ -102,7 +104,7 @@ export async function whereFor(
     const found = named(desks, computer);
     if ("missing" in found) return found;
     const chosen = found.desk;
-    if (!chosen.online) {
+    if (!chosen.online && !options.asleep) {
       const others = desks.filter((d) => d !== chosen && stateOf(d) !== "offline");
       return {
         missing: `${chosen.name ?? "That computer"} is ${

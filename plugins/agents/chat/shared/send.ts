@@ -67,6 +67,10 @@ async function handOver(
     where ? `?in=${encodeURIComponent(where)}` : ""
   }`;
   const named = (await agentsNamed(ctx, [t.agent]))[t.agent]?.name || t.agent;
+  // What the chat it comes back to calls where it went.
+  const called =
+    (await as.db.collection<{ name?: string }>("space").findOne({ _id: space }))?.name ??
+      "another space";
   return {
     output: `Sent to ${to} in a new chat in that space (${chat})${
       input.expectReply === false ? "." : "; you'll have the reply before you continue."
@@ -81,13 +85,13 @@ async function handOver(
       text,
       hops: t.hops + 1,
       via: { kind: "delegated", name: named, path: from },
-      back: { thread: t.thread, ...(where ? { in: where } : {}) },
+      back: { thread: t.thread, ...(where ? { in: where } : {}), from: called },
       ...(input.expectReply === false ? { expectReply: false } : {}),
       at,
     },
     thread: {
       _id: fresh,
-      title: text.slice(0, 80),
+      title: text.length > 80 ? `${text.slice(0, 80).replace(/\s+\S*$/, "")}…` : text,
       parent: { thread: t.thread, message: step },
       agents: [to],
       in: space,

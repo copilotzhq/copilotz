@@ -150,6 +150,7 @@ test("work handed to another space opens a chat its members see, and its answer 
       personal,
       "delegated",
     ]);
+    assertEquals(back.via?.name, "Project");
     assert(here.at(-1)!.from === "north", "it answered after");
     assertEquals(here.at(-1)!.to, ["ana"]);
     // Bob never sees the chat it came from.

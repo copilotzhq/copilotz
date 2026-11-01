@@ -154,10 +154,10 @@ space.
 - **Browsers** sign in with Google once: a sign-in Action verifies the person, creates a session and
   sets it as an httpOnly, Secure cookie, which the connection presents. Sign-in methods are plugins;
   the runtime knows sessions.
-- **What a browser may do:** read and write directly under the rules (a message's `from` pinned to
-  the person), watch queries, call Actions for what rules can't express (several documents kept
-  consistent, side effects, secrets). It can't hold a transaction open: batches commit in one
-  request. It never receives secret fields.
+- **What a browser may do:** read directly under the rules, watch queries, and call Actions for
+  everything it changes (a message's `from` pinned to the person), including what rules can't
+  express (several documents kept consistent, side effects, secrets). It can't hold a transaction
+  open: batches commit in one request. It never receives secret fields.
 
 ## Built (2026-10-28)
 

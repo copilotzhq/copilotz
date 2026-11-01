@@ -71,7 +71,7 @@ export const answer = async (
   text: string,
   how: { failed?: boolean; stopped?: boolean; told?: Told[] } = {},
   /** The turn's thread, when it has it already. */
-  known?: Pick<Thread, "in" | "title">,
+  known?: Pick<Thread, "in">,
 ) => {
   const messages = ctx.db.collection<Message>("message");
   const [trigger, thread] = await Promise.all([
@@ -107,7 +107,7 @@ export const answer = async (
       to: [trigger!.from],
       via: {
         kind: "delegated",
-        name: (thread?.title ?? "Another space").slice(0, 120),
+        name: (back.from ?? "Another space").slice(0, 120),
         path: `/thread/${encodeURIComponent(t.thread)}${
           thread?.in ? `?in=${encodeURIComponent(thread.in)}` : ""
         }`,

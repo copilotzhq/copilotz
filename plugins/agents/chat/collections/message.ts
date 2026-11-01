@@ -84,7 +84,7 @@ const messageSchema = {
      */
     back: {
       type: "object",
-      properties: { thread: { type: "string" }, in: { type: "string" } },
+      properties: { thread: { type: "string" }, in: { type: "string" }, from: { type: "string" } },
       required: ["thread"],
     },
     /** A step's model state (its thinking), sent back to that model while its turn goes on. */

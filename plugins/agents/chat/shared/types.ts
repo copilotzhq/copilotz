@@ -54,6 +54,9 @@ export type Offer =
   | ((agent: string, thread: Thread, ctx: ViewContext) => boolean);
 
 /** What a tool's code reaches: the runtime, and whose turn it runs in. */
+/** A message's `via` when it's handed from one space to another, either way. */
+export const DELEGATED = "delegated";
+
 export type ToolContext = Context & {
   /** The agent calling it, the thread it works in, and the message it answers. */
   agent: string;

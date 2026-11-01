@@ -2,7 +2,7 @@ import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { LlmFile, LlmMessage, LlmState } from "../../../models/contract.ts";
 import { type File, text, textual } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
-import type { Step, Told } from "../shared/types.ts";
+import { DELEGATED, type Step, type Told } from "../shared/types.ts";
 import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
 
 /** How much of a text file an agent is sent. */
@@ -45,12 +45,14 @@ function attached(m: Message, ctx: ViewContext): { text: string; files: LlmFile[
 
 /**
  * A message as the viewing agent sees it: its own as its turns (after what it
- * was told then), others' as labelled input.
+ * was told then), others' as labelled input. So is what it handed between
+ * spaces itself: that was other work, in another chat, not this turn's.
  */
 
 export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
   const me = ctx.viewer?.name;
-  if (m.from !== me) {
+  const handed = m.via?.kind === DELEGATED;
+  if (m.from !== me || handed) {
     // People by name (an agent's own name is as it is).
     const names = namesIn(ctx, [m.from, ...m.to]);
     const to = !me || m.to.includes(me) || !m.to.length
@@ -61,7 +63,7 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
     const via = m.via ? ` (via ${m.via.kind} "${m.via.name}")` : "";
     return [{
       role: "user",
-      text: `${nameOf(m.from, names)}${via}${to}: ${m.text ?? ""}${notes}`,
+      text: `${m.from === me ? "You" : nameOf(m.from, names)}${via}${to}: ${m.text ?? ""}${notes}`,
       ...(files.length ? { files } : {}),
     }];
   }

@@ -33,6 +33,7 @@ import { Transcript } from "./transcript.tsx";
 import { waitingOn } from "./waiting.ts";
 import { byAgent, names } from "./who.ts";
 import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
+import { DELEGATED } from "../../shared/types.ts";
 
 /** Messages this close after the one before, from the same author, go under its name. */
 const GROUP_MS = 5 * 60_000;
@@ -146,8 +147,10 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
           const before = said[i - 1];
           // Yours, while an agent it's to finishes an earlier one: it waits its turn.
           const queued = m.from === me && !byAgent(m) ? waitingOn(m, live, said) : [];
+          // What's handed between spaces stands apart, or an agent's hand-off and answer read as one.
           const follows = !!before && before.from === m.from && before.thread === m.thread &&
-            !before.failed && Date.parse(m.at) - Date.parse(before.at) < GROUP_MS;
+            !before.failed && before.via?.kind !== DELEGATED && m.via?.kind !== DELEGATED &&
+            Date.parse(m.at) - Date.parse(before.at) < GROUP_MS;
           return ctx.show("message", m, {
             thread: t._id,
             who: shown,

@@ -1,3 +1,14 @@
+## 1.0.0-rc.12 — 2026-11-01
+
+- **An agent can hand work to itself in another space.** "Itself" now means the same agent in the
+  same chat: North in Personal and North in Project management are two pieces of work. Whoever a
+  space says answers takes what's handed there, even the agent that sent it, instead of being
+  skipped for someone else, so a space where only that agent answers can receive work too. It reads
+  what it handed over, and the answer back, as input (`You (via delegated "Solo"): …`), not as
+  something it said.
+- **Delegated messages name the other space:** "Delegated: Personal" there, "Delegated: Project
+  management" back, with an icon of their own.
+
 ## 1.0.0-rc.11 — 2026-10-31
 
 - **A routine can run with nobody watching.** What its agent needs a yes for can now be allowed for

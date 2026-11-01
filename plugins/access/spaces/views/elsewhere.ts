@@ -36,10 +36,7 @@ export const elsewhereView = (thread: { in?: string }, ctx: ViewContext<string>)
   const others = spaces.filter((s) => !near.has(s._id) && !s.archived)
     .sort((a, b) => Number(b.kind === "personal") - Number(a.kind === "personal"));
   const hands = (agent[name]?.tools ?? []).includes(SEND)
-    ? handoffs.flatMap((s) => {
-      const there = s.agents.filter((a) => a !== name);
-      return s._id !== thread.in && there.length ? [{ ...s, agents: there }] : [];
-    })
+    ? handoffs.filter((s) => s._id !== thread.in && s.agents.length)
     : [];
   if (!others.length && !hands.length) return undefined;
   // People by name.
@@ -65,7 +62,7 @@ export const elsewhereView = (thread: { in?: string }, ctx: ViewContext<string>)
         `to their team:`,
         ...hands.slice(0, LISTED).map((s) =>
           `- ${s.kind === "personal" ? "Personal" : s.name} [space: ${s._id}]: ${
-            s.agents.join(", ")
+            s.agents.map((a) => a === name ? `${a} (you, working there)` : a).join(", ")
           }`
         ),
       ]

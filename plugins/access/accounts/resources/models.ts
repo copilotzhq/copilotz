@@ -25,6 +25,8 @@ export const accountHeaders =
   };
 
 export const chatgptModels: Provider = {
+  title: "ChatGPT plan",
+  note: "Runs on the plan of whoever asks: each person connects their own.",
   adapter: "openai",
   catalog: "openai",
   baseURL: "https://chatgpt.com/backend-api/codex",

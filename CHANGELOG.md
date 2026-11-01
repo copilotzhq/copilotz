@@ -1,5 +1,14 @@
 ## 1.0.0-rc.13 — 2026-11-01
 
+- **Choose an agent's model from the catalog, with your own key.** The agent editor searches every
+  provider and model in the models.dev catalog an agent can work with (`models.offered`): those with
+  a protocol we speak and an address of their own. An org's owners and admins add a key for a
+  provider right there (`modelKey.set`): it's sealed, shows only its end, and its agents' calls to
+  that provider use it, over the app's. Those uses are tagged `paid: "own-key"`. The catalog now
+  keeps names, release dates, and which models can't call tools or answer in text.
+- **Secrets stay out of the log.** `env.set` and `apps.configure` recorded their input, so a space's
+  or an app's secret was kept in plain text in its `action.started` event, sealed field or not. Both
+  are unrecorded now. Secrets set before this remain in events already written: rotate them.
 - **Agents manage cloud computers.** `list_computers`, `create_computer` and `manage_computer` (add,
   remove, rename, default, destroy) work in the conversation's space, as the person the agent works
   for, through the same Actions and rules a person has. Nothing asks first except destroying, which

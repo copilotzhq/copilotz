@@ -1,12 +1,59 @@
 /**
  * Agents' layout on the web, on the theme's variables: adding one to a
  * space (those someone knows, and making one), the form an agent is made
- * and changed with (its emoji, its instructions being written, its tools),
+ * and changed with (its emoji, its instructions being written, its model, its tools),
  * what making one says after, and an agent's page (where it works, what
  * it's told, what it uses, changing and deleting it). Only layout: the
  * pieces are the toolkit's.
  */
 export const STYLE = `
+/* Choosing a model */
+.model-chosen { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px;
+  padding: 8px 12px; border: 1px solid var(--input); border-radius: var(--radius-md);
+  background: var(--background); color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: border-color .15s, background-color .15s; }
+.model-chosen:hover:not(:disabled) { background: var(--accent); }
+.model-chosen:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.model-chosen:disabled { opacity: .6; cursor: default; }
+.model-chosen > .copilotz-icon { flex: none; color: var(--muted-foreground); }
+.model-chosen-text, .model-row-text { display: grid; flex: 1; min-width: 0; gap: 1px; }
+.model-chosen-text b, .model-row-text b { overflow: hidden; font-size: 14px; font-weight: 580;
+  text-overflow: ellipsis; white-space: nowrap; }
+.model-chosen-text span, .model-row-text span { overflow: hidden; color: var(--muted-foreground);
+  font-size: 12.5px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.model-dialog .copilotz-dialog-body { display: flex; min-height: min(560px, calc(100dvh - 130px)); }
+.model-choose { display: flex; flex: 1; flex-direction: column; gap: 12px; min-width: 0; }
+.model-groups { display: grid; gap: 16px; }
+.model-group { margin: 0 0 6px; color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
+.model-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.model-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px;
+  padding: 7px 10px; border: 0; border-radius: var(--radius-md); background: transparent;
+  color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.model-row:hover:not(:disabled) { background: var(--accent); }
+.model-row:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.model-row:disabled { opacity: .55; cursor: not-allowed; }
+.model-row[aria-current] { background: var(--primary-soft); }
+.model-row > .copilotz-icon { flex: none; color: var(--muted-foreground); }
+.model-row[aria-current] > .copilotz-icon { color: var(--primary); }
+.model-row .model-row-text span { white-space: normal; }
+.model-none { margin: 24px 0; color: var(--muted-foreground); font-size: 14px; text-align: center; }
+.model-provider-head { display: flex; align-items: center; gap: 8px; margin-left: -6px; }
+.model-provider-head h3 { margin: 0; overflow-wrap: anywhere; font-size: 15px; font-weight: 600; }
+.model-provider-note { margin: -6px 0 0; color: var(--muted-foreground); font-size: 13px; }
+.model-key { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--card); }
+.model-key label { font-size: 13.5px; font-weight: 600; }
+.model-key p { margin: 0; color: var(--muted-foreground); font-size: 12.5px; line-height: 1.45; }
+.model-key-entry { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-key-entry > .copilotz-input { flex: 1 1 180px; min-width: 0; }
+.model-key p.model-key-error, .model-key-error { margin: 0; color: var(--destructive-text, var(--destructive));
+  font-size: 13px; }
+.model-key-kept { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 4px 10px; padding: 6px 6px 6px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--card); font-size: 13px; }
+.model-key-actions { display: flex; }
+.model-key-kept .model-key-error { flex-basis: 100%; }
+
 /* Adding an agent to a space */
 .agent-add { container: agent-add / inline-size; display: grid; gap: 14px; }
 .agent-known { display: grid; gap: 12px; }

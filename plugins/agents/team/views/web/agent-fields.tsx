@@ -16,12 +16,12 @@ import {
   Icon,
   Input,
   message,
-  Select,
   Skeleton,
   Spinner,
   Textarea,
 } from "../../../../../hosts/web/mod.ts";
 import { ICONS, type Options } from "./agents.ts";
+import { ModelPicker } from "./model-picker.tsx";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -151,17 +151,13 @@ export function AgentFields(
       <Instructions value={value} onChange={onChange} call={call} disabled={disabled} />
       <Field label="Model" hint="What it thinks with.">
         {(control) => (
-          <Select
-            {...control}
+          <ModelPicker
+            id={control.id}
             value={value.model}
+            call={call}
             disabled={disabled}
-            onChange={(event) => onChange({ model: event.target.value })}
-          >
-            {(options.models.includes(value.model) || !value.model
-              ? options.models
-              : [value.model, ...options.models]).map((m) => <option key={m} value={m}>{m}
-              </option>)}
-          </Select>
+            onChange={(model) => onChange({ model })}
+          />
         )}
       </Field>
       <Tools value={value.tools} onChange={(tools) => onChange({ tools })} options={options} />

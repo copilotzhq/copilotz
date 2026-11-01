@@ -10,6 +10,9 @@
  * - `transcription.transcribe` { model, audio (base64), type, filename?, tags? } → Transcript
  * - `models.check` { model, port: "llm" | "embeddings" | "transcription" }: throws what's wrong
  * - `models.price` { catalog } → Price
+ * - `models.offered` { provider?, search?, model? }: what an agent can be given
+ * - `models.keyable` { provider } → boolean: whether a key can be brought for it
+ * - the `modelKeys` resource: where orgs' own keys are kept (ModelKeys)
  * - the `modelUse` resource: UseListener entries, told each call's use in the job that made it
  */
 import type { Cost } from "./shared/choice.ts";
@@ -17,6 +20,7 @@ import type { Cost } from "./shared/choice.ts";
 export type {
   Cost,
   Media,
+  ModelKeys,
   ModelRef,
   ModelSettings,
   Prices,
@@ -24,6 +28,7 @@ export type {
   Resolved,
 } from "./shared/choice.ts";
 export type { Caller } from "./shared/provider.ts";
+export type { OfferedModel, OfferedProvider } from "./actions/offered.ts";
 export type { Completion, Generate } from "./shared/generate.ts";
 export type { Embedding } from "./shared/embed.ts";
 export type { Transcript } from "./shared/transcribe.ts";

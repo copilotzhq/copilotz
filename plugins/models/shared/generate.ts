@@ -1,9 +1,11 @@
 /** Calling a model: the model choice resolved, fallbacks, state, and its use told. */
 import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
-import { invalid } from "../../../runtime/mod.ts";
+import { failure, invalid } from "../../../runtime/mod.ts";
 import {
   adapterFor,
+  keyable,
   type Media,
+  type ModelKeys,
   type ModelRef,
   type Provider,
   resolve,
@@ -31,6 +33,7 @@ import {
  * provider's `headers` hear it), and (to meter it) where to record.
  */
 type Reach = Pick<Context, "resources" | "adapters" | "signal"> & {
+  as?: Context["as"];
   actor?: Actor;
   call?: ReadContext["call"];
   record?: Context["record"];
@@ -107,6 +110,28 @@ const stateFor = (id: string, same: "provider" | "model") => (message: LlmMessag
 const refused = (error: unknown) => (error as { status?: number }).status === 400;
 
 /**
+ * A model with its org's own key for its provider, which goes before the
+ * app's. A provider only an org's key reaches, without one, is told so.
+ */
+async function keyed(ctx: Reach, m: Resolved): Promise<Resolved> {
+  const keys = ctx.resources.modelKeys as ModelKeys | undefined;
+  if (!keys || !keyable(m.provider)) return m;
+  // From a read there's no system to ask as, and so no key: only the app's.
+  const key = ctx.as
+    ? await ctx.as().call<string | null>(keys.open, { provider: m.provider })
+    : null;
+  if (key) {
+    return {
+      ...m,
+      endpoint: { ...m.endpoint, apiKey: key },
+      tags: { ...m.tags, paid: "own-key" },
+    };
+  }
+  if (m.endpoint.apiKey || m.endpoint.headers) return m;
+  throw failure("key_missing", `There's no key for ${m.provider}: this org's admins can add one.`);
+}
+
+/**
  * Streams a model's answer: text, tool calls, state and usage, as they come.
  * A call that breaks (the network, nothing coming for the provider's
  * `silence`, a provider timing out or busy) is tried again, longer waits
@@ -118,7 +143,15 @@ const refused = (error: unknown) => (error as { status?: number }).status === 40
  */
 export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<LlmChunk> {
   const choices = chooseModels(ctx, request.model);
-  for (const [i, m] of choices.entries()) {
+  for (const [i, choice] of choices.entries()) {
+    let m: Resolved;
+    try {
+      m = await keyed(ctx, choice);
+    } catch (error) {
+      // No key for this one: the next, if there is one.
+      if (i === choices.length - 1) throw error;
+      continue;
+    }
     const adapter = adapterFor<LlmAdapter>(ctx.adapters, "llm", m);
     const { effort, maxTokens, temperature, options } = m.settings as LlmSettings;
     // What this model reads besides text, that its adapter can send.

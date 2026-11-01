@@ -111,6 +111,12 @@ function input(model: Raw) {
   return kinds.length ? kinds : undefined;
 }
 
+/** Whether a model answers in something other than text (an embedder, an image model). */
+function chatless(model: Raw) {
+  const output = object(model.modalities)?.output;
+  return Array.isArray(output) && !output.includes("text");
+}
+
 const response = await fetch(SOURCE);
 if (!response.ok) throw new Error(`${SOURCE}: ${response.status}`);
 const raw = object(await response.json());
@@ -128,6 +134,12 @@ for (const [id, value] of Object.entries(raw).sort(([a], [b]) => a.localeCompare
     const limit = object(model.limit);
     const own = object(model.provider);
     const entry = compact({
+      name: typeof model.name === "string" ? model.name : undefined,
+      released: typeof model.release_date === "string" ? model.release_date : undefined,
+      // Only what an agent couldn't work with is said: no tools, or nothing to read back.
+      tools: model.tool_call === false ? false : undefined,
+      chat: chatless(model) ? false : undefined,
+      deprecated: model.status === "deprecated" ? true : undefined,
       protocol: (own && (SHAPES[own.shape as string] ?? PROTOCOLS[own.npm as string])) ||
         undefined,
       api: url(own?.api),
@@ -140,6 +152,7 @@ for (const [id, value] of Object.entries(raw).sort(([a], [b]) => a.localeCompare
     if (Object.keys(entry).length) models[name] = entry;
   }
   providers[id] = compact({
+    name: typeof provider.name === "string" ? provider.name : undefined,
     protocol: PROTOCOLS[npm],
     api: url(provider.api) ?? URLS[id],
     models,

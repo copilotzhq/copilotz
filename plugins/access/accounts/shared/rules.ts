@@ -12,6 +12,6 @@ const NOBODY = { _id: { $in: [] } };
 export const rules: Guard = (actor, { collection }) =>
   collection === "account"
     ? actor.kind === "person" ? { person: actor.id } : NOBODY
-    : collection === "accountFlow"
+    : collection === "accountFlow" || collection === "modelKey"
     ? NOBODY
     : undefined;

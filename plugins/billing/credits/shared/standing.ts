@@ -10,7 +10,7 @@ import type { Context } from "../../../../runtime/mod.ts";
 import type { Credit } from "../collections/credit.ts";
 import type { Plan } from "../collections/plan.ts";
 import type { Room } from "../collections/room.ts";
-import { settingsOf } from "./settings.ts";
+import { type PlanTerms, settingsOf } from "./settings.ts";
 import { monthOf, periodOf, walk, type Walked } from "./walk.ts";
 
 /** What stands for "no limit" in `room`: taking prices off it never gets near zero. */
@@ -26,21 +26,29 @@ export const rooms = (ctx: Context) => ctx.as().db.collection<Room>("billingRoom
 export const planOf = (ctx: Context) => plans(ctx).findOne({ _id: PLAN });
 
 /**
- * The org's plan, started on the app's first one the first time it's needed. A
- * trial is one a person: the personal org they get once. A team's starts without.
+ * A plan's terms for this org. A trial is one a person: the personal org they
+ * get once. A team's starts without it, and doesn't gain it by falling back.
+ */
+export function termsFor(ctx: Context, name: string): PlanTerms | undefined {
+  const terms = settingsOf(ctx).plans[name];
+  const team = (ctx.resources.org as { kind?: string } | undefined)?.kind === "team";
+  if (!terms?.credits?.once || !team) return terms;
+  const { once: _once, ...credits } = terms.credits;
+  return { ...terms, credits };
+}
+
+/**
+ * The org's plan, started on the app's first one the first time it's needed.
  * While limits are off, its clock doesn't start (`counting`).
  */
 export async function ensurePlan(ctx: Context, now: string): Promise<Plan> {
   const had = await planOf(ctx);
   if (had) return had;
   const set = settingsOf(ctx);
-  const first = set.plans[set.start] ?? { title: set.start };
-  const team = (ctx.resources.org as { kind?: string } | undefined)?.kind === "team";
-  const { once: _once, ...kept } = first.credits ?? {};
   const plan = {
     _id: PLAN,
     name: set.start,
-    terms: team && first.credits ? { ...first, credits: kept } : first,
+    terms: termsFor(ctx, set.start) ?? { title: set.start },
     since: now,
     anchor: now,
     channel: "manual",

@@ -13,7 +13,7 @@ import type { Credit } from "../collections/credit.ts";
 import type { Payment } from "../collections/payment.ts";
 import type { Plan } from "../collections/plan.ts";
 import { settingsOf } from "./settings.ts";
-import { ensurePlan, forget } from "./standing.ts";
+import { ensurePlan, forget, termsFor } from "./standing.ts";
 
 const round = (usd: number) => Math.round(usd * 1e8) / 1e8;
 
@@ -94,7 +94,7 @@ export async function changePlan(ctx: Context, fact: PlanFact): Promise<void> {
     return;
   }
   const stale = !!fact.at && !!plan.statusAt && fact.at < plan.statusAt && !fact.ended;
-  const named = fact.name ? settingsOf(ctx).plans[fact.name] : undefined;
+  const named = fact.name ? termsFor(ctx, fact.name) : undefined;
   const terms = fact.terms ?? named;
   if (fact.name && !terms) throw invalid(`There's no plan "${fact.name}".`);
   const moved = !!fact.name && fact.name !== plan.name;

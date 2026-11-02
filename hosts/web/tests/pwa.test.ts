@@ -163,5 +163,7 @@ test("the browser's orgs: a server with many answers them; one with one org, non
   assertEquals(currentOrg(orgs)?.id, "o-1");
   assertEquals(orgName(orgs.orgs[0]), "Personal");
   assertEquals(asStaff(orgs), false);
-  assertEquals(asStaff({ ...orgs, staff: true, current: "o-9" }), true);
+  // Staff in an org of their own are its people, until they go in as staff.
+  assertEquals(asStaff({ ...orgs, staff: true }), false);
+  assertEquals(asStaff({ ...orgs, staff: true, asStaff: true }), true);
 });

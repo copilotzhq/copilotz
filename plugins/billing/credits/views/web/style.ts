@@ -32,7 +32,7 @@ export const STYLE = `
 .billing-worth { margin: 8px 0 0; color: var(--muted-foreground); font-size: 12.5px; line-height: 1.45; }
 .billing-buckets { display: grid; gap: 10px; min-width: 0; }
 .billing-buckets h4 { font-size: 12.5px; }
-.billing-stack { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; }
+.billing-stack { display: flex; gap: 2px; height: 8px; border-radius: var(--radius-sm); overflow: hidden; }
 .billing-stack > span { flex-basis: 0; min-width: 3px; }
 [data-colour="1"] { background: var(--chart-1, var(--primary)); }
 [data-colour="2"] { background: var(--chart-2, var(--primary)); }
@@ -43,7 +43,7 @@ export const STYLE = `
 .billing-bucket-list li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: baseline; gap: 10px;
   padding: 5px 0; }
 .billing-bucket-list li + li { border-top: 1px solid var(--border); }
-.billing-bucket-list i { align-self: center; width: 10px; height: 10px; border-radius: 3px; }
+.billing-bucket-list i { align-self: center; width: 10px; height: 10px; border-radius: var(--radius-sm); }
 .billing-bucket-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; font-size: 14px; font-weight: 580; }
 .billing-bucket-name small { color: var(--muted-foreground); font-size: 12.5px; font-weight: 450; }
 .billing-bucket-left { display: inline-flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-end; gap: 0 6px;
@@ -78,7 +78,7 @@ export const STYLE = `
   font-variant-numeric: tabular-nums; transition: background-color .12s, border-color .12s, box-shadow .12s; }
 .billing-choice:hover { background: var(--muted); }
 .billing-choice[data-on] { border-color: var(--ring); background: var(--primary-soft); color: var(--primary-text);
-  box-shadow: inset 0 0 0 1px var(--ring); }
+  outline: 1px solid var(--ring); outline-offset: -2px; }
 .billing-choice input { position: absolute; inset: 0; margin: 0; appearance: none; border-radius: inherit; cursor: inherit; outline: none; }
 .billing-choice input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .billing-choice:has(input:disabled) { opacity: .6; cursor: default; }
@@ -104,9 +104,9 @@ export const STYLE = `
 /* The month's budget */
 .billing-spent { margin: -4px 0 0; color: var(--muted-foreground); font-size: 15px; font-variant-numeric: tabular-nums; }
 .billing-spent b { color: var(--foreground); font-family: var(--font-display); font-size: 22px; font-weight: 660; letter-spacing: -.015em; }
-.billing-meter { height: 8px; border-radius: 4px; overflow: hidden;
+.billing-meter { height: 8px; border-radius: var(--radius-sm); overflow: hidden;
   background: color-mix(in oklab, var(--chart-1, var(--primary)) 14%, transparent); }
-.billing-meter > span { display: block; height: 100%; border-radius: 4px; background: var(--chart-1, var(--primary));
+.billing-meter > span { display: block; height: 100%; border-radius: var(--radius-sm); background: var(--chart-1, var(--primary));
   transition: width .3s ease-out; }
 .billing-meter[data-tone=near] { background: color-mix(in oklab, var(--warning) 20%, transparent); }
 .billing-meter[data-tone=near] > span { background: var(--warning); }

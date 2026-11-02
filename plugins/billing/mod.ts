@@ -11,4 +11,5 @@ import credits from "./credits/mod.ts";
 export * from "./usage/mod.ts";
 export * from "./credits/mod.ts";
 export { stripe, stripeWebhook } from "./stripe/mod.ts";
+export type { Seller, StripeSettings } from "./stripe/mod.ts";
 export { credits, usage };

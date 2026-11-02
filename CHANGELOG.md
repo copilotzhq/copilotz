@@ -1,3 +1,12 @@
+## 1.0.0-rc.14
+
+- **Credits** (`plugins/billing/credits`): what an org can spend. Plans, credits and payments are its own rows, the balance is walked from them and the ledger, and one check stops model calls, computers and builds at the limit, in plain words. Staff set plans, give credits, waive usage or seats, and record payments; gift codes wait in the directory.
+- **Stripe** (`plugins/billing/stripe`): Checkout, the customer portal and signed webhooks, for one or more accounts. A subscription's credits come with its paid invoice.
+- **Prices:** a use on an org's own key costs nothing; a plan can name a price list; `usage.quotes`; the model picker shows the org's real price.
+- **Removed:** the cloud plugin's `create` and `budgetUsd` settings. Anyone in an org but its guests makes a computer; what the org can spend keeps the cost.
+- **Fixed:** model use listeners are awaited, so a late record isn't lost; a VM's seconds stop at its lease, so an org closed for days isn't charged for a VM long gone.
+- `composerNotes`, a note above the composer from another front end.
+
 ## 1.0.0-rc.13 — 2026-11-01
 
 - **Choose an agent's model from the catalog, with your own key.** The agent editor searches every

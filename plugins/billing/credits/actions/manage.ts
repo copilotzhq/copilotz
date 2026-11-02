@@ -261,6 +261,13 @@ export const applyAction = defineAction({
   },
 });
 
+export const planAction = defineAction({
+  description: "The org's plan, started if it hasn't one",
+  record: false,
+  input: { type: "object", additionalProperties: false },
+  run: (ctx) => ensurePlan(ctx, new Date().toISOString()),
+});
+
 export const settleAction = defineAction({
   description: "Writes what's come due: the trial, this period's credits, a waiver that ended",
   input: { type: "object", additionalProperties: false },

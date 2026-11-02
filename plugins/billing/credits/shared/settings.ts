@@ -24,6 +24,12 @@ export type CreditsSettings = {
   warnAt: number;
   /** What's never stopped, by a call's `purpose`: the app's own upkeep, which follows turns. */
   free: string[];
+  /** Amounts offered for buying credits (USD), and the least and most. */
+  topUps: number[];
+  topUpMin: number;
+  topUpMax: number;
+  /** How an org pays, when something lets it (the Actions `stripe` names). */
+  pay?: { checkout: string; portal: string };
 };
 
 export const DEFAULTS: CreditsSettings = {
@@ -32,6 +38,9 @@ export const DEFAULTS: CreditsSettings = {
   start: "free",
   warnAt: 0.8,
   free: ["history", "memory"],
+  topUps: [10, 25, 50, 100],
+  topUpMin: 5,
+  topUpMax: 2000,
 };
 
 export const settingsOf = (ctx: { resources: Resources }): CreditsSettings => ({

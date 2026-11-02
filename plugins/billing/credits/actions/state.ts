@@ -73,6 +73,22 @@ export const stateAction = defineAction({
       month: s.month,
       history: s.history.slice(0, 100),
       payments,
+      pay: set.pay
+        ? {
+          topUps: set.topUps,
+          min: set.topUpMin,
+          max: set.topUpMax,
+          // The plans an org can move to by itself: those a seat's price is known for.
+          plans: Object.entries(set.plans).filter(([, terms]) => terms.seat)
+            .map(([name, terms]) => ({
+              name,
+              title: terms.title,
+              seat: terms.seat,
+              credits: terms.credits,
+            })),
+          manage: !!s.plan?.customer,
+        }
+        : null,
       ...(staff ? { plans: set.plans } : {}),
     };
   },

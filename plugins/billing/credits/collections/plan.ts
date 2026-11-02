@@ -53,8 +53,9 @@ export const planSchema = {
     since: { type: "string" },
     /** Where its periods start: the same day each month. */
     anchor: { type: "string" },
-    /** Who collects for it (`manual`, `stripe`…), and what it's called there. */
+    /** Who collects for it (`manual`, `stripe`…), which of its accounts, and what it's called there. */
     channel: { type: "string" },
+    seller: { type: "string" },
     customer: { type: "string" },
     subscription: { type: "string" },
     /** How its payments stand, as its channel last said: `active`, `past_due`, `canceled`. */

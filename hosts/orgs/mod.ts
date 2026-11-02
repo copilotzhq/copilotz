@@ -26,7 +26,9 @@
  *   `{ suspended?, name? }`; `POST …/<id>/move` `{ schema }` (its rows to
  *   another schema); `GET …/<id>/export` (its rows, as SQL); `POST
  *   …/<id>/delete` `{ confirm: <its name> }`. The app does the rows'
- *   part (`operations`). Staff enter any org with `/orgs/enter`.
+ *   part (`operations`). Staff enter any org with `/orgs/enter`. Gift codes:
+ *   `GET /console/codes`; `POST /console/codes` `{ amount, expires?, until?,
+ *   note? }` (the code, shown this once); `POST /console/codes/revoke` `{ id }`.
  * - Hosts orgs claimed (`claimHost` in an org's `directory` resource: a
  *   preview's `<id>-preview.copilotz.app`, an app's): with the app's own
  *   hosts named (`hosts`), a request to any other host is the org's that
@@ -236,6 +238,12 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
             });
             claims.delete(name);
           },
+          /** A gift code's credits, for this org. */
+          claimCode: (code: string, person: string) =>
+            directory.call<{ id: string; amount: number; expires?: string; note?: string }>(
+              "code.claim",
+              { code, org: org.id, person },
+            ),
           /** The host is no longer the org's. */
           releaseHost: async (host: string) => {
             const name = plainHost(host);
@@ -656,6 +664,27 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
         case "GET /console/orgs": {
           if (!await staffOnly(request)) return json({ error: "Staff only" }, { status: 403 });
           return json(await directory.call("org.list", {}));
+        }
+        case "GET /console/codes": {
+          if (!await staffOnly(request)) return json({ error: "Staff only" }, { status: 403 });
+          return json(await directory.call("code.list", {}));
+        }
+        case "POST /console/codes": {
+          const who = await staffOnly(request);
+          if (!who) return json({ error: "Staff only" }, { status: 403 });
+          const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+          return await directory.call("code.create", { ...body, by: who.person }).then(
+            (made) => json(made),
+            (error) => json({ error: (error as Error).message }, { status: 400 }),
+          );
+        }
+        case "POST /console/codes/revoke": {
+          if (!await staffOnly(request)) return json({ error: "Staff only" }, { status: 403 });
+          const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+          return await directory.call("code.revoke", { id: body.id }).then(
+            () => json({}),
+            (error) => json({ error: (error as Error).message }, { status: 400 }),
+          );
         }
       }
       if (url.pathname.startsWith("/console/orgs/")) {

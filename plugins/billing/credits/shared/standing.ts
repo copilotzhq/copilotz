@@ -98,7 +98,9 @@ export async function settle(ctx: Context, now: string): Promise<Plan> {
   if (terms?.once) {
     await grant({ _id: "trial", kind: "trial", amount: terms.once, note: plan.terms.title });
   }
-  if (terms?.monthly || terms?.perSeat) {
+  // A subscription that isn't being paid gets no new period's credits.
+  const paying = !plan.status || plan.status === "active" || plan.status === "trialing";
+  if (paying && (terms?.monthly || terms?.perSeat)) {
     const period = periodOf(plan.anchor, now);
     const id = `plan:${plan.name}:${period.start}`;
     if (!kept.has(id)) {

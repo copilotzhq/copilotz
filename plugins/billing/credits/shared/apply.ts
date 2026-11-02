@@ -52,8 +52,10 @@ export type PlanFact = {
   terms?: Plan["terms"];
   seats?: number | null;
   channel?: string;
+  seller?: string;
   customer?: string;
-  subscription?: string;
+  /** Null: it has none now. */
+  subscription?: string | null;
   status?: string;
   /** Where its periods start (now, when its plan changes). */
   anchor?: string;
@@ -72,13 +74,21 @@ export async function changePlan(ctx: Context, fact: PlanFact): Promise<void> {
       ...(fact.name ? { name: fact.name } : {}),
       ...(terms ? { terms } : {}),
       ...(fact.channel ? { channel: fact.channel } : {}),
+      ...(fact.seller ? { seller: fact.seller } : {}),
       ...(fact.customer ? { customer: fact.customer } : {}),
       ...(fact.subscription ? { subscription: fact.subscription } : {}),
       ...(fact.status ? { status: fact.status } : {}),
       ...(typeof fact.seats === "number" ? { seats: fact.seats } : {}),
       ...(fact.anchor || moved ? { anchor: fact.anchor ?? now } : {}),
     },
-    ...(fact.seats === null ? { $unset: { seats: "" } } : {}),
+    ...(fact.seats === null || fact.subscription === null
+      ? {
+        $unset: {
+          ...(fact.seats === null ? { seats: "" } : {}),
+          ...(fact.subscription === null ? { subscription: "" } : {}),
+        },
+      }
+      : {}),
   });
   await forget(ctx);
 }

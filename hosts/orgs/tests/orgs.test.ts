@@ -157,6 +157,18 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     assertEquals(await standing(), { role: "owner", staff: false });
     await sam.send("POST", "/orgs/enter", { org: acme.id });
 
+    // Staff by the email they verified, as anyone signed in with Google is: their id isn't it.
+    const gia = browser(host.serve);
+    await gia.send("POST", "/signin/dev", { name: "gia-1234" });
+    assertEquals((await (await gia.send("GET", "/orgs")).json()).staff, false);
+    assertEquals((await gia.send("GET", "/console/orgs")).status, 403);
+    await dir.call("person.set", { person: "gia-1234", email: "Sam@Example.com" });
+    assertEquals((await (await gia.send("GET", "/orgs")).json()).staff, true);
+    assertEquals((await gia.send("GET", "/console/orgs")).status, 200);
+    const gias = (await (await gia.send("GET", "/orgs")).json()).current as string;
+    assertEquals((await gia.send("POST", "/orgs/enter", { org: gias, staff: true })).status, 200);
+    assertEquals((await (await gia.send("GET", "/orgs")).json()).asStaff, true);
+
     // Only staff can ask to: a member can't, and someone else's org is still closed to them.
     assertEquals(
       (await ana.send("POST", "/orgs/enter", { org: acme.id, staff: true })).status,

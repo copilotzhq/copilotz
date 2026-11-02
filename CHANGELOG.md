@@ -1,3 +1,9 @@
+## 1.0.0-rc.16 — 2026-11-02
+
+- **Fixed:** staff by email weren't staff anywhere but going into an org. `org.mine` asked without
+  their email, so anyone signed in with Google, whose id isn't their email, had no console and no
+  "Enter as staff". It takes `email` now, and the orgs host passes the one they verified.
+
 ## 1.0.0-rc.15 — 2026-11-02
 
 - **Enter as staff, in your own org too.** Staff who belong to an org go in as one of its people, as

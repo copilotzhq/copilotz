@@ -61,10 +61,10 @@ export const createOrgAction = defineAction({
 });
 
 export const myOrgsAction = defineAction({
-  description: "The orgs someone belongs to, the one they were in last first",
+  description: "The orgs someone belongs to, the one they were in last first, and if they're staff",
   input: {
     type: "object",
-    properties: { person },
+    properties: { person, email: { type: "string" } },
     required: ["person"],
     additionalProperties: false,
   },
@@ -91,7 +91,7 @@ export const myOrgsAction = defineAction({
           (entered.get(b.id) ?? "").localeCompare(entered.get(a.id) ?? "") ||
           (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "personal" ? -1 : 1)
         ),
-      staff: await isStaff(ctx, input.person),
+      staff: await isStaff(ctx, input.person, input.email),
     };
   },
 });

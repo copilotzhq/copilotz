@@ -32,10 +32,8 @@ import {
 import { hostFor } from "../shared/host.ts";
 import { poolsOf, wantsOf } from "../shared/records.ts";
 import { samePlace } from "../shared/settings.ts";
-import { after, minutes, nowOf, poll } from "../shared/time.ts";
+import { after, LEASE_MS, nowOf, poll } from "../shared/time.ts";
 
-/** How long a VM given to a computer is its without a renewal. */
-export const LEASE_MS = minutes(10);
 /** How long a take waits for a VM when none was free. */
 export const VM_MS = 150_000;
 /**

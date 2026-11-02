@@ -549,6 +549,23 @@ test("a computer whose VM died is woken again on another, its disk detached by f
   });
 });
 
+test("a VM's seconds stop at its lease: an org closed for days isn't charged for a VM that was gone", async () => {
+  await setup(async (rt) => {
+    const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
+      size: "small",
+    }, { actor: ana });
+    await rt.call("cloud.wake", { computer: id });
+    const { woke } = await cloudOf(rt, id);
+    await rt.call("cloud.tick", { now: later(woke, 5 * MIN) });
+    // Nothing ticks for three days (the org closed), and its VM went with its lease long ago.
+    await rt.call("cloud.release", { computer: id, force: true, now: later(woke, 3 * 1440 * MIN) });
+    const seconds = (await recordsOf<UsageRecord>(rt, "usage"))
+      .filter((r) => r.subject === "cloud/small")
+      .reduce((sum, r) => sum + (r.quantities.seconds ?? 0), 0);
+    assertEquals(seconds, 15 * 60, "the 5 minutes ticked, and at most its lease after them");
+  });
+});
+
 test("a VM nobody renews goes once its lease runs out; one its computer uses is renewed", async () => {
   await setup(async (rt, world) => {
     const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {

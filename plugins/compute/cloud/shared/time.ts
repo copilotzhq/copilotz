@@ -7,6 +7,9 @@ export const nowOf = (ctx: Pick<Context, "scheduled">, given?: string): string =
 
 export const minutes = (n: number) => n * 60_000;
 
+/** How long a VM given to a computer is its without a renewal: past it, the pool deletes it. */
+export const LEASE_MS = minutes(10);
+
 /** Milliseconds from `a` to `b` (ISO times). */
 export const between = (a: string, b: string) => new Date(b).getTime() - new Date(a).getTime();
 

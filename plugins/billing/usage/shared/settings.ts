@@ -10,9 +10,19 @@ export type UsageSettings = {
    * { "usage.close": null }` turns rollups off.
    */
   rollups: Rollups;
+  /**
+   * Whoever keeps an org's plan: the Action naming its price list among
+   * `resources.priceLists` (none: `resources.price`). Answers its name or null.
+   */
+  priceList?: string;
+  /**
+   * The Action told what each use was charged (`{ price }`), before it's
+   * recorded, so what's left is known without reading the ledger.
+   */
+  spent?: string;
 };
 
-export const DEFAULTS: UsageSettings = {
+export const DEFAULTS: Pick<UsageSettings, "rollups"> = {
   rollups: { dimensions: ["tags.agent", "tags.purpose", "tags.person"], units: UNITS, recheck: 7 },
 };
 

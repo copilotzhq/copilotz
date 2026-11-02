@@ -24,6 +24,8 @@
  *   the rest from the records, with the same result.
  * - **Quotes** (`usage.quote`): what a use would be charged now, rated the
  *   same way and recorded nowhere, for showing prices before use.
+ * - **A use on an org's own key** (`paid: "own-key"`) costs the app nothing and
+ *   is charged nothing; what it used is kept all the same.
  * - **Re-rating** (`usage.rerate`) never changes a record: it appends
  *   adjustments for what new rates would change, so totals follow.
  * - **Across an org** (where the app serves many): `usage.org` (totals) and
@@ -46,7 +48,7 @@ import { usage } from "./collections/usage.ts";
 import { DEFAULTS, rollupsOf } from "./shared/settings.ts";
 import { recordAction } from "./actions/record.ts";
 import { orgUsageAction, usageCallsAction } from "./actions/org.ts";
-import { quoteAction } from "./actions/quote.ts";
+import { quoteAction, quotesAction } from "./actions/quote.ts";
 import { ledger } from "./resources/ledger.ts";
 
 export type { Use } from "./shared/use.ts";
@@ -76,6 +78,7 @@ export const usagePlugin: Plugin = definePlugin({
     "usage.org": orgUsageAction,
     "usage.calls": usageCallsAction,
     "usage.quote": quoteAction,
+    "usage.quotes": quotesAction,
   },
   schedules: { "usage.close": { cron: "10 0 * * *", call: "usage.close", input: {} } },
   check(merged) {

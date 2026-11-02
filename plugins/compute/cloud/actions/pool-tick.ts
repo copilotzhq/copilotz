@@ -20,8 +20,8 @@ import { defineAction } from "../../../../runtime/mod.ts";
 import { hostFor } from "../shared/host.ts";
 import { poolsOf, wantsOf } from "../shared/records.ts";
 import { type Floor, samePlace, settingsOf } from "../shared/settings.ts";
-import { after, hourIn, minutes, nowOf } from "../shared/time.ts";
-import { LEASE_MS, VM_MS } from "./vms.ts";
+import { after, hourIn, LEASE_MS, minutes, nowOf } from "../shared/time.ts";
+import { VM_MS } from "./vms.ts";
 
 const log = (what: string) => (error: unknown) =>
   console.error(`cloud pool: ${what}:`, error instanceof Error ? error.message : error);

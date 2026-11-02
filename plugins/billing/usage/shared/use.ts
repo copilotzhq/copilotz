@@ -52,6 +52,16 @@ export async function recordUse(ctx: UseContext, use: Use): Promise<void> {
   // Whose it was, so each person sees their own.
   const person = personOf(ctx.actor);
   const tags = { ...use.tags, ...(person ? { person } : {}) };
+  // Told first: a write of its own (in memory), and the record below still rides the job's next.
+  const spent = (ctx.resources.usage as { spent?: string } | undefined)?.spent;
+  if (spent && rated.price && ctx.call) {
+    await ctx.call(spent, { price: rated.price }).catch((error) =>
+      console.error(
+        "usage: telling what was spent:",
+        error instanceof Error ? error.message : error,
+      )
+    );
+  }
   ctx.record("usage", {
     meter: use.meter,
     subject: use.subject,

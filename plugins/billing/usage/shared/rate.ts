@@ -5,7 +5,9 @@
  * from `resources.price` (by subject, `provider/*`, `*`): rates of the app's
  * own, or a gross margin on the cost; with none, a use's price is its cost (a
  * margin of 0). Each is kept by part too (input, cached, cacheWrite, output,
- * reasoning, seconds…), and what caching saved.
+ * reasoning, seconds…), and what caching saved. An org's plan can name another
+ * price list (`resources.priceLists`). A use on the org's own key is the org's
+ * to pay its provider, so it costs the app nothing and is charged nothing.
  */
 import type { Context, ReadContext } from "../../../../runtime/mod.ts";
 import type { Cost, Prices } from "../../../models/contract.ts";
@@ -129,10 +131,30 @@ export type Rating = {
   unpriced?: string[];
 };
 
-/** Rates a use with the books in force at its time. */
-export async function rate(ctx: Books, use: Use & { at: string }): Promise<Rating> {
+/** The prices that apply here: the list the org's plan names, else the app's. */
+export async function chargesOf(ctx: Books): Promise<Record<string, unknown> | undefined> {
+  const lists = ctx.resources.priceLists as Record<string, Record<string, unknown>> | undefined;
+  const asking = (ctx.resources.usage as { priceList?: string } | undefined)?.priceList;
+  const name = lists && asking && ctx.call
+    ? await ctx.call<string | null>(asking, {}).catch(() => null)
+    : null;
+  return (name && lists?.[name]) || ctx.resources.price as Record<string, unknown> | undefined;
+}
+
+/**
+ * Rates a use with the books in force at its time. `charges`: the prices, when
+ * the caller has asked already (a batch of quotes).
+ */
+export async function rate(
+  ctx: Books,
+  use: Use & { at: string },
+  charges?: Record<string, unknown>,
+): Promise<Rating> {
+  if (use.tags?.paid === "own-key") {
+    return { cost: 0, price: 0, rated: { cost: "own-key", price: "own-key" } };
+  }
   const book = ctx.resources.cost as Record<string, unknown> | undefined;
-  const charges = ctx.resources.price as Record<string, unknown> | undefined;
+  charges ??= await chargesOf(ctx);
   let costRate: Rate | undefined;
   let costBy: string | undefined;
   const own = inForce(named<Rate>(book, use.subject), use.at);

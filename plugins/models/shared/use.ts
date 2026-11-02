@@ -37,11 +37,21 @@ export type UseContext = Pick<Context, "resources"> & {
 /** A `modelUse` resource: hears every model call's use. */
 export type UseListener = { used(ctx: UseContext, use: ModelUse): void | Promise<void> };
 
-/** Tells every `modelUse` listener about a use. Nobody listening: nothing happens. */
-export function used(ctx: UseContext, use: ModelUse): void {
-  for (
-    const listener of Object.values((ctx.resources.modelUse ?? {}) as Record<string, UseListener>)
-  ) {
-    listener.used(ctx, use);
-  }
+/**
+ * Tells every `modelUse` listener about a use, and waits for them: what one
+ * records has to go with the job that made the call, and a job's last write
+ * can be close behind. One that fails is logged; the call goes on.
+ */
+export async function used(ctx: UseContext, use: ModelUse): Promise<void> {
+  const listeners = Object.values((ctx.resources.modelUse ?? {}) as Record<string, UseListener>);
+  await Promise.all(listeners.map(async (listener) => {
+    try {
+      await listener.used(ctx, use);
+    } catch (error) {
+      console.error(
+        `models: a listener failed on ${use.subject}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }));
 }

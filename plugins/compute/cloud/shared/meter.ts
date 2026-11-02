@@ -9,7 +9,7 @@
 import type { Context } from "../../../../runtime/mod.ts";
 import { type CloudComputer, SUBJECTS } from "../contract.ts";
 import { recordsOf, still } from "./records.ts";
-import { after, between } from "./time.ts";
+import { after, between, LEASE_MS } from "./time.ts";
 
 export type CloudUse = {
   subject: string;
@@ -34,6 +34,9 @@ const tagsOf = (rec: CloudComputer) => ({ computer: rec._id, person: rec.owner }
 /**
  * A VM's whole seconds from its mark (`metered`, else when it woke) to `now`;
  * the mark moves by as much, so the part of a second left counts next time.
+ * Ticks come each minute while its org is open. A longer gap means they
+ * stopped (the org closed), and nobody renewed its VM's lease then, so it's
+ * counted to the lease's end at most, and the mark moves to `now`.
  * `state`: only while it's still so (awake, for a tick; releasing, for a release).
  */
 export async function meterVm(
@@ -44,11 +47,13 @@ export async function meterVm(
 ): Promise<void> {
   const from = rec.metered ?? rec.woke;
   if (!from) return;
-  const seconds = Math.floor(between(from, now) / 1000);
+  const gap = between(from, now);
+  const lapsed = gap > LEASE_MS;
+  const seconds = Math.floor((lapsed ? LEASE_MS : gap) / 1000);
   if (seconds <= 0) return;
   const { modifiedCount } = await recordsOf(ctx).updateOne(
     { _id: rec._id, state, ...still("metered", rec.metered) },
-    { $set: { metered: after(from, seconds * 1000) } },
+    { $set: { metered: lapsed ? now : after(from, seconds * 1000) } },
   );
   if (!modifiedCount) return;
   await meter(ctx, {

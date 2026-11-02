@@ -71,11 +71,11 @@ const REFUSED = {
   },
   credits: {
     title: "This org is out of credits",
-    text: () => "Its owners and admins can add more in Billing. Nothing you have is affected.",
+    text: () => "Its owners and admins can add more in Billing. Your computers and files are safe.",
   },
   budget: {
     title: "This org has reached its budget for the month",
-    text: () => "Its owners and admins can raise it in Billing. Nothing you have is affected.",
+    text: () => "Its owners and admins can raise it in Billing. Your computers and files are safe.",
   },
 };
 

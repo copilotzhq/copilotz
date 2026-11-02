@@ -81,7 +81,9 @@ export const checkoutAction = defineAction({
       if (plan.subscription && plan.status !== "canceled") {
         throw failure("subscribed", "This org already has a subscription: manage it instead.");
       }
-      const seats = Math.max(await ctx.as().call<number>("org.seats", {}).catch(() => 1), 1);
+      // What the Billing page said it would come to: those not waived.
+      const people = plan.seats ?? await ctx.as().call<number>("org.seats", {}).catch(() => 1);
+      const seats = Math.max(people - (plan.waived?.seats?.people?.length ?? 0), 1);
       const metadata = { org, plan: input.plan, seller: name };
       const { url } = await call({
         mode: "subscription",

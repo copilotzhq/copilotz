@@ -33,7 +33,11 @@
  * - `refusals`: by the code a send was refused with, the View shown over
  *   where you type instead of the error, with what was typed and a way to
  *   send it again (`{ not_here: { view: "space.not-here" } }`: adding the
- *   agents it named to the space).
+ *   agents it named to the space);
+ * - `composerNotes`: by key, Views it shows over where you type, in a
+ *   conversation and on home, with hints `{ thread?, in?, working }`: what to
+ *   know before sending, or nothing (`{ billing: { view: "billing.composer" } }`:
+ *   that the org is out of credits).
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { conversationView } from "./views/web/conversation.tsx";

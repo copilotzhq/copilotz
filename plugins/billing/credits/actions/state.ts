@@ -43,16 +43,21 @@ export const stateAction = defineAction({
       sort: { at: -1 },
       limit: 50,
     });
-    const low = !!room && (
-      (room.lowCredits !== undefined && room.credits < room.lowCredits) ||
-      (room.lowBudget !== undefined && room.budget < room.lowBudget)
-    );
+    const lowOn = !room
+      ? undefined
+      : room.lowCredits !== undefined && room.credits < room.lowCredits
+      ? "credits"
+      : room.lowBudget !== undefined && room.budget < room.lowBudget
+      ? "budget"
+      : undefined;
+    const waivedPeople = s.plan?.waived?.seats?.people?.length ?? 0;
     return {
       on: set.enforce,
       runs,
       staff,
       ...verdict,
-      low,
+      low: !!lowOn,
+      ...(lowOn ? { lowOn } : {}),
       plan: s.plan && {
         name: s.plan.name,
         terms: s.plan.terms,
@@ -64,15 +69,31 @@ export const stateAction = defineAction({
         ...(typeof s.plan.seats === "number" ? { fixedSeats: s.plan.seats } : {}),
         ...(s.plan.waived ? { waived: s.plan.waived } : {}),
       },
-      ...(seats !== undefined ? { seats } : {}),
+      ...(seats !== undefined
+        ? { seats, billedSeats: Math.max((s.plan?.seats ?? seats) - waivedPeople, 1) }
+        : {}),
       ...(s.period ? { period: s.period } : {}),
       balance: s.walked.balance,
       buckets: s.walked.buckets,
       debt: s.walked.debt,
       waived: s.waivedUsage,
       month: s.month,
-      history: s.history.slice(0, 100),
-      payments,
+      history: s.history.slice(0, 100).map(({ by: who, ...credit }) => ({
+        ...credit,
+        ...(staff && who ? { by: who } : {}),
+      })),
+      // What it was and came to, for who runs the org; what a channel kept, and who, for staff.
+      payments: staff ? payments : payments.map((p) => ({
+        _id: p._id,
+        channel: p.channel,
+        ref: p.ref,
+        amount: p.amount,
+        currency: p.currency,
+        purpose: p.purpose,
+        ...(p.credits !== undefined ? { credits: p.credits } : {}),
+        ...(p.note ? { note: p.note } : {}),
+        at: p.at,
+      })),
       pay: set.pay
         ? {
           topUps: set.topUps,

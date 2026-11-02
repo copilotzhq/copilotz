@@ -16,6 +16,7 @@ import {
   go,
   Icon,
   LazyView,
+  Notice,
   orgName,
   Page,
   Skeleton,
@@ -23,7 +24,7 @@ import {
   Title,
   useOrgs,
 } from "../../../../hosts/web/mod.ts";
-import { chosenSection, runs, sectionsOf, standingName } from "../shared/orgs.ts";
+import { chosenSection, type OrgSection, runs, sectionsOf, standingName } from "../shared/orgs.ts";
 import { useStanding } from "../shared/standing.ts";
 import { OrgFace } from "./orgs.tsx";
 
@@ -84,6 +85,10 @@ function OrgPage({ given, tab, call }: { given: unknown; tab?: string; call: Cal
   const name = orgName(here);
   const sections = sectionsOf(given, standing);
   const section = chosenSection(sections, tab);
+  // Sent to a section that isn't theirs (a link in a message, for everyone): said, not silent.
+  const heldBack = tab && !sections.some((s) => s.key === tab)
+    ? ((given ?? {}) as Record<string, OrgSection | null>)[tab]?.title
+    : undefined;
   const personal = here.kind === "personal";
   return (
     <Page
@@ -117,6 +122,15 @@ function OrgPage({ given, tab, call }: { given: unknown; tab?: string; call: Cal
         : `What ${here.name} is, and who's in it.`}
     >
       <Title text={section ? `${name}: ${section.title}` : name} />
+      {heldBack
+        ? (
+          <Notice tone="info" className="copilotz-org-held">
+            {heldBack}{" "}
+            is for this org's owners and admins. Ask one of them if you need something changed
+            there.
+          </Notice>
+        )
+        : null}
       {sections.length
         ? (
           <>

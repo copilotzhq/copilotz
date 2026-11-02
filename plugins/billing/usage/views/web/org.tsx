@@ -10,7 +10,8 @@
  * admins see everyone's (`usage.org`, `usage.calls`), or just theirs;
  * anyone else, their own.
  *
- * Every amount is a price: what people are charged. Platform staff alone
+ * Every amount is a price: what people are charged (a call on the org's own
+ * key or a connected plan says so, rather than $0). Platform staff alone
  * see what it cost too, and so the margin (the answers say so: `costs`), in
  * the staff colour and marked as theirs.
  */
@@ -417,6 +418,19 @@ function Usage(
     </div>
   );
 }
+
+/**
+ * A use the org wasn't charged for because someone else pays for it: on its
+ * own key, or a person's plan. Said as what it is, rather than $0.
+ */
+export const paidBy = (
+  tags: Record<string, string> | undefined,
+): { label: string; title: string } | undefined =>
+  tags?.paid === "own-key"
+    ? { label: "Your key", title: "Ran on your own key: no credits used" }
+    : tags?.paid === "subscription"
+    ? { label: "Plan", title: "Ran on a connected plan: no credits used" }
+    : undefined;
 
 /** "1 call", "12 calls". */
 const callCount = (n: number) => `${n.toLocaleString()} ${n === 1 ? "call" : "calls"}`;
@@ -910,7 +924,13 @@ function Recent(
                   </td>
                   <td className="usage-num">{compact(c.quantities.output ?? 0)}</td>
                   <td className="usage-num">
-                    {price === undefined
+                    {paidBy(c.tags)
+                      ? (
+                        <span className="usage-quiet" title={paidBy(c.tags)!.title}>
+                          {paidBy(c.tags)!.label}
+                        </span>
+                      )
+                      : price === undefined
                       ? <span className="usage-quiet" title="No known cost for this model">—</span>
                       : usd(price, true)}
                   </td>

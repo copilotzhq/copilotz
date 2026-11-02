@@ -521,3 +521,47 @@ test({
     }
   },
 });
+
+test("what a payment kept and who entered it are for staff; who runs the org sees what it came to", async () => {
+  await setup(async (rt) => {
+    await rt.call("billing.pay", {
+      ref: "inv-1",
+      amount: 100,
+      currency: "usd",
+      fee: 3.2,
+      rate: 1,
+      purpose: "credits",
+      credits: 100,
+    }, { actor: staff });
+    const anas = await stateOf<{ payments: Record<string, unknown>[]; history: { by?: string }[] }>(
+      rt,
+    );
+    assertEquals(
+      [anas.payments[0].amount, anas.payments[0].fee, anas.payments[0].rate, anas.payments[0].by],
+      [100, undefined, undefined, undefined],
+    );
+    assert(anas.history.every((c) => c.by === undefined));
+    const sams = await stateOf<{ payments: Record<string, unknown>[] }>(rt, staff);
+    assertEquals([sams.payments[0].fee, sams.payments[0].by], [3.2, "sam"]);
+  });
+});
+
+test("it says which it's running low on; seats waived aren't billed", async () => {
+  await setup(async (rt) => {
+    await stateOf(rt);
+    await rt.call("billing.budget", { usd: 10 }, { actor: ana });
+    await rt.call("billing.grant", { amount: 100, reason: "x" }, { actor: staff });
+    await rt.call("test.use", {
+      meter: "llm",
+      subject: "script/m",
+      quantities: { input: 9_000_000 },
+    });
+    const near = await stateOf<{ low: boolean; lowOn?: string }>(rt);
+    assertEquals([near.low, near.lowOn], [true, "budget"]);
+    await rt.call("billing.waive", { what: "seats", reason: "friend", people: ["bob"] }, {
+      actor: staff,
+    });
+    const seats = await stateOf<{ seats: number; billedSeats: number }>(rt);
+    assertEquals([seats.seats, seats.billedSeats], [2, 1]);
+  });
+});

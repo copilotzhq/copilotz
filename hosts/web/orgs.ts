@@ -13,7 +13,8 @@
  * - Staff's console: `consoleOrgs()`, `updateOrg(id, { suspended?, name? })`,
  *   `moveOrg(id, schema)`, `exportOrgUrl(id)` (its rows, as SQL, to save)
  *   and `deleteOrg(id, name)` (its exact name confirms it). An app that
- *   doesn't do one says so (`unsupported`).
+ *   doesn't do one says so (`unsupported`). Gift codes: `giftCodes()`,
+ *   `createGiftCode(...)` (the code itself, this once) and `revokeGiftCode(id)`.
  *
  * It's the page's own HTTP, same origin, with the cookies the server set.
  */
@@ -319,4 +320,47 @@ export const exportOrgUrl = (org: string): string =>
 /** Deletes an org for good: `name`, its exact name, confirms it. */
 export async function deleteOrg(org: string, name: string): Promise<void> {
   await post(`/console/orgs/${encodeURIComponent(org)}/delete`, { confirm: name });
+}
+
+/** A gift code as staff's console lists it: never the code itself, which is only kept hashed. */
+export type GiftCode = {
+  id: string;
+  /** Enough to tell them apart: it can't be claimed with this. */
+  short: string;
+  /** USD. */
+  amount: number;
+  /** The first day its credits no longer count (`YYYY-MM-DD`); none: they don't lapse. */
+  expires?: string;
+  /** The last moment it can be claimed (ISO); none: until it is. */
+  until?: string;
+  note?: string;
+  by: string;
+  at: string;
+  /** Who took it, for which org, and when. */
+  org?: string;
+  person?: string;
+  claimed?: string;
+  revoked?: string;
+};
+
+/** Gift codes, newest first, for staff's console. */
+export async function giftCodes(): Promise<GiftCode[]> {
+  const response = await fetch("/console/codes", { headers: { accept: "application/json" } });
+  const answer = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw Object.assign(new Error(answer.error ?? response.statusText), {
+      code: codeOf(response.status),
+    });
+  }
+  return (answer as { codes: GiftCode[] }).codes;
+}
+
+/** Makes a gift code: the answer's `code` is the only time it's ever shown. */
+export const createGiftCode = (
+  code: { amount: number; expires?: string; until?: string; note?: string },
+): Promise<{ code: string; id: string }> => post("/console/codes", code);
+
+/** Takes back a gift code nobody has claimed. */
+export async function revokeGiftCode(id: string): Promise<void> {
+  await post("/console/codes/revoke", { id });
 }

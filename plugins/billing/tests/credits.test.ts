@@ -573,6 +573,15 @@ test("a trial is one a person: a team's org starts without it", async () => {
       const state = await stateOf<{ plan: { terms: { credits?: { once?: number } } } }>(rt);
       assertEquals([state.balance, state.plan.terms.credits?.once], [0, undefined]);
       assert((await ask(rt)).text?.includes("out of credits"));
+      // Nor does it gain one by going back to Free, however it got there.
+      await rt.call("billing.setPlan", { name: "team" }, { actor: staff });
+      await rt.call("billing.setPlan", { name: "free" }, { actor: staff });
+      await stateOf(rt);
+      assertEquals(
+        (await rt.call<{ _id: string }[]>("test.all", { collection: "credit" }))
+          .some((c) => c._id === "trial"),
+        false,
+      );
     },
     {},
     { resources: { org: { id: "o-team", name: "Team", kind: "team" } } },

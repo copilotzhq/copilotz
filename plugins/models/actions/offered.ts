@@ -96,6 +96,8 @@ const shownModel = (
 const newest = (a: OfferedModel, b: OfferedModel) =>
   (b.released ?? "").localeCompare(a.released ?? "") || a.name.localeCompare(b.name);
 
+const SAMPLE = 1000;
+
 /**
  * Models at what the org is charged for them: those on the app's keys as the
  * ledger would rate them, those on the org's own at their provider's prices.
@@ -118,7 +120,8 @@ async function atPrices(
         const entry = `${typeof from === "string" ? from : m.provider}/${
           m.id.slice(m.provider.length + 1)
         }`;
-        return [{ input: 1_000_000 }, { output: 1_000_000 }].map((quantities) => ({
+        // A short prompt's price: a million tokens at once would be charged at a long prompt's.
+        return [{ input: SAMPLE }, { output: SAMPLE }].map((quantities) => ({
           meter: "llm",
           subject: m.id,
           catalog: entry,
@@ -132,9 +135,13 @@ async function atPrices(
     const price = prices.get(m.id);
     if (!price) return own(m) ? { ...m, ownKey: true } : m;
     const { price: _list, ...rest } = m;
-    return price[0] === null || price[1] === null
-      ? rest
-      : { ...rest, price: { input: price[0], output: price[1] } };
+    return price[0] === null || price[1] === null ? rest : {
+      ...rest,
+      price: {
+        input: price[0] * (1_000_000 / SAMPLE),
+        output: price[1] * (1_000_000 / SAMPLE),
+      },
+    };
   });
 }
 

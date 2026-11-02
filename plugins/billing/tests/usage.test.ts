@@ -500,6 +500,14 @@ test("the models on offer show what the org would be charged; on its own key, it
     >("models.offered", { model: "openai/gpt-5.4-mini" }, ana);
     assertAlmostEquals(model.price.input, 0.75 / 0.8);
     assertAlmostEquals(model.price.output, 4.5 / 0.8);
+    // A model that costs more past a long prompt shows a short prompt's price.
+    const tiered = await rt.call<{ model: { price: { input: number; output: number } } }>(
+      "models.offered",
+      { model: "openai/gpt-6.1-sol" },
+      ana,
+    );
+    assertAlmostEquals(tiered.model.price.input, 2 / 0.8);
+    assertAlmostEquals(tiered.model.price.output, 10 / 0.8);
     assertEquals(model.ownKey, undefined);
     const listed = catalog.providers.groq.models["llama-3.3-70b-versatile"].cost!;
     const own = await rt.call<

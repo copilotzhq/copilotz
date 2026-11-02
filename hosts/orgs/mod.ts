@@ -473,7 +473,10 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
   const staffOnly = async (request: Request) => {
     const who = await signedIn(request);
     if (!who) return null;
-    const { staff } = await directory.call<{ staff: boolean }>("org.mine", { person: who.person });
+    const { staff } = await directory.call<{ staff: boolean }>("org.mine", {
+      person: who.person,
+      ...(who.email ? { email: who.email } : {}),
+    });
     return staff ? who : null;
   };
 
@@ -618,7 +621,10 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
           const who = await signedIn(request);
           if (!who) return json({ error: "Not signed in" }, { status: 401 });
           const [{ orgs, staff }, { invites }] = await Promise.all([
-            directory.call<{ orgs: unknown[]; staff: boolean }>("org.mine", { person: who.person }),
+            directory.call<{ orgs: unknown[]; staff: boolean }>("org.mine", {
+              person: who.person,
+              ...(who.email ? { email: who.email } : {}),
+            }),
             who.email
               ? directory.call<{ invites: unknown[] }>("invite.mine", { email: who.email })
               : Promise.resolve({ invites: [] }),

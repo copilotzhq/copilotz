@@ -13,12 +13,13 @@ import {
   type Plugin,
   type Store,
 } from "../../../runtime/mod.ts";
+import { postgresPool, postgresStore } from "../../../stores/sql/postgres/mod.ts";
 import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
 import models, { type LlmAdapter } from "../../models/mod.ts";
 import { chat, type Message } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { credits, usage, type UsageRecord } from "../mod.ts";
-import { tempFile, test } from "../../../testing/mod.ts";
+import { env, tempFile, test } from "../../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -480,4 +481,43 @@ test("with limits off, nothing starts, nobody's stopped, and only staff see anyt
     const seen = await stateOf<{ on: boolean; waived: boolean }>(rt, staff);
     assertEquals([seen.on, seen.waived], [false, true]);
   }, { enforce: false });
+});
+
+const POSTGRES = env("COPILOTZ_TEST_POSTGRES_URL");
+
+test({
+  name: "on PostgreSQL too: a plan, its waivers lifted, and what's left",
+  ignore: !POSTGRES,
+  fn: async () => {
+    const pool = await postgresPool({ url: POSTGRES! });
+    const schema = `credits_${crypto.randomUUID().slice(0, 8)}`;
+    calls = 0;
+    const rt = await started(await postgresStore({ pool, schema, tenant: "org" }), {}, {
+      executors: 2,
+    });
+    try {
+      assertEquals((await ask(rt)).text, "done");
+      await rt.call("billing.waive", { what: "seats", reason: "friend", people: ["bob"] }, {
+        actor: staff,
+      });
+      await rt.call("billing.waive", { what: "usage", reason: "internal" }, { actor: staff });
+      const waived = await stateOf<{ plan: { waived: { seats: { people: string[] } } } }>(rt);
+      assertEquals(waived.plan.waived.seats.people, ["bob"]);
+      assertEquals((await ask(rt)).text, "done");
+      await rt.call("billing.waive", { what: "usage", lift: true }, { actor: staff });
+      await rt.call("billing.waive", { what: "seats", lift: true }, { actor: staff });
+      const lifted = await stateOf<{ plan: { waived?: { usage?: unknown; seats?: unknown } } }>(rt);
+      assertEquals([lifted.plan.waived?.usage, lifted.plan.waived?.seats], [undefined, undefined]);
+      // $2, less the one call before the waiver; the one during it was given back.
+      assertAlmostEquals(lifted.balance, 1);
+      await rt.call("billing.setPlan", { name: "team", seats: 3 }, { actor: staff });
+      await rt.call("billing.setPlan", { name: "team", seats: null }, { actor: staff });
+      assertEquals((await stateOf<{ seats: number }>(rt)).seats, 2);
+      await rt.call("billing.budget", { usd: null }, { actor: ana });
+      assertEquals((await stateOf<{ month: { limit?: number } }>(rt)).month.limit, undefined);
+    } finally {
+      await rt.close();
+      await pool.close();
+    }
+  },
 });

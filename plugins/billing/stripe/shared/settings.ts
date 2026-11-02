@@ -14,6 +14,8 @@ export type Seller = {
   /** The product credits are sold as, and each plan's price for a seat. */
   credits: string;
   prices: Record<string, string>;
+  /** The customer portal's configuration; none: the account's default. */
+  portal?: string;
 };
 
 export type StripeSettings = {

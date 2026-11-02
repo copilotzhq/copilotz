@@ -135,7 +135,11 @@ export const portalAction = defineAction({
       { key: chosen[1].key, fetch: set.fetch },
       "POST",
       "/v1/billing_portal/sessions",
-      { customer: plan.customer, return_url: `${set.url}/org?tab=billing` },
+      {
+        customer: plan.customer,
+        return_url: `${set.url}/org?tab=billing`,
+        ...(chosen[1].portal ? { configuration: chosen[1].portal } : {}),
+      },
     );
     return { url };
   },

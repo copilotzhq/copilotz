@@ -130,6 +130,15 @@ export type HomeView = { view: string; order?: number };
 export type RefusalView = { view: string };
 
 /**
+ * A `composerNotes` resource: by key, a View shown over the box where you
+ * type, in a conversation and on home, with hints `{ thread?, in?, working }`
+ * (the chat, none from home; its space; whether agents are at work): what to
+ * know before sending. Lowest `order` first; a View with nothing to say
+ * returns null, and takes no room.
+ */
+export type ComposerNote = { view: string; order?: number };
+
+/**
  * A `toolViews` resource: by a tool's name, the View kind that shows a call
  * to it in a conversation, in place of chat's own (what it was given and
  * what it returned, as data, folded). The View gets the call (`ShownCall`)

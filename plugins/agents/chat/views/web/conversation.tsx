@@ -12,8 +12,9 @@
  * wrote, are written to or work, and `@` lists those answering in the
  * chat's space: `thread.agents`. A message refused for a reason another
  * front end helps with (the `refusals` resource: `not_here`, spaces') shows
- * that front end's View over where you type. A message of yours waiting
- * for an agent still at work on an earlier one says so (see queued.tsx).
+ * that front end's View over where you type, as does what they want known
+ * before sending (`composerNotes`). A message of yours waiting for an agent
+ * still at work on an earlier one says so (see queued.tsx).
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -21,7 +22,7 @@ import type { Live } from "../../collections/live.ts";
 import type { Message } from "../../collections/message.ts";
 import type { Thread } from "../../collections/thread.ts";
 import type { Team } from "../../shared/agents.ts";
-import type { ConversationView, RefusalView } from "../../shared/types.ts";
+import type { ComposerNote, ConversationView, RefusalView } from "../../shared/types.ts";
 import { mentionable, shownAll } from "./agents.ts";
 import { Composer } from "./composer.tsx";
 import { Header, type Someone } from "./header.tsx";
@@ -185,6 +186,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
         agents={team ? mentionable(team) : undefined}
         where={space ? space.kind === "personal" ? "Personal" : space.name : undefined}
         refusals={ctx.resources.refusals as Record<string, RefusalView | null> | undefined}
+        notes={ctx.resources.composerNotes as Record<string, ComposerNote | null> | undefined}
         place={{ thread: t._id, ...(thread.in ? { in: thread.in } : {}) }}
       />
     </section>

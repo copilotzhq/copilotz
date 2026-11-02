@@ -225,6 +225,13 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .voice-failed { margin: 0 0 10px; animation: chat-fade .2s ease-out; }
 .chat-refusal { margin: 0 0 10px; animation: chat-fade .2s ease-out; }
 .chat-refusal:empty { display: none; }
+.chat-notes { display: grid; gap: 6px; margin: 0 0 8px; animation: chat-fade .2s ease-out; }
+.chat-notes:not(:has(.copilotz-notice)) { display: none; }
+/* On home what's over the box takes no room, so the box doesn't move: the greeting glides up to make way */
+.chat-home .chat-composer-inner { position: relative; }
+.chat-home .chat-composer-inner:not(:has(.chat-refusal, .voice-failed)) .chat-notes { position: absolute; right: 0; bottom: 100%; left: 0; }
+.chat-home-hero { transition: transform .2s ease-out; }
+.chat-home-body:has(.chat-notes .copilotz-notice) .chat-home-hero { transform: translateY(-34px); }
 .chat-mention-handle { color: var(--muted-foreground); font: 500 12px var(--font-mono); }
 .chat-attached { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 12px 12px 0; }
 .chat-attached-file { display: flex; align-items: center; gap: 8px; max-width: 260px; padding: 5px 4px 5px 5px;
@@ -340,6 +347,7 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .chat-keys { display: none; }
   .chat-home-body { padding: 72px 0 6vh; }
   .chat-home .chat-composer { padding: 0 14px; }
+  .chat-home-body:has(.chat-notes .copilotz-notice) .chat-home-hero { transform: translateY(-48px); }
   .chat-home-top { padding: 0 14px; margin-bottom: 24px; }
 }
 `;

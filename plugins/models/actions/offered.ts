@@ -9,6 +9,10 @@
  * - `{ search }`: providers and models whose words match.
  * - `{ model }`: one model, `"provider/model"`, to show what's chosen.
  *
+ * A model's `price` is what this org would be charged (`usage.quotes`, when
+ * there's a ledger). One that runs on the org's own key (`ownKey`) is its
+ * provider's to charge, so it shows the catalog's.
+ *
  * Only what an agent can use is offered: it answers in text, calls tools, and
  * isn't deprecated. Nothing secret is in it. `models.keyable`: whether a key
  * can be brought for a provider.
@@ -50,6 +54,8 @@ export type OfferedModel = {
   reasons?: boolean;
   /** USD per million tokens. */
   price?: { input?: number; output?: number };
+  /** It runs on a key of the org's own: its provider charges for it, not the app. */
+  ownKey?: boolean;
   released?: string;
   ready: boolean;
 };
@@ -89,6 +95,55 @@ const shownModel = (
 
 const newest = (a: OfferedModel, b: OfferedModel) =>
   (b.released ?? "").localeCompare(a.released ?? "") || a.name.localeCompare(b.name);
+
+const SAMPLE = 1000;
+
+/**
+ * Models at what the org is charged for them: those on the app's keys as the
+ * ledger would rate them, those on the org's own at their provider's prices.
+ */
+async function atPrices(
+  ctx: Context,
+  known: Map<string, OfferedProvider>,
+  models: OfferedModel[],
+): Promise<OfferedModel[]> {
+  const declared = (ctx.resources.provider ?? {}) as Record<string, Provider>;
+  const own = (m: OfferedModel) => {
+    const app = declared[m.provider];
+    return !!known.get(m.provider)?.hint || !(app?.apiKey || app?.headers);
+  };
+  const charged = ctx.resources.usage ? models.filter((m) => !own(m) && m.price) : [];
+  const quoted = charged.length
+    ? await ctx.call<(number | null)[]>("usage.quotes", {
+      uses: charged.flatMap((m) => {
+        const from = declared[m.provider]?.catalog;
+        const entry = `${typeof from === "string" ? from : m.provider}/${
+          m.id.slice(m.provider.length + 1)
+        }`;
+        // A short prompt's price: a million tokens at once would be charged at a long prompt's.
+        return [{ input: SAMPLE }, { output: SAMPLE }].map((quantities) => ({
+          meter: "llm",
+          subject: m.id,
+          catalog: entry,
+          quantities,
+        }));
+      }),
+    })
+    : [];
+  const prices = new Map(charged.map((m, i) => [m.id, [quoted[2 * i], quoted[2 * i + 1]]]));
+  return models.map((m) => {
+    const price = prices.get(m.id);
+    if (!price) return own(m) ? { ...m, ownKey: true } : m;
+    const { price: _list, ...rest } = m;
+    return price[0] === null || price[1] === null ? rest : {
+      ...rest,
+      price: {
+        input: price[0] * (1_000_000 / SAMPLE),
+        output: price[1] * (1_000_000 / SAMPLE),
+      },
+    };
+  });
+}
 
 /** Every provider there is to offer, in the order to show them. */
 async function providersOf(ctx: Context): Promise<OfferedProvider[]> {
@@ -155,17 +210,18 @@ export const offered = defineAction({
       const id = input.model.slice(0, slash);
       const name = input.model.slice(slash + 1);
       const info = listedIn(id, declared[id])?.models[name];
+      const shown = info
+        ? shownModel(id, titled(id, declared[id]), name, info, !!known.get(id)?.ready)
+        : null;
       return {
         provider: known.get(id) ?? null,
-        model: info
-          ? shownModel(id, titled(id, declared[id]), name, info, !!known.get(id)?.ready)
-          : null,
+        model: shown && (await atPrices(ctx, known, [shown]))[0],
       };
     }
     if (input.provider) {
       return {
         provider: known.get(input.provider) ?? null,
-        models: modelsOf(input.provider).sort(newest),
+        models: await atPrices(ctx, known, modelsOf(input.provider).sort(newest)),
       };
     }
     const words = fold(input.search ?? "").split(/\s+/).filter(Boolean);
@@ -176,8 +232,11 @@ export const offered = defineAction({
       return {
         providers: providers.filter((p) => has(words, `${p.name} ${p.id}`)),
         // Those that can be used first, then the newest.
-        models: models.sort((a, b) => Number(b.ready) - Number(a.ready) || newest(a, b))
-          .slice(0, FOUND),
+        models: await atPrices(
+          ctx,
+          known,
+          models.sort((a, b) => Number(b.ready) - Number(a.ready) || newest(a, b)).slice(0, FOUND),
+        ),
       };
     }
     const keys = ctx.resources.modelKeys as ModelKeys | undefined;

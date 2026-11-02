@@ -28,7 +28,7 @@ import models from "../../models/mod.ts";
 import { chat, type ToolContext } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
-import { usage, type UsageRecord } from "../../billing/mod.ts";
+import { credits, usage, type UsageRecord } from "../../billing/mod.ts";
 import {
   cloud,
   type CloudComputer,
@@ -120,6 +120,8 @@ async function setup(
     settings?: Record<string, unknown>;
     jobs?: () => Job[];
     booting?: { hold: boolean };
+    /** With credits and its check. */
+    credits?: boolean;
   } = {},
 ) {
   const topic = `cloud-test.${crypto.randomUUID()}`;
@@ -131,10 +133,19 @@ async function setup(
       chat,
       ...access,
       usage,
+      ...(options.credits ? [credits] : []),
       computers,
       cloud,
       cloudPool,
       app(world.host, options.settings),
+      ...(options.credits
+        ? [
+          definePlugin({
+            name: "plans",
+            resources: { billing: { plans: { free: { title: "Free" } } } },
+          }),
+        ]
+        : []),
     ],
     transports: [{ type: "in-process", config: { topic } }],
     // Time moves only when a test says (no tick fires on its own).
@@ -402,7 +413,7 @@ test("a pool grown for a wake isn't shrunk while its VM boots", async () => {
 
 test("who makes cloud computers, and who sees them", async () => {
   await setup(async (rt) => {
-    // Members don't, by default; owners and admins do: the sizes offered say so, and why.
+    // Anyone but guests: the sizes offered say so, and why.
     type Offer = { create: boolean; why?: string; warmMinutes: number; viewMinutes: number };
     const offer = (actor: Actor) => rt.query<Offer>("cloudComputer.sizes", {}, { actor });
     const forAna = await offer(ana);
@@ -412,9 +423,12 @@ test("who makes cloud computers, and who sees them", async () => {
       10,
       120,
     ]);
-    assertEquals([(await offer(bob)).create, (await offer(bob)).why], [false, "admins"]);
-    assertEquals(await rt.call("cloud.may", {}, { actor: bob }), { create: false, why: "admins" });
-    const refused = await rt.call("cloud.create", { size: "small" }, { actor: bob })
+    assertEquals((await offer(bob)).create, true);
+    await rt.call("org.join", { person: "gus", role: "guest" });
+    const gus: Actor = { kind: "person", id: "gus" };
+    assertEquals([(await offer(gus)).create, (await offer(gus)).why], [false, "guests"]);
+    assertEquals(await rt.call("cloud.may", {}, { actor: gus }), { create: false, why: "guests" });
+    const refused = await rt.call("cloud.create", { size: "small" }, { actor: gus })
       .then(() => "made", (error) => (error as { code?: string }).code);
     assertEquals(refused, "forbidden");
     const { computer: anas } = await rt.call<{ computer: string }>("cloud.create", {
@@ -447,7 +461,7 @@ test("who makes cloud computers, and who sees them", async () => {
     assertEquals(woken, "forbidden");
   });
   await setup(async (rt) => {
-    // Opened to members: Bob makes one, and sees it.
+    // A member makes one, and sees it.
     const { computer } = await rt.call<{ computer: string }>("cloud.create", {
       size: "standard",
       name: "Bob's box",
@@ -456,21 +470,58 @@ test("who makes cloud computers, and who sees them", async () => {
     assertEquals([mine._id, mine.size], [computer, "standard"]);
     const [named] = await rt.query<Computer[]>("computer.mine", {}, { actor: bob });
     assertEquals(named.name, "Bob's box");
-    assertEquals(
-      (await rt.query<{ create: boolean }>("cloudComputer.sizes", {}, { actor: bob })).create,
-      true,
+  });
+});
+
+test("an org that can't spend: nothing's made or woken, what's awake sleeps, and a grant brings it back", async () => {
+  await setup(async (rt, world) => {
+    const staff: Actor = { kind: "person", id: "sam", staff: true };
+    await rt.call("billing.grant", { amount: 1, reason: "enough to start" }, { actor: staff });
+    const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
+      size: "small",
+    }, { actor: ana });
+    await rt.call("cloud.wake", { computer: id });
+    const { vm, woke } = await cloudOf(rt, id);
+    assert(vm, "awake, it has a VM");
+
+    // Running for far longer than its credits last: the next tick after they're gone puts it to sleep.
+    await rt.call("cloud.tick", { now: later(woke, 9 * MIN) });
+    assertEquals((await cloudOf(rt, id)).state, "awake", "still has credits");
+    await rt.call("usage.record", {
+      meter: "x",
+      subject: "cloud/small",
+      quantities: { seconds: 360_000 },
+    });
+    await rt.call("cloud.tick", { now: later(woke, 10 * MIN) });
+    const slept = await cloudOf(rt, id);
+    assertEquals([slept.state, slept.vm], ["asleep", undefined]);
+    assert(world.disks.has(`cz-d-${id}`), "its disk stays");
+
+    // It doesn't wake, says why, and nothing's touched.
+    const taken = world.calls.length;
+    const refused = await rt.call("cloud.wake", { computer: id }).then(
+      () => undefined,
+      (error) => error as Error & { code: string },
     );
-  }, { settings: { create: "members" } });
-  await setup(async (rt) => {
-    // This month's budget spent (none, here): nobody makes more, owners neither.
-    const refused = await rt.call("cloud.create", { size: "small" }, { actor: ana })
+    assertEquals(refused?.code, "credits");
+    assertStringIncludes(refused!.message, "The computer can't wake. This org is out of credits.");
+    assertEquals((await cloudOf(rt, id)).state, "asleep");
+    assertEquals(world.calls.length, taken);
+
+    // Nor is one made; the offer says so before anyone asks.
+    const made = await rt.call("cloud.create", { size: "small" }, { actor: ana })
       .then(() => "made", (error) => (error as { code?: string }).code);
-    assertEquals(refused, "budget");
+    assertEquals(made, "credits");
     const offered = await rt.query<{ create: boolean; why?: string }>("cloudComputer.sizes", {}, {
       actor: ana,
     });
-    assertEquals([offered.create, offered.why], [false, "budget"]);
-  }, { settings: { budgetUsd: 0 } });
+    assertEquals([offered.create, offered.why], [false, "credits"]);
+
+    // A grant, and it wakes.
+    await rt.call("billing.grant", { amount: 5000, reason: "more" }, { actor: staff });
+    assertEquals(await rt.call("cloud.wake", { computer: id }), { state: "awake" });
+    await rt.call("cloud.release", { computer: id });
+  }, { credits: true });
 });
 
 test("a cloud computer shared into a space: its members see how it is, on its desk there", async () => {
@@ -546,6 +597,23 @@ test("a computer whose VM died is woken again on another, its disk detached by f
     // Not a cloud computer: nothing to wake.
     assertEquals(await rt.call("cloud.wake", { computer: "a-laptop" }), null);
     assertStringIncludes(id, "-");
+  });
+});
+
+test("a VM's seconds stop at its lease: an org closed for days isn't charged for a VM that was gone", async () => {
+  await setup(async (rt) => {
+    const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
+      size: "small",
+    }, { actor: ana });
+    await rt.call("cloud.wake", { computer: id });
+    const { woke } = await cloudOf(rt, id);
+    await rt.call("cloud.tick", { now: later(woke, 5 * MIN) });
+    // Nothing ticks for three days (the org closed), and its VM went with its lease long ago.
+    await rt.call("cloud.release", { computer: id, force: true, now: later(woke, 3 * 1440 * MIN) });
+    const seconds = (await recordsOf<UsageRecord>(rt, "usage"))
+      .filter((r) => r.subject === "cloud/small")
+      .reduce((sum, r) => sum + (r.quantities.seconds ?? 0), 0);
+    assertEquals(seconds, 15 * 60, "the 5 minutes ticked, and at most its lease after them");
   });
 });
 

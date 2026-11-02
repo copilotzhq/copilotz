@@ -13,7 +13,10 @@
  * another front end can help with (`refusals`, by its code: `not_here`, it
  * named agents that don't answer here) shows that front end's View over the
  * box, with what was typed and a way to send it again: nothing went, and
- * what was typed stays.
+ * what was typed stays. What other front ends want known before sending
+ * (`notes`, the `composerNotes` resource: the org is out of credits) shows
+ * over the box too, each its own View, taking no room until it has something
+ * to say.
  */
 import {
   type ClipboardEvent,
@@ -40,7 +43,7 @@ import {
   Spinner,
   Textarea,
 } from "../../../../../hosts/web/mod.ts";
-import type { RefusalView } from "../../shared/types.ts";
+import type { ComposerNote, RefusalView } from "../../shared/types.ts";
 import { matching, mention, type Mentionable, typingAt, unanswered } from "./agents.ts";
 import { type Attached, chosen, FILES, read, size } from "./attach.ts";
 import { record, type Recorder as Recording } from "./record.ts";
@@ -89,6 +92,8 @@ export function Composer(props: {
   where?: string;
   /** By the code a send is refused with, the View to show over the box (`refusals`). */
   refusals?: Record<string, RefusalView | null>;
+  /** What to know before sending, each a View over the box (`composerNotes`), with `place`. */
+  notes?: Record<string, ComposerNote | null>;
   /** Where it sends, for those Views: the chat (none from home) and its space. */
   place?: { thread?: string; in?: string };
 }): ReactNode {
@@ -119,6 +124,9 @@ export function Composer(props: {
   const phase = recording?.phase;
   const live = phase === "starting" || phase === "recording" || phase === "stopping";
   const take = phase === "review" ? recording?.take : undefined;
+  const notes = Object.values(props.notes ?? {})
+    .filter((note): note is ComposerNote => !!note?.view)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const fine = () => matchMedia("(pointer: fine)").matches;
 
   // Ready to type after what's there, where there's a keyboard (on a phone, it waits for a tap).
@@ -408,6 +416,21 @@ export function Composer(props: {
               onRetry={() => void submit()}
               onAudioOnly={() => void submit({ transcribe: false })}
             />
+          )
+          : null}
+        {notes.length
+          ? (
+            <div className="chat-notes">
+              {notes.map((note) => (
+                <LazyView
+                  key={note.view}
+                  kind={note.view}
+                  item={{}}
+                  hints={{ ...props.place, working: working.length > 0 }}
+                  fallback={null}
+                />
+              ))}
+            </div>
           )
           : null}
         <div

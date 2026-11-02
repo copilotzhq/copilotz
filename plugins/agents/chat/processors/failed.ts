@@ -30,6 +30,12 @@ const failed = async (ctx: Context, event: Event) => {
     const text = written?.text ? `${written.text} (stopped)` : "(stopped)";
     return await answer(ctx, t, run, text, { stopped: true });
   }
+  // The org's limit isn't the agent failing: it says what happened, and who can change it.
+  if (error.code === "credits" || error.code === "budget") {
+    return await answer(ctx, t, run, error.message ?? "This org can't spend right now.", {
+      failed: true,
+    });
+  }
   await answer(ctx, t, run, `${t.agent} failed: ${error.message ?? "unknown error"}`, {
     failed: true,
   });

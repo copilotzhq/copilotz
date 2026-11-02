@@ -8,7 +8,7 @@
  * Views may ask it.
  */
 import { defineAction, people } from "../../../../runtime/mod.ts";
-import { nonzero, rate } from "../shared/rate.ts";
+import { chargesOf, nonzero, rate } from "../shared/rate.ts";
 
 export const quoteAction = defineAction({
   description: "What a use would be charged now (its price), without recording it",
@@ -39,5 +39,50 @@ export const quoteAction = defineAction({
       price: rated.price ?? null,
       ...(costs ? { cost: rated.cost ?? null } : {}),
     };
+  },
+});
+
+/**
+ * `usage.quotes` `{ uses }`: `usage.quote` for many, the prices asked once.
+ * Answers each one's `price` (null when nothing prices it), in order. For
+ * trusted code showing many prices (the models on offer).
+ */
+export const quotesAction = defineAction({
+  description: "What many uses would be charged now, without recording them",
+  record: false,
+  input: {
+    type: "object",
+    properties: {
+      uses: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            meter: { type: "string" },
+            subject: { type: "string" },
+            catalog: { type: "string" },
+            quantities: { type: "object", additionalProperties: { type: "number" } },
+          },
+          required: ["meter", "subject", "quantities"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["uses"],
+    additionalProperties: false,
+  },
+  run: async (ctx, input) => {
+    const at = new Date().toISOString();
+    const charges = await chargesOf(ctx) ?? {};
+    return await Promise.all(input.uses.map(async (use) => {
+      const rated = await rate(ctx, {
+        meter: use.meter,
+        subject: use.subject,
+        ...(use.catalog ? { catalog: use.catalog } : {}),
+        quantities: nonzero(use.quantities as Record<string, number>),
+        at,
+      }, charges);
+      return rated.price ?? null;
+    }));
   },
 });

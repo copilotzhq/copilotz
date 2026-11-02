@@ -7,9 +7,11 @@
  * from its menu renaming it, suspending it (nobody but staff goes in) or
  * lifting that, moving its rows to a schema of its own, downloading them as
  * SQL, and deleting it for good, which its exact name confirms. The console
- * reads no org's content: only what the directory keeps.
+ * reads no org's content: only what the directory keeps. Its other tab (`?tab=codes`,
+ * console-codes.tsx): gift codes of credits, made, listed and taken back.
  */
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import type { ViewContext } from "../../../../runtime/mod.ts";
 import {
   Avatar,
   Badge,
@@ -23,6 +25,7 @@ import {
   enterOrg,
   exportOrgUrl,
   Field,
+  go,
   Icon,
   Input,
   Menu,
@@ -38,8 +41,11 @@ import {
   useOrgs,
 } from "../../../../hosts/web/mod.ts";
 import { type ConsoleFilter, consoleList, consoleTotals, SCHEMA } from "../shared/orgs.ts";
+import { GiftCodes } from "./console-codes.tsx";
 
-export const consoleView = (): ReactNode => <Console />;
+export const consoleView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => (
+  <Console tab={(ctx.hints.query as Record<string, string> | undefined)?.tab} />
+);
 
 /** What staff are doing to an org, in a dialog. */
 type Doing = { what: "rename" | "suspend" | "move" | "delete"; org: ConsoleOrg };
@@ -51,7 +57,13 @@ const FILTERS: { value: ConsoleFilter; label: string }[] = [
   { value: "suspended", label: "Suspended" },
 ];
 
-function Console(): ReactNode {
+/** The console's tabs: the address says which (`?tab=codes`). */
+const CONSOLE_TABS = [
+  { value: "orgs", label: "Organizations", icon: "building", href: "/console" },
+  { value: "codes", label: "Gift codes", icon: "star", href: "/console?tab=codes" },
+] as const;
+
+function Console({ tab }: { tab?: string }): ReactNode {
   const orgs = useOrgs();
   const staff = orgs.status === "ready" && orgs.value.staff;
   const [list, setList] = useState<ConsoleOrg[]>();
@@ -107,6 +119,32 @@ function Console(): ReactNode {
     setDone(note);
     void load();
   };
+  const tabs = (
+    <Tabs
+      label="What the console shows"
+      variant="line"
+      className="console-tabs"
+      value={tab === "codes" ? "codes" : "orgs"}
+      onChange={(next) => go(next === "codes" ? "/console?tab=codes" : "/console")}
+      tabs={[...CONSOLE_TABS]}
+    />
+  );
+  if (tab === "codes") {
+    return (
+      <Page
+        title="Gift codes"
+        icon="server"
+        width="full"
+        className="console"
+        badges={<Badge tone="warning">Staff</Badge>}
+        description="Credits waiting to be claimed. Someone who runs an org types one in under Billing, and its credits are that org's."
+      >
+        <Title text="Gift codes" />
+        {tabs}
+        <GiftCodes orgs={list ?? []} ready={staff} />
+      </Page>
+    );
+  }
   return (
     <Page
       title="Organizations"
@@ -122,6 +160,7 @@ function Console(): ReactNode {
       }
     >
       <Title text="Console" />
+      {tabs}
       <div className="console-stats" aria-busy={!list || undefined}>
         <Stat label="Organizations" value={list ? totals.orgs : undefined} />
         <Stat label="Team orgs" value={list ? totals.teams : undefined} />

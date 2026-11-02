@@ -5,7 +5,8 @@
  *    at least that long ago) is released, unless a person has it open (up to
  *    `viewMinutes` past its last use) or a job it doesn't keep is still
  *    running on it (a long build). One that isn't connected is released too:
- *    its VM died.
+ *    its VM died. With an org that can't spend, each is released all the same:
+ *    its jobs stop, its disk stays, and it wakes again once the org can spend.
  * 2. **Metering:** each computer still awake, its VM's seconds since last.
  * 3. **Leases:** the VMs its computers have (waking, awake or releasing) are
  *    still theirs (`pool.renew`): the pool deletes a VM nobody renews.
@@ -17,6 +18,7 @@
  */
 import { type Context, defineAction } from "../../../../runtime/mod.ts";
 import type { CloudComputer } from "../contract.ts";
+import { stopped } from "../shared/may.ts";
 import { meterVm } from "../shared/meter.ts";
 import { recordsOf } from "../shared/records.ts";
 import { type CloudSettings, settingsOf } from "../shared/settings.ts";
@@ -72,14 +74,22 @@ export const tickAction = defineAction({
 
     // 1. Idle ones go, together (each takes seconds).
     const awake = await records.find({ state: "awake" });
+    // Not being able to ask isn't a reason to stop anything, or the rest of this tick.
+    const spent = awake.length
+      ? await stopped(ctx).catch((error) => {
+        log("asking whether the org can spend")(error);
+        return undefined;
+      })
+      : undefined;
     const idle: CloudComputer[] = [];
-    for (const rec of awake) if (!await keeps(ctx, rec, now, set)) idle.push(rec);
+    for (const rec of awake) if (spent || !await keeps(ctx, rec, now, set)) idle.push(rec);
     const released = await Promise.all(
       idle.map((rec) =>
         ctx.call<{ released: boolean }>("cloud.release", {
           computer: rec._id,
           now,
-          ...(rec.used ? { used: rec.used } : {}),
+          // Idle unless it's used meanwhile; an org that can't spend, either way.
+          ...(rec.used && !spent ? { used: rec.used } : {}),
         }).then((r) => r.released ? rec._id : undefined, (error) => {
           log(`releasing ${rec._id}`)(error);
           return undefined;

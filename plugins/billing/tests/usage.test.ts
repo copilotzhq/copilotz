@@ -404,3 +404,117 @@ test("totals sum cost and price by part, and what caching saved; people see pric
     await runtime.close();
   }
 });
+
+test("a use on the org's own key costs the app nothing and is charged nothing, even when re-rated", async () => {
+  const rated = await rate(
+    books(undefined, { "*": { margin: 0.2 } }),
+    {
+      ...use("openai/gpt-5.4-mini", { input: MILLION }, "openai/gpt-5.4-mini"),
+      tags: { paid: "own-key" },
+    },
+  );
+  assertEquals([rated.cost, rated.price, rated.unpriced], [0, 0, undefined]);
+  assertEquals(rated.rated, { cost: "own-key", price: "own-key" });
+
+  const rt = await createRuntime({
+    store: await sqliteStore({ path: tempFile() }),
+    plugins: [
+      models,
+      usage,
+      definePlugin({
+        name: "app",
+        resources: { price: { "*": { margin: 0.2 } } },
+        actions: {
+          "test.use": defineAction({
+            input: { type: "object" },
+            run: (ctx, input) => ctx.call("usage.record", input),
+          }),
+          "test.all": defineAction({
+            input: { type: "object" },
+            run: (ctx) => ctx.db.collection("usage").find({}),
+          }),
+        },
+      }),
+    ],
+  });
+  try {
+    await rt.call("test.use", {
+      meter: "llm",
+      subject: "openai/gpt-5.4-mini",
+      catalog: "openai/gpt-5.4-mini",
+      quantities: { input: MILLION },
+      tags: { paid: "own-key" },
+    });
+    assertEquals(await rt.call("usage.rerate", {}), { adjusted: 0 });
+    const [record] = await rt.call<UsageRecord[]>("test.all", {});
+    assertEquals([record.cost, record.price, record.quantities.input], [0, 0, MILLION]);
+  } finally {
+    await rt.close();
+  }
+});
+
+test("an org's plan can name its own price list; none, or an unknown one, is the app's", async () => {
+  const quiet = {
+    resources: {
+      price: { "*": { margin: 0.5 } },
+      priceLists: { contract: { "*": { margin: 0.1 } } },
+      usage: { priceList: "plan.prices" },
+    },
+  };
+  const asked = (name: string | null) => ({
+    ...quiet,
+    call: <R>(action: string, input?: unknown) =>
+      action === "plan.prices"
+        ? Promise.resolve(name as R)
+        : Promise.resolve(models.actions![action].run({} as never, input) as R),
+  });
+  const of = async (name: string | null) =>
+    (await rate(
+      asked(name),
+      use("openai/gpt-5.4-mini", { input: MILLION }, "openai/gpt-5.4-mini"),
+    )).price!;
+  assertAlmostEquals(await of(null), 0.75 / 0.5);
+  assertAlmostEquals(await of("contract"), 0.75 / 0.9);
+  assertAlmostEquals(await of("gone"), 0.75 / 0.5);
+});
+
+test("the models on offer show what the org would be charged; on its own key, its provider's prices", async () => {
+  const rt = await createRuntime({
+    store: await sqliteStore({ path: tempFile() }),
+    plugins: [
+      models,
+      usage,
+      definePlugin({
+        name: "app",
+        resources: {
+          provider: { openai: { apiKey: "the-apps-key" }, groq: {} },
+          price: { "*": { margin: 0.2 } },
+        },
+      }),
+    ],
+  });
+  try {
+    const ana = { actor: { kind: "person", id: "ana" } as const };
+    const { model } = await rt.call<
+      { model: { price: { input: number; output: number }; ownKey?: boolean } }
+    >("models.offered", { model: "openai/gpt-5.4-mini" }, ana);
+    assertAlmostEquals(model.price.input, 0.75 / 0.8);
+    assertAlmostEquals(model.price.output, 4.5 / 0.8);
+    // A model that costs more past a long prompt shows a short prompt's price.
+    const tiered = await rt.call<{ model: { price: { input: number; output: number } } }>(
+      "models.offered",
+      { model: "openai/gpt-6.1-sol" },
+      ana,
+    );
+    assertAlmostEquals(tiered.model.price.input, 2 / 0.8);
+    assertAlmostEquals(tiered.model.price.output, 10 / 0.8);
+    assertEquals(model.ownKey, undefined);
+    const listed = catalog.providers.groq.models["llama-3.3-70b-versatile"].cost!;
+    const own = await rt.call<
+      { model: { price: { input: number }; ownKey?: boolean } }
+    >("models.offered", { model: "groq/llama-3.3-70b-versatile" }, ana);
+    assertEquals([own.model.price.input, own.model.ownKey], [listed.input, true]);
+  } finally {
+    await rt.close();
+  }
+});

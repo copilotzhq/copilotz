@@ -132,6 +132,27 @@ async function keyed(ctx: Reach, m: Resolved): Promise<Resolved> {
 }
 
 /**
+ * Whether what's about to run may spend (the `spending` resource: whoever
+ * keeps an org's limits). Not asked from a read, for a model the app doesn't
+ * pay for (the org's own key, a person's subscription). Saying no is final:
+ * trying again won't help.
+ */
+async function mayRun(ctx: Reach, m: Resolved, request: Generate): Promise<void> {
+  const spending = ctx.resources.spending as { check?: string } | undefined;
+  if (!spending?.check || !ctx.as || m.tags?.paid) return;
+  const purpose = request.tags?.purpose;
+  const verdict = await ctx.as().call<{ ok: boolean; why?: string; message?: string }>(
+    spending.check,
+    purpose ? { purpose } : {},
+  );
+  if (verdict.ok) return;
+  throw Object.assign(
+    failure(verdict.why ?? "spending", verdict.message ?? "This org can't spend right now."),
+    { final: true },
+  );
+}
+
+/**
  * Streams a model's answer: text, tool calls, state and usage, as they come.
  * A call that breaks (the network, nothing coming for the provider's
  * `silence`, a provider timing out or busy) is tried again, longer waits
@@ -139,17 +160,21 @@ async function keyed(ctx: Reach, m: Resolved): Promise<Resolved> {
  * and when it tries next. With a list, a model that fails before writing
  * anything hands over to the next at once (the last one is tried again). A provider's thinking goes back to any of
  * its models; if one refuses another model's, the call is made again with
- * its own only.
+ * its own only. A model the org can't spend on hands over too, to one it can
+ * (its own key, a person's plan); with none, that's what it's told.
  */
 export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<LlmChunk> {
   const choices = chooseModels(ctx, request.model);
+  let stopped: unknown;
   for (const [i, choice] of choices.entries()) {
     let m: Resolved;
     try {
       m = await keyed(ctx, choice);
+      await mayRun(ctx, m, request);
     } catch (error) {
-      // No key for this one: the next, if there is one.
-      if (i === choices.length - 1) throw error;
+      if ((error as { final?: boolean }).final) stopped ??= error;
+      // No key for this one, or no credits: the next, if there is one.
+      if (i === choices.length - 1) throw stopped ?? error;
       continue;
     }
     const adapter = adapterFor<LlmAdapter>(ctx.adapters, "llm", m);
@@ -232,7 +257,8 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
           s++;
           continue;
         }
-        if (i === choices.length - 1) throw out;
+        // The last one failed, having been stopped earlier: that's what to tell them.
+        if (i === choices.length - 1) throw stopped ?? out;
         break;
       }
     }

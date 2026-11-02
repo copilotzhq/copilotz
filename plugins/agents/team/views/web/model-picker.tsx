@@ -37,11 +37,16 @@ const tokens = (count: number) =>
 
 const usd = (amount: number) => `$${+amount.toFixed(amount < 1 ? 3 : 2)}`;
 
-/** What a model costs, per million tokens in and out; free when it says so. */
-function priced({ price }: OfferedModel): string | undefined {
+/**
+ * What a model costs, per million tokens in and out; nothing, when it says so. On
+ * the org's own key it's its provider's to charge, and uses none of the org's
+ * credits, which is worth knowing before choosing it.
+ */
+function priced({ price, ownKey }: OfferedModel): string | undefined {
   if (price?.input === undefined || price.output === undefined) return undefined;
-  if (!price.input && !price.output) return "Free";
-  return `${usd(price.input)} in · ${usd(price.output)} out per 1M`;
+  if (!price.input && !price.output) return "No credits used";
+  const per = `${usd(price.input)} in · ${usd(price.output)} out per 1M tokens`;
+  return ownKey ? `No credits used: your key, at ${per}` : per;
 }
 
 const MEDIA: Record<string, string> = {

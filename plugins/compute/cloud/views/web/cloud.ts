@@ -27,9 +27,10 @@ export type Sizes = {
   /** How long one stays awake unused, and while someone has it open (minutes). */
   warmMinutes: number;
   viewMinutes: number;
-  /** Whether the person may make one now, and why not: only admins do here, or the budget's spent. */
+  /** Whether the person may make one now, and why not: guests don't, or the org can't spend. */
   create: boolean;
-  why?: "admins" | "budget";
+  why?: "guests" | "credits" | "budget";
+  message?: string;
 };
 
 /** How long a computer stays awake after its last use, unless the app says otherwise. */
@@ -70,8 +71,9 @@ export function sizesOf(answer: unknown): Sizes {
     viewMinutes: minutesOf(said.viewMinutes, VIEW_MINUTES),
     // An app that doesn't say lets anyone try: `cloud.create` says if not.
     create: said.create !== false,
-    ...(said.create === false && (said.why === "admins" || said.why === "budget")
-      ? { why: said.why }
+    ...(said.create === false &&
+        (said.why === "guests" || said.why === "credits" || said.why === "budget")
+      ? { why: said.why, ...(typeof said.message === "string" ? { message: said.message } : {}) }
       : {}),
   };
 }
@@ -174,9 +176,9 @@ export const stillWaking = (error: unknown): boolean => {
 };
 
 /** Why making one was refused, when it's who may (`forbidden`) or the month's budget (`budget`). */
-export function refusalOf(error: unknown): "forbidden" | "budget" | undefined {
+export function refusalOf(error: unknown): "forbidden" | "credits" | "budget" | undefined {
   const code = (error as { code?: string })?.code;
-  return code === "forbidden" || code === "budget" ? code : undefined;
+  return code === "forbidden" || code === "credits" || code === "budget" ? code : undefined;
 }
 
 /** A name to start from, for a new one in a space. */

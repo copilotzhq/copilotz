@@ -141,6 +141,15 @@ export const removeFromOrgAction = defineAction({
   },
 });
 
+export const orgSeatsAction = defineAction({
+  description: "How many people count as the org's seats: everyone but its guests",
+  record: false,
+  input: { type: "object", additionalProperties: false },
+  run: async (ctx) =>
+    (await ctx.as().db.collection<{ role: string }>("member").find({ space: ORG }))
+      .filter((m) => m.role !== "guest").length,
+});
+
 export const orgMeAction = defineAction({
   description:
     "Your standing in the org: your role, whether you're platform staff, and the org (in an app " +

@@ -2,8 +2,8 @@
  * The chat plugin's contract: what plugins built on chat (memory, history,
  * spaces, computers) may import from it: the shapes of its documents and of
  * the resource kinds it reads (`agents`, `tools`, `context`, `roster`,
- * `agentSources`; on the web, `conversation`, `home`, `toolViews` and
- * `refusals`),
+ * `agentSources`; on the web, `conversation`, `home`, `toolViews`,
+ * `refusals` and `composerNotes`),
  * `tool()` to declare a tool, and what knowing agents takes (`agentsOf`,
  * `defaults`, `modelOf`, `agentsNamed`, `agentsShown`, `SEND`).
  * Everything else they reach through the runtime: its collections by name
@@ -19,6 +19,7 @@ export type { Wait } from "./collections/wait.ts";
 export type {
   Agent,
   ChatSettings,
+  ComposerNote,
   ContextEntry,
   ConversationView,
   HomeView,

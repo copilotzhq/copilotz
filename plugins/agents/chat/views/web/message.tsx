@@ -12,7 +12,9 @@
  * says so, with a way to send it now (`hints.queued`: their ids; see
  * queued.tsx). One that drew on spaces not everyone here sees says so
  * (`hints.sources`: their names), and someone who sees them can share it.
- * One sent for someone by what they set up (`via`: a routine) says so.
+ * One sent for someone by what they set up (`via`: a routine) says so. One
+ * that says why its agent couldn't start (the org's limit) is a calm notice,
+ * with its link; one where the agent itself failed is an error.
  * Agents show as they're named, with their emoji (`hints.who`, by id), and
  * an agent's name links to its page; people, by their names.
  */
@@ -37,6 +39,14 @@ import { Steps } from "./steps.tsx";
 import { toolView } from "./tool-view.ts";
 import { byAgent } from "./who.ts";
 import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
+
+/**
+ * Whether a failed message says the agent itself failed ("Maya failed: …"), or
+ * says in its own words why it couldn't start (the org's limit, with where to
+ * change it): that one isn't an error from the agent, and reads calmly.
+ */
+export const failedOwn = (m: Pick<Message, "from" | "text">): boolean =>
+  !m.text || m.text.startsWith(`${m.from} failed:`);
 
 export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode => {
   const me = ctx.viewer?.name;
@@ -140,7 +150,13 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
           ? (
             <div className="msg-body">
               {m.failed
-                ? <Notice tone="destructive">{m.text || "Couldn't answer."}</Notice>
+                ? failedOwn(m)
+                  ? <Notice tone="destructive">{m.text || "Couldn't answer."}</Notice>
+                  : (
+                    <Notice tone="warning" className="msg-limit">
+                      <Markdown text={m.text ?? ""} />
+                    </Notice>
+                  )
                 : <Markdown text={m.text ?? ""} />}
             </div>
           )

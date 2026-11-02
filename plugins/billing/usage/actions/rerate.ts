@@ -32,6 +32,7 @@ async function rerate(ctx: Context, filter: Filter) {
       subject: record.subject,
       catalog: record.catalog,
       quantities: record.quantities as Quantities,
+      ...(record.tags ? { tags: record.tags as Record<string, string> } : {}),
       at: record.at,
     });
     const was = net.get(record._id)!;

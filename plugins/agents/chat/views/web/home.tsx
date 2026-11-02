@@ -8,14 +8,15 @@
  * nothing to say. A space the person doesn't reach (a link someone else
  * shared) says so instead. `@` lists the agents answering there
  * (`thread.agents`); a message refused for a reason another front end
- * helps with shows its View (the `refusals` resource); `?to=maya` (an
- * agent's page's "Ask") starts with `@maya ` typed.
+ * helps with shows its View (the `refusals` resource), and over where you
+ * type, what they want known before sending (`composerNotes`); `?to=maya`
+ * (an agent's page's "Ask") starts with `@maya ` typed.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { EmptyState, go, Icon, Logo, Title } from "../../../../../hosts/web/mod.ts";
 import type { Team } from "../../shared/agents.ts";
-import type { HomeView, RefusalView } from "../../shared/types.ts";
+import type { ComposerNote, HomeView, RefusalView } from "../../shared/types.ts";
 import { mentionable } from "./agents.ts";
 import { Composer } from "./composer.tsx";
 import { STYLE } from "./style.ts";
@@ -87,6 +88,7 @@ export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
           agents={team ? mentionable(team) : undefined}
           where={space ? space.kind === "personal" ? "Personal" : space.name : undefined}
           refusals={ctx.resources.refusals as Record<string, RefusalView | null> | undefined}
+          notes={ctx.resources.composerNotes as Record<string, ComposerNote | null> | undefined}
           place={here ? { in: here } : {}}
           send={async (text, files, options) => {
             const sent = await ctx.call<{ thread: string }>("chat.send", {

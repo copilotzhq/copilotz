@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "1.0.0-rc.13",
+  "version": "1.0.0-rc.14",
   "exports": {
     ".": "./runtime/mod.ts",
     "./stores/memory": "./stores/memory/mod.ts",
@@ -17,7 +17,7 @@
     "./plugins/access/web": "./plugins/access/web.tsx",
     "./plugins/access/terminal": "./plugins/access/terminal.ts",
     "./plugins/billing": "./plugins/billing/mod.ts",
-    "./plugins/billing/web": "./plugins/billing/usage/web.tsx",
+    "./plugins/billing/web": "./plugins/billing/web.tsx",
     "./plugins/billing/terminal": "./plugins/billing/terminal.ts",
     "./plugins/compute": "./plugins/compute/mod.ts",
     "./plugins/compute/web": "./plugins/compute/web.tsx",

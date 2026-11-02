@@ -15,10 +15,13 @@
  *   code, as a person's computer would. Once it's connected, it's awake.
  * - Failing, the VM goes (`pool.drop`), the computer is back asleep (or
  *   cold), and the call fails saying why.
+ * - An org that can't spend (the `spending` resource) doesn't wake one: the
+ *   call fails saying so, before anything's touched.
  */
 import { type Context, defineAction } from "../../../../runtime/mod.ts";
 import type { CloudComputer, PoolAssign, PoolTake } from "../contract.ts";
 import { hostFor } from "../shared/host.ts";
+import { stopped } from "../shared/may.ts";
 import { meterStorage } from "../shared/meter.ts";
 import { deviceOf } from "../shared/names.ts";
 import { computerOf, onlineOf, recordsOf } from "../shared/records.ts";
@@ -82,6 +85,8 @@ export const wakeAction = defineAction({
         }
         continue;
       }
+      const no = await stopped(ctx);
+      if (no) throw failure(`The computer can't wake. ${no.message}`, no.why);
       // Asleep or cold: this call wakes it, unless another took it first.
       const { modifiedCount } = await records.updateOne(
         { _id: rec._id, state: rec.state },

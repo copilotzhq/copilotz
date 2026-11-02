@@ -35,6 +35,13 @@ import {
   sendInviteAction,
 } from "./actions/invite.ts";
 import { claimHostAction, releaseHostAction } from "./actions/host.ts";
+import {
+  claimCodeAction,
+  createCodeAction,
+  listCodesAction,
+  revokeCodeAction,
+} from "./actions/code.ts";
+import { creditCode } from "./collections/credit-code.ts";
 import { invite } from "./collections/invite.ts";
 import { membership } from "./collections/membership.ts";
 import { org } from "./collections/org.ts";
@@ -45,12 +52,13 @@ export type { Org } from "./collections/org.ts";
 export type { Membership } from "./collections/membership.ts";
 export type { Invite } from "./collections/invite.ts";
 export type { OrgHost } from "./collections/org-host.ts";
+export type { CreditCode } from "./collections/credit-code.ts";
 export type { DirectorySettings } from "./shared/settings.ts";
 
 export const directory: Plugin = definePlugin({
   name: "directory",
   requires: ["identity"],
-  collections: { org, membership, invite, staff, orgHost },
+  collections: { org, membership, invite, staff, orgHost, creditCode },
   actions: {
     "org.create": createOrgAction,
     "org.mine": myOrgsAction,
@@ -70,6 +78,10 @@ export const directory: Plugin = definePlugin({
     "invite.cancel": cancelInviteAction,
     "host.claim": claimHostAction,
     "host.release": releaseHostAction,
+    "code.create": createCodeAction,
+    "code.claim": claimCodeAction,
+    "code.list": listCodesAction,
+    "code.revoke": revokeCodeAction,
   },
 });
 

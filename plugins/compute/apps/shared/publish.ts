@@ -113,6 +113,16 @@ async function sourceOf(
  * Publishes for `by` (the person; `who`: whose shell asks the computer,
  * `agent:<name>` or `person:<id>`). The caller has checked they may.
  */
+/** A build costs: an org that can't spend (the `spending` resource) doesn't start one. Live apps stay. */
+async function mayBuild(ctx: Context): Promise<void> {
+  const check = (ctx.resources.spending as { check?: string } | undefined)?.check;
+  if (!check) return;
+  const verdict = await ctx.as().call<{ ok: boolean; why?: string; message?: string }>(check, {});
+  if (!verdict.ok) {
+    throw failure(verdict.message ?? "This org can't spend right now.", verdict.why ?? "credits");
+  }
+}
+
 export async function publish(
   ctx: Context,
   input: PublishInput & { who: string; by: string },
@@ -121,6 +131,7 @@ export async function publish(
   if (!name) throw failure("An app needs a name.", "invalid");
   // Nowhere to publish to fails now, not once it's building.
   hostOf(ctx);
+  await mayBuild(ctx);
   const where = await ctx.as().call<Where>("computer.scope", {
     in: input.in,
     who: input.who,
@@ -173,6 +184,7 @@ export async function rebuild(
     throw failure("It was removed: publish it again to bring it back.", "invalid");
   }
   if (app.status === "building") return { app: app._id, url: app.url, status: "building" };
+  await mayBuild(ctx);
   await ctx.as().transaction(async (tx) => {
     await tx.db.collection("app").updateOne({ _id: app._id }, {
       $set: { status: "building", ...(source ? { source } : {}) },

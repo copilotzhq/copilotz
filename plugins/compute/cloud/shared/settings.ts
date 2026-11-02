@@ -15,9 +15,6 @@
  * - `pool`: the free VMs to keep (`floor`, by the hour in a time zone, per
  *   size unless it names one; 0 outside its hours) besides those expected,
  *   up to `max` per placement and size;
- * - `create`: who makes cloud computers: the org's owners and admins, or its
- *   members too; `budgetUsd`: what cloud computers may spend in a month,
- *   past which nobody makes more;
  * - `approve`: what agents on a cloud computer ask their person before doing
  *   (`terminal`, `jobs`, `writes`), in place of the computers plugin's:
  *   nothing by default (publishing an app is always asked);
@@ -49,9 +46,7 @@ export type CloudSettings = {
   viewMinutes: number;
   coldDays: number;
   pool: { floor: Floor[]; max: number };
-  create: "admins" | "members";
   approve: ("terminal" | "jobs" | "writes")[];
-  budgetUsd?: number;
   audience?: string;
 };
 
@@ -68,7 +63,6 @@ export const DEFAULTS: CloudSettings = {
   viewMinutes: 120,
   coldDays: 7,
   pool: { floor: [{ from: 9, to: 21, tz: "America/Sao_Paulo", count: 1, size: "small" }], max: 10 },
-  create: "admins",
   approve: [],
 };
 

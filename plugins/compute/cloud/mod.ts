@@ -7,8 +7,8 @@
  *
  * **`cloud`**, where the computers are:
  *
- * - **Making one:** `cloud.create` `{ size, in?, name? }` (the org's owners
- *   and admins, or its members when the settings say) makes its computer
+ * - **Making one:** `cloud.create` `{ size, in?, name? }` (anyone in the org
+ *   but its guests, while it can spend) makes its computer
  *   record and secret (`computer.provision`) and its disk.
  * - **Waking:** work for one that's asleep wakes it first: the computers
  *   plugin calls `cloud.wake` through the `computerWake` resource, and

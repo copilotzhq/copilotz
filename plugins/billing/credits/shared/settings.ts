@@ -1,0 +1,40 @@
+/** Credits' settings: the `billing` resource, which an app patches. */
+import type { Resources } from "../../../../runtime/mod.ts";
+
+/** A plan: the terms an org on it gets. */
+export type PlanTerms = {
+  title: string;
+  seat?: { price: number; currency: string };
+  credits?: { once?: number; monthly?: number; perSeat?: number };
+  prices?: string;
+};
+
+export type CreditsSettings = {
+  /**
+   * Whether limits apply. Off, nothing starts: no plans, no trials, no
+   * balances, and nobody's stopped, though staff can prepare orgs.
+   */
+  enforce: boolean;
+  /** The plans there are, and the one an org starts on. */
+  plans: Record<string, PlanTerms>;
+  start: string;
+  /** The month's limit an org starts with (USD); none: no limit. */
+  budget?: number;
+  /** The share of a budget or of its credits used when it's said to be running low. */
+  warnAt: number;
+  /** What's never stopped, by a call's `purpose`: the app's own upkeep, which follows turns. */
+  free: string[];
+};
+
+export const DEFAULTS: CreditsSettings = {
+  enforce: true,
+  plans: { free: { title: "Free", credits: { once: 5 } } },
+  start: "free",
+  warnAt: 0.8,
+  free: ["history", "memory"],
+};
+
+export const settingsOf = (ctx: { resources: Resources }): CreditsSettings => ({
+  ...DEFAULTS,
+  ...(ctx.resources.billing as Partial<CreditsSettings> | undefined),
+});

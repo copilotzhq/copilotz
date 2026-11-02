@@ -6,8 +6,8 @@
  * once what that means (you pay while it's awake; it sleeps after a while
  * unused; its disk is kept, at its price a GB-month), a name, then
  * `cloud.create`. Made, it says so, with a way to open it (which wakes it).
- * Refused (only the org's admins make them, or the month's budget is
- * spent), it says so plainly, and who can help.
+ * Refused (guests don't make them, or the org is out of credits or at its
+ * month's budget), it says so plainly, and who can help.
  */
 import { type ReactNode, useId, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -66,15 +66,16 @@ export const cloudNewView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
 
 const REFUSED = {
   forbidden: {
-    title: "Only your org's admins make cloud computers",
-    text: (where: string) =>
-      `Ask one of them to make one for ${where}, or to let members make them in the org's ` +
-      "settings.",
+    title: "Guests don't make cloud computers here",
+    text: (where: string) => `Ask someone in the org to make one for ${where}.`,
+  },
+  credits: {
+    title: "This org is out of credits",
+    text: () => "Its owners and admins can add more in Billing. Nothing you have is affected.",
   },
   budget: {
-    title: "This month's budget for cloud computers is spent",
-    text: () =>
-      "No more can be made until next month, unless one of your org's admins raises the budget.",
+    title: "This org has reached its budget for the month",
+    text: () => "Its owners and admins can raise it in Billing. Nothing you have is affected.",
   },
 };
 
@@ -86,9 +87,13 @@ export function NewCloud(
   const [name, setName] = useState(() => suggestedName(where));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  // Refused before asking, when the app says so (only admins make them, or the budget's spent).
-  const [refused, setRefused] = useState<"forbidden" | "budget" | undefined>(() =>
-    sizes.create ? undefined : sizes.why === "budget" ? "budget" : "forbidden"
+  // Refused before asking, when the app says so (guests don't, or the org can't spend).
+  const [refused, setRefused] = useState<keyof typeof REFUSED | undefined>(() =>
+    sizes.create
+      ? undefined
+      : sizes.why === "budget" || sizes.why === "credits"
+      ? sizes.why
+      : "forbidden"
   );
   const [made, setMade] = useState<{ computer: string; name: string }>();
   const chosen = sizes.sizes.find((s) => s.id === size) ?? sizes.sizes[0];
@@ -155,7 +160,14 @@ export function NewCloud(
     >
       {refused
         ? (
-          <Notice tone="warning" icon="lock" title={REFUSED[refused].title}>
+          <Notice
+            tone="warning"
+            icon="lock"
+            title={REFUSED[refused].title}
+            action={refused === "forbidden"
+              ? undefined
+              : <Button href="/org?tab=billing" size="sm">Go to Billing</Button>}
+          >
             {REFUSED[refused].text(here)}
           </Notice>
         )

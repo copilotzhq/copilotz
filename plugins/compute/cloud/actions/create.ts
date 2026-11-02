@@ -7,7 +7,7 @@
  * (nothing by default: publishing is always asked), then its disk, in the
  * first placement; its first wake formats it. Answers `{ computer }`.
  */
-import { defineAction, people } from "../../../../runtime/mod.ts";
+import { defineAction, failure, people } from "../../../../runtime/mod.ts";
 import { hostFor } from "../shared/host.ts";
 import { diskOf } from "../shared/names.ts";
 import { mayCreate } from "../shared/may.ts";
@@ -34,16 +34,9 @@ export const createAction = defineAction({
     if (!size) {
       throw invalid(`No size "${input.size}": ${Object.keys(set.sizes).join(", ") || "none"}`);
     }
-    const may = await mayCreate(ctx);
-    if (may.why === "admins") {
-      throw forbidden("Only the org's owners and admins make cloud computers here.");
-    }
-    if (may.why === "budget") {
-      throw Object.assign(
-        new Error("This month's budget for cloud computers is spent: no more can be made."),
-        { code: "budget" },
-      );
-    }
+    const may = await mayCreate(ctx, "check");
+    if (may.why === "guests") throw forbidden("Guests don't make cloud computers here.");
+    if (may.why) throw failure(may.why, may.message ?? "This org can't spend right now.");
     const now = new Date().toISOString();
     const placement = set.placements[0];
     if (!placement) throw invalid("The app has no placement for cloud computers.");

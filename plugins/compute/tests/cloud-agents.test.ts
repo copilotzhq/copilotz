@@ -167,7 +167,7 @@ test("an agent makes a cloud computer for its person, unasked, and works on it",
   });
 });
 
-test("the rules are the person's: a member can't where only admins make them, can where members do", async () => {
+test("the rules are the person's: a member makes one, in a space they share", async () => {
   const shared = async (rt: Rt) => {
     const { space } = await rt.call<{ space: string }>("space.create", { name: "Launch" }, {
       actor: ana,
@@ -178,20 +178,12 @@ test("the rules are the person's: a member can't where only admins make them, ca
   await setup(async (rt) => {
     const space = await shared(rt);
     const listed = await use(rt, space, "list_computers", {}, bob);
-    assertEquals([listed.can_create, listed.why_not], [false, "admins"]);
-    assertStringIncludes(
-      await use(rt, space, "create_computer", {}, bob),
-      "Only the org's owners and admins",
-    );
-    assertEquals(await desksIn(rt, space), []);
-  });
-  await setup(async (rt) => {
-    const space = await shared(rt);
+    assertEquals([listed.can_create, listed.why_not], [true, undefined]);
     const made = await use(rt, space, "create_computer", {}, bob);
     const [desk] = await desksIn(rt, space);
     // Bob's, in the space, and so Ana sees it there too.
     assertEquals([desk.computer, desk.owner], [made.computer, "bob"]);
-  }, { create: "members" });
+  });
 });
 
 test("an agent adds, renames, chooses and removes a computer; it and its files stay", async () => {

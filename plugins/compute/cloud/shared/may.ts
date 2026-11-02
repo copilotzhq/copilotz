@@ -1,34 +1,36 @@
 /**
- * Whether the person asking may make a cloud computer now, and why not: the
- * org's owners and admins (and platform staff) may, its members too when the
- * settings say (`create: "members"`), and anyone in their own personal org;
- * and only while the org's cloud spend this month is under its budget
- * (`budgetUsd`), when it has one.
+ * Whether the person asking may make a cloud computer now, and why not: anyone
+ * in the org but its guests, while it can spend. Cost is kept by what the org
+ * may spend (the `spending` resource: its credits and budget, when the app has
+ * them), not by who's asking.
  */
 import type { Context } from "../../../../runtime/mod.ts";
-import { runs, standingOf } from "./people.ts";
-import { settingsOf } from "./settings.ts";
+import { standingOf } from "./people.ts";
 
-export type May = { create: boolean; why?: "admins" | "budget" };
+export type May = { create: boolean; why?: "guests" | "credits" | "budget"; message?: string };
 
-/** What cloud computers have cost the org this month, at their price (none without a ledger). */
-async function spent(ctx: Context, now: string): Promise<number> {
-  const totals = await ctx.as().db.collection("usage").query<{ price?: number }[]>("totals", {
-    filter: { meter: "computer", at: { $gte: `${now.slice(0, 7)}-01T00:00:00.000Z` } },
-    by: [],
-  }).catch(() => []);
-  return totals.reduce((sum, t) => sum + (t.price ?? 0), 0);
+type Spending = { check?: string; may?: string };
+type Verdict = { ok: boolean; why?: "credits" | "budget"; message?: string };
+
+/**
+ * Why the org can't spend now, or nothing. `check`: from work about to spend,
+ * which can write what's due first; `may`: from a read, which can't.
+ */
+export async function stopped(ctx: Context, ask: "check" | "may" = "check"): Promise<
+  { why: "credits" | "budget"; message: string } | undefined
+> {
+  const action = (ctx.resources.spending as Spending | undefined)?.[ask];
+  if (!action) return undefined;
+  const verdict = await ctx.as().call<Verdict>(action, {});
+  return verdict.ok ? undefined : {
+    why: verdict.why ?? "credits",
+    message: verdict.message ?? "This org can't spend right now.",
+  };
 }
 
-export async function mayCreate(ctx: Context): Promise<May> {
-  const set = settingsOf(ctx);
+export async function mayCreate(ctx: Context, ask: "check" | "may" = "may"): Promise<May> {
   const me = await standingOf(ctx);
-  const personal = (ctx.resources.org as { kind?: string } | undefined)?.kind === "personal";
-  const may = runs(me) || (set.create === "members" && me.role !== "guest") ||
-    (personal && me.role === "owner");
-  if (!may) return { create: false, why: "admins" };
-  if (set.budgetUsd !== undefined && await spent(ctx, new Date().toISOString()) >= set.budgetUsd) {
-    return { create: false, why: "budget" };
-  }
-  return { create: true };
+  if (!me.staff && (!me.role || me.role === "guest")) return { create: false, why: "guests" };
+  const no = await stopped(ctx, ask);
+  return no ? { create: false, ...no } : { create: true };
 }

@@ -58,7 +58,8 @@ export const EVENTS = [
 /** What an event comes to for an org: facts for `billing.apply`; nothing when it isn't ours. */
 export type Fact = { org: string; plan?: PlanFact; payment?: PaymentFact };
 
-type Any = Record<string, any>; // deno-lint-ignore no-explicit-any
+// deno-lint-ignore no-explicit-any
+type Any = Record<string, any>;
 
 const idOf = (value: unknown): string | undefined =>
   typeof value === "string" ? value : (value as { id?: string } | null)?.id;

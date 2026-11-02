@@ -24,6 +24,8 @@ export type StripeSettings = {
   seller: string;
   /** The app's address, for coming back from checkout. */
   url: string;
+  /** Real money: a test mode's customers and subscriptions don't carry over. */
+  live?: boolean;
   /** Instead of the network, in tests. */
   fetch?: typeof fetch;
 };

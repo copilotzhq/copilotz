@@ -44,6 +44,8 @@ export const planSchema = {
         },
         /** The price list that applies (`resources.priceLists`); none: the app's. */
         prices: { type: "string" },
+        /** The month's limit it starts with, per seat; none: the app's. */
+        budget: { type: "object", properties: { perSeat: { type: "number" } } },
       },
       required: ["title"],
     },
@@ -51,6 +53,8 @@ export const planSchema = {
     seats: { type: "number" },
     /** From when its usage counts against its credits. */
     since: { type: "string" },
+    /** Whether that clock has started: not while limits are off. */
+    counting: { type: "boolean" },
     /** Where its periods start: the same day each month. */
     anchor: { type: "string" },
     /** Who collects for it (`manual`, `stripe`…), which of its accounts, and what it's called there. */
@@ -60,6 +64,12 @@ export const planSchema = {
     subscription: { type: "string" },
     /** How its payments stand, as its channel last said: `active`, `past_due`, `canceled`. */
     status: { type: "string" },
+    /** When its channel said so: anything older is out of date. */
+    statusAt: { type: "string" },
+    /** Subscriptions that have ended: news of them, however late, doesn't bring them back. */
+    ended: { type: "array", items: { type: "string" } },
+    /** Its customer and subscription are from a test mode, so going live forgets them. */
+    sandbox: { type: "boolean" },
     /** The month's limit (USD); absent: the app's default; null: none. */
     budget: { type: ["number", "null"] },
     /** Its usage or seats, not charged. Usage is recorded all the same. */

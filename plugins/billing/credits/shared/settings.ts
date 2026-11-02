@@ -7,6 +7,8 @@ export type PlanTerms = {
   seat?: { price: number; currency: string };
   credits?: { once?: number; monthly?: number; perSeat?: number };
   prices?: string;
+  /** The month's limit it starts with, per seat; none: the app's `budget`. */
+  budget?: { perSeat: number };
 };
 
 export type CreditsSettings = {
@@ -30,6 +32,8 @@ export type CreditsSettings = {
   topUpMax: number;
   /** How an org pays, when something lets it (the Actions `stripe` names). */
   pay?: { checkout: string; portal: string };
+  /** Real money: what came from a test mode stops counting. */
+  live?: boolean;
 };
 
 export const DEFAULTS: CreditsSettings = {

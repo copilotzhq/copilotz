@@ -24,6 +24,8 @@ export const paymentSchema = {
     credits: { type: "number" },
     note: { type: "string" },
     by: { type: "string" },
+    /** From a test mode: no real money. */
+    sandbox: { type: "boolean" },
     at: { type: "string" },
   },
   required: ["channel", "ref", "amount", "currency", "purpose", "at"],

@@ -23,7 +23,14 @@ import {
 import { runsOrg } from "../../../access/spaces/contract.ts";
 import type { Credit } from "../collections/credit.ts";
 import type { Plan } from "../collections/plan.ts";
-import { changePlan, pay, type PaymentFact, type PlanFact } from "../shared/apply.ts";
+import {
+  changePlan,
+  grantPeriod,
+  pay,
+  type PaymentFact,
+  type PeriodFact,
+  type PlanFact,
+} from "../shared/apply.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { endWaiver, ensurePlan, forget, planOf, refresh } from "../shared/standing.ts";
 
@@ -63,7 +70,13 @@ export const setPlanAction = defineAction({
   run: async (ctx, input) => {
     staffOnly(ctx);
     const { note: _note, ...fact } = input;
-    await changePlan(ctx, { channel: "manual", ...fact } as PlanFact);
+    // By hand now, whatever collected before: what it said of its payments no longer applies.
+    await changePlan(ctx, {
+      channel: "manual",
+      status: null,
+      subscription: null,
+      ...fact,
+    } as PlanFact);
     return {};
   },
 });
@@ -91,7 +104,7 @@ export const grantAction = defineAction({
       kind: input.amount > 0 ? "gift" : "adjustment",
       amount: input.amount,
       at: now,
-      note: input.reason,
+      reason: input.reason,
       ...(input.expires ? { expires: input.expires } : {}),
       ...(by(ctx) ? { by: by(ctx)! } : {}),
     });
@@ -250,6 +263,7 @@ export const applyAction = defineAction({
     properties: {
       payment: { type: "object" },
       plan: { type: "object" },
+      period: { type: "object" },
     },
     additionalProperties: false,
   },
@@ -257,6 +271,7 @@ export const applyAction = defineAction({
     await ensurePlan(ctx, new Date().toISOString());
     if (input.plan) await changePlan(ctx, input.plan as PlanFact);
     if (input.payment) await pay(ctx, input.payment as PaymentFact);
+    if (input.period) await grantPeriod(ctx, input.period as PeriodFact);
     return {};
   },
 });

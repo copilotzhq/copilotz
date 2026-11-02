@@ -74,7 +74,13 @@ export const tickAction = defineAction({
 
     // 1. Idle ones go, together (each takes seconds).
     const awake = await records.find({ state: "awake" });
-    const spent = awake.length ? await stopped(ctx) : undefined;
+    // Not being able to ask isn't a reason to stop anything, or the rest of this tick.
+    const spent = awake.length
+      ? await stopped(ctx).catch((error) => {
+        log("asking whether the org can spend")(error);
+        return undefined;
+      })
+      : undefined;
     const idle: CloudComputer[] = [];
     for (const rec of awake) if (spent || !await keeps(ctx, rec, now, set)) idle.push(rec);
     const released = await Promise.all(

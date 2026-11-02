@@ -6,7 +6,8 @@
  * Each day: what's expired goes, what was granted comes (paying any debt
  * first), then what was spent is taken: what expires soonest first, then, among
  * those alike, plan credits, the trial, gifts, and last what was bought.
- * Spending beyond the credits is debt, which the next grant pays.
+ * Spending beyond the credits is debt, which the next grant pays. A refund comes
+ * out of what the money bought, not of what was about to lapse anyway.
  */
 export type Grant = {
   _id: string;
@@ -14,6 +15,8 @@ export type Grant = {
   amount: number;
   at: string;
   expires?: string;
+  /** Taken away: what it comes out of first. */
+  takes?: string;
 };
 
 export type Bucket = { id: string; kind: string; amount: number; left: number; expires?: string };
@@ -56,9 +59,12 @@ export function walk(grants: Grant[], spent: Record<string, number>, today: stri
   let buckets: Bucket[] = [];
   let debt = 0;
   let expired = 0;
-  const take = (amount: number) => {
+  const take = (amount: number, first?: string) => {
     let owed = amount;
-    for (const bucket of buckets) {
+    const ordered = first
+      ? [...buckets.filter((b) => b.kind === first), ...buckets.filter((b) => b.kind !== first)]
+      : buckets;
+    for (const bucket of ordered) {
       if (owed <= 0) break;
       const taken = Math.min(bucket.left, owed);
       bucket.left -= taken;
@@ -76,9 +82,11 @@ export function walk(grants: Grant[], spent: Record<string, number>, today: stri
       return true;
     });
     let out = spent[day] ?? 0;
+    const taken: Grant[] = [];
     for (const grant of byDay.get(day) ?? []) {
       if (grant.amount < 0) {
-        out -= grant.amount;
+        if (grant.takes) taken.push(grant);
+        else out -= grant.amount;
         continue;
       }
       if (grant.expires && grant.expires <= day) continue;
@@ -95,6 +103,7 @@ export function walk(grants: Grant[], spent: Record<string, number>, today: stri
       }
     }
     buckets.sort(order);
+    for (const grant of taken) take(-grant.amount, grant.takes);
     if (out >= 0) take(out);
     else {
       // More came back than went (a correction): it pays debt, then it's credit like any other.

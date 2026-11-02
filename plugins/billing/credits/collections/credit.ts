@@ -17,9 +17,15 @@ export const creditSchema = {
     at: { type: "string" },
     /** The first day (UTC, `YYYY-MM-DD`) it no longer counts; none: it doesn't expire. */
     expires: { type: "string" },
-    /** What to show for it, and who gave it. */
+    /** What to show for it. */
     note: { type: "string" },
+    /** Why it was given, and who gave it: for staff. */
+    reason: { type: "string" },
     by: { type: "string" },
+    /** Taken away, what it comes out of first: a refund, of what the money bought. */
+    takes: { type: "string" },
+    /** From a test mode: it stops counting when the app goes live. */
+    sandbox: { type: "boolean" },
   },
   required: ["kind", "amount", "at"],
 } as const;

@@ -35,14 +35,14 @@ export function stripeWebhook(options: {
     const named = { name: sellerName, ...(seller.rate ? { rate: seller.rate } : {}) };
     try {
       let fact = factOf(event, named, options.start);
-      if (event.type === "charge.dispute.created") {
+      if (event.type === "charge.dispute.created" || event.type === "charge.dispute.closed") {
         const dispute = event.data.object;
         const charge = await stripeCall(
           { key: seller.key, fetch: options.settings.fetch },
           "GET",
           `/v1/charges/${typeof dispute.charge === "string" ? dispute.charge : dispute.charge.id}`,
         );
-        fact = factOfDispute(dispute, charge, sellerName);
+        fact = factOfDispute(event.type, dispute, charge, named);
       }
       // Not ours (another product on the account), or nothing to keep: received all the same.
       if (!fact) return answer(200, { ignored: event.type });
@@ -57,6 +57,10 @@ export function stripeWebhook(options: {
         `stripe: ${event.type} (${event.id}):`,
         error instanceof Error ? error.message : error,
       );
+      // What can never land (a plan the app no longer has) isn't worth trying again.
+      if ((error as { code?: string }).code === "invalid") {
+        return answer(200, { ignored: "invalid" });
+      }
       return answer(500, { error: "Try again" });
     }
   };

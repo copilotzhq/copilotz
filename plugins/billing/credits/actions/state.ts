@@ -13,9 +13,20 @@
  */
 import { type Context, defineAction, people } from "../../../../runtime/mod.ts";
 import { runsOrg } from "../../../access/spaces/contract.ts";
+import { billableSeats } from "../contract.ts";
 import type { Payment } from "../collections/payment.ts";
+import type { Plan } from "../collections/plan.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { NO_LIMIT, refresh, rooms, seatsOf, standingOf, verdictOf } from "../shared/standing.ts";
+
+/** A waiver as who runs the org sees it: what, and until when; why and who are staff's. */
+const withoutWhy = (waived: NonNullable<Plan["waived"]>) =>
+  Object.fromEntries(
+    Object.entries(waived).map(([what, w]) => {
+      const { reason: _reason, by: _by, ...shown } = w as { reason?: string; by?: string };
+      return [what, shown];
+    }),
+  );
 
 async function sight(ctx: Context) {
   const me = await ctx.call<{ role?: string | null; staff?: boolean }>("org.me", {})
@@ -50,7 +61,6 @@ export const stateAction = defineAction({
       : room.lowBudget !== undefined && room.budget < room.lowBudget
       ? "budget"
       : undefined;
-    const waivedPeople = s.plan?.waived?.seats?.people?.length ?? 0;
     return {
       on: set.enforce,
       runs,
@@ -67,21 +77,25 @@ export const stateAction = defineAction({
         ...(s.plan.customer ? { customer: s.plan.customer } : {}),
         ...(s.plan.subscription ? { subscription: s.plan.subscription } : {}),
         ...(typeof s.plan.seats === "number" ? { fixedSeats: s.plan.seats } : {}),
-        ...(s.plan.waived ? { waived: s.plan.waived } : {}),
+        ...(s.plan.waived ? { waived: staff ? s.plan.waived : withoutWhy(s.plan.waived) } : {}),
       },
-      ...(seats !== undefined
-        ? { seats, billedSeats: Math.max((s.plan?.seats ?? seats) - waivedPeople, 1) }
-        : {}),
+      ...(seats !== undefined ? { seats, billedSeats: billableSeats(s.plan!, seats, now) } : {}),
       ...(s.period ? { period: s.period } : {}),
       balance: s.walked.balance,
       buckets: s.walked.buckets,
       debt: s.walked.debt,
       waived: s.waivedUsage,
       month: s.month,
-      history: s.history.slice(0, 100).map(({ by: who, ...credit }) => ({
-        ...credit,
-        ...(staff && who ? { by: who } : {}),
-      })),
+      // Why it was given, and by whom, for staff; those who run the org, what it is.
+      history: s.history.slice(0, 100).map(({ by: who, reason, ...credit }) =>
+        staff
+          ? {
+            ...credit,
+            ...(credit.note ?? reason ? { note: credit.note ?? reason } : {}),
+            ...(who ? { by: who } : {}),
+          }
+          : credit
+      ),
       // What it was and came to, for who runs the org; what a channel kept, and who, for staff.
       payments: staff ? payments : payments.map((p) => ({
         _id: p._id,

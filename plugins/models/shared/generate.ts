@@ -257,7 +257,8 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
           s++;
           continue;
         }
-        if (i === choices.length - 1) throw out;
+        // The last one failed, having been stopped earlier: that's what to tell them.
+        if (i === choices.length - 1) throw stopped ?? out;
         break;
       }
     }

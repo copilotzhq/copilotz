@@ -25,28 +25,35 @@ export const rooms = (ctx: Context) => ctx.as().db.collection<Room>("billingRoom
 
 export const planOf = (ctx: Context) => plans(ctx).findOne({ _id: PLAN });
 
-/** The org's plan, started on the app's first one the first time it's needed. */
+/**
+ * The org's plan, started on the app's first one the first time it's needed. A
+ * trial is one a person: the personal org they get once. A team's starts without.
+ * While limits are off, its clock doesn't start (`counting`).
+ */
 export async function ensurePlan(ctx: Context, now: string): Promise<Plan> {
   const had = await planOf(ctx);
   if (had) return had;
   const set = settingsOf(ctx);
+  const first = set.plans[set.start] ?? { title: set.start };
+  const team = (ctx.resources.org as { kind?: string } | undefined)?.kind === "team";
+  const { once: _once, ...kept } = first.credits ?? {};
   const plan = {
     _id: PLAN,
     name: set.start,
-    terms: set.plans[set.start] ?? { title: set.start },
+    terms: team && first.credits ? { ...first, credits: kept } : first,
     since: now,
     anchor: now,
     channel: "manual",
-    ...(set.budget !== undefined ? { budget: set.budget } : {}),
+    ...(set.enforce ? { counting: true } : {}),
     at: now,
   };
   try {
     await plans(ctx).insertOne(plan);
-  } catch {
-    // Another executor made it just now.
+  } catch (error) {
+    // Another executor made it just now; else it's that it can't be written from here.
     const found = await planOf(ctx);
     if (found) return found;
-    throw new Error("The org's plan couldn't be started.");
+    throw error;
   }
   return plan as Plan;
 }
@@ -56,29 +63,45 @@ export const seatsOf = async (ctx: Context, plan: Plan): Promise<number> =>
   plan.seats ??
     await ctx.as().call<number>("org.seats", {}).catch(() => 1);
 
-/** What was charged between two times (USD). */
-async function chargedBetween(ctx: Context, from: string, to: string): Promise<number> {
-  const totals = await ctx.as().db.collection("usage").query<{ price?: number }[]>("totals", {
-    filter: { at: { $gte: from, $lt: to } },
-    by: [],
-  });
-  return totals.reduce((sum, t) => sum + (t.price ?? 0), 0);
+/** What's been charged by day since `from`, and before `to` if it says (USD). */
+async function chargedByDay(ctx: Context, from: string, to?: string) {
+  const totals = await ctx.as().db.collection("usage").query<
+    { key: { day: string }; price?: number }[]
+  >("totals", { filter: { at: { $gte: from, ...(to ? { $lt: to } : {}) } }, by: ["day"] });
+  return Object.fromEntries(totals.map((t) => [t.key.day, t.price ?? 0]));
 }
 
-/** A usage waiver's end: what it let through is given back, so it doesn't count afterwards. */
+/** What counts of what it was given: from a test mode, not once the app is live. */
+const counted = (ctx: Context, history: Credit[]) =>
+  settingsOf(ctx).live ? history.filter((c) => !c.sandbox) : history;
+
+/**
+ * A usage waiver's end: what it let through is given back, so it doesn't count
+ * afterwards. Not what was charged, but what the balance lost by it: credits that
+ * would have lapsed anyway aren't given back for good.
+ */
 export async function endWaiver(ctx: Context, plan: Plan, at: string): Promise<void> {
   const waived = plan.waived?.usage;
   if (!waived) return;
-  const amount = await chargedBetween(ctx, waived.from, at);
+  const history = counted(ctx, await credits(ctx).find({}));
+  const spent = await chargedByDay(ctx, plan.since);
+  const from = waived.from > plan.since ? waived.from : plan.since;
+  const during = await chargedByDay(ctx, from, at);
+  const without = Object.fromEntries(
+    Object.entries(spent).map(([day, price]) => [day, price - (during[day] ?? 0)]),
+  );
+  const today = at.slice(0, 10);
+  const amount = walk(history, without, today).balance - walk(history, spent, today).balance;
   if (amount > 0) {
     await credits(ctx).insertOne({
       _id: `waived:${waived.from}`,
       kind: "waived",
-      amount,
+      amount: Math.round(amount * 1e8) / 1e8,
       at,
-      note: waived.reason,
+      note: "Usage waived",
+      reason: waived.reason,
       ...(waived.by ? { by: waived.by } : {}),
-    });
+    } as Credit);
   }
   await plans(ctx).updateOne({ _id: PLAN }, { $unset: { "waived.usage": "" } });
 }
@@ -86,6 +109,11 @@ export async function endWaiver(ctx: Context, plan: Plan, at: string): Promise<v
 /** Writes what's come due. */
 export async function settle(ctx: Context, now: string): Promise<Plan> {
   let plan = await ensurePlan(ctx, now);
+  // Limits have just come on for it: what it used before they did doesn't count.
+  if (!plan.counting) {
+    await plans(ctx).updateOne({ _id: PLAN }, { $set: { since: now, counting: true } });
+    plan = (await planOf(ctx))!;
+  }
   const kept = new Set((await credits(ctx).find({})).map((c) => c._id));
   const grant = async (
     doc: { _id: string; kind: Credit["kind"]; amount: number; expires?: string; note?: string },
@@ -98,9 +126,9 @@ export async function settle(ctx: Context, now: string): Promise<Plan> {
   if (terms?.once) {
     await grant({ _id: "trial", kind: "trial", amount: terms.once, note: plan.terms.title });
   }
-  // A subscription that isn't being paid gets no new period's credits.
-  const paying = !plan.status || plan.status === "active" || plan.status === "trialing";
-  if (paying && (terms?.monthly || terms?.perSeat)) {
+  // A plan a provider collects for gets its credits when a period is paid for (`grantPeriod`).
+  const byHand = !plan.channel || plan.channel === "manual";
+  if (byHand && (terms?.monthly || terms?.perSeat)) {
     const period = periodOf(plan.anchor, now);
     const id = `plan:${plan.name}:${period.start}`;
     if (!kept.has(id)) {
@@ -133,20 +161,28 @@ export type Standing = {
   waivedUsage: boolean;
 };
 
+/**
+ * The month's limit: what its people chose; none if they chose none; else what
+ * its plan starts with, so a team's grows with its seats and doesn't stop it with
+ * credits left; else the app's.
+ */
+async function limitOf(ctx: Context, plan: Plan): Promise<number | undefined> {
+  if (plan.budget === null) return undefined;
+  if (typeof plan.budget === "number") return plan.budget;
+  const perSeat = plan.terms.budget?.perSeat;
+  if (perSeat) return perSeat * await seatsOf(ctx, plan);
+  return settingsOf(ctx).budget;
+}
+
 /** Where the org stands now, from what's kept. */
 export async function standingOf(ctx: Context, now: string): Promise<Standing> {
   const plan = await planOf(ctx);
-  const history = await credits(ctx).find({}, { sort: { at: -1 } });
+  const history = counted(ctx, await credits(ctx).find({}, { sort: { at: -1 } }));
   const today = now.slice(0, 10);
   const month = monthOf(now);
-  const totals = plan
-    ? await ctx.as().db.collection("usage").query<{ key: { day: string }; price?: number }[]>(
-      "totals",
-      { filter: { at: { $gte: plan.since } }, by: ["day"] },
-    )
-    : [];
-  const spent = Object.fromEntries(totals.map((t) => [t.key.day, t.price ?? 0]));
-  const limit = typeof plan?.budget === "number" ? plan.budget : undefined;
+  // Not started yet (limits off): nothing has counted.
+  const spent = plan?.counting ? await chargedByDay(ctx, plan.since) : {};
+  const limit = plan ? await limitOf(ctx, plan) : undefined;
   const usageWaiver = plan?.waived?.usage;
   return {
     plan,

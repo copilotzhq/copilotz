@@ -18,9 +18,9 @@ import {
   invalid,
 } from "../../../../runtime/mod.ts";
 import { runsOrg } from "../../../access/spaces/contract.ts";
-import type { Plan, PlanTerms } from "../../credits/contract.ts";
+import { billableSeats, type Plan, type PlanTerms } from "../../credits/contract.ts";
 import { stripeCall } from "../shared/api.ts";
-import { sellerFor, settingsOf } from "../shared/settings.ts";
+import { sellerFor, settingsOf, type StripeSettings } from "../shared/settings.ts";
 
 async function runsIt(ctx: Context) {
   if (ctx.actor?.staff === true) return;
@@ -29,6 +29,13 @@ async function runsIt(ctx: Context) {
 }
 
 const planOf = (ctx: Context) => ctx.as().call<Plan>("billing.plan", {});
+
+/** A plan as going live leaves it: a test mode's customer and subscription mean nothing there. */
+function fresh(set: StripeSettings, plan: Plan): Plan {
+  if (!set.live || !plan.sandbox) return plan;
+  const { customer: _c, subscription: _s, seller: _l, status: _t, ...rest } = plan;
+  return rest as Plan;
+}
 
 const orgOf = (ctx: Context) => {
   const org = ctx.resources.org as { id?: string } | undefined;
@@ -53,7 +60,17 @@ export const checkoutAction = defineAction({
     await runsIt(ctx);
     const org = orgOf(ctx);
     const set = settingsOf(ctx);
-    const plan = await planOf(ctx);
+    const billing = ctx.resources.billing as {
+      enforce?: boolean;
+      plans: Record<string, PlanTerms>;
+      topUpMin: number;
+      topUpMax: number;
+    };
+    // With limits off nothing's for sale yet; staff can try it.
+    if (billing.enforce === false && ctx.actor?.staff !== true) {
+      throw failure("not_yet", "Nothing is charged for here yet.");
+    }
+    const plan = fresh(set, await planOf(ctx));
     const chosen = sellerFor(set, plan.seller, input.country);
     if (!chosen) throw failure("no_seller", "Paying isn't set up here yet.");
     const [name, seller] = chosen;
@@ -74,16 +91,16 @@ export const checkoutAction = defineAction({
         },
       );
     if (input.plan) {
-      const { plans } = ctx.resources.billing as { plans: Record<string, PlanTerms> };
-      const terms = plans[input.plan];
+      const terms = billing.plans[input.plan];
       const price = seller.prices[input.plan];
       if (!terms || !price) throw invalid(`The plan "${input.plan}" can't be bought here.`);
       if (plan.subscription && plan.status !== "canceled") {
         throw failure("subscribed", "This org already has a subscription: manage it instead.");
       }
       // What the Billing page said it would come to: those not waived.
-      const people = plan.seats ?? await ctx.as().call<number>("org.seats", {}).catch(() => 1);
-      const seats = Math.max(people - (plan.waived?.seats?.people?.length ?? 0), 1);
+      const people = await ctx.as().call<number>("org.seats", {}).catch(() => 1);
+      const seats = billableSeats(plan, Math.max(people, 1), new Date().toISOString());
+      if (!seats) throw failure("waived", "This org's seats are waived: there's nothing to pay.");
       const metadata = { org, plan: input.plan, seller: name };
       const { url } = await call({
         mode: "subscription",
@@ -98,6 +115,9 @@ export const checkoutAction = defineAction({
     }
     if (!input.credits) throw invalid("Say how many credits.");
     const credits = Math.round(input.credits * 100) / 100;
+    if (credits < billing.topUpMin || credits > billing.topUpMax) {
+      throw invalid(`Choose between $${billing.topUpMin} and $${billing.topUpMax}.`);
+    }
     if (seller.currency !== "usd" && !seller.rate) {
       throw failure("no_seller", "Paying isn't set up here yet.");
     }
@@ -111,7 +131,6 @@ export const checkoutAction = defineAction({
         price_data: { currency: seller.currency, unit_amount: unit, product: seller.credits },
       }],
       ...(plan.customer ? {} : { customer_creation: "always" }),
-      invoice_creation: { enabled: true },
       metadata,
       payment_intent_data: { metadata },
       success_url: back("credits"),
@@ -128,7 +147,7 @@ export const portalAction = defineAction({
   run: async (ctx) => {
     await runsIt(ctx);
     const set = settingsOf(ctx);
-    const plan = await planOf(ctx);
+    const plan = fresh(set, await planOf(ctx));
     const chosen = sellerFor(set, plan.seller);
     if (!chosen || !plan.customer) {
       throw failure("not_paying", "There's nothing to manage yet: nothing has been paid.");
@@ -162,8 +181,14 @@ export const seatsAction = defineAction({
     if (!plan?.subscription || plan.status !== "active" || !plan.seller) return {};
     const seller = set.sellers[plan.seller];
     if (!seller) return {};
-    const people = plan.seats ?? await ctx.as().call<number>("org.seats", {}).catch(() => 1);
-    const seats = Math.max(people - (plan.waived?.seats?.people?.length ?? 0), 1);
+    const people = await ctx.as().call<number>("org.seats", {}).catch(() => 1);
+    const seats = billableSeats(
+      plan as Pick<Plan, "seats" | "waived">,
+      people,
+      new Date().toISOString(),
+    );
+    // Every seat waived: staff decide what happens to its subscription.
+    if (!seats) return {};
     const key = { key: seller.key, fetch: set.fetch };
     const subscription = await stripeCall<{
       items: { data: { id: string; quantity: number }[] };

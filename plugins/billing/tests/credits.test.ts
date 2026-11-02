@@ -19,6 +19,7 @@ import models, { type LlmAdapter } from "../../models/mod.ts";
 import { chat, type Message } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { credits, usage, type UsageRecord } from "../mod.ts";
+import { walk } from "../credits/shared/walk.ts";
 import { env, tempFile, test } from "../../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
@@ -198,10 +199,10 @@ test("a gift gets it going again at once; only staff give, in person", async () 
     );
     await rt.call("billing.grant", grant, { actor: staff });
     assertEquals((await ask(rt)).text, "done");
-    const [gift] = (await rt.call<{ kind: string; note: string; by: string }[]>("test.all", {
+    const [gift] = (await rt.call<{ kind: string; reason: string; by: string }[]>("test.all", {
       collection: "credit",
     })).filter((c) => c.kind === "gift");
-    assertEquals([gift.note, gift.by], ["welcome", "sam"]);
+    assertEquals([gift.reason, gift.by], ["welcome", "sam"]);
   });
 });
 
@@ -564,4 +565,187 @@ test("it says which it's running low on; seats waived aren't billed", async () =
     const seats = await stateOf<{ seats: number; billedSeats: number }>(rt);
     assertEquals([seats.seats, seats.billedSeats], [2, 1]);
   });
+});
+
+test("a trial is one a person: a team's org starts without it", async () => {
+  await setup(
+    async (rt) => {
+      const state = await stateOf<{ plan: { terms: { credits?: { once?: number } } } }>(rt);
+      assertEquals([state.balance, state.plan.terms.credits?.once], [0, undefined]);
+      assert((await ask(rt)).text?.includes("out of credits"));
+    },
+    {},
+    { resources: { org: { id: "o-team", name: "Team", kind: "team" } } },
+  );
+  await setup(
+    async (rt) => {
+      assertEquals((await stateOf(rt)).balance, 2);
+    },
+    {},
+    { resources: { org: { id: "p-1", name: "Personal", kind: "personal" } } },
+  );
+});
+
+test("a waiver gives back what the balance lost: all it let through, and nothing more", async () => {
+  await setup(async (rt) => {
+    await stateOf(rt);
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    await rt.call("billing.grant", { amount: 100, reason: "x", expires: tomorrow }, {
+      actor: staff,
+    });
+    await rt.call("billing.waive", { what: "usage", reason: "internal" }, { actor: staff });
+    await rt.call("test.use", {
+      meter: "llm",
+      subject: "script/m",
+      quantities: { input: 50_000_000 },
+    });
+    await rt.call("billing.waive", { what: "usage", lift: true }, { actor: staff });
+    const state = await stateOf<{ history: { kind: string; amount: number }[] }>(rt);
+    assertEquals(state.history.find((c) => c.kind === "waived")?.amount, 50);
+    assertAlmostEquals(state.balance, 102);
+  });
+  // Credits that had lapsed while it was waived aren't given back for good.
+  const history = [{
+    _id: "p",
+    kind: "plan",
+    amount: 100,
+    at: "2026-10-01T00:00:00Z",
+    expires: "2026-11-01",
+  }];
+  const spent = { "2026-10-15": 100 };
+  const today = "2026-11-02";
+  const lost = walk(history, {}, today).balance - walk(history, spent, today).balance;
+  assertEquals(lost, 0, "they'd have lapsed anyway");
+});
+
+test("a refund comes out of what the money bought, not of credits about to lapse", async () => {
+  await setup(async (rt) => {
+    await stateOf(rt);
+    const until = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    await rt.call("billing.grant", { amount: 100, reason: "lapses", expires: until }, {
+      actor: staff,
+    });
+    const payment = { channel: "stripe", amount: 100, currency: "usd" };
+    await rt.call("billing.apply", {
+      payment: { ...payment, ref: "cs_1", purpose: "credits", credits: 100 },
+    });
+    await rt.call("billing.apply", {
+      payment: { ...payment, ref: "re_1", amount: -100, purpose: "refund", credits: -100 },
+    });
+    const state = await stateOf<{ buckets: { kind: string; left: number; expires?: string }[] }>(
+      rt,
+    );
+    assertEquals(
+      state.buckets.find((b) => b.kind === "purchase"),
+      undefined,
+      "nothing bought left",
+    );
+    assertEquals(state.buckets.find((b) => b.expires)?.left, 100);
+  });
+});
+
+test("what it used while limits were off doesn't count when they come on; what it was given does", async () => {
+  const path = tempFile();
+  const off = await started(await sqliteStore({ path }), { enforce: false });
+  await off.call("billing.grant", { amount: 100, reason: "ready" }, { actor: staff });
+  await off.call("test.use", {
+    meter: "llm",
+    subject: "script/m",
+    quantities: { input: 300_000_000 },
+  });
+  await off.close();
+  const on = await started(await sqliteStore({ path }));
+  try {
+    assertAlmostEquals((await stateOf(on)).balance, 102);
+  } finally {
+    await on.close();
+  }
+});
+
+test("seats: a waiver that's ended no longer applies; one naming nobody is every seat", async () => {
+  await setup(async (rt) => {
+    await stateOf(rt);
+    const billed = async () => (await stateOf<{ billedSeats: number }>(rt)).billedSeats;
+    assertEquals(await billed(), 2);
+    await rt.call("billing.waive", { what: "seats", reason: "x", people: ["bob"] }, {
+      actor: staff,
+    });
+    assertEquals(await billed(), 1);
+    await rt.call("billing.waive", { what: "seats", lift: true }, { actor: staff });
+    await rt.call("billing.waive", { what: "seats", reason: "all" }, { actor: staff });
+    assertEquals(await billed(), 0);
+    await rt.call("billing.waive", { what: "seats", lift: true }, { actor: staff });
+    await rt.call("billing.waive", {
+      what: "seats",
+      reason: "soon",
+      people: ["bob"],
+      until: new Date(Date.now() + 40).toISOString(),
+    }, { actor: staff });
+    assertEquals(await billed(), 1);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assertEquals(await billed(), 2);
+  });
+});
+
+test("a contract after a subscription: what the subscription said no longer applies", async () => {
+  await setup(async (rt) => {
+    await rt.call("billing.apply", {
+      plan: { name: "team", channel: "stripe", subscription: "sub_1", status: "canceled" },
+    });
+    await rt.call("billing.setPlan", {
+      name: "acme",
+      terms: { title: "Acme", credits: { monthly: 100 } },
+    }, { actor: staff });
+    const state = await stateOf<{ plan: { status?: string; subscription?: string } }>(rt);
+    assertEquals([state.plan.status, state.plan.subscription], [undefined, undefined]);
+    assertAlmostEquals(state.balance, 100);
+  });
+});
+
+test("why a credit was given and who waived what are for staff", async () => {
+  await setup(async (rt) => {
+    await rt.call("billing.grant", { amount: 5, reason: "goodwill, ticket 44" }, { actor: staff });
+    await rt.call("billing.waive", { what: "usage", reason: "friend of sam" }, { actor: staff });
+    const shown = JSON.stringify(await stateOf(rt));
+    assert(
+      !shown.includes("ticket 44") && !shown.includes("friend of sam") && !shown.includes("sam"),
+    );
+    const staffs = JSON.stringify(await stateOf(rt, staff));
+    assert(staffs.includes("ticket 44") && staffs.includes("friend of sam"));
+  });
+});
+
+test("going live: what a test mode gave stops counting", async () => {
+  const path = tempFile();
+  const test1 = await started(await sqliteStore({ path }));
+  await test1.call("billing.apply", {
+    payment: {
+      channel: "stripe",
+      ref: "cs_t",
+      amount: 1000,
+      currency: "usd",
+      purpose: "credits",
+      credits: 1000,
+      sandbox: true,
+    },
+  });
+  await test1.close();
+  const live = await started(await sqliteStore({ path }), { live: true });
+  try {
+    assertEquals((await stateOf(live)).balance, 2);
+  } finally {
+    await live.close();
+  }
+});
+
+test("a team's budget starts by its seats, so it isn't stopped with credits left", async () => {
+  await setup(async (rt) => {
+    await rt.call("billing.setPlan", {
+      name: "big",
+      terms: { title: "Big", credits: { perSeat: 10 }, budget: { perSeat: 50 } },
+    }, { actor: staff });
+    assertEquals((await stateOf<{ month: { limit: number } }>(rt)).month.limit, 100);
+    await rt.call("billing.budget", { usd: 70 }, { actor: ana });
+    assertEquals((await stateOf<{ month: { limit: number } }>(rt)).month.limit, 70);
+  }, { budget: 50 });
 });

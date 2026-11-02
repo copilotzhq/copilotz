@@ -94,7 +94,7 @@ async function setup(
       definePlugin({
         name: "app",
         resources: {
-          org: { id: "org-1", name: "Org", kind: "team" },
+          org: { id: "org-1", name: "Org", kind: "personal" },
           stripe: settings,
           shared: { thread: {}, message: {} },
           billing: {
@@ -218,71 +218,204 @@ test("other products on the account, and orgs that are gone, are received and le
   });
 });
 
-test("a subscription: on its plan, its seats' credits come, unpaid it stops, ended it goes back", async () => {
-  await setup(async (rt, send) => {
-    await send({
-      id: "evt_s1",
-      type: "checkout.session.completed",
-      data: {
-        object: {
-          id: "cs_2",
-          mode: "subscription",
-          payment_status: "paid",
-          customer: "cus_2",
-          subscription: "sub_1",
-          metadata: { org: "org-1", plan: "team" },
-        },
+const NOW = Math.floor(Date.now() / 1000);
+const DAYS = 86400;
+
+const paidInvoice = (
+  id: string,
+  sub = "sub_1",
+  start = NOW - 3600,
+  end = NOW + 30 * DAYS,
+  seats = 2,
+  reason = "subscription_create",
+) => ({
+  id: `evt_${id}`,
+  type: "invoice.paid",
+  data: {
+    object: {
+      id,
+      currency: "usd",
+      subtotal: seats * 2000,
+      amount_paid: seats * 2000,
+      billing_reason: reason,
+      lines: { data: [{ quantity: seats, period: { start, end } }] },
+      parent: {
+        subscription_details: { subscription: sub, metadata: { org: "org-1", plan: "team" } },
       },
-    });
+    },
+  },
+});
+
+const subscribed = (sub = "sub_1", id = "evt_s1") => ({
+  id,
+  type: "checkout.session.completed",
+  created: 1000,
+  data: {
+    object: {
+      id: `cs_${sub}`,
+      mode: "subscription",
+      payment_status: "paid",
+      customer: "cus_2",
+      subscription: sub,
+      metadata: { org: "org-1", plan: "team" },
+    },
+  },
+});
+
+const ended = (sub = "sub_1", id = "evt_e1") => ({
+  id,
+  type: "customer.subscription.deleted",
+  created: 2000,
+  data: { object: { id: sub, status: "canceled", metadata: { org: "org-1" } } },
+});
+
+const failed = (sub: string, id: string, created: number) => ({
+  id,
+  type: "invoice.payment_failed",
+  created,
+  data: {
+    object: {
+      parent: { subscription_details: { subscription: sub, metadata: { org: "org-1" } } },
+    },
+  },
+});
+
+test("a subscription: on its plan; its credits come with the money, for what was paid", async () => {
+  await setup(async (rt, send) => {
+    await stateOf(rt);
+    await send(subscribed());
     let state = await stateOf(rt);
     assertEquals([state.plan.name, state.plan.status, state.plan.subscription], [
       "team",
       "active",
       "sub_1",
     ]);
-    assertEquals(state.buckets.find((b) => b.kind === "plan")?.left, 20, "two seats, $10 each");
+    assertEquals(state.buckets.find((b) => b.kind === "plan"), undefined, "nothing paid yet");
 
-    await send({
-      id: "evt_s2",
-      type: "invoice.paid",
-      data: {
-        object: {
-          id: "in_1",
-          currency: "usd",
-          subtotal: 4000,
-          amount_paid: 4000,
-          parent: {
-            subscription_details: { subscription: "sub_1", metadata: { org: "org-1" } },
-          },
-        },
-      },
-    });
+    await send(paidInvoice("in_1"));
     state = await stateOf(rt);
     assertEquals(state.payments.map((p) => [p.ref, p.amount, p.purpose]), [["in_1", 40, "seats"]]);
-    assertEquals(state.balance, 20, "a seat's fee buys no credits of its own");
+    assertEquals(state.buckets.find((b) => b.kind === "plan")?.left, 20, "two seats paid for");
+    // Sent again, nothing more.
+    await send(paidInvoice("in_1"));
+    assertEquals((await stateOf(rt)).buckets.find((b) => b.kind === "plan")?.left, 20);
+    // A seat added midway pays its part: its credits come with the next period.
+    await send(paidInvoice("in_p", "sub_1", NOW - 3600, NOW + 30 * DAYS, 3, "subscription_update"));
+    assertEquals((await stateOf(rt)).buckets.find((b) => b.kind === "plan")?.left, 20);
+    // The next period: as many as it charged for, whoever has joined since.
+    await send(
+      paidInvoice("in_2", "sub_1", NOW + 30 * DAYS, NOW + 60 * DAYS, 3, "subscription_cycle"),
+    );
+    assertEquals(
+      (await stateOf(rt)).buckets.filter((b) => b.kind === "plan").map((b) => b.left).sort(),
+      [20, 30],
+    );
 
-    await send({
-      id: "evt_s3",
-      type: "invoice.payment_failed",
-      data: {
-        object: {
-          parent: { subscription_details: { subscription: "sub_1", metadata: { org: "org-1" } } },
-        },
-      },
-    });
-    assertEquals((await stateOf(rt)).plan.status, "past_due");
+    await send(failed("sub_1", "evt_f1", 1500));
+    state = await stateOf(rt);
+    assertEquals(state.plan.status, "past_due");
+    assertEquals(
+      state.buckets.filter((b) => b.kind === "plan").length,
+      2,
+      "a failed payment grants nothing",
+    );
 
-    await send({
-      id: "evt_s4",
-      type: "customer.subscription.deleted",
-      data: { object: { id: "sub_1", status: "canceled", metadata: { org: "org-1" } } },
-    });
+    await send(ended());
     state = await stateOf(rt);
     assertEquals([state.plan.name, state.plan.status, state.plan.subscription], [
       "free",
       "canceled",
       undefined,
     ]);
+  });
+});
+
+test("news comes out of order: an ended subscription stays ended; old news changes nothing", async () => {
+  await setup(async (rt, send) => {
+    await stateOf(rt);
+    // Ended, and only then the checkout that began it arrives.
+    await send(ended("sub_1"));
+    await send(subscribed("sub_1", "evt_late"));
+    let state = await stateOf(rt);
+    assertEquals([state.plan.name, state.plan.subscription], ["free", undefined]);
+
+    // A new one; the old one's end, and its failed payments, don't touch it.
+    await send(subscribed("sub_2", "evt_new"));
+    await send(failed("sub_1", "evt_f", 3000));
+    await send(ended("sub_1", "evt_e2"));
+    state = await stateOf(rt);
+    assertEquals([state.plan.name, state.plan.status, state.plan.subscription], [
+      "team",
+      "active",
+      "sub_2",
+    ]);
+
+    // Its own, in the wrong order: the older says nothing.
+    await send(failed("sub_2", "evt_f2", 5000));
+    await send({
+      id: "evt_u",
+      type: "customer.subscription.updated",
+      created: 4000,
+      data: { object: { id: "sub_2", status: "active", metadata: { org: "org-1" } } },
+    });
+    assertEquals((await stateOf(rt)).plan.status, "past_due");
+  });
+});
+
+test("a plan the app no longer has isn't tried forever; another seller's event isn't ours", async () => {
+  await setup(async (rt, send) => {
+    await stateOf(rt);
+    const gone = subscribed();
+    gone.data.object.metadata = { org: "org-1", plan: "gone" };
+    const quiet = console.error;
+    console.error = () => {};
+    assertEquals((await send(gone)).status, 200);
+    console.error = quiet;
+    const theirs = {
+      ...paidCredits,
+      data: {
+        object: {
+          ...paidCredits.data.object,
+          metadata: { org: "org-1", credits: "25", seller: "other" },
+        },
+      },
+    };
+    assertEquals((await send(theirs)).status, 200);
+    assertEquals((await stateOf(rt)).balance, 2);
+  });
+});
+
+test("a dispute and a refund on one charge take back once; a dispute won gives it back", async () => {
+  await setup(async (rt, send) => {
+    await send(paidCredits);
+    await send({
+      id: "evt_d1",
+      type: "charge.dispute.created",
+      data: { object: { id: "dp_1", charge: "ch_9", amount: 2500 } },
+    });
+    assertEquals((await stateOf(rt)).balance, 2);
+    await send({
+      id: "evt_r1",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_9",
+          amount: 2500,
+          amount_refunded: 2500,
+          disputed: true,
+          currency: "usd",
+          metadata: { org: "org-1", credits: "25" },
+        },
+        previous_attributes: { amount_refunded: 0 },
+      },
+    });
+    assertEquals((await stateOf(rt)).balance, 2);
+    await send({
+      id: "evt_d2",
+      type: "charge.dispute.closed",
+      data: { object: { id: "dp_1", charge: "ch_9", amount: 2500, status: "won" } },
+    });
+    assertEquals((await stateOf(rt)).balance, 27);
   });
 });
 
@@ -325,6 +458,8 @@ test("a refund takes back what it paid for, in proportion; a dispute takes it al
 
 test("buying credits: on Stripe's page, for who may, with what the webhook needs", async () => {
   await setup(async (rt) => {
+    await assertRejects(() => rt.call("billing.checkout", { credits: 1 }, { actor: ana }));
+    await assertRejects(() => rt.call("billing.checkout", { credits: 99999 }, { actor: ana }));
     await assertRejects(() => rt.call("billing.checkout", { credits: 25 }, { actor: bob }));
     await assertRejects(() =>
       rt.call("billing.checkout", { credits: 25 }, { actor: { ...ana, key: "k" } as Actor })
@@ -363,20 +498,7 @@ test("subscribing: a seat each, its plan's price; only a plan with one; only onc
       Error,
       "nothing to manage",
     );
-    await send({
-      id: "evt_s1",
-      type: "checkout.session.completed",
-      data: {
-        object: {
-          id: "cs_2",
-          mode: "subscription",
-          payment_status: "paid",
-          customer: "cus_2",
-          subscription: "sub_1",
-          metadata: { org: "org-1", plan: "team" },
-        },
-      },
-    });
+    await send(subscribed());
     await assertRejects(
       () => rt.call("billing.checkout", { plan: "team" }, { actor: ana }),
       Error,

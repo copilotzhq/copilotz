@@ -1445,7 +1445,14 @@ export async function createOwner(
           emit({
             id,
             type: "action.started",
-            data: { action, input: input ?? null, inputHash, startedAt, attempt },
+            // An unrecorded Action's input stays out of the log, whatever became of it.
+            data: {
+              action,
+              input: registry.actions[action]?.record === false ? null : input ?? null,
+              inputHash,
+              startedAt,
+              attempt,
+            },
           }),
           ...(after
             ? [emit({

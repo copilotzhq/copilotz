@@ -42,6 +42,8 @@ export type Orgs = {
   invites: OrgInvite[];
   /** Platform staff, who go into any org. */
   staff: boolean;
+  /** The session they hold in the org they're in is staff's, one of theirs or not. */
+  asStaff: boolean;
 };
 
 /** An org as staff's console lists it, with what it last reported of itself. */
@@ -139,8 +141,7 @@ export const currentOrg = (orgs: Orgs): Org | undefined =>
   orgs.orgs.find((o) => o.id === orgs.current);
 
 /** Whether they're in an org as platform staff, not as one of its people. */
-export const asStaff = (orgs: Orgs): boolean =>
-  orgs.staff && !!orgs.current && !orgs.orgs.some((o) => o.id === orgs.current);
+export const asStaff = (orgs: Orgs): boolean => orgs.asStaff === true;
 
 /** What an org is called where it shows: everyone's own is "Personal". */
 export const orgName = (org: Pick<Org, "name" | "kind">): string =>
@@ -223,7 +224,7 @@ async function into<T>(to: Switching, move: () => Promise<T>): Promise<T> {
 export function enterOrg(org: Pick<Org, "id" | "name" | "kind">, staff = false): Promise<void> {
   return into(
     { id: org.id, name: org.name, kind: org.kind, ...(staff ? { staff: true } : {}) },
-    () => post("/orgs/enter", { org: org.id }),
+    () => post("/orgs/enter", { org: org.id, ...(staff ? { staff: true } : {}) }),
   ).then(() => {});
 }
 

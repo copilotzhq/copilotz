@@ -98,10 +98,16 @@ export const myOrgsAction = defineAction({
 
 export const enterOrgAction = defineAction({
   description:
-    "Whether someone may go into an org, and how: the role they join with, and where it lives",
+    "Whether someone may go into an org, and how: the role they join with, whether as staff " +
+    "(asked for, or staff who don't belong to it), and where it lives",
   input: {
     type: "object",
-    properties: { org: { type: "string" }, person, email: { type: "string" } },
+    properties: {
+      org: { type: "string" },
+      person,
+      email: { type: "string" },
+      staff: { type: "boolean" },
+    },
     required: ["org", "person"],
     additionalProperties: false,
   },
@@ -110,8 +116,11 @@ export const enterOrgAction = defineAction({
     if (!org) throw forbidden("No such org, or not one you belong to.");
     const memberships = ctx.db.collection<Membership>("membership");
     const mine = await memberships.findOne({ _id: `${input.org}|${input.person}` });
-    const staff = !mine && await isStaff(ctx, input.person, input.email);
+    // Staff who belong to an org go in as one of its people, unless they ask.
+    const staff = (!mine || input.staff === true) &&
+      await isStaff(ctx, input.person, input.email);
     if (!mine && !staff) throw forbidden("No such org, or not one you belong to.");
+    if (input.staff === true && !staff) throw forbidden("Staff only.");
     if (org.suspended && !staff) throw forbidden("This org is suspended.");
     if (mine) {
       await memberships.updateOne({ _id: mine._id }, {

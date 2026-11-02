@@ -111,6 +111,7 @@ function Console({ tab }: { tab?: string }): ReactNode {
     );
   }
   const current = orgs.status === "ready" ? orgs.value.current : null;
+  const inAsStaff = orgs.status === "ready" && orgs.value.asStaff;
   /** A dialog's closing ends what it was for, and nothing that started since. */
   const closer = (what: Doing["what"]) => () =>
     setDoing((now) => now?.what === what ? undefined : now);
@@ -231,6 +232,7 @@ function Console({ tab }: { tab?: string }): ReactNode {
                 key={org.id}
                 org={org}
                 here={org.id === current}
+                inAsStaff={org.id === current && inAsStaff}
                 onDo={(what) => setDoing({ what, org })}
               />
             ))}
@@ -273,7 +275,12 @@ function Stat(
 }
 
 function Row(
-  { org, here, onDo }: { org: ConsoleOrg; here: boolean; onDo(what: Doing["what"]): void },
+  { org, here, inAsStaff, onDo }: {
+    org: ConsoleOrg;
+    here: boolean;
+    inAsStaff: boolean;
+    onDo(what: Doing["what"]): void;
+  },
 ): ReactNode {
   const [entering, setEntering] = useState(false);
   const [error, setError] = useState<string>();
@@ -295,7 +302,9 @@ function Row(
         <span className="console-org-text">
           <span className="console-org-name">
             {org.name}
-            {here ? <Badge tone="primary">You're here</Badge> : null}
+            {here
+              ? <Badge tone="primary">{inAsStaff ? "You're here as staff" : "You're here"}</Badge>
+              : null}
           </span>
           <span className="console-org-meta">
             <span className="console-kind">{org.kind === "personal" ? "Personal" : "Team"}</span>
@@ -329,10 +338,10 @@ function Row(
           size="sm"
           icon="enter"
           loading={entering}
-          disabled={here}
+          disabled={inAsStaff}
           onClick={enter}
-          title={here
-            ? "You're in it"
+          title={inAsStaff
+            ? "You're in it as staff"
             : `Go into ${org.name} as staff: what you do there is on its record`}
         >
           Enter as staff

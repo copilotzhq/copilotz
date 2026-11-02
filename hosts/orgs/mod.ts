@@ -26,7 +26,8 @@
  *   `{ suspended?, name? }`; `POST …/<id>/move` `{ schema }` (its rows to
  *   another schema); `GET …/<id>/export` (its rows, as SQL); `POST
  *   …/<id>/delete` `{ confirm: <its name> }`. The app does the rows'
- *   part (`operations`). Staff enter any org with `/orgs/enter`. Gift codes:
+ *   part (`operations`). Staff enter any org with `/orgs/enter` `{ org, staff:
+ *   true }`, their own too; without it, they go into theirs as its people. Gift codes:
  *   `GET /console/codes`; `POST /console/codes` `{ amount, expires?, until?,
  *   note? }` (the code, shown this once); `POST /console/codes/revoke` `{ id }`.
  * - Hosts orgs claimed (`claimHost` in an org's `directory` resource: a
@@ -332,10 +333,16 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     url: URL,
     who: { person: string; email: string | null },
     org: string,
+    asStaff = false,
   ) => {
     const { org: info, role, staff } = await directory.call<
       { org: OrgInfo; role?: string; staff: boolean }
-    >("org.enter", { org, person: who.person, ...(who.email ? { email: who.email } : {}) });
+    >("org.enter", {
+      org,
+      person: who.person,
+      ...(who.email ? { email: who.email } : {}),
+      ...(asStaff ? { staff: true } : {}),
+    });
     const cell = await cellOf(info);
     cell.last = Date.now();
     report(cell);
@@ -349,7 +356,7 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
       ...(profile?.name ? { name: profile.name } : {}),
       ...(profile?.picture ? { picture: profile.picture } : {}),
     });
-    if (!staff) {
+    if (!staff || role) {
       await cell.runtime.call("org.join", { person: who.person, ...(role ? { role } : {}) });
     }
     // A session they hold already, for this org and this person, stays.
@@ -371,6 +378,17 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
         setCookie(url, info.id, MONTH, CURRENT),
       ],
     };
+  };
+
+  /** Whether the session a request holds in an org is staff's. */
+  const heldAsStaff = async (request: Request, org: string) => {
+    const secret = cookieOf(request, sessionOf(org));
+    const info = secret ? await orgInfo(org) : null;
+    if (!info || info.suspended) return false;
+    const actor = await (await cellOf(info)).runtime
+      .query<Actor | null>("credential.actor", { secret: secret! })
+      .catch(() => null);
+    return actor?.staff === true;
   };
 
   /** Whether a request's session for an org's cell is still good there. */
@@ -605,13 +623,15 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
               ? directory.call<{ invites: unknown[] }>("invite.mine", { email: who.email })
               : Promise.resolve({ invites: [] }),
           ]);
+          const current = cookieOf(request, CURRENT) ?? null;
           return json({
             person: who.person,
             email: who.email,
-            current: cookieOf(request, CURRENT) ?? null,
+            current,
             orgs,
             invites,
             staff,
+            asStaff: staff && !!current && await heldAsStaff(request, current),
           });
         }
         case "POST /orgs": {
@@ -630,8 +650,8 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
         case "POST /orgs/enter": {
           const who = await signedIn(request);
           if (!who) return json({ error: "Not signed in" }, { status: 401 });
-          const { org } = await request.json() as { org: string };
-          const entered = await enter(request, url, who, String(org));
+          const { org, staff } = await request.json() as { org: string; staff?: boolean };
+          const entered = await enter(request, url, who, String(org), staff === true);
           return json({ org: entered.org }, { cookies: entered.cookies });
         }
         case "POST /orgs/invites/answer": {

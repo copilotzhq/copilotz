@@ -183,6 +183,7 @@ export const STYLE = `
 .copilotz-me-chevron { flex: none; color: var(--muted-foreground); }
 
 /* The org's page */
+.copilotz-org-held { margin-bottom: 12px; }
 .copilotz-org-tabs { position: sticky; top: 0; z-index: 4; display: flex; width: 100%; margin-top: -2px;
   background: var(--background); }
 .copilotz-org-tabs .copilotz-tab { padding: 0 10px; }

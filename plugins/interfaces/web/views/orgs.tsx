@@ -22,6 +22,7 @@ import {
   Icon,
   Input,
   message,
+  Notice,
   type Org,
   type OrgInvite,
   orgName,
@@ -69,6 +70,12 @@ export function OrgSwitcher(
     onNew(): void;
   },
 ): ReactNode {
+  const [failed, setFailed] = useState<string>();
+  /** Goes in or back as staff: the page starts over, or it stays and says why. */
+  const switchTo = (org: Org, staff: boolean) => {
+    setFailed(undefined);
+    enterOrg(org, staff).catch((e) => setFailed(message(e)));
+  };
   const waiting = orgs.invites.length;
   const name = here ? orgName(here) : "Organization";
   const mine = [...orgs.orgs].sort((a, b) =>
@@ -122,10 +129,23 @@ export function OrgSwitcher(
                 <Icon name="shield" size={15} />
                 <span>
                   You're in <b>{here.name}</b> as staff. What you do here is on its record.
+                  {standing?.role
+                    ? (
+                      <button
+                        type="button"
+                        data-popover-item
+                        className="copilotz-orgs-staff-back"
+                        onClick={() => switchTo(here, false)}
+                      >
+                        Continue as {standingName(standing)}
+                      </button>
+                    )
+                    : null}
                 </span>
               </div>
             )
             : null}
+          {failed ? <Notice tone="destructive" role="alert">{failed}</Notice> : null}
           <ul className="copilotz-orgs-list" aria-label="Organizations">
             {mine.map((org) => (
               <li key={org.id}>
@@ -182,6 +202,21 @@ export function OrgSwitcher(
                   </span>
                   {runs(standing) ? "Organization settings" : "About this organization"}
                 </a>
+              )
+              : null}
+            {orgs.staff && here && !staff
+              ? (
+                <button
+                  type="button"
+                  data-popover-item
+                  className="copilotz-orgs-action"
+                  onClick={() => switchTo(here, true)}
+                >
+                  <span className="copilotz-orgs-icon">
+                    <Icon name="shield" size={15} />
+                  </span>
+                  Enter as staff
+                </button>
               )
               : null}
             {orgs.staff

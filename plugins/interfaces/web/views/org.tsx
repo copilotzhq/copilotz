@@ -99,19 +99,20 @@ function OrgPage({ given, tab, call }: { given: unknown; tab?: string; call: Cal
       badges={
         <>
           <Badge variant="outline">{personal ? "Personal org" : "Team org"}</Badge>
-          {standing.staff && !standing.role
+          {standing.staff
             ? (
               <Badge tone="warning">
                 <Icon name="shield" size={12} />
                 Staff access
               </Badge>
             )
-            : standing.role
+            : null}
+          {standing.role
             ? <Badge tone={runs(standing) ? "primary" : "neutral"}>{standingName(standing)}</Badge>
             : null}
         </>
       }
-      description={standing.staff && !standing.role
+      description={standing.staff
         ? `You're here as platform staff: what you do is on ${here.name}'s record.`
         : personal
         ? "Your own organization: just you, and what you make alone."

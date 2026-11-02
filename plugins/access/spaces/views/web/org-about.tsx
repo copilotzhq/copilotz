@@ -67,9 +67,9 @@ function About({ org, standing, call }: { org: Org; standing: Standing; call: Ca
         </Setting>
         <Setting
           title="Your role"
-          text={standing.role
-            ? role?.lets ?? ""
-            : "Platform staff: you reach all of it, and what you do here is on its record, as yours."}
+          text={standing.staff
+            ? "Platform staff: you reach all of it, and what you do here is on its record, as yours."
+            : role?.lets ?? ""}
         >
           <span className="org-about-role">
             {standing.role

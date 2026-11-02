@@ -100,6 +100,8 @@ export const STYLE = `
   color: var(--warning-text); font-size: 12.5px; line-height: 1.45; }
 .copilotz-orgs-staff > .copilotz-icon { margin-top: 1px; }
 .copilotz-orgs-staff b { font-weight: 650; }
+.copilotz-orgs-staff-back { display: block; margin-top: 4px; padding: 0; border: 0; background: none; color: inherit;
+  font: inherit; font-weight: 650; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .copilotz-orgs-list, .copilotz-orgs-invites ul { list-style: none; display: grid; gap: 1px; margin: 0; padding: 0; }
 .copilotz-orgs-row, .copilotz-orgs-action { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px;
   padding: 6px 8px; border: 0; border-radius: var(--radius-md); background: transparent; color: inherit;

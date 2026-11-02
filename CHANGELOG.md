@@ -1,3 +1,11 @@
+## 1.0.0-rc.15 — 2026-11-02
+
+- **Enter as staff, in your own org too.** Staff who belong to an org go in as one of its people, as
+  before, but can now ask to go in as staff: from the console, or the org switcher. They keep their
+  role, get the staff tools, and "Continue as Owner" takes them back. `POST /orgs/enter` takes
+  `staff: true`, `org.enter` takes `staff`, and `GET /orgs` says `asStaff`, which `asStaff()` now
+  reads instead of guessing from membership.
+
 ## 1.0.0-rc.14 — 2026-11-02
 
 - **Credits** (`plugins/billing/credits`): what an org can spend. Plans, credits and payments are

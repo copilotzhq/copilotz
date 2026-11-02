@@ -144,6 +144,7 @@ test("the browser's orgs: a server with many answers them; one with one org, non
     orgs: [{ id: "p-1", name: "ana", kind: "personal" }, { id: "o-1", name: "Acme", kind: "team" }],
     invites: [],
     staff: false,
+    asStaff: false,
   };
   const fetched = globalThis.fetch;
   try {

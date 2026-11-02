@@ -132,6 +132,41 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     const consoleOrgs = await (await sam.send("GET", "/console/orgs")).json();
     assert(consoleOrgs.orgs.some((o: { id: string }) => o.id === acme.id));
     assertEquals((await ana.send("GET", "/console/orgs")).status, 403);
+    assertEquals((await (await sam.send("GET", "/orgs")).json()).asStaff, true);
+
+    // Staff in an org of their own are one of its people, until they ask; then they keep
+    // their role and act as staff, and going in as usual puts them back.
+    await sam.send("POST", "/orgs", { name: "Sam's" });
+    assertEquals((await (await sam.send("GET", "/orgs")).json()).asStaff, false);
+    const sams = (await (await sam.send("GET", "/orgs")).json()).current as string;
+    const samsRt = (await host.runtime(sams)) as Runtime;
+    const standing = async () => {
+      const actor = await samsRt.query<Actor>("credential.actor", {
+        secret: sam.jar.get(`s_${sams}`)!,
+      });
+      const { role, staff } = await samsRt.call<{ role: string; staff: boolean }>("org.me", {}, {
+        actor,
+      });
+      return { role, staff };
+    };
+    assertEquals((await sam.send("POST", "/orgs/enter", { org: sams, staff: true })).status, 200);
+    assertEquals((await (await sam.send("GET", "/orgs")).json()).asStaff, true);
+    assertEquals(await standing(), { role: "owner", staff: true });
+    assertEquals((await sam.send("POST", "/orgs/enter", { org: sams })).status, 200);
+    assertEquals((await (await sam.send("GET", "/orgs")).json()).asStaff, false);
+    assertEquals(await standing(), { role: "owner", staff: false });
+    await sam.send("POST", "/orgs/enter", { org: acme.id });
+
+    // Only staff can ask to: a member can't, and someone else's org is still closed to them.
+    assertEquals(
+      (await ana.send("POST", "/orgs/enter", { org: acme.id, staff: true })).status,
+      403,
+    );
+    assertEquals((await (await ana.send("GET", "/orgs")).json()).asStaff, false);
+    assertEquals(
+      (await eve.send("POST", "/orgs/enter", { org: acme.id, staff: true })).status,
+      403,
+    );
 
     // Ana takes Bob out: his session there ends, and Acme is no longer his.
     await acmeRt.call("org.remove", { person: "bob@example.com" }, { actor: asAna });

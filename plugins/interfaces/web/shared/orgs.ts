@@ -41,7 +41,7 @@ export const orgRoleName = (role: string | null | undefined): string =>
 export const runs = (standing: Standing | undefined): boolean =>
   !!standing && (standing.staff || standing.role === "owner" || standing.role === "admin");
 
-/** How someone stands, in a word: "Owner", or "Staff" for staff who aren't in it. */
+/** How someone stands, in a word: their role ("Owner"), or "Staff" for staff who aren't in it. */
 export const standingName = (standing: Standing | undefined): string =>
   !standing ? "" : standing.role ? orgRoleName(standing.role) : standing.staff ? "Staff" : "";
 

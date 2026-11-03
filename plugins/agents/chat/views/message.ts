@@ -71,7 +71,9 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
   const told: LlmMessage[] = m.told?.length
     ? [{ role: "user", text: (m.told as Told[]).map((c) => c.text).join("\n\n") }]
     : [];
-  if (!m.toolCalls?.length) return [...told, { role: "assistant", text: m.text ?? "" }];
+  // Its model's state goes back with it: thinking, signatures (only to the model that wrote them).
+  const state = m.state ? { state: m.state as LlmState } : {};
+  if (!m.toolCalls?.length) return [...told, { role: "assistant", text: m.text ?? "", ...state }];
   const calls = m.toolCalls as Step[];
   return [
     ...told,
@@ -79,7 +81,7 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
       role: "assistant",
       text: m.text || undefined,
       toolCalls: calls.map(({ id, name, input }) => ({ id, name, input })),
-      ...(m.state ? { state: m.state as LlmState } : {}),
+      ...state,
     },
     ...calls.map((c): LlmMessage => {
       // A tool's own View decides how its result reads (clipped, summarized…).

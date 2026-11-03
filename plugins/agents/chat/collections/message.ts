@@ -87,7 +87,11 @@ const messageSchema = {
       properties: { thread: { type: "string" }, in: { type: "string" }, from: { type: "string" } },
       required: ["thread"],
     },
-    /** A step's model state (its thinking), sent back to that model while its turn goes on. */
+    /**
+     * Its model's state (thinking, signatures) on a step or an answer: sent
+     * back to that model in its later calls, this turn's and the next ones'.
+     * Only trusted code reads it.
+     */
     state: { type: "object" },
     /**
      * What its sender was told before writing it, at the start of its turn
@@ -109,7 +113,8 @@ const messageSchema = {
 
 export const message = defineCollection({
   schema: messageSchema,
-  private: ["told"],
+  // What it was told and its model's state are the agent's: people's reads and events go without.
+  private: ["told", "state"],
   queries: {
     /**
      * Everything in a thread, oldest first, agents' private steps included.
@@ -150,9 +155,10 @@ export const message = defineCollection({
       params: { thread: string; agent: string; since?: string },
       ctx,
     ) => {
+      // Summarized (another plugin's), from where it says; else a window that moves in batches.
       const recent = await lineage(ctx.db, params.thread, {
         agent: params.agent,
-        ...(params.since ? { since: params.since } : {}),
+        ...(params.since !== undefined ? { since: params.since } : { batched: true }),
       });
       const sent = new Set(
         recent.flatMap((m) =>

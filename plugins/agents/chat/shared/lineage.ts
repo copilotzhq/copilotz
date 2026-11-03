@@ -4,49 +4,79 @@ import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { HISTORY } from "./agents.ts";
 
-type Reads = { collection<T>(name: string): Pick<Collection<T>, "find" | "findOne"> };
+type Reads = {
+  collection<T>(name: string): Pick<Collection<T>, "find" | "findOne" | "countDocuments">;
+};
+
+/** Only a guard: from `since` on, a summarized history's budget is what bounds them. */
+const WHOLE = 5_000;
 
 /**
- * A thread's latest messages, oldest first. A fork continues with its parent's,
- * up to the message it started at, and so on up the lineage; nothing is
- * copied. `agent` limits them to what that agent sees: the shared ones and its
- * own private steps. Each level is one query the owner keeps cached.
+ * Where an agent's window of a thread starts when nothing summarizes it: it
+ * holds from HISTORY to twice that, and drops HISTORY at a time, so between
+ * drops each prompt starts as the last one did (and the provider's cache
+ * holds it).
+ */
+export const windowStart = (total: number) =>
+  total <= 2 * HISTORY ? 0 : total - HISTORY - ((total - HISTORY) % HISTORY);
+
+/**
+ * A thread's messages, oldest first. A fork continues with its parent's, up
+ * to the message it started at, and so on up the lineage; nothing is copied.
+ * `agent` limits them to what that agent sees: the shared ones and its own
+ * private steps. Which of its own:
+ *
+ * - `since` (where a summarized history turns whole, `""` before it does):
+ *   every one from then on, and the latest HISTORY of what it inherited;
+ * - `batched` (an agent's, unsummarized): the window `windowStart` says;
+ * - else the latest `limit` (HISTORY), through the lineage.
+ *
+ * Each level is one query the owner keeps cached.
  */
 export async function lineage(
   db: Reads,
   id: string,
-  options: { agent?: string; limit?: number; since?: string } = {},
+  options: { agent?: string; limit?: number; since?: string; batched?: boolean } = {},
 ): Promise<Message[]> {
   const { agent, since } = options;
-  // From `since` on (where a summarized history turns whole), every message; else the latest.
-  const limit = since ? 1_000 : options.limit ?? HISTORY;
   const threads = db.collection<Thread>("thread");
   const messages = db.collection<Message>("message");
   const visible = agent ? { $or: [{ private: { $ne: true } }, { from: agent }] } : {};
-  /** The latest messages it sees in a thread, newest first: one query per thread and agent. */
-  const latest = (thread: string) =>
-    messages.find({ thread, ...visible }).sort({ at: -1 }).limit(limit);
-  const levels: Message[][] = [];
-  let left = limit;
-  let level = since
-    ? await messages.find({ thread: id, at: { $gte: since }, ...visible }).sort({ at: -1 })
-      .limit(limit)
-    : await latest(id);
-  for (let current = await threads.findOne({ _id: id });;) {
-    levels.push(level.slice(0, left));
-    left -= Math.min(level.length, left);
-    if (!left || !current?.fork || !current.parent) break;
+  /** The latest `n` messages it sees in a thread, newest first. */
+  const latest = (thread: string, n: number) =>
+    messages.find({ thread, ...visible }).sort({ at: -1 }).limit(n);
+
+  let level: Message[];
+  let left: number;
+  if (since !== undefined) {
+    level = await messages.find({ thread: id, at: { $gte: since }, ...visible }).sort({ at: -1 })
+      .limit(WHOLE);
+    left = HISTORY;
+  } else if (options.batched) {
+    const total = await messages.countDocuments({ thread: id, ...visible });
+    level = await latest(id, Math.max(1, total - windowStart(total)));
+    left = Math.max(0, HISTORY - level.length);
+  } else {
+    const limit = options.limit ?? HISTORY;
+    level = await latest(id, limit);
+    left = limit - level.length;
+  }
+  const levels: Message[][] = [level];
+  for (let current = await threads.findOne({ _id: id }); left > 0;) {
+    if (!current?.fork || !current.parent) break;
     const { thread, message } = current.parent;
     const from = await messages.findOne({ _id: message });
     if (!from) break;
     // The parent's latest window usually reaches back to the fork point; when
     // it doesn't, ask for the messages up to it.
-    const window = await latest(thread);
+    const window = await latest(thread, left);
     level = window.filter((m) => m.at <= from.at);
-    if (window.length === limit && level.length < left) {
+    if (window.length === left && level.length < left) {
       level = await messages.find({ thread, at: { $lte: from.at }, ...visible })
-        .sort({ at: -1 }).limit(limit);
+        .sort({ at: -1 }).limit(left);
     }
+    levels.push(level);
+    left -= level.length;
     current = await threads.findOne({ _id: thread });
   }
   // Each level is newest first, and older than the one before it.

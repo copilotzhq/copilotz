@@ -1,3 +1,20 @@
+## 1.0.0-rc.17 — 2026-11-03
+
+- **A model's state goes back with its answers.** What a model returns to be sent back (Anthropic's
+  signed thinking, Gemini's thought signatures) was kept on tool steps but dropped on the final
+  answer, so the next turn started without it. Answers keep it now, and agents are sent it on
+  text-only messages too. A message's `state` is private, like `told`: people's reads and events go
+  without it, and an answer handed back to another space doesn't carry it.
+- **History counts what a prompt really carries.** The history plugin's tail is measured in
+  estimated tokens of what an agent is sent for each message: its text, text files' content,
+  transcripts, images (1,600 each) and PDFs (2,000 a page), and agents' tool steps, which leave the
+  tail without a line. `tail` is in tokens now (was bytes); its default stays `[16_000,
+  48_000]`,
+  so a text-only conversation keeps about four times more whole. Until the tail first overflows,
+  every message is sent: no more 50-message cut before anything is summarized.
+- **Without the history plugin,** an agent's window holds 50 to 100 messages and drops 50 at a time
+  (was the latest 50, one off every turn), so the prompt cache holds between drops.
+
 ## 1.0.0-rc.16 — 2026-11-02
 
 - **Fixed:** staff by email weren't staff anywhere but going into an org. `org.mine` asked without

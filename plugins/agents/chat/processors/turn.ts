@@ -140,7 +140,11 @@ const turn = async (ctx: Context, event: Event) => {
     }
     if (!calls.length) {
       await live.settle();
-      return await answer(ctx, t, run, text, step === first ? { told } : {}, current);
+      // Its answer keeps what it was told, and its state: what it thought goes back with it.
+      return await answer(ctx, t, run, text, {
+        ...(step === first ? { told } : {}),
+        ...(state ? { state } : {}),
+      }, current);
     }
 
     // Ids derive from the run, so a retry rewrites nothing it already committed.

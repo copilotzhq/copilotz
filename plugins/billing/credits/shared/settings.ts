@@ -9,7 +9,27 @@ export type PlanTerms = {
   prices?: string;
   /** The month's limit it starts with, per seat; none: the app's `budget`. */
   budget?: { perSeat: number };
+  /** Which orgs may be on it: a person's own, or a team's; none: any. */
+  for?: "personal" | "team";
+  /** The model tier its orgs' agents use while the org hasn't chosen one (`billing.tier`). */
+  models?: string;
 };
+
+/** What kind of org this is (`personal` or `team`), where the app serves many. */
+export const orgKind = (ctx: { resources: Resources }): string | undefined =>
+  (ctx.resources.org as { kind?: string } | undefined)?.kind;
+
+/**
+ * Why an org of this kind can't be on a plan, in words, or nothing when it
+ * can: a plan for personal orgs isn't a team's, and the other way round. An
+ * org whose kind isn't known (an app that serves one) can be on any.
+ */
+export function unfit(terms: Pick<PlanTerms, "title" | "for">, kind?: string): string | undefined {
+  if (!terms.for || !kind || terms.for === kind) return undefined;
+  return terms.for === "team"
+    ? `${terms.title} is for team orgs, and this is a personal one. Make a team org to move to it.`
+    : `${terms.title} is for personal orgs, and this one is a team's.`;
+}
 
 export type CreditsSettings = {
   /**
@@ -30,8 +50,12 @@ export type CreditsSettings = {
   topUps: number[];
   topUpMin: number;
   topUpMax: number;
-  /** How an org pays, when something lets it (the Actions `stripe` names). */
-  pay?: { checkout: string; portal: string };
+  /**
+   * How an org pays, when something lets it (the Actions `stripe` names):
+   * checking out, managing what it pays, and which plans can be sold to it
+   * now (`sellable`: `{}` → plan names; none: every plan with a seat price).
+   */
+  pay?: { checkout: string; portal: string; sellable?: string };
   /** Real money: what came from a test mode stops counting. */
   live?: boolean;
 };

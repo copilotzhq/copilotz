@@ -178,9 +178,12 @@ export type Told = { name: string; text: string };
  * be stable (it is cached across turns); `turn` text comes after the
  * conversation when it says something new (when it's not what the agent was
  * last told there), and stays in the conversation where it came. It goes to
- * every agent unless `agents` says.
+ * every agent unless `agents` says. Any other text is tagged as information,
+ * not instructions; `instructions` is for the app's own words on how its
+ * agents work (a charter): `system` text sent as they are, after the agent's
+ * own instructions.
  */
-export type ContextEntry = { place: "system" | "turn"; agents?: string[] };
+export type ContextEntry = { place: "system" | "turn"; agents?: string[]; instructions?: boolean };
 
 /** Chat's settings, as configured. */
 export const settingsOf = (ctx: { resources: Resources }): ChatSettings =>

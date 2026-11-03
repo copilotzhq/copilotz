@@ -12,7 +12,7 @@ import { type Context, invalid } from "../../../../runtime/mod.ts";
 import type { Credit } from "../collections/credit.ts";
 import type { Payment } from "../collections/payment.ts";
 import type { Plan } from "../collections/plan.ts";
-import { settingsOf } from "./settings.ts";
+import { orgKind, settingsOf, unfit } from "./settings.ts";
 import { ensurePlan, forget, termsFor } from "./standing.ts";
 
 const round = (usd: number) => Math.round(usd * 1e8) / 1e8;
@@ -97,6 +97,9 @@ export async function changePlan(ctx: Context, fact: PlanFact): Promise<void> {
   const named = fact.name ? termsFor(ctx, fact.name) : undefined;
   const terms = fact.terms ?? named;
   if (fact.name && !terms) throw invalid(`There's no plan "${fact.name}".`);
+  // Whoever moves it, a personal org takes no team's plan, nor a team a person's.
+  const why = terms && fact.name !== plan.name ? unfit(terms, orgKind(ctx)) : undefined;
+  if (why) throw invalid(why);
   const moved = !!fact.name && fact.name !== plan.name;
   const unset = {
     ...(fact.seats === null ? { seats: "" } : {}),

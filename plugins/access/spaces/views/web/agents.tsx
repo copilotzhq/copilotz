@@ -6,6 +6,8 @@
  * change an agent's role, have it answer new chats, open it to edit (when
  * they manage where it belongs; otherwise to view), take it out, and add
  * one (the invite surface, at Agents). What agents are, said in a line.
+ * Other front ends add to it (`spaceAgents`): above the agents, and a line
+ * on each one's row.
  */
 import { type ReactNode, useState } from "react";
 import {
@@ -33,13 +35,16 @@ const pageOf = (id: string, edit = false) =>
   `/agent/${encodeURIComponent(id)}${edit ? "?edit=1" : ""}`;
 
 export function Agents(
-  { space, spaces, members, roster, manage, adds, onAdd, call }: {
+  { space, spaces, members, roster, above = [], lines = {}, manage, adds, onAdd, call }: {
     space: Reached;
     /** Every space the person reaches: where each agent belongs, and whether they manage it. */
     spaces: Reached[];
     /** The space's agent members. */
     members: Member[];
     roster?: Roster;
+    /** What other front ends show above the agents (`spaceAgents`), and on each one's row. */
+    above?: ReactNode[];
+    lines?: Record<string, ReactNode[]>;
     manage: boolean;
     /** Whether agents can be added here (the app has them). */
     adds: boolean;
@@ -78,6 +83,7 @@ export function Agents(
           : "They work for whoever asks them, and reach only what that person can. One answers " +
             "new chats; @name asks another."}
       </p>
+      {members.length ? above : null}
       {members.length
         ? (
           <ul className="space-rows">
@@ -96,6 +102,7 @@ export function Agents(
                   space={space}
                   manage={manage}
                   edits={edits}
+                  line={lines[id]}
                   call={call}
                 />
               );
@@ -120,7 +127,7 @@ export function Agents(
 
 /** One agent working here: who it is, its role, and what a manager does with it. */
 function AgentRow(
-  { member: m, id, agent, home, answers, space, manage, edits, call }: {
+  { member: m, id, agent, home, answers, space, manage, edits, line, call }: {
     member: Member;
     id: string;
     agent?: AgentShown;
@@ -131,6 +138,8 @@ function AgentRow(
     manage: boolean;
     /** Whether the person changes it: they manage where it belongs. */
     edits: boolean;
+    /** What other front ends say of it here (its model). */
+    line?: ReactNode[];
     call: Call;
   },
 ): ReactNode {
@@ -193,6 +202,7 @@ function AgentRow(
         <p className="space-row-what">
           {error ? <span className="space-invite-error">{error}</span> : what}
         </p>
+        {line?.length ? <div className="space-row-more">{line}</div> : null}
       </div>
       <div className="space-row-end">
         {manage

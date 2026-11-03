@@ -128,6 +128,10 @@ export const computers: Plugin = definePlugin({
     shared: { desk: {}, preview: { field: "space" }, envVar: { field: "space" } },
     // What jobs serve, at addresses of their own, once the app says where (`previews`).
     routes: previewRoutes,
+    // A computer's uses (a cloud computer's time, its disk) by its name, as its desks say it.
+    usageNames: {
+      computer: { tag: "tags.computer", collection: "desk", key: "computer", field: "name" },
+    },
   },
   // Each person reaches their own computers, codes, approvals (those they answer) and grants.
   guard: (actor, { collection }) => {

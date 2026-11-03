@@ -1,7 +1,8 @@
 /**
  * Totals of records, grouped by fields: `meter`, `subject`, `day`, `month`,
- * `tags.<name>`, or any other. The store sums them (`aggregate`): only the
- * groups come back, however many records there are.
+ * `category` (see categories.ts), `tags.<name>`, or any other. The store
+ * sums them (`aggregate`): only the groups come back, however many records
+ * there are.
  *
  * With rollups (see actions/close.ts), the whole closed days a query covers
  * come from them: each day's few groups instead of its records. The rest
@@ -18,6 +19,7 @@ import type {
 } from "../../../../runtime/mod.ts";
 import type { UsageRecord } from "../collections/usage.ts";
 import type { ClosedDay } from "../collections/closed.ts";
+import { byMeters, CATEGORIES, type Categories, categoryOf } from "./categories.ts";
 import { addDays, firstWholeDay, lastWholeDay } from "./days.ts";
 import { type Quantities, round } from "./rate.ts";
 
@@ -58,6 +60,14 @@ export type Rollups = {
   /** Closed days counted again at each close, for records that came late. */
   recheck: number;
 };
+
+/**
+ * What a closed day was rolled up by (its dimensions and units), kept with
+ * it: rollups of another shape don't hold what's asked now, so they're read
+ * only once every closed day has been closed again in this one.
+ */
+export const shapeOf = (rollups: Rollups): string =>
+  JSON.stringify([rollups.dimensions, rollups.units]);
 
 type Group = Record<string, unknown> & { _id: Record<string, unknown> };
 
@@ -104,11 +114,23 @@ export const summing = (
   },
 ];
 
-/** Groups (from records, rollups or both) folded into totals by their key. */
-function fold(groups: Group[], units: string[]): Totals[] {
+/**
+ * Groups (from records, rollups or both) folded into totals by their key.
+ * Asked by `category`, they were grouped by meter: each says its category
+ * instead (and its meter only when asked), and those of one category fold
+ * together.
+ */
+function fold(groups: Group[], units: string[], by: string[], categories: Categories): Totals[] {
   const out = new Map<string, Totals>();
+  const sorted = by.includes("category");
   for (const group of groups) {
-    const { _kind, _unpriced, _rated, ...key } = group._id;
+    const { _kind, _unpriced, _rated, ...grouped } = group._id;
+    const key = sorted
+      ? Object.fromEntries(by.map((field) => [
+        field,
+        field === "category" ? categoryOf(grouped.meter, categories) : grouped[field],
+      ]))
+      : grouped;
     const id = JSON.stringify(key);
     const sum = out.get(id) ?? {
       key,
@@ -180,6 +202,9 @@ async function rolled(
     closed.findOne({}, { sort: { _id: -1 } }),
   ]);
   if (!first || !last) return;
+  // Closing again goes from the first day on: once both ends are of this shape, every day is.
+  const shape = shapeOf(rollups);
+  if (first.shape !== shape || last.shape !== shape) return;
   let from = first._id;
   let through = last._id;
   for (const bound of [at.$gte, at.$gt]) {
@@ -197,20 +222,32 @@ async function rolled(
   return from <= through ? { from, through } : undefined;
 }
 
+/**
+ * Totals of what `filter` matches, grouped `by` fields, summing `units`.
+ * With `db` and `rollups`, whole closed days come from rollups; `categories`
+ * says what each category holds (the defaults, unless given).
+ */
 export async function totals(
   records: ReadCollection<UsageRecord>,
   params: { filter?: Filter; by?: string[]; units?: string[] } = {},
-  rollups?: { db: ReadContext["db"]; rollups: Rollups },
+  options: { db?: ReadContext["db"]; rollups?: Rollups; categories?: Categories } = {},
 ): Promise<Totals[]> {
-  const filter = params.filter ?? {};
-  const by = params.by ?? [];
+  const categories = options.categories ?? CATEGORIES;
+  const filter = byMeters(params.filter ?? {}, categories);
+  const asked = params.by ?? [];
+  // A category is its meters: grouped by meter, then folded (see `fold`).
+  const by = asked.includes("category")
+    ? [...new Set(asked.map((field) => field === "category" ? "meter" : field))]
+    : asked;
   const units = params.units ?? UNITS;
+  const done = (groups: Group[]) => fold(groups, units, asked, categories);
   const raw = (f: Filter) =>
     records.aggregate<Group>(
       summing(f, Object.fromEntries(by.map((x) => [x, ofRecords(x)])), units, { $count: {} }),
     );
-  const span = rollups && await rolled(rollups.db, rollups.rollups, filter, by, units);
-  if (!span) return fold(await raw(filter), units);
+  const span = options.db && options.rollups &&
+    await rolled(options.db, options.rollups, filter, by, units);
+  if (!span) return done(await raw(filter));
   // Records before the closed days and after them, and the closed days' rollups between.
   const { at, ...rest } = filter as Filter & { at?: Bounds };
   const lower = { ...(at?.$gte ? { $gte: at.$gte } : {}), ...(at?.$gt ? { $gt: at.$gt } : {}) };
@@ -223,7 +260,7 @@ export async function totals(
     !(at?.$lte !== undefined && at.$lte < next);
   const parts = await Promise.all([
     before ? raw({ ...rest, at: { ...lower, $lt: span.from } }) : [],
-    rollups.db.collection("usageRollup").aggregate<Group>(
+    options.db!.collection("usageRollup").aggregate<Group>(
       summing(
         { ...rest, day: { $gte: span.from, $lte: span.through } },
         Object.fromEntries(by.map((x) => [x, ofRollups(x)])),
@@ -233,5 +270,5 @@ export async function totals(
     ),
     after ? raw({ ...rest, at: { ...upper, $gte: next } }) : [],
   ]);
-  return fold(parts.flat(), units);
+  return done(parts.flat());
 }

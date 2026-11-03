@@ -1,9 +1,16 @@
 /** An agent's turn: model calls and tool steps until it answers, or waits for replies. */
 import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
-import type { LlmChunk, LlmMessage, LlmState, ToolCall } from "../../../models/contract.ts";
+import type {
+  LlmChunk,
+  LlmMessage,
+  LlmState,
+  ModelRef,
+  ToolCall,
+} from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import {
+  type AgentModel,
   agentsNamed,
   check,
   modelOf,
@@ -18,7 +25,7 @@ import { answer, delivery } from "../shared/delivery.ts";
 import { liveWriter } from "../shared/live.ts";
 import { prepare, principalOf, type Send } from "../shared/send.ts";
 import { noted, startedWith } from "../shared/summary.ts";
-import { type Prompt, settingsOf, type Step, type Tool } from "../shared/types.ts";
+import { type Agent, type Prompt, settingsOf, type Step, type Tool } from "../shared/types.ts";
 
 /** Runs a turn: started by `turn.requested`, or resumed when its wait is over. */
 /**
@@ -36,6 +43,20 @@ const asAgent = (ctx: Context, agent: string, at?: string): Context => {
 /** The space a thread is in, where its turns work: what they write elsewhere needs a person. */
 const spaceOf = async (ctx: Context, thread: string) =>
   (await ctx.as().db.collection<Thread>("thread").findOne({ _id: thread }))?.in;
+
+/**
+ * The model it thinks with this turn: what the `agentModel` resource says for
+ * it in this space, when one says anything, else its own.
+ */
+async function modelFor(ctx: Context, name: string, agent: Agent, space?: string) {
+  const [source] = Object.values((ctx.resources.agentModel ?? {}) as Record<string, AgentModel>);
+  if (!source) return modelOf(agent);
+  const chosen = await ctx.call<ModelRef | null>(source.action, {
+    agent: name,
+    ...(space ? { space } : {}),
+  });
+  return chosen ?? modelOf(agent);
+}
 
 export const turnProcessor: ProcessorDef = {
   on: ["turn.requested", "wait.updated"],
@@ -108,6 +129,8 @@ const turn = async (ctx: Context, event: Event) => {
 
   // What it writes shows as it comes: the turn's live document.
   const live = liveWriter(ctx, t, run, current.in);
+  // Asked once a run: a change reaches its next reply, never a step halfway.
+  const model = await modelFor(ctx, t.agent, agent, current.in);
 
   const { maxSteps } = settingsOf(ctx);
   for (; maxSteps === undefined || step < maxSteps; step++) {
@@ -117,12 +140,17 @@ const turn = async (ctx: Context, event: Event) => {
     const calls: ToolCall[] = [];
     for await (
       const chunk of await ctx.call<AsyncIterable<LlmChunk>>("llm.stream", {
-        model: modelOf(agent),
+        model,
         instructions,
         messages: conversation,
         tools: offered,
-        // Its usage record says whose turn it was, in which thread.
-        tags: { thread: t.thread, agent: t.agent, turn: run },
+        // Its usage record says whose turn it was, in which thread and space.
+        tags: {
+          thread: t.thread,
+          agent: t.agent,
+          turn: run,
+          ...(current.in ? { space: current.in } : {}),
+        },
       })
     ) {
       if (chunk.type === "text") {

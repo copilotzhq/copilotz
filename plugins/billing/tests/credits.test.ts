@@ -758,3 +758,110 @@ test("a team's budget starts by its seats, so it isn't stopped with credits left
     assertEquals((await stateOf<{ month: { limit: number } }>(rt)).month.limit, 70);
   }, { budget: 50 });
 });
+
+/** Plans for each kind of org, and one for any, each naming the model tier its agents use. */
+const KINDS = {
+  plans: {
+    free: { title: "Free", credits: { once: 2 }, models: "everyday" },
+    personal: {
+      title: "Personal",
+      seat: { price: 10, currency: "usd" },
+      credits: { perSeat: 10 },
+      for: "personal",
+      models: "everyday",
+    },
+    team: {
+      title: "Team",
+      seat: { price: 20, currency: "usd" },
+      credits: { perSeat: 20 },
+      for: "team",
+      models: "advanced",
+    },
+    pro: { title: "Pro", seat: { price: 50, currency: "usd" } },
+  },
+};
+
+const personalOrg = { resources: { org: { id: "p-1", name: "Ana", kind: "personal" } } };
+const teamOrg = { resources: { org: { id: "o-1", name: "Acme", kind: "team" } } };
+
+test("a plan for team orgs isn't a personal org's, nor the other way round, whoever moves it", async () => {
+  await setup(
+    async (rt) => {
+      await assertRejects(
+        () => rt.call("billing.setPlan", { name: "team" }, { actor: staff }),
+        Error,
+        "Team is for team orgs, and this is a personal one",
+      );
+      await rt.call("billing.setPlan", { name: "personal" }, { actor: staff });
+      await rt.call("billing.setPlan", { name: "pro" }, { actor: staff });
+      // News of what it's on already isn't a move.
+      await rt.call("billing.setPlan", { name: "pro" }, { actor: staff });
+    },
+    KINDS,
+    personalOrg,
+  );
+  await setup(
+    async (rt) => {
+      await assertRejects(
+        () => rt.call("billing.apply", { plan: { name: "personal" } }),
+        Error,
+        "Personal is for personal orgs, and this one is a team's",
+      );
+      await rt.call("billing.setPlan", { name: "team" }, { actor: staff });
+    },
+    KINDS,
+    teamOrg,
+  );
+  // An app that serves one org has no kind of org to keep to.
+  await setup(async (rt) => {
+    await rt.call("billing.setPlan", { name: "team" }, { actor: staff });
+  }, KINDS);
+});
+
+test("plan offers follow the org's kind: its own first, a team's said apart to a person", async () => {
+  type Offers = { pay: { plans: { name: string }[]; elsewhere?: { name: string }[] } };
+  const pay = { pay: { checkout: "test.none", portal: "test.none" } };
+  await setup(
+    async (rt) => {
+      const { pay } = await stateOf<Offers>(rt);
+      assertEquals(pay.plans.map((p) => p.name), ["personal", "pro"]);
+      assertEquals(pay.elsewhere?.map((p) => p.name), ["team"]);
+    },
+    { ...KINDS, ...pay },
+    personalOrg,
+  );
+  await setup(
+    async (rt) => {
+      const { pay } = await stateOf<Offers>(rt);
+      assertEquals(pay.plans.map((p) => p.name), ["team", "pro"]);
+      assertEquals(pay.elsewhere?.map((p) => p.name), ["personal"]);
+    },
+    { ...KINDS, ...pay },
+    teamOrg,
+  );
+});
+
+test("the model tier an org's plan gives: its terms', as the app's plan says before they named one", async () => {
+  await setup(
+    async (rt) => {
+      // Before it has a plan: the one it would start on.
+      assertEquals(await rt.call("billing.tier", {}), "everyday");
+      await rt.call("billing.setPlan", { name: "team" }, { actor: staff });
+      assertEquals(await rt.call("billing.tier", {}), "advanced");
+      await rt.call("billing.setPlan", {
+        name: "acme",
+        terms: { title: "Acme", models: "frontier" },
+      }, { actor: staff });
+      assertEquals(await rt.call("billing.tier", {}), "frontier");
+      // Terms kept from before plans named a tier: what the app's plan of that name says.
+      await rt.call("billing.setPlan", { name: "team", terms: { title: "Team" } }, {
+        actor: staff,
+      });
+      assertEquals(await rt.call("billing.tier", {}), "advanced");
+      await rt.call("billing.setPlan", { name: "pro" }, { actor: staff });
+      assertEquals(await rt.call("billing.tier", {}), null);
+    },
+    KINDS,
+    teamOrg,
+  );
+});

@@ -6,8 +6,11 @@
  * gives it. Each says whose it is (`all`).
  *
  * - `usage.org`: totals as `usage.totals` sums them (`{ filter, by, units }`):
- *   by day, person (`tags.person`), agent (`tags.agent`), model (`subject`).
- * - `usage.calls`: the latest uses, newest first (`{ filter, limit }`).
+ *   by day or month, category (agents, computers, apps), space
+ *   (`tags.space`), person (`tags.person`), agent (`tags.agent`), model
+ *   (`subject`); with the names of what it groups by, where the caller
+ *   reaches them (`names`: a space's, say).
+ * - `usage.activity` (activity.ts): the latest things done, newest first.
  *
  * People see prices: what they're charged. What it cost (and so the margin)
  * only platform staff see; each says whether it shows them (`costs`). Both
@@ -22,21 +25,27 @@ import {
   personOf,
 } from "../../../../runtime/mod.ts";
 import type { UsageRecord } from "../collections/usage.ts";
-import { rollupsOf } from "../shared/settings.ts";
+import { named } from "../shared/names.ts";
+import { categoriesOf, rollupsOf } from "../shared/settings.ts";
 import { priceOnly, totals, UNITS } from "../shared/totals.ts";
-import { priceOf } from "../shared/use.ts";
 import { runsOrg } from "../../../access/spaces/contract.ts";
 
 /**
  * What the caller sees: everyone's (`all`) when they run the org (an owner or
- * an admin there, or platform staff), and costs only as staff.
+ * an admin there, or platform staff), and costs only as staff. Anyone else
+ * sees their own: `mine` is the filter that keeps them to it.
  */
-async function sight(ctx: Context): Promise<{ all: boolean; costs: boolean }> {
+export async function sight(
+  ctx: Context,
+): Promise<{ all: boolean; costs: boolean; mine: Filter }> {
   const me = await ctx.call<{ role?: string | null; staff?: boolean }>("org.me", {})
     // An app without org roles has nobody who runs one.
     .catch(() => undefined);
   const staff = me?.staff === true;
-  return { all: staff || runsOrg(me?.role), costs: staff };
+  const all = staff || runsOrg(me?.role);
+  const person = personOf(ctx.actor);
+  if (!all && !person) throw forbidden("Only people see usage.");
+  return { all, costs: staff, mine: all ? {} : { "tags.person": person! } };
 }
 
 const filter = { type: "object" } as const;
@@ -55,70 +64,20 @@ export const orgUsageAction = defineAction({
   },
   allow: people,
   run: async (ctx, input) => {
-    const { all, costs } = await sight(ctx);
-    const person = personOf(ctx.actor);
-    if (!all && !person) throw forbidden("Only people see usage.");
+    const { all, costs, mine } = await sight(ctx);
     // The ledger is read as the system: everyone's once the org says they run it, else theirs.
     const system = ctx.as();
-    const asked = (input.filter ?? {}) as Filter;
+    const by = input.by ?? [];
     const found = await totals(
       system.db.collection<UsageRecord>("usage"),
-      {
-        filter: all ? asked : { ...asked, "tags.person": person! },
-        by: input.by ?? [],
-        units: input.units ?? UNITS,
-      },
-      { db: system.db, rollups: rollupsOf(ctx) },
+      { filter: { ...(input.filter ?? {}) as Filter, ...mine }, by, units: input.units ?? UNITS },
+      { db: system.db, rollups: rollupsOf(ctx), categories: categoriesOf(ctx) },
     );
-    return { totals: costs ? found : found.map(priceOnly), all, costs };
-  },
-});
-
-export const usageCallsAction = defineAction({
-  description:
-    "The latest uses (model calls and the rest), newest first: everyone's for the org's " +
-    "owners and admins, your own for others",
-  record: false,
-  input: {
-    type: "object",
-    properties: {
-      filter,
-      limit: { type: "integer", minimum: 1, maximum: 200 },
-    },
-    additionalProperties: false,
-  },
-  allow: people,
-  run: async (ctx, input) => {
-    const { all, costs } = await sight(ctx);
-    const person = personOf(ctx.actor);
-    if (!all && !person) throw forbidden("Only people see usage.");
-    const asked = (input.filter ?? {}) as Filter;
-    const found = await ctx.as().db.collection<UsageRecord>("usage").find(
-      // Uses only (adjustments correct a rating; they aren't calls); yours unless you run it.
-      { ...asked, kind: { $exists: false }, ...(all ? {} : { "tags.person": person! }) },
-      { sort: { at: -1 }, limit: input.limit ?? 20 },
+    // What it's grouped by, named as the caller reads it.
+    const names = await named(
+      ctx,
+      Object.fromEntries(by.map((field) => [field, found.map((t) => t.key[field])])),
     );
-    return {
-      calls: found.map((r) => {
-        const price = priceOf(r);
-        const saved = r.saved && (costs ? r.saved : { price: r.saved.price });
-        return {
-          _id: r._id,
-          meter: r.meter,
-          subject: r.subject,
-          quantities: r.quantities,
-          ...(r.tags ? { tags: r.tags } : {}),
-          ...(price !== undefined ? { price } : {}),
-          ...(r.prices ? { prices: r.prices } : {}),
-          ...(costs && r.cost !== undefined ? { cost: r.cost } : {}),
-          ...(costs && r.costs ? { costs: r.costs } : {}),
-          ...(saved && Object.values(saved).some((v) => v !== undefined) ? { saved } : {}),
-          ...(r.unpriced?.length ? { unpriced: r.unpriced } : {}),
-          at: r.at,
-        };
-      }),
-      all,
-      costs,
-    };
+    return { totals: costs ? found : found.map(priceOnly), all, costs, names };
   },
 });

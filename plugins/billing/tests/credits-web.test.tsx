@@ -36,6 +36,8 @@ import {
   paidIn,
   periodShown,
   pilesOf,
+  planCredits,
+  planCreditsSaid,
   priceFor,
   slug,
   teamOf,
@@ -483,4 +485,131 @@ test("gift codes in the console: where each stands, and what's asked for", () =>
   );
   assert("error" in newCodeOf({ amount: "nope", expires: "", until: "", note: "" }));
   assert("error" in newCodeOf({ amount: "0", expires: "", until: "", note: "" }));
+});
+
+test("this month's plan credits: what's left and until when; used up, when more come", () => {
+  const period = { start: "2026-11-03", end: "2026-12-03" };
+  const history = [
+    {
+      _id: "plan:personal:2026-11-03",
+      kind: "plan",
+      amount: 10,
+      at: "2026-11-03",
+      expires: "2026-12-03",
+    },
+    {
+      _id: "plan:personal:2026-10-03",
+      kind: "plan",
+      amount: 10,
+      at: "2026-10-03",
+      expires: "2026-11-03",
+    },
+    { _id: "purchase:x", kind: "purchase", amount: 25, at: "2026-11-04" },
+  ];
+  const left = [
+    { id: "plan:personal:2026-11-03", kind: "plan", amount: 10, left: 4.2, expires: "2026-12-03" },
+    { id: "purchase:x", kind: "purchase", amount: 25, left: 25 },
+  ];
+  const credits = planCredits({ period, history, buckets: left })!;
+  assertEquals(credits, { amount: 10, left: 4.2, until: "2026-12-03" });
+  assertEquals(
+    planCreditsSaid(credits, true, NOW).title,
+    "$4.20 of this month's credits, until Dec 3",
+  );
+  assertStringIncludes(planCreditsSaid(credits, true, NOW).more, "doesn't carry over");
+  // Spent: none left in the walk, and it says when more come.
+  const spent = planCredits({ period, history, buckets: left.slice(1) })!;
+  assertEquals(planCreditsSaid(spent, true, NOW), {
+    title: "This month's $10 of credits are used up",
+    more: "More come with the plan on Dec 3. Until then, any other credits are used.",
+  });
+  assertEquals(planCredits({ period, history: history.slice(2), buckets: left }), undefined);
+  assertEquals(planCredits({ history, buckets: left }), undefined);
+});
+
+test("the plan card says what's left of this month's credits, and until when", () => {
+  const plan = {
+    name: "personal",
+    terms: { title: "Personal", seat: { price: 10, currency: "usd" }, credits: { perSeat: 10 } },
+    since: "2026-11-03",
+    customer: "cus_1",
+    subscription: "sub_1",
+  };
+  const state = standing({
+    plan,
+    seats: 1,
+    period: { start: "2026-11-03", end: "2026-12-03" },
+    history: [{ _id: "p", kind: "plan", amount: 10, at: "2026-11-03", expires: "2026-12-03" }],
+    buckets: [{ id: "p", kind: "plan", amount: 10, left: 4.2, expires: "2026-12-03" }],
+  });
+  const card = text(<PlanCard state={state} team="the Compass team" call={call} />);
+  assertStringIncludes(card, "Personal $4.20 of this month's credits, until Dec 3");
+});
+
+test("a personal org isn't offered a team's plan: it's told a team org takes it", () => {
+  const team = {
+    name: "team",
+    title: "Team",
+    seat: { price: 20, currency: "usd" },
+    for: "team" as const,
+  };
+  const personal = {
+    name: "personal",
+    title: "Personal",
+    seat: { price: 10, currency: "usd" },
+    credits: { perSeat: 10 },
+    for: "personal" as const,
+  };
+  const state = standing({
+    pay: { ...standing().pay!, plans: [personal], elsewhere: [team] },
+  });
+  const out = text(<PlanOffers state={state} call={call} />);
+  assertStringIncludes(out, "Move to Personal");
+  assertStringIncludes(out, "Working with others? Team ($20 a seat a month) is for team orgs");
+  assertEquals(out.includes("Move to Team"), false);
+  // Already on Personal: nothing to move to, and still where Team is.
+  const on = standing({
+    plan: { name: "personal", terms: { title: "Personal" }, since: "2026-11-01" },
+    pay: { ...standing().pay!, plans: [personal], elsewhere: [team] },
+  });
+  const left = text(<PlanOffers state={on} call={call} />);
+  assertStringIncludes(left, "Plans Working with others?");
+  // A team isn't told about a person's plan.
+  const teams = standing({ pay: { ...standing().pay!, plans: [team], elsewhere: [personal] } });
+  assertEquals(text(<PlanOffers state={teams} call={call} />).includes("Personal"), false);
+});
+
+test("a personal org's plan is one person's: credits each month, no seats to speak of", () => {
+  const plan = {
+    name: "personal",
+    terms: { title: "Personal", seat: { price: 10, currency: "usd" }, credits: { perSeat: 10 } },
+    since: "2026-11-03",
+  };
+  const state = standing({ plan, seats: 1, period: { start: "2026-11-03", end: "2026-12-03" } });
+  const mine = text(<PlanCard state={state} team="the Compass team" personal call={call} />);
+  assertStringIncludes(mine, "Includes $10 of credits each month");
+  assertEquals([mine.includes("a seat"), mine.includes("Seats")], [false, false]);
+  // A team's says its seats, as before.
+  const team = text(
+    <PlanCard state={{ ...state, seats: 3 }} team="the Compass team" call={call} />,
+  );
+  assertStringIncludes(team, "$10 of credits a seat each month ($30 for 3 seats)");
+  assertStringIncludes(team, "Seats 3 seats");
+  // Moving to one: what it costs a month, and what comes with it, without seats.
+  const personal = {
+    name: "personal",
+    title: "Personal",
+    seat: { price: 10, currency: "usd" },
+    credits: { perSeat: 10 },
+  };
+  const offers = text(
+    <PlanOffers
+      state={standing({ pay: { ...standing().pay!, plans: [personal] } })}
+      personal
+      call={call}
+    />,
+  );
+  assertStringIncludes(offers, "Personal $10 a month $10 of credits each month");
+  assertEquals(offers.includes("seat"), false);
+  assertEquals(priceFor({ price: 10, currency: "usd" }, 1, true), { total: "$10 a month" });
 });

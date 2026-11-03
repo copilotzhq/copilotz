@@ -9,6 +9,7 @@
  * - `embeddings.embed` { model, input, tags? } → Embedding
  * - `transcription.transcribe` { model, audio (base64), type, filename?, tags? } → Transcript
  * - `models.check` { model, port: "llm" | "embeddings" | "transcription" }: throws what's wrong
+ * - `models.efforts` { model } → string[] | null: the efforts the catalog says it takes
  * - `models.price` { catalog } → Price
  * - `models.offered` { provider?, search?, model? }: what an agent can be given
  * - `models.keyable` { provider } → boolean: whether a key can be brought for it

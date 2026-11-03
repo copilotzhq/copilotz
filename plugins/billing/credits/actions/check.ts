@@ -11,6 +11,10 @@
  * - `billing.spent` `{ price }`: the ledger, as it records a use: its price
  *   comes off `room`, in memory, before the record goes.
  * - `billing.priceList` `{}`: the list the org's plan names, for rating.
+ * - `billing.tier` `{}`: the model tier the org's plan gives its agents (the
+ *   `planTier` resource), or null: the plan it's on, or the one it would start
+ *   on. A plan's terms are copied when an org moves to it; terms kept from
+ *   before plans named a tier say what the app's plan of that name says now.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import { settingsOf } from "../shared/settings.ts";
@@ -78,4 +82,15 @@ export const priceListAction = defineAction({
   record: false,
   input: { type: "object", additionalProperties: false },
   run: async (ctx) => (await planOf(ctx))?.terms.prices ?? null,
+});
+
+export const tierAction = defineAction({
+  description: "The model tier the org's plan gives its agents",
+  record: false,
+  input: { type: "object", additionalProperties: false },
+  run: async (ctx) => {
+    const set = settingsOf(ctx);
+    const plan = await planOf(ctx);
+    return plan?.terms.models ?? set.plans[plan?.name ?? set.start]?.models ?? null;
+  },
 });

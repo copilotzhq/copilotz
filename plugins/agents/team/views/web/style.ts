@@ -53,6 +53,10 @@ export const STYLE = `
   border-radius: var(--radius-lg); background: var(--card); font-size: 13px; }
 .model-key-actions { display: flex; }
 .model-key-kept .model-key-error { flex-basis: 100%; }
+.model-pick { display: grid; gap: 4px; min-width: 0; }
+.model-pick[data-look=link] { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.model-pick-error { color: var(--destructive-text, var(--destructive)); font-size: 12.5px; line-height: 1.4; }
+.model-change { height: auto; padding: 0; font-size: 13px; }
 
 /* Adding an agent to a space */
 .agent-add { container: agent-add / inline-size; display: grid; gap: 14px; }

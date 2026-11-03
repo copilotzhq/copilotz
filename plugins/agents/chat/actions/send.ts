@@ -132,7 +132,7 @@ export const sendAction = defineAction({
           audio: f.data,
           type: f.type,
           filename: f.name,
-          tags: { thread: threadId, purpose: "transcription" },
+          tags: { thread: threadId, purpose: "transcription", ...(where ? { space: where } : {}) },
         });
         return heard.text.trim();
       } catch (error) {

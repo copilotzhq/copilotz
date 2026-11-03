@@ -20,7 +20,8 @@
  *
  * Other plugins' startup checks ask `models.check` about the models they're
  * configured with; the usage ledger asks `models.price` what the catalog says
- * a model costs. `models.offered` lists what an agent can be given.
+ * a model costs. `models.offered` lists what an agent can be given, and
+ * `models.efforts` the efforts a model takes.
  *
  * Where another plugin keeps orgs' own keys (the `modelKeys` resource), any
  * provider in the catalog with an address of its own and a protocol we speak
@@ -34,7 +35,7 @@
  * used, in the job that made it (the usage ledger records it, rated).
  */
 import { definePlugin, type Plugin } from "../../runtime/mod.ts";
-import { check } from "./actions/check.ts";
+import { check, efforts } from "./actions/check.ts";
 import { embed } from "./actions/embed.ts";
 import { generate } from "./actions/generate.ts";
 import { keyableAction, offered } from "./actions/offered.ts";
@@ -67,6 +68,7 @@ export const models: Plugin = definePlugin({
     "embeddings.embed": embed,
     "transcription.transcribe": transcribe,
     "models.check": check,
+    "models.efforts": efforts,
     "models.price": price,
     "models.offered": offered,
     "models.keyable": keyableAction,

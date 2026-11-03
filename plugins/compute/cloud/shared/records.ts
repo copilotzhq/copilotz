@@ -1,7 +1,8 @@
 /**
  * What the plugin keeps, read and written as the system (people reach their
  * own through the guard; the plugin's work reaches all), and what it reads
- * of the computers plugin's: whether a computer is connected, and its name.
+ * of the computers plugin's: whether a computer is connected, its name, and
+ * its space.
  */
 import type { Context, Filter } from "../../../../runtime/mod.ts";
 import type { CloudComputer, PoolVm } from "../contract.ts";
@@ -19,6 +20,16 @@ export const wantsOf = (ctx: Context) =>
 /** The computer record, as the computers plugin keeps it: connected or not, and what it's called. */
 export const computerOf = (ctx: Context, id: string) =>
   ctx.as().db.collection<{ online?: boolean; name?: string }>("computer").findOne({ _id: id });
+
+/**
+ * A computer's space: the one it was put in (its first desk; moving it puts
+ * it in another), not those it's shared into since. None: it has no desk.
+ */
+export const spaceOf = async (ctx: Context, id: string): Promise<string | undefined> =>
+  (await ctx.as().db.collection<{ in: string }>("desk").find({ computer: id }, {
+    sort: { at: 1 },
+    limit: 1,
+  }))[0]?.in;
 
 /** Whether a computer is connected now. */
 export const onlineOf = async (ctx: Context, id: string) =>

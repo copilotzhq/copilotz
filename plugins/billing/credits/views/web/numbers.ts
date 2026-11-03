@@ -41,7 +41,16 @@ export type PaymentRow = {
 
 export type Seat = { price: number; currency: string };
 export type CreditTerms = { once?: number; monthly?: number; perSeat?: number };
-export type Terms = { title: string; seat?: Seat; credits?: CreditTerms; prices?: string };
+export type Terms = {
+  title: string;
+  seat?: Seat;
+  credits?: CreditTerms;
+  prices?: string;
+  /** Which orgs may be on it; none: any. */
+  for?: "personal" | "team";
+  /** The model tier its agents use while the org hasn't chosen one. */
+  models?: string;
+};
 
 /** A waiver: why, by whom, until when; for seats, whose. */
 export type Waiver = {
@@ -65,13 +74,22 @@ export type Plan = {
 };
 
 /** A plan the org can move to by itself. */
-export type Offer = { name: string; title: string; seat: Seat; credits?: CreditTerms };
+export type Offer = {
+  name: string;
+  title: string;
+  seat: Seat;
+  credits?: CreditTerms;
+  for?: "personal" | "team";
+};
 
 export type Pay = {
   topUps: number[];
   min: number;
   max: number;
+  /** Those it can move to, its own kind of org's first. */
   plans: Offer[];
+  /** Those only another kind of org can have (a team's, for a personal org). */
+  elsewhere?: Offer[];
   manage: boolean;
 };
 
@@ -222,13 +240,21 @@ export function pilesOf(buckets: Bucket[]): Bucket[] {
 export const newestFirst = <T extends { at: string }>(rows: T[]): T[] =>
   [...rows].sort((a, b) => b.at.localeCompare(a.at));
 
-/** What a plan's terms give, in sentences' pieces, and for this many seats. */
-export function includes(terms: Pick<Terms, "credits">, seats?: number): string[] {
+/**
+ * What a plan's terms give, in sentences' pieces, and for this many seats. A
+ * personal org is one person: its seat isn't worth saying.
+ */
+export function includes(
+  terms: Pick<Terms, "credits">,
+  seats?: number,
+  personal = false,
+): string[] {
   const c = terms.credits ?? {};
   const said: string[] = [];
   if (c.once) said.push(`${dollars(c.once)} of credits to start`);
   if (c.monthly) said.push(`${dollars(c.monthly)} of credits each month`);
-  if (c.perSeat) {
+  if (c.perSeat && personal) said.push(`${dollars(c.perSeat)} of credits each month`);
+  else if (c.perSeat) {
     const all = seats && seats > 1 ? ` (${dollars(c.perSeat * seats)} for ${seats} seats)` : "";
     said.push(`${dollars(c.perSeat)} of credits a seat each month${all}`);
   }
@@ -239,12 +265,59 @@ export function includes(terms: Pick<Terms, "credits">, seats?: number): string[
 export const seatsSaid = (n: number): string =>
   `${n.toLocaleString("en-US")} seat${n === 1 ? "" : "s"}`;
 
-/** What a plan comes to, per seat and for the org's: what's asked before they go. */
-export function priceFor(seat: Seat, seats: number | undefined): { each: string; total: string } {
+/**
+ * What a plan comes to, per seat and for the org's: what's asked before they
+ * go. A personal org's is just a month's price.
+ */
+export function priceFor(
+  seat: Seat,
+  seats: number | undefined,
+  personal = false,
+): { each?: string; total: string } {
+  if (personal) return { total: `${inCurrency(seat.price, seat.currency)} a month` };
   const count = Math.max(seats ?? 1, 1);
   return {
     each: `${inCurrency(seat.price, seat.currency)} a seat, each month`,
     total: `${inCurrency(seat.price * count, seat.currency)} a month for ${seatsSaid(count)}`,
+  };
+}
+
+/**
+ * This period's plan credits: what came, what's left of it, and the day they
+ * end (the period's end, when what's left lapses); none when none came.
+ */
+export function planCredits(
+  s: Pick<BillingState, "period" | "history" | "buckets">,
+): { amount: number; left: number; until: string } | undefined {
+  const until = s.period?.end;
+  if (!until) return undefined;
+  const ours = (c: { kind: string; expires?: string }) => c.kind === "plan" && c.expires === until;
+  const amount = (s.history ?? []).filter(ours).reduce((sum, c) => sum + c.amount, 0);
+  if (amount <= 0) return undefined;
+  const left = (s.buckets ?? []).filter(ours).reduce((sum, b) => sum + b.left, 0);
+  return { amount, left: Math.min(Math.max(left, 0), amount), until };
+}
+
+/** What a plan's credits for this period come to, in words: "$4.20 of this month's credits, until Dec 3". */
+export function planCreditsSaid(
+  c: { amount: number; left: number; until: string },
+  renews: boolean,
+  now = Date.now(),
+): { title: string; more: string } {
+  const day = dayShown(c.until, now);
+  if (c.left < 0.005) {
+    return {
+      title: `This month's ${dollars(c.amount)} of credits are used up`,
+      more: renews
+        ? `More come with the plan on ${day}. Until then, any other credits are used.`
+        : "Any other credits are used now.",
+    };
+  }
+  return {
+    title: `${money(c.left)} of this month's credits, until ${day}`,
+    more: `Of ${
+      dollars(c.amount)
+    }. What's left on ${day} doesn't carry over; credits you buy never lapse.`,
   };
 }
 

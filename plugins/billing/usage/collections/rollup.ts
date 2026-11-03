@@ -41,8 +41,12 @@ export const rollupSchema = {
 export const usageRollup = defineCollection({
   schema: rollupSchema,
   events: false,
-  indexes: [["day"], ["meter", "day"], ["subject", "day"], ["tags.agent", "day"], [
-    "tags.purpose",
-    "day",
-  ]],
+  indexes: [
+    ["day"],
+    ["meter", "day"],
+    ["subject", "day"],
+    ["tags.agent", "day"],
+    ["tags.purpose", "day"],
+    ["tags.space", "day"],
+  ],
 });

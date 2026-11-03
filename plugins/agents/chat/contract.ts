@@ -2,7 +2,7 @@
  * The chat plugin's contract: what plugins built on chat (memory, history,
  * spaces, computers) may import from it: the shapes of its documents and of
  * the resource kinds it reads (`agents`, `tools`, `context`, `roster`,
- * `agentSources`; on the web, `conversation`, `home`, `toolViews`,
+ * `agentSources`, `agentModel`; on the web, `conversation`, `home`, `toolViews`,
  * `refusals` and `composerNotes`),
  * `tool()` to declare a tool, and what knowing agents takes (`agentsOf`,
  * `defaults`, `modelOf`, `agentsNamed`, `agentsShown`, `SEND`).
@@ -37,7 +37,7 @@ export type {
 export { tool } from "./shared/types.ts";
 export { principalOf } from "./shared/send.ts";
 export { type Origin, originKey, originOf } from "./shared/origin.ts";
-export type { AgentSource, Roster, RosterSource, Team } from "./shared/agents.ts";
+export type { AgentModel, AgentSource, Roster, RosterSource, Team } from "./shared/agents.ts";
 /**
  * The app's agents (`agentsOf`), who of them answer new conversations
  * (`defaults`), an agent's model (`modelOf`), which names are agents and

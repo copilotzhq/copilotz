@@ -219,6 +219,7 @@ test("a cloud computer: made, woken by an agent's work, released when idle, cold
     assertEquals(assign.code?.length, 9, "the first wake connects with a code");
     let rec = await cloudOf(rt, id);
     assertEquals([rec.state, rec.vm, rec.ready], ["awake", "vm-small-1", true]);
+    const woke = rec.woke;
     assert(world.disks.get(`cz-d-${id}`)?.state?.startsWith(`${id}.`), "its state on its disk");
     assert(world.calls.includes("take vm-small-1"));
     // Awake, work goes straight through.
@@ -267,9 +268,17 @@ test("a cloud computer: made, woken by an agent's work, released when idle, cold
     assertAlmostEquals(seconds, 12 * 60 + 1, 3);
     for (const u of vmUses) {
       assertEquals([u.meter, u.tags?.computer, u.tags?.person], ["computer", id, "ana"]);
+      // In its space, and one session: from its wake to its release.
+      assertEquals([u.tags?.space, u.tags?.session], [space, woke]);
       assertAlmostEquals(u.cost!, u.quantities.seconds! * 0.0385 / 3600, 1e-6);
       assertAlmostEquals(u.price!, u.cost! * 10, 1e-6);
     }
+    // On Usage, one session, named as the computers plugin names it (its desks).
+    const activity = await rt.call<
+      { items: { kind: string }[]; names: Record<string, Record<string, { name: string }>> }
+    >("usage.activity", {}, { actor: ana });
+    assertEquals(activity.items.filter((i) => i.kind === "session").length, 1);
+    assertEquals(activity.names["tags.computer"]?.[id]?.name, "Small cloud computer");
 
     // The next command wakes it on another VM: its disk has its state, so no code, no format.
     assertEquals((await tool({ stdin: "ls" }) as { stdout: string }).stdout, "ran ls");
@@ -292,6 +301,7 @@ test("a cloud computer: made, woken by an agent's work, released when idle, cold
       filter: { subject: "cloud/disk" },
     });
     assertAlmostEquals(disk.quantities.gbHours!, 10 * 8 * 24, 1);
+    assertEquals([disk.tags?.space, disk.tags?.session], [space, undefined]);
     assertAlmostEquals(disk.cost!, disk.quantities.gbHours! * 0.10 / 730, 1e-6);
     assertAlmostEquals(disk.price!, disk.cost! * 2, 1e-6);
 

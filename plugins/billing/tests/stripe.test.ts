@@ -61,7 +61,7 @@ const settings: StripeSettings = {
       webhookSecret: "whsec_main",
       currency: "usd",
       credits: "prod_credits",
-      prices: { team: "price_team" },
+      prices: { team: "price_team", crew: "price_crew" },
     },
     br: {
       key: "rk_test_br",
@@ -105,6 +105,9 @@ async function setup(
                 seat: { price: 20, currency: "usd" },
                 credits: { perSeat: 10 },
               },
+              // One its seller has no price for yet, and one only a team's org can have.
+              solo: { title: "Solo", seat: { price: 10, currency: "usd" }, for: "personal" },
+              crew: { title: "Crew", seat: { price: 30, currency: "usd" }, for: "team" },
             },
           },
         },
@@ -535,4 +538,22 @@ test("parameters go as Stripe reads them", () => {
     ["d", "x"],
     ["f", "true"],
   ]);
+});
+
+test("plans offered are those its seller sells, for its kind of org; checkout keeps to its kind", async () => {
+  await setup(async (rt) => {
+    type Offers = { pay: { plans: { name: string }[]; elsewhere?: { name: string }[] } };
+    const offers = async () => {
+      const { pay } = await rt.call<Offers>("billing.state", {}, { actor: ana });
+      return [pay.plans.map((p) => p.name), pay.elsewhere?.map((p) => p.name)];
+    };
+    // Solo is for it, but its seller has no price for it yet; Crew is a team org's.
+    assertEquals(await offers(), [["team"], ["crew"]]);
+    await assertRejects(
+      () => rt.call("billing.checkout", { plan: "crew" }, { actor: ana }),
+      Error,
+      "Crew is for team orgs",
+    );
+    assertEquals(asked.length, 0, "Stripe was never asked");
+  });
 });

@@ -7,14 +7,16 @@
  * The ledger only grows, so a closed day's record count tells whether
  * records came late: each close counts the last `recheck` closed days again
  * (one indexed pass) and closes again from the first that changed. `from`
- * closes again from a day on, for records older than that.
+ * closes again from a day on, for records older than that. A day rolled up
+ * by other dimensions or units than the app's now (it added `tags.space`)
+ * is closed again too, and from it on: until then, totals read records.
  */
 import { type Context, defineAction, type Doc, type Expr } from "../../../../runtime/mod.ts";
 import type { ClosedDay } from "../collections/closed.ts";
 import type { UsageRecord } from "../collections/usage.ts";
 import { addDays, DAY, dayOf } from "../shared/days.ts";
 import { rollupsOf } from "../shared/settings.ts";
-import { type Rollups, summing } from "../shared/totals.ts";
+import { type Rollups, shapeOf, summing } from "../shared/totals.ts";
 
 /** Days aggregated in one pass, and rollups written in one transaction (whole days each). */
 const WINDOW_DAYS = 31;
@@ -32,11 +34,21 @@ function put(doc: Record<string, unknown>, path: string, value: unknown) {
   target[keys.at(-1)!] = value;
 }
 
-/** The first day to close: after the last closed, or from the first that changed since. */
+/**
+ * The first day to close: after the last closed, or from the first that
+ * changed since, or the first rolled up in another shape.
+ */
 async function start(ctx: Context, rollups: Rollups): Promise<string | undefined> {
   const usage = ctx.db.collection<UsageRecord>("usage");
   const closed = ctx.db.collection<ClosedDay>("usageClosed");
-  const last = await closed.findOne({}, { sort: { _id: -1 } });
+  const [last, other] = await Promise.all([
+    closed.findOne({}, { sort: { _id: -1 } }),
+    closed.findOne(
+      { $or: [{ shape: { $exists: false } }, { shape: { $ne: shapeOf(rollups) } }] },
+      { sort: { _id: 1 } },
+    ),
+  ]);
+  if (other) return other._id;
   if (!last) {
     const first = await usage.findOne({}, { sort: { at: 1 } });
     return first ? dayOf(first.at) : undefined;
@@ -71,6 +83,7 @@ async function close(
     ...Object.fromEntries(rollups.dimensions.map((d, i) => [`d${i}`, `$${d}`])),
   };
   const now = new Date().toISOString();
+  const shape = shapeOf(rollups);
   let days = 0;
   let written = 0;
   for (let window = from; window <= through; window = addDays(window, WINDOW_DAYS)) {
@@ -129,6 +142,7 @@ async function close(
             {
               records: made.reduce((n, doc) => n + (doc.n as number), 0),
               groups: made.length,
+              shape,
               at: now,
             },
             { upsert: true, writeConcern: { w: 0 } },

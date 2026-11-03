@@ -32,8 +32,15 @@ type Embedding = Pick<Context, "resources"> & { call: ReadContext["call"] };
  */
 const caches = new WeakMap<object, Map<string, number[]>>();
 
-/** Vectors for texts, or undefined without an embedder. */
-export async function vectors(ctx: Embedding, texts: string[]): Promise<number[][] | undefined> {
+/**
+ * Vectors for texts, or undefined without an embedder. `tags`: what they're
+ * for (the conversation and its space), on the embedder's usage record.
+ */
+export async function vectors(
+  ctx: Embedding,
+  texts: string[],
+  tags: Record<string, string> = {},
+): Promise<number[][] | undefined> {
   const { embedder } = settingsOf(ctx);
   if (!embedder) return undefined;
   let seen = caches.get(ctx.resources);
@@ -45,7 +52,7 @@ export async function vectors(ctx: Embedding, texts: string[]): Promise<number[]
     const { vectors } = await ctx.call<Vectors>("embeddings.embed", {
       model: embedder,
       input: missing,
-      tags: { purpose: "memory" },
+      tags: { ...tags, purpose: "memory" },
     });
     missing.forEach((text, i) => seen.set(key(text), vectors[i]));
     while (seen.size > 1_000) seen.delete(seen.keys().next().value!);

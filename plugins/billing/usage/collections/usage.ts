@@ -6,7 +6,7 @@ import {
   people,
   type ReadCollection,
 } from "../../../../runtime/mod.ts";
-import { rollupsOf } from "../shared/settings.ts";
+import { categoriesOf, rollupsOf } from "../shared/settings.ts";
 import { priceOnly, totals } from "../shared/totals.ts";
 
 export const usageSchema = {
@@ -49,10 +49,13 @@ export const usageSchema = {
 export type UsageRecord = Infer<typeof usageSchema> & { _id: string };
 
 /**
- * What the ledger is read by: time, and time per meter, subject and thread.
- * An app adds its own (`collections: { usage: { indexes: [["tags.tenant", "at"]] } }`).
+ * What the ledger is read by: time, and time per meter, subject and thread;
+ * a turn's records (activity shows them together). An app adds its own
+ * (`collections: { usage: { indexes: [["tags.tenant", "at"]] } }`).
  */
-export const INDEXES = [["at"], ["meter", "at"], ["subject", "at"], ["tags.thread", "at"]];
+export const INDEXES = [["at"], ["meter", "at"], ["subject", "at"], ["tags.thread", "at"], [
+  "tags.turn",
+]];
 
 export const usage = defineCollection({
   records: true,
@@ -61,9 +64,9 @@ export const usage = defineCollection({
   queries: {
     /**
      * Totals of the records matching `filter`, grouped `by` fields
-     * (`["day", "tags.agent"]`), summing `units` (input, output, cached,
-     * cacheWrite, reasoning, seconds and calls by default). Whole closed
-     * days come from their rollups when those hold what's asked.
+     * (`["day", "tags.agent"]`, `["category"]`), summing `units` (input,
+     * output, cached, cacheWrite, reasoning, seconds and calls by default).
+     * Whole closed days come from their rollups when those hold what's asked.
      */
     totals: {
       // A person sees their own usage, at its price; the system, everyone's, cost too.
@@ -79,7 +82,7 @@ export const usage = defineCollection({
           person
             ? { ...params, filter: { ...params.filter, "tags.person": ctx.actor!.id } }
             : params,
-          { db: ctx.db, rollups: rollupsOf(ctx) },
+          { db: ctx.db, rollups: rollupsOf(ctx), categories: categoriesOf(ctx) },
         );
         return person ? found.map(priceOnly) : found;
       },

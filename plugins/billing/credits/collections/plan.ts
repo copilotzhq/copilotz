@@ -46,6 +46,10 @@ export const planSchema = {
         prices: { type: "string" },
         /** The month's limit it starts with, per seat; none: the app's. */
         budget: { type: "object", properties: { perSeat: { type: "number" } } },
+        /** Which orgs may be on it (`personal`, `team`); none: any. */
+        for: { type: "string", enum: ["personal", "team"] },
+        /** The model tier its agents use while the org hasn't chosen one. */
+        models: { type: "string" },
       },
       required: ["title"],
     },

@@ -167,7 +167,16 @@ async function server() {
             arguments: '{"sides":6}',
           },
         },
-        { type: "response.completed", response: { usage: { input_tokens: 11, output_tokens: 7 } } },
+        {
+          type: "response.completed",
+          response: {
+            usage: {
+              input_tokens: 11,
+              output_tokens: 7,
+              output_tokens_details: { reasoning_tokens: 5 },
+            },
+          },
+        },
       ], true)),
   };
   // A server whose model takes no cache breakpoints (OpenAI's before GPT-5.6), and that reports
@@ -446,7 +455,8 @@ test("openai (Responses): a reasoning model's reasoning comes back as state, in 
     assertEquals(answer(chunks).calls, [{ id: "c1", name: "roll", input: { sides: 6 } }]);
     assertEquals(chunks.filter((c) => c.type === "state"), [{
       type: "state",
-      state: { data: reasoned },
+      // Sent back, it costs about what it took to think.
+      state: { data: reasoned, tokens: 5 },
     }]);
     // Asked for, encrypted: nothing is kept on OpenAI's side for it to point at.
     assertEquals((mock.seen[0].body as { include: string[] }).include, [

@@ -215,7 +215,11 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
           )
         ) {
           if (chunk.type === "state") {
-            yield { type: "state", state: { by: m.id, data: chunk.state.data } };
+            const { tokens } = chunk.state;
+            yield {
+              type: "state",
+              state: { by: m.id, data: chunk.state.data, ...(tokens ? { tokens } : {}) },
+            };
           } else if (chunk.type === "usage") {
             const { type: _, model: __, ...quantities } = chunk;
             call.usage(quantities);

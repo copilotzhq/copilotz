@@ -76,7 +76,7 @@ async function run(settings: Record<string, unknown>, withHistory = true) {
   return { runtime, sent, summarized, say, prompt, thread: () => thread! };
 }
 
-test("weights: text by bytes, an image at a large one's cost, a PDF by its pages", () => {
+test("weights: text by bytes, an image at a large one's cost, a PDF by its pages, state as told", () => {
   const pdf = b64("%PDF-1.4 /Type /Pages /Count 3 /Type /Page /Type/Page /Type /Page %%EOF");
   assertEquals(pagesOf(pdf), 3);
   assertEquals(pagesOf(b64("%PDF compressed, no page objects")), 1);
@@ -84,10 +84,14 @@ test("weights: text by bytes, an image at a large one's cost, a PDF by its pages
     weigh([
       { role: "user", text: "abcdefgh", files: [{ name: "a.png", type: "image/png", data: "" }] },
       { role: "user", text: "", files: [{ name: "b.pdf", type: "application/pdf", data: pdf }] },
-      { role: "assistant", toolCalls: [{ id: "1", name: "go", input: { a: 1 } }] },
+      {
+        role: "assistant",
+        toolCalls: [{ id: "1", name: "go", input: { a: 1 } }],
+        state: { data: ["encrypted"], tokens: 500 },
+      },
       { role: "tool", toolCallId: "1", text: "x".repeat(400) },
     ]),
-    2 + IMAGE + 3 * PAGE + 3 + 100,
+    2 + IMAGE + 3 * PAGE + 3 + 500 + 100,
   );
 });
 

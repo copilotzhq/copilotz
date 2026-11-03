@@ -3,8 +3,8 @@
  * agent is actually sent for it (its `message` View: the text, files' content
  * and transcripts, tool calls and results, what it was told), not just its
  * text. An estimate: about four bytes of text a token; an image as much as
- * a large one costs; a PDF by its pages. A model's state (its thinking) isn't
- * counted: each provider keeps or drops it its own way.
+ * a large one costs; a PDF by its pages; a model's state (its thinking, sent
+ * back to it) as its adapter says.
  */
 import type { Context } from "../../../../runtime/mod.ts";
 import type { LlmFile, LlmMessage } from "../../../models/contract.ts";
@@ -41,6 +41,7 @@ export const weigh = (sent: LlmMessage[]) =>
       for (const call of m.toolCalls ?? []) {
         tokens += tokensOf(call.name + JSON.stringify(call.input));
       }
+      tokens += m.state?.tokens ?? 0;
     }
     return sum + tokens;
   }, 0);

@@ -206,10 +206,12 @@ export const openaiResponses: LlmAdapter = {
           kept.push(reasoning);
         }
       } else if (event.type === "response.completed") {
-        if (kept.some((item) => item.type === "reasoning")) {
-          yield { type: "state", state: { data: kept } };
-        }
         const usage = event.response?.usage;
+        // Sent back, its reasoning costs about what it took to think.
+        const tokens = usage?.output_tokens_details?.reasoning_tokens;
+        if (kept.some((item) => item.type === "reasoning")) {
+          yield { type: "state", state: { data: kept, ...(tokens ? { tokens } : {}) } };
+        }
         if (usage) {
           yield {
             type: "usage",

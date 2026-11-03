@@ -213,10 +213,15 @@ export const anthropic: LlmAdapter = {
         case "message_stop":
           // Its thinking goes back with this answer when tools continue it.
           if (thoughts.size) {
-            yield {
-              type: "state",
-              state: { data: [...thoughts].sort(([a], [b]) => a - b).map(([, t]) => t) },
-            };
+            const data = [...thoughts].sort(([a], [b]) => a - b).map(([, t]) => t);
+            // Sent back, its thinking counts about as its text (redacted: as its data, encrypted).
+            const tokens = data.reduce(
+              (n, t) =>
+                n + Math.ceil(String(t.thinking ?? "").length / 4) +
+                Math.ceil(String(t.data ?? "").length / 12),
+              0,
+            );
+            yield { type: "state", state: { data, ...(tokens ? { tokens } : {}) } };
           }
           yield { type: "usage", ...usageOf(usage) };
           break;

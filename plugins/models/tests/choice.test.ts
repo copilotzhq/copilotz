@@ -312,7 +312,8 @@ test("Anthropic's signed thinking goes back to the provider's models, not anothe
       messages: [{ role: "user", text: "roll" }],
     });
     const thought = { type: "thinking", thinking: "Roll it.", signature: "sig" };
-    assertEquals(first.state, { by: "claude/claude-opus-5-5", data: [thought] });
+    // What it adds to a prompt, sent back: about its text's tokens ("Roll it.": 2).
+    assertEquals(first.state, { by: "claude/claude-opus-5-5", data: [thought], tokens: 2 });
     const conversation = [
       { role: "user" as const, text: "roll" },
       { role: "assistant" as const, toolCalls: first.toolCalls, state: first.state },

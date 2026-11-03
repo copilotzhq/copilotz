@@ -5,6 +5,13 @@
   answer, so the next turn started without it. Answers keep it now, and agents are sent it on
   text-only messages too. A message's `state` is private, like `told`: people's reads and events go
   without it, and an answer handed back to another space doesn't carry it.
+- **OpenAI's reasoning goes back to it.** The Responses adapter asks for a reasoning model's
+  reasoning, encrypted (`include: ["reasoning.encrypted_content"]`), keeps it as its answer's state,
+  in its place among the answer's text and calls, without ids, and sends it back. Between tool steps
+  the model carries on instead of thinking again: on gpt-6.1-sol, a two-turn tool task wrote 42%
+  fewer output tokens. A server that refuses `include` is asked again without it, and not asked
+  again. Sent back, past reasoning stays in later prompts (a probe: 616 input tokens with it, 48
+  without), so a state now says about what it adds (`LlmState.tokens`), and history counts it.
 - **History counts what a prompt really carries.** The history plugin's tail is measured in
   estimated tokens of what an agent is sent for each message: its text, text files' content,
   transcripts, images (1,600 each) and PDFs (2,000 a page), and agents' tool steps, which leave the

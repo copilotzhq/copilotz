@@ -29,7 +29,10 @@ export async function search(
       : { core: { $ne: true } }),
   };
   const query = words(text);
-  const [vector] = await vectors(ctx, [text]) ?? [];
+  const [vector] = await vectors(ctx, [text], {
+    thread: scope.thread,
+    ...(scope.in ? { space: scope.in } : {}),
+  }) ?? [];
   const candidates: Scored[] = vector
     ? await memories.nearest(vector, { filter, limit: limit * 4 })
     : (await memories.find(filter, { sort: { at: -1 }, limit: 500 })).map((m) => ({
@@ -60,7 +63,10 @@ export async function keep(
   id?: string,
 ): Promise<string> {
   const memories = ctx.db.collection<Memory>("memory");
-  const [embedding] = await vectors(ctx, [entry.text]) ?? [];
+  const [embedding] = await vectors(ctx, [entry.text], {
+    ...(entry.source?.thread ? { thread: entry.source.thread } : {}),
+    ...(entry.in ? { space: entry.in } : {}),
+  }) ?? [];
   let existing: Memory | null = id
     ? await memories.findOne({ _id: id, forgotten: { $exists: false } })
     : null;

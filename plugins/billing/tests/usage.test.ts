@@ -15,6 +15,8 @@ import {
 import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
 import models, { type LlmAdapter } from "../../models/mod.ts";
 import { chat } from "../../agents/chat/mod.ts";
+import { history } from "../../agents/history/mod.ts";
+import { memory, memoryExtraction } from "../../agents/memory/mod.ts";
 import usage, { rate, type UsageRecord } from "../usage/mod.ts";
 import { catalog } from "../../models/shared/choice.ts";
 import { tempFile, test } from "../../../testing/mod.ts";
@@ -215,6 +217,54 @@ test("a chat turn's model calls are metered, tagged with its thread, agent and t
       2000,
     ]);
     assertAlmostEquals(byAgent.cost, 2 * 660 / MILLION);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("a conversation's upkeep (its summaries, its memory notes) is charged to it, in its space", async () => {
+  const script: LlmAdapter = {
+    async *generate({ connection }) {
+      // The summarizer's line, and the extractor's notes (none): both short.
+      yield { type: "text", text: connection.model === "cheap" ? '{"memories": []}' : "ok" };
+      yield { type: "usage", input: 100, output: 10 };
+    },
+  };
+  const app = definePlugin({
+    name: "app",
+    resources: {
+      provider: { script: { adapter: "script" } },
+      agents: { lead: { instructions: "Help.", model: "script/lead" } },
+      // A tail of a few messages, so they're summarized as they leave it; notes every two.
+      history: { summarizer: "script/cheap", line: 40, tail: [25, 50], outline: [60, 120] },
+      memory: { extractor: "script/cheap", every: 2 },
+    },
+    adapters: { llm: { script } },
+  });
+  const runtime = await createRuntime({
+    store: await sqliteStore({ path: tempFile() }),
+    plugins: [models, chat, history, memory, memoryExtraction, usage, app],
+  });
+  const ana = { kind: "person", id: "ana" };
+  try {
+    let thread: string | undefined;
+    for (let n = 0; n < 6; n++) {
+      thread = (await runtime.call<{ thread: string }>("chat.send", {
+        thread,
+        in: "research",
+        text: `message number ${n} is long enough to need a summary line`,
+      }, { actor: ana })).thread;
+      await runtime.idle();
+    }
+    const records = await runtime.query<UsageRecord[]>("usage.list");
+    const upkeep = records.filter((r) => r.tags?.purpose);
+    assertEquals(
+      [...new Set(upkeep.map((r) => r.tags!.purpose))].sort(),
+      ["history", "memory"],
+    );
+    for (const r of upkeep) {
+      assertEquals([r.tags?.thread, r.tags?.space, r.tags?.agent], [thread, "research", undefined]);
+    }
   } finally {
     await runtime.close();
   }

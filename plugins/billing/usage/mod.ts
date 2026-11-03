@@ -19,19 +19,27 @@
  *   - a use nothing prices is recorded all the same, and flagged `unpriced`.
  * - **Who sees what:** people see prices (what they're charged); costs, and
  *   so margins, only platform staff and the system.
- * - **Totals** by any field or tag: `runtime.query("usage.totals", { filter, by })`.
- *   Whole closed days come from rollups (`usage.close`, scheduled daily),
- *   the rest from the records, with the same result.
+ * - **Totals** by any field or tag: `runtime.query("usage.totals", { filter, by })`,
+ *   and by category (agents, computers, apps: what a use's meter is, see
+ *   shared/categories.ts). Whole closed days come from rollups
+ *   (`usage.close`, scheduled daily), the rest from the records, with the
+ *   same result.
  * - **Quotes** (`usage.quote`): what a use would be charged now, rated the
  *   same way and recorded nowhere, for showing prices before use.
  * - **A use on an org's own key** (`paid: "own-key"`) costs the app nothing and
  *   is charged nothing; what it used is kept all the same.
  * - **Re-rating** (`usage.rerate`) never changes a record: it appends
  *   adjustments for what new rates would change, so totals follow.
- * - **Across an org** (where the app serves many): `usage.org` (totals) and
- *   `usage.calls` (the latest uses) give its owners and admins everyone's,
- *   and anyone else their own, at their price (cost too for staff). Its web front end (web.tsx) is the org
- *   page's Usage section.
+ * - **Across an org** (where the app serves many): `usage.org` (totals, with
+ *   names for what they're grouped by) and `usage.activity` (what was done,
+ *   newest first: turns, computers' sessions, apps' days) give its owners
+ *   and admins everyone's, and anyone else their own, at their price (cost
+ *   too for staff). Its web front end (web.tsx) is the org page's Usage
+ *   section.
+ * - **Names** for what tags point to (a space, a conversation, a computer)
+ *   come from whoever owns it: the `usageNames` resource kind (a tag, the
+ *   collection and the field naming it; see shared/names.ts), read as the
+ *   caller. A tag nobody names shows as its id.
  *
  * Rates are keyed by subject (`"openai/gpt-6.1-sol"`), then by provider
  * (`"chatgpt/*"`), then the catalog, then `"*"`. A rate prices units per
@@ -47,9 +55,11 @@ import { usageRollup } from "./collections/rollup.ts";
 import { usage } from "./collections/usage.ts";
 import { DEFAULTS, rollupsOf } from "./shared/settings.ts";
 import { recordAction } from "./actions/record.ts";
-import { orgUsageAction, usageCallsAction } from "./actions/org.ts";
+import { orgUsageAction } from "./actions/org.ts";
+import { activityAction } from "./actions/activity.ts";
 import { quoteAction, quotesAction } from "./actions/quote.ts";
 import { ledger } from "./resources/ledger.ts";
+import { nameProblem } from "./shared/names.ts";
 
 export type { Use } from "./shared/use.ts";
 export type { UsageRecord } from "./collections/usage.ts";
@@ -63,6 +73,9 @@ export {
   rate,
 } from "./shared/rate.ts";
 export { type Rollups, type Totals, totals, UNITS } from "./shared/totals.ts";
+export { CATEGORIES, type Categories } from "./shared/categories.ts";
+export type { ActivityCall, ActivityItem, ActivityKind } from "./actions/activity.ts";
+export type { UsageName } from "./shared/names.ts";
 
 export type { UsageSettings } from "./shared/settings.ts";
 
@@ -76,7 +89,7 @@ export const usagePlugin: Plugin = definePlugin({
     "usage.rerate": rerateAction,
     "usage.close": closeAction,
     "usage.org": orgUsageAction,
-    "usage.calls": usageCallsAction,
+    "usage.activity": activityAction,
     "usage.quote": quoteAction,
     "usage.quotes": quotesAction,
   },
@@ -86,6 +99,10 @@ export const usagePlugin: Plugin = definePlugin({
       if (!/^(tags\.[^.]+|catalog)$/.test(dimension)) {
         throw new Error(`rollup dimension "${dimension}" is not tags.<name> or catalog`);
       }
+    }
+    for (const [key, naming] of Object.entries(merged.resources.usageNames ?? {})) {
+      const problem = nameProblem(key, naming);
+      if (problem) throw new Error(problem);
     }
   },
 });

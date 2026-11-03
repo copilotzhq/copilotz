@@ -17,12 +17,26 @@
  *   and record payments (actions/manage.ts); a provider's webhook calls
  *   `billing.apply` with its own event id, which lands in the same place.
  * - **`enforce`** off: nothing starts and nobody's stopped; staff can prepare.
+ * - **Who a plan is for** (`for`: personal or team orgs): an org of the other
+ *   kind isn't offered it and can't be moved to it, by anyone. A plan can name
+ *   the model tier its agents use while the org hasn't chosen one (`models`,
+ *   read through `billing.tier`, the `planTier` resource).
  *
  *   plugins: [models, usage, credits, …]
- *   resources: { billing: { plans: { team: { title: "Team", credits: { perSeat: 10 } } } } }
+ *   resources: {
+ *     billing: {
+ *       plans: { team: { title: "Team", credits: { perSeat: 10 }, for: "team", models: "advanced" } },
+ *     },
+ *   }
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
-import { checkAction, mayAction, priceListAction, spentAction } from "./actions/check.ts";
+import {
+  checkAction,
+  mayAction,
+  priceListAction,
+  spentAction,
+  tierAction,
+} from "./actions/check.ts";
 import {
   applyAction,
   budgetAction,
@@ -55,6 +69,7 @@ export const credits: Plugin = definePlugin({
     "billing.may": mayAction,
     "billing.spent": spentAction,
     "billing.priceList": priceListAction,
+    "billing.tier": tierAction,
     "billing.state": stateAction,
     "billing.notice": noticeAction,
     "billing.setPlan": setPlanAction,
@@ -72,6 +87,8 @@ export const credits: Plugin = definePlugin({
     billing: DEFAULTS,
     usage: { priceList: "billing.priceList", spent: "billing.spent" },
     spending: { check: "billing.check", may: "billing.may" },
+    // Which model tier the org's plan gives its agents, for the tiers plugin.
+    planTier: { action: "billing.tier" },
   },
 });
 

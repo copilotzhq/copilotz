@@ -1,9 +1,10 @@
 /**
  * Rollups: closing a day rolls its records up, and totals take whole closed
  * days from the rollups and the rest from the records, with the same result
- * as the records alone, for any filter and grouping they can serve. The
- * daily schedule closes what's due, and closes again a day whose records
- * came late.
+ * as the records alone, for any filter and grouping they can serve (by
+ * category and space too). The daily schedule closes what's due, and closes
+ * again a day whose records came late, or that was rolled up in another
+ * shape (until then, totals read records).
  */
 import { assert, assertEquals, assertNotEquals, assertRejects } from "@std/assert";
 import {
@@ -46,8 +47,9 @@ function uses(count: number, days: number[], seed: number): Use[] {
   return Array.from({ length: count }, () => {
     const day = days[Math.floor(random() * days.length)];
     const at = new Date(Date.UTC(2026, 9, day) + Math.floor(random() * 86_400_000)).toISOString();
+    const kind = random();
     return {
-      meter: random() < 0.8 ? "llm" : "tool",
+      meter: kind < 0.6 ? "llm" : kind < 0.8 ? "computer" : "tool",
       // m/b has no cost: its uses are unpriced.
       subject: random() < 0.7 ? "m/a" : "m/b",
       quantities: {
@@ -59,6 +61,7 @@ function uses(count: number, days: number[], seed: number): Use[] {
         thread: `t${Math.floor(random() * 5)}`,
         ...(random() < 0.8 ? { agent: random() < 0.5 ? "a1" : "a2" } : {}),
         purpose: random() < 0.3 ? "memory" : "chat",
+        ...(random() < 0.7 ? { space: random() < 0.5 ? "s1" : "s2" } : {}),
       },
       at,
     };
@@ -116,6 +119,10 @@ const CASES: { filter?: Filter; by?: string[]; units?: string[] }[] = [
   { filter: { at: { $gt: "2026-10-12", $lte: "2026-10-17" } }, by: ["tags.purpose"] },
   { filter: { "tags.agent": "a1", subject: { $in: ["m/a"] } }, by: ["day", "kind"] },
   { filter: { at: { $gte: "2026-10-14", $lt: "2026-10-15" } }, units: ["input"] },
+  // By category, and space: as rollups keep them.
+  { by: ["category"] },
+  { filter: { category: "agents" }, by: ["day", "tags.space"] },
+  { filter: { "tags.space": { $exists: false } }, by: ["category", "subject"] },
   // What rollups don't keep: from the records.
   { by: ["tags.thread"] },
   { filter: { "tags.thread": "t1" }, by: ["day"] },
@@ -195,6 +202,53 @@ each("the daily close catches up, and closes again a day whose records came late
     assertNotEquals(second.get("2026-10-13"), new Map(first).get("2026-10-13"));
     assert(second.has("2026-10-16"));
     await compare(runtime);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("days rolled up in another shape are read from records until they're closed again", async () => {
+  const path = tempFile(".sqlite");
+  // Rolled up by agent alone, as an app did before it rolled up by space.
+  const before = definePlugin({
+    name: "before",
+    resources: { usage: { rollups: { dimensions: ["tags.agent"] } } },
+  });
+  const first = await createRuntime({
+    store: await sqliteStore({ path }),
+    plugins: [usage, app, before],
+  });
+  try {
+    await first.call("seed.uses", { uses: uses(200, [10, 11, 12, 13, 14], 5) });
+    assertEquals(
+      (await first.call<{ days: number }>("usage.close", { through: "2026-10-14" })).days,
+      5,
+    );
+  } finally {
+    await first.close();
+  }
+  const runtime = await createRuntime({
+    store: await sqliteStore({ path }),
+    plugins: [usage, app],
+  });
+  try {
+    const bySpace = { by: ["tags.space"] };
+    // Not read: they don't keep spaces (changed, they'd change nothing).
+    await runtime.call("rollup.tamper", {});
+    assertEquals(
+      settled(await runtime.query<Totals[]>("usage.totals", bySpace)),
+      settled(await runtime.call<Totals[]>("raw.totals", bySpace)),
+    );
+    // The next close rolls every day up again, from the first, in this shape; then they're read.
+    const again = await runtime.call<{ from: string; days: number }>("usage.close", {
+      through: "2026-10-14",
+    });
+    assertEquals([again.from, again.days], ["2026-10-10", 5]);
+    await compare(runtime);
+    await runtime.call("rollup.tamper", {});
+    const [all] = await runtime.query<Totals[]>("usage.totals", {});
+    const [raw] = await runtime.call<Totals[]>("raw.totals", {});
+    assertEquals(all.quantities.input! - raw.quantities.input!, 1_000_000);
   } finally {
     await runtime.close();
   }

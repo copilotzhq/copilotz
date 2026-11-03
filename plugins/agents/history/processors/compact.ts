@@ -44,13 +44,14 @@ researcher: …"). Never make anything look further along than it was.`;
 
 /**
  * Asks the summarizer for one line within the limit: retried when too long,
- * cut as a last resort. Its calls are metered for the thread.
+ * cut as a last resort. Its calls are metered for the thread, in its space
+ * (`tags`): the conversation's upkeep.
  */
 async function write(
   ctx: Context,
   config: HistorySettings,
   task: string,
-  thread: string,
+  tags: Record<string, string>,
 ): Promise<string> {
   const ruler = "-".repeat(config.line);
   const messages: LlmMessage[] = [{
@@ -63,7 +64,7 @@ async function write(
       model: config.summarizer,
       instructions: INSTRUCTIONS,
       messages,
-      tags: { thread, purpose: "history" },
+      tags: { ...tags, purpose: "history" },
     });
     const line = text.trim().replace(/\s*\n\s*/g, " ");
     if (!best || size(line) < size(best)) best = line;
@@ -96,6 +97,7 @@ async function summarize(
   put: (level: number, i: number, line: string, message?: string) => Summary,
 ) {
   if (await get(0, index)) return; // Summarized when it came (before summaries waited).
+  const tags = { thread, ...(m.in ? { space: m.in } : {}) };
   // People by name in what's kept.
   const text = lineOf(m, await namesFor(ctx, [m.from, ...m.to]));
   // The message's own line: itself when short, else compressed with the lines before it.
@@ -111,7 +113,7 @@ async function summarize(
         `(about ${Math.round(config.line / 7)} words), the length of this ruler:\n{ruler}\n` +
         (before.length ? `<chat>\n${before.join("\n")}\n</chat>\n` : "") +
         `<input>\n${text}\n</input>`,
-      thread,
+      tags,
     );
   }
   put(0, index, own, m._id);
@@ -128,7 +130,7 @@ async function summarize(
       `Compaction: merge lines ${(i - 1) * n}+${n} and ${i * n}+${n}, adjacent, into one line of ` +
         `at most ${config.line} bytes (about ${Math.round(config.line / 7)} words), the length ` +
         `of this ruler:\n{ruler}\n<input>\n${left.text}\n${right.text}\n</input>`,
-      thread,
+      tags,
     );
     put(level + 1, (i - 1) / 2, line);
   }

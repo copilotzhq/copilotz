@@ -59,7 +59,8 @@ async function extract(ctx: Context, event: Event) {
   ).join("\n");
   const { text } = await ctx.call<Completion>("llm.generate", {
     model: extractor!,
-    tags: { thread: String(m.thread), purpose: "memory" },
+    // The conversation's upkeep: charged to it, in its space.
+    tags: { thread: String(m.thread), purpose: "memory", ...(m.in ? { space: m.in } : {}) },
     instructions: EXTRACT,
     messages: [{
       role: "user",

@@ -5,10 +5,14 @@
  * was. Each moves its mark first (only one caller meters a stretch), then
  * records it. An app without the billing plugin records nothing; any other
  * failure is logged, and that stretch isn't recorded again.
+ *
+ * Each is tagged with the computer, its owner, its space (the one it was put
+ * in: its first desk) and, for a VM's seconds, its session (when it woke),
+ * so usage shows it by space, and a session as one.
  */
 import type { Context } from "../../../../runtime/mod.ts";
 import { type CloudComputer, SUBJECTS } from "../contract.ts";
-import { recordsOf, still } from "./records.ts";
+import { recordsOf, spaceOf, still } from "./records.ts";
 import { after, between, LEASE_MS } from "./time.ts";
 
 export type CloudUse = {
@@ -29,7 +33,11 @@ export async function meter(ctx: Context, use: CloudUse): Promise<void> {
   }
 }
 
-const tagsOf = (rec: CloudComputer) => ({ computer: rec._id, person: rec.owner });
+async function tagsOf(ctx: Context, rec: CloudComputer): Promise<Record<string, string>> {
+  // Its mark has moved: the stretch is recorded, with its space or, unread, without.
+  const space = await spaceOf(ctx, rec._id).catch(() => undefined);
+  return { computer: rec._id, person: rec.owner, ...(space ? { space } : {}) };
+}
 
 /**
  * A VM's whole seconds from its mark (`metered`, else when it woke) to `now`;
@@ -59,7 +67,7 @@ export async function meterVm(
   await meter(ctx, {
     subject: SUBJECTS.vm(rec.size),
     quantities: { seconds },
-    tags: tagsOf(rec),
+    tags: { ...await tagsOf(ctx, rec), ...(rec.woke ? { session: rec.woke } : {}) },
     at: now,
   });
 }
@@ -81,7 +89,7 @@ export async function meterStorage(ctx: Context, rec: CloudComputer, now: string
   await meter(ctx, {
     subject: rec.state === "cold" ? SUBJECTS.snapshot : SUBJECTS.disk,
     quantities: { gbHours: Math.round(rec.diskGb * hours * 1e6) / 1e6 },
-    tags: tagsOf(rec),
+    tags: await tagsOf(ctx, rec),
     at: now,
   });
 }

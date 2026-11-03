@@ -22,7 +22,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.17"`),
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.18"`),
 and the imports below are the same everywhere. Some pieces need a package of their own, installed
 beside it: `esbuild` to bundle the web host on Node, `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types.
@@ -99,8 +99,8 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                         |
 | `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                              |
 | `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                             |
-| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tool`                        |
-| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`                          |
+| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `tool`               |
+| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`              |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                  |
 | `copilotz/plugins/access`              | `access` (`spaces`, `identity`), `accounts`, `directory`, `googleSignIn`                                     |
 | `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`                                                                                   |
@@ -204,7 +204,7 @@ and an app serves it from there by default:
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.17" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.18" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 
@@ -354,6 +354,11 @@ name, never by importing its code.
 - **`routines`**: a message sent to an agent on a schedule, in a space ("every weekday at 9:00, ask
   @researcher for the news"), as whoever made it, reaching only what they reach; each run's chat and
   outcome are kept. Agents make them from a conversation too (`schedule_routine`).
+- **`tiers`**: which models the app's agents think with, named by what the work needs (Everyday,
+  Expert…): the app declares each tier's model for each agent; an org chooses one, a space can
+  choose another, and either can pick a model for one agent, the tier's list kept behind it. Kept by
+  name, so retuning a tier moves everyone on it; while an org hasn't chosen, its plan's tier
+  applies. Each tier shows what a typical reply comes to at the org's prices.
 
 **`access/`**: who can see and do what (see [design/access.md](design/access.md)).
 
@@ -404,9 +409,19 @@ name, never by importing its code.
     from an older day. `schedules: { "usage.close": null }` turns them off.
   - **Re-rating** (`usage.rerate`) never changes a record: it appends adjustments, dated when made,
     and totals follow.
-  - **On the web** (`usageWeb`): an org's Usage page, day by day and against the period before, by
-    person, agent and model, with what the cache read, wrote and saved; owners and admins see
-    everyone's, anyone else their own.
+  - **Categories:** each meter is one (`llm`, `embeddings` and `transcription` are agents',
+    `computer` computers', `app` apps'; any other its own); totals group and filter by `category`,
+    and rollups serve it. Rollups keep `tags.space` too; days rolled up in another shape are closed
+    again, and read from records until then.
+  - **Across an org:** `usage.org` (totals, naming what they're grouped by as the caller reaches it)
+    and `usage.activity` (agents' turns, computers' sessions, apps' days and conversations' upkeep,
+    newest first): owners and admins see everyone's, anyone else their own. What a tag points to is
+    named by the plugin that owns it, in the `usageNames` resource kind
+    (`{ tag: "tags.app", collection: "app", field: "name" }`); a tag nobody names shows as its id.
+  - **On the web** (`usageWeb`): an org's Usage page: the billing month's spend against the budget
+    and credits left (from the credits plugin, when it's there) and the same point last month; a
+    daily chart and a ranked list by kind, space, person, agent or model, whose rows filter the
+    page; and activity. Staff see cost and margin in place.
 
 **`compute/`**: **`computers`**, machines people connect (the computer program in
 `computers/program/`, a worker of the plugin's `computer` kind) and their desks, one per space
@@ -833,7 +848,7 @@ exporters/      where measurements go: the Exporter port's implementations (OTLP
 plugins/        the features, by theme
   models/       one plugin: llm, embeddings, transcription; shared/ (providers, model choice,
                 models.dev catalog)
-  agents/       chat, history, memory, team, skills, routines
+  agents/       chat, history, memory, team, skills, routines, tiers
   billing/      usage (the ledger)
   access/       spaces (members, reach, rules), identity, Google sign-in, connected accounts, the
                 directory of orgs

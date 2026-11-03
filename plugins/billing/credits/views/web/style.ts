@@ -94,6 +94,10 @@ export const STYLE = `
 
 /* The plan */
 .billing-plan-name { margin: -6px 0 0; font-family: var(--font-display); font-size: 22px; font-weight: 660; letter-spacing: -.015em; line-height: 1.2; }
+.billing-plan-credits { display: grid; gap: 6px; padding: 10px 12px 11px; border-radius: var(--radius-lg); background: var(--muted); }
+.billing-plan-left { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.billing-for-teams { padding-top: 10px; border-top: 1px solid var(--border); }
+.billing-card-head + .billing-for-teams { padding-top: 0; border-top: 0; }
 .billing-offers { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
 .billing-offer { display: grid; grid-template-rows: 1fr auto; gap: 12px; min-width: 0; padding: 14px 16px;
   border: 1px solid var(--border); border-radius: var(--radius-lg); }

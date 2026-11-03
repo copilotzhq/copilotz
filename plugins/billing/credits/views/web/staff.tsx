@@ -272,6 +272,7 @@ function PlanDialog({ open, state, org, call, close, onChanged }: Shared): React
                   {names.map((n) => (
                     <option key={n} value={n}>
                       {plans[n].title}
+                      {plans[n].for ? ` · ${plans[n].for} orgs only` : ""}
                       {n === state.plan?.name ? " (now)" : ""}
                     </option>
                   ))}

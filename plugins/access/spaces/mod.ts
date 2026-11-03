@@ -91,7 +91,7 @@ export type { Invitation } from "./collections/invitation.ts";
 export type { DirectoryPort } from "./actions/org.ts";
 export type { Member } from "./collections/member.ts";
 export type { Reached, Space } from "./collections/space.ts";
-export type { SpaceInvite, SpaceSidebar, SpaceTab } from "./contract.ts";
+export type { SpaceAgents, SpaceInvite, SpaceSidebar, SpaceTab } from "./contract.ts";
 export type { Request } from "./collections/request.ts";
 // People by name, wherever an id would show (see shared/names.ts).
 export {
@@ -166,6 +166,10 @@ export const spaces: Plugin = definePlugin({
     roster: { spaces: { action: "space.roster" } },
     // Where people's names are, for whatever shows a person (pages, agents' prompts).
     names: { collection: PROFILE },
+    // Spaces by name on Usage (a Personal space says whose it is).
+    usageNames: {
+      space: { tag: "tags.space", collection: "space", field: "name", owner: "owner" },
+    },
   },
   processors: { "spaces.agentGone": agentGoneProcessor, "spaces.profile": profileProcessor },
 });

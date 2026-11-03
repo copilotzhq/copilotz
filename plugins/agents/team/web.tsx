@@ -9,8 +9,10 @@
  * (spaces' `spaceInvite` resource, named here; Personal spaces too). In
  * the command palette (`agent.palette`): agents to go to, adding one,
  * making one, having one answer new chats, and what to do with the one
- * open. Chat's front end shows agents in chats; spaces' adds them. Add it
- * beside them:
+ * open. Chat's front end shows agents in chats; spaces' adds them. Other
+ * front ends choose a model with the same picker (`model.pick`: item
+ * `{ value }`, hints `{ action, input, look? }`, calling `action` with what's
+ * chosen). Add it beside them:
  *
  * ```ts
  * await web({ plugins: [webShell, chatWeb, spacesWeb, teamWeb], root });
@@ -20,6 +22,7 @@ import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { agentView } from "./views/web/agent.tsx";
 import { agentAddView } from "./views/web/agent-add.tsx";
 import { agentPaletteView } from "./views/web/agent-palette.tsx";
+import { modelPickView } from "./views/web/model-pick.tsx";
 
 export const teamWeb: Plugin = definePlugin({
   name: "team-web",
@@ -28,6 +31,7 @@ export const teamWeb: Plugin = definePlugin({
     agent: { web: agentView },
     "agent.add": { web: agentAddView },
     "agent.palette": { web: agentPaletteView },
+    "model.pick": { web: modelPickView },
   },
   resources: {
     spaceInvite: {

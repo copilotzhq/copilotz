@@ -120,6 +120,14 @@ export async function teamOf(
   return { ...roster, here: roster.here.filter((name) => agents[name]), agents };
 }
 
+/**
+ * An `agentModel` resource: the Action saying which model one of the app's
+ * agents thinks with in a space (the tiers plugin's), `{ agent, space? }` in,
+ * a model (as `model` takes it) or null (its own) out. Asked as the turn, once
+ * each run, so it reads only what's cheap.
+ */
+export type AgentModel = { action: string };
+
 /** An agent's model, with the settings it calls it with. */
 export const modelOf = ({ model, effort, maxTokens, temperature }: Agent): ModelRef => ({
   model,

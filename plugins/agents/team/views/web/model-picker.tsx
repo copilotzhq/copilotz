@@ -1,7 +1,8 @@
 /**
  * Choosing the model an agent thinks with, from every provider the app can
  * reach (`models.offered`, from the models.dev catalog). Closed, it shows
- * what's chosen, and says so when it can't run yet. Open, a dialog: search
+ * what's chosen, and says so when it can't run yet; or, where a line already
+ * says what's chosen (`look: "link"`), it's just a small "Change". Open, a dialog: search
  * across providers and models, or browse the providers, those ready first, and
  * then one's models, newest first, with what each costs and can do. A provider
  * without a key asks for one: the org's owners and admins add it here
@@ -66,27 +67,72 @@ function abilities(model: OfferedModel): string[] {
 }
 
 export function ModelPicker(
-  { value, onChange, call, disabled, id }: {
+  { value, onChange, call, disabled, id, look = "field", label = "Change" }: {
     value: string;
     onChange(model: string): void;
     call: Call;
     disabled?: boolean;
     id?: string;
+    /** A field showing what's chosen (the default), or a small button saying `label`. */
+    look?: "field" | "link";
+    label?: string;
   },
 ): ReactNode {
   const [open, setOpen] = useState(false);
   const [chosen, setChosen] = useState<
     { model: OfferedModel | null; provider: OfferedProvider | null }
   >();
+  // What's chosen, by name, for the field; a link leaves that to the line it's on.
   const load = useCallback(() => {
-    if (!value) return setChosen(undefined);
+    if (!value || look === "link") return setChosen(undefined);
     call<{ model: OfferedModel | null; provider: OfferedProvider | null }>("models.offered", {
       model: value,
     }).then(setChosen, () => setChosen(undefined));
-  }, [value, call]);
+  }, [value, call, look]);
   useEffect(load, [load]);
   // Known and not ready: nothing can reach it until its key is added.
   const stuck = chosen?.provider && !chosen.provider.ready;
+  const dialog = open
+    ? createPortal(
+      <Dialog
+        open
+        onClose={() => {
+          setOpen(false);
+          load();
+        }}
+        title="Choose a model"
+        className="model-dialog"
+      >
+        <Choosing
+          value={value}
+          call={call}
+          onChoose={(model) => {
+            onChange(model);
+            setOpen(false);
+          }}
+        />
+      </Dialog>,
+      document.body,
+    )
+    : null;
+  if (look === "link") {
+    return (
+      <>
+        <Button
+          id={id}
+          variant="link"
+          size="sm"
+          className="model-change"
+          disabled={disabled}
+          aria-haspopup="dialog"
+          onClick={() => setOpen(true)}
+        >
+          {label}
+        </Button>
+        {dialog}
+      </>
+    );
+  }
   return (
     <>
       <button
@@ -108,29 +154,7 @@ export function ModelPicker(
         <Icon name="selector" size={16} />
       </button>
       {/* Outside the page: the form this is in mustn't hear what's typed or pressed in it. */}
-      {open
-        ? createPortal(
-          <Dialog
-            open
-            onClose={() => {
-              setOpen(false);
-              load();
-            }}
-            title="Choose a model"
-            className="model-dialog"
-          >
-            <Choosing
-              value={value}
-              call={call}
-              onChoose={(model) => {
-                onChange(model);
-                setOpen(false);
-              }}
-            />
-          </Dialog>,
-          document.body,
-        )
-        : null}
+      {dialog}
     </>
   );
 }

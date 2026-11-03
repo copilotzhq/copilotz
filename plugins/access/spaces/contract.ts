@@ -35,6 +35,10 @@
  *   hints `{ in }`, for those who manage the space; `personal: true` when
  *   it joins a Personal space too (agents do; people don't). The words for
  *   the roles agents work in are `AGENT_ROLES`.
+ * - `spaceAgents`: what a front end adds to a space's agents (its Members
+ *   tab): a View above them (`view`: item `{ _id }`, the space), and one on
+ *   each agent's row (`row`: item `{ _id }`, the agent), both with hints
+ *   `{ in, manage, mode }` (`manage`: whether the person manages the space).
  *
  * ```ts
  * resources: {
@@ -44,6 +48,7 @@
  *   },
  *   spaceSidebar: { chats: { view: "chats.recent", title: "chats" } },
  *   spaceInvite: { agents: { title: "Agents", view: "agent.add", personal: true } },
+ *   spaceAgents: { tiers: { view: "tiers.space", row: "tiers.agent" } },
  * }
  * ```
  */
@@ -99,6 +104,13 @@ export type SpaceSidebar = {
   title?: string;
   order?: number;
 };
+
+/**
+ * A `spaceAgents` resource: what a front end adds to a space's agents: a View
+ * above them (item `{ _id }`, the space) and one on each agent's row (item
+ * `{ _id }`, the agent), with hints `{ in, manage, mode: "page" | "panel" }`.
+ */
+export type SpaceAgents = { view?: string; row?: string; order?: number };
 
 /** A `spaceInvite` resource: a kind of member added to a space, a tab of its invite surface. */
 export type SpaceInvite = {

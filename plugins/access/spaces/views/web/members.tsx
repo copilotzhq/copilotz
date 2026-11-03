@@ -5,11 +5,13 @@
  * shows them: see agents.tsx); and the spaces that draw on it. Those who
  * manage it invite people, take an invitation back, change roles, take
  * someone out (never its last manager), let in or turn down who asked to
- * join, and add agents (the invite surface, at Agents). A Personal space is
+ * join, and add agents (the invite surface, at Agents). Other front ends add
+ * to its agents (`spaceAgents`): above them, and on each agent's row (tiers:
+ * the space's models). A Personal space is
  * just you and your agents, and says how to work with others; an archived
  * one invites no one.
  */
-import { type ReactNode, useState } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
   Avatar,
@@ -23,7 +25,7 @@ import {
   Skeleton,
   Time,
 } from "../../../../../hosts/web/mod.ts";
-import type { Invitation, Member, Reached, Request } from "../../contract.ts";
+import type { Invitation, Member, Reached, Request, SpaceAgents } from "../../contract.ts";
 import { Agents, type Roster } from "./agents.tsx";
 import { InviteDialog } from "./invite-dialog.tsx";
 import { InviteForm } from "./invite.tsx";
@@ -71,6 +73,31 @@ export const membersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
   const roster = adds || byKind(members).agents.length
     ? ctx.db.collection("thread").query<Roster>("agents", { in: id }).value
     : undefined;
+  // What other front ends add to its agents (`spaceAgents`): above them, and on each one's row.
+  const extras = Object.entries((ctx.resources.spaceAgents ?? {}) as Record<string, SpaceAgents>)
+    .filter(([, extra]) => extra?.view || extra?.row)
+    .sort(([a, x], [b, y]) => (x.order ?? 0) - (y.order ?? 0) || a.localeCompare(b));
+  const hints = {
+    in: id,
+    manage: space.can.includes("manage"),
+    mode: compact ? "panel" : "page",
+  };
+  const above = extras.flatMap(([key, extra]) =>
+    extra.view ? [<Fragment key={key}>{ctx.show(extra.view, { _id: id }, hints)}</Fragment>] : []
+  );
+  const lines = Object.fromEntries(
+    byKind(members).agents.map((m) => {
+      const agent = whoOf(m.member).id;
+      return [
+        agent,
+        extras.flatMap(([key, extra]) =>
+          extra.row
+            ? [<Fragment key={key}>{ctx.show(extra.row, { _id: agent }, hints)}</Fragment>]
+            : []
+        ),
+      ];
+    }),
+  );
   return (
     <>
       {style}
@@ -79,6 +106,8 @@ export const membersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
         spaces={spaces}
         members={byMember(members, ctx.viewer?.name, names)}
         roster={roster}
+        above={above}
+        lines={lines}
         adds={adds}
         requests={requests}
         invitations={invitations}
@@ -97,6 +126,8 @@ function Members(
     spaces: reached,
     members,
     roster,
+    above,
+    lines,
     adds,
     requests,
     invitations,
@@ -109,6 +140,9 @@ function Members(
     spaces: Reached[];
     members: Member[];
     roster?: Roster;
+    /** What other front ends show above its agents, and on each agent's row. */
+    above: ReactNode[];
+    lines: Record<string, ReactNode[]>;
     adds: boolean;
     requests: Request[];
     invitations: Invitation[];
@@ -179,6 +213,8 @@ function Members(
         spaces={reached}
         members={agents}
         roster={roster}
+        above={above}
+        lines={lines}
         manage={manage}
         adds={adds}
         onAdd={() => setAdding(true)}

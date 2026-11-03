@@ -5,6 +5,8 @@
  * - `billing.checkout` `{ credits, country? }`: buy credits, once (USD);
  * - `billing.checkout` `{ plan, country? }`: subscribe to a plan, a seat each;
  * - `billing.portal` `{}`: manage what's being paid: card, invoices, cancelling.
+ * - `billing.sellable` `{}`: the plans the org's seller has a price for, so
+ *   the Billing page offers only those (credits' `pay.sellable`).
  *
  * What was bought lands by the webhook, not here: a person can close the page,
  * and only the webhook is signed.
@@ -18,7 +20,13 @@ import {
   invalid,
 } from "../../../../runtime/mod.ts";
 import { runsOrg } from "../../../access/spaces/contract.ts";
-import { billableSeats, type Plan, type PlanTerms } from "../../credits/contract.ts";
+import {
+  billableSeats,
+  orgKind,
+  type Plan,
+  type PlanTerms,
+  unfit,
+} from "../../credits/contract.ts";
 import { stripeCall } from "../shared/api.ts";
 import { sellerFor, settingsOf, type StripeSettings } from "../shared/settings.ts";
 
@@ -94,6 +102,8 @@ export const checkoutAction = defineAction({
       const terms = billing.plans[input.plan];
       const price = seller.prices[input.plan];
       if (!terms || !price) throw invalid(`The plan "${input.plan}" can't be bought here.`);
+      const why = unfit(terms, orgKind(ctx));
+      if (why) throw invalid(why);
       if (plan.subscription && plan.status !== "canceled") {
         throw failure("subscribed", "This org already has a subscription: manage it instead.");
       }
@@ -136,6 +146,19 @@ export const checkoutAction = defineAction({
       success_url: back("credits"),
     });
     return { url };
+  },
+});
+
+export const sellableAction = defineAction({
+  description: "The plans the org's seller can sell it",
+  record: false,
+  input: { type: "object", additionalProperties: false },
+  run: async (ctx) => {
+    const set = settingsOf(ctx);
+    // As checkout would choose: the seller it pays already, else the app's.
+    const had = await ctx.as().db.collection<Plan>("billingPlan").findOne({ _id: "plan" });
+    const chosen = sellerFor(set, had ? fresh(set, had).seller : undefined);
+    return chosen ? Object.keys(chosen[1].prices) : [];
   },
 });
 

@@ -1,10 +1,11 @@
 /**
  * Usage as the web says it: money, tokens, counts and shares in few
- * characters; a model by its name with its provider apart; a period's days
- * (each with its sums, empty days included) and the period before it;
- * groups (by person, agent, model) largest first, with their share; and
- * caching: how much input came from a cache, what it was charged and what
- * it saved.
+ * characters; a model by its name with its provider apart; a month and its
+ * days (empty ones included), and the same point of the month before; what
+ * it's grouped by (kind, space, person, agent, model), each a row with its
+ * sums, its share, and the filter that keeps to it; the day's columns
+ * stacked by those rows; how long what's left lasts at this pace; and how
+ * long a computer was awake.
  *
  * Everything is in what people are charged (the price, "spend"). What it
  * cost, and so the margin, is there only for platform staff: the totals
@@ -19,9 +20,6 @@ export type Total = PriceTotals & {
   costs?: Quantities;
   saved: { price: number; cost?: number };
 };
-
-/** What a chart and the groups measure. */
-export type Measure = "spend" | "tokens" | "calls";
 
 const MINUS = "−";
 
@@ -107,24 +105,20 @@ export const agentName = (key: string): string =>
   key ? key[0].toUpperCase() + key.slice(1).replace(/[-_]+/g, " ") : "";
 
 /**
- * Totals summed: spend (the price), tokens, calls and what's unpriced; the
- * input's parts (from the cache, written to it, neither) with their spend
- * and what caching saved; and, for staff, the cost (none for anyone else).
+ * Totals summed: spend (the price), tokens, uses and what's unpriced; the
+ * input's parts (from the cache, written to it) and what caching saved;
+ * and, for staff, the cost (none for anyone else).
  */
 export type Sum = {
   spend: number;
   tokens: number;
-  calls: number;
+  uses: number;
   unpriced: number;
   input: number;
   output: number;
   /** Input tokens read from a cache, and written to one. */
   cached: number;
   cacheWrite: number;
-  /** Spend on input read from a cache, written to one, and neither. */
-  cachedSpend: number;
-  cacheWriteSpend: number;
-  inputSpend: number;
   /** What caching saved, at the price (below zero: it was charged more). */
   saved: number;
   /** Only for staff. */
@@ -135,15 +129,12 @@ export type Sum = {
 export const zero = (): Sum => ({
   spend: 0,
   tokens: 0,
-  calls: 0,
+  uses: 0,
   unpriced: 0,
   input: 0,
   output: 0,
   cached: 0,
   cacheWrite: 0,
-  cachedSpend: 0,
-  cacheWriteSpend: 0,
-  inputSpend: 0,
   saved: 0,
 });
 
@@ -152,15 +143,12 @@ export function add(into: Sum, t: Total): Sum {
   const q = t.quantities;
   into.spend += t.price;
   into.tokens += tokensOf(t);
-  into.calls += t.uses;
+  into.uses += t.uses;
   into.unpriced += t.unpriced;
   into.input += q.input ?? 0;
   into.output += q.output ?? 0;
   into.cached += q.cached ?? 0;
   into.cacheWrite += q.cacheWrite ?? 0;
-  into.cachedSpend += t.prices.cached ?? 0;
-  into.cacheWriteSpend += t.prices.cacheWrite ?? 0;
-  into.inputSpend += t.prices.input ?? 0;
   into.saved += t.saved.price ?? 0;
   if (t.cost !== undefined) into.cost = (into.cost ?? 0) + t.cost;
   if (t.saved.cost !== undefined) into.savedCost = (into.savedCost ?? 0) + t.saved.cost;
@@ -175,36 +163,64 @@ const DAY = 86_400_000;
 /** A UTC day, `2026-10-29`. */
 export const dayOf = (at: Date | number): string => new Date(at).toISOString().slice(0, 10);
 
-/** Where a period of `days` days, ending today, starts; and the one before it. */
-export function periodOf(days: number, now = Date.now()): { since: string; before: string } {
-  const today = Date.parse(`${dayOf(now)}T00:00:00Z`);
+/** A month (`2026-11`): its first day and the next month's (`end`), as the ledger's days are UTC. */
+export function monthOf(month: string): { start: string; end: string } {
+  const [y, m] = month.split("-").map(Number);
   return {
-    since: new Date(today - (days - 1) * DAY).toISOString(),
-    before: new Date(today - (2 * days - 1) * DAY).toISOString(),
+    start: `${month}-01`,
+    end: new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 7) + "-01",
   };
 }
 
-/** A day's sums, for the chart. */
-export type Day = Sum & { day: string };
+/** The month a time is in: `2026-11`. */
+export const monthAt = (at: string | number): string => new Date(at).toISOString().slice(0, 7);
 
-/** Each day of the period, oldest first, with its sums (none: zeros). */
-export function daysOf(totals: Total[], days: number, now = Date.now()): Day[] {
-  const byDay = new Map(totals.map((t) => [String(t.key.day), t]));
-  const today = Date.parse(`${dayOf(now)}T00:00:00Z`);
-  return Array.from({ length: days }, (_, i) => {
-    const day = dayOf(today - (days - 1 - i) * DAY);
-    const t = byDay.get(day);
-    return { day, ...(t ? add(zero(), t) : zero()) };
-  });
+/** The month before: `2026-10` for `2026-11`. */
+export function monthBefore(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
 }
 
-/** The days' sums, split into the period and the one before it (by `since`). */
-export function sums(totals: Total[], since: string): { now: Sum; before: Sum } {
-  const now = zero();
-  const before = zero();
-  const first = since.slice(0, 10);
-  for (const t of totals) add(String(t.key.day) >= first ? now : before, t);
-  return { now, before };
+/** A month in words: "November 2026"; "November" with `short`. */
+export const monthSaid = (month: string, short = false): string =>
+  new Date(`${month}-15T12:00:00Z`).toLocaleDateString("en-US", {
+    month: "long",
+    ...(short ? {} : { year: "numeric" }),
+    timeZone: "UTC",
+  });
+
+/**
+ * The same point of the month before: as far into it as `now` is into its
+ * own month, and no further than its end. For comparing a month so far.
+ */
+export function samePointBefore(month: string, now: number): string {
+  const { start } = monthOf(month);
+  const before = monthOf(monthBefore(month));
+  const into = now - Date.parse(`${start}T00:00:00Z`);
+  const at = Math.min(
+    Date.parse(`${before.start}T00:00:00Z`) + into,
+    Date.parse(`${before.end}T00:00:00Z`),
+  );
+  return new Date(at).toISOString();
+}
+
+/** How far into a month `now` is, in days (fractional), and how many it has. */
+export function monthProgress(month: string, now: number): { elapsed: number; days: number } {
+  const { start, end } = monthOf(month);
+  const from = Date.parse(`${start}T00:00:00Z`);
+  const to = Date.parse(`${end}T00:00:00Z`);
+  return {
+    elapsed: Math.min(Math.max(0, (now - from) / DAY), (to - from) / DAY),
+    days: (to - from) / DAY,
+  };
+}
+
+/** Each day of a month, oldest first. */
+export function daysIn(month: string): string[] {
+  const { start, end } = monthOf(month);
+  const out: string[] = [];
+  for (let at = Date.parse(`${start}T00:00:00Z`); dayOf(at) < end; at += DAY) out.push(dayOf(at));
+  return out;
 }
 
 /** How much a period changed from the one before: a fraction, or none when there was nothing. */
@@ -215,50 +231,6 @@ export const change = (now: number, before: number): number | undefined =>
 export const changeSaid = (delta: number): string =>
   delta >= 9 ? `${Math.round(1 + delta)}×` : `${Math.abs(Math.round(delta * 100))}%`;
 
-/** A change in a share, unsigned, in percentage points: "4 pts". */
-export const pointsSaid = (delta: number): string => `${Math.abs(Math.round(delta * 100))} pts`;
-
-/** A group (a person, an agent, a model), with its sums and its share of the period's. */
-export type Group = Sum & { key: string; share: number };
-
-/** Totals grouped by `field`, largest first by `measure`, each with its share; nameless last. */
-export function groupsOf(totals: Total[], field: string, measure: Measure): Group[] {
-  const rows = totals.map((t) => ({ key: String(t.key[field] ?? ""), ...add(zero(), t) }));
-  const sum = rows.reduce((n, r) => n + r[measure], 0);
-  return rows
-    .map((r) => ({ ...r, share: sum > 0 ? r[measure] / sum : 0 }))
-    .sort((a, b) => Number(!a.key) - Number(!b.key) || b[measure] - a[measure]);
-}
-
-/**
- * The input's parts, in tokens and as shares of it: read from a cache,
- * written to one, and neither (charged in full).
- */
-export function inputParts(s: Pick<Sum, "input" | "cached" | "cacheWrite">): {
-  cached: number;
-  written: number;
-  fresh: number;
-  shares: { cached: number; written: number; fresh: number };
-} {
-  const cached = Math.max(0, s.cached);
-  const written = Math.max(0, s.cacheWrite);
-  const fresh = Math.max(0, s.input - cached - written);
-  const whole = cached + written + fresh;
-  const share = (n: number) => whole > 0 ? n / whole : 0;
-  return {
-    cached,
-    written,
-    fresh,
-    shares: { cached: share(cached), written: share(written), fresh: share(fresh) },
-  };
-}
-
-/** Models that took input, most input first: how caching went for each. */
-export const cacheByModel = (models: Total[]): Group[] =>
-  groupsOf(models, "subject", "tokens")
-    .filter((g) => g.input > 0)
-    .sort((a, b) => b.input - a.input);
-
 /** A round top for a chart's scale: 1, 2 or 5 times a power of ten, at or over `n`. */
 export function niceMax(n: number): number {
   if (n <= 0) return 1;
@@ -267,5 +239,144 @@ export function niceMax(n: number): number {
   return step * power;
 }
 
-/** A measure's value, as the page says it. */
-export const said = (n: number, m: Measure): string => m === "spend" ? usd(n) : compact(n);
+/** What the page groups by: one switch for the chart and the list. */
+export type Dimension = "kind" | "space" | "person" | "agent" | "model";
+
+/** Each dimension, and the fields totals are grouped by for it. */
+export const DIMENSIONS: Record<Dimension, { label: string; by: string[] }> = {
+  kind: { label: "Kind", by: ["category"] },
+  space: { label: "Space", by: ["tags.space"] },
+  person: { label: "Person", by: ["tags.person"] },
+  // An agent's, else (a model's without one) what it was for, else the kind.
+  agent: { label: "Agent", by: ["tags.agent", "category", "tags.purpose"] },
+  // A model's, for agents; computers' and apps' as their kind.
+  model: { label: "Model", by: ["subject", "category"] },
+};
+
+/** What a conversation pays for without an agent: its summaries, memory notes, voice transcribed. */
+export const UPKEEP = ["history", "memory", "transcription"];
+
+/** A model use's purpose, in words. */
+export const purposeSaid = (purpose: string): string =>
+  ({
+    history: "Summaries",
+    memory: "Memory notes",
+    transcription: "Voice transcribed",
+    "agent.draft": "Drafting agents",
+  })[purpose] ?? agentName(purpose.replace(/\./g, " "));
+
+const NONE = { $exists: false };
+
+/**
+ * A total's row in a dimension: its key, and the filter keeping to it.
+ * Agents' kind is `agents`; a key without a value is "" (not recorded).
+ */
+export function rowOf(dimension: Dimension, key: Record<string, unknown>): {
+  key: string;
+  filter: Record<string, unknown>;
+} {
+  const category = String(key.category ?? "");
+  switch (dimension) {
+    case "kind":
+      return { key: category, filter: { category } };
+    case "space":
+    case "person": {
+      const field = DIMENSIONS[dimension].by[0];
+      const value = typeof key[field] === "string" ? key[field] as string : "";
+      return { key: value, filter: { [field]: value || NONE } };
+    }
+    case "agent": {
+      const agent = key["tags.agent"];
+      if (typeof agent === "string" && agent) {
+        return { key: `agent:${agent}`, filter: { "tags.agent": agent } };
+      }
+      if (category !== "agents") return { key: `category:${category}`, filter: { category } };
+      const purpose = typeof key["tags.purpose"] === "string" ? key["tags.purpose"] as string : "";
+      const base = { "tags.agent": NONE, category: "agents" };
+      return UPKEEP.includes(purpose)
+        ? { key: "upkeep", filter: { ...base, "tags.purpose": { $in: UPKEEP } } }
+        : purpose
+        ? { key: `purpose:${purpose}`, filter: { ...base, "tags.purpose": purpose } }
+        : { key: "model", filter: { ...base, "tags.purpose": NONE } };
+    }
+    case "model":
+      return category === "agents" && typeof key.subject === "string"
+        ? { key: `subject:${key.subject}`, filter: { subject: key.subject } }
+        : { key: `category:${category}`, filter: { category } };
+  }
+}
+
+/** A row: what it stands for, its sums and its share of the whole. */
+export type Row = Sum & { key: string; share: number; filter: Record<string, unknown> };
+
+/** Totals as a dimension's rows, the largest first, the unnamed ("") last. */
+export function rowsOf(totals: Total[], dimension: Dimension): Row[] {
+  const rows = new Map<string, Row>();
+  for (const t of totals) {
+    const { key, filter } = rowOf(dimension, t.key);
+    const row = rows.get(key) ?? { key, filter, share: 0, ...zero() };
+    add(row, t);
+    rows.set(key, row);
+  }
+  const all = [...rows.values()];
+  const whole = all.reduce((n, r) => n + r.spend, 0);
+  return all
+    .map((r) => ({ ...r, share: whole > 0 ? r.spend / whole : 0 }))
+    .sort((a, b) =>
+      Number(!a.key) - Number(!b.key) || b.spend - a.spend || a.key.localeCompare(b.key)
+    );
+}
+
+/** The series a chart stacks: the largest rows, then the rest as one ("other"). */
+export const SERIES = 5;
+
+/** A day's column: what each series spent, in the series' order, and in all. */
+export type Column = { day: string; values: number[]; spend: number };
+
+/**
+ * Each day of a month, its spend by series: the rows' keys (`series`, at
+ * most `SERIES`; past that, the rest as one, last).
+ */
+export function columnsOf(
+  totals: Total[],
+  dimension: Dimension,
+  days: string[],
+  series: string[],
+): Column[] {
+  const at = new Map(series.map((key, i) => [key, i]));
+  const other = series.length;
+  const byDay = new Map(days.map((day) => [day, new Array(other + 1).fill(0) as number[]]));
+  for (const t of totals) {
+    const values = byDay.get(String(t.key.day));
+    if (!values) continue;
+    values[at.get(rowOf(dimension, t.key).key) ?? other] += t.price;
+  }
+  return days.map((day) => {
+    const values = byDay.get(day)!;
+    return { day, values, spend: values.reduce((a, b) => a + b, 0) };
+  });
+}
+
+/**
+ * How long what's left lasts at this pace, in words: "about 6 days",
+ * "about 3 weeks"; none without a pace.
+ */
+export function lastsSaid(left: number, perDay: number): string | undefined {
+  if (!(perDay > 0) || left <= 0) return undefined;
+  const days = left / perDay;
+  if (days < 1) return "less than a day";
+  if (days < 1.5) return "about a day";
+  if (days < 14) return `about ${Math.round(days)} days`;
+  if (days < 60) return `about ${Math.round(days / 7)} weeks`;
+  if (days < 365) return `about ${Math.round(days / 30)} months`;
+  return "more than a year";
+}
+
+/** How long, from seconds: "45 s", "14 min", "2h 10m". */
+export function durationSaid(seconds: number): string {
+  if (seconds < 60) return `${Math.max(0, Math.round(seconds))} s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+}

@@ -1,3 +1,43 @@
+## 1.0.0-rc.18 — 2026-11-03
+
+- **Model tiers for the app's agents** (the new `tiers` plugin, in `copilotz/plugins/agents`). An
+  app declares its tiers (`tiers` resource: a title, what it's good for, and a model for each of its
+  agents, as an agent's `model` takes one). Which one an agent thinks with, first that applies: a
+  model picked for it in the space, the space's tier, a model picked for it by the org, the org's
+  tier, the tier the org's plan names (`planTier`), else its own model.
+  - An org's owners and admins choose for the org, a space's managers for the space (`tiers.choose`,
+    `tiers.pick`); everyone who reaches them sees it (`modelChoice.offered`, `modelChoice.agent`).
+    Choices keep the tier's name, so retuning a tier moves everyone on it.
+  - A pick keeps the tier's list behind it as fallback, and carries the `maxTokens` of the entry it
+    replaces, and its `effort` when the picked model takes it (`models.efforts`, from the catalog).
+  - Chat asks through a new `agentModel` resource, once per run, for the app's agents only; agents
+    people make keep their own model. A turn's usage now says its `space`.
+  - On the web (`tiersWeb`): "Agents' models" in org settings (the tiers with a typical reply's
+    price, choosing one with Undo, a model per agent), and on a space's Members tab its tier and
+    each app agent's model with where it comes from. Team's model picker is a View (`model.pick`)
+    other plugins show.
+- **Plans say whom they're for and which tier they give.** `PlanTerms.for` (`"personal"` or
+  `"team"`) is enforced on every move to a plan (checkout, staff, a provider's webhook);
+  `PlanTerms.models` names the plan's tier (`billing.tier`). The Billing page offers an org only the
+  plans for its kind that its seller can sell (`billing.sellable`), says how much of this period's
+  plan credits is left and when they lapse, and speaks of seats only to teams.
+- **The Usage page, rebuilt around money.** One line: spent this billing month, against the budget,
+  what's left and how long it lasts at this pace. One "By" switch (kind, space, person, agent,
+  model) drives a stacked daily chart and a ranked list; a row filters the page. Activity shows
+  turns, computer sessions, app days and conversation upkeep instead of ledger records; staff see
+  cost and margin in place.
+  - `usage.calls` is gone: `usage.activity` replaces it. `usage.org` groups and filters by
+    `category` (agents, computers, apps; `usage.categories`) and by `tags.space`, and names what it
+    groups by as the caller reads them, through a new `usageNames` resource kind each owning plugin
+    contributes (spaces, conversations, computers, apps).
+  - Cloud computers' records say their `space` and, for VM time, their `session`; summaries, memory
+    notes and their embeddings say their conversation's `thread` and `space`.
+  - Rollups keep `tags.space`. A closed day remembers its shape; days closed with an older one are
+    read from records until `usage.close` closes them again (the next nightly close, or by hand).
+- **An app's own instructions are sent as instructions.** A `context` entry with
+  `instructions: true` (`system` only) goes right after the agent's instructions, without the
+  `<context>` tag that marks other contexts as information, not instructions.
+
 ## 1.0.0-rc.17 — 2026-11-03
 
 - **A model's state goes back with its answers.** What a model returns to be sent back (Anthropic's

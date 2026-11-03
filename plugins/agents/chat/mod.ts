@@ -21,14 +21,18 @@
  *   its parent's conversation up to the message it started at, through every
  *   level, without copying it; a new thread starts from its first message.
  *
- * - Agents are the app's (its `agents` resource). Two optional hooks widen
+ * - Agents are the app's (its `agents` resource). Three optional hooks widen
  *   that, each an unrecorded Action called as the asker, and cost nothing
  *   when absent: `agentSources` say what agents beyond the app's are (the
- *   team plugin's, agents people make), and the `roster` says who answers
+ *   team plugin's, agents people make), the `roster` says who answers
  *   in a space (the spaces plugin's): new conversations there go to its
- *   default, and only its agents are mentioned or messaged there. Without
- *   a roster, every agent answers everywhere. `thread.agents` answers both
- *   for front ends.
+ *   default, and only its agents are mentioned or messaged there, and
+ *   `agentModel` says which model an agent thinks with in a space (the
+ *   tiers plugin's), asked once each run of a turn; null, or none, is its
+ *   own. Without a roster, every agent answers everywhere. `thread.agents`
+ *   answers both for front ends.
+ * - Each model call is tagged with its thread, agent, turn and space, for
+ *   whoever records its use.
  *
  * Declares resource kinds the app (or another plugin) fills in, plain objects:
  * - `agents`: { instructions, model, effort?, maxTokens?, temperature?,
@@ -36,7 +40,8 @@
  *   `"provider/model"`, an alias, or a list tried in order (see the models plugin);
  * - `tools`:  { description, input?, run(input) };
  * - `agentSources`: { action }: `{ names }` in, the definitions of those the asker meets out;
- * - `roster`: { action }: `{ space }` in, `{ agents, default? }` out.
+ * - `roster`: { action }: `{ space }` in, `{ agents, default? }` out;
+ * - `agentModel`: { action }: `{ agent, space? }` in, a model or null out.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { forkAction } from "./actions/fork.ts";
@@ -90,6 +95,10 @@ export const chat: Plugin = definePlugin({
     "chat.move": moveAction,
   },
   events: { "turn.requested": turnRequested },
+  // Conversations by title on Usage.
+  resources: {
+    usageNames: { thread: { tag: "tags.thread", collection: "thread", field: "title" } },
+  },
   processors: {
     "chat.turn": turnProcessor,
     "chat.failed": failedProcessor,

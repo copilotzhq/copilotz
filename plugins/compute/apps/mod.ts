@@ -69,6 +69,8 @@ export const apps: Plugin = definePlugin({
     apps: DEFAULTS,
     // A space's members see its apps.
     shared: { app: { field: "space" } },
+    // An app's uses (its builds, what it ran) by its name.
+    usageNames: { app: { tag: "tags.app", collection: "app", field: "name" } },
   },
 });
 

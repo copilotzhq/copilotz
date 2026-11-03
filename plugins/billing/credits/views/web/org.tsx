@@ -137,7 +137,7 @@ function Billing({ org, call }: { org?: Org; call: Call }): ReactNode {
       className="billing-pair billing-pair-even"
       data-budget-first={(budgetFirst && state.plan?.status !== "past_due") || undefined}
     >
-      <PlanCard state={state} team={team} call={call} />
+      <PlanCard state={state} team={team} personal={personal} call={call} />
       <BudgetCard state={state} call={call} onChanged={read} />
     </div>
   );
@@ -168,7 +168,7 @@ function Billing({ org, call }: { org?: Org; call: Call }): ReactNode {
               <Redeem call={call} onRedeemed={read} />
             </div>
             {budgetFirst ? null : planAndBudget}
-            <PlanOffers state={state} call={call} />
+            <PlanOffers state={state} personal={personal} call={call} />
             <History state={state} />
           </>
         )

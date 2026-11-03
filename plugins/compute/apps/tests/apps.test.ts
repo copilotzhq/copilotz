@@ -296,6 +296,12 @@ test("a person publishes a job: building at once, then live, routed to its targe
         { minutes: 2 },
         { app: published.app, space, person: "ana" },
       ]);
+      // On Usage, the app's day, named as the apps plugin names it.
+      const activity = await rt.call<
+        { items: { kind: string }[]; names: Record<string, Record<string, { name: string }>> }
+      >("usage.activity", {}, { actor: ana });
+      assertEquals(activity.items.map((i) => i.kind), ["app"]);
+      assertEquals(activity.names["tags.app"]?.[published.app]?.name, "My Shop!");
       // Nobody else sees it.
       assertEquals(await rt.call("app.list", {}, { actor: bob }), []);
       assertEquals(await rt.query("app.here", { in: space }, { actor: bob }), []);

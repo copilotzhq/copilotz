@@ -3,7 +3,10 @@
  *
  * - `billing.state` `{}`: for the Billing section. Its people see whether work
  *   can go on and why not; its owners and admins, the plan, balance, month,
- *   credits and payments; platform staff, also the plans there are to set.
+ *   credits and payments, and the plans it can move to (`pay.plans`: those for
+ *   its kind of org that its way of paying sells it now, its own kind's first;
+ *   `pay.elsewhere`, those only another kind of org can have); platform staff,
+ *   also the plans there are to set.
  *   With limits off (`enforce`), only staff see anything, and nothing starts.
  * - `billing.notice` `{}`: what to say above the composer, if anything: that
  *   the org can't spend (to everyone), or is running low (to those who can act
@@ -16,7 +19,13 @@ import { runsOrg } from "../../../access/spaces/contract.ts";
 import { billableSeats } from "../contract.ts";
 import type { Payment } from "../collections/payment.ts";
 import type { Plan } from "../collections/plan.ts";
-import { settingsOf } from "../shared/settings.ts";
+import {
+  type CreditsSettings,
+  orgKind,
+  type PlanTerms,
+  settingsOf,
+  unfit,
+} from "../shared/settings.ts";
 import { NO_LIMIT, refresh, rooms, seatsOf, standingOf, verdictOf } from "../shared/standing.ts";
 
 /** A waiver as who runs the org sees it: what, and until when; why and who are staff's. */
@@ -27,6 +36,36 @@ const withoutWhy = (waived: NonNullable<Plan["waived"]>) =>
       return [what, shown];
     }),
   );
+
+/** A plan as it's offered: what it is, costs and gives, and who it's for. */
+const offer = ([name, terms]: [string, PlanTerms]) => ({
+  name,
+  title: terms.title,
+  seat: terms.seat,
+  credits: terms.credits,
+  ...(terms.for ? { for: terms.for } : {}),
+});
+
+/**
+ * The plans an org can move to by itself: those a seat's price is known for,
+ * that its way of paying can sell it now, for its kind of org (its own kind's
+ * first); and apart, those only another kind of org can have.
+ */
+async function offersOf(ctx: Context, set: CreditsSettings) {
+  const kind = orgKind(ctx);
+  const sold = set.pay?.sellable
+    ? new Set(await ctx.call<string[]>(set.pay.sellable, {}))
+    : undefined;
+  const priced = Object.entries(set.plans)
+    .filter(([name, terms]) => terms.seat && (!sold || sold.has(name)));
+  const fits = priced.filter(([, terms]) => !unfit(terms, kind))
+    .sort(([, a], [, b]) => Number(b.for === kind) - Number(a.for === kind));
+  const elsewhere = priced.filter(([, terms]) => unfit(terms, kind));
+  return {
+    plans: fits.map(offer),
+    ...(elsewhere.length ? { elsewhere: elsewhere.map(offer) } : {}),
+  };
+}
 
 async function sight(ctx: Context) {
   const me = await ctx.call<{ role?: string | null; staff?: boolean }>("org.me", {})
@@ -113,14 +152,7 @@ export const stateAction = defineAction({
           topUps: set.topUps,
           min: set.topUpMin,
           max: set.topUpMax,
-          // The plans an org can move to by itself: those a seat's price is known for.
-          plans: Object.entries(set.plans).filter(([, terms]) => terms.seat)
-            .map(([name, terms]) => ({
-              name,
-              title: terms.title,
-              seat: terms.seat,
-              credits: terms.credits,
-            })),
+          ...await offersOf(ctx, set),
           manage: !!s.plan?.customer,
         }
         : null,

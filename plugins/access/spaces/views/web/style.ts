@@ -152,6 +152,8 @@ export const STYLE = `
 .space-row-handle { flex: none; color: var(--muted-foreground); font: 500 12.5px var(--font-mono); }
 .space-row-name .copilotz-badge { flex: none; }
 .space-row-agent[aria-busy] { opacity: .7; }
+.space-row-more { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; margin-top: 2px; }
+.space-row-more:empty { display: none; }
 .space-agents-none { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px;
   padding: 14px 16px; border-style: dashed; box-shadow: none; background: transparent; }
 .space-agents-none p { margin: 0; color: var(--muted-foreground); font-size: 13.5px; }

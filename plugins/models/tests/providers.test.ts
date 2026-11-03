@@ -140,6 +140,35 @@ async function server() {
     "/v1/audio/transcriptions": () =>
       Response.json({ text: "hello there", usage: { type: "duration", seconds: 3 } }),
     "/v1/fail/chat/completions": () => new Response("nope", { status: 401 }),
+    // A reasoning model: its reasoning, encrypted, before and between what it writes and calls.
+    "/v1/reasoning/responses": () =>
+      new Response(sse([
+        {
+          type: "response.output_item.done",
+          item: { id: "rs_1", type: "reasoning", encrypted_content: "E1", summary: [] },
+        },
+        { type: "response.output_text.delta", delta: "Rolling." },
+        {
+          type: "response.output_item.done",
+          item: { id: "msg_1", type: "message", status: "completed", content: [] },
+        },
+        {
+          type: "response.output_item.done",
+          item: { id: "rs_2", type: "reasoning", encrypted_content: "E2", summary: [] },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            id: "fc_1",
+            type: "function_call",
+            status: "completed",
+            call_id: "c1",
+            name: "roll",
+            arguments: '{"sides":6}',
+          },
+        },
+        { type: "response.completed", response: { usage: { input_tokens: 11, output_tokens: 7 } } },
+      ], true)),
   };
   // A server whose model takes no cache breakpoints (OpenAI's before GPT-5.6), and that reports
   // what it wrote to the cache otherwise.
@@ -165,6 +194,16 @@ async function server() {
           },
         },
       ], true));
+  // A server that doesn't know `include` (one speaking the Responses protocol, not OpenAI).
+  const unreasoned = (body: string) =>
+    JSON.parse(body).include
+      ? Response.json({
+        error: { message: "Unknown parameter: 'include'.", param: "include", code: "unknown" },
+      }, { status: 400 })
+      : new Response(sse([
+        { type: "response.output_text.delta", delta: "Hi" },
+        { type: "response.completed", response: { usage: { input_tokens: 3, output_tokens: 1 } } },
+      ], true));
   const http = await serve(async (request) => {
     const url = new URL(request.url);
     const multipart = request.headers.get("content-type")?.startsWith("multipart/");
@@ -180,6 +219,7 @@ async function server() {
       raw,
     });
     if (url.pathname === "/v1/pointless/responses") return pointless(text);
+    if (url.pathname === "/v1/unreasoned/responses") return unreasoned(text);
     return (replies[url.pathname] ?? (() => new Response("unknown", { status: 404 })))();
   });
   return { url: http.url, seen, close: () => http.close() };
@@ -359,6 +399,169 @@ test("openai (Responses): a cache point on the model's own message goes on the i
         }],
       },
       { role: "assistant", content: "Hello." },
+    ]);
+  } finally {
+    await mock.close();
+  }
+});
+
+/** What the Responses adapter sends for these messages (and the info given). */
+async function responsesInput(
+  baseURL: string,
+  messages: LlmMessage[],
+  info?: LlmRequest["info"],
+) {
+  const mock = await server();
+  try {
+    for await (
+      const _ of openaiResponses.generate({
+        connection: { model: "m", baseURL: `${mock.url}${baseURL}`, apiKey: "k" },
+        messages,
+        ...(info ? { info } : {}),
+      })
+    ) { /* the request is what's checked */ }
+    return mock.seen[0].body as { input: unknown[]; include?: string[] };
+  } finally {
+    await mock.close();
+  }
+}
+
+/** A reasoning model's answer, as the adapter keeps it: reasoning in its place among the rest. */
+const reasoned = [
+  { type: "reasoning", encrypted_content: "E1", summary: [] },
+  { type: "message" },
+  { type: "reasoning", encrypted_content: "E2", summary: [] },
+  { type: "function_call", call_id: "c1" },
+];
+
+test("openai (Responses): a reasoning model's reasoning comes back as state, in its place, without ids", async () => {
+  const mock = await server();
+  try {
+    const chunks = await run(openaiResponses, {
+      model: "m",
+      baseURL: `${mock.url}/v1/reasoning`,
+      apiKey: "k",
+    });
+    assertEquals(answer(chunks).text, "Rolling.");
+    assertEquals(answer(chunks).calls, [{ id: "c1", name: "roll", input: { sides: 6 } }]);
+    assertEquals(chunks.filter((c) => c.type === "state"), [{
+      type: "state",
+      state: { data: reasoned },
+    }]);
+    // Asked for, encrypted: nothing is kept on OpenAI's side for it to point at.
+    assertEquals((mock.seen[0].body as { include: string[] }).include, [
+      "reasoning.encrypted_content",
+    ]);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("openai (Responses): its reasoning goes back with its answer, in order; breakpoints stay where they were", async () => {
+  const body = await responsesInput("/v1/", [
+    { role: "user", text: "roll a die" },
+    {
+      role: "assistant",
+      text: "Rolling.",
+      toolCalls: [{ id: "c1", name: "roll", input: { sides: 6 } }],
+      state: { by: "openai/m", data: reasoned },
+    },
+    { role: "tool", toolCallId: "c1", text: "4", cache: true },
+    { role: "user", text: "again" },
+  ]);
+  assertEquals(body.input, [
+    { role: "user", content: "roll a die" },
+    { type: "reasoning", encrypted_content: "E1", summary: [] },
+    { role: "assistant", content: "Rolling." },
+    { type: "reasoning", encrypted_content: "E2", summary: [] },
+    { type: "function_call", call_id: "c1", name: "roll", arguments: '{"sides":6}' },
+    {
+      type: "function_call_output",
+      call_id: "c1",
+      output: [{ type: "input_text", text: "4", prompt_cache_breakpoint: { mode: "explicit" } }],
+    },
+    { role: "user", content: "again" },
+  ]);
+});
+
+test("openai (Responses): a final answer's reasoning goes back with it; an empty one's alone", async () => {
+  const thought = { type: "reasoning", encrypted_content: "E1", summary: [] };
+  const body = await responsesInput("/v1/", [
+    { role: "user", text: "closest to 2026?" },
+    { role: "assistant", text: "43 and 47.", state: { data: [thought, { type: "message" }] } },
+    { role: "user", text: "and 3000?" },
+    // An answer with no text: its reasoning still goes back (the API takes it alone).
+    { role: "assistant", text: "", state: { data: [thought] } },
+    // Without state, an empty answer sends nothing, as before.
+    { role: "assistant", text: "" },
+    { role: "user", text: "well?" },
+  ]);
+  assertEquals(body.input, [
+    { role: "user", content: "closest to 2026?" },
+    thought,
+    { role: "assistant", content: "43 and 47." },
+    { role: "user", content: "and 3000?" },
+    thought,
+    { role: "user", content: "well?" },
+  ]);
+});
+
+test("openai (Responses): state that doesn't place the text and calls puts its reasoning first", async () => {
+  const thought = { type: "reasoning", encrypted_content: "E1", summary: [] };
+  const body = await responsesInput("/v1/", [
+    { role: "user", text: "roll" },
+    {
+      role: "assistant",
+      text: "Rolling.",
+      toolCalls: [{ id: "c1", name: "roll", input: {} }],
+      state: { data: [thought] },
+    },
+    { role: "tool", toolCallId: "c1", text: "4" },
+  ]);
+  assertEquals(body.input, [
+    { role: "user", content: "roll" },
+    thought,
+    { role: "assistant", content: "Rolling." },
+    { type: "function_call", call_id: "c1", name: "roll", arguments: "{}" },
+    { type: "function_call_output", call_id: "c1", output: "4" },
+  ]);
+});
+
+test("openai (Responses): a model that doesn't reason isn't asked for its reasoning, and keeps no state", async () => {
+  const mock = await server();
+  try {
+    const chunks = await run(openaiResponses, {
+      model: "m",
+      baseURL: `${mock.url}/v1/`,
+      apiKey: "k",
+    }, { info: { reasoning: false } });
+    assertEquals(chunks.filter((c) => c.type === "state"), []);
+    assertEquals((mock.seen[0].body as { include?: string[] }).include, undefined);
+    // One the catalog doesn't rule out is asked; an answer that came without reasoning keeps none.
+    const asked = await run(openaiResponses, {
+      model: "m",
+      baseURL: `${mock.url}/v1/`,
+      apiKey: "k",
+    });
+    assertEquals(asked.filter((c) => c.type === "state"), []);
+    assertEquals((mock.seen[1].body as { include?: string[] }).include, [
+      "reasoning.encrypted_content",
+    ]);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("openai (Responses): a server that refuses `include` is asked again without, from then on", async () => {
+  const mock = await server();
+  try {
+    const connection = { model: "m", baseURL: `${mock.url}/v1/unreasoned`, apiKey: "k" };
+    assertEquals(answer(await run(openaiResponses, connection)).text, "Hi");
+    await run(openaiResponses, connection);
+    assertEquals(mock.seen.map((s) => (s.body as { include?: string[] }).include !== undefined), [
+      true,
+      false,
+      false,
     ]);
   } finally {
     await mock.close();

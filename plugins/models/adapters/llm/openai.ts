@@ -1,4 +1,8 @@
-/** OpenAI Responses API, streaming. */
+/**
+ * OpenAI Responses API, streaming. A reasoning model's reasoning comes back
+ * encrypted, as its answer's state, and goes back with its answer in the next
+ * calls: between tool steps it carries on from it instead of thinking again.
+ */
 import { post, sse, usageOf } from "../../shared/provider.ts";
 import type { LlmAdapter, LlmFile, LlmMessage } from "../../shared/types.ts";
 import { OPENAI } from "./openai-compatible.ts";
@@ -32,6 +36,42 @@ function pointsOf(messages: LlmMessage[]): Set<number> {
 }
 
 /**
+ * A model's answer as it goes back to it (its state): the output's reasoning
+ * items, encrypted, as they came but for their ids (which point at nothing
+ * when nothing is stored), in their places among its message and its calls,
+ * which stand in by kind (`{ type: "message" }`, `{ type: "function_call",
+ * call_id }`).
+ */
+type Kept = { type: string; call_id?: string; [field: string]: unknown };
+
+/**
+ * An assistant message as input: its reasoning, text and calls in the order
+ * they came out; without that order (no state, or another's), its text and then its calls.
+ */
+const answerOf = (message: Extract<LlmMessage, { role: "assistant" }>) => {
+  const text: Record<string, unknown>[] = message.text
+    ? [{ role: "assistant", content: message.text }]
+    : [];
+  const calls = new Map((message.toolCalls ?? []).map((call) => [call.id, {
+    type: "function_call",
+    call_id: call.id,
+    name: call.name,
+    arguments: JSON.stringify(call.input),
+  }]));
+  const kept = Array.isArray(message.state?.data) ? message.state.data as Kept[] : [];
+  const input: Record<string, unknown>[] = [];
+  for (const item of kept) {
+    if (item.type === "message") input.push(...text.splice(0));
+    else if (item.type === "function_call") {
+      const call = calls.get(item.call_id ?? "");
+      if (call) input.push(call);
+      calls.delete(item.call_id ?? "");
+    } else if (item.type === "reasoning") input.push(item);
+  }
+  return [...input, ...text, ...calls.values()];
+};
+
+/**
  * The Responses API's input. The messages in `points` (a user's text, a
  * tool's output) carry a breakpoint: the prefix up to it is kept for the next
  * call, and found there although what came after it this time doesn't come
@@ -57,24 +97,24 @@ const inputOf = (messages: LlmMessage[], points: Set<number>) =>
         ],
       }];
     }
-    return [
-      ...(message.text ? [{ role: "assistant", content: message.text }] : []),
-      ...(message.toolCalls ?? []).map((call) => ({
-        type: "function_call",
-        call_id: call.id,
-        name: call.name,
-        arguments: JSON.stringify(call.input),
-      })),
-    ];
+    return answerOf(message);
   });
 
 /** Models that refused breakpoints (OpenAI's before GPT-5.6, other servers): sent none from then on. */
 const pointless = new Set<string>();
 
-/** Whether a refusal is of the breakpoints themselves. */
-const refusedPoints = (error: unknown) =>
-  (error as { status?: number }).status === 400 &&
-  String((error as Error).message).includes("prompt_cache_breakpoint");
+/** Servers that refused to send reasoning back encrypted: not asked again. */
+const unreasoned = new Set<string>();
+
+/** Whether a refusal is of this part of the request, as its message names it. */
+const refusedFor = (named: RegExp) => (error: unknown) =>
+  (error as { status?: number }).status === 400 && named.test(String((error as Error).message));
+const refusedPoints = refusedFor(/prompt_cache_breakpoint/);
+// The parameter itself (`"param": "include"`, "Unrecognized … argument: include"), not what's in it.
+const refusedInclude = refusedFor(/"param":\s*"include|['"]include['"]|argument[^.]*\binclude\b/i);
+
+/** What's asked to come back with the answer: its reasoning, encrypted, to go back to it. */
+const REASONING = ["reasoning.encrypted_content"];
 
 export const openaiResponses: LlmAdapter = {
   media: ["image", "pdf"],
@@ -85,12 +125,18 @@ export const openaiResponses: LlmAdapter = {
       maxTokens,
       temperature,
       options,
+      info,
       instructions,
       messages,
       tools = [],
       signal,
     },
   ) {
+    const where = `${connection.baseURL ?? OPENAI.baseURL} ${connection.model}`;
+    // Breakpoints, and its reasoning back (from a model that reasons), unless this server refused
+    // them once: then it's asked again without, from then on.
+    let points = pointless.has(where) ? new Set<number>() : pointsOf(messages);
+    let include = info?.reasoning !== false && !unreasoned.has(where);
     const body = (input: Record<string, unknown>[]) => ({
       model: connection.model,
       ...(instructions ? { instructions } : {}),
@@ -112,34 +158,57 @@ export const openaiResponses: LlmAdapter = {
       ...(effort ? { reasoning: { effort } } : {}),
       ...(maxTokens ? { max_output_tokens: maxTokens } : {}),
       ...(temperature !== undefined ? { temperature } : {}),
+      ...(include ? { include: REASONING } : {}),
       ...options,
     });
-    const request = (points: Set<number>) =>
-      post(connection, OPENAI, "/responses", body(inputOf(messages, points)), signal);
-    // Breakpoints, unless this model refused them once: then it's asked again without.
-    const where = `${connection.baseURL ?? OPENAI.baseURL} ${connection.model}`;
-    const points = pointless.has(where) ? new Set<number>() : pointsOf(messages);
-    const response = await request(points).catch((error) => {
-      if (!points.size || !refusedPoints(error)) throw error;
-      pointless.add(where);
-      return request(new Set());
-    });
+    let response: Response;
+    for (;;) {
+      try {
+        response = await post(
+          connection,
+          OPENAI,
+          "/responses",
+          body(inputOf(messages, points)),
+          signal,
+        );
+        break;
+      } catch (error) {
+        if (points.size && refusedPoints(error)) {
+          pointless.add(where);
+          points = new Set();
+        } else if (include && refusedInclude(error)) {
+          unreasoned.add(where);
+          include = false;
+        } else throw error;
+      }
+    }
+    // What goes back with the answer: its reasoning, in its place among what it wrote and called.
+    const kept: Kept[] = [];
     for await (const { data } of sse(response.body!)) {
       const event = JSON.parse(data);
       if (event.type === "response.output_text.delta") {
         yield { type: "text", text: event.delta };
-      } else if (
-        event.type === "response.output_item.done" && event.item?.type === "function_call"
-      ) {
-        yield {
-          type: "tool_call",
-          call: {
-            id: event.item.call_id,
-            name: event.item.name,
-            input: JSON.parse(event.item.arguments || "{}"),
-          },
-        };
+      } else if (event.type === "response.output_item.done") {
+        const item = event.item ?? {};
+        if (item.type === "function_call") {
+          kept.push({ type: "function_call", call_id: item.call_id });
+          yield {
+            type: "tool_call",
+            call: {
+              id: item.call_id,
+              name: item.name,
+              input: JSON.parse(item.arguments || "{}"),
+            },
+          };
+        } else if (item.type === "message") kept.push({ type: "message" });
+        else if (item.type === "reasoning") {
+          const { id: _, status: __, ...reasoning } = item;
+          kept.push(reasoning);
+        }
       } else if (event.type === "response.completed") {
+        if (kept.some((item) => item.type === "reasoning")) {
+          yield { type: "state", state: { data: kept } };
+        }
         const usage = event.response?.usage;
         if (usage) {
           yield {

@@ -64,6 +64,8 @@ const isResult = (value: unknown): value is TerminalResult =>
 export function terminalCall(call: Pick<ShownCall, "input" | "output">): TerminalCall {
   const input = call.input ?? {};
   const stdin = typeof input.stdin === "string" ? input.stdin : "";
+  // A command is in `command`; calls from before it said so gave it as `stdin`.
+  const text = typeof input.command === "string" ? input.command : stdin;
   const mode = input.operation === "interrupt"
     ? "interrupt"
     : !input.commandId
@@ -74,7 +76,7 @@ export function terminalCall(call: Pick<ShownCall, "input" | "output">): Termina
   const done = outcome(call);
   return {
     mode,
-    text: stdin.replace(/\n$/, ""),
+    text: text.replace(/\n$/, ""),
     ...(done.kind === "done" && isResult(done.value) ? { result: done.value } : {}),
   };
 }

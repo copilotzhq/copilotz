@@ -115,7 +115,7 @@ test({
       const run = async (stdin: string) => {
         const answer = await rt.call<TerminalResult | string>("test.tool", {
           thread,
-          input: { stdin },
+          input: { command: stdin },
         }, { actor: ana });
         assert(typeof answer === "object", `ran: ${answer}`);
         return answer.stdout;

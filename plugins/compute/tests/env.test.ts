@@ -221,7 +221,7 @@ test("jobs and shells run with the space's environment, and what's given over it
         API_KEY: "sk-live-0123456789abcdef",
         PORT: "4000",
       });
-      await tool("terminal", { stdin: "echo $API_URL" });
+      await tool("terminal", { command: "echo $API_URL" });
       assertEquals(asked(WORK.terminal).env, {
         API_URL: "https://api.test",
         API_KEY: "sk-live-0123456789abcdef",

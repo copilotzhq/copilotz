@@ -35,7 +35,7 @@ const script: LlmAdapter = {
     if (command) {
       yield {
         type: "tool_call",
-        call: { id: crypto.randomUUID(), name: "terminal", input: { stdin: command } },
+        call: { id: crypto.randomUUID(), name: "terminal", input: { command } },
       };
     } else yield { type: "text", text: "ok" };
   },

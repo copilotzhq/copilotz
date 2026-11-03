@@ -207,7 +207,7 @@ test("a cloud computer: made, woken by an agent's work, released when idle, cold
       rt.call<{ stdout?: string } | string>("test.tool", { tool: "terminal", thread, input }, {
         actor: ana,
       });
-    assertEquals((await tool({ stdin: "ls" }) as { stdout: string }).stdout, "ran ls");
+    assertEquals((await tool({ command: "ls" }) as { stdout: string }).stdout, "ran ls");
     const first = world.vms.get("vm-small-1")!;
     assertEquals(first.assigned.length, 1);
     const [assign] = first.assigned;
@@ -223,7 +223,7 @@ test("a cloud computer: made, woken by an agent's work, released when idle, cold
     assert(world.disks.get(`cz-d-${id}`)?.state?.startsWith(`${id}.`), "its state on its disk");
     assert(world.calls.includes("take vm-small-1"));
     // Awake, work goes straight through.
-    assertEquals((await tool({ stdin: "pwd" }) as { stdout: string }).stdout, "ran pwd");
+    assertEquals((await tool({ command: "pwd" }) as { stdout: string }).stdout, "ran pwd");
     assertEquals(first.assigned.length, 1);
 
     // Within its warm window it stays; a job it doesn't keep keeps it past that.
@@ -281,7 +281,7 @@ test("a cloud computer: made, woken by an agent's work, released when idle, cold
     assertEquals(activity.names["tags.computer"]?.[id]?.name, "Small cloud computer");
 
     // The next command wakes it on another VM: its disk has its state, so no code, no format.
-    assertEquals((await tool({ stdin: "ls" }) as { stdout: string }).stdout, "ran ls");
+    assertEquals((await tool({ command: "ls" }) as { stdout: string }).stdout, "ran ls");
     rec = await cloudOf(rt, id);
     assert(rec.vm && rec.vm !== "vm-small-1", "a new VM");
     const second = world.vms.get(rec.vm)!;
@@ -307,7 +307,7 @@ test("a cloud computer: made, woken by an agent's work, released when idle, cold
 
     // Waking from cold makes its disk again from the snapshot, which then goes.
     const snapshot = rec.snapshot;
-    assertEquals((await tool({ stdin: "ls" }) as { stdout: string }).stdout, "ran ls");
+    assertEquals((await tool({ command: "ls" }) as { stdout: string }).stdout, "ran ls");
     rec = await cloudOf(rt, id);
     assertEquals([rec.state, rec.snapshot], ["awake", undefined]);
     assert(world.calls.includes(`restore ${snapshot} cz-d-${id}`));
@@ -824,11 +824,11 @@ test("an agent names an asleep cloud computer when the default is a person's: it
       });
     try {
       // The default: the laptop. The cloud computer sleeps on.
-      assertEquals((await tool({ stdin: "ls" }) as { stdout: string }).stdout, "ran ls");
+      assertEquals((await tool({ command: "ls" }) as { stdout: string }).stdout, "ran ls");
       assertEquals((await cloudOf(rt, id)).state, "asleep");
       // Named, it wakes (its pool grows for it), and the command runs there.
       assertEquals(
-        (await tool({ stdin: "make", computer: "Builder" }) as { stdout: string }).stdout,
+        (await tool({ command: "make", computer: "Builder" }) as { stdout: string }).stdout,
         "ran make",
       );
       const rec = await cloudOf(rt, id);

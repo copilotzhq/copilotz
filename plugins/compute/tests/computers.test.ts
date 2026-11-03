@@ -159,7 +159,7 @@ test("an agent works on its space's computer, in the space's folder, once its pe
 
     // No computer here yet.
     assertStringIncludes(
-      String(await tool("terminal", { stdin: "ls" })),
+      String(await tool("terminal", { command: "ls" })),
       "There's no computer in this space",
     );
     assertStringIncludes(await knows(), "This space has no computer");
@@ -179,7 +179,10 @@ test("an agent works on its space's computer, in the space's folder, once its pe
     assertStringIncludes(await knows(), "answered with /approve");
 
     // A command waits for ana's yes; nothing ran.
-    assertStringIncludes(String(await tool("terminal", { stdin: "ls" })), "Waiting for ana's yes");
+    assertStringIncludes(
+      String(await tool("terminal", { command: "ls" })),
+      "Waiting for ana's yes",
+    );
     assertEquals(computer.asked.filter((a) => a.work === WORK.terminal), []);
     const [asked] = await rt.query<Approval[]>("approval.pending", {}, { actor: ana });
     assertEquals([asked.agent, asked.work, asked.detail], ["assistant", "terminal", "ls"]);
@@ -190,7 +193,7 @@ test("an agent works on its space's computer, in the space's folder, once its pe
     await rt.idle();
     const said = await rt.query<Message[]>("message.history", { thread }, { actor: ana });
     assert(said.some((m) => m.from === "ana" && m.text === "Yes, in this conversation: ls"));
-    assertEquals(await tool("terminal", { stdin: "ls" }), {
+    assertEquals(await tool("terminal", { command: "ls" }), {
       state: "idle",
       commandId: "c1",
       stdout: "ran ls",
@@ -206,9 +209,30 @@ test("an agent works on its space's computer, in the space's folder, once its pe
     assertEquals(ran.input.scope, { space: space, folder: "personal", who: "agent:assistant" });
     // Another command in this conversation needs no new yes.
     assertEquals(
-      (await tool("terminal", { stdin: "pwd" }) as { stdout: string }).stdout,
+      (await tool("terminal", { command: "pwd" }) as { stdout: string }).stdout,
       "ran pwd",
     );
+    // A call it can't read runs nothing and says what to give: never an empty success.
+    const shells = () => computer.asked.filter((a) => a.work === WORK.terminal).length;
+    const before = shells();
+    for (
+      const [input, says] of [
+        [{ stdin: "ls" }, "stdin answers a running command"],
+        [{ cmd: "ls" }, "terminal takes no cmd"],
+        [{}, "give the command to run in command"],
+        [{ command: " " }, "command is empty"],
+        [{ command: "ls", commandId: "c1" }, "not both"],
+      ] as const
+    ) {
+      const said = String(await tool("terminal", input));
+      assertStringIncludes(said, "Error: nothing ran: ");
+      assertStringIncludes(said, says);
+    }
+    assertEquals(shells(), before);
+    // A running command is answered as before: its id, and what to type.
+    await tool("terminal", { commandId: "c1", stdin: "y\n" });
+    const answered = computer.asked.filter((a) => a.work === WORK.terminal).at(-1)!;
+    assertEquals([answered.input.commandId, answered.input.stdin], ["c1", "y\n"]);
 
     // Yes once: used up.
     await tool("write_file", { path: "a.txt", content: "hi" });
@@ -227,7 +251,7 @@ test("an agent works on its space's computer, in the space's folder, once its pe
 
     // An agent working for Bob, in Ana's conversation, doesn't reach her computer.
     assertStringIncludes(
-      String(await tool("terminal", { stdin: "ls" }, bob)),
+      String(await tool("terminal", { command: "ls" }, bob)),
       "isn't one of yours",
     );
 
@@ -302,12 +326,15 @@ test("a computer shared into a space: its members' agents use it, and they answe
     await rt.idle();
     const tool = (name: string, input: Record<string, unknown>) =>
       rt.call<unknown>("test.tool", { tool: name, thread, input }, { actor: bob });
-    assertStringIncludes(String(await tool("terminal", { stdin: "ls" })), "Waiting for bob's yes");
+    assertStringIncludes(
+      String(await tool("terminal", { command: "ls" })),
+      "Waiting for bob's yes",
+    );
     assertEquals(await rt.query("approval.pending", {}, { actor: ana }), []);
     const [asked] = await rt.query<Approval[]>("approval.pending", {}, { actor: bob });
     assertEquals([asked.owner, asked.for, asked.name], ["bob", "bob", "testbox"]);
     await rt.call("computer.approve", { approval: asked._id, answer: "thread" }, { actor: bob });
-    await tool("terminal", { stdin: "ls" });
+    await tool("terminal", { command: "ls" });
     const ran = computer.asked.find((a) => a.work === WORK.terminal)!;
     assertEquals(ran.input.scope, { space: launch, folder: "launch", who: "agent:assistant" });
 
@@ -351,7 +378,7 @@ test("a computer shared into a space: its members' agents use it, and they answe
     // Out of Launch: its agents have no computer there, and what waited on it goes.
     await rt.call("computer.unshare", { desk: desk._id }, { actor: ana });
     assertStringIncludes(
-      String(await tool("terminal", { stdin: "ls" })),
+      String(await tool("terminal", { command: "ls" })),
       "There's no computer in this space",
     );
     assertEquals(await rt.query("approval.pending", {}, { actor: ana }), []);
@@ -411,7 +438,7 @@ test("a computer the app makes asking nothing (a cloud computer): its agents wor
     const ran = await rt.call<{ stdout?: string }>("test.tool", {
       tool: "terminal",
       thread,
-      input: { stdin: "ls" },
+      input: { command: "ls" },
     }, { actor: ana });
     assertEquals(ran.stdout, "ran ls");
     assertEquals(await rt.query("approval.pending", {}, { actor: ana }), []);

@@ -1,3 +1,14 @@
+## 1.0.0-rc.19 — 2026-11-03
+
+- **`terminal` takes the command in `command`.** It took it in `stdin`, while `start_job` takes
+  `command`, and the tool answered any other field with an empty success: a model that sent
+  `command` (gpt-6-luna in 21 of 22 calls in our tests, Claude Haiku 5.5 in 7 of 35) was told it ran
+  when nothing had. Now `command` runs a command; `commandId` with `stdin` answers a running one,
+  and with `operation: "interrupt"` stops it. A call it can't read (another field, both a command
+  and a commandId, an empty command, `stdin` without a commandId) runs nothing and says what to give
+  instead. The computer program is unchanged. A chat shows the command from `command`, and from
+  `stdin` on calls made before.
+
 ## 1.0.0-rc.18 — 2026-11-03
 
 - **Model tiers for the app's agents** (the new `tiers` plugin, in `copilotz/plugins/agents`). An

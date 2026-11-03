@@ -30,7 +30,7 @@ const scripted: LlmAdapter = {
     if (/run ls$|Yes, /.test(said)) {
       return yield {
         type: "tool_call",
-        call: { id: crypto.randomUUID(), name: "terminal", input: { stdin: "ls" } },
+        call: { id: crypto.randomUUID(), name: "terminal", input: { command: "ls" } },
       };
     }
     yield { type: "text", text: "ok" };

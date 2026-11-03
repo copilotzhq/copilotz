@@ -104,13 +104,13 @@ test("the program connects to the plugin; agents work on it once their person sa
     assertEquals(laptop.name, "laptop");
 
     // A command waits for her; in this conversation, yes: it runs in her space's folder.
-    assertStringIncludes(String(await tool("terminal", { stdin: "pwd" })), "Waiting for ana");
+    assertStringIncludes(String(await tool("terminal", { command: "pwd" })), "Waiting for ana");
     await answer("thread");
     // In the computer's shell: PowerShell on Windows.
     const stdin = process.platform === "win32"
       ? 'Set-Content -Path made.txt -Value "hi`n" -NoNewline; (Get-Location).Path'
       : "echo hi > made.txt && pwd";
-    const ran = await tool("terminal", { stdin }) as { stdout: string; exitCode: number };
+    const ran = await tool("terminal", { command: stdin }) as { stdout: string; exitCode: number };
     assertEquals(ran.exitCode, 0);
     assert(/[\\/]personal$/.test(ran.stdout.trim()), ran.stdout);
     const made = join(root, "personal", "made.txt");

@@ -270,14 +270,10 @@ test("what a computer tool's call came to, from what it returned", () => {
     durationMs: 3,
     cwd: ".",
   };
-  assertEquals(
-    terminalCall({ input: { stdin: "ls" }, output: JSON.stringify(result) }).mode,
-    "run",
-  );
-  assertEquals(
-    terminalCall({ input: { stdin: "ls" }, output: JSON.stringify(result) }).result?.stdout,
-    "ok\n",
-  );
+  const ran = terminalCall({ input: { command: "ls" }, output: JSON.stringify(result) });
+  assertEquals([ran.mode, ran.text, ran.result?.stdout], ["run", "ls", "ok\n"]);
+  // A call from before the command had its own field: it was the stdin.
+  assertEquals(terminalCall({ input: { stdin: "ls" } }), { mode: "run", text: "ls" });
   assertEquals(terminalCall({ input: { stdin: "", commandId: "c" } }).mode, "poll");
   assertEquals(terminalCall({ input: { stdin: "y\n", commandId: "c" } }), {
     mode: "input",

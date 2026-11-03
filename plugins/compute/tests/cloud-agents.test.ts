@@ -154,7 +154,7 @@ test("an agent makes a cloud computer for its person, unasked, and works on it",
     assertEquals(await rt.query("approval.pending", {}, { actor: ana }), []);
 
     // Its own work wakes it.
-    const ran = await use(rt, space, "terminal", { stdin: "ls" });
+    const ran = await use(rt, space, "terminal", { command: "ls" });
     assertEquals(ran.stdout, "ran ls");
     assertEquals((await records(rt))[0].state, "awake");
 

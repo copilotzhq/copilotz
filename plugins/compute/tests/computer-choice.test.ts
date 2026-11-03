@@ -142,22 +142,22 @@ test("an agent's tools use the default computer, or the one it names: by name, a
     const terminalOf = (m: ReturnType<typeof fakeComputer>) =>
       m.asked.filter((a) => a.work === WORK.terminal).map((a) => a.input.stdin);
 
-    assertEquals(ran(await s.tool("terminal", { stdin: "ls" })), "ran ls");
+    assertEquals(ran(await s.tool("terminal", { command: "ls" })), "ran ls");
     assertEquals(
-      ran(await s.tool("terminal", { stdin: "pwd", computer: "Studio Desktop" })),
+      ran(await s.tool("terminal", { command: "pwd", computer: "Studio Desktop" })),
       "ran pwd",
     );
     assertEquals(
-      ran(await s.tool("terminal", { stdin: "whoami", computer: "desk" })),
+      ran(await s.tool("terminal", { command: "whoami", computer: "desk" })),
       "ran whoami",
     );
     const studio = (await s.desks()).find((d) => d.name === "studio desktop")!;
-    assertEquals(ran(await s.tool("terminal", { stdin: "id", computer: studio._id })), "ran id");
+    assertEquals(ran(await s.tool("terminal", { command: "id", computer: studio._id })), "ran id");
     assertEquals(terminalOf(laptop), ["ls"]);
     assertEquals(terminalOf(desktop), ["pwd", "whoami", "id"]);
 
     // A name it doesn't have: the agent is told what there is.
-    const unknown = String(await s.tool("terminal", { stdin: "ls", computer: "server" }));
+    const unknown = String(await s.tool("terminal", { command: "ls", computer: "server" }));
     assertStringIncludes(unknown, 'There\'s no computer called "server" in this space');
     assertStringIncludes(unknown, "laptop (online), studio desktop (online)");
   });
@@ -165,11 +165,11 @@ test("an agent's tools use the default computer, or the one it names: by name, a
 
 test("two computers of one name: the agent is told their ids, and one of them works", async () => {
   await setup([{ hostname: "box" }, { hostname: "box" }], async (s) => {
-    const said = String(await s.tool("terminal", { stdin: "ls", computer: "box" }));
+    const said = String(await s.tool("terminal", { command: "ls", computer: "box" }));
     assertStringIncludes(said, 'More than one of this space\'s computers is called "box"');
     const [, second] = await s.desks();
     assertStringIncludes(said, second._id);
-    assertEquals(ran(await s.tool("terminal", { stdin: "ls", computer: second._id })), "ran ls");
+    assertEquals(ran(await s.tool("terminal", { command: "ls", computer: second._id })), "ran ls");
   });
 });
 
@@ -180,7 +180,7 @@ test("a named computer that's offline: the agent is told so, and which others it
       async () => !(await s.desks()).find((d) => d.name === "desktop")!.online,
       "desktop went",
     );
-    const said = String(await s.tool("terminal", { stdin: "ls", computer: "desktop" }));
+    const said = String(await s.tool("terminal", { command: "ls", computer: "desktop" }));
     assertEquals(said, "desktop is offline: ana can start it again. Use another: laptop (online).");
   });
 });

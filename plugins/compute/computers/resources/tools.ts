@@ -92,27 +92,60 @@ async function on(
 const terminal = tool({
   description: "Runs a command in your own shell on your person's computer, in this space's " +
     "folder: bash on macOS and Linux, PowerShell on Windows (your context says which this " +
-    "computer has). Your working directory and environment persist between calls. It " +
-    'answers within about a second: if the command is still "running", call again with its ' +
-    "commandId and empty stdin to see more, or with stdin to answer a prompt; operation " +
-    "interrupt stops it. For servers and other long-running commands, use start_job instead.",
+    "computer has). Give it in command. Your working directory and environment persist " +
+    'between calls. It answers within about a second: if the command is still "running", ' +
+    "call again with its commandId to see more, with its commandId and stdin to answer a " +
+    "prompt, or with its commandId and operation interrupt to stop it. For servers and other " +
+    "long-running commands, use start_job instead.",
   input: {
     type: "object",
     properties: {
-      stdin: { type: "string", description: "A command, or input for the running one." },
-      commandId: { type: "string" },
+      command: { type: "string", description: "The command to run." },
+      commandId: {
+        type: "string",
+        description: "A running command's, to see more of it, answer it or stop it.",
+      },
+      stdin: { type: "string", description: "Input for the running command (with its commandId)." },
       operation: { enum: ["interrupt"] },
       computer: computerChoice,
     },
+    additionalProperties: false,
   },
-  run: (input, ctx) =>
-    on(
-      ctx,
-      WORK.terminal,
-      input,
-      input.stdin && !input.commandId ? { kind: "terminal", detail: input.stdin } : undefined,
-    ),
+  run: (input, ctx) => {
+    const wrong = misused(input);
+    if (wrong) return `Error: nothing ran: ${wrong}`;
+    // The computer's shell takes a new command as its input, as its program always has.
+    const { command, ...rest } = input;
+    return command
+      ? on(ctx, WORK.terminal, { ...rest, stdin: command }, { kind: "terminal", detail: command })
+      : on(ctx, WORK.terminal, rest);
+  },
 });
+
+/**
+ * Why a terminal call can't run as given, else undefined. A call it can't
+ * read is refused with what to give instead, never answered with an empty
+ * success: a model that sent the command under another name would think it
+ * ran.
+ */
+function misused(input: Record<string, unknown>): string | undefined {
+  const known = ["command", "commandId", "stdin", "operation", "computer"];
+  const other = Object.keys(input).filter((key) => !known.includes(key));
+  if (other.length) {
+    return `terminal takes no ${other.join(" or ")}. Give a new command in command; for a ` +
+      "running one, its commandId, with stdin to answer it or operation interrupt to stop it.";
+  }
+  if (input.command !== undefined && input.commandId !== undefined) {
+    return "give a new command (command) or a running one's commandId, not both.";
+  }
+  if (input.command !== undefined) {
+    return String(input.command).trim() ? undefined : "command is empty.";
+  }
+  if (input.commandId !== undefined) return undefined;
+  return input.stdin !== undefined
+    ? "stdin answers a running command, with its commandId. Give a new command in command."
+    : "give the command to run in command.";
+}
 
 const startJob = tool({
   description:

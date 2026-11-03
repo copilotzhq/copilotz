@@ -12,6 +12,7 @@
  * `turn.requested`), its Actions (`chat.send`, `chat.stop`, `chat.move`…).
  */
 export type { File } from "./collections/file.ts";
+export { FILE_CHARS, textual } from "./collections/file.ts";
 export type { Live, LiveCall } from "./collections/live.ts";
 export type { Message } from "./collections/message.ts";
 export type { Thread } from "./collections/thread.ts";

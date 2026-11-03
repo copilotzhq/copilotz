@@ -1,4 +1,9 @@
-/** The compactor: every shared message, in each thread's order, is numbered and moves the outline; it gets its line when it leaves the tail. */
+/**
+ * The compactor: every message, in each thread's order, adds its weight to the
+ * tail (agents' steps too, which only their agent is sent); each shared one is
+ * numbered, and gets its line when it leaves the tail. Steps that leave it
+ * just go: summaries keep what was said, not tool results.
+ */
 import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
 import type { Completion, LlmMessage } from "../../../models/contract.ts";
 import type { Message } from "../../chat/contract.ts";
@@ -6,6 +11,10 @@ import type { Outline } from "../collections/outline.ts";
 import type { Summary } from "../collections/summary.ts";
 import { type HistorySettings, settingsOf } from "../shared/settings.ts";
 import { cut, lineOf, node, size } from "../shared/lines.ts";
+import { weightOf } from "../shared/weight.ts";
+
+/** Shared messages that always stay whole, however much they weigh: the newest ones. */
+const KEPT = 4;
 import { namesFor } from "../../../access/spaces/contract.ts";
 
 const INSTRUCTIONS = `You write the memory of a conversation: one step of a summary tree,
@@ -126,8 +135,9 @@ async function summarize(
 }
 
 /**
- * Numbers a shared message and moves the outline: past the tail's maximum,
- * the oldest messages leave it, each summarized as it does.
+ * Adds a message to the tail (numbering it, when shared) and moves the
+ * outline: past the tail's maximum, the oldest leave it, each shared one
+ * summarized as it does.
  */
 async function compact(ctx: Context, m: Message, config: HistorySettings) {
   const outlines = ctx.db.collection<Outline>("outline");
@@ -140,9 +150,16 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
     boundary: 0,
     tail: [],
     tailAt: [],
+    // Made with the thread's first message, it has weighed them all; made later
+    // (history added to an app, a thread from before), it hasn't.
+    complete: !await ctx.db.collection<Message>("message").findOne({
+      thread: m.thread,
+      at: { $lt: m.at },
+    }),
   };
   if (state.last === m._id) return; // Committed before this delivery was retried.
   const at = new Date().toISOString();
+  const step = m.private === true;
   const index = state.count;
   const made = new Map<string, Summary>();
   const get = async (level: number, i: number) =>
@@ -162,22 +179,31 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
     return doc;
   };
 
-  // The tail grows by this message; past its maximum, the oldest become lines.
-  const count = index + 1;
-  const tail = [...state.tail, size(lineOf(m, await namesFor(ctx, [m.from, ...m.to])))];
+  // The tail grows by what this message costs a prompt; past its maximum, the oldest leave it.
+  const count = step ? index : index + 1;
+  const tail = [...state.tail, await weightOf(ctx, m)];
   const tailAt = [...state.tailAt, m.at];
   // Which messages they are (before summaries waited, every one had its line already).
   const tailIds = [...(state.tailIds ?? state.tail.map(() => "")), m._id];
-  let tailBytes = tail.reduce((a, b) => a + b, 0);
+  const tailSteps = [...(state.tailSteps ?? state.tail.map(() => false)), step];
+  let tailTokens = tail.reduce((a, b) => a + b, 0);
   const lines = [...state.lines] as [number, number, number][];
   let bytes = state.bytes;
   let boundary = state.boundary;
-  if (tailBytes > config.tail[1]) {
-    // The newest message always stays whole.
-    while (tailBytes > config.tail[0] && tail.length > 1) {
-      tailBytes -= tail.shift()!;
-      tailAt.shift();
+  // The newest shared messages stay whole (with a file a few answers might need), and so does
+  // what came after them.
+  const kept = () => tailSteps.filter((s) => !s).length <= KEPT && !tailSteps[0];
+  let cutAt = state.cutAt;
+  let gone = "";
+  if (tailTokens > config.tail[1]) {
+    while (tailTokens > config.tail[0] && tail.length > 1 && !kept()) {
+      // In messages' own time: what was written up to this one was thought with the old start.
+      cutAt = m.at;
+      tailTokens -= tail.shift()!;
+      const left = tailAt.shift()!;
+      if (left > gone) gone = left;
       const id = tailIds.shift()!;
+      if (tailSteps.shift()) continue;
       if (!await get(0, boundary)) {
         const left = await ctx.db.collection<Message>("message").findOne({ _id: id });
         if (left) await summarize(ctx, config, m.thread, boundary, left, get, put);
@@ -188,6 +214,14 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
         bytes += line.bytes + 1;
       }
       boundary++;
+    }
+    // A step is dated before its tools ran, and may follow messages written meanwhile: one dated
+    // before what just left goes with it, so whole messages start after every line.
+    while (tail.length > 1 && tailSteps[0] && tailAt[0] < gone) {
+      tailTokens -= tail.shift()!;
+      tailAt.shift();
+      tailIds.shift();
+      tailSteps.shift();
     }
   }
   // Past the outline's maximum, merge the most due pairs (whose parent is built).
@@ -235,14 +269,21 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
       tail,
       tailAt,
       tailIds,
+      tailSteps,
       last: m._id,
+      ...(state.complete ? { complete: true } : {}),
+      ...(cutAt ? { cutAt } : {}),
     }, { upsert: true, ...w0 });
   });
 }
 
 export const compactor: ProcessorDef = {
   on: "message.created",
-  where: { "doc.private": { $ne: true } },
   key: (event: Event) => String((event.data.doc as Message).thread),
-  run: (ctx, event) => compact(ctx, event.data.doc as Message, settingsOf(ctx)),
+  run: async (ctx, event) => {
+    // Events go without private fields (what it was told, its state): read it whole.
+    const sent = event.data.doc as Message;
+    const m = await ctx.db.collection<Message>("message").findOne({ _id: sent._id }) ?? sent;
+    await compact(ctx, m, settingsOf(ctx));
+  },
 };

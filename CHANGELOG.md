@@ -1,3 +1,39 @@
+## 1.0.0-rc.17 — 2026-11-03
+
+- **A model's state goes back with its answers.** What a model returns to be sent back (Anthropic's
+  signed thinking, Gemini's thought signatures) was kept on tool steps but dropped on the final
+  answer, so the next turn started without it. Answers keep it now, and agents are sent it on
+  text-only messages too. A message's `state` is private, like `told`: people's reads and events go
+  without it, and an answer handed back to another space doesn't carry it.
+- **OpenAI's reasoning goes back to it.** The Responses adapter asks for a reasoning model's
+  reasoning, encrypted (`include: ["reasoning.encrypted_content"]`), keeps it as its answer's state,
+  in its place among the answer's text and calls, without ids, and sends it back. Between tool steps
+  the model carries on instead of thinking again: on gpt-6.1-sol, a two-turn tool task wrote 42%
+  fewer output tokens. A server that refuses `include` is asked again without it, and not asked
+  again. Sent back, past reasoning stays in later prompts (a probe: 616 input tokens with it, 48
+  without), so a state now says about what it adds (`LlmState.tokens`), and history counts it.
+- **History counts what a prompt really carries.** The history plugin's tail is measured in
+  estimated tokens of what an agent is sent for each message: its text, its model's state, text
+  files' content, transcripts, images (1,600 each) and PDFs (2,000 a page), and agents' tool steps,
+  which leave the tail without a line. `tail` is in tokens now (was bytes), and its default stays
+  `[16_000, 48_000]`, so a text-only conversation keeps about four times more whole.
+  - Until the tail first cuts, every message is sent: no 50-message cut before anything is
+    summarized. That holds for threads whose outline began with them; older ones get chat's window
+    until their first cut.
+  - The four newest shared messages always stay whole, so a big file stays while it's talked about.
+  - A message's line names its files, and `zoom(id, 1)` gives the message as the agent is sent it,
+    text files' content included.
+  - After a cut, state from before it (thinking bound to how the conversation began) isn't sent
+    again; and when a provider refuses a model's own state as stale anyway, the call is tried once
+    more without any.
+  - Outlines no longer log events.
+- **Without the history plugin,** an agent's window holds 50 to 100 messages and drops 50 at a time
+  (was the latest 50, one off every turn), so the prompt cache holds between drops. `lineage`
+  (exported) takes `batched`; its `since: ""` now means every message, and its db needs
+  `countDocuments`.
+- **Fixed:** lifting a usage waiver gave back nothing for a use recorded in the very millisecond it
+  was lifted (a flaky billing test showed it).
+
 ## 1.0.0-rc.16 — 2026-11-02
 
 - **Fixed:** staff by email weren't staff anywhere but going into an org. `org.mine` asked without

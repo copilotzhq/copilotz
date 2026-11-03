@@ -1,5 +1,6 @@
 /** `zoom`: opens a summary line into the two it was made from, down to the message whole. */
 import type { Context } from "../../../../runtime/mod.ts";
+import type { LlmMessage } from "../../../models/contract.ts";
 import { type Message, tool } from "../../chat/contract.ts";
 import type { Summary } from "../collections/summary.ts";
 import { lineOf, node, type Outlined } from "../shared/lines.ts";
@@ -24,7 +25,7 @@ export const zoom = tool({
     },
     required: ["id", "n"],
   },
-  run: (input, ctx) => open(ctx, ctx.thread, input),
+  run: (input, ctx) => open(ctx, ctx.thread, input, ctx.agent),
 });
 
 /** Runs `zoom` for a thread. */
@@ -32,6 +33,7 @@ async function open(
   ctx: Context,
   thread: string,
   input: Record<string, unknown>,
+  agent?: string,
 ): Promise<string> {
   const [id, n] = [Number(input.id), Number(input.n)];
   if (!Number.isInteger(id) || !Number.isInteger(n) || n < 1 || n & (n - 1) || id % n) {
@@ -43,9 +45,14 @@ async function open(
     const message = line?.message
       ? await ctx.db.collection<Message>("message").findOne({ _id: line.message })
       : null;
-    return message
-      ? `${id}+1|${lineOf(message, await namesFor(ctx, [message.from, ...message.to]))}`
-      : `Error: no message ${id} here.`;
+    if (!message) return `Error: no message ${id} here.`;
+    // As the agent is sent it: text files' content and transcripts too (images and PDFs by name).
+    const viewer = agent ? { viewer: { kind: "agent", name: agent } } : {};
+    const shown = await ctx.render("llm", "message", message, viewer).catch(() => undefined);
+    const text = Array.isArray(shown)
+      ? (shown as LlmMessage[]).map((m) => m.text ?? "").join("\n")
+      : lineOf(message, await namesFor(ctx, [message.from, ...message.to]));
+    return `${id}+1|${text}`;
   }
   const level = Math.log2(n) - 1;
   const half = n / 2;

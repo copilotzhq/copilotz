@@ -7,7 +7,11 @@ export type HistorySettings = {
   summarizer: ModelRef;
   /** A line's size limit, in UTF-8 bytes (512: a dense paragraph). */
   line: number;
-  /** Whole messages at the end: they grow to the second size, then the oldest become lines until the first (bytes). */
+  /**
+   * Whole messages at the end, by what they cost a prompt (estimated tokens:
+   * text, files, tool steps): they grow to the second, then the oldest leave
+   * (shared ones as lines) until the first.
+   */
   tail: [number, number];
   /** The outline: it grows to the second size, then the most due pairs merge until the first (bytes). */
   outline: [number, number];

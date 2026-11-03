@@ -97,17 +97,31 @@ const providerOf = (id: string) => id.slice(0, id.indexOf("/"));
 
 /**
  * State goes back to models of the provider that wrote it (`same`: only to
- * the model itself); another provider's is left out.
+ * the model itself; `none`: to nobody); another provider's is left out.
  */
-const stateFor = (id: string, same: "provider" | "model") => (message: LlmMessage) => {
+const stateFor = (id: string, same: "provider" | "model" | "none") => (message: LlmMessage) => {
   const by = message.role === "assistant" ? message.state?.by : undefined;
-  if (!by || (same === "model" ? by === id : providerOf(by) === providerOf(id))) return message;
+  if (!by && (same !== "none" || message.role !== "assistant" || !message.state)) return message;
+  if (by && same !== "none" && (same === "model" ? by === id : providerOf(by) === providerOf(id))) {
+    return message;
+  }
   const { state: _, ...rest } = message as Extract<LlmMessage, { role: "assistant" }>;
   return rest;
 };
 
 /** A provider refusing the request as given: worth one try without another model's state. */
 const refused = (error: unknown) => (error as { status?: number }).status === 400;
+
+/**
+ * A refusal of the state it was sent (thinking bound to a conversation that
+ * has changed since: summarized, its instructions edited): worth one more try
+ * without any.
+ */
+const stale = (error: unknown) =>
+  refused(error) &&
+  /thinking|signature|reasoning|encrypted|bound to a different/i.test(
+    String((error as Error).message),
+  );
 
 /**
  * A model with its org's own key for its provider, which goes before the
@@ -190,7 +204,15 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
     // A broken call is tried again, waiting longer each time, until `retry` ms have gone by.
     const { silence = SILENCE, retry = RETRY } = m.endpoint as Provider;
     const until = Date.now() + retry;
-    const sames = borrowed ? ["provider", "model"] as const : ["model"] as const;
+    const stated = request.messages.some((message) =>
+      message.role === "assistant" && message.state
+    );
+    // Its state as it can go, then, refused, without another's, then without any.
+    const sames = [
+      ...(borrowed ? ["provider" as const] : []),
+      "model" as const,
+      ...(stated ? ["none" as const] : []),
+    ];
     for (let s = 0, attempt = 0;;) {
       const same = sames[s];
       const call = measure(ctx.metrics, m, "chat");
@@ -215,7 +237,11 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
           )
         ) {
           if (chunk.type === "state") {
-            yield { type: "state", state: { by: m.id, data: chunk.state.data } };
+            const { tokens } = chunk.state;
+            yield {
+              type: "state",
+              state: { by: m.id, data: chunk.state.data, ...(tokens ? { tokens } : {}) },
+            };
           } else if (chunk.type === "usage") {
             const { type: _, model: __, ...quantities } = chunk;
             call.usage(quantities);
@@ -253,7 +279,8 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
         // A break it tried again for as long as it should is final: nobody tries it again.
         const out = transient(error) ? Object.assign(error as Error, { final: true }) : error;
         if (wrote) throw out;
-        if (same === "provider" && refused(error) && s + 1 < sames.length) {
+        const next = sames[s + 1];
+        if (next && (next === "model" ? refused(error) : stale(error))) {
           s++;
           continue;
         }

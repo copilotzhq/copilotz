@@ -1,12 +1,9 @@
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { LlmFile, LlmMessage, LlmState } from "../../../models/contract.ts";
-import { type File, text, textual } from "../collections/file.ts";
+import { type File, FILE_CHARS, text, textual } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
 import { DELEGATED, type Step, type Told } from "../shared/types.ts";
 import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
-
-/** How much of a text file an agent is sent. */
-const FILE_CHARS = 20_000;
 
 /** Files a model may be shown as they are: images and PDFs (the models plugin decides, by model). */
 const viewable = (type: string) =>
@@ -71,7 +68,9 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
   const told: LlmMessage[] = m.told?.length
     ? [{ role: "user", text: (m.told as Told[]).map((c) => c.text).join("\n\n") }]
     : [];
-  if (!m.toolCalls?.length) return [...told, { role: "assistant", text: m.text ?? "" }];
+  // Its model's state goes back with it: thinking, signatures (only to the model that wrote them).
+  const state = m.state ? { state: m.state as LlmState } : {};
+  if (!m.toolCalls?.length) return [...told, { role: "assistant", text: m.text ?? "", ...state }];
   const calls = m.toolCalls as Step[];
   return [
     ...told,
@@ -79,7 +78,7 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
       role: "assistant",
       text: m.text || undefined,
       toolCalls: calls.map(({ id, name, input }) => ({ id, name, input })),
-      ...(m.state ? { state: m.state as LlmState } : {}),
+      ...state,
     },
     ...calls.map((c): LlmMessage => {
       // A tool's own View decides how its result reads (clipped, summarized…).

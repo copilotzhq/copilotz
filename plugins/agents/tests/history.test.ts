@@ -59,7 +59,8 @@ async function start(make: () => Store | Promise<Store>) {
     resources: {
       provider: { script: { adapter: "script" } },
       agents: { agent: { instructions: "Help.", model: "script/main" } },
-      history: { summarizer: "script/cheap", line: 40, tail: [100, 200], outline: [60, 120] },
+      // The tail in estimated tokens: a long message from ana is 15, the agent's "ok" 3.
+      history: { summarizer: "script/cheap", line: 40, tail: [25, 50], outline: [60, 120] },
     },
     adapters: { llm: { script } },
   });
@@ -68,10 +69,13 @@ async function start(make: () => Store | Promise<Store>) {
     plugins: [models, chat, history, app],
   });
   let thread: string | undefined;
-  const say = async (words: string) => {
-    thread =
-      (await runtime.call<{ thread: string }>("chat.send", { thread, text: words, from: "ana" }))
-        .thread;
+  const say = async (words: string, files?: unknown[]) => {
+    thread = (await runtime.call<{ thread: string }>("chat.send", {
+      thread,
+      text: words,
+      from: "ana",
+      ...(files ? { files } : {}),
+    })).thread;
     await runtime.idle();
   };
   const prompt = () => runtime.query<Prompt>("thread.prompt", { thread, agent: "agent" });
@@ -83,11 +87,11 @@ const long = (n: number) => `message number ${n} is long enough to need a summar
 
 each("lines, merges and a tail that shrinks in batches; the newest stays whole", async (make) => {
   const { runtime, summarizer, say, prompt, thread } = await start(make);
-  // Within the tail (200 bytes), nothing is summarized.
+  // Within the tail (50 tokens), nothing is summarized.
   for (let n = 0; n < 2; n++) await say(long(n));
   assertEquals(summarizer, []);
   for (let n = 2; n < 4; n++) await say(long(n));
-  // The 5th message took the tail past 200 bytes: the 3 oldest left it, each with its line. Long
+  // The 5th message took the tail past 50 tokens: the 3 oldest left it, each with its line. Long
   // ones were compressed; short ones and short pairs needed no call.
   assertEquals(summarizer.filter((s) => s.includes("compress")).length, 2);
   assert(summarizer.every((s) => !s.includes("merge lines 0+1")), "short pairs are joined");
@@ -98,7 +102,7 @@ each("lines, merges and a tail that shrinks in batches; the newest stays whole",
     "S2",
   ]);
   assertEquals(nodes.find((s) => s.level === 1 && s.index === 0)?.text, "S0\nagent → ana: ok");
-  // 8 messages: the tail passed 200 bytes, and the oldest became lines.
+  // 8 messages: the tail passed 50 tokens, and the oldest became lines.
   const p = await prompt();
   const [summaryBlock, ...whole] = p.history;
   assertStringIncludes(text(summaryBlock), "<chat>\n0+1|S0\n1+1|agent → ana: ok");
@@ -127,6 +131,28 @@ each("zoom opens a line into the two it was made from, and a message whole", asy
   await say("zoom pair");
   assertEquals(text(turns.at(-1)!.at(-1)!), "0+1|S0\n1+1|agent → ana: ok");
   await say("zoom one");
-  assertEquals(text(turns.at(-1)!.at(-1)!), `0+1|ana → agent: ${long(0)}`);
+  // As the agent is sent it.
+  assertEquals(text(turns.at(-1)!.at(-1)!), `0+1|ana: ${long(0)}`);
   await runtime.close();
 });
+
+each(
+  "a message's files are named in its line, and zoom brings a text file back whole",
+  async (make) => {
+    const { runtime, turns, say, thread } = await start(make);
+    const notes = { name: "notes.txt", type: "text/plain", data: btoa("Ship on Friday.") };
+    await say("here", [notes]);
+    for (let n = 1; n < 6; n++) await say(long(n));
+    // Short, it's its own line: the file named.
+    const lines = await runtime.query<Summary[]>("summary.of", { thread: thread() });
+    assertEquals(
+      lines.find((s) => s.level === 0 && s.index === 0)!.text,
+      "ana → agent: here [file notes.txt]",
+    );
+    await say("zoom one");
+    const opened = text(turns.at(-1)!.at(-1)!);
+    assertStringIncludes(opened, "0+1|ana: here");
+    assertStringIncludes(opened, "Ship on Friday.");
+    await runtime.close();
+  },
+);

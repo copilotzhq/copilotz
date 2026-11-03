@@ -9,11 +9,13 @@ export type ToolCall = { id: string; name: string; input: Record<string, unknown
 
 /**
  * What a provider needs back with its own answer in the next calls, opaque to
- * everyone else: Anthropic's signed thinking, Gemini's thought signatures.
+ * everyone else: Anthropic's signed thinking, Gemini's thought signatures,
+ * OpenAI's encrypted reasoning.
  * `by` is the model that wrote it (`"provider/model"`); it goes back to that
- * model only.
+ * model only. `tokens`: about what it adds to a prompt it goes back in, when
+ * its adapter knows (what budgets a prompt counts it as).
  */
-export type LlmState = { by?: string; data: unknown };
+export type LlmState = { by?: string; data: unknown; tokens?: number };
 
 /**
  * A file given with a message: its name, media type and content (base64). A

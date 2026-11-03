@@ -312,7 +312,8 @@ test("Anthropic's signed thinking goes back to the provider's models, not anothe
       messages: [{ role: "user", text: "roll" }],
     });
     const thought = { type: "thinking", thinking: "Roll it.", signature: "sig" };
-    assertEquals(first.state, { by: "claude/claude-opus-5-5", data: [thought] });
+    // What it adds to a prompt, sent back: about its text's tokens ("Roll it.": 2).
+    assertEquals(first.state, { by: "claude/claude-opus-5-5", data: [thought], tokens: 2 });
     const conversation = [
       { role: "user" as const, text: "roll" },
       { role: "assistant" as const, toolCalls: first.toolCalls, state: first.state },
@@ -417,4 +418,45 @@ test("an agent's thinking goes back with its tool results, from the stored step 
   } finally {
     await runtime.close();
   }
+});
+
+test("a model's own state, refused as stale, is left out once; another refusal stays an error", async () => {
+  const sent: LlmRequest["messages"][] = [];
+  const bound: LlmAdapter = {
+    async *generate({ messages }) {
+      sent.push(messages);
+      if (messages.some((m) => m.role === "assistant" && m.state)) {
+        throw Object.assign(
+          new Error("Anthropic: thinking block is bound to a different conversation"),
+          { status: 400 },
+        );
+      }
+      if (messages.at(-1)?.role === "user" && messages.at(-1)!.text === "broken") {
+        throw Object.assign(new Error("Anthropic: max_tokens is too large"), { status: 400 });
+      }
+      yield { type: "text", text: "fresh" };
+    },
+  };
+  const reach = {
+    resources: { provider: { mind: { adapter: "bound", retry: 0 } } },
+    adapters: { ...models.adapters!, llm: { ...models.adapters!.llm, bound } },
+    signal: new AbortController().signal,
+  };
+  const before = [
+    { role: "user" as const, text: "think" },
+    { role: "assistant" as const, text: "thought", state: { by: "mind/deep", data: ["old"] } },
+  ];
+  const answer = await complete(reach, {
+    model: "mind/deep",
+    messages: [...before, { role: "user", text: "again" }],
+  });
+  assertEquals(answer.text, "fresh");
+  assertEquals(sent.length, 2);
+  assertEquals(sent[1][1], { role: "assistant", text: "thought" });
+  // A refusal of something else isn't helped by leaving state out: it's the answer.
+  await assertRejects(
+    () => complete(reach, { model: "mind/deep", messages: [{ role: "user", text: "broken" }] }),
+    Error,
+    "max_tokens",
+  );
 });

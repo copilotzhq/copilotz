@@ -14,6 +14,10 @@
  * - The tail and the outline grow at their end and shrink in batches (a
  *   sawtooth), so between batches each prompt starts with the last one and
  *   reads it from the provider's prompt cache.
+ * - The tail is measured by what a prompt carries for each message, in
+ *   estimated tokens: its text, files' content, transcripts, images and PDFs,
+ *   and agents' tool steps (which leave it without a line). Until it first
+ *   overflows, every message is sent whole.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { outline } from "./collections/outline.ts";

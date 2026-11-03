@@ -1,5 +1,6 @@
 /** Delivering a message: the turns it starts and the waits it checks off; and agents' answers. */
 import type { Context, Resources, TransactionScope } from "../../../../runtime/mod.ts";
+import type { LlmState } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import type { Wait } from "../collections/wait.ts";
@@ -78,7 +79,7 @@ export const answer = async (
   t: Turn,
   run: string,
   text: string,
-  how: { failed?: boolean; stopped?: boolean; told?: Told[] } = {},
+  how: { failed?: boolean; stopped?: boolean; told?: Told[]; state?: LlmState } = {},
   /** The turn's thread, when it has it already. */
   known?: Pick<Thread, "in">,
 ) => {
@@ -104,6 +105,8 @@ export const answer = async (
     ...(how.stopped ? { stopped: true } : {}),
     // What it was told this turn, when it's the turn's first message.
     ...(how.told?.length ? { told: how.told } : {}),
+    // Its model's state (its thinking), for that model's next calls: private, like `told`.
+    ...(how.state ? { state: how.state } : {}),
     at: now(),
   };
   // Handed over from another space: the answer goes back there too, where its sender waits.
@@ -122,6 +125,7 @@ export const answer = async (
         }`,
       },
       told: undefined,
+      state: undefined,
     }
     : undefined;
   const writer = returned ? ctx.as() : ctx;
@@ -138,7 +142,7 @@ export const answer = async (
     await tx.db.collection("message").insertOne(reply);
     await noted(tx, reply);
     if (returned) {
-      const { told: _, ...copy } = returned;
+      const { told: _, state: __, ...copy } = returned;
       await tx.db.collection("message").insertOne(copy);
       await noted(tx, copy);
     }

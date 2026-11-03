@@ -71,11 +71,11 @@ export const seatsOf = async (ctx: Context, plan: Plan): Promise<number> =>
   plan.seats ??
     await ctx.as().call<number>("org.seats", {}).catch(() => 1);
 
-/** What's been charged by day since `from`, and before `to` if it says (USD). */
+/** What's been charged by day since `from`, and up to `to` if it says (USD): a use in its very millisecond was in it. */
 async function chargedByDay(ctx: Context, from: string, to?: string) {
   const totals = await ctx.as().db.collection("usage").query<
     { key: { day: string }; price?: number }[]
-  >("totals", { filter: { at: { $gte: from, ...(to ? { $lt: to } : {}) } }, by: ["day"] });
+  >("totals", { filter: { at: { $gte: from, ...(to ? { $lte: to } : {}) } }, by: ["day"] });
   return Object.fromEntries(totals.map((t) => [t.key.day, t.price ?? 0]));
 }
 

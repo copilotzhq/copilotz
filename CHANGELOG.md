@@ -19,6 +19,8 @@
   48_000]`,
   so a text-only conversation keeps about four times more whole. Until the tail first overflows,
   every message is sent: no more 50-message cut before anything is summarized.
+- **Fixed:** lifting a usage waiver gave back nothing for a use recorded in the very millisecond it
+  was lifted (a flaky billing test showed it).
 - **Without the history plugin,** an agent's window holds 50 to 100 messages and drops 50 at a time
   (was the latest 50, one off every turn), so the prompt cache holds between drops.
 

@@ -69,10 +69,13 @@ async function start(make: () => Store | Promise<Store>) {
     plugins: [models, chat, history, app],
   });
   let thread: string | undefined;
-  const say = async (words: string) => {
-    thread =
-      (await runtime.call<{ thread: string }>("chat.send", { thread, text: words, from: "ana" }))
-        .thread;
+  const say = async (words: string, files?: unknown[]) => {
+    thread = (await runtime.call<{ thread: string }>("chat.send", {
+      thread,
+      text: words,
+      from: "ana",
+      ...(files ? { files } : {}),
+    })).thread;
     await runtime.idle();
   };
   const prompt = () => runtime.query<Prompt>("thread.prompt", { thread, agent: "agent" });
@@ -128,6 +131,28 @@ each("zoom opens a line into the two it was made from, and a message whole", asy
   await say("zoom pair");
   assertEquals(text(turns.at(-1)!.at(-1)!), "0+1|S0\n1+1|agent → ana: ok");
   await say("zoom one");
-  assertEquals(text(turns.at(-1)!.at(-1)!), `0+1|ana → agent: ${long(0)}`);
+  // As the agent is sent it.
+  assertEquals(text(turns.at(-1)!.at(-1)!), `0+1|ana: ${long(0)}`);
   await runtime.close();
 });
+
+each(
+  "a message's files are named in its line, and zoom brings a text file back whole",
+  async (make) => {
+    const { runtime, turns, say, thread } = await start(make);
+    const notes = { name: "notes.txt", type: "text/plain", data: btoa("Ship on Friday.") };
+    await say("here", [notes]);
+    for (let n = 1; n < 6; n++) await say(long(n));
+    // Short, it's its own line: the file named.
+    const lines = await runtime.query<Summary[]>("summary.of", { thread: thread() });
+    assertEquals(
+      lines.find((s) => s.level === 0 && s.index === 0)!.text,
+      "ana → agent: here [file notes.txt]",
+    );
+    await say("zoom one");
+    const opened = text(turns.at(-1)!.at(-1)!);
+    assertStringIncludes(opened, "0+1|ana: here");
+    assertStringIncludes(opened, "Ship on Friday.");
+    await runtime.close();
+  },
+);

@@ -28,10 +28,14 @@ export const windowStart = (total: number) =>
  *
  * - `since` (where a summarized history turns whole, `""` before it does):
  *   every one from then on, and the latest HISTORY of what it inherited;
- * - `batched` (an agent's, unsummarized): the window `windowStart` says;
+ * - `batched` (an agent's, unsummarized): the window `windowStart` says, and
+ *   the latest HISTORY of what it inherited while that window starts at its
+ *   first message;
  * - else the latest `limit` (HISTORY), through the lineage.
  *
- * Each level is one query the owner keeps cached.
+ * Each level is one query the owner keeps cached: of a fixed size (the
+ * window is sliced from the latest 2 × HISTORY), so the cache holds one entry
+ * per thread and agent, not one per turn.
  */
 export async function lineage(
   db: Reads,
@@ -48,14 +52,17 @@ export async function lineage(
 
   let level: Message[];
   let left: number;
+  // How many of a parent's are read: HISTORY for an agent, as many as asked for a reader.
+  const inherited = since !== undefined || options.batched ? HISTORY : options.limit ?? HISTORY;
   if (since !== undefined) {
     level = await messages.find({ thread: id, at: { $gte: since }, ...visible }).sort({ at: -1 })
       .limit(WHOLE);
     left = HISTORY;
   } else if (options.batched) {
     const total = await messages.countDocuments({ thread: id, ...visible });
-    level = await latest(id, Math.max(1, total - windowStart(total)));
-    left = Math.max(0, HISTORY - level.length);
+    const start = windowStart(total);
+    level = (await latest(id, 2 * HISTORY)).slice(0, Math.max(1, total - start));
+    left = start ? 0 : HISTORY;
   } else {
     const limit = options.limit ?? HISTORY;
     level = await latest(id, limit);
@@ -69,12 +76,13 @@ export async function lineage(
     if (!from) break;
     // The parent's latest window usually reaches back to the fork point; when
     // it doesn't, ask for the messages up to it.
-    const window = await latest(thread, left);
+    const window = await latest(thread, inherited);
     level = window.filter((m) => m.at <= from.at);
-    if (window.length === left && level.length < left) {
+    if (window.length === inherited && level.length < left) {
       level = await messages.find({ thread, at: { $lte: from.at }, ...visible })
-        .sort({ at: -1 }).limit(left);
+        .sort({ at: -1 }).limit(inherited);
     }
+    level = level.slice(0, left);
     levels.push(level);
     left -= level.length;
     current = await threads.findOne({ _id: thread });

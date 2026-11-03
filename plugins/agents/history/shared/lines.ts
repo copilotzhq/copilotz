@@ -11,16 +11,17 @@ export const size = (text: string) => encoder.encode(text).length;
 
 /**
  * A message as one piece of text: who wrote it, to whom (people by name,
- * from `names`), and what.
+ * from `names`), what, and the files it came with, by name.
  */
 export const lineOf = (
-  m: Pick<Message, "from" | "to" | "text">,
+  m: Pick<Message, "from" | "to" | "text" | "files">,
   names: Record<string, string> = {},
 ) => {
   const shown = (who: string) => nameOf(who, names);
+  const files = (m.files ?? []).map((f) => ` [file ${f.name}]`).join("");
   return `${shown(m.from)}${m.to.length ? ` → ${m.to.map(shown).join(", ")}` : ""}: ${
     m.text ?? ""
-  }`;
+  }${files}`;
 };
 
 /** Cuts text to at most `limit` UTF-8 bytes, on a character boundary. */

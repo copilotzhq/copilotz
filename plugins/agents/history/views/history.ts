@@ -39,8 +39,12 @@ export function historyView(
   // Lines kept before names were known say people's ids: each by name now.
   const outline = lines.join("\n");
   const named = withNames(outline, namesIn(ctx, idsIn(outline)));
+  // A model's state from before the last cut is bound to how the conversation began then (a
+  // provider may refuse it): it goes, and the model thinks afresh.
+  const cutAt = state.value.cutAt ?? "";
+  const fresh = (m: Message) => m.state && m.at <= cutAt ? { ...m, state: undefined } : m;
   return [
     { role: "user", text: `${HEADER}\n<chat>\n${named}\n</chat>` },
-    ...whole(messages.filter((m) => m.at >= since)),
+    ...whole(messages.filter((m) => m.at >= since).map(fresh)),
   ];
 }

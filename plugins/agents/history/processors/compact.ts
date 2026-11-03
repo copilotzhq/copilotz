@@ -12,6 +12,9 @@ import type { Summary } from "../collections/summary.ts";
 import { type HistorySettings, settingsOf } from "../shared/settings.ts";
 import { cut, lineOf, node, size } from "../shared/lines.ts";
 import { weightOf } from "../shared/weight.ts";
+
+/** Shared messages that always stay whole, however much they weigh: the newest ones. */
+const KEPT = 4;
 import { namesFor } from "../../../access/spaces/contract.ts";
 
 const INSTRUCTIONS = `You write the memory of a conversation: one step of a summary tree,
@@ -147,6 +150,12 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
     boundary: 0,
     tail: [],
     tailAt: [],
+    // Made with the thread's first message, it has weighed them all; made later
+    // (history added to an app, a thread from before), it hasn't.
+    complete: !await ctx.db.collection<Message>("message").findOne({
+      thread: m.thread,
+      at: { $lt: m.at },
+    }),
   };
   if (state.last === m._id) return; // Committed before this delivery was retried.
   const at = new Date().toISOString();
@@ -181,12 +190,18 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
   const lines = [...state.lines] as [number, number, number][];
   let bytes = state.bytes;
   let boundary = state.boundary;
-  // The newest shared message always stays whole, and so does what came after it.
-  const lastShared = () => !tailSteps[0] && tailSteps.slice(1).every(Boolean);
+  // The newest shared messages stay whole (with a file a few answers might need), and so does
+  // what came after them.
+  const kept = () => tailSteps.filter((s) => !s).length <= KEPT && !tailSteps[0];
+  let cutAt = state.cutAt;
+  let gone = "";
   if (tailTokens > config.tail[1]) {
-    while (tailTokens > config.tail[0] && tail.length > 1 && !lastShared()) {
+    while (tailTokens > config.tail[0] && tail.length > 1 && !kept()) {
+      // In messages' own time: what was written up to this one was thought with the old start.
+      cutAt = m.at;
       tailTokens -= tail.shift()!;
-      tailAt.shift();
+      const left = tailAt.shift()!;
+      if (left > gone) gone = left;
       const id = tailIds.shift()!;
       if (tailSteps.shift()) continue;
       if (!await get(0, boundary)) {
@@ -199,6 +214,14 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
         bytes += line.bytes + 1;
       }
       boundary++;
+    }
+    // A step is dated before its tools ran, and may follow messages written meanwhile: one dated
+    // before what just left goes with it, so whole messages start after every line.
+    while (tail.length > 1 && tailSteps[0] && tailAt[0] < gone) {
+      tailTokens -= tail.shift()!;
+      tailAt.shift();
+      tailIds.shift();
+      tailSteps.shift();
     }
   }
   // Past the outline's maximum, merge the most due pairs (whose parent is built).
@@ -248,6 +271,8 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
       tailIds,
       tailSteps,
       last: m._id,
+      ...(state.complete ? { complete: true } : {}),
+      ...(cutAt ? { cutAt } : {}),
     }, { upsert: true, ...w0 });
   });
 }

@@ -48,7 +48,10 @@ export const file = defineCollection({
 export type File = Infer<typeof fileSchema> & { _id: string };
 
 /** Media types read as text: what agents get the content of. */
-export const textual = (type: string) =>
+/** How much of a text file an agent is sent. */
+export const FILE_CHARS = 20_000;
+
+export const textual = (type: string): boolean =>
   type.startsWith("text/") || /json|xml|yaml|csv|javascript|typescript/.test(type);
 
 /** A base64 file's content as text. */

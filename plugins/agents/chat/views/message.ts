@@ -1,12 +1,9 @@
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { LlmFile, LlmMessage, LlmState } from "../../../models/contract.ts";
-import { type File, text, textual } from "../collections/file.ts";
+import { type File, FILE_CHARS, text, textual } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
 import { DELEGATED, type Step, type Told } from "../shared/types.ts";
 import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
-
-/** How much of a text file an agent is sent. */
-const FILE_CHARS = 20_000;
 
 /** Files a model may be shown as they are: images and PDFs (the models plugin decides, by model). */
 const viewable = (type: string) =>

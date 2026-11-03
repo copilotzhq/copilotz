@@ -21,10 +21,22 @@ const outlineSchema = {
     tailSteps: { type: "array", items: { type: "boolean" } },
     /** The last message numbered, so a retried delivery knows it's done. */
     last: { type: "string" },
+    /**
+     * It has weighed every message of the thread from its first (made by this
+     * compactor, not one that came later or from before steps counted): until
+     * it first cuts, all of them can be sent.
+     */
+    complete: { type: "boolean" },
+    /**
+     * The newest message when its tail last cut: state on messages up to it
+     * (thinking bound to the old start) is stale.
+     */
+    cutAt: { type: "string" },
   },
   required: ["count", "lines", "bytes", "boundary", "tail", "tailAt"],
 } as const;
 
 export type Outline = Infer<typeof outlineSchema> & { _id: string };
 
-export const outline = defineCollection({ schema: outlineSchema });
+// Rewritten on every message, and nobody listens: no events.
+export const outline = defineCollection({ schema: outlineSchema, events: false });

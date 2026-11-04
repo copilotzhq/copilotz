@@ -1,11 +1,13 @@
 /**
  * A space's WhatsApp (kind `whatsapp.space`: its WhatsApp tab, item
  * `{ _id }`, the space; spaces' `spaceTabs`): the number connected to it,
- * what Meta knows it as and whether its answers can go out; then your phone
- * (linking it, or, linked, where your messages go). Those who manage the
- * space connect a number (by hand, with what Meta's dashboard gives), see
- * its webhook again, replace its token and disconnect it. With none, it
- * says what it's for, and who can connect one. In a side panel
+ * what Meta knows it as and whether its answers can go out; whether it's
+ * open to customers (see line.tsx); then your phone (linking it, or,
+ * linked, where your messages go). Those who manage the space connect a
+ * number (by hand, with what Meta's dashboard gives), see its webhook
+ * again, replace its token, open it to customers and disconnect it (but the
+ * app's own lines, which its settings keep). With
+ * none, it says what it's for, and who can connect one. In a side panel
  * (`hints.mode: "panel"`), the same, compact.
  */
 import { type ReactNode, useState } from "react";
@@ -22,8 +24,10 @@ import {
   Time,
 } from "../../../../../hosts/web/mod.ts";
 import type { Reached } from "../../../../access/spaces/contract.ts";
+import type { Team } from "../../../../agents/chat/contract.ts";
 import type { WhatsAppCode, WhatsAppNumber, WhatsAppPhone } from "../../contract.ts";
 import { ConnectDialog, DisconnectDialog, ReplaceDialog, WebhookDialog } from "./connect.tsx";
+import { CustomerLine } from "./line.tsx";
 import { type Place, YourPhone } from "./phone.tsx";
 import { STYLE } from "./style.ts";
 
@@ -37,9 +41,11 @@ export const whatsappView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
   const phones = ctx.db.collection<WhatsAppPhone>("whatsapp_phone").find({}).value;
   const codes = ctx.db.collection<WhatsAppCode>("whatsapp_code").find({}).value;
   const spaces = ctx.db.collection("space").query<Reached[]>("reached", {}).value;
+  // Who answers there: who a customer line's chats may go to.
+  const team = ctx.db.collection("thread").query<Team>("agents", { in: id }).value;
   const compact = ctx.hints.mode === "panel";
   const style = <style href="whatsapp-web" precedence="copilotz">{STYLE}</style>;
-  if (!numbers || !phones || !codes || !spaces) {
+  if (!numbers || !phones || !codes || !spaces || !team) {
     return (
       <div className="wa-tab" aria-busy="true">
         {style}
@@ -68,6 +74,7 @@ export const whatsappView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
         codes={codes}
         places={places}
         personal={personal?._id}
+        team={team}
         compact={compact}
         call={ctx.call}
       />
@@ -76,13 +83,14 @@ export const whatsappView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
 };
 
 function WhatsApp(
-  { space, numbers, phones, codes, places, personal, compact, call }: {
+  { space, numbers, phones, codes, places, personal, team, compact, call }: {
     space: Reached;
     numbers: WhatsAppNumber[];
     phones: WhatsAppPhone[];
     codes: WhatsAppCode[];
     places: Place[];
     personal?: string;
+    team: Team;
     compact: boolean;
     call: Call;
   },
@@ -140,6 +148,7 @@ function WhatsApp(
                   {number.problem
                     ? <Badge tone="warning">Needs attention</Badge>
                     : <Badge tone="success">Connected</Badge>}
+                  {number.open ? <Badge tone="info">Open to customers</Badge> : null}
                 </h3>
                 <p className="wa-number-meta">
                   {number.name ? <span>{number.name}</span> : null}
@@ -153,7 +162,7 @@ function WhatsApp(
                   </span>
                 </p>
               </div>
-              {manage
+              {manage && !number.declared
                 ? (
                   <Menu
                     label={`${number.phone}: settings`}
@@ -204,6 +213,22 @@ function WhatsApp(
                 </Notice>
               )
               : null}
+            {space.kind === "personal" || (compact && !number.open)
+              ? null
+              : (
+                <div className="wa-customers">
+                  <h4 className="wa-you-title">Customers</h4>
+                  <CustomerLine
+                    number={number}
+                    where={space.name}
+                    manage={manage && !compact && !number.declared}
+                    here={team.here}
+                    agents={team.agents}
+                    fallback={team.default[0]}
+                    call={call}
+                  />
+                </div>
+              )}
             <div className="wa-you">
               <h4 className="wa-you-title">Your phone</h4>
               <YourPhone

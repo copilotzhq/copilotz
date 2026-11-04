@@ -6,6 +6,15 @@
  *   once a day, and nothing else. A six-digit code they send is tried:
  *   one the app gave a person, unexpired, links the phone to them (five
  *   wrong ones in an hour, and it stops listening to codes for a while).
+ * - **A customer**, on an open number (a customer line), is a stranger too,
+ *   who is answered: a contact (made from their first message), writing in
+ *   a chat of their own in the number's space, to its agent. A chat quiet
+ *   for the number's `gap` (12 hours) is over: their next message starts a
+ *   new one. What they write always goes to the agent (commands are linked
+ *   people's), except a code that links their phone. More than the number's
+ *   `rate` a minute (20) goes unanswered; a phone its people blocked, or took
+ *   out of its chat (until the gap passes), is let go without a word; what
+ *   they're told is in the number's `language`.
  * - **Someone linked**, still in the number's space: their message is
  *   marked read (with "typing…") and becomes `chat.send`, as them, in
  *   their WhatsApp conversation, in the space they chose (their Personal
@@ -14,11 +23,16 @@
  *   quoting an agent's message, or one sent while an agent waits on their
  *   answer there, answers it. `/new`, `/space` and `/help` are commands
  *   (see shared/commands.ts).
+ * - **A tap** (a button, a list's row, a carousel card's reply) comes as its
+ *   title, with what it meant (`tap.id`) and the addition it was in
+ *   (`tap.key`), answering the message it was on.
  *
  * It reads the number, its phones and codes as the system (who's linked is
- * what it's here to find out), and acts as the person for everything they
- * do. Meta sending a message again changes nothing: the event is the same
- * one. A retried delivery finds the calls it made answered from the log.
+ * what it's here to find out), and acts as the person, or the contact, for
+ * everything they do. Meta sending a message again changes nothing: the
+ * event is the same one. A retried delivery finds the calls it made answered
+ * from the log, and what it makes has ids from the message, so it makes the
+ * same ones.
  */
 import type { Actor, Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
 import type { WhatsAppCode } from "../collections/code.ts";
@@ -34,9 +48,12 @@ import {
 } from "../shared/commands.ts";
 import { fetchMedia, markRead } from "../shared/graph.ts";
 import { type Connected, connected, send } from "../shared/number.ts";
-import { mediaOf, type WaMessage, wordsOf } from "../shared/payload.ts";
+import { mediaOf, tapOf, type WaMessage, wordsOf } from "../shared/payload.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { may } from "../../../access/spaces/contract.ts";
+import { CONTACT } from "../../../access/contacts/contract.ts";
+import { GAP, QUIET } from "../collections/number.ts";
+import { CUSTOMERS, type Lines } from "../shared/customers.ts";
 
 type Received = { number: string; from: string; name?: string; message: WaMessage };
 
@@ -54,8 +71,13 @@ export const receiveProcessor: ProcessorDef = {
     if (!on) return;
     const phone = await ctx.as().db.collection<WhatsAppPhone>("whatsapp_phone")
       .findOne({ _id: `${on.number._id}:${received.from}` });
-    if (!phone?.person) return await stranger(ctx, on, received, phone);
-    return await linked(ctx, on, received, phone, event);
+    if (phone?.person) return await linked(ctx, on, received, phone, event);
+    // Blocked by the number's people: what it sends goes nowhere, and nothing is said.
+    if (phone?.blocked) return;
+    const code = await tried(ctx, on, received, phone);
+    if (code === "linked") return;
+    if (on.number.open) return await customer(ctx, on, received, phone, event);
+    return await stranger(ctx, on, received, phone, code);
   },
 };
 
@@ -63,66 +85,89 @@ export const receiveProcessor: ProcessorDef = {
 const say = (ctx: Context, on: Connected, to: string, text: string) =>
   send(ctx, on, to, text).catch(() => "");
 
-/** A phone nobody has linked: a code may link it; otherwise, how to, once a day. */
-async function stranger(
+/**
+ * A code a phone sent, tried: one the app gave a person, unexpired, links
+ * the phone to them (`linked`); another counts as a wrong try (`wrong`),
+ * and five in an hour stop it being listened to for a while (`ignored`).
+ * Anything else isn't a code (undefined).
+ */
+async function tried(
   ctx: Context,
   on: Connected,
   { from, name, message }: Received,
   phone: WhatsAppPhone | null,
-) {
+): Promise<"linked" | "wrong" | "ignored" | undefined> {
+  const code = /^\s*(?:link\s+)?(\d{3})[\s-]?(\d{3})\s*$/i.exec(wordsOf(message));
+  if (!code) return undefined;
   const system = ctx.as().db;
-  const phones = system.collection("whatsapp_phone");
   const _id = `${on.number._id}:${from}`;
   const now = Date.now();
   const at = new Date(now).toISOString();
   const base = { number: on.number._id, phone: from, ...(name ? { name } : {}), at };
-  const code = /^\s*(?:link\s+)?(\d{3})[\s-]?(\d{3})\s*$/i.exec(wordsOf(message));
-  if (code) {
-    const counting = phone?.since && now - Date.parse(phone.since) < HOUR;
-    const tries = counting ? phone?.tries ?? 0 : 0;
-    // Guessing: it's no longer listened to, for a while.
-    if (tries >= TRIES) return;
-    const codes = system.collection<WhatsAppCode>("whatsapp_code");
-    const found = await codes.findOne({ _id: `${on.number._id}:${code[1]}${code[2]}` });
-    if (found && Date.parse(found.expires) > now) {
-      await ctx.as().transaction(async (tx) => {
-        await tx.db.collection("whatsapp_phone").replaceOne(
-          { _id },
-          { ...base, person: found.person, linked: at },
-          { upsert: true },
-        );
-        await tx.db.collection("whatsapp_code").deleteMany({
-          person: found.person,
-          number: on.number._id,
-        });
-      });
-      await markRead(on.graph, message.id, false).catch(() => {});
-      const space = await spaceOf(ctx, { kind: "person", id: found.person }, undefined);
-      await say(
-        ctx,
-        on,
-        from,
-        `You're linked${name ? `, ${name}` : ""}! What you send here goes to your agents in ` +
-          `*${space.name}*, and they answer here.\n\nSend /help to see what else you can do.`,
-      );
-      return;
-    }
-    await phones.updateOne(
+  const counting = phone?.since && now - Date.parse(phone.since) < HOUR;
+  const tries = counting ? phone?.tries ?? 0 : 0;
+  // Guessing: it's no longer listened to, for a while.
+  if (tries >= TRIES) return "ignored";
+  const codes = system.collection<WhatsAppCode>("whatsapp_code");
+  const found = await codes.findOne({ _id: `${on.number._id}:${code[1]}${code[2]}` });
+  if (!found || Date.parse(found.expires) <= now) {
+    await system.collection("whatsapp_phone").updateOne(
       { _id },
       { $set: { ...base, tries: tries + 1, since: counting ? phone!.since! : at } },
       { upsert: true },
     );
-    await say(
+    return "wrong";
+  }
+  // Linked: theirs now, and no longer anyone's customer.
+  await ctx.as().transaction(async (tx) => {
+    await tx.db.collection("whatsapp_phone").replaceOne(
+      { _id },
+      { ...base, person: found.person, linked: at },
+      { upsert: true },
+    );
+    await tx.db.collection("whatsapp_code").deleteMany({
+      person: found.person,
+      number: on.number._id,
+    });
+  });
+  await markRead(on.graph, message.id, false).catch(() => {});
+  const space = await spaceOf(ctx, { kind: "person", id: found.person }, undefined);
+  await say(
+    ctx,
+    on,
+    from,
+    `You're linked${name ? `, ${name}` : ""}! What you send here goes to your agents in ` +
+      `*${space.name}*, and they answer here.\n\nSend /help to see what else you can do.`,
+  );
+  return "linked";
+}
+
+/** A phone nobody has linked, on a number that isn't open: how to link it, once a day. */
+async function stranger(
+  ctx: Context,
+  on: Connected,
+  { from, name }: Received,
+  phone: WhatsAppPhone | null,
+  code: "wrong" | "ignored" | undefined,
+) {
+  if (code === "ignored") return;
+  if (code === "wrong") {
+    return void await say(
       ctx,
       on,
       from,
       "That code didn't match. Codes work for a few minutes: get a new one in the app, " +
         "and send it here.",
     );
-    return;
   }
+  const now = Date.now();
   if (phone?.told && now - Date.parse(phone.told) < DAY) return;
-  await phones.updateOne({ _id }, { $set: { ...base, told: at } }, { upsert: true });
+  const at = new Date(now).toISOString();
+  await ctx.as().db.collection("whatsapp_phone").updateOne(
+    { _id: `${on.number._id}:${from}` },
+    { $set: { number: on.number._id, phone: from, ...(name ? { name } : {}), at, told: at } },
+    { upsert: true },
+  );
   const where = on.number.url ? ` at ${on.number.url}` : "";
   await say(
     ctx,
@@ -132,6 +177,213 @@ async function stranger(
       `space this number belongs to, and under WhatsApp choose *Link my phone*. Then send the ` +
       `code it shows you here.`,
   );
+}
+
+/**
+ * A customer on an open number: a contact (made from their first message,
+ * so a retry makes the same one), writing in their chat there, as them.
+ * Their chat is the one they're in, unless it's been quiet for the number's
+ * gap, or they can't reach it anymore: then it's a new one.
+ */
+async function customer(
+  ctx: Context,
+  on: Connected,
+  received: Received,
+  phone: WhatsAppPhone | null,
+  event: Event,
+) {
+  const { from, name, message } = received;
+  const system = ctx.as();
+  // Too many at once: let go, unanswered (each answer costs a model's turn and Meta's message).
+  if (await flooding(ctx, on, `${on.number._id}:${from}`, event)) return;
+  const contact = await contactOf(ctx, on, received, phone, event);
+  await markRead(on.graph, message.id, true).catch(() => {});
+  const lines = CUSTOMERS[on.number.language ?? "en"];
+  const brings = await broughtBy(ctx, on, from, message, lines);
+  if (!brings) return;
+
+  const as = ctx.as({ kind: "contact", id: contact });
+  // Answered once they've been quiet a moment: a burst of short messages gets one answer.
+  const quiet = Math.round((on.number.quiet ?? QUIET) * 1000);
+  const sending = (thread: string) =>
+    written(ctx, on, as, `${CONTACT}${contact}`, thread, message, {
+      ...brings,
+      ...(quiet ? { quiet } : {}),
+    });
+  const gap = (on.number.gap ?? GAP) * HOUR;
+  const current = phone?.thread
+    ? await system.db.collection<{ _id: string; at: string }>("thread")
+      .findOne({ _id: phone.thread })
+    : null;
+  const ongoing = current && Date.parse(event.at) - Date.parse(current.at) < gap;
+  const fresh = () => chatFor(ctx, on, { from, name, contact }, event);
+  try {
+    await sending(ongoing ? current!._id : await fresh());
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    // Taken out of their chat by its people: heard again only once it's been quiet for the gap.
+    if (ongoing && (code === "duplicate_key" || code === "forbidden")) return;
+    if (!await told(ctx, on, from, error, lines)) throw error;
+  }
+}
+
+/** Messages a customer may send a minute, unless the number says otherwise. */
+const RATE = 20;
+
+/**
+ * Whether a customer's phone sent more than its number allows in a minute
+ * (`rate`), counting this message: counted in memory, by the minute.
+ */
+async function flooding(ctx: Context, on: Connected, phone: string, event: Event) {
+  const counts = ctx.as().db.collection<{ minute: number; count: number }>("whatsapp_rate");
+  const minute = Math.floor(Date.parse(event.at) / 60_000);
+  const had = await counts.findOne({ _id: phone });
+  const count = had?.minute === minute ? had.count + 1 : 1;
+  await counts.replaceOne({ _id: phone }, { minute, count }, { upsert: true });
+  return count > (on.number.rate ?? RATE);
+}
+
+/**
+ * The contact a customer's phone is: made from their first message (its id
+ * from it, so a retry makes the same one), and named as their WhatsApp
+ * profile is, as that changes.
+ */
+async function contactOf(
+  ctx: Context,
+  on: Connected,
+  { name }: Received,
+  phone: WhatsAppPhone | null,
+  event: Event,
+) {
+  if (phone?.contact && (!name || name === phone.name)) return phone.contact;
+  const system = ctx.as();
+  const { contact } = await system.call<{ contact: string }>("contact.start", {
+    id: phone?.contact ?? `c-${(await digest(event.id)).slice(0, 24)}`,
+    in: on.number.in,
+    via: "whatsapp",
+    ...(name ? { name } : {}),
+  });
+  if (phone?.contact) {
+    await system.db.collection("whatsapp_phone").updateOne({ _id: phone._id }, { $set: { name } });
+  }
+  return contact;
+}
+
+/**
+ * A new chat for a customer: opened for their contact in the number's
+ * space (by the number's agent, while it still answers there), with an id
+ * from this message, and noted as theirs on WhatsApp before anything is said
+ * in it, so what agents answer there goes out at once.
+ */
+async function chatFor(
+  ctx: Context,
+  on: Connected,
+  { from, name, contact }: { from: string; name?: string; contact: string },
+  event: Event,
+) {
+  const system = ctx.as();
+  const thread = `whatsapp-${(await digest(event.id)).slice(0, 32)}`;
+  const open = (agent?: string) =>
+    system.call("contact.chat", {
+      contact,
+      in: on.number.in,
+      thread,
+      ...(agent ? { agent } : {}),
+      ...(name ? { title: name } : {}),
+    });
+  try {
+    await open(on.number.agent);
+  } catch (error) {
+    // Its agent no longer answers in the space: who answers new chats there does.
+    if ((error as { code?: string }).code !== "not_here") throw error;
+    await open();
+  }
+  const at = new Date().toISOString();
+  await system.transaction(async (tx) => {
+    await tx.db.collection("whatsapp_phone").updateOne(
+      { _id: `${on.number._id}:${from}` },
+      {
+        $set: {
+          number: on.number._id,
+          phone: from,
+          ...(name ? { name } : {}),
+          contact,
+          thread,
+          at,
+        },
+      },
+      { upsert: true },
+    );
+    await tx.db.collection("whatsapp_thread").replaceOne(
+      { _id: thread },
+      { number: on.number._id, phone: from, contact, at },
+      { upsert: true },
+    );
+  });
+  return thread;
+}
+
+/**
+ * What a message brings to say: its words, and its file (fetched from
+ * Meta). Undefined when there's nothing to pass on, once the phone was told
+ * why (a file too large, a kind of message agents can't read).
+ */
+async function broughtBy(
+  ctx: Context,
+  on: Connected,
+  from: string,
+  message: WaMessage,
+  lines?: Lines,
+) {
+  const words = wordsOf(message).trim();
+  const media = mediaOf(message);
+  const files: { name: string; type: string; data: string }[] = [];
+  if (media) {
+    try {
+      const got = await fetchMedia(on.graph, media.id, settingsOf(ctx).maxFileBytes);
+      files.push({ name: media.name, type: got.type || media.type, data: got.data });
+    } catch (error) {
+      if ((error as { code?: string }).code !== "too_large") throw error;
+      await say(
+        ctx,
+        on,
+        from,
+        lines?.large ?? `${(error as Error).message} Send a smaller one, or a link to it.`,
+      );
+      return undefined;
+    }
+  }
+  if (!words && !files.length) {
+    await say(
+      ctx,
+      on,
+      from,
+      lines?.kind ??
+        "I can't pass that kind of message on yet: send text, a photo, a document or a voice note.",
+    );
+    return undefined;
+  }
+  return { ...(words ? { text: words } : {}), ...(files.length ? { files } : {}) };
+}
+
+/**
+ * Tells the phone why its message couldn't be sent, when that's for them to
+ * know: whether it did. A customer is told in its number's `lines`, never in
+ * an error's own words.
+ */
+async function told(ctx: Context, on: Connected, from: string, error: unknown, lines?: Lines) {
+  const failed = error as { code?: string; message?: string };
+  if (failed.code === "transcription_failed") {
+    await say(
+      ctx,
+      on,
+      from,
+      lines?.voice ?? "I couldn't make out that voice note. Could you say it again, or write it?",
+    );
+  } else if (failed.code === "not_here" || failed.code === "invalid") {
+    await say(ctx, on, from, lines?.failed ?? failed.message ?? "That couldn't be sent.");
+  } else return false;
+  return true;
 }
 
 /** The space someone's messages go to: the one they chose while they may write there, else Personal. */
@@ -175,44 +427,14 @@ async function linked(
     return;
   }
   await markRead(on.graph, message.id, true).catch(() => {});
-  const words = wordsOf(message).trim();
-  const command = message.type === "text" ? commandOf(words) : undefined;
+  const command = message.type === "text" ? commandOf(wordsOf(message).trim()) : undefined;
   if (command) return await commanded(ctx, on, from, phone, command);
-
-  // What it brings: its words, and its file.
-  const media = mediaOf(message);
-  const files: { name: string; type: string; data: string }[] = [];
-  if (media) {
-    try {
-      const got = await fetchMedia(on.graph, media.id, settingsOf(ctx).maxFileBytes);
-      files.push({ name: media.name, type: got.type || media.type, data: got.data });
-    } catch (error) {
-      if ((error as { code?: string }).code !== "too_large") throw error;
-      await say(ctx, on, from, `${(error as Error).message} Send a smaller one, or a link to it.`);
-      return;
-    }
-  }
-  if (!words && !files.length) {
-    await say(
-      ctx,
-      on,
-      from,
-      "I can't pass that kind of message on yet: send text, a photo, a document or a voice note.",
-    );
-    return;
-  }
+  const brings = await broughtBy(ctx, on, from, message);
+  if (!brings) return;
 
   const space = await spaceOf(ctx, person, phone.space);
-  const sending = async (thread: string) => {
-    const replyTo = await answering(ctx, person, thread, message);
-    return await as.call("chat.send", {
-      thread,
-      in: space._id,
-      ...(words ? { text: words } : {}),
-      ...(files.length ? { files } : {}),
-      ...(replyTo ? { replyTo } : {}),
-    });
-  };
+  const sending = (thread: string) =>
+    written(ctx, on, as, person.id, thread, message, { ...brings, in: space._id });
   try {
     await sending(phone.thread ?? await opened(ctx, on, phone, event));
   } catch (error) {
@@ -226,17 +448,8 @@ async function linked(
         last = again;
       }
     }
-    const failed = last as { code?: string; message?: string };
-    if (failed.code === "transcription_failed") {
-      await say(
-        ctx,
-        on,
-        from,
-        "I couldn't make out that voice note. Could you say it again, or write it?",
-      );
-    } else if (failed.code === "not_here" || failed.code === "invalid") {
-      await say(ctx, on, from, failed.message ?? "That couldn't be sent.");
-    } else if (failed.code === "forbidden" && space.chosen) {
+    if (await told(ctx, on, from, last)) return;
+    if ((last as { code?: string }).code === "forbidden" && space.chosen) {
       await phones.updateOne({ _id: phone._id }, { $unset: { space: "", thread: "" } });
       await say(
         ctx,
@@ -277,26 +490,65 @@ const digest = async (text: string) =>
     .map((b) => b.toString(16).padStart(2, "0")).join("");
 
 /**
- * The message this one answers: the agent's message it quotes, else the
- * latest question an agent waits on them for in this conversation (only
- * its messages are read: what this job reads labels what it writes).
+ * Says what a message brings, as them (`as`, whom messages name `sender`),
+ * in `thread`: as the reply to what it answers, a tap with what it meant and
+ * the addition it was in. "Typing…" is kept up while agents answer it (see
+ * processors/typing.ts).
  */
-async function answering(ctx: Context, person: Actor, thread: string, message: WaMessage) {
+async function written(
+  ctx: Context,
+  on: Connected,
+  as: Context,
+  sender: string,
+  thread: string,
+  message: WaMessage,
+  brings: Record<string, unknown>,
+) {
+  const { replyTo, key } = await answered(ctx, as, sender, thread, message);
+  const tap = tapOf(message);
+  const at = new Date().toISOString();
+  await ctx.as().db.collection("whatsapp_typing").replaceOne(
+    { _id: thread },
+    { number: on.number._id, wamid: message.id, at, shown: at },
+    { upsert: true },
+  );
+  return await as.call("chat.send", {
+    thread,
+    ...brings,
+    ...(replyTo ? { replyTo } : {}),
+    ...(tap ? { tap: { ...tap, ...(key ? { key } : {}) } } : {}),
+  });
+}
+
+/**
+ * The message this one answers: the agent's message it quotes or taps (and
+ * the addition the tap was in), else the latest question an agent waits on
+ * them (`sender`, as messages name them) for in this conversation (only its
+ * messages are read, as them: what this job reads labels what it writes).
+ */
+async function answered(
+  ctx: Context,
+  as: Context,
+  sender: string,
+  thread: string,
+  message: WaMessage,
+): Promise<{ replyTo?: string; key?: string }> {
   const quoted = message.context?.id;
   if (quoted) {
+    // Only what went out in this chat: a quote of another answers nothing here.
     const sent = await ctx.as().db.collection<WhatsAppSent>("whatsapp_sent")
-      .findOne({ wamid: quoted });
-    if (sent) return sent.message;
+      .findOne({ wamid: quoted, thread });
+    if (sent) return { replyTo: sent.message, ...(sent.key ? { key: sent.key } : {}) };
   }
-  const asked = await ctx.as(person).db.collection<{ _id: string }>("message").find(
-    { thread, to: person.id, replyTo: { $exists: false }, expectReply: { $ne: false } },
+  const asked = await as.db.collection<{ _id: string }>("message").find(
+    { thread, to: sender, replyTo: { $exists: false }, expectReply: { $ne: false } },
     { sort: { at: -1 }, limit: 5 },
   );
   const waits = ctx.as().db.collection("wait");
   for (const question of asked) {
-    if (await waits.findOne({ waitingFor: question._id })) return question._id;
+    if (await waits.findOne({ waitingFor: question._id })) return { replyTo: question._id };
   }
-  return undefined;
+  return {};
 }
 
 /** `/new`, `/space [name]`, `/help`. */

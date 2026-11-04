@@ -35,6 +35,12 @@ export const delivery = async (
   where = m.thread,
   /** False: it checks off waits but starts no turn (an answer to a stop). */
   start = true,
+  /**
+   * Ms its sender may write on before agents answer (a customer who writes in
+   * bursts): each turn it starts waits that long, and a message sent meanwhile
+   * waits again in its place, so the agent answers them all, once.
+   */
+  quiet = 0,
 ) => {
   const agents = await agentsNamed(ctx, m.to);
   const waits = ctx.db.collection<Wait>("wait");
@@ -56,12 +62,14 @@ export const delivery = async (
         )
       );
     } else if (start && starts(ctx, m.hops)) {
+      const turn = { thread: where, agent: name, trigger: m._id, hops: m.hops };
       steps.push((tx) =>
-        tx.emit(
-          "turn.requested",
-          { thread: where, agent: name, trigger: m._id, hops: m.hops },
-          { id: `${m._id}:${name}` },
-        )
+        quiet > 0
+          ? void tx.schedule("chat.quiet", turn, {
+            at: Date.now() + quiet,
+            id: `quiet:${where}:${name}`,
+          })
+          : tx.emit("turn.requested", turn, { id: `${m._id}:${name}` })
       );
     }
   }

@@ -1,8 +1,8 @@
 /**
  * The chat plugin's contract: what plugins built on chat (memory, history,
  * spaces, computers) may import from it: the shapes of its documents and of
- * the resource kinds it reads (`agents`, `tools`, `context`, `roster`,
- * `agentSources`, `agentModel`; on the web, `conversation`, `home`, `toolViews`,
+ * the resource kinds it reads (`agents`, `tools`, `context`, `additions`,
+ * `roster`, `agentSources`, `agentModel`; on the web, `conversation`, `home`, `toolViews`,
  * `refusals` and `composerNotes`),
  * `tool()` to declare a tool, and what knowing agents takes (`agentsOf`,
  * `defaults`, `modelOf`, `agentsNamed`, `agentsShown`, `SEND`).
@@ -14,10 +14,13 @@
 export type { File } from "./collections/file.ts";
 export { FILE_CHARS, textual } from "./collections/file.ts";
 export type { Live, LiveCall } from "./collections/live.ts";
-export type { Message } from "./collections/message.ts";
+export { isAnswer, type Message } from "./collections/message.ts";
+export type { AdditionShown } from "./collections/shown.ts";
 export type { Thread } from "./collections/thread.ts";
 export type { Wait } from "./collections/wait.ts";
 export type {
+  Addition,
+  AdditionEntry,
   Agent,
   ChatSettings,
   ComposerNote,
@@ -35,7 +38,6 @@ export type {
   Turn,
 } from "./shared/types.ts";
 export { tool } from "./shared/types.ts";
-export { principalOf } from "./shared/send.ts";
 export { type Origin, originKey, originOf } from "./shared/origin.ts";
 export type { AgentModel, AgentSource, Roster, RosterSource, Team } from "./shared/agents.ts";
 /**

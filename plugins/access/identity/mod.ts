@@ -39,11 +39,10 @@ export const identity: Plugin = definePlugin({
     "person.set": setPerson,
     "person.email": emailOf,
   },
-  // Each person sees only themselves, and their own credentials.
-  guard: (actor, { collection }) =>
-    collection === "credential"
-      ? { person: actor.id }
-      : collection === "person"
-      ? { _id: actor.id }
-      : undefined,
+  // Each person sees only themselves, and their own credentials: nobody else does, whatever their id.
+  guard: (actor, { collection }) => {
+    if (collection !== "credential" && collection !== "person") return undefined;
+    if (actor.kind !== "person") return { _id: { $in: [] } };
+    return collection === "credential" ? { person: actor.id } : { _id: actor.id };
+  },
 });

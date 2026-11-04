@@ -3,7 +3,8 @@
  * role. Only those who manage a space change its members. A member is a
  * person or an agent (`{ kind, id }`), or another space (`{ kind: "space",
  * id }`), which then draws on this one. A document shared on its own is the
- * space, `on` its collection; managing its space manages its sharing.
+ * space, `on` its collection; managing its space manages its sharing. A
+ * contact (someone outside the org) is a member of documents only: its chat.
  * People join a space by accepting an invitation (`invitation.send`) or a
  * request they made: here, a person who's in already only changes role.
  * An agent joins at once, as a viewer or an editor, if the manager adding
@@ -37,7 +38,7 @@ async function manages(ctx: Context, space: string, on?: string): Promise<string
   if (!doc) throw forbidden(`No ${on} "${space}".`);
   const key = docKey(on, space);
   const home = String(doc[shared.field ?? "in"]);
-  if (!await may(ctx, "manage", key)) {
+  if (!await may(ctx, "manage", space, on)) {
     await must(ctx, "manage", home, `You don't manage "${home}".`);
   }
   return key;

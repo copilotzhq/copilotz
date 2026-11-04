@@ -6,7 +6,7 @@
  * `whatsapp.webhook`: the webhook to set up in Meta's dashboard for a
  * number, for those who manage its space: where it is, and its verify token.
  */
-import { defineAction, inPerson } from "../../../../runtime/mod.ts";
+import { defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
 import type { WhatsAppNumber } from "../collections/number.ts";
 import type { WhatsAppSecret } from "../collections/secret.ts";
 import { mustManage } from "./connect.ts";
@@ -30,6 +30,9 @@ export const disconnectAction = defineAction({
       .findOne({ _id: input.number });
     if (!found) throw notHere();
     await mustManage(ctx, found.in, "disconnect its number");
+    if (found.declared) {
+      throw failure("invalid", "This number is the app's own: its settings say how it works.");
+    }
     const system = ctx.as();
     await system.transaction(async (tx) => {
       await tx.db.collection("whatsapp_number").deleteOne({ _id: found._id });

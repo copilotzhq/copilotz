@@ -101,6 +101,7 @@ export {
   namesIn,
   namesOf,
   type NamesResource,
+  type NamesSource,
   picturesIn,
   PROFILE,
   withNames,
@@ -166,7 +167,7 @@ export const spaces: Plugin = definePlugin({
     // Who works in a space, for chat: its agents.
     roster: { spaces: { action: "space.roster" } },
     // Where people's names are, for whatever shows a person (pages, agents' prompts).
-    names: { collection: PROFILE },
+    names: { people: { collection: PROFILE } },
     // Spaces by name on Usage (a Personal space says whose it is).
     usageNames: {
       space: { tag: "tags.space", collection: "space", field: "name", owner: "owner" },

@@ -64,7 +64,7 @@ export const spacesWeb: Plugin = definePlugin({
   },
   resources: {
     // Where people's names are, for Views here too: a browser loads only front ends.
-    names: { collection: PROFILE },
+    names: { people: { collection: PROFILE } },
     sidebar: {
       invitations: { view: "invitations", order: 3 },
       spaces: { title: "Spaces", view: "spaces", order: 10 },

@@ -1,5 +1,5 @@
 /** remember, recall and forget: offered to the agents with memory. */
-import type { Resources } from "../../../../runtime/mod.ts";
+import type { Actor, Resources } from "../../../../runtime/mod.ts";
 import { tool } from "../../chat/contract.ts";
 import type { Message } from "../../chat/contract.ts";
 import type { Memory } from "../collections/memory.ts";
@@ -8,8 +8,8 @@ import { namesFor } from "../../../access/spaces/contract.ts";
 import { keep, search } from "../shared/search.ts";
 import { applies } from "../shared/settings.ts";
 
-/** Offered to the agents with memory. */
-const offer = (agent: string, _thread: unknown, ctx: { resources: Resources }) =>
+/** Offered to the agents with memory, where they have it. */
+const offer = (agent: string, _thread: unknown, ctx: { resources: Resources; actor?: Actor }) =>
   applies(ctx, agent);
 
 const remember = tool({

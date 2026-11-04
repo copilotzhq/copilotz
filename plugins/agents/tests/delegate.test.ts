@@ -23,7 +23,7 @@ let told: Record<string, string[]> = {};
 /** Every model call, in order. */
 let calls: { agent: string; messages: LlmMessage[] }[] = [];
 /** Whether its work had been stopped by the time its tool ran. */
-const stoppedBefore: Record<string, boolean> = {};
+let stoppedBefore: Record<string, boolean> = {};
 /** What an agent told to "hold" waits for before it goes on. */
 let held: Promise<void> = Promise.resolve();
 
@@ -92,6 +92,7 @@ async function setup(fn: (rt: Awaited<ReturnType<typeof createRuntime>>) => Prom
   said = [];
   told = {};
   calls = [];
+  stoppedBefore = {};
   const rt = await createRuntime({
     store: memoryStore(),
     plugins: [models, chat, ...access, app],

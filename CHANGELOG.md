@@ -53,7 +53,15 @@
     message it was on; agents read `Carla: PIX [tapped: pay:pix]`. Typing the title is just text.
   - **"Typing…" while agents work:** each step an agent takes in a WhatsApp chat shows it again once
     WhatsApp may have hidden it (after 20 s, for up to five minutes); nothing says "please wait".
-    Media other than public https links (a chat's files, signed links) comes next.
+  - **Media:** a part's picture or file is a public https link (as given), one of the app's routes
+    (`{ route, params }`: a link signed for a day with its params, which the route checks with
+    `verifyLink`), or a chat's file (`{ file }`: a signed link to `/files/<id>`, or, without the
+    app's `links`, uploaded to Meta and sent by its id). A carousel's pictures must be links: a file
+    with nowhere to link it sends the fallback. A message's files go as images (jpeg, png up to 5
+    MB) or documents, a short text as the first one's caption.
+- **Signed links** (the runtime's `signLink` and `verifyLink`, with the app's `links` resource:
+  `{ origin, secret }`): a path, its params and an expiry, HMAC-signed. The web host serves a file
+  at a signed `/files/<id>` link without a session, as the system; expired or altered, a 404.
 - **Chat in spaces declares its own `shared` entries** (`thread`, `message` with labels, `file`,
   `live` and `shown`, each a part of its thread). `chat.open` opens an empty chat in a space;
   `chat.say { id, thread, from, text, to? }` has an agent say a fixed message in a chat without a

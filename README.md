@@ -480,9 +480,11 @@ filled by the front ends through resources).
   an image, a document, each checked against Meta's limits): after an answer, features show more
   (`additions`: a carousel of trips, buttons to pay), once per chat per key, the answer's text in
   the same message when there's room, a fallback when Meta refuses one; taps come back with their
-  ids. Opened to anyone (`whatsapp.set`), a number is a customer line: a stranger who writes is a
-  contact, in a chat of their own in the number's space, answered by its agent, and a chat quiet for
-  the number's `gap` (12 hours) is over: their next message starts a new one.
+  ids. Pictures and files go as public links, signed links to the app's routes or files (the `links`
+  resource, `{ origin, secret }`; the runtime's `signLink`, `verifyLink`), or uploads. Opened to
+  anyone (`whatsapp.set`), a number is a customer line: a stranger who writes is a contact, in a
+  chat of their own in the number's space, answered by its agent, and a chat quiet for the number's
+  `gap` (12 hours) is over: their next message starts a new one.
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.

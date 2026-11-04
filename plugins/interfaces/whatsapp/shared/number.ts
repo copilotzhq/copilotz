@@ -41,7 +41,12 @@ export async function send(
   const numbers = ctx.as().db.collection("whatsapp_number");
   const part: WaPart = typeof what === "string" ? { type: "text", text: what } : what;
   try {
-    const id = await sendPart(on.graph, to, part, (media) => sendable(ctx, media));
+    const id = await sendPart(
+      on.graph,
+      to,
+      part,
+      (media, linked) => sendable(ctx, on.graph, media, linked),
+    );
     if (on.number.problem) {
       await numbers.updateOne({ _id: on.number._id }, { $unset: { problem: "" } });
       delete on.number.problem;

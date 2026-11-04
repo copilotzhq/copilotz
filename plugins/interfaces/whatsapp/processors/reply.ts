@@ -182,7 +182,7 @@ async function show(
       return void await record(false);
     } catch (error) {
       if (!refused(error)) throw error;
-      console.error(`whatsapp: Meta refused addition "${key}":`, (error as Error).message);
+      console.error(`whatsapp: addition "${key}" couldn't go as it is:`, (error as Error).message);
     }
   }
   if (!fallback.length) return;

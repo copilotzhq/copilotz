@@ -33,6 +33,8 @@
  *   once per chat per key, the answer's text in the first one's body when
  *   there's room (one message, not two: Meta charges each), and its fallback
  *   when Meta refuses it. A tap comes back as its title, with its id.
+ *   Pictures and files go as links (public ones; signed ones to the app's
+ *   routes and files, with its `links` resource), or uploaded to Meta.
  * - **The webhook** (`/hooks/whatsapp/<number>`, the web host's `routes`
  *   resource) checks Meta's signature before anything else. Credentials are
  *   kept where no event and no reader outside reaches them.

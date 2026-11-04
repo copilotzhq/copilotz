@@ -13,8 +13,12 @@
  *   file opened on its own (an SVG, an HTML page someone sent) runs no script.
  * - **Kept privately:** a file never changes once sent; a browser may keep it,
  *   a shared cache may not.
+ * - **A signed link** (`/files/<id>?exp=…&sig=…`, the runtime's `signLink`
+ *   with the app's `links` secret) is served without anyone signed in, as
+ *   the system: code that could read the file signed it, to send it on
+ *   (WhatsApp fetches a picture from it). Expired or altered, it's a 404.
  */
-import type { Actor, Runtime } from "../../runtime/mod.ts";
+import { type Actor, linksOf, type Runtime, verifyLink } from "../../runtime/mod.ts";
 
 /** Where files are served. */
 export const FILES = "/files/";
@@ -58,9 +62,17 @@ function range(header: string | null, size: number): [number, number] | null | u
  * person, if any); any other request gets undefined, for the app's routes.
  */
 export function fileServer(
-  runtime: Pick<Runtime, "query">,
+  runtime: Pick<Runtime, "query" | "describe">,
   whom: (request: Request) => Promise<Actor | null>,
 ): (request: Request) => Promise<Response> | undefined {
+  /** Whether a request is a link signed for its file: then the system reads it. */
+  const signed = async (url: URL) => {
+    if (!url.searchParams.has("sig")) return false;
+    const links = linksOf(runtime.describe().resources);
+    const query = Object.fromEntries(url.searchParams);
+    delete query.download;
+    return !!links && !!await verifyLink(links.secret, url.pathname, query);
+  };
   return (request) => {
     const url = new URL(request.url);
     if (!url.pathname.startsWith(FILES)) return undefined;
@@ -72,9 +84,11 @@ export function fileServer(
       } catch {
         return missing();
       }
-      const actor = id ? await whom(request) : null;
-      const file = actor
-        ? await runtime.query<Sent | null>("file.content", { id }, { actor }).catch(() => null)
+      const system = id ? await signed(url) : false;
+      const actor = id && !system ? await whom(request) : null;
+      const file = system || actor
+        ? await runtime.query<Sent | null>("file.content", { id }, actor ? { actor } : {})
+          .catch(() => null)
         : null;
       if (!file) return missing();
       const bytes = bytesOf(file.data);

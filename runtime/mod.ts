@@ -21,6 +21,7 @@ export type {
 } from "./collection.ts";
 export type { Actor, Doc, Edge, Event, Store } from "./store.ts";
 export { personOf, principalOf } from "./actor.ts";
+export { linksOf, type LinksSettings, signLink, verifyLink } from "./links.ts";
 export {
   contacts,
   failure,

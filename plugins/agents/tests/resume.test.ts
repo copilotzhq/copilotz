@@ -301,8 +301,14 @@ test("memory: a tool its executor's crash cut short runs again as itself", async
     const first = executor();
     await until(() => runtime.stats().executors === 1);
     const { thread, message } = await send(runtime);
-    // The tool charged, then hangs: its executor dies there.
-    await until(async () => (await store.find("charge")).length === 1);
+    // The tool charged, then hangs: its executor dies there. The charge is on
+    // record once its Action completed, which is a commit after the charge's
+    // own: before that, a retry may charge again (outside effects key on `callId`).
+    await until(async () =>
+      (await store.events(0)).some((e: Event) =>
+        e.type === "action.completed" && e.data.action === "booking.charge"
+      )
+    );
     first.kill();
     await first.exited;
     await until(() => runtime.stats().executors === 0);

@@ -52,6 +52,45 @@
   tools. Workers are told they're gone after the drain, so running work can still use them. The orgs
   host's `close({ drain })` passes it on to every org's runtime.
 
+- **Contacts: people outside the org who talk to its agents** (the new `contacts` plugin, part of
+  `access`). A WhatsApp customer is a contact, its own kind of actor (`{ kind: "contact", id }`),
+  never a person: every `allow: people` Action and query stays shut to it, and nothing that asks for
+  a person (`personOf`) finds one. The runtime's `principalOf` says whom work is for, a person or a
+  contact (it moved there from chat), and `peopleOrContacts` is what an Action opened to contacts
+  allows: today only `chat.send`, whose message is then from `contact:<id>`.
+  - A contact's chat is shared with it on its own (a membership `on` the thread, made by
+    `contact.chat`): it reaches that chat, what's said and filed there, and its own record, nothing
+    else. The space's people reach it as any chat there; the agent working for the contact reaches
+    exactly that chat. Three generic completions in spaces make it so, and help people too (a person
+    can now share one chat): a shared collection's documents can be part of another's (`part`: a
+    message's `thread`), reached with it; an agent working for someone reaches a document one of
+    them reaches on its own in a space the other reaches; and `present(ctx, space)` says whether
+    someone reaches a space or a document in it, so `space.roster` tells a contact in its chat who
+    answers (agents only).
+  - A contact is let into documents only, never a whole space (`member.set`, a request granted), and
+    never manages one. `request_access` isn't offered to agents working for a contact, nor memory: a
+    customer's chat keeps to itself.
+  - `contact.start` (trusted code, idempotent by id) and `contact.chat`; `contactOf(actor)` says
+    whose work an event's actor's is (the contact's id, through the agent working for them too);
+    agents are told whom they talk with (the `contact` context) and see them by name: the `names`
+    resource is now a map of sources
+    (`{ people: { collection: "profile" }, contact: { collection: "contact", prefix:
+    "contact:" } }`),
+    replacing `{ collection }`. On the web, add `contactsWeb` to show contacts by name.
+- **A WhatsApp number can be a customer line.** Its space's managers open it to anyone
+  (`whatsapp.set { number, open, agent, gap }`). A stranger who writes is then a contact, in a chat
+  of their own in the number's space, answered by the number's agent (or who answers new chats
+  there); a chat quiet for `gap` hours (12 by default) is over, and their next message starts a new
+  one. Their text always goes to the agent (commands stay linked people's); a code from the app
+  still links a phone, and linked phones keep working as their person. The `whatsapp` plugin now
+  requires `contacts`.
+- **Chat in spaces declares its own `shared` entries** (`thread`, `message` with labels, `file`,
+  `live`, each a part of its thread). `chat.open` opens an empty chat in a space;
+  `chat.say { id, thread, from, text, to? }` has an agent say a fixed message in a chat without a
+  turn (trusted code only; the same `id` is said once), sent out like any of its answers.
+- **Fixed:** `message.questions`, and the terminal's `shell.mine`, `shell.set` and `shell.print`,
+  let anyone whose id matched in; they're a person's own now.
+
 ## 1.0.0-rc.20 — 2026-11-04
 
 - **A model thinking past two minutes isn't a dropped call.** A call counted as dropped once its

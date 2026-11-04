@@ -1,5 +1,10 @@
 /** An agent's turn: model calls and tool steps until it answers, or waits for replies. */
-import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
+import {
+  type Context,
+  type Event,
+  principalOf,
+  type ProcessorDef,
+} from "../../../../runtime/mod.ts";
 import type {
   LlmChunk,
   LlmMessage,
@@ -25,15 +30,16 @@ import {
 } from "../shared/agents.ts";
 import { answer, delivery } from "../shared/delivery.ts";
 import { liveWriter } from "../shared/live.ts";
-import { prepare, principalOf, type Send } from "../shared/send.ts";
+import { prepare, type Send } from "../shared/send.ts";
 import { noted, startedWith } from "../shared/summary.ts";
 import { type Agent, type Prompt, settingsOf, type Step, type Tool } from "../shared/types.ts";
 
 /** Runs a turn: started by `turn.requested`, or resumed when its wait is over. */
 /**
- * A turn someone started acts as its agent, for them: with the access
- * plugin, it reaches only what both reach (an agent is a member of spaces,
- * like a person). Without anyone, it runs as the system.
+ * A turn someone started (a person, or a contact in its chat) acts as its
+ * agent, for them: with the access plugin, it reaches only what both reach
+ * (an agent is a member of spaces, like a person). Without anyone, it runs
+ * as the system.
  */
 const asAgent = (ctx: Context, agent: string, at?: string): Context => {
   const principal = principalOf(ctx.actor);

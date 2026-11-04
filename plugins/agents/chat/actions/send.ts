@@ -1,15 +1,17 @@
 /**
- * A person's message. It goes to `to` when given, else to the agents
- * `@mentioned` in it, else to the sender of the message it replies to,
- * else to the thread's agents (a new thread's: those it names, or who
- * answers new chats in its space). Only agents answering in its space
- * answer there: naming one that doesn't fails (`not_here`). Audio sent with it is transcribed first
- * (what agents read): if that fails, nothing is sent and the call fails
- * with `transcription_failed`; `transcribe: false` sends it as it is. `via`
- * says what sent it for the person (a routine); a new thread takes `title`
- * and `renamable` in the same commit, so its first turn already has them.
+ * A person's message, or a contact's (someone outside the org, in a chat
+ * shared with them: the rules keep them to it). It goes to `to` when given,
+ * else to the agents `@mentioned` in it, else to the sender of the message
+ * it replies to, else to the thread's agents (a new thread's: those it
+ * names, or who answers new chats in its space). Only agents answering in
+ * its space answer there: naming one that doesn't fails (`not_here`). Audio
+ * sent with it is transcribed first (what agents read): if that fails,
+ * nothing is sent and the call fails with `transcription_failed`;
+ * `transcribe: false` sends it as it is. `via` says what sent it for the
+ * person (a routine); a new thread takes `title` and `renamable` in the same
+ * commit, so its first turn already has them.
  */
-import { defineAction, people } from "../../../../runtime/mod.ts";
+import { type Actor, defineAction, peopleOrContacts } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
@@ -19,6 +21,14 @@ import { movedBy, startedWith } from "../shared/summary.ts";
 import { settingsOf } from "../shared/types.ts";
 
 const names = { type: "array", items: { type: "string" } } as const;
+
+/** Who a message is from, pinned to whoever sends it: a person by id, a contact as `contact:<id>`. */
+const fromOf = (actor?: Actor) =>
+  actor?.kind === "person"
+    ? actor.id
+    : actor?.kind === "contact"
+    ? `contact:${actor.id}`
+    : undefined;
 
 export const sendAction = defineAction({
   input: {
@@ -82,8 +92,8 @@ export const sendAction = defineAction({
     },
     additionalProperties: false,
   },
-  // People write as themselves: their own messages.
-  allow: people,
+  // People and contacts write as themselves: their own messages.
+  allow: peopleOrContacts,
   run: async (ctx, input) => {
     const said = input.text ?? "";
     if (!said.trim() && !input.files?.length) {
@@ -169,7 +179,7 @@ export const sendAction = defineAction({
         }
         : {}),
       thread: threadId,
-      from: ctx.actor?.kind === "person" ? ctx.actor.id : input.from ?? "user",
+      from: fromOf(ctx.actor) ?? input.from ?? "user",
       ...(where ? { in: where } : {}),
       to: [...to],
       text: said,

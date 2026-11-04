@@ -1,10 +1,11 @@
 /**
  * What agents say on WhatsApp goes out: a message an agent writes in a
- * WhatsApp conversation, to that conversation's person (its answer, or a
- * question it waits on them for), is sent to their phone as text, its
- * Markdown as WhatsApp formats it, a long one in several messages split
- * where a reader would pause. Their steps (private) and what agents say to
- * each other there stay in the app.
+ * WhatsApp conversation, to that conversation's person or contact (its
+ * answer, a question it waits on them for, or what it says without a turn:
+ * `chat.say`), is sent to their phone as text, its Markdown as WhatsApp
+ * formats it, a long one in several messages split where a reader would
+ * pause. Their steps (private) and what agents say to each other there stay
+ * in the app.
  *
  * Each part sent is recorded (`whatsapp_sent`), so a retried delivery sends
  * only what's left. It reads the conversation's number as the system: its
@@ -15,6 +16,7 @@ import type { WhatsAppSent } from "../collections/sent.ts";
 import type { WhatsAppThread } from "../collections/thread.ts";
 import { connected, send } from "../shared/number.ts";
 import { split, toWhatsApp } from "../shared/text.ts";
+import { CONTACT } from "../../../access/contacts/contract.ts";
 
 type Said = { _id: string; thread: string; to?: string[]; text?: string };
 
@@ -31,7 +33,9 @@ export const replyProcessor: ProcessorDef = {
     const system = ctx.as().db;
     const chat = await system.collection<WhatsAppThread>("whatsapp_thread")
       .findOne({ _id: said.thread });
-    if (!chat || !said.to?.includes(chat.person)) return;
+    // Whom it's with: a person by id, a contact as messages name them.
+    const to = chat?.person ?? (chat?.contact ? `${CONTACT}${chat.contact}` : undefined);
+    if (!chat || !to || !said.to?.includes(to)) return;
     const text = toWhatsApp(said.text ?? "");
     if (!text) return;
     const on = await connected(ctx, chat.number);

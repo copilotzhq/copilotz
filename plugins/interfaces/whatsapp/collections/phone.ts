@@ -4,8 +4,9 @@
  * sent the code the app gave them, and, for them, where their messages go
  * (`space`, their Personal space unless they chose another; `thread`, the
  * conversation they're in). One that isn't linked is only what's needed to
- * answer it politely, once a day, and to stop guessing codes. Each person
- * reads their own.
+ * answer it politely, once a day, and to stop guessing codes; on an open
+ * number, it's a contact (`contact`), in the chat it's in (`thread`). Each
+ * person reads their own.
  */
 import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
 
@@ -25,6 +26,8 @@ const phoneSchema = {
     space: { type: "string" },
     /** The conversation their messages go to; a new one without it. */
     thread: { type: "string" },
+    /** On an open number, the contact it is (someone outside the org). */
+    contact: { type: "string" },
     /** When it was last told how to link: once a day. */
     told: { type: "string" },
     /** Codes it sent that didn't match, since `since`. */

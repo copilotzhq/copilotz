@@ -3,8 +3,9 @@
  * documents live `in` a space (the `shared` resource names them and their
  * field): an actor reads those in spaces they may read, and writes those in
  * spaces they may write (or manage, for some), plus documents shared with
- * them on their own; documents that are members (agents) are read where
- * they work too. A query that names a space it reaches needs nothing more:
+ * them on their own and those documents' parts (a chat's messages come with
+ * it); documents that are members (agents) are read where they work too. A
+ * query that names a space, or a document it reaches, needs nothing more:
  * it goes to the store as it is. Spaces and memberships are readable where reached and
  * changed only by those who manage them; invitations are their managers',
  * and read by whom they're to (by the email they signed in with).
@@ -17,13 +18,16 @@ import { memberKey, reachOf, type Verb, where } from "./reach.ts";
  * The `shared` resource: collections whose documents live in spaces, the
  * field saying where (`in`), whether they keep labels (see labels.ts), what
  * changing one needs where it lives (`write`: "write" by default, "manage"
- * for those only its managers change), and whether its documents are
- * members of spaces themselves (`member`: the kind, `agent` for agents
- * people make), readable too where they're members.
+ * for those only its managers change), whether its documents are members
+ * of spaces themselves (`member`: the kind, `agent` for agents people make),
+ * readable too where they're members, and whether each is part of a document
+ * of another shared collection (`part`: that collection, which its field of
+ * the same name names: a message's `thread`), reached with it when that
+ * document is shared on its own.
  */
 export type Shared = Record<
   string,
-  { field?: string; labels?: boolean; write?: Verb; member?: string }
+  { field?: string; labels?: boolean; write?: Verb; member?: string; part?: string }
 >;
 
 export const rules: Guard = async (actor, { collection, access, filter }, ctx) => {
@@ -49,7 +53,7 @@ export const rules: Guard = async (actor, { collection, access, filter }, ctx) =
     const spaces = where(by, access === "read" ? "read" : "manage");
     return collection === "space" ? { _id: { $in: spaces } } : { space: { $in: spaces } };
   }
-  const { field = "in", labels, write = "write", member } = shared[collection];
+  const { field = "in", labels, write = "write", member, part } = shared[collection];
   const verb = access === "read" ? "read" : write;
   const spaces = where(reach, verb);
   // A labelled document needs its sources reached too, to read or change it.
@@ -58,10 +62,19 @@ export const rules: Guard = async (actor, { collection, access, filter }, ctx) =
     : undefined;
   const named = filter?.[field];
   if (typeof named === "string" && spaces.includes(named)) return sourced ?? true;
+  // Parts of documents shared on their own (the messages of a chat shared with a contact).
+  const wholes = part ? where(reach, verb, part) : [];
+  const whole = part ? filter?.[part] : undefined;
+  if (typeof whole === "string" && wholes.includes(whole)) return sourced ?? true;
   const docs = where(reach, verb, collection);
   // Documents that are members (agents) are read where they work too.
   if (member && access === "read") docs.push(...await membersOf(ctx, spaces, member));
-  const inSpaces: Filter = { [field]: { $in: spaces } };
-  const reached = docs.length ? { $or: [inSpaces, { _id: { $in: docs } }] } : inSpaces;
+  // Only what's reached, so a store can use its indexes (a contact reaches no space at all).
+  const anyOf: Filter[] = [
+    ...(spaces.length ? [{ [field]: { $in: spaces } }] : []),
+    ...(docs.length ? [{ _id: { $in: docs } }] : []),
+    ...(wholes.length ? [{ [part!]: { $in: wholes } }] : []),
+  ];
+  const reached = anyOf.length > 1 ? { $or: anyOf } : anyOf[0] ?? { [field]: { $in: [] } };
   return sourced ? { $and: [reached, sourced] } : reached;
 };

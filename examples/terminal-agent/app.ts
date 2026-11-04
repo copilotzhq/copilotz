@@ -65,9 +65,9 @@ const COMPUTER = [
 const app = definePlugin({
   name: "terminal-agent",
   resources: {
-    // Conversations live in spaces: each person reaches their own, and the
-    // shared spaces they join (see the access plugin).
-    shared: { thread: {}, message: { labels: true }, memory: {}, file: {}, live: {} },
+    // Memories live in spaces, as conversations do (chat says so for its own): each person
+    // reaches their own, and the shared spaces they join (see the access plugin).
+    shared: { memory: {} },
     // A provider the catalog knows needs only its key: the catalog has its
     // protocol and URL, its models' prices, reasoning levels and limits.
     // Others name an `adapter` (the protocol) and a `baseURL`.

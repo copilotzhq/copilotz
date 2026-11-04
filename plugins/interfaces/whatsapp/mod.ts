@@ -8,7 +8,14 @@
  *   webhook of its own to set up in Meta's dashboard (`whatsapp.webhook`).
  * - **A phone** is linked to a person in that space: they ask the app for
  *   a code (`whatsapp.link`) and send it to the number from WhatsApp.
- *   Anyone else who writes is told how, once a day, and nothing more.
+ *   Anyone else who writes is told how, once a day, and nothing more,
+ *   unless the number is open to anyone.
+ * - **A customer line:** those who manage the space open the number to
+ *   anyone (`whatsapp.set`). A stranger who writes is then a contact
+ *   (someone outside the org), in a chat of their own in the number's
+ *   space, answered by its agent: they reach that chat and nothing else; the
+ *   space's members read it. A chat quiet for the number's `gap` (12 hours)
+ *   is over, and their next message starts a new one.
  * - **What they send** becomes `chat.send`, as them, in their WhatsApp
  *   conversation, in the space they choose (their Personal space unless
  *   they say: `whatsapp.move`, or `/space <name>` from the phone); photos,
@@ -30,6 +37,7 @@ import { connectAction, credentialsAction } from "./actions/connect.ts";
 import { disconnectAction, webhookAction } from "./actions/disconnect.ts";
 import { hookAction, HOOKS } from "./actions/hook.ts";
 import { linkAction, moveAction, unlinkAction } from "./actions/link.ts";
+import { setAction } from "./actions/set.ts";
 import { code } from "./collections/code.ts";
 import { number } from "./collections/number.ts";
 import { phone } from "./collections/phone.ts";
@@ -45,7 +53,7 @@ export * from "./contract.ts";
 
 export const whatsapp: Plugin = definePlugin({
   name: "whatsapp",
-  requires: ["chat", "spaces"],
+  requires: ["chat", "spaces", "contacts"],
   collections: {
     whatsapp_number: number,
     whatsapp_secret: secret,
@@ -64,6 +72,7 @@ export const whatsapp: Plugin = definePlugin({
     "whatsapp.link": linkAction,
     "whatsapp.unlink": unlinkAction,
     "whatsapp.move": moveAction,
+    "whatsapp.set": setAction,
   },
   processors: {
     "whatsapp.receive": receiveProcessor,

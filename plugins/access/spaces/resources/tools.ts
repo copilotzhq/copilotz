@@ -1,8 +1,10 @@
 /**
  * `request_access`, for agents: asks the managers of a space the agent (or
  * its person) can't reach to let them in, with a reason. They decide; it
- * doesn't wait.
+ * doesn't wait. Not for an agent working for a contact: a contact is let
+ * into its chat alone.
  */
+import { principalOf } from "../../../../runtime/mod.ts";
 import type { Tool } from "../../../agents/chat/contract.ts";
 import { PERSONAL } from "../shared/personal.ts";
 import { memberKey } from "../shared/reach.ts";
@@ -10,7 +12,7 @@ import { nameOf, namesFor } from "../shared/names.ts";
 
 export const tools: Record<string, Tool> = {
   request_access: {
-    offer: true,
+    offer: (_agent, _thread, ctx) => principalOf(ctx.actor)?.kind !== "contact",
     description: "Ask the managers of a space you can't see to let the person you work for in, " +
       "saying why. Use it when what you need is somewhere you aren't allowed.",
     input: {

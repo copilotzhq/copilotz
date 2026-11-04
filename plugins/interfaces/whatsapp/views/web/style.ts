@@ -28,6 +28,14 @@ export const STYLE = `
 .wa-you-title { margin: 0; color: var(--muted-foreground); font-size: 11.5px; font-weight: 650; letter-spacing: .05em;
   text-transform: uppercase; }
 
+/* Open to customers */
+.wa-customers { display: grid; gap: 12px; padding: 16px 18px; border-top: 1px solid var(--border); }
+.wa-line { display: grid; gap: 12px; }
+.wa-line-head { display: flex; align-items: center; gap: 8px; }
+.wa-line-head > .copilotz-icon { color: var(--info-text); }
+.wa-line-head b { font-weight: 620; }
+.wa-line-fields { display: grid; gap: 10px; }
+
 /* Linking your phone */
 .wa-offer { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .wa-offer-text { display: grid; gap: 2px; min-width: 0; }

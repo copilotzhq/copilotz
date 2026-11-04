@@ -1,15 +1,17 @@
 /**
  * A space's people on the web, by name (as React draws them): the Members
  * tab and the header list each person by their profile's name, never by a
- * sign-in's id; someone without a profile is "someone".
+ * sign-in's id; someone without a profile is "someone"; a contact, by its
+ * own record's name.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ViewContext } from "../../../runtime/mod.ts";
 import { merge } from "../../../runtime/registry.ts";
-import type { Member, Reached } from "../spaces/contract.ts";
+import { type Member, nameOf, namesIn, type Reached } from "../spaces/contract.ts";
 import { spacesWeb } from "../spaces/web.tsx";
+import { contactsWeb } from "../contacts/web.tsx";
 import { membersView } from "../spaces/views/web/members.tsx";
 import { SpaceHeader } from "../spaces/views/web/header.tsx";
 import { test } from "../../../testing/mod.ts";
@@ -101,4 +103,29 @@ test("a space's header shows its people by name", () => {
   );
   assertStringIncludes(html, "Members: Ana Lima, Bob Silva");
   assert(!html.includes(ANA), html);
+});
+
+test("a contact shows by name too, read from its own source; a person from profiles", () => {
+  const asked: string[] = [];
+  const ctx = {
+    ...ctxOf({}),
+    db: {
+      collection: (name: string) => ({
+        query: (query: string, params: { ids: string[] }) => {
+          asked.push(`${name}.${query}:${params.ids.join(",")}`);
+          return {
+            status: "ready",
+            value: name === "contact" ? { "contact:c-carla-01": "Carla" } : { [ANA]: "Ana Lima" },
+          };
+        },
+      }),
+    } as unknown as ViewContext<ReactNode>["db"],
+    resources: merge([spacesWeb, contactsWeb], { elsewhere: true }).resources,
+  };
+  const names = namesIn(ctx, [ANA, "contact:c-carla-01", `person:${ANA}`]);
+  assertEquals(names, { [ANA]: "Ana Lima", "contact:c-carla-01": "Carla" });
+  assertEquals(nameOf("contact:c-carla-01", names), "Carla");
+  assertEquals(asked.sort(), [`contact.names:contact:c-carla-01`, `profile.names:${ANA}`]);
+  // Without contacts' front end, a contact is "someone".
+  assertEquals(nameOf("contact:c-carla-01", {}), "someone");
 });

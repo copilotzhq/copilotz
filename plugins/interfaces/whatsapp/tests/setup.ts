@@ -1,0 +1,323 @@
+/**
+ * What the WhatsApp tests share: a runtime with a number connected to Launch
+ * (by Ana), a fake Graph API that records what's sent, Meta's deliveries
+ * (signed) and what people read.
+ */
+import {
+  type Actor,
+  createRuntime,
+  defineAction,
+  definePlugin,
+  type Runtime,
+  type ViewContext,
+} from "../../../../runtime/mod.ts";
+import { memoryStore } from "../../../../stores/memory/mod.ts";
+import models, { type LlmAdapter } from "../../../models/mod.ts";
+import { chat, type Message, type Thread } from "../../../agents/chat/mod.ts";
+import { access } from "../../../access/mod.ts";
+import { createTickets } from "../../../../hosts/web/tickets.ts";
+import { webServer } from "../../../../hosts/web/server.ts";
+import { serve as listen } from "../../../../testing/mod.ts";
+import { whatsapp } from "../mod.ts";
+import { sign } from "../shared/signature.ts";
+import type { WaMessage } from "../shared/payload.ts";
+
+export const ana: Actor = { kind: "person", id: "ana" };
+export const bob: Actor = { kind: "person", id: "bob" };
+export const TOKEN = "EAAG-token-for-tests-0123456789";
+export const SECRET = "app-secret-for-tests-0123";
+export const PHONE_ID = "106540352242922";
+export const ANA_PHONE = "5511987654321";
+export const BOB_PHONE = "5521999990000";
+export const STRANGER = "14155550123";
+
+/** A paragraph of Markdown, long enough that a few need several WhatsApp messages. */
+export const PARAGRAPH = "**Note.** " +
+  "This is a sentence about the plan, with some detail. ".repeat(30);
+
+/**
+ * Answers what it was told. Asked for something long, a long Markdown
+ * answer; asked to ask, it asks the person and waits; given their answer,
+ * says it.
+ */
+export const echo: LlmAdapter = {
+  async *generate({ messages }) {
+    // What was said last, past what contexts add each turn.
+    const last = messages.findLast((m) => !("text" in m && m.text?.startsWith("<context")))!;
+    if (last.role === "tool") {
+      yield { type: "text", text: `got ${last.text}` };
+      return;
+    }
+    const text = "text" in last ? last.text ?? "" : "";
+    if (text.includes("long")) {
+      yield { type: "text", text: Array.from({ length: 6 }, () => PARAGRAPH).join("\n\n") };
+      return;
+    }
+    if (text.includes("ask me")) {
+      yield {
+        type: "tool_call",
+        call: { id: "ask", name: "send_message", input: { to: "ana", text: "Which color?" } },
+      };
+      return;
+    }
+    yield { type: "text", text: `heard **${text}**` };
+  },
+};
+
+/** What people read, as Views: what a front end would show them. */
+export const reads = definePlugin({
+  name: "reads",
+  views: Object.fromEntries(
+    [
+      "whatsapp_number",
+      "whatsapp_secret",
+      "whatsapp_phone",
+      "whatsapp_code",
+      "whatsapp_thread",
+      "thread",
+      "message",
+      "contact",
+    ].map((c) => [
+      c,
+      { test: (_: unknown, ctx: ViewContext) => ctx.db.collection(c).find({}).value ?? [] },
+    ]),
+  ),
+  actions: {
+    // A chat gone quiet for some hours: its last message that long ago.
+    "test.age": defineAction({
+      input: { type: "object" },
+      run: (ctx, input: { thread: string; hours: number }) =>
+        ctx.db.collection("thread").updateOne({ _id: input.thread }, {
+          $set: { at: new Date(Date.now() - input.hours * 3_600_000).toISOString() },
+        }),
+    }),
+    // Meta stops taking the number's token (it expired).
+    "test.expire": defineAction({
+      input: { type: "object" },
+      run: (ctx) =>
+        ctx.db.collection("whatsapp_secret").updateMany({}, {
+          $set: { token: "EAAG-expired-token-00000000" },
+        }),
+    }),
+  },
+});
+
+export type Seen = { method: string; path: string; body?: Record<string, unknown> };
+
+/** The Graph API, as far as the plugin uses it: a number, messages, read marks, media. */
+export async function fakeGraph() {
+  const requests: Seen[] = [];
+  const media: Record<string, { type: string; bytes: Uint8Array }> = {
+    "media-photo": { type: "image/jpeg", bytes: new Uint8Array([255, 216, 255, 1, 2, 3]) },
+    "media-voice": { type: "audio/ogg; codecs=opus", bytes: new Uint8Array(64).fill(7) },
+    "media-doc": { type: "application/pdf", bytes: new TextEncoder().encode("%PDF-1.4 plan") },
+    "media-huge": { type: "video/mp4", bytes: new Uint8Array(1) },
+  };
+  let sent = 0;
+  const server = await listen(async (request) => {
+    const url = new URL(request.url);
+    if (request.headers.get("authorization") !== `Bearer ${TOKEN}`) {
+      return Response.json({ error: { message: "Invalid OAuth access token.", code: 190 } }, {
+        status: 401,
+      });
+    }
+    const body = request.method === "POST" ? await request.json() : undefined;
+    requests.push({ method: request.method, path: url.pathname, ...(body ? { body } : {}) });
+    const [, version, id, more] = url.pathname.split("/");
+    if (version === "files") {
+      return new Response(media[id].bytes as BodyInit, {
+        headers: { "content-type": media[id].type },
+      });
+    }
+    if (/^\d+$/.test(id) && !more) {
+      return Response.json({
+        id,
+        display_phone_number: id === PHONE_ID ? "+1 555-0100" : `+${id}`,
+        verified_name: "Example Support",
+      });
+    }
+    if (more === "messages") {
+      return Response.json(
+        body?.status === "read"
+          ? { success: true }
+          : { messaging_product: "whatsapp", messages: [{ id: `wamid.out.${++sent}` }] },
+      );
+    }
+    if (media[id]) {
+      return Response.json({
+        url: `${server.url}/files/${id}`,
+        mime_type: media[id].type,
+        file_size: id === "media-huge" ? 200 * 1024 * 1024 : media[id].bytes.length,
+      });
+    }
+    return Response.json({ error: { message: "Unknown path", code: 100 } }, { status: 404 });
+  });
+  return {
+    url: server.url,
+    close: server.close,
+    requests,
+    /** The texts sent to a phone, in order. */
+    texts: (to: string) =>
+      requests.filter((r) => r.body?.to === to && r.body?.type === "text")
+        .map((r) => (r.body!.text as { body: string }).body),
+  };
+}
+
+export type Setup = {
+  runtime: Runtime;
+  graph: Awaited<ReturnType<typeof fakeGraph>>;
+  serve(request: Request): Promise<Response>;
+  launch: string;
+  personal: string;
+  /** The number connected to Launch, by Ana. */
+  number: string;
+  verify: string;
+  /** Delivers messages to the number's webhook as Meta does, signed, and waits for what follows. */
+  deliver(
+    messages: Partial<WaMessage>[],
+    options?: { from?: string; secret?: string; name?: string },
+  ): Promise<Response>;
+  /** What someone reads of a collection, as a View. */
+  read<T>(collection: string, actor: Actor): Promise<T[]>;
+  /** Lets Bob into Launch, as an editor. */
+  bobJoins(): Promise<void>;
+};
+
+export async function setup(fn: (s: Setup) => Promise<void>) {
+  const graph = await fakeGraph();
+  const app = definePlugin({
+    name: "app",
+    resources: {
+      shared: { thread: {}, message: { labels: true }, file: {} },
+      provider: { e: { adapter: "e" } },
+      model: { transcribe: "fake/listen" },
+      agents: {
+        lead: { instructions: "Hi.", model: "e/lead", default: true, tools: ["send_message"] },
+        desk: { instructions: "Sell.", model: "e/desk" },
+      },
+      whatsapp: { graph: `${graph.url}/v23.0` },
+    },
+    adapters: { llm: { e: echo } },
+  });
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [models, chat, ...access, whatsapp, reads, app],
+  });
+  try {
+    const { space: personal } = await runtime.call<{ space: string }>("space.personal", {}, {
+      actor: ana,
+    });
+    const { space: launch } = await runtime.call<{ space: string }>("space.create", {
+      name: "Launch",
+    }, { actor: ana });
+    const { number, verify } = await runtime.call<{ number: string; verify: string }>(
+      "whatsapp.connect",
+      { in: launch, phoneId: PHONE_ID, token: TOKEN, secret: SECRET, url: "https://app.test" },
+      { actor: ana },
+    );
+    const serve = webServer({
+      runtime,
+      tickets: createTickets(),
+      code: { entry: "app.js", files: { "app.js": "" } },
+      upgrade: () => new Response(null, { status: 299 }),
+    });
+    let n = 0;
+    await fn({
+      runtime,
+      graph,
+      serve,
+      launch,
+      personal,
+      number,
+      verify,
+      deliver: async (messages, options = {}) => {
+        const from = options.from ?? ANA_PHONE;
+        const body = JSON.stringify({
+          object: "whatsapp_business_account",
+          entry: [{
+            id: "waba",
+            changes: [{
+              field: "messages",
+              value: {
+                messaging_product: "whatsapp",
+                metadata: { display_phone_number: "15550100", phone_number_id: PHONE_ID },
+                contacts: [{
+                  profile: { name: options.name ?? (from === ANA_PHONE ? "Ana" : "Someone") },
+                  wa_id: from,
+                }],
+                messages: messages.map((m) => ({
+                  id: `wamid.in.${++n}`,
+                  from,
+                  timestamp: "1761800000",
+                  type: "text",
+                  ...m,
+                })),
+              },
+            }],
+          }],
+        });
+        const bytes = new TextEncoder().encode(body);
+        const answered = await serve(
+          new Request(`http://localhost/hooks/whatsapp/${number}`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-hub-signature-256": await sign(options.secret ?? SECRET, bytes),
+            },
+            body,
+          }),
+        );
+        await runtime.idle();
+        return answered;
+      },
+      read: async <T>(collection: string, actor: Actor) => {
+        const seen = runtime.observe<T[]>("test", collection, {}, { actor });
+        const output = await seen.ready;
+        seen.close();
+        return output.status === "ready" ? output.value : [];
+      },
+      bobJoins: async () => {
+        await runtime.call("person.set", { person: "bob", email: "bob@example.com" });
+        const { invitation } = await runtime.call<{ invitation: string }>("invitation.send", {
+          space: launch,
+          email: "bob@example.com",
+          role: "editor",
+        }, { actor: ana });
+        await runtime.call("invitation.accept", { invitation }, { actor: bob });
+      },
+    });
+  } finally {
+    await runtime.close();
+    await graph.close();
+  }
+}
+
+/** Links someone's phone: a code from the app, sent from that phone. */
+export async function link(s: Setup, who = ana, phone = ANA_PHONE) {
+  const { code } = await s.runtime.call<{ code: string }>("whatsapp.link", { number: s.number }, {
+    actor: who,
+  });
+  await s.deliver([{ text: { body: code } }], { from: phone });
+}
+
+/** Every event, as text: what the log holds. */
+export async function logged(runtime: Runtime, during: () => Promise<void>): Promise<string> {
+  const seen: unknown[] = [];
+  const stop = runtime.subscribe((item) => {
+    if (item.kind === "event") seen.push(item.event);
+  });
+  try {
+    await during();
+    await runtime.idle();
+  } finally {
+    stop();
+  }
+  return JSON.stringify(seen);
+}
+
+export const threadsOf = (runtime: Runtime, space: string, actor = ana) =>
+  runtime.query<Thread[]>("thread.recent", { in: space }, { actor });
+
+export const said = async (runtime: Runtime, thread: string) =>
+  (await runtime.query<Message[]>("message.history", { thread }, { actor: ana }))
+    .filter((m) => !m.private).map((m) => [m.from, m.text]);

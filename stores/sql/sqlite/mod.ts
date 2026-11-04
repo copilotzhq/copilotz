@@ -10,9 +10,11 @@
  *
  * The owner writes through one connection and reads committed state through a
  * second one. WAL mode lets any SQLite client read the file while it runs, and
- * each collection is also a SQL view (`SELECT * FROM message`). Maintenance
- * SQL (`inspect`, a transaction's `execute`) runs one statement on them, as
- * it is; SQLite has no statement timeout, so `timeout` is not kept here.
+ * each collection is also a SQL view (`SELECT * FROM message`). The store
+ * names its own tables in `main`, so nothing temporary stands in for them.
+ * Maintenance SQL (`inspect`, a transaction's `execute`) runs one statement
+ * as it is: a read apart, in a worker on a read-only connection of its own
+ * (apart.ts), a write in a maintenance transaction on the writer.
  */
 type SQLInputValue = null | number | bigint | string | Uint8Array;
 
@@ -30,8 +32,6 @@ export type SqliteStatement = {
   all(...params: SQLInputValue[]): unknown[];
   get(...params: SQLInputValue[]): unknown;
   run(...params: SQLInputValue[]): { changes: number | bigint; lastInsertRowid: number | bigint };
-  /** Rows one at a time (both have it), so a read can stop at its limit. */
-  iterate?(...params: SQLInputValue[]): IterableIterator<unknown>;
 };
 
 // Not literal, so no checker or bundler tries to resolve the one this runtime lacks.
@@ -48,6 +48,7 @@ async function builtin(path: string): Promise<SqliteDatabase> {
   return new DatabaseSync(path);
 }
 import type { JSONSchema } from "../../../runtime/define.ts";
+import { forbidden, invalid } from "../../../runtime/errors.ts";
 import { applyUpdate, seedOf } from "../../../runtime/mongo.ts";
 import {
   type Blob,
@@ -66,10 +67,11 @@ import { type Bind, page, type Scalars, where } from "../shared/filter.ts";
 import { scalar, sqlite, sqliteAggregates } from "./dialect.ts";
 import { grouped } from "../shared/aggregate.ts";
 import { statement as checked } from "../shared/statement.ts";
+import { apart, readApart } from "./apart.ts";
 
 const SCHEMA = `
-  CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value ANY) STRICT;
-  CREATE TABLE IF NOT EXISTS events (
+  CREATE TABLE IF NOT EXISTS main.meta (key TEXT PRIMARY KEY, value ANY) STRICT;
+  CREATE TABLE IF NOT EXISTS main.events (
     seq INTEGER PRIMARY KEY,
     id TEXT NOT NULL UNIQUE,
     type TEXT NOT NULL,
@@ -78,29 +80,29 @@ const SCHEMA = `
     at TEXT NOT NULL,
     actor TEXT
   ) STRICT;
-  CREATE INDEX IF NOT EXISTS events_cause ON events (cause);
-  CREATE TABLE IF NOT EXISTS nodes (
+  CREATE INDEX IF NOT EXISTS main.events_cause ON events (cause);
+  CREATE TABLE IF NOT EXISTS main.nodes (
     collection TEXT NOT NULL,
     id TEXT NOT NULL,
     doc TEXT NOT NULL,
     PRIMARY KEY (collection, id)
   ) STRICT;
-  CREATE TABLE IF NOT EXISTS edges (
+  CREATE TABLE IF NOT EXISTS main.edges (
     "from" TEXT NOT NULL,
     type TEXT NOT NULL,
     "to" TEXT NOT NULL,
     data TEXT,
     PRIMARY KEY ("from", type, "to")
   ) STRICT;
-  CREATE INDEX IF NOT EXISTS edges_to ON edges ("to", type);
-  CREATE TABLE IF NOT EXISTS vectors (
+  CREATE INDEX IF NOT EXISTS main.edges_to ON edges ("to", type);
+  CREATE TABLE IF NOT EXISTS main.vectors (
     collection TEXT NOT NULL,
     node TEXT NOT NULL,
     field TEXT NOT NULL,
     embedding TEXT NOT NULL,
     PRIMARY KEY (collection, node, field)
   ) STRICT;
-  CREATE TABLE IF NOT EXISTS blobs (
+  CREATE TABLE IF NOT EXISTS main.blobs (
     id TEXT PRIMARY KEY,
     data BLOB NOT NULL,
     type TEXT
@@ -146,31 +148,28 @@ const refused = (error: unknown) => {
   });
 };
 
-/**
- * Rows of a statement, at most `limit` when given. A query (`SELECT`,
- * `VALUES`: never a write, in SQLite) stops there; anything else runs whole,
- * as `all` does, since stepping a write that `query_only` refuses ends
- * quietly instead of failing.
- */
-const rowsOf = (
-  prepared: SqliteStatement,
-  keyword: string,
-  params: SQLInputValue[],
-  limit?: number,
-) => {
-  if (limit === undefined || !prepared.iterate || !["SELECT", "VALUES"].includes(keyword)) {
-    const rows = prepared.all(...params) as Row[];
-    return limit === undefined ? rows : rows.slice(0, limit);
-  }
-  const rows: Row[] = [];
-  if (limit <= 0) return rows;
-  for (const row of prepared.iterate(...params)) {
-    rows.push(row as Row);
-    if (rows.length >= limit) break;
-  }
-  return rows;
-};
+/** Statements SQLite can hold in a subquery, so a read stops at its limit there. */
+const QUERIES = new Set(["SELECT", "VALUES", "WITH"]);
 
+/** Pragmas that only say something, even with an argument. */
+const TELLING = new Set([
+  "table_info",
+  "table_xinfo",
+  "table_list",
+  "index_list",
+  "index_info",
+  "index_xinfo",
+  "foreign_key_list",
+  "foreign_key_check",
+  "integrity_check",
+  "quick_check",
+]);
+
+/** Whether a pragma sets something (`= value`, or an argument to one that isn't `TELLING`). */
+const setting = (text: string) => {
+  const found = /PRAGMA\s+(?:"?\w+"?\s*\.\s*)?"?(\w+)"?\s*([=(])?/i.exec(text);
+  return !found || found[2] === "=" || (found[2] === "(" && !TELLING.has(found[1].toLowerCase()));
+};
 export async function sqliteStore(options: {
   path: string;
   /** Each connection's page cache (64 MiB) and memory-mapped reads (256 MiB). */
@@ -183,8 +182,12 @@ export async function sqliteStore(options: {
     /** Exposes each collection as a SQL view of its schema's top-level fields. */
     describe(collections: Record<string, JSONSchema>): void;
     index(collections: Record<string, IndexSpec[]>): void;
-    /** Runs one read-only statement on the reading connection, for inspection and maintenance. */
-    inspect(sql: string, params?: unknown[], options?: { limit?: number }): Promise<Row[]>;
+    /** Runs one read-only statement, for inspection and maintenance. */
+    inspect(
+      sql: string,
+      params?: unknown[],
+      options?: { limit?: number; timeout?: number },
+    ): Promise<Row[]>;
   }
 > {
   const connect = async () => {
@@ -199,18 +202,23 @@ export async function sqliteStore(options: {
     return db;
   };
   const writer = await connect();
+  /** Whether reads stay on the reading connection: no worker runs here. */
+  let inline = false;
+  /** A database in this process alone: nothing else can open it to read it apart. */
+  const memory = options.path === ":memory:" || options.path === "" ||
+    options.path.startsWith("file::memory:") || /[?&]mode=memory\b/.test(options.path);
   // Vectors were once keyed by id alone, before any were written: start them over.
-  const shape = writer.prepare("PRAGMA table_info(vectors)").all() as { name: string }[];
+  const shape = writer.prepare("PRAGMA main.table_info(vectors)").all() as { name: string }[];
   if (shape.length && !shape.some((column) => column.name === "field")) {
-    writer.exec("DROP TABLE vectors");
+    writer.exec("DROP TABLE main.vectors");
   }
   writer.exec(SCHEMA);
   // Events record who did them since the actor came in: older logs gain the column.
-  const logged = writer.prepare("PRAGMA table_info(events)").all() as { name: string }[];
+  const logged = writer.prepare("PRAGMA main.table_info(events)").all() as { name: string }[];
   if (!logged.some((column) => column.name === "actor")) {
-    writer.exec("ALTER TABLE events ADD COLUMN actor TEXT");
+    writer.exec("ALTER TABLE main.events ADD COLUMN actor TEXT");
   }
-  writer.exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('epoch', 0)");
+  writer.exec("INSERT OR IGNORE INTO main.meta (key, value) VALUES ('epoch', 0)");
   // The planner prefers the primary key (collection, id) to a collection's
   // own indexes unless statistics say how many rows a collection holds and
   // how its indexes divide them. They're gathered when missing, and again
@@ -219,13 +227,15 @@ export async function sqliteStore(options: {
   const changes = () => Number((counting.get() as { n: number }).n);
   const primary = String(
     (writer.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'nodes' " +
+      "SELECT name FROM main.sqlite_master WHERE type = 'index' AND tbl_name = 'nodes' " +
         "AND name LIKE 'sqlite_autoindex_nodes_%'",
     ).get() as Row).name,
   );
   const counted = () => {
-    if (!writer.prepare("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'").get()) return;
-    const row = writer.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?").get(primary) as
+    if (!writer.prepare("SELECT 1 FROM main.sqlite_master WHERE name = 'sqlite_stat1'").get()) {
+      return;
+    }
+    const row = writer.prepare("SELECT stat FROM main.sqlite_stat1 WHERE idx = ?").get(primary) as
       | Row
       | undefined;
     return row ? Number(String(row.stat).split(" ")[0]) : undefined;
@@ -234,7 +244,7 @@ export async function sqliteStore(options: {
   /** The reading connection loads the new statistics (it keeps what it loaded first). */
   let reload = () => {};
   const analyze = () => {
-    writer.exec("ANALYZE nodes");
+    writer.exec("ANALYZE main.nodes");
     due = changes() + Math.max(1_000, counted() ?? 0);
     reload();
   };
@@ -289,7 +299,7 @@ export async function sqliteStore(options: {
     // Async, so a filter it can't translate rejects like any other failure.
     const find: Reader["find"] = async (collection, filter = {}, options = {}) => {
       const { bind, params } = binder();
-      const sql = `SELECT doc FROM nodes WHERE collection = ${named(collection, bind)} AND ` +
+      const sql = `SELECT doc FROM main.nodes WHERE collection = ${named(collection, bind)} AND ` +
         `${where(filter, sqlite, bind, scalars.get(collection))}` +
         page(options, sqlite, bind, scalars.get(collection));
       return await Promise.resolve(
@@ -301,7 +311,8 @@ export async function sqliteStore(options: {
       // Filtered in SQL, ranked here: SQLite has no vector index.
       async nearest(collection, field, vector, options = {}) {
         const { bind, params } = binder();
-        const sql = `SELECT n.doc AS doc, v.embedding AS embedding FROM nodes n JOIN vectors v ` +
+        const sql =
+          `SELECT n.doc AS doc, v.embedding AS embedding FROM main.nodes n JOIN main.vectors v ` +
           `ON v.collection = n.collection AND v.node = n.id WHERE n.collection = ${
             named(collection, bind)
           } AND v.field = ${bind(field)} AND ${
@@ -323,21 +334,25 @@ export async function sqliteStore(options: {
         const { bind, params } = binder();
         const query = grouped({ ...plan, group: plan.group }, sqlite, sqliteAggregates, bind);
         const sql =
-          `SELECT ${query.select} FROM nodes WHERE collection = ${named(collection, bind)} AND ` +
+          `SELECT ${query.select} FROM main.nodes WHERE collection = ${
+            named(collection, bind)
+          } AND ` +
           `${where(plan.match, sqlite, bind, scalars.get(collection))}${query.groupBy}`;
         return await Promise.resolve(query.read(all(db, sql, params)));
       },
       async count(collection, filter = {}) {
         const { bind, params } = binder();
         const sql =
-          `SELECT count(*) AS n FROM nodes WHERE collection = ${named(collection, bind)} AND ` +
+          `SELECT count(*) AS n FROM main.nodes WHERE collection = ${
+            named(collection, bind)
+          } AND ` +
           where(filter, sqlite, bind, scalars.get(collection));
         return await Promise.resolve(Number(one(db, sql, params)?.n ?? 0));
       },
       edges(query) {
         const rows = all(
           db,
-          `SELECT "from", type, "to", data FROM edges WHERE ` +
+          `SELECT "from", type, "to", data FROM main.edges WHERE ` +
             `(?1 IS NULL OR "from" = ?1) AND (?2 IS NULL OR type = ?2) AND (?3 IS NULL OR "to" = ?3)`,
           [query.from ?? null, query.type ?? null, query.to ?? null],
         );
@@ -349,7 +364,7 @@ export async function sqliteStore(options: {
         })));
       },
       blob(id) {
-        const row = one(db, "SELECT data, type FROM blobs WHERE id = ?", [id]);
+        const row = one(db, "SELECT data, type FROM main.blobs WHERE id = ?", [id]);
         return Promise.resolve(
           row
             ? {
@@ -362,14 +377,14 @@ export async function sqliteStore(options: {
       },
       events: (after, limit = 1000) =>
         Promise.resolve(
-          all(db, "SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?", [after, limit])
+          all(db, "SELECT * FROM main.events WHERE seq > ? ORDER BY seq LIMIT ?", [after, limit])
             .map(event),
         ),
       related: (id, types) =>
         Promise.resolve(
           all(
             db,
-            `SELECT * FROM events WHERE (id = ? OR cause = ?) AND type IN (${
+            `SELECT * FROM main.events WHERE (id = ? OR cause = ?) AND type IN (${
               types.map(() => "?").join(", ")
             }) ORDER BY seq`,
             [id, id, ...types],
@@ -378,12 +393,15 @@ export async function sqliteStore(options: {
     };
   };
 
-  const transaction = (emitted: Omit<Event, "seq" | "at">[]): Transaction => {
+  const transaction = (
+    emitted: Omit<Event, "seq" | "at">[],
+    maintenance: boolean,
+  ): Transaction => {
     const read = reader(writer);
     /** Whether it went in: with `ifAbsent`, an existing `_id` is left as it is. */
     const insert = (collection: string, doc: Doc, ifAbsent = false) => {
       try {
-        run(writer, "INSERT INTO nodes (collection, id, doc) VALUES (?, ?, ?)", [
+        run(writer, "INSERT INTO main.nodes (collection, id, doc) VALUES (?, ?, ?)", [
           collection,
           doc._id,
           JSON.stringify(doc),
@@ -396,7 +414,7 @@ export async function sqliteStore(options: {
       }
     };
     const write = (collection: string, doc: Doc) =>
-      run(writer, "UPDATE nodes SET doc = ? WHERE collection = ? AND id = ?", [
+      run(writer, "UPDATE main.nodes SET doc = ? WHERE collection = ? AND id = ?", [
         JSON.stringify(doc),
         collection,
         doc._id,
@@ -453,7 +471,10 @@ export async function sqliteStore(options: {
       async delete(collection, filter, options = {}) {
         const found = await read.find(collection, filter, options.many ? {} : { limit: 1 });
         for (const doc of found) {
-          run(writer, "DELETE FROM nodes WHERE collection = ? AND id = ?", [collection, doc._id]);
+          run(writer, "DELETE FROM main.nodes WHERE collection = ? AND id = ?", [
+            collection,
+            doc._id,
+          ]);
         }
         return {
           deleted: found.length,
@@ -461,16 +482,20 @@ export async function sqliteStore(options: {
         };
       },
       link(edge: Edge) {
-        run(writer, `INSERT OR REPLACE INTO edges ("from", type, "to", data) VALUES (?, ?, ?, ?)`, [
-          edge.from,
-          edge.type,
-          edge.to,
-          edge.data === undefined ? null : JSON.stringify(edge.data),
-        ]);
+        run(
+          writer,
+          `INSERT OR REPLACE INTO main.edges ("from", type, "to", data) VALUES (?, ?, ?, ?)`,
+          [
+            edge.from,
+            edge.type,
+            edge.to,
+            edge.data === undefined ? null : JSON.stringify(edge.data),
+          ],
+        );
         return Promise.resolve();
       },
       unlink(edge) {
-        run(writer, `DELETE FROM edges WHERE "from" = ? AND type = ? AND "to" = ?`, [
+        run(writer, `DELETE FROM main.edges WHERE "from" = ? AND type = ? AND "to" = ?`, [
           edge.from,
           edge.type,
           edge.to,
@@ -479,7 +504,7 @@ export async function sqliteStore(options: {
       },
       putBlob(value: Blob) {
         // Content-addressed: an existing id already holds these bytes.
-        run(writer, "INSERT OR IGNORE INTO blobs (id, data, type) VALUES (?, ?, ?)", [
+        run(writer, "INSERT OR IGNORE INTO main.blobs (id, data, type) VALUES (?, ?, ?)", [
           value.id,
           value.data,
           value.type ?? null,
@@ -489,7 +514,7 @@ export async function sqliteStore(options: {
       putVector(value) {
         run(
           writer,
-          "INSERT OR REPLACE INTO vectors (collection, node, field, embedding) VALUES (?1, ?2, ?3, ?4)",
+          "INSERT OR REPLACE INTO main.vectors (collection, node, field, embedding) VALUES (?1, ?2, ?3, ?4)",
           [value.collection, value.doc, value.field, JSON.stringify(value.embedding)],
         );
         return Promise.resolve();
@@ -499,7 +524,7 @@ export async function sqliteStore(options: {
         const { bind, params } = binder();
         run(
           writer,
-          `DELETE FROM vectors WHERE collection = ${bind(collection)} AND node IN (${
+          `DELETE FROM main.vectors WHERE collection = ${bind(collection)} AND node IN (${
             docs.map((doc) => bind(doc)).join(", ")
           })${field ? ` AND field = ${bind(field)}` : ""}`,
           params,
@@ -509,19 +534,41 @@ export async function sqliteStore(options: {
       emit(value) {
         emitted.push({ ...value, id: value.id ?? crypto.randomUUID() });
       },
-      // Maintenance SQL, as it is: the writer runs one transaction at a time, so it's alone.
+      /**
+       * Maintenance SQL, as it is, in a maintenance transaction (the writer
+       * runs one at a time). Refused, and rolled back with its transaction,
+       * when it leaves a temporary object (one would stand in for the
+       * store's tables on this connection) or changes the store's own state
+       * (`meta`: the fencing epoch, Processors' positions).
+       */
       async execute(sql, params = []) {
+        if (!maintenance) throw invalid("SQL runs only in a maintenance transaction.");
         const { text } = checked(sql, "sqlite", "write");
+        const state = () =>
+          JSON.stringify(all(writer, "SELECT key, value FROM main.meta ORDER BY key"));
+        const was = state();
         const before = changes();
+        let rows: Row[];
         try {
           // Not among the prepared statements kept: each is its own.
-          const rows = await Promise.resolve(
-            writer.prepare(text).all(...params.map(bindable)) as Row[],
-          );
-          return { rows, changed: changes() - before };
+          rows = await Promise.resolve(writer.prepare(text).all(...params.map(bindable)) as Row[]);
         } catch (error) {
           throw refused(error);
         }
+        const changed = changes() - before;
+        if (Number(one(writer, "SELECT count(*) AS n FROM temp.sqlite_master")?.n)) {
+          throw forbidden(
+            "The statement made a temporary object, which would stand in for the store's own " +
+              "tables: it was rolled back.",
+          );
+        }
+        if (state() !== was) {
+          throw forbidden(
+            "The statement changed the store's own state (meta: its fencing epoch or " +
+              "Processors' positions): it was rolled back.",
+          );
+        }
+        return { rows, changed };
       },
     };
   };
@@ -533,7 +580,8 @@ export async function sqliteStore(options: {
     return next;
   };
 
-  const epochNow = () => Number(one(writer, "SELECT value FROM meta WHERE key = 'epoch'")?.value);
+  const epochNow = () =>
+    Number(one(writer, "SELECT value FROM main.meta WHERE key = 'epoch'")?.value);
 
   return {
     ...reader(committed),
@@ -541,7 +589,7 @@ export async function sqliteStore(options: {
       serially(() => {
         writer.exec("BEGIN IMMEDIATE");
         try {
-          run(writer, "UPDATE meta SET value = value + 1 WHERE key = 'epoch'");
+          run(writer, "UPDATE main.meta SET value = value + 1 WHERE key = 'epoch'");
           const epoch = epochNow();
           writer.exec("COMMIT");
           return Promise.resolve({ epoch });
@@ -552,7 +600,9 @@ export async function sqliteStore(options: {
       }),
     positions: () =>
       Promise.resolve(Object.fromEntries(
-        all(committed, "SELECT key, value FROM meta WHERE key LIKE 'position:%'").map((row) => [
+        all(committed, "SELECT key, value FROM main.meta WHERE key LIKE 'position:%'").map((
+          row,
+        ) => [
           String(row.key).slice("position:".length),
           Number(row.value),
         ]),
@@ -564,14 +614,14 @@ export async function sqliteStore(options: {
         try {
           if (epochNow() !== owner) throw fenced();
           const emitted: Omit<Event, "seq" | "at">[] = [];
-          const result = await work(transaction(emitted));
+          const result = await work(transaction(emitted, options.maintenance ?? false));
           const at = new Date().toISOString();
           const events: Event[] = [];
           // An event id already in the log was committed by an earlier attempt.
           for (const e of emitted) {
             const inserted = run(
               writer,
-              "INSERT OR IGNORE INTO events (id, type, data, cause, actor, at) " +
+              "INSERT OR IGNORE INTO main.events (id, type, data, cause, actor, at) " +
                 "VALUES (?, ?, ?, ?, ?, ?)",
               [
                 e.id,
@@ -589,7 +639,7 @@ export async function sqliteStore(options: {
           for (const [name, seq] of Object.entries(options.positions ?? {})) {
             run(
               writer,
-              "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+              "INSERT INTO main.meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
               [
                 `position:${name}`,
                 seq,
@@ -615,7 +665,7 @@ export async function sqliteStore(options: {
           const name = indexName(collection, spec.fields.map((f) => f.path));
           wanted.add(name);
           writer.exec(
-            `CREATE INDEX IF NOT EXISTS ${quote(name)} ON nodes ` +
+            `CREATE INDEX IF NOT EXISTS main.${quote(name)} ON nodes ` +
               `(${spec.fields.map((f) => scalar(f.path)).join(", ")}) ` +
               `WHERE collection = '${collection.replaceAll("'", "''")}'`,
           );
@@ -623,10 +673,10 @@ export async function sqliteStore(options: {
       }
       // Indexes no longer declared go.
       const existing = writer.prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'ix\\_%' ESCAPE '\\'",
+        "SELECT name FROM main.sqlite_master WHERE type = 'index' AND name LIKE 'ix\\_%' ESCAPE '\\'",
       ).all() as { name: string }[];
       for (const { name } of existing) {
-        if (!wanted.has(name)) writer.exec(`DROP INDEX ${quote(name)}`);
+        if (!wanted.has(name)) writer.exec(`DROP INDEX main.${quote(name)}`);
       }
       // New indexes have no statistics yet.
       const had = new Set(existing.map(({ name }) => name));
@@ -634,19 +684,43 @@ export async function sqliteStore(options: {
         analyze();
       }
     },
-    async inspect(sql, params = [], options = {}) {
+    /**
+     * One read-only statement. On the file itself (the runtime's own SQLite):
+     * apart, in a worker on a read-only connection of its own (apart.ts), cut
+     * off at its timeout. Else on the reading connection, writes refused
+     * meanwhile, a pragma only when it sets nothing, and no timeout. A query
+     * stops at its limit in SQLite.
+     */
+    async inspect(sql, params = [], asked = {}) {
       const { text, keyword } = checked(sql, "sqlite", "read");
-      // The reading connection, refusing writes while it runs (it's synchronous: nothing else
-      // runs on it meanwhile).
-      committed.exec("PRAGMA query_only = 1");
+      const bound = params.map(bindable);
+      const { limit } = asked;
+      const query = limit !== undefined && QUERIES.has(keyword)
+        ? `SELECT * FROM (\n${text}\n) LIMIT ${Math.max(0, Math.floor(limit))}`
+        : text;
+      const cut = (rows: Row[]) => limit === undefined ? rows : rows.slice(0, limit);
       try {
-        return await Promise.resolve(
-          rowsOf(committed.prepare(text), keyword, params.map(bindable), options.limit),
-        );
+        if (!options.open && !memory && !inline && await apart()) {
+          try {
+            return cut(await readApart(options.path, query, bound, asked.timeout) as Row[]);
+          } catch (error) {
+            if ((error as { code?: string }).code !== "unstarted") throw error;
+            // No worker runs here: read on the reading connection, as without a file.
+            inline = true;
+          }
+        }
+        if (keyword === "PRAGMA" && setting(text)) {
+          throw invalid("A pragma here only reads: one that sets would stay on the connection.");
+        }
+        // Synchronous: nothing else runs on the reading connection meanwhile.
+        committed.exec("PRAGMA query_only = 1");
+        try {
+          return cut(committed.prepare(query).all(...bound) as Row[]);
+        } finally {
+          committed.exec("PRAGMA query_only = 0");
+        }
       } catch (error) {
         throw refused(error);
-      } finally {
-        committed.exec("PRAGMA query_only = 0");
       }
     },
     describe(collections) {
@@ -660,9 +734,9 @@ export async function sqliteStore(options: {
             quote(field)
           }`
         );
-        writer.exec(`DROP VIEW IF EXISTS ${quote(name)}`);
+        writer.exec(`DROP VIEW IF EXISTS main.${quote(name)}`);
         writer.exec(
-          `CREATE VIEW ${quote(name)} AS SELECT ${["id AS _id", ...columns].join(", ")} ` +
+          `CREATE VIEW main.${quote(name)} AS SELECT ${["id AS _id", ...columns].join(", ")} ` +
             `FROM nodes WHERE collection = '${name.replaceAll("'", "''")}' ORDER BY rowid`,
         );
       }

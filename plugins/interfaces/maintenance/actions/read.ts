@@ -65,11 +65,20 @@ export const readAction = defineAction({
         return { doc: await docs.findOne(filter, input.sort ? { sort: input.sort } : {}) };
       case "countDocuments":
         return { count: await docs.countDocuments(filter) };
-      case "aggregate":
-        return page(
-          await docs.aggregate(needs(input.pipeline, "aggregate", "pipeline") as Pipeline),
-          needs(input.limit, "aggregate", "limit"),
-        );
+      case "aggregate": {
+        const limit = needs(input.limit, "aggregate", "limit");
+        // The store stops at one more than asked, whatever the pipeline said.
+        const pipeline = needs(input.pipeline, "aggregate", "pipeline") as Pipeline;
+        const has = pipeline.findIndex((stage) => "$limit" in stage);
+        const capped: Pipeline = has < 0
+          ? [...pipeline, { $limit: limit + 1 }]
+          : pipeline.map((stage, i) =>
+            i === has
+              ? { $limit: Math.min(Number((stage as { $limit: number }).$limit), limit + 1) }
+              : stage
+          );
+        return page(await docs.aggregate(capped), limit);
+      }
       case "query":
         return { result: await docs.query(needs(input.name, "query", "name"), input.params ?? {}) };
     }

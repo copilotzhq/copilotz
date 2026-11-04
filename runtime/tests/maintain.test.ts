@@ -22,8 +22,13 @@ import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { postgresPool, postgresStore } from "../../stores/sql/postgres/mod.ts";
 import { env, tempFile, test } from "../../testing/mod.ts";
+import { type Maintainer, maintainer } from "../../stores/tests/maintainer.ts";
 
 const POSTGRES = env("COPILOTZ_TEST_POSTGRES_URL");
+/** Whether the test database's role can make a maintenance role of its own (CREATEROLE). */
+const ROLES = POSTGRES
+  ? await maintainer(POSTGRES).then(async (m) => (await m?.drop(), !!m))
+  : false;
 const operator: Actor = { kind: "maintenance", id: "maintenance", by: "ana" };
 
 /** Stores on one database: each call opens another on it (the newest fences the rest). */
@@ -42,14 +47,29 @@ const databases: Record<string, () => Database> = {
       done: async () => (await pool).close(),
     };
   },
-  ...(POSTGRES
+  ...(POSTGRES && ROLES
     ? {
+      // Maintenance SQL as a role of its own, with privileges on this schema only.
       postgres: (): Database => {
         const schema = `m_${crypto.randomUUID().slice(0, 8)}`;
+        let role: Promise<Maintainer> | undefined;
         return {
           dialect: "postgres",
-          open: () => postgresStore({ url: POSTGRES, schema }),
-          done: async () => await (await postgresStore({ url: POSTGRES, schema })).drop(),
+          async open() {
+            const first = !role;
+            const m = await (role ??= maintainer(POSTGRES).then((m) => m!));
+            const store = await postgresStore({
+              url: POSTGRES,
+              schema,
+              maintenance: { url: m.url },
+            });
+            if (first) await m.grant(schema);
+            return store;
+          },
+          async done() {
+            await (await postgresStore({ url: POSTGRES, schema })).drop();
+            await (await role)?.drop();
+          },
         };
       },
     }

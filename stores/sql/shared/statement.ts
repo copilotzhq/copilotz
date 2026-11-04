@@ -3,12 +3,17 @@
  * transactions' `execute`): exactly one, and none that would end the
  * transaction it runs in, or change its connection beyond it.
  *
- * PostgreSQL runs every statement of a query sent without parameters, and
- * SQLite runs the first and drops the rest, so a statement is read here
- * first, as its database reads it: strings, quoted names and comments are
- * skipped (PostgreSQL's `E'…'` escapes and `$tag$…$tag$` bodies too), and a
- * `;` outside them may only end it. A SQLite trigger's body (`BEGIN …; END`)
- * is therefore more than one: make triggers elsewhere.
+ * A statement is read here first, as its database's scanner reads it:
+ * strings, quoted names and comments are skipped, and a `;` outside them
+ * may only end it. PostgreSQL's line comments end at a CR or an LF, its
+ * block comments nest, and its `E'…'` strings (and their continuations on
+ * a later line) take backslash escapes, as they do once
+ * `standard_conforming_strings` is on, which maintenance sets; `$tag$…$tag$`
+ * bodies are skipped. SQLite's line comments end at an LF. Behind this,
+ * PostgreSQL gets every maintenance statement over its extended protocol,
+ * which refuses more than one, and SQLite compiles only the first. A
+ * SQLite trigger's body (`BEGIN …; END`) is more than one: make triggers
+ * elsewhere.
  */
 import { invalid } from "../../../runtime/errors.ts";
 
@@ -55,6 +60,26 @@ const identifier = /[A-Za-z0-9_$\u0080-￿]/;
 const tag = /\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/y;
 
 /**
+ * Where a PostgreSQL string continues, if it does: after its closing quote,
+ * space with a line break in it (comments allowed), then a quote (the
+ * scanner's `quotecontinue`). The index just past that quote, or undefined.
+ */
+function continued(sql: string, from: number): number | undefined {
+  let i = from;
+  let broke = false;
+  for (;;) {
+    const c = sql[i];
+    if (c === "\n" || c === "\r") (broke = true, i++);
+    else if (c === " " || c === "\t" || c === "\f" || (broke && c === "\v")) i++;
+    else if (sql.startsWith("--", i)) {
+      const line = sql.slice(i).search(/[\n\r]/);
+      if (line < 0) return undefined;
+      i += line;
+    } else return broke && c === "'" ? i + 1 : undefined;
+  }
+}
+
+/**
  * The statement in `sql`, checked: its text without the `;` that ends it
  * (and whatever follows), and its first keyword, uppercased. Throws
  * `invalid` for none, more than one, or one maintenance can't run.
@@ -73,8 +98,9 @@ export function statement(
   /** Skips a comment at `i`; false when there's none. */
   const comment = () => {
     if (sql.startsWith("--", i)) {
-      const line = sql.indexOf("\n", i);
-      i = line < 0 ? sql.length : line + 1;
+      // PostgreSQL ends a line comment at either; SQLite only at an LF.
+      const line = sql.slice(i).search(postgres ? /[\n\r]/ : /\n/);
+      i = line < 0 ? sql.length : i + line + 1;
       return true;
     }
     if (!sql.startsWith("/*", i)) return false;
@@ -109,6 +135,11 @@ export function statement(
       const escaped = postgres && /[eE]/.test(before) && !identifier.test(sql[i - 2] ?? "");
       i++;
       quoted("'", "string", escaped);
+      // An E'…' string goes on in a quote after a line break, escapes and all.
+      for (let next; escaped && (next = continued(sql, i)) !== undefined;) {
+        i = next;
+        quoted("'", "string", true);
+      }
     } else if (c === '"') (i++, quoted('"', "quoted name"));
     else if (!postgres && c === "`") (i++, quoted("`", "quoted name"));
     else if (!postgres && c === "[") (i++, quoted("]", "quoted name"));

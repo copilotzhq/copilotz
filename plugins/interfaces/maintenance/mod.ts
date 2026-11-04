@@ -3,17 +3,22 @@
  * reach its database themselves (a client's network that keeps their
  * database user out). The one place an app runs SQL of its own.
  *
- * - **One key** (the `maintenance` resource's `key`, from the app's
- *   environment): every request shows it (`Authorization: Bearer <key>`),
- *   compared in constant time. Without one, the endpoints answer that
- *   maintenance is off.
+ * - **A key** (the `maintenance` resource's `key`, or several in `keys`
+ *   while one rotates, from the app's environment): every request shows one
+ *   (`Authorization: Bearer <key>`), compared in constant time. Without
+ *   one, every request is unauthorized; a weak one stops the app. An orgs
+ *   host's orgs don't get the plugin (one key would reach every org).
+ * - **A line for each request**, before it runs (`log`): who, what (a
+ *   statement's hash), which key, when: a record outside the database.
  * - **The maintenance actor** (`{ kind: "maintenance", id: "maintenance",
  *   by? }`): who every request acts as. Its Actions let only it call them,
  *   and run as the system on the record (`ctx.as()`: events say `via` it),
  *   so no rule keeps it from a document, and nothing else can act as it: a
  *   host binds actors, and none binds this one but these routes.
  * - **Read SQL**, one read-only statement (`runtime.maintenance.read`, the
- *   store's `inspect`): at most `limit` rows, cut off after `timeout`.
+ *   store's `inspect`): at most `limit` rows and `bytes`, cut off after
+ *   `timeout`. On a PostgreSQL server, as a role of its own
+ *   (`postgresStore({ maintenance: { url } })`; the README's Maintenance).
  * - **Writes through the owner**: the collections' operations (insertOne…
  *   deleteMany, and find…aggregate), checked against their schemas, recorded
  *   as events, cached and heard by Processors like any write; and the

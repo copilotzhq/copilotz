@@ -140,7 +140,7 @@ export function createMaintenance(env: {
         );
         tx.emit({ ...(id !== undefined ? { id } : {}), type: MAINTENANCE_SQL, data, actor });
         return { ...done, prior: undefined };
-      }, { alone: true });
+      }, { maintenance: true });
       if (result.prior) {
         return {
           rows: [],

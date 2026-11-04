@@ -131,7 +131,9 @@ export type Transaction = Reader & {
    * Optional, for maintenance only (runtime/maintain.ts): runs one SQL
    * statement as it is, in this transaction, and says how many rows it
    * changed. It bypasses schemas and per-document events, so it runs only in
-   * a transaction that runs `alone`. A SQL store in a schema of its own has it.
+   * a `maintenance` transaction, and a statement that changes the store's own
+   * state (its fencing epoch, Processors' positions) is refused. A SQL store
+   * has it, where SQL can reach nothing but this store's own data.
    */
   execute?(sql: string, params?: unknown[], options?: { timeout?: number }): Promise<Executed>;
 };
@@ -182,14 +184,15 @@ export type Store = Reader & {
   /**
    * Runs `work` as one atomic, fenced transaction and returns its result with
    * the committed events. Throws `fenced` if another owner claimed the store.
-   * `positions` (Processor positions) are saved with the commit. `alone`: the
-   * writes running end first, and the next wait for it (a store whose writes
-   * run together; one that runs them one at a time already does).
+   * `positions` (Processor positions) are saved with the commit.
+   * `maintenance`: a transaction for maintenance SQL (`execute`). It runs
+   * alone (the writes running end first, and the next wait for it), and a
+   * store may run it on a connection of its own.
    */
   transaction<T>(
     epoch: number,
     work: (tx: Transaction) => Promise<T>,
-    options?: { positions?: Record<string, number>; alone?: boolean },
+    options?: { positions?: Record<string, number>; maintenance?: boolean },
   ): Promise<{ result: T; events: Event[] }>;
   /** Each Processor's saved position: the last event it has finished with. */
   positions(): Promise<Record<string, number>>;
@@ -210,7 +213,8 @@ export type Store = Reader & {
    * Optional, for maintenance and inspection tools: runs one read-only SQL
    * statement on committed state, with `params` bound ($1, ?1…), and returns
    * at most `limit` rows; `timeout` (ms) cancels it where the database can.
-   * A SQL store in a schema of its own has it.
+   * A SQL store has it, refusing it where SQL could reach other tenants' data,
+   * and leaving nothing of it on a connection the store's other work shares.
    */
   inspect?(
     sql: string,

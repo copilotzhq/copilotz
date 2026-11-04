@@ -33,7 +33,7 @@
  * `limit` rows and `timeout` ms, and may ask for less.
  */
 import { type Actor, invalid, type Resources, type Runtime } from "../../../../runtime/mod.ts";
-import type { MaintenanceActor, MaintenanceSettings } from "../contract.ts";
+import type { MaintenanceActor, MaintenanceLog, MaintenanceSettings } from "../contract.ts";
 import { isRead, READS } from "../actions/read.ts";
 import { isWrite, WRITES } from "../actions/write.ts";
 
@@ -42,7 +42,15 @@ import { isWrite, WRITES } from "../actions/write.ts";
 /** A key shorter than this is refused at start: it would be guessable. */
 const MIN_KEY = 32;
 
-type Settings = { key?: string; limit: number; timeout: number };
+type Settings = {
+  keys: string[];
+  limit: number;
+  timeout: number;
+  bytes: number;
+  log: (line: MaintenanceLog) => void;
+  /** An orgs host's org: maintenance doesn't serve one (one key would reach every org). */
+  org: boolean;
+};
 
 const positive = (value: unknown, name: string, fallback: number) => {
   if (value === undefined || value === null) return fallback;
@@ -52,16 +60,36 @@ const positive = (value: unknown, name: string, fallback: number) => {
   return Math.floor(value);
 };
 
+/** Why a key isn't one: too short, too few characters, or a short run repeated. */
+export function weak(key: string): string | undefined {
+  if (key.length < MIN_KEY) return `at least ${MIN_KEY} characters`;
+  if (new Set(key).size < 10) return "random: it uses too few characters";
+  for (let period = 1; period <= key.length / 2; period++) {
+    if ([...key].every((c, i) => c === key[i % period])) return "random: it repeats itself";
+  }
+}
+
 export function settingsOf(resources: Resources): Settings {
   const set = (resources.maintenance ?? {}) as MaintenanceSettings;
-  const key = set.key === undefined || set.key === null || set.key === "" ? undefined : set.key;
-  if (key !== undefined && (typeof key !== "string" || key.length < MIN_KEY)) {
-    throw invalid(`maintenance.key is at least ${MIN_KEY} random characters`);
+  const keys = [set.key, ...(set.keys ?? [])].filter((key) => key !== undefined && key !== "");
+  for (const key of keys) {
+    const why = typeof key === "string" ? weak(key) : "text";
+    if (why) throw invalid(`A maintenance key must be ${why}: make one with 32 random bytes`);
+  }
+  const org = resources.org !== undefined && resources.org !== null;
+  if (org && keys.length) {
+    throw invalid(
+      "Maintenance doesn't serve an orgs host's orgs (one key would reach every org): leave " +
+        "it out of their plugins, or its key out of their settings.",
+    );
   }
   return {
-    ...(key ? { key } : {}),
+    keys: keys as string[],
     limit: positive(set.limit, "limit", 1_000),
     timeout: positive(set.timeout, "timeout", 30_000),
+    bytes: positive(set.bytes, "bytes", 8 * 1024 * 1024),
+    log: typeof set.log === "function" ? set.log : (line) => console.log(JSON.stringify(line)),
+    org,
   };
 }
 
@@ -78,6 +106,17 @@ export async function sameKey(given: string, key: string): Promise<boolean> {
   for (let i = 0; i < a.length; i++) differ |= a[i] ^ b[i];
   return differ === 0;
 }
+
+/** Which of the keys `given` is (its place among them), comparing it with every one. */
+async function keyOf(given: string, keys: string[]): Promise<number | undefined> {
+  let found: number | undefined;
+  for (const [i, key] of keys.entries()) if (await sameKey(given, key)) found ??= i;
+  return found;
+}
+
+/** A statement's SHA-256, hex: what the log line keeps of it. */
+const hashOf = async (text: string) =>
+  [...await digest(text)].map((b) => b.toString(16).padStart(2, "0")).join("");
 
 /** The key a request shows: a Bearer token, or undefined. */
 function bearer(request: Request): string | undefined {
@@ -104,6 +143,7 @@ const STATUS: Record<string, number> = {
   too_large: 413,
   unsupported: 501,
   shared_schema: 501,
+  unsafe_role: 501,
   unavailable: 503,
   fenced: 503,
   timeout: 504,
@@ -268,6 +308,28 @@ function sqlOf(body: Record<string, unknown>, settings: Settings) {
   };
 }
 
+/**
+ * Rows within `bytes` of JSON: as many as fit, in order, and whether some
+ * were left out. What a read answers never grows past what the settings let.
+ */
+export function fit<T>(rows: T[], bytes: number): { rows: T[]; cut: boolean } {
+  const encoder = new TextEncoder();
+  let used = 2;
+  for (const [i, row] of rows.entries()) {
+    used += encoder.encode(JSON.stringify(row ?? null, plain)).length + 1;
+    if (used > bytes) return { rows: rows.slice(0, i), cut: true };
+  }
+  return { rows, cut: false };
+}
+
+/** A single answer within `bytes`, or `too_large`. */
+const within = (value: unknown, bytes: number) => {
+  if (new TextEncoder().encode(JSON.stringify(value ?? null, plain)).length > bytes) {
+    throw fault("too_large", `The answer is over ${bytes} bytes: ask for less.`);
+  }
+  return value;
+};
+
 /** Answers a request under `/maintenance/`. */
 export async function serveMaintenance(request: Request, host?: Served): Promise<Response> {
   if (!host?.runtime) {
@@ -276,21 +338,29 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
   const { runtime } = host;
   try {
     const settings = settingsOf(runtime.describe().resources);
-    if (!settings.key) {
-      return failure(
-        503,
-        "unavailable",
-        "Maintenance is off: the app's settings give it no key (resources.maintenance.key).",
-      );
-    }
+    // No key, or an orgs host's org: as unauthorized as a wrong key, so nothing says it's here.
     const given = bearer(request);
-    if (!given || !await sameKey(given, settings.key)) return unauthorized();
+    const key = given && settings.keys.length && !settings.org
+      ? await keyOf(given, settings.keys)
+      : undefined;
+    if (key === undefined) return unauthorized();
     const actor = actorOf(request);
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/maintenance\/?/, "/");
     const method = (want: string) => {
       if (request.method !== want) throw fault("method", `Use ${want} for ${url.pathname}.`);
     };
+    /** The request's line, before it runs: who, what, when. */
+    const log = (what: string, more: Partial<MaintenanceLog> = {}) =>
+      settings.log({
+        severity: "NOTICE",
+        maintenance: what,
+        ...(actor.by ? { by: actor.by } : {}),
+        ...more,
+        key,
+        at: new Date().toISOString(),
+      });
+    const { bytes } = settings;
 
     if (path === "/") {
       method("GET");
@@ -299,6 +369,7 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
         collections: Object.keys(runtime.describe().collections).sort(),
         limit: settings.limit,
         timeout: settings.timeout,
+        bytes,
         endpoints: {
           "POST /maintenance/sql": "{ sql, params?, limit?, timeout? }: one read-only statement",
           "POST /maintenance/sql/write": "{ sql, params?, limit?, timeout? }: one that writes",
@@ -308,33 +379,42 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
         },
       });
     }
-    if (path === "/sql") {
+    if (path === "/sql" || path === "/sql/write") {
       method("POST");
+      const write = path === "/sql/write";
       const { sql, ...options } = sqlOf(await bodyOf(request), settings);
+      log(write ? "sql.write" : "sql.read", {
+        sql: await hashOf(sql),
+        params: options.params?.length ?? 0,
+      });
       const started = performance.now();
-      try {
-        const { rows, truncated } = await runtime.maintenance.read(sql, options);
-        return json({ rows, count: rows.length, truncated, ms: elapsed(started) });
-      } catch (error) {
-        const code = (error as { code?: string }).code;
-        if (code !== "read_only") throw error;
-        throw fault(code, `${(error as Error).message} (this endpoint reads: /sql/write writes)`);
+      if (!write) {
+        try {
+          const read = await runtime.maintenance.read(sql, options);
+          const { rows, cut } = fit(read.rows, bytes);
+          return json({
+            rows,
+            count: rows.length,
+            truncated: read.truncated || cut,
+            ms: elapsed(started),
+          });
+        } catch (error) {
+          const code = (error as { code?: string }).code;
+          if (code !== "read_only") throw error;
+          throw fault(code, `${(error as Error).message} (this endpoint reads: /sql/write writes)`);
+        }
       }
-    }
-    if (path === "/sql/write") {
-      method("POST");
-      const { sql, ...options } = sqlOf(await bodyOf(request), settings);
       const id = idOf(request, "sql");
-      const started = performance.now();
       const done = await runtime.maintenance.write(sql, {
         ...options,
         actor,
         ...(id ? { id } : {}),
       });
+      const { rows, cut } = fit(done.rows, bytes);
       return json({
         changed: done.changed,
-        rows: done.rows,
-        truncated: done.truncated,
+        rows,
+        truncated: done.truncated || cut,
         event: { id: done.event.id, seq: done.event.seq, at: done.event.at },
         ms: elapsed(started),
         ...(done.repeated ? { repeated: true } : {}),
@@ -348,6 +428,7 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
       if (isWrite(op)) {
         only(body, ["doc", "docs", "filter", "update", "upsert"]);
         const id = idOf(request, "op");
+        log("op", { collection, op });
         return json(
           await runtime.call(
             "maintenance.write",
@@ -359,9 +440,15 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
       if (isRead(op)) {
         only(body, ["filter", "sort", "limit", "skip", "pipeline"]);
         const limit = upTo(body.limit, "limit", settings.limit);
-        return json(
-          await runtime.call("maintenance.read", { ...body, collection, op, limit }, { actor }),
+        log("op", { collection, op });
+        const read = await runtime.call<Record<string, unknown>>(
+          "maintenance.read",
+          { ...body, collection, op, limit },
+          { actor },
         );
+        if (!Array.isArray(read.docs)) return json(within(read, bytes));
+        const { rows, cut } = fit(read.docs, bytes);
+        return json({ ...read, docs: rows, truncated: Boolean(read.truncated) || cut });
       }
       throw fault("not_found", `No operation "${op}": ${[...WRITES, ...READS].join(", ")}.`);
     }
@@ -374,6 +461,7 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
         throw fault("not_found", `No query "${named}": name it <collection>.<query>.`);
       }
       const params = await bodyOf(request);
+      log("query", { query: named });
       const started = performance.now();
       const { result } = await runtime.call<{ result: unknown }>("maintenance.read", {
         collection: named.slice(0, dot),
@@ -381,13 +469,18 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
         name: named.slice(dot + 1),
         params,
       }, { actor });
-      return json({ result, ms: elapsed(started) });
+      if (!Array.isArray(result)) {
+        return json({ result: within(result, bytes), ms: elapsed(started) });
+      }
+      const { rows, cut } = fit(result, bytes);
+      return json({ result: rows, ...(cut ? { truncated: true } : {}), ms: elapsed(started) });
     }
     const blob = /^\/blobs\/([^/]+)$/.exec(path);
     if (blob) {
       method("GET");
       const id = decodeURIComponent(blob[1]);
       if (!BLOB.test(id)) throw fault("invalid", "A blob's id is sha256- and 64 hex digits.");
+      log("blob", { blob: id });
       const found = await runtime.maintenance.blob(id);
       if (!found) throw fault("not_found", `No blob ${id}.`);
       return new Response(found.data as BodyInit, {

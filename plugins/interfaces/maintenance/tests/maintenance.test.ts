@@ -3,7 +3,9 @@
  * that can't write; collection operations through the owner (schema-checked,
  * recorded as events by the system on the maintenance actor's behalf, cached
  * as any write, heard by Processors); raw SQL writes in the owner, audited,
- * after which the owner reads what they left; blobs by id. On every store.
+ * after which the owner reads what they left; blobs by id; answers within
+ * their bytes; a line for each request. On every store; on PostgreSQL
+ * servers, as a maintenance role of its own.
  */
 import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
 import {
@@ -20,22 +22,37 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import { sqliteStore } from "../../../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../../../stores/sql/postgres/mod.ts";
 import { routeServer } from "../../../../hosts/web/routes.ts";
-import { env, tempFile, temporary, test } from "../../../../testing/mod.ts";
-import { maintenance, serveMaintenance } from "../mod.ts";
-import { sameKey } from "../resources/routes.ts";
+import { env, tempFile, test } from "../../../../testing/mod.ts";
+import { maintainer } from "../../../../stores/tests/maintainer.ts";
+import { maintenance, type MaintenanceLog, serveMaintenance } from "../mod.ts";
+import { sameKey, weak } from "../resources/routes.ts";
 
-const KEY = "mk_" + "k".repeat(40);
+const KEY = "mk_Zq8vT2xLp9WcR4nY7bH3kJ6dF1sA5gE0uM";
+const NEXT = "mk_7Hw2Qe9Rt4Yu1Io8Pa3Sd6Fg0Jk5Lz2Xc";
 const POSTGRES = env("COPILOTZ_TEST_POSTGRES_URL");
+const ROLES = POSTGRES
+  ? await maintainer(POSTGRES).then(async (m) => (await m?.drop(), !!m))
+  : false;
 const stores: Record<string, () => Store | Promise<Store>> = {
   memory: memoryStore,
   sqlite: () => sqliteStore({ path: tempFile(".sqlite") }),
   pglite: () => postgresStore({ url: ":memory:" }),
-  ...(POSTGRES
+  ...(POSTGRES && ROLES
     ? {
-      postgres: () =>
-        temporary(
-          postgresStore({ url: POSTGRES, schema: `mx_${crypto.randomUUID().slice(0, 8)}` }),
-        ),
+      // Maintenance SQL as a role of its own, with privileges on this schema only.
+      postgres: async () => {
+        const role = (await maintainer(POSTGRES))!;
+        const schema = `mx_${crypto.randomUUID().slice(0, 8)}`;
+        const store = await postgresStore({
+          url: POSTGRES,
+          schema,
+          maintenance: { url: role.url },
+        });
+        await role.grant(schema);
+        return Object.assign(store, {
+          close: async () => (await store.drop(), await role.drop()),
+        });
+      },
     }
     : {}),
 };
@@ -71,11 +88,23 @@ const notes = definePlugin({
     "notes.heard": { on: ["note.updated", "maintenance.sql"], run: (_, e) => void heard.push(e) },
   },
 });
-const settings = (key?: string) =>
-  definePlugin({ name: "app", resources: { maintenance: { key, limit: 50 } } });
+/** What each request logged. */
+const logged: MaintenanceLog[] = [];
+const settings = (more: Record<string, unknown> = {}) =>
+  definePlugin({
+    name: "app",
+    resources: {
+      maintenance: {
+        key: KEY,
+        limit: 50,
+        log: (line: MaintenanceLog) => logged.push(line),
+        ...more,
+      },
+    },
+  });
 
-const open = async (store: Store, key: string | undefined = KEY) =>
-  await createRuntime({ store, plugins: [notes, maintenance, settings(key)] });
+const open = async (store: Store, more: Record<string, unknown> = {}) =>
+  await createRuntime({ store, plugins: [notes, maintenance, settings(more)] });
 
 // deno-lint-ignore no-explicit-any
 type Sent = { status: number; body: any; headers: Headers };
@@ -112,15 +141,15 @@ const sha256 = async (text: string) =>
       .map((b) => b.toString(16).padStart(2, "0")).join("")
   }`;
 
-test("maintenance: the key, in constant time; without one, it's off", async () => {
+test("maintenance: the key, in constant time; without one, nothing says it's here", async () => {
   assert(await sameKey(KEY, KEY));
   for (const other of ["", "x" + KEY.slice(1), KEY.slice(0, -1) + "x", KEY + "x", KEY.slice(1)]) {
     assertEquals(await sameKey(other, KEY), false);
   }
-  const off = await open(memoryStore(), "");
+  const off = await open(memoryStore(), { key: undefined });
   try {
     const answer = await send(off, "GET", "/");
-    assertEquals([answer.status, answer.body.error.code], [503, "unavailable"]);
+    assertEquals([answer.status, answer.body.error.code], [401, "unauthorized"]);
   } finally {
     await off.close();
   }
@@ -150,8 +179,60 @@ test("maintenance: the key, in constant time; without one, it's off", async () =
   } finally {
     await runtime.close();
   }
-  // A key too short to be safe stops the app.
-  await assertRejects(() => open(memoryStore(), "short"), Error, "maintenance.key");
+  // A key too short, or plainly not random, stops the app.
+  for (const key of ["short", "k".repeat(40), "abcdefghijkl".repeat(3), "0123456789".repeat(4)]) {
+    assert(weak(key), key);
+    await assertRejects(() => open(memoryStore(), { key }), Error, "maintenance key");
+  }
+  assertEquals(weak(KEY), undefined);
+});
+
+test("maintenance: keys rotate, and each request is logged before it runs", async () => {
+  logged.length = 0;
+  const runtime = await open(memoryStore(), { key: undefined, keys: [KEY, NEXT] });
+  try {
+    assertEquals((await send(runtime, "GET", "/")).status, 200);
+    assertEquals((await send(runtime, "GET", "/", { key: NEXT })).status, 200);
+    const failing = await send(runtime, "POST", "/sql", {
+      body: { sql: "SELECT 1", params: ["a", "b"] },
+      key: NEXT,
+      headers: { "x-maintenance-by": "ana" },
+    });
+    assertEquals(failing.status, 501);
+    const hash = (await sha256("SELECT 1")).slice("sha256-".length);
+    assertEquals(logged.map(({ at: _, ...line }) => line), [{
+      severity: "NOTICE",
+      maintenance: "sql.read",
+      by: "ana",
+      sql: hash,
+      params: 2,
+      key: 1,
+    }]);
+    assert(!Number.isNaN(Date.parse(logged[0].at)));
+    // A wrong key is refused before anything is logged.
+    assertEquals((await send(runtime, "GET", "/", { key: "wrong" })).status, 401);
+    assertEquals(logged.length, 1);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("maintenance: an orgs host's org has none (one key would reach every org)", async () => {
+  const org = definePlugin({ name: "org-here", resources: { org: { id: "o1", name: "One" } } });
+  await assertRejects(
+    () => createRuntime({ store: memoryStore(), plugins: [notes, maintenance, settings(), org] }),
+    Error,
+    "orgs host",
+  );
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [notes, maintenance, settings({ key: undefined }), org],
+  });
+  try {
+    assertEquals((await send(runtime, "GET", "/")).status, 401);
+  } finally {
+    await runtime.close();
+  }
 });
 
 for (const [name, make] of Object.entries(stores)) {
@@ -384,6 +465,48 @@ test("memory: SQL isn't there, operations are", async () => {
       const answer = await send(runtime, "POST", path, { body: { sql: "SELECT 1" } });
       assertEquals([answer.status, answer.body.error.code], [501, "unsupported"]);
     }
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("sqlite: an answer stays within its bytes, and a pipeline within its limit", async () => {
+  const runtime = await open(await sqliteStore({ path: tempFile(".sqlite") }), { bytes: 400 });
+  try {
+    for (const n of [1, 2, 3, 4, 5, 6]) {
+      await runtime.call("note.add", { id: `n${n}`, text: `${n}`.repeat(60) });
+    }
+    // As many rows as fit, in order, said to be cut.
+    const read = await send(runtime, "POST", "/sql", {
+      body: { sql: "SELECT id, doc FROM nodes WHERE collection = 'note' ORDER BY id" },
+    });
+    assertEquals(read.status, 200);
+    assert(read.body.count > 0 && read.body.count < 6, `${read.body.count} rows fit`);
+    assertEquals(read.body.truncated, true);
+    assert(JSON.stringify(read.body.rows).length <= 400);
+    const found = await send(runtime, "POST", "/collections/note/find", { body: {} });
+    assert(found.body.docs.length < 6 && found.body.truncated);
+    // One answer too big to cut says so.
+    const huge = await runtime.call("maintenance.write", {
+      collection: "note",
+      op: "insertOne",
+      doc: { _id: "big", text: "x".repeat(2000) },
+    }, { actor: { kind: "maintenance", id: "maintenance" } });
+    assert(huge);
+    const big = await send(runtime, "POST", "/collections/note/findOne", {
+      body: { filter: { _id: "big" } },
+    });
+    assertEquals([big.status, big.body.error.code], [413, "too_large"]);
+    // A pipeline's groups stop at the limit asked, or its own lower one.
+    const pipeline = [{ $group: { _id: "$text", n: { $count: {} } } }];
+    const groups = await send(runtime, "POST", "/collections/note/aggregate", {
+      body: { pipeline, limit: 2 },
+    });
+    assertEquals([groups.body.docs.length, groups.body.truncated], [2, true]);
+    const own = await send(runtime, "POST", "/collections/note/aggregate", {
+      body: { pipeline: [...pipeline, { $limit: 1 }], limit: 2 },
+    });
+    assertEquals([own.body.docs.length, own.body.truncated], [1, false]);
   } finally {
     await runtime.close();
   }

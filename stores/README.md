@@ -28,9 +28,14 @@ dialect. Both keep five tables (`events`, `nodes` with documents as JSON, `edges
 (`SELECT * FROM message`). Read them with any client while the runtime runs
 (`sqlite3 -box
 .data/copilotz.sqlite`, `psql`), or with `/sql <query>` in the chat. Maintenance SQL
-runs one statement on them as it is: `inspect` reads (read only, up to a limit), and a transaction's
-`execute` writes, only in a transaction that runs `alone` (the maintenance plugin's, through the
-owner: see the README's Maintenance).
+runs one statement as it is, where it can reach nothing but this store's data: `inspect` reads (read
+only, always rolled back, up to a limit and a timeout), and a maintenance transaction's `execute`
+writes (alone among the store's writes, fenced, refused if it changes `meta`). On a PostgreSQL
+server each runs on a connection of its own, over the extended protocol, as a role of its own
+(`postgresStore({ maintenance: { url } })`) or else the store's, closed after; PGlite discards what
+it left on its one session; a SQLite read runs in a worker on a read-only connection of its own, and
+a SQLite write is refused if it leaves a temporary object (the store names its tables in `main`).
+See the README's Maintenance.
 
 ## Tenants
 
@@ -62,7 +67,7 @@ only tenant (`""`), in the same tables.
   (`SET copilotz.tenant = 'org_1'`; else `""`, a schema's only tenant). Not a view per tenant: that
   grows the catalog with sign-ups, with DDL on every open. They're for reading: SQL can reach the
   tables beside them, so `inspect` and `execute` (`/sql` in the chat, the maintenance endpoints) run
-  only in a schema of its own.
+  only in a schema of its own, where their role reaches no other schema.
 - **The layout before tenants** (no `tenant` column) migrates in place when a store opens it, in one
   transaction under a lock: its rows become the tenant `""`, keys are rebuilt to lead with it, and
   nothing is renumbered.

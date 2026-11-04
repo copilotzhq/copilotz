@@ -551,10 +551,9 @@ Cloud Storage (`gcsBlobs`).
 
 When an app's operators can't reach its database (a client's network that keeps their database user
 out), the `maintenance` plugin (`copilotz/plugins/interfaces`) answers for it over HTTP, under
-`/maintenance/`, with one key the app gives it:
-`resources: { maintenance: { key: process.env.MAINTENANCE_KEY } }` (at least 32 random characters;
-`limit` and `timeout` cap what one request reads, 1,000 rows and 30 s by default). It's the one
-place an app runs SQL of its own: plugin code never does.
+`/maintenance/`, with a key the app gives it:
+`resources: { maintenance: { key: process.env.MAINTENANCE_KEY } }`. It's the one place an app runs
+SQL of its own: plugin code never does.
 
 ```sh
 curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
@@ -570,28 +569,82 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
 | `POST /maintenance/queries/<collection>.<name>`   | A collection's named query (`booking.stats`), the body its params: `{ result, ms }`                    |
 | `GET /maintenance/blobs/<sha256-…>`               | A blob's bytes and type, as a download                                                                 |
 
-- **Who:** every request shows the key (`Authorization: Bearer <key>`), compared in constant time,
-  and acts as the maintenance actor (`{ kind: "maintenance", id: "maintenance", by }`, `by` from
-  `X-Maintenance-By`, as said). Its Actions let only it call them, and run as the system on the
-  record (`ctx.as()`): no rule keeps it from a document, and every event says `via` it. Writes take
-  an `Idempotency-Key`: sent again, one answers what it did the first time.
-- **Read SQL** is one statement (a `;` outside its strings and comments ends it) in a read-only
-  transaction (SQLite: `query_only`, on the reading connection), stopped at its limit (a cursor in
-  PostgreSQL) and cut off after its timeout (on a PostgreSQL server).
+- **Keys:** `key`, or several in `keys` while one rotates (add the new, move clients, drop the old).
+  Each is at least 32 random characters: a short one, or one plainly not random, stops the app from
+  starting. Every request shows one (`Authorization: Bearer <key>`), compared in constant time;
+  without a key configured, every request is unauthorized, the same answer as a wrong key.
+- **Who:** a request acts as the maintenance actor
+  (`{ kind: "maintenance", id: "maintenance", by }`, `by` from `X-Maintenance-By`, as said). Its
+  Actions let only it call them, and run as the system on the record (`ctx.as()`): no rule keeps it
+  from a document, and every event says `via` it. Writes take an `Idempotency-Key`: sent again, one
+  answers what it did the first time.
+- **On record twice:** before it runs, each request writes a line (`log`, by default JSON on
+  standard output, which Cloud Run keeps): who, what (a statement's SHA-256, its params' count; an
+  operation, a query, a blob), which key, when. A SQL write also records a `maintenance.sql` event
+  in the same commit. The line is the record the key's holder can't rewrite.
+- **Limits:** `limit` rows (1,000), `timeout` ms (30 s) and `bytes` of rows in an answer (8 MB; past
+  it the rows are cut, and `truncated` says so). A request may ask for less. A pipeline stops at the
+  limit too.
 - **Operations go through the owner's write path:** checked against the collection's schema,
   recorded as its events, cached and heard by Processors like any write. Prefer them. Named queries
   run as the system does them (`runtime.query` with no actor), and check their own params.
+- **Read SQL** is one statement (a `;` outside its strings and comments ends it; PostgreSQL's line
+  comments end at a CR too, and maintenance reads strings with `standard_conforming_strings` on) in
+  a read-only transaction, always rolled back, stopped at its limit and cut off at its timeout.
 - **Raw SQL writes run inside the owner** (`runtime.maintenance.write`, see `runtime/maintain.ts`),
   for what operations can't do: alone among its writes (those running end first, the next wait for
-  it), in a transaction fenced by its epoch, so an owner that lost the store can't run one, and with
-  one `maintenance.sql` event in the same commit (the statement, its params, the rows it changed,
-  who). Nothing that would end that transaction or outlive it on the connection runs (`COMMIT`,
-  `SET`, a SQLite `PRAGMA`…). It bypasses schemas and per-document events, so the owner then forgets
-  what it derived from documents: its cache empties, observed Views run again, and the clock reads
-  the timers again. Processors' positions and the fencing epoch (`meta`) are read only at start:
-  leave them be.
-- **Where:** SQL needs a SQL store, and a PostgreSQL store in a schema other tenants share refuses
-  it (SQL could reach their rows); operations and blobs work everywhere, the memory store too.
+  it), in a transaction fenced by its epoch, so an owner that lost the store can't run one, with its
+  `maintenance.sql` event in the same commit (the statement, its params, the rows it changed in any
+  table, who). It bypasses schemas and per-document events, so the owner then forgets what it
+  derived from documents: its cache empties, observed Views run again, and the clock reads the
+  timers again. A statement that ends or nests its transaction (`COMMIT`, `SAVEPOINT`…) or changes
+  its connection (`SET`, `PREPARE`, `LISTEN`, SQLite's `ATTACH`, `PRAGMA`…) doesn't run; one that
+  changes the store's own state (`meta`: the fencing epoch, Processors' positions) or, in SQLite,
+  leaves a temporary object, is rolled back.
+- **Nothing outlives its statement:** on a PostgreSQL server each statement runs on a connection of
+  its own, closed after, so what it sets on its session (a setting, a session lock, a prepared
+  statement) goes with it; and it goes over the extended protocol, where the server refuses a second
+  statement whatever the check said. PGlite has one session: it forgets what maintenance left there
+  (`DISCARD ALL`). A SQLite read runs apart, in a worker on a read-only connection of its own, so a
+  long one doesn't hold the process (Deno stops it at its timeout; Node can't stop SQLite in the
+  middle of a statement, so there it answers at its timeout and the statement runs on in its thread
+  until it ends). SQLite writes name the store's tables in `main`, so nothing temporary stands in
+  for them.
+- **Where:** SQL needs a SQL store. In PostgreSQL it runs only where it can't reach another tenant:
+  never in a schema other tenants share, nor where its role has privileges on another schema's
+  tables or the database has `dblink` or `postgres_fdw`; an orgs host's orgs don't get the plugin at
+  all (one key would reach every org). Operations and blobs work everywhere, the memory store too.
+
+### A role of its own
+
+On a PostgreSQL server, SQL runs as the store's own role unless the store names one for maintenance:
+`postgresStore({ url, schema, maintenance: { url: process.env.MAINTENANCE_DATABASE_URL } })`. Give
+it one. The store's role owns the tables: as it, a statement can rewrite the log, stop the app's own
+connections (`pg_terminate_backend`) or read what else the role reaches; that's allowed only for an
+app alone on its database (nothing else in reach), and then at the key holder's word. A role of its
+own reaches the store's schema only, appends to the log without changing it, and can't touch the
+app's connections; maintenance checks before each statement that it is so (not a superuser, not a
+member of the store's role or of `pg_signal_backend` and the other server-wide roles, no other
+schema's tables, no `UPDATE`, `DELETE` or `TRUNCATE` on `events`) and refuses otherwise. As the
+store's role (the schema's owner), with the schema made (the app has started once):
+
+```sql
+CREATE ROLE copilotz_maintenance LOGIN PASSWORD '…' NOINHERIT;  -- as a role that may create roles
+GRANT USAGE ON SCHEMA copilotz TO copilotz_maintenance;
+-- Reading everything there, the collections' views too, now and later.
+GRANT SELECT ON ALL TABLES IN SCHEMA copilotz TO copilotz_maintenance;
+ALTER DEFAULT PRIVILEGES IN SCHEMA copilotz GRANT SELECT ON TABLES TO copilotz_maintenance;
+-- Changing documents, edges, vectors and blobs.
+GRANT INSERT, UPDATE, DELETE ON copilotz.nodes, copilotz.edges, copilotz.vectors, copilotz.blobs
+  TO copilotz_maintenance;
+-- Appending to the log (its own audit events), never changing it.
+GRANT INSERT ON copilotz.events TO copilotz_maintenance;
+-- Holding the fence while it writes (FOR SHARE needs it); a statement that changes meta is rolled back.
+GRANT UPDATE (value) ON copilotz.meta TO copilotz_maintenance;
+```
+
+Replace `copilotz` with the store's schema. `PUBLIC` keeps `CONNECT` on the database and `USAGE` on
+`public`; nothing else needs granting.
 
 ## The example app
 

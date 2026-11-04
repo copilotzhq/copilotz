@@ -56,6 +56,24 @@ test("statement: more than one is refused, however it's hidden", () => {
   refused("SELECT 1 /* a /* b */ ; SELECT 2", "sqlite");
 });
 
+test("statement: what ends a line comment, and an E'…' string, is the database's", () => {
+  // PostgreSQL ends a line comment at a CR as at an LF: what follows is a statement.
+  refused("SELECT 1 -- x\r; COMMIT; DELETE FROM nodes");
+  refused("SELECT 1 -- x\r\n; DELETE FROM nodes");
+  // SQLite's runs to an LF: after a CR alone, it's still comment.
+  assertEquals(statement("SELECT 1 -- x\r; DELETE FROM nodes", "sqlite", "read").keyword, "SELECT");
+  refused("SELECT 1 -- x\n; DELETE FROM nodes", "sqlite");
+  // An E'…' string continued in a quote on a later line keeps its escapes there.
+  refused("SELECT E'a'\n'\\'' ; DELETE FROM nodes; --'");
+  refused("SELECT E'a' -- note\n  '\\'' ; DELETE FROM nodes; --'");
+  assertEquals(statement("SELECT E'a'\n'b\\'c'", "postgres", "read").keyword, "SELECT");
+  // A plain string's continuation has no escapes: `''` in it is a quote, so this is one string.
+  assertEquals(
+    statement("SELECT 'a'\n'\\'' ; DELETE FROM nodes; --'", "postgres", "read").keyword,
+    "SELECT",
+  );
+});
+
 test("statement: nothing, or something unterminated, is refused", () => {
   refused("");
   refused("  -- only a comment\n");

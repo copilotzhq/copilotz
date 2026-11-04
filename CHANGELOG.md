@@ -1,27 +1,38 @@
 ## Unreleased
 
 - **Maintenance endpoints** (the new `maintenance` plugin, in `copilotz/plugins/interfaces`): HTTP
-  under `/maintenance/` for an app's operators when they can't reach its database, with one key
-  (`resources.maintenance.key`, at least 32 characters, compared in constant time). Requests act as
-  the maintenance actor (`{ kind: "maintenance", by }`), whose Actions run as the system on the
-  record.
-  - `POST /maintenance/sql`: one read-only statement, with `params`, at most `limit` rows (a cursor
-    in PostgreSQL), cut off after `timeout`.
+  under `/maintenance/` for an app's operators when they can't reach its database. A key (`key`, or
+  several in `keys` to rotate one; 32 random characters at least, a weak one stops the app),
+  compared in constant time; without one, every request is unauthorized. Requests act as the
+  maintenance actor (`{ kind: "maintenance", by }`), whose Actions run as the system on the record,
+  and each writes a line (`log`) before it runs. An orgs host's orgs don't get it.
+  - `POST /maintenance/sql`: one read-only statement, with `params`, at most `limit` rows and
+    `bytes`, cut off after `timeout`.
   - `POST /maintenance/collections/<collection>/<op>`: insertOne… deleteMany, find… aggregate,
     through the owner's write path: schema-checked, recorded, cached, heard by Processors.
-  - `POST /maintenance/sql/write`: one statement that writes, run by the owner alone among its
-    writes, fenced by its epoch, with a `maintenance.sql` audit event in the same commit; then the
-    owner empties its read cache, runs observed Views again and re-reads its timers. An
-    `Idempotency-Key` makes it safe to send again.
   - `POST /maintenance/queries/<collection>.<name>`: a collection's named query, the body its
     params, read as the system.
+  - `POST /maintenance/sql/write`: one statement that writes, run by the owner alone among its
+    writes, fenced by its epoch, with a `maintenance.sql` audit event in the same commit; then the
+    owner empties its read cache, runs observed Views again and re-reads its timers. A statement
+    that changes `meta` (the epoch, Processors' positions) is rolled back. An `Idempotency-Key`
+    makes it safe to send again.
   - `GET /maintenance/blobs/<id>`: a blob's bytes, as a download.
 - **SQL on the store port, for maintenance only:**
   `Store.inspect?(sql, params?, { limit, timeout })` (now SQLite's too), a transaction's
-  `execute?(sql, params?)` and `transaction(…, { alone })`. Both run exactly one statement: a
+  `execute?(sql, params?)` and `transaction(…, { maintenance })`. Both run exactly one statement: a
   second, or one that ends the transaction or changes the connection (`COMMIT`, `SET`…), is refused
-  (PostgreSQL ran every statement of an unparameterized `inspect` before). `runtime.maintenance` is
-  the owner's way to them; plugin code has none. The cache gains `clear()`, observers `stale()`.
+  (PostgreSQL ran every statement of an unparameterized `inspect` before; PostgreSQL's line comments
+  end at a CR too). `runtime.maintenance` is the owner's way to them; plugin code has none. The
+  cache gains `clear()`, observers `stale()`.
+  - **PostgreSQL servers:** each statement runs on a connection of its own, over the extended
+    protocol, closed after, as a role of its own when the store names one
+    (`postgresStore({ maintenance: { url } })`, least privilege, checked before each statement) or
+    else the store's; it's refused where its role reaches another schema's tables, or the database
+    has `dblink` or `postgres_fdw`. PGlite discards what maintenance left on its session.
+  - **SQLite:** the store names its tables in `main`, so a temporary object can't stand in for them
+    (a write that leaves one is rolled back); a read runs in a worker on a read-only connection of
+    its own, cut off at its timeout.
 
 - **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
   ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,

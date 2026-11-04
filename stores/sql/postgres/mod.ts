@@ -22,7 +22,7 @@
  * PGlite has a single connection, so its reads wait for an open transaction.
  */
 import type { JSONSchema } from "../../../runtime/define.ts";
-import { invalid } from "../../../runtime/errors.ts";
+import { failure, invalid } from "../../../runtime/errors.ts";
 import { applyUpdate, seedOf } from "../../../runtime/mongo.ts";
 import { canonical } from "../../../runtime/registry.ts";
 import {
@@ -59,6 +59,7 @@ import {
 import { type PostgresPool, postgresPool } from "./pool.ts";
 import { dropTenant } from "./tenants.ts";
 import { statement } from "../shared/statement.ts";
+import { connect, reach } from "./maintenance.ts";
 
 export { type PostgresPool, postgresPool } from "./pool.ts";
 export { copyTenant, dropTenant, exportTenant, type Location } from "./tenants.ts";
@@ -120,6 +121,13 @@ const refused = (error: unknown) => {
 /** A reading that stops at the rows it fetched: nothing it did is kept. */
 const READ = Symbol("read");
 
+const stateChanged = () =>
+  failure(
+    "forbidden",
+    "The statement changed the store's own state (meta: its fencing epoch or Processors' " +
+      "positions): it was rolled back.",
+  );
+
 /**
  * A document (a jsonb expression) without the private fields at these dot
  * paths, as the log keeps it. As in JavaScript, a path through an array
@@ -158,6 +166,13 @@ export async function postgresStore(options: {
   tenant?: string;
   /** Hears every SQL statement sent, for debugging. */
   trace?: (sql: string) => void;
+  /**
+   * Where maintenance SQL connects (`inspect`, a transaction's `execute`;
+   * see maintenance.ts): a role of its own, with privileges on this schema
+   * only. A new connection for each statement, closed after. Without it, the
+   * store's own role, and only where it reaches nothing else.
+   */
+  maintenance?: { url: string };
 }): Promise<
   Store & {
     /** Exposes each collection as a SQL view of its schema's top-level fields. */
@@ -188,12 +203,15 @@ export async function postgresStore(options: {
   const T = constant(tenant);
   const writer = pool.writes;
   const committed = pool.reads;
+  /** Whether maintenance SQL runs as a role of its own, which must then be least privilege. */
+  const ownRole = !!options.maintenance;
   /**
-   * Maintenance SQL's settings, for its transaction only: the views show this
-   * tenant, unqualified names are the schema's, and a statement runs at most
-   * `timeout` ms.
+   * Maintenance SQL's settings, for its transaction only: strings read as the
+   * statement check reads them, the views show this tenant, unqualified names
+   * are the schema's, and a statement runs at most `timeout` ms.
    */
   const scoped = (timeout?: number) =>
+    `set_config('standard_conforming_strings', 'on', true), ` +
     `set_config('copilotz.tenant', ${T}, true), set_config('search_path', ` +
     `${constant(`${ident(schema)}, public`)}, true)` +
     (timeout !== undefined && Number.isFinite(timeout) && timeout > 0
@@ -437,7 +455,7 @@ export async function postgresStore(options: {
     tx: Session,
     emitted: Omit<Event, "seq" | "at">[],
     held: Held,
-    alone: boolean,
+    maintenance: boolean,
   ): Transaction & { flush(): Promise<void> } => {
     /** The ids that went in. With `ifAbsent`, existing ones are left as they are. */
     const insert = async (collection: string, docs: Doc[], ifAbsent = false) => {
@@ -699,18 +717,25 @@ export async function postgresStore(options: {
         emitted.push({ ...value, id: value.id ?? crypto.randomUUID() });
       },
       /**
-       * Maintenance SQL, as it is (runtime/maintain.ts). Alone, so no other
-       * write holds numbers for events it might add to the log; the rows it
-       * changed are what this transaction's table statistics moved by.
+       * Maintenance SQL, as it is (runtime/maintain.ts), in a maintenance
+       * transaction: alone, so no other write holds numbers for events it
+       * might add to the log. The rows it changed are what this
+       * transaction's table statistics moved by, in every table. A statement
+       * that changes the store's own state (`meta`: the fencing epoch,
+       * Processors' positions) is refused, and its transaction rolled back.
        */
       async execute(sql, params = [], options = {}) {
-        if (!alone) throw invalid("SQL runs only in a transaction that runs alone.");
+        if (!maintenance) throw invalid("SQL runs only in a maintenance transaction.");
         const { text } = statement(sql, "postgres", "write");
         await flush();
-        if (await others(counted(tx), schema, tenant)) throw sharedSchema();
         const moved = `(SELECT coalesce(sum(n_tup_ins + n_tup_upd + n_tup_del), 0) FROM ` +
-          `pg_stat_xact_user_tables WHERE schemaname = ${constant(schema)})::bigint`;
-        const [before] = await run(tx, `SELECT ${scoped(options.timeout)}, ${moved} AS n`);
+          `pg_stat_xact_user_tables)::bigint`;
+        const state = `(SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb) FROM ` +
+          `${t("meta")} WHERE tenant = ${T})::text`;
+        const [before] = await run(
+          tx,
+          `SELECT ${scoped(options.timeout)}, ${moved} AS n, ${state} AS state`,
+        );
         let rows: Row[];
         try {
           rows = await run(tx, text, params);
@@ -719,9 +744,10 @@ export async function postgresStore(options: {
         }
         const [after] = await run(
           tx,
-          `SELECT ${moved} AS n, (SELECT coalesce(max(seq), 0) FROM ${t("events")} WHERE ` +
-            `tenant = ${T}) AS seq`,
+          `SELECT ${moved} AS n, ${state} AS state, (SELECT coalesce(max(seq), 0) FROM ` +
+            `${t("events")} WHERE tenant = ${T}) AS seq`,
         );
+        if (after.state !== before.state) throw stateChanged();
         // Events it wrote into the log keep their numbers: this commit's go after them.
         if (last !== undefined) last = Math.max(last, Number(after.seq));
         return { rows, changed: Number(after.n) - Number(before.n) };
@@ -1188,6 +1214,62 @@ export async function postgresStore(options: {
     });
   };
 
+  /** The store's own role: a maintenance role of its own mustn't be a member of it. */
+  let role: Promise<string> | undefined;
+  const storeRole = () =>
+    role ??= run(committed, "SELECT current_user AS role").then(([row]) => String(row.role));
+  /**
+   * Refuses maintenance SQL where it could reach what isn't this tenant's:
+   * a schema other tenants share, or (on `db`, the connection it runs on)
+   * anything beyond this schema (maintenance.ts).
+   */
+  const reachable = async (db: Session, ownRole: boolean) => {
+    if (await others(counted(committed), schema, tenant)) throw sharedSchema();
+    await reach(db, schema, { own: ownRole, store: await storeRole() });
+  };
+  /** On a server, a connection of its own for one maintenance statement (maintenance.ts). */
+  const dedicated = async () => {
+    const db = await connect(options.maintenance?.url ?? pool.url);
+    return { db: counted(db), end: () => db.end() };
+  };
+  /**
+   * PGlite has one session, the store's: after maintenance SQL, it forgets
+   * whatever that left on it (settings, session locks, prepared statements).
+   */
+  const discard = () => run(writer, "DISCARD ALL").then(() => {}, () => {});
+
+  /**
+   * A maintenance transaction on a server: alone, on a connection of its
+   * own (closed after), fenced like any commit (the epoch, locked for share),
+   * with its events, numbered as the store numbers them, in the same commit.
+   */
+  const maintained = async <T>(owner: number, work: (tx: Transaction) => Promise<T>) => {
+    const { db, end } = await dedicated();
+    let inserting: [string, Doc][] = [];
+    try {
+      await reachable(db, ownRole);
+      await db.query("BEGIN");
+      const [fence] = (await db.query(
+        `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch' FOR SHARE`,
+      )).rows;
+      if (Number(fence?.value) !== owner) throw fenced();
+      const emitted: Omit<Event, "seq" | "at">[] = [];
+      const held: Held = { docs: [], blobs: [] };
+      const scope = transaction(db, emitted, held, true);
+      const result = await work(scope);
+      inserting = [...held.docs];
+      await scope.flush();
+      const events = await record(db, unique(emitted), {});
+      await db.query("COMMIT");
+      return { result, events };
+    } catch (error) {
+      await db.query("ROLLBACK").catch(() => {});
+      throw await conflict(error, inserting);
+    } finally {
+      await end();
+    }
+  };
+
   return {
     ...reader(committed),
     command,
@@ -1214,92 +1296,99 @@ export async function postgresStore(options: {
       );
     },
     transaction: (owner, work, options = {}) =>
-      gate(options.alone ?? false, async () => {
-        const positions = options.positions ?? {};
-        // The database transaction opens with the command's first statement. A
-        // command that only records events (an action's completion, say) needs
-        // none: its events go in as one fenced statement, atomic on its own.
-        const emitted: Omit<Event, "seq" | "at">[] = [];
-        let open:
-          | { tx: Promise<Session>; done: PromiseWithResolvers<void>; settled: Promise<void> }
-          | undefined;
-        const begin = () => {
-          if (closed) throw new Error("This store is closed.");
-          if (!open) {
-            const ready = Promise.withResolvers<Session>();
-            const done = Promise.withResolvers<void>();
-            done.promise.catch(() => {});
-            const settled = writer.transaction(async (tx: Session) => {
-              // Unparameterized, so Ominipg sends it together with BEGIN. FOR SHARE
-              // waits for a newer owner's claim to settle, then sees it.
+      options.maintenance && pool.server
+        ? gate(true, () => maintained(owner, work))
+        : gate(options.maintenance ?? false, async () => {
+          const positions = options.positions ?? {};
+          if (options.maintenance) await reachable(counted(committed), false);
+          // The database transaction opens with the command's first statement. A
+          // command that only records events (an action's completion, say) needs
+          // none: its events go in as one fenced statement, atomic on its own.
+          const emitted: Omit<Event, "seq" | "at">[] = [];
+          let open:
+            | { tx: Promise<Session>; done: PromiseWithResolvers<void>; settled: Promise<void> }
+            | undefined;
+          const begin = () => {
+            if (closed) throw new Error("This store is closed.");
+            if (!open) {
+              const ready = Promise.withResolvers<Session>();
+              const done = Promise.withResolvers<void>();
+              done.promise.catch(() => {});
+              const settled = writer.transaction(async (tx: Session) => {
+                // Unparameterized, so Ominipg sends it together with BEGIN. FOR SHARE
+                // waits for a newer owner's claim to settle, then sees it.
+                const [fence] = await run(
+                  tx,
+                  `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch' FOR SHARE`,
+                );
+                if (Number(fence?.value) !== owner) throw fenced();
+                ready.resolve(tx);
+                await done.promise;
+              });
+              settled.catch((error) => ready.reject(error));
+              ready.promise.catch(() => {});
+              open = { tx: ready.promise, done, settled };
+            }
+            return open.tx;
+          };
+          const lazy: Session = {
+            query: async (sql, params) => (await begin()).query(sql, params),
+          };
+          const held: Held = { docs: [], blobs: [] };
+          // What the last statement inserts, to name a duplicate _id if it fails.
+          let inserting: [string, Doc][] = [];
+          try {
+            const scope = transaction(lazy, emitted, held, options.maintenance ?? false);
+            const result = await work(scope);
+            const events = unique(emitted);
+            const writes = events.length || Object.keys(positions).length ||
+              held.docs.length || held.blobs.length;
+            inserting = held.docs;
+            if (!open) {
+              if (writes) return { result, events: await append(owner, events, positions, held) };
+              // Nothing to write: still tell a fenced owner so.
               const [fence] = await run(
-                tx,
-                `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch' FOR SHARE`,
+                writer,
+                `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch'`,
               );
               if (Number(fence?.value) !== owner) throw fenced();
-              ready.resolve(tx);
-              await done.promise;
-            });
-            settled.catch((error) => ready.reject(error));
-            ready.promise.catch(() => {});
-            open = { tx: ready.promise, done, settled };
-          }
-          return open.tx;
-        };
-        const lazy: Session = { query: async (sql, params) => (await begin()).query(sql, params) };
-        const held: Held = { docs: [], blobs: [] };
-        // What the last statement inserts, to name a duplicate _id if it fails.
-        let inserting: [string, Doc][] = [];
-        try {
-          const scope = transaction(lazy, emitted, held, options.alone ?? false);
-          const result = await work(scope);
-          const events = unique(emitted);
-          const writes = events.length || Object.keys(positions).length ||
-            held.docs.length || held.blobs.length;
-          inserting = held.docs;
-          if (!open) {
-            if (writes) return { result, events: await append(owner, events, positions, held) };
-            // Nothing to write: still tell a fenced owner so.
-            const [fence] = await run(
-              writer,
-              `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch'`,
-            );
-            if (Number(fence?.value) !== owner) throw fenced();
-            return { result, events: [] };
-          }
-          const tx = await open.tx;
-          const finish = (tx as { finish?: Finish }).finish;
-          if (finish && writes) {
-            // Ominipg 0.11.2+: the last statement and COMMIT go in one round trip.
-            // It must carry no parameters, so its values are written as literals.
-            const at = new Date().toISOString();
-            const sql = final(events, positions, at, held);
-            statements++;
-            trace?.(sql);
-            const { rows } = await finish.call(tx, sql);
+              return { result, events: [] };
+            }
+            const tx = await open.tx;
+            const finish = (tx as { finish?: Finish }).finish;
+            if (finish && writes) {
+              // Ominipg 0.11.2+: the last statement and COMMIT go in one round trip.
+              // It must carry no parameters, so its values are written as literals.
+              const at = new Date().toISOString();
+              const sql = final(events, positions, at, held);
+              statements++;
+              trace?.(sql);
+              const { rows } = await finish.call(tx, sql);
+              open.done.resolve();
+              await open.settled;
+              return {
+                result,
+                events: events.length
+                  ? committedEvents(events, at, rows as { id: string; seq: number }[])
+                  : [],
+              };
+            }
+            await scope.flush();
+            const recorded = await record(tx, events, positions);
             open.done.resolve();
             await open.settled;
-            return {
-              result,
-              events: events.length
-                ? committedEvents(events, at, rows as { id: string; seq: number }[])
-                : [],
-            };
+            statements++; // COMMIT
+            return { result, events: recorded };
+          } catch (error) {
+            if (open) {
+              open.done.reject(error);
+              await open.settled.catch(() => {});
+            }
+            throw await conflict(error, inserting);
+          } finally {
+            if (options.maintenance) await discard();
           }
-          await scope.flush();
-          const recorded = await record(tx, events, positions);
-          open.done.resolve();
-          await open.settled;
-          statements++; // COMMIT
-          return { result, events: recorded };
-        } catch (error) {
-          if (open) {
-            open.done.reject(error);
-            await open.settled.catch(() => {});
-          }
-          throw await conflict(error, inserting);
-        }
-      }),
+        }),
     async index(collections) {
       const wanted = new Map<string, string>();
       for (const [collection, specs] of Object.entries(collections)) {
@@ -1397,31 +1486,55 @@ export async function postgresStore(options: {
       }
       known.set(key, signature);
     },
+    /**
+     * One read-only statement: on a server on a connection of its own (the
+     * maintenance role's, else the store's) in a read-only transaction,
+     * closed after; in PGlite on the store's session, which forgets it after.
+     * Always rolled back. A query a cursor holds stops at its limit.
+     */
     async inspect(sql, params = [], options = {}) {
       const { text, keyword } = statement(sql, "postgres", "read");
-      // Any SQL can reach the tables, and so other tenants' rows: only in a schema of its own.
-      if (await others(counted(committed), schema, tenant)) throw sharedSchema();
       const { limit } = options;
-      let rows: Row[] = [];
+      const read = async (db: Session) => {
+        await db.query(`SELECT ${scoped(options.timeout)}`);
+        if (limit !== undefined && CURSORS.has(keyword)) {
+          // A cursor fetches only what's asked for, however many rows the query has.
+          await db.query(`DECLARE copilotz_inspect NO SCROLL CURSOR FOR ${text}`, params);
+          const count = Math.max(0, Math.floor(limit));
+          return (await db.query(`FETCH FORWARD ${count} FROM copilotz_inspect`)).rows;
+        }
+        const rows = (await db.query(text, params)).rows;
+        return limit !== undefined ? rows.slice(0, limit) : rows;
+      };
       try {
-        await committed.transaction(async (tx: Session) => {
-          await tx.query(`SELECT ${scoped(options.timeout)}`);
-          if (limit !== undefined && CURSORS.has(keyword)) {
-            // A cursor fetches only what's asked for, however many rows the query has.
-            await tx.query(`DECLARE copilotz_inspect NO SCROLL CURSOR FOR ${text}`, params);
-            const count = Math.max(0, Math.floor(limit));
-            rows = (await tx.query(`FETCH FORWARD ${count} FROM copilotz_inspect`)).rows;
-          } else {
-            rows = (await tx.query(text, params)).rows;
-            if (limit !== undefined) rows = rows.slice(0, limit);
+        if (pool.server) {
+          const { db, end } = await dedicated();
+          try {
+            await reachable(db, ownRole);
+            await db.query("BEGIN READ ONLY");
+            return await read(db);
+          } finally {
+            await db.query("ROLLBACK").catch(() => {});
+            await end();
           }
-          // Rolled back: whatever it set (a setting, for the session) goes with it.
-          throw READ;
-        }, { readOnly: true });
+        }
+        await reachable(counted(committed), false);
+        let rows: Row[] = [];
+        try {
+          await committed.transaction(async (tx: Session) => {
+            rows = await read(tx);
+            // Rolled back: whatever it set (a setting, for the session) goes with it.
+            throw READ;
+          }, { readOnly: true });
+        } catch (error) {
+          if (error !== READ) throw error;
+        } finally {
+          await discard();
+        }
+        return rows;
       } catch (error) {
-        if (error !== READ) throw refused(error);
+        throw refused(error);
       }
-      return rows;
     },
     roundTrips: () => statements,
     close,

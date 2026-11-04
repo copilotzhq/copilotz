@@ -334,6 +334,39 @@ test("a contact erased: its access, its chats and its phone go; writing again, i
   });
 });
 
+test("a block outlives erasing the contact; erasing chats takes managing their spaces; the rate table keeps only this minute", async () => {
+  await setup(async (s) => {
+    const { runtime, graph, deliver, launch, read } = s;
+    await open(s);
+    await runtime.call("test.stale", {});
+    await deliver([{ text: { body: "hi" } }], { from: CARLA });
+    // Only this minute's counts are kept: the stale one went.
+    const counts = await read<{ _id: string }>("whatsapp_rate", { kind: "system", id: "" });
+    assertEquals(counts.map((c) => c._id), [`${s.number}:${CARLA}`]);
+    const [chat] = await threadsOf(runtime, launch);
+    const carla = await contactIn(s, chat._id);
+    // Moved to a space Ana doesn't manage: she can't erase it with the contact.
+    const { space: other } = await runtime.call<{ space: string }>("space.create", {
+      name: "Other",
+    }, { actor: { kind: "person", id: "bob" } });
+    await runtime.call("test.move", { thread: chat._id, to: other });
+    await assertRejects(
+      () => runtime.call("contact.forget", { contact: carla.id, chats: true }, { actor: ana }),
+      Error,
+      "manage its chats",
+    );
+    // Blocked, then erased: still blocked.
+    await runtime.call("test.move", { thread: chat._id, to: launch });
+    await runtime.call("whatsapp.block", { thread: chat._id, blocked: true }, { actor: ana });
+    await runtime.call("contact.forget", { contact: carla.id, chats: true }, { actor: ana });
+    await runtime.idle();
+    const before = graph.requests.length;
+    await deliver([{ text: { body: "me again" } }], { from: CARLA });
+    assertEquals(graph.requests.length, before);
+    assertEquals(await threadsOf(runtime, launch), []);
+  });
+});
+
 /** A line the app declares in its settings, at a webhook path it routes itself. */
 const declaring = definePlugin({
   name: "declaring",
@@ -433,4 +466,35 @@ test("a line the app declares answers customers with no person connecting or ope
     await write("e a volta?");
     assertEquals(graph.texts(CARLA).at(-1), "heard *Carla: e a volta?*");
   }, { plugins: [declaring] });
+});
+
+test("a declared line is one org's: with the orgs host, only the org it names has it", async () => {
+  const scoped = (org?: string) =>
+    definePlugin({
+      name: "scoped",
+      resources: {
+        ...(org ? { org: { id: org } } : {}),
+        whatsapp: {
+          lines: {
+            acme: {
+              in: "line-space",
+              phoneId: "999888777",
+              token: TOKEN,
+              secret: "the-acme-lines-own-secret-01",
+              verify: "acme-verify",
+              org: "acme",
+            },
+          },
+        },
+      },
+    });
+  const handshake = (s: Setup) =>
+    s.serve(
+      new Request(
+        "http://localhost/hooks/whatsapp/acme?hub.mode=subscribe&hub.verify_token=acme-verify&hub.challenge=1",
+      ),
+    ).then((r) => r.status);
+  await setup(async (s) => assertEquals(await handshake(s), 404), { plugins: [scoped()] });
+  await setup(async (s) => assertEquals(await handshake(s), 404), { plugins: [scoped("other")] });
+  await setup(async (s) => assertEquals(await handshake(s), 200), { plugins: [scoped("acme")] });
 });

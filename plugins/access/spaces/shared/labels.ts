@@ -22,7 +22,10 @@ import { docKey, homeOf, reachOf } from "./reach.ts";
 import { nameOf, namesOf, PROFILE } from "./names.ts";
 import type { Shared } from "./rules.ts";
 
+/** The `shared` resource; an entry is a collection's own key, never what objects inherit. */
 const sharedOf = (ctx: ReadContext) => (ctx.resources.shared ?? {}) as Shared;
+const entryOf = (shared: Shared, collection: string) =>
+  Object.hasOwn(shared, collection) ? shared[collection] : undefined;
 
 /** A document's own label: `#<collection>:<id>`, apart from spaces' ids. */
 const OWN = "#";
@@ -33,7 +36,7 @@ const OWN = "#";
  * are parts of (a chat). Others are shared only through their space.
  */
 function wholeOf(collection: string, doc: Record<string, unknown>, shared: Shared) {
-  const part = shared[collection]?.part;
+  const part = entryOf(shared, collection)?.part;
   if (part) return typeof doc[part] === "string" ? docKey(part, doc[part] as string) : undefined;
   const whole = Object.values(shared).some((entry) => entry?.part === collection);
   return whole && typeof doc._id === "string" ? docKey(collection, doc._id) : undefined;
@@ -83,7 +86,7 @@ const covered = async (space: string, ctx: ReadContext) =>
 export const labels: Labels = {
   read(collection, docs, ctx) {
     const all = sharedOf(ctx);
-    const shared = all[collection];
+    const shared = entryOf(all, collection);
     // A document that's a member (an agent) is meant for everywhere it works: reading it labels nothing.
     if (!shared || shared.member) return [];
     const field = shared.field ?? "in";
@@ -101,7 +104,7 @@ export const labels: Labels = {
   },
   async write(actor, collection, doc, read, ctx) {
     const all = sharedOf(ctx);
-    const shared = all[collection];
+    const shared = entryOf(all, collection);
     const space = shared ? doc[shared.field ?? "in"] : undefined;
     if (typeof space !== "string") return doc;
     const seen = await covered(space, ctx);

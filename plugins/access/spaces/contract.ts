@@ -9,7 +9,7 @@
  * `invitation`, `profile`), its queries `space.reached` (each space with what the asker
  * may do there) and `invitation.mine` (those to the asker's email), and its
  * Actions (`space.create`, `space.personal`, `space.rename`, `space.can`,
- * `space.leave`, `space.archive`, `space.agent`, `member.set`,
+ * `space.leave`, `space.archive`, `space.agent`, `space.keep`, `member.set`,
  * `member.remove`, `invitation.send`, `invitation.accept`,
  * `invitation.decline`, `request.grant`, `request.deny`).
  *
@@ -60,6 +60,7 @@ export type { Member } from "./collections/member.ts";
 export type { Invitation } from "./collections/invitation.ts";
 export type { Request } from "./collections/request.ts";
 export type { Verb } from "./shared/reach.ts";
+export type { DeclaredSpace } from "./shared/declared.ts";
 export type { Profile } from "./collections/profile.ts";
 export {
   idsIn,
@@ -73,7 +74,7 @@ export {
   PROFILE,
   withNames,
 } from "./shared/names.ts";
-export { may, must, mustOwnOr, present } from "./shared/can.ts";
+export { may, must, mustOwnOr, present, sharedWith } from "./shared/can.ts";
 export { ORG, runsOrg } from "./shared/reach.ts";
 export { PERSONAL } from "./shared/personal.ts";
 export { AGENT_ROLES } from "./views/web/who.ts";

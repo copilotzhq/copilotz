@@ -54,7 +54,12 @@ const cards = [
 const booking = definePlugin({
   name: "booking",
   resources: {
-    additions: { pay: { order: 20 }, trips: { order: 10 }, seats: { order: 30 } },
+    additions: {
+      pay: { order: 20 },
+      trips: { order: 10 },
+      seats: { order: 30 },
+      peek: { order: 40 },
+    },
     tools: {
       // A step that takes a while: long enough that WhatsApp would hide "typing…".
       slow: tool({
@@ -69,9 +74,14 @@ const booking = definePlugin({
     },
   },
   views: {
+    // Read from the chat, as whom it goes to reads it (as anyone else, there's no chat to read).
     "addition:trips": {
-      whatsapp: ({ answer }: { answer: Message }): Addition<WaPart> | undefined =>
-        said_(answer).includes("trips")
+      whatsapp: (
+        { answer }: { answer: Message },
+        ctx: ViewContext,
+      ): Addition<WaPart> | undefined =>
+        said_(answer).includes("trips") &&
+          ctx.db.collection("thread").findOne({ _id: answer.thread }).value
           ? {
             key: "trips:santos",
             parts: [carousel("Some trips to Santos", cards)],
@@ -94,6 +104,16 @@ const booking = definePlugin({
             ],
           }
           : undefined,
+    },
+    // What the chats it reads say, as whom the answer goes to may read them.
+    "addition:peek": {
+      whatsapp: ({ answer }: { answer: Message }, ctx: ViewContext) => {
+        if (!said_(answer).includes("peek")) return undefined;
+        const chats = ctx.db.collection("thread").find({}).value;
+        return chats
+          ? { key: `peek:${answer._id}`, parts: [text(`${chats.length} chat`)] }
+          : undefined;
+      },
     },
     "addition:pay": {
       whatsapp: ({ answer }: { answer: Message }) =>
@@ -326,4 +346,23 @@ test("an app's own message View is how its messages show on WhatsApp", async () 
     await write(s, "hi");
     assertEquals(s.graph.texts(CARLA), ["🚌 heard **Carla: hi**"]);
   }, { plugins: [app] });
+});
+
+test("what follows an answer is read as whom it goes to, whoever's work the answer was", async () => {
+  await run(async (s) => {
+    await open(s);
+    await s.runtime.call("chat.send", { in: s.launch, text: "the team's own" }, { actor: ana });
+    await write(s, "hi");
+    const chat = await chatOf(s);
+    const carla = (await said(s.runtime, chat._id))[0][0] as string;
+    // Trusted code's answer to Carla (the system's work, which reaches every chat).
+    await s.runtime.call("test.said", {
+      thread: chat._id,
+      to: carla,
+      text: "a peek",
+      answer: true,
+    });
+    await s.runtime.idle();
+    assertEquals(s.graph.texts(CARLA).at(-1), "a peek\n\n1 chat");
+  });
 });

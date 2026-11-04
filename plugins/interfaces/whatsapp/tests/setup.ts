@@ -76,6 +76,7 @@ export const reads = definePlugin({
       "whatsapp_phone",
       "whatsapp_code",
       "whatsapp_thread",
+      "whatsapp_rate",
       "thread",
       "message",
       "contact",
@@ -132,10 +133,16 @@ export const reads = definePlugin({
     // An agent's message in a chat, as trusted code writes one (with what it drew on, maybe).
     "test.said": defineAction({
       input: { type: "object" },
-      run: async (ctx, input: { thread: string; to: string; text: string; sources?: string[] }) => {
+      run: async (
+        ctx,
+        input: { thread: string; to: string; text: string; sources?: string[]; answer?: boolean },
+      ) => {
         const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: input.thread });
+        const turn = crypto.randomUUID();
         await ctx.db.collection("message").insertOne({
-          _id: crypto.randomUUID(),
+          // An answer, as a turn writes one, when it says so.
+          _id: input.answer ? `${turn}:reply` : turn,
+          ...(input.answer ? { turn } : {}),
           thread: input.thread,
           ...(thread?.in ? { in: thread.in } : {}),
           from: "lead",
@@ -146,6 +153,18 @@ export const reads = definePlugin({
           at: new Date().toISOString(),
         });
       },
+    }),
+    // A rate count from long ago, of a phone that wrote then.
+    "test.stale": defineAction({
+      input: { type: "object" },
+      run: (ctx) =>
+        ctx.db.collection("whatsapp_rate").insertOne({ _id: "old:phone", minute: 1, count: 3 }),
+    }),
+    // A chat moved to another space, as the system does it.
+    "test.move": defineAction({
+      input: { type: "object" },
+      run: (ctx, input: { thread: string; to: string }) =>
+        ctx.db.collection("thread").updateOne({ _id: input.thread }, { $set: { in: input.to } }),
     }),
     // A chat gone quiet for some hours: its last message that long ago.
     "test.age": defineAction({

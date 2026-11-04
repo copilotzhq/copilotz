@@ -109,8 +109,8 @@ export const replyProcessor: ProcessorDef = {
     // A turn that failed tells a customer only that, in their line's language: never its error.
     const own = said.failed && chat.contact
       ? [{ type: "text", text: CUSTOMERS[on.number.language ?? "en"].turn } as WaPart]
-      : (await ctx.render("whatsapp", "message", said, { viewer }) ?? []) as WaPart[];
-    const additions = isAnswer(said) ? await additionsAfter(ctx, said, viewer) : [];
+      : (await ctx.as(reader).render("whatsapp", "message", said, { viewer }) ?? []) as WaPart[];
+    const additions = isAnswer(said) ? await additionsAfter(ctx, said, viewer, reader) : [];
     const { sending, done } = await delivering(ctx, on, chat, said, reader);
 
     const mine: Out[] = own.map((part, i) => ({ ids: [`${said._id}:${i}`], part }));
@@ -156,7 +156,7 @@ export const undeliveredProcessor: ProcessorDef = {
     const whom = addresseeOf(chat);
     const on = chat ? await connected(ctx, chat.number) : null;
     if (!said || !chat || !whom || !on) return;
-    const [addition] = await additionsAfter(ctx, said, whom.viewer, key);
+    const [addition] = await additionsAfter(ctx, said, whom.viewer, whom.reader, key);
     if (!addition?.fallback?.length) {
       return console.error(`whatsapp: addition "${key}" wasn't delivered, and has no fallback`);
     }
@@ -169,7 +169,8 @@ export const undeliveredProcessor: ProcessorDef = {
     // The answer's text, if it went in the same message: with the fallback (or just before it).
     const lost = sent.find((s) => /^\d+$/.test(s._id.slice(s.message.length + 1)));
     const own = lost
-      ? (await ctx.render("whatsapp", "message", said, { viewer: whom.viewer }) ?? []) as WaPart[]
+      ? (await ctx.as(whom.reader).render("whatsapp", "message", said, { viewer: whom.viewer }) ??
+        []) as WaPart[]
       : [];
     const words = lost ? own[Number(lost._id.slice(said._id.length + 1))] : undefined;
     if (words?.type === "text") {
@@ -183,13 +184,15 @@ export const undeliveredProcessor: ProcessorDef = {
 
 /**
  * The additions that go after an answer, in order: each entry's View, here,
- * for the answer's agent; those already shown in this chat (by key) left out.
- * A View that fails is logged and left out.
+ * for the answer's agent, read as whom it goes to (`reader`: what they may
+ * see, never what whoever's work it was reaches); those already shown in
+ * this chat (by key) left out. A View that fails is logged and left out.
  */
 async function additionsAfter(
   ctx: Context,
   said: Message,
   viewer: Viewer,
+  reader: Actor,
   /** Only the one of this key, shown or not (to send its fallback after all). */
   only?: string,
 ): Promise<Addition<WaPart>[]> {
@@ -207,9 +210,10 @@ async function additionsAfter(
   for (const [name] of entries) {
     let made: unknown;
     try {
-      made = await ctx.render("whatsapp", `addition:${name}`, { thread, answer: said }, {
-        viewer,
-      });
+      made = await ctx.as(reader).render("whatsapp", `addition:${name}`, {
+        thread,
+        answer: said,
+      }, { viewer });
     } catch (error) {
       console.error(`whatsapp: addition "${name}" failed:`, (error as Error).message);
       continue;

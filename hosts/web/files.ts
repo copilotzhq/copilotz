@@ -65,10 +65,11 @@ export function fileServer(
   runtime: Pick<Runtime, "query" | "describe">,
   whom: (request: Request) => Promise<Actor | null>,
 ): (request: Request) => Promise<Response> | undefined {
+  // The app's links, checked as the server starts (a secret too short is refused now, not per file).
+  const links = linksOf(runtime.describe().resources);
   /** Whether a request is a link signed for its file: then the system reads it. */
   const signed = async (url: URL) => {
     if (!url.searchParams.has("sig")) return false;
-    const links = linksOf(runtime.describe().resources);
     const query = Object.fromEntries(url.searchParams);
     delete query.download;
     return !!links && !!await verifyLink(links, url.pathname, query);

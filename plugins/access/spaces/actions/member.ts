@@ -16,6 +16,7 @@ import { keepsAManager } from "../shared/managers.ts";
 import { joinable } from "../shared/personal.ts";
 import { may, must } from "../shared/can.ts";
 import { checkRole, seat } from "../shared/seat.ts";
+import { declaredAgent } from "../shared/declared.ts";
 import { docKey, memberKey, ORG } from "../shared/reach.ts";
 
 const who = {
@@ -33,15 +34,23 @@ async function manages(ctx: Context, space: string, on?: string): Promise<string
     await must(ctx, "manage", space, `You don't manage "${space}".`);
     return space;
   }
-  const shared = ((ctx.resources.shared ?? {}) as Record<string, { field?: string }>)[on];
+  const all = (ctx.resources.shared ?? {}) as Record<string, { field?: string }>;
+  const shared = Object.hasOwn(all, on) ? all[on] : undefined;
   const doc = shared ? await ctx.as().db.collection(on).findOne({ _id: space }) : null;
-  if (!doc) throw forbidden(`No ${on} "${space}".`);
+  if (!doc || !shared) throw forbidden(`No ${on} "${space}".`);
   const key = docKey(on, space);
   const home = String(doc[shared.field ?? "in"]);
   if (!await may(ctx, "manage", space, on)) {
     await must(ctx, "manage", home, `You don't manage "${home}".`);
   }
   return key;
+}
+
+/** Throws unless `member` may leave or change role in `space`: the app's own agents there stay. */
+function appsOwn(ctx: Context, space: string, member: { kind: string; id: string }) {
+  if (member.kind === "agent" && declaredAgent(ctx, space, member.id)) {
+    throw forbidden(`${member.id} works here as the app declares: its settings keep it.`);
+  }
 }
 
 export const setMemberAction = defineAction({
@@ -63,6 +72,7 @@ export const setMemberAction = defineAction({
     const place = await manages(ctx, input.space, input.on);
     const key = memberKey(input.member);
     checkRole(ctx, key, input.role);
+    if (!input.on && input.role !== "editor") appsOwn(ctx, input.space, input.member);
     if (!input.on) {
       joinable(await ctx.as().db.collection("space").findOne({ _id: input.space }), key);
       if (input.member.kind === "agent") await mustKnow(ctx, input.member.id);
@@ -104,6 +114,7 @@ export const removeMemberAction = defineAction({
   run: async (ctx, input) => {
     if (input.space === ORG) throw forbidden("People leave the org with org.remove.");
     const place = await manages(ctx, input.space, input.on);
+    if (!input.on) appsOwn(ctx, input.space, input.member);
     if (!input.on) await keepsAManager(ctx, input.space, memberKey(input.member));
     await ctx.as().db.collection("member").deleteOne({
       _id: `${place}|${memberKey(input.member)}`,

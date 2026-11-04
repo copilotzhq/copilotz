@@ -19,6 +19,8 @@ const spaceSchema = {
     archived: { type: "string" },
     /** The agent that answers its new chats (`space.agent`): one working here. */
     agent: { type: "string" },
+    /** The app's own (its `spaces` resource): its name and agents are as the app declares. */
+    declared: { type: "boolean" },
   },
   required: ["name", "kind"],
 } as const;

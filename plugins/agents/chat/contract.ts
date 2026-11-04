@@ -4,8 +4,10 @@
  * the resource kinds it reads (`agents`, `tools`, `context`, `additions`,
  * `roster`, `agentSources`, `agentModel`; on the web, `conversation`, `home`, `toolViews`,
  * `refusals` and `composerNotes`),
- * `tool()` to declare a tool, and what knowing agents takes (`agentsOf`,
- * `defaults`, `modelOf`, `agentsNamed`, `agentsShown`, `SEND`).
+ * `tool()` to declare a tool, its runner (`runTool`, `toolText`: how a turn
+ * runs one, for interfaces that run them for a model outside), and what
+ * knowing agents takes (`agentsOf`, `defaults`, `modelOf`, `agentsNamed`,
+ * `agentsShown`, `SEND`).
  * Everything else they reach through the runtime: its collections by name
  * (`message`, `thread`…), its queries (`thread.agents`: who answers in a
  * space, and what each agent is), its events (`message.created`,
@@ -33,11 +35,18 @@ export type {
   ShownCall,
   Step,
   Tool,
+  ToolAnnotations,
   ToolContext,
   ToolViews,
   Turn,
 } from "./shared/types.ts";
 export { tool } from "./shared/types.ts";
+/**
+ * Chat's tool runner, for whoever else runs the app's tools (a model
+ * outside, over MCP): a tool's input checked, run, and its result read as
+ * agents read it, exactly as a turn does (`runTool`, `toolText`).
+ */
+export { runTool, type ToolAt, type ToolRun, toolText } from "./shared/tools.ts";
 export { type Origin, originKey, originOf } from "./shared/origin.ts";
 export type { AgentModel, AgentSource, Roster, RosterSource, Team } from "./shared/agents.ts";
 /**

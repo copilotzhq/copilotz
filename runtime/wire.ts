@@ -46,7 +46,7 @@ export type Job =
   };
 
 /** Why something failed; `final`: trying again won't help (it already was, as long as it should be). */
-export type Failure = { message: string; code?: string; final?: true };
+export type Failure = { message: string; code?: string; final?: true; public?: true };
 
 export type Line =
   | { frame: { channel: string; data: unknown } }
@@ -86,6 +86,8 @@ export const failure = (error: unknown): Failure => ({
     ? { code: (error as { code: string }).code }
     : {}),
   ...((error as { final?: unknown })?.final === true ? { final: true as const } : {}),
+  // A message for any caller stays one from job to job (see errors.ts).
+  ...((error as { public?: unknown })?.public === true ? { public: true as const } : {}),
 });
 
 export const raise = (failure: Failure): Error =>
@@ -93,6 +95,7 @@ export const raise = (failure: Failure): Error =>
     new Error(failure.message),
     failure.code ? { code: failure.code } : {},
     failure.final ? { final: true } : {},
+    failure.public ? { public: true } : {},
   );
 
 /**

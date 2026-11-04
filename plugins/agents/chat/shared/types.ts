@@ -54,6 +54,27 @@ export type Tool<I = Record<string, unknown>> = {
    * for a contact, say), it isn't offered.
    */
   offer?: Offer;
+  /** What people see it called ("Search trips"), where they're shown it: its name otherwise. */
+  title?: string;
+  /** What it does to the world, for whoever decides how to call it (see `ToolAnnotations`). */
+  annotations?: ToolAnnotations;
+};
+
+/**
+ * What a tool does to the world, as hints for whoever calls it: a model
+ * outside (MCP's annotations), or an app asking before a destructive one.
+ * Hints, not rules: what it may do is still what its caller may.
+ *
+ * - `readOnly`: it changes nothing (a search).
+ * - `destructive`: it may change or remove what's there, not only add.
+ * - `idempotent`: calling it again with the same input changes nothing more.
+ * - `openWorld`: it reaches outside the app (another company's system, the web).
+ */
+export type ToolAnnotations = {
+  readOnly?: boolean;
+  destructive?: boolean;
+  idempotent?: boolean;
+  openWorld?: boolean;
 };
 
 /** Whom a tool is offered to: everyone, these agents, or decided per agent and thread. */
@@ -89,6 +110,8 @@ export const tool = <const S extends JSONSchema>(
     input?: S;
     run(input: Infer<S>, ctx: ToolContext): unknown;
     offer?: Offer;
+    title?: string;
+    annotations?: ToolAnnotations;
   },
 ): Tool => def as Tool;
 

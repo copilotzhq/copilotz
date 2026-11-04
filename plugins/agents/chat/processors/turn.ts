@@ -18,7 +18,6 @@ import type { Thread } from "../collections/thread.ts";
 import {
   type AgentModel,
   agentsNamed,
-  check,
   modelOf,
   NO_ANSWER,
   now,
@@ -32,14 +31,8 @@ import { answer, delivery } from "../shared/delivery.ts";
 import { liveWriter } from "../shared/live.ts";
 import { prepare, type Send } from "../shared/send.ts";
 import { noted, startedWith } from "../shared/summary.ts";
-import {
-  type Agent,
-  type Prompt,
-  settingsOf,
-  type Step,
-  type Tool,
-  type Turn,
-} from "../shared/types.ts";
+import { runTool, toolText } from "../shared/tools.ts";
+import { type Agent, type Prompt, settingsOf, type Step, type Turn } from "../shared/types.ts";
 
 /** Runs a turn: started by `turn.requested`, or resumed when its wait is over. */
 /**
@@ -95,7 +88,6 @@ export const turnProcessor: ProcessorDef = {
 const turn = async (ctx: Context, event: Event) => {
   const t = turnOf(event);
   const run = event.id;
-  const tools = (ctx.resources.tools ?? {}) as Record<string, Tool>;
   // What it is: the app's, or one people made that works where this thread is.
   const agent = (await agentsNamed(ctx, [t.agent]))[t.agent];
   if (!agent) throw new Error(`No agent "${t.agent}" works here`);
@@ -246,24 +238,17 @@ const turn = async (ctx: Context, event: Event) => {
         // It returned before the retry: it doesn't run again.
         output = returned;
       } else {
-        try {
-          if (!offered.some((tool) => tool.name === call.name)) {
-            throw new Error(`Unknown tool "${call.name}"`);
-          }
-          check(call.name, tools[call.name])(call.input);
-          const result = await tools[call.name].run(call.input, {
-            ...ctx.branch(`${step}.${i}`),
+        // Only a tool offered to it here; each in a branch of its own, as chat's runner runs them.
+        output = offered.some((tool) => tool.name === call.name)
+          ? (await runTool(ctx.branch(`${step}.${i}`), call.name, call.input, {
             agent: t.agent,
             thread: t.thread,
             trigger: t.trigger,
             callId: `${id}:${i}`,
             // Only a call that was written and never returned may have run already.
             retry: !!resumed,
-          });
-          output = typeof result === "string" ? result : JSON.stringify(result);
-        } catch (error) {
-          output = `Error: ${error instanceof Error ? error.message : String(error)}`;
-        }
+          })).output
+          : `Error: Unknown tool "${call.name}"`;
         // What it returned is on record at once: a retry won't run it again. If
         // that write fails, a retry runs it again, as itself.
         await intents.updateOne({ _id: run }, { $set: { [`outputs.${i}`]: output } })
@@ -283,12 +268,7 @@ const turn = async (ctx: Context, event: Event) => {
     });
     for (const c of done) {
       // As later turns will see it, through its tool's View.
-      const shown = await ctx.render("llm", `tool:${c.name}`, c, { viewer });
-      conversation.push({
-        role: "tool",
-        toolCallId: c.id,
-        text: typeof shown === "string" ? shown : c.output,
-      });
+      conversation.push({ role: "tool", toolCallId: c.id, text: await toolText(ctx, c, viewer) });
     }
 
     // The step, what it sent and what it waits for commit together, so no

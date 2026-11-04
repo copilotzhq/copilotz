@@ -112,8 +112,8 @@ agents.
   and between steps the prompt only grows: a conversation that runs on past the window misses the
   cache once a step, not every turn.
 - **From the newest message, not the clock:** the View reads only data, so `thread.prompt` shows
-  what the agent is sent for the latest message, and a thread that's quiet for days starts afresh with
-  the next one.
+  what the agent is sent for the latest message, and a thread that's quiet for days starts afresh
+  with the next one.
 - **What it was told** in a message that ages out is told again, in the next turn's first message
   (as after any cut): it's sent only what it hasn't been told in the messages it still sees.
 - **A model's state** on the messages it still sees goes back as before. A provider that refuses it

@@ -398,6 +398,10 @@
   from `message_start`; MiniMax (on Anthropic's protocol) says them in `message_delta`, so its calls
   were recorded with 0 input tokens. It now reads every count from both, the greatest of each (they
   are totals so far), so Anthropic's, said in both, count once.
+- **OpenAI keeps nothing: `store: false`.** The Responses API stores every response (30 days) unless
+  told not to, and Copilotz never read them back: a model's reasoning already comes back encrypted
+  and goes back with each call. A server that refuses `store` is asked again without it, from then
+  on, as one refusing `include` is. A model's `options` can still set it.
 
 - **Fixed: a collection's private fields reached the log on PostgreSQL.** Writes that go as the
   store's single command (most of them) recorded `.created`, `.updated` and `.deleted` with the

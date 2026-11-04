@@ -297,3 +297,18 @@ test("a line's widgets are checked at start: an Action that isn't, one the model
     "https origin",
   );
 });
+
+test("a template that can't be made: the line goes on without widgets, its tools still answer", async () => {
+  const failing = widgetsOf({
+    code: () => Promise.reject(new Error("the bundle failed")),
+    plugins: [cardsWeb],
+  });
+  await setup(async (s) => {
+    const init = await s.legacy("initialize", { protocolVersion: "2025-11-25" });
+    assertEquals(res(init).capabilities, { tools: {} });
+    const names = (res(await s.legacy("tools/list")).tools as Tool[]).map((t) => t.name);
+    assert(names.includes("show_card") && !names.includes("write_card"));
+    const shown = await s.call("show_card", { text: "Hi" }, { session: "s1" });
+    assertEquals([said(shown), res(shown)._meta], ["A card is shown.", undefined]);
+  }, { line, plugins: [cards], widgets: failing });
+});

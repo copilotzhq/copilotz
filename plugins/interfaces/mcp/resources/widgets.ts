@@ -41,15 +41,31 @@ const TEMPLATE = /^ui:\/\/([\w-]{1,60})\/widget-[\w-]{1,64}\.html$/;
 /** The most reads a widget asks at once. */
 const MOST_READS = 32;
 
-/** The line's template now, when it has widgets and the host serves them. */
+/** Lines already told about in the log, whose template couldn't be made: once each. */
+const broken = new Set<string>();
+
+/**
+ * The line's template now, when it has widgets and the host serves them. One that can't be
+ * made (its code didn't bundle) is said once in the log, and the line goes on without widgets:
+ * its tools still answer, drawn by nothing.
+ */
 export async function templateOf(
   line: Line,
   widgets: Widgets | undefined,
   origin: string | undefined,
 ): Promise<{ uri: string; html: string } | undefined> {
   if (!widgets || !origin || !hasWidgets(line)) return undefined;
-  const { html, version } = await widgets.page(origin);
-  return { uri: uriOf(line, version), html };
+  try {
+    const { html, version } = await widgets.page(origin);
+    broken.delete(line.name);
+    return { uri: uriOf(line, version), html };
+  } catch (error) {
+    if (!broken.has(line.name)) {
+      broken.add(line.name);
+      console.error(`mcp.${line.name}: no widgets, the template failed:`, (error as Error).message);
+    }
+    return undefined;
+  }
 }
 
 /** The template's `_meta`: MCP Apps' `ui`, with ChatGPT's aliases. */

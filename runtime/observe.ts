@@ -303,7 +303,7 @@ export function createObservers(env: {
   ): ViewContext => ({
     db,
     resources: run.source.resources,
-    renderer: p.medium,
+    medium: p.medium,
     kind,
     ...(p.viewer ? { viewer: p.viewer } : {}),
     ...(p.actor ? { actor: p.actor } : {}),

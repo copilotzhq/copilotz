@@ -32,7 +32,7 @@ function ctxOf(reads: Record<string, unknown>, viewer = "ana"): ViewContext<Reac
       }),
     } as unknown as ViewContext<ReactNode>["db"],
     resources: {},
-    renderer: "web",
+    medium: "web",
     kind: "test",
     viewer: { name: viewer },
     hints: {},

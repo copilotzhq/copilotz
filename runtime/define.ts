@@ -91,7 +91,7 @@ export type Context = {
    * code never ends another org's browsers.
    */
   disconnect(actor: Actor): Promise<number>;
-  /** Renders `item` through the View registered for its kind and the renderer (see Views). */
+  /** Renders `item` through the View registered for its kind and the medium (see Views). */
   render: Render;
   /**
    * Appends a document to a records collection, and returns its `_id`. It
@@ -163,9 +163,9 @@ export type Merged = {
 
 /**
  * Views present data to a medium. A plugin registers them by kind (a
- * collection's name, `tool:<name>`, a named datum) and renderer (a medium:
- * `llm`, later `react`). The runtime gives neither name a meaning; for a kind
- * and renderer, the last plugin's View wins.
+ * collection's name, `tool:<name>`, a named datum) and medium (`llm`,
+ * `web`…). The runtime gives neither name a meaning; for a kind
+ * and medium, the last plugin's View wins.
  */
 export type Views = Record<string, Record<string, ViewDef>>;
 
@@ -182,16 +182,16 @@ export type Viewer = { name: string; kind?: string; label?: string };
 
 export type RenderOptions = { viewer?: Viewer; hints?: Record<string, unknown> };
 
-/** Renders through the View for a kind and renderer; undefined when there is none. */
+/** Renders through the View for a kind and medium; undefined when there is none. */
 export type Render = (
-  renderer: string,
+  medium: string,
   kind: string,
   item: unknown,
   options?: RenderOptions,
 ) => Promise<unknown>;
 
 /**
- * A read inside a View: it returns at once. While `loading`, the renderer
+ * A read inside a View: it returns at once. While `loading`, the runtime
  * waits for it and runs the View again, until a pass reads nothing new.
  */
 export type Read<T> =
@@ -213,7 +213,7 @@ export type ViewContext<Shown = unknown> = {
   db: { collection<T = Record<string, unknown>>(name: string): ViewCollection<T> };
   resources: Resources;
   /** The medium being rendered. */
-  renderer: string;
+  medium: string;
   /** The kind being rendered: a medium's default View (kind `"*"`) renders any kind. */
   kind: string;
   viewer?: Viewer;
@@ -222,7 +222,7 @@ export type ViewContext<Shown = unknown> = {
   /** What the caller asked for (`mode`: a density, …). Open-ended. */
   hints: Record<string, unknown>;
   /**
-   * Renders `item` through its kind's View in this renderer; undefined when
+   * Renders `item` through its kind's View in this medium; undefined when
    * there is none. Observed, the shown View is a part of its own: it runs
    * again on its own when what it read changes (see `Owner.observe`).
    */

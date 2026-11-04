@@ -9,7 +9,7 @@ import type { Metrics } from "./metrics.ts";
 import { isRead } from "./ops.ts";
 import { invalid, json, readCall, type Registry } from "./registry.ts";
 import type { Actor, Edge } from "./store.ts";
-import { renderer } from "./views.ts";
+import { presenter } from "./views.ts";
 
 export function reading(
   registry: Registry,
@@ -24,7 +24,7 @@ export function reading(
   const ctx: ReadContext = {
     db: { collection: (name) => collection(name, reads, query) },
     graph: { edges: (query) => reads({ op: "edges", query }) as Promise<Edge[]> },
-    render: renderer(registry.views, () => reading(registry, reads, record, metrics, actor)),
+    render: presenter(registry.views, () => reading(registry, reads, record, metrics, actor)),
     record,
     metrics,
     resources: registry.resources,

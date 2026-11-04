@@ -1,5 +1,5 @@
 /**
- * What's being said in a call (the `voice_call` View, renderer `voice`),
+ * What's being said in a call (the `voice_call` View, medium `voice`),
  * read as the line's agent working for its caller: what agents answered
  * them since the call began, in order, each as its `message` View here says
  * it; what an agent is writing right now (`live`); and whether the agent

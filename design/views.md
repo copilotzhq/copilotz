@@ -38,18 +38,18 @@ views: {
 }
 ```
 
-- **Kind, then renderer.** A kind is a collection's name, `tool:<name>`, or a named datum (`thread`,
-  `participants`). A renderer is a medium: `llm` now, `react` with the web runtime. The runtime
-  treats both as names; only plugins give them meaning.
+- **Kind, then medium.** A kind is a collection's name, `tool:<name>`, or a named datum (`thread`,
+  `participants`). A medium is `llm` now, `react` with the web runtime. The runtime treats both as
+  names; only plugins give them meaning.
 - **Composition.** `ctx.show(kind, item, hints?)` renders whatever View is registered for that kind,
-  in the current renderer, or returns undefined when there is none.
+  in the current medium, or returns undefined when there is none.
 - **Viewer.** `ctx.viewer` is who looks (an agent, a person). Views render relative to it: your own
   messages are the assistant's turns; for a person, your bubbles are on the right.
 - **Hints.** `ctx.hints` carries what the caller asked for (`mode`: a density, such as `panel` or a
   summary line). Open-ended.
-- **The last plugin wins** for a kind and renderer, so the app always has the last word. No
-  resolver, no preference resources.
-- **Synchronous reads.** Inside a View, reads return `{ value, status }` at once. The renderer runs
+- **The last plugin wins** for a kind and medium, so the app always has the last word. No resolver,
+  no preference resources.
+- **Synchronous reads.** Inside a View, reads return `{ value, status }` at once. The runtime runs
   the View again once pending reads arrive, until nothing is pending. Observed, the same function
   runs again when what it read changes, which is how a screen stays live. One authoring style for
   every medium.
@@ -59,7 +59,7 @@ views: {
 
 ## The agent prompt is a View
 
-The chat plugin's `thread` View in the `llm` renderer is the prompt layout. It returns the agent's
+The chat plugin's `thread` View in the `llm` medium is the prompt layout. It returns the agent's
 tools and three zones, ordered for the prompt cache (tools, then system, then messages, in every
 provider):
 

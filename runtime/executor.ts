@@ -9,7 +9,7 @@ import type { Context, Plugins, ReadContext, TransactionScope } from "./define.t
 import { isRead, type Op, type Outcome, RESULTS, type TimerOp } from "./ops.ts";
 import type { Scheduled, ScheduleOptions } from "./schedules.ts";
 import { compile, events, fingerprint, invalid, json, merge, unprivate } from "./registry.ts";
-import { renderer } from "./views.ts";
+import { presenter } from "./views.ts";
 import { refuseBlobKeys } from "./blobs.ts";
 import { querying as queryingOver, reading as readingOver } from "./reads.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
@@ -227,7 +227,7 @@ export function createExecutor(
       cancel: async (target) => Boolean(await run({ op: "cancel", ...target } as Op)),
       disconnect: async (actor) =>
         Number(await run({ op: "disconnect", actor: { kind: actor.kind, id: actor.id } })),
-      render: renderer(registry.views, () => reading(run, job.record, actor)),
+      render: presenter(registry.views, () => reading(run, job.record, actor)),
       record: job.record,
       metrics,
       resources: registry.resources,
@@ -490,7 +490,7 @@ export function createExecutor(
           request.params,
         );
       case "render":
-        return renderer(
+        return presenter(
           registry.views,
           () =>
             reading(
@@ -502,7 +502,7 @@ export function createExecutor(
               job.record,
               request.actor,
             ),
-        )(request.renderer, request.view, request.item, {
+        )(request.medium, request.view, request.item, {
           ...(request.viewer ? { viewer: request.viewer } : {}),
           ...(request.hints ? { hints: request.hints } : {}),
         });

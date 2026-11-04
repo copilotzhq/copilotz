@@ -1,5 +1,11 @@
 ## Unreleased
 
+- **Breaking: `renderer` is `medium`.** The docs said "medium" and the API said `renderer`; now one
+  word. A View's context field `ctx.renderer` is `ctx.medium`, and the wire/owner `render` job's
+  `renderer` field is `medium`. Migrate by renaming `ctx.renderer` to `ctx.medium` (and a test's
+  hand-made context `renderer: "web"` to `medium: "web"`); `render(medium, kind, item)` already took
+  the medium by position. The medium names are unchanged (`llm`, `web`, `terminal`, `whatsapp`,
+  `voice`). No alias.
 - **One web host, its parts from the app's plugins.** `serve` (and `webServer` beneath it) is the
   host for every app: routes from `routes` resources, as before; the page and its code from `code`
   (none: no page, the routes and `/health`); who a browser is from a new `entrances` resource; how

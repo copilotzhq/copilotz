@@ -617,8 +617,8 @@ filled by the front ends through resources).
 - **`whatsapp`**: people talk to their agents from WhatsApp, through Meta's Cloud API. A space's
   managers connect a number; a person links their phone with a code; what they send becomes their
   messages, and what agents say to them goes back, a long answer in several messages. It's a medium
-  for Views (renderer `whatsapp`, parts built with its toolkit: text, buttons, a list, a carousel,
-  an image, a document, each checked against Meta's limits): after an answer, features show more
+  for Views (medium `whatsapp`, parts built with its toolkit: text, buttons, a list, a carousel, an
+  image, a document, each checked against Meta's limits): after an answer, features show more
   (`additions`: a carousel of trips, buttons to pay), once per chat per key, the answer's text in
   the same message when there's room, a fallback when Meta refuses one; taps come back with their
   ids. Pictures and files go as public links, signed links to the app's routes or files (the `links`
@@ -634,11 +634,11 @@ filled by the front ends through resources).
   signature, a call is taken within its caller's limits and the line's (calls at once, a day: else
   busy, nothing spent) and opens the line's socket with a one-time ticket. A caller is a contact in
   a chat of their own, the same one when they call back only if Twilio verified their number; what
-  the agent writes for them is said as it writes it (a medium for Views: renderer `voice`), a caller
-  speaking over it cuts it there (the agent is told what was heard), a failed or slow answer says a
-  short line in the line's language, and silence, a call too long or too many prompts, or the
-  agent's `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that
-  takes a route's socket (`serve`).
+  the agent writes for them is said as it writes it (a medium for Views: `voice`), a caller speaking
+  over it cuts it there (the agent is told what was heard), a failed or slow answer says a short
+  line in the line's language, and silence, a call too long or too many prompts, or the agent's
+  `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that takes a
+  route's socket (`serve`).
 - **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A line the app
   declares (`mcp.lines.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
   each is shown, who calls, its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP,

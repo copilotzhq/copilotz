@@ -654,7 +654,10 @@ The log records what happened, with no bookkeeping tables beside it:
   any event back to the request that started it.
 - **Blobs.** Strings over 16 KiB (configurable) are stored once, named by the hash of their content
   (`sha256-…`). Documents and events hold `{ $blob, size, type }` in their place. The owner moves
-  values out on write and back in on read, so plugin code never sees a reference.
+  values out on write and back in on read, so plugin code never sees a reference. Only the owner
+  makes them: a `$blob` key anywhere in what plugin code writes, or in what an Action is called
+  with, is refused (`invalid`). On read, only an exact reference (those three keys, a
+  `sha256-<64 hex>` id) loads a blob; any other object is data. Blob stores take no other id.
 
 ## Schedules
 

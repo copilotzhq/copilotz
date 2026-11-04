@@ -1,5 +1,22 @@
 ## Unreleased
 
+- **Security: a forged blob reference is refused, never loaded.** Large strings are kept as blobs
+  and documents hold `{ $blob, size, type }` in their place; the owner loaded any object with a
+  string `$blob` on every read. So an Action that stores what it's given (a tool's input, a
+  webhook's body) could plant one: an id no blob has made every read of that document fail (a chat
+  that can't be read or erased, Processors giving up on its events); another document's hash pulled
+  that content in; and a path or a name read a file (`fileBlobs`) or any object in the bucket
+  (`gcsBlobs` without a prefix).
+  - What plugin code writes (documents, updates, upserts' filters, edges, events, records, timers'
+    inputs, Action results) and what an Action is called with may hold no `$blob` key: `invalid`.
+    The owner checks it as it walks what it offloads, so it costs no extra pass.
+  - Only an exact reference loads a blob: the keys `$blob`, `size` and `type`, a `sha256-<64 hex>`
+    id, a numeric size and a string type. Any other object is data.
+  - Every blob store (memory, SQLite, PostgreSQL, `fileBlobs`, `httpBlobs`, `gcsBlobs`) takes only a
+    blob's id (`checkBlobId`, exported for your own `Blobs`).
+  - Fixed on the way: a timer's input over 16 KiB reached its Action as a reference; it comes whole.
+  - A store may hold references planted before: see the release notes for a query that finds them.
+
 - **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
   ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,
   its tools run again, with whatever input the model now chose, and the model never saw the first

@@ -108,7 +108,7 @@ test("blobs can live in a bucket, over HTTP", async () => {
     assertEquals(bucket.size, 1);
     const prompt = await runtime.query<Prompt>("thread.prompt", { thread, agent: "lead" });
     assertStringIncludes(JSON.stringify(prompt.history), "xxxxxxxxxx");
-    assertEquals(await blobs.get("sha256-nothing"), null);
+    assertEquals(await blobs.get(`sha256-${"0".repeat(64)}`), null);
     const [file] = await runtime.query<File[]>("message.history", { thread }).then(() =>
       blobs.get([...bucket.keys()][0]).then((b) => [b])
     );

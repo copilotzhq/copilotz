@@ -702,6 +702,29 @@ for (const [name, database] of Object.entries(shared)) {
   });
 }
 
+for (const [name, make] of Object.entries(adapters)) {
+  test(`${name}: blobs go by blob ids only`, async () => {
+    const store = await make();
+    const { epoch } = await store.open();
+    const id = `sha256-${"a".repeat(64)}`;
+    const data = new Uint8Array([1, 2, 3]);
+    await store.transaction(epoch, (tx) => tx.putBlob({ id, data, type: "image/png" }));
+    assertEquals(Array.from((await store.blob(id))!.data), [1, 2, 3]);
+    assertEquals(await store.blob(`sha256-${"b".repeat(64)}`), null);
+    const invalid = async (run: () => Promise<unknown>) =>
+      assertEquals(((await assertRejects(run)) as { code?: string }).code, "invalid");
+    for (const bad of ["../../etc/hosts", "sha256-a", id.toUpperCase(), `${id}/x`, "other"]) {
+      await invalid(() => store.blob(bad));
+      await invalid(() => store.transaction(epoch, (tx) => tx.putBlob({ id: bad, data })));
+      const run = store.command?.(epoch, { steps: [], blobs: [{ id: bad, data }] });
+      if (run) await invalid(() => run);
+    }
+    // Nothing was kept under them.
+    assertEquals(await store.blob(id).then((blob) => blob?.type), "image/png");
+    await store.close();
+  });
+}
+
 test("sqlite: each collection reads as a SQL view", async () => {
   const path = temp();
   const store = await sqliteStore({ path });

@@ -33,6 +33,17 @@ import type { Actor, Blob, Event, Row, Store } from "./store.ts";
 /** The audit event of a maintenance write. */
 export const MAINTENANCE_SQL = "maintenance.sql";
 
+/**
+ * A statement as the record keeps it: a password literal in it
+ * (`PASSWORD '…'`, any quoting) as `PASSWORD '***'`. Statements that set
+ * one are refused anyway; this is what's said of one that slipped by.
+ */
+export const redacted = (sql: string): string =>
+  sql.replace(
+    /\b(PASSWORD)(\s+)(?:[EU]&?'(?:[^'\\]|''|\\.)*'|'(?:[^']|'')*'|(\$\w*\$)[\s\S]*?\3)/gi,
+    "$1$2'***'",
+  );
+
 export type Maintenance = {
   /** Whether the store runs SQL (a SQL store; PostgreSQL in a schema of its own). */
   readonly sql: boolean;
@@ -43,7 +54,7 @@ export type Maintenance = {
   read(
     sql: string,
     options?: { params?: unknown[]; limit?: number; timeout?: number; bytes?: number },
-  ): Promise<{ rows: Row[]; truncated: boolean }>;
+  ): Promise<{ rows: Row[]; truncated: boolean; inline?: true }>;
   /** One statement that writes, as `actor`, with its audit event (see above). */
   write(
     sql: string,
@@ -114,7 +125,12 @@ export function createMaintenance(env: {
         ...(timeout !== undefined ? { timeout } : {}),
         ...(bytes !== undefined ? { bytes } : {}),
       });
-      return cut(rows, limit);
+      const read = cut(rows, limit);
+      return {
+        ...read,
+        truncated: read.truncated || !!rows.cut,
+        ...(rows.inline ? { inline: true as const } : {}),
+      };
     },
 
     async write(statement, options) {
@@ -127,7 +143,7 @@ export function createMaintenance(env: {
           const [prior] = (await tx.related(id, [MAINTENANCE_SQL])).filter((e) => e.id === id);
           if (prior) {
             const said = await hydrate(prior.data, blob);
-            if (said.sql !== statement || canonical(said.params) !== canonical(bound)) {
+            if (said.sql !== redacted(statement) || canonical(said.params) !== canonical(bound)) {
               throw conflict(id);
             }
             return { rows: [], changed: Number(said.changed), prior };
@@ -138,7 +154,7 @@ export function createMaintenance(env: {
         const done = await tx.execute(statement, bound, timeout !== undefined ? { timeout } : {});
         const ms = Math.round((performance.now() - started) * 100) / 100;
         const data = await offload(
-          { sql: statement, params: bound, changed: done.changed, ms },
+          { sql: redacted(statement), params: bound, changed: done.changed, ms },
           (large) => env.blobs ? env.blobs.put(large) : tx.putBlob(large),
           env.blobThreshold,
         );

@@ -348,6 +348,40 @@ test("sqlite: a read's errors aren't lost to its limit, nor its pragmas kept", a
   await store.close();
 });
 
+test("sqlite: reads on the store's own connection say so, once and on each answer", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { store } = await notes((path) => new DatabaseSync(path));
+  const warned: string[] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => void warned.push(args.join(" "));
+  try {
+    const first = await store.inspect("SELECT 1 AS one");
+    const second = await store.inspect("SELECT 2 AS two");
+    assertEquals([first.inline, second.inline], [true, true]);
+  } finally {
+    console.warn = warn;
+  }
+  assertEquals(warned.length, 1);
+  assertMatch(warned[0], /no timeout: the database is opened another way/);
+  await store.close();
+});
+
+test("sqlite: a read's process takes nothing of the app's environment", async () => {
+  const { store } = await notes();
+  const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process
+    ?.env;
+  const before = env?.NODE_OPTIONS;
+  // Were it passed on, a Node process couldn't start.
+  if (env) env.NODE_OPTIONS = "--require=/nowhere/copilotz-missing.cjs";
+  try {
+    const rows = await store.inspect("SELECT 1 AS one");
+    assertEquals([rows[0].one, rows.inline], [1, undefined]);
+  } finally {
+    if (env) before === undefined ? delete env.NODE_OPTIONS : env.NODE_OPTIONS = before;
+  }
+  await store.close();
+});
+
 test("sqlite: on a database it can't open apart, a read sets no pragma", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const { store } = await notes((path) => new DatabaseSync(path));
@@ -442,6 +476,36 @@ test("pglite: a write that makes a trigger on the store's tables is rolled back"
   await store.close();
 });
 
+test("pglite: the checks after a statement read the catalog, whatever stands in for it", async () => {
+  const pool = await postgresPool({ url: ":memory:" });
+  const store = await postgresStore({ pool, schema: schemaName() });
+  const { epoch } = await store.open();
+  // Temporary tables on the one session, named as catalogs the checks read.
+  for (
+    const sql of [
+      "CREATE TEMP TABLE pg_trigger (tgrelid oid, tgisinternal bool, tgname name)",
+      "CREATE TEMP TABLE pg_stat_xact_user_tables (n_tup_ins bigint, n_tup_upd bigint, " +
+      "n_tup_del bigint)",
+      "INSERT INTO pg_stat_xact_user_tables VALUES (1000000, 0, 0)",
+    ]
+  ) await pool.writes.query(sql);
+  const sql = "CREATE TRIGGER scrub BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION " +
+    "suppress_redundant_updates_trigger()";
+  const error = await assertRejects(() =>
+    store.transaction(epoch, (tx) => tx.execute!(sql), { maintenance: true })
+  );
+  assertEquals(code(error), "forbidden");
+  await store.transaction(epoch, (tx) => tx.insert("note", [{ _id: "a", text: "A" }]));
+  const done = await store.transaction(
+    epoch,
+    (tx) => tx.execute!("UPDATE nodes SET doc = doc || '{}' WHERE id = 'a'"),
+    { maintenance: true },
+  );
+  assertEquals(done.result.changed, 1);
+  await store.close();
+  await pool.close();
+});
+
 test("pglite: SQL refuses a database where other schemas are within reach", async () => {
   const pool = await postgresPool({ url: ":memory:" });
   const other = await postgresStore({ pool, schema: schemaName() });
@@ -493,8 +557,12 @@ if (POSTGRES && ROLES) {
     const twice = await assertRejects(() => db.query("SELECT 1; SELECT 2"));
     assertEquals((twice as { code?: string }).code, "42601");
     await db.end();
-    // Strings are read as the check reads them, whatever the role's default.
+    // A role with settings of its own is refused (they'd outlive any statement)…
     await role.run(`ALTER ROLE "${role.role}" SET standard_conforming_strings = off`);
+    const settings = await assertRejects(() => store.inspect("SELECT 1"));
+    assertMatch((settings as Error).message, /settings of its own/);
+    await role.run(`ALTER ROLE "${role.role}" RESET ALL`);
+    // …and strings are read as the check reads them.
     assertEquals(await store.inspect("SHOW standard_conforming_strings"), [
       { standard_conforming_strings: "on" },
     ]);
@@ -608,12 +676,13 @@ if (POSTGRES && ROLES) {
       await role.run(revoke);
       assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1, revoke);
     };
-    // A column of another schema's table.
-    await role.run(`GRANT USAGE ON SCHEMA "${elsewhere}" TO ${r}`);
+    // A column of another schema's table, or anything granted there at all.
     await refusedWith(
-      `GRANT SELECT (x) ON "${elsewhere}".secrets TO ${r}`,
-      `REVOKE SELECT (x) ON "${elsewhere}".secrets FROM ${r}`,
-      /may use/,
+      `GRANT USAGE ON SCHEMA "${elsewhere}" TO ${r}; GRANT SELECT (x) ON "${elsewhere}".secrets ` +
+        `TO ${r}`,
+      `REVOKE SELECT (x) ON "${elsewhere}".secrets FROM ${r}; REVOKE USAGE ON SCHEMA ` +
+        `"${elsewhere}" FROM ${r}`,
+      /may use .*secrets/,
     );
     // Making anything, anywhere.
     await refusedWith(
@@ -653,6 +722,60 @@ if (POSTGRES && ROLES) {
     assertEquals(code(write), "unsafe_role");
     await role.run(`DROP TRIGGER noted ON "${schema}".nodes`);
     await role.run(`DROP SCHEMA "${elsewhere}" CASCADE`);
+    await done();
+  });
+
+  test("postgres: nothing a statement does outlives it in the role", async () => {
+    const { store, epoch, role, done } = await owned();
+    const write = (sql: string) =>
+      store.transaction(epoch, (tx) => tx.execute!(sql), { maintenance: true });
+    // Its own password, settings or members: refused before anything runs.
+    for (
+      const sql of [
+        `ALTER ROLE "${role.role}" PASSWORD 'known'`,
+        `ALTER USER CURRENT_USER SET work_mem = '64kB'`,
+      ]
+    ) assertEquals(code(await assertRejects(() => write(sql))), "invalid", sql);
+    // Nor through dynamic SQL: a query can't change a role.
+    const dynamic = await assertRejects(() =>
+      write(
+        `SELECT query_to_xml('ALTER ROLE "${role.role}" SET work_mem = ''1MB''', false, ` +
+          `false, '') AS x`,
+      )
+    );
+    assertEquals(code(dynamic), "sql");
+    // Settings someone gave it: refused until they're gone.
+    await role.run(`ALTER ROLE "${role.role}" SET work_mem = '64kB'`);
+    assertMatch(
+      ((await assertRejects(() => store.inspect("SELECT 1"))) as Error).message,
+      /settings of its own/,
+    );
+    await role.run(`ALTER ROLE "${role.role}" RESET ALL`);
+    // A large object it makes is its own, outside the schema: rolled back.
+    const made = await assertRejects(() => write("SELECT lo_from_bytea(0, 'kept'::bytea) AS lo"));
+    assertEquals(code(made), "unsafe_role");
+    assertMatch((made as Error).message, /owns large object/);
+    const left = await role.run(
+      `SELECT count(*)::int AS n FROM pg_largeobject_metadata m JOIN pg_roles r ON ` +
+        `r.oid = m.lomowner WHERE r.rolname = '${role.role}'`,
+    ) as { n: number }[];
+    assertEquals(left[0].n, 0);
+    // One someone else made, everyone's to read: refused until it's gone.
+    const [lo] = await role.run("SELECT lo_from_bytea(0, 'a secret'::bytea)::int AS oid") as {
+      oid: number;
+    }[];
+    await role.run(`GRANT SELECT ON LARGE OBJECT ${lo.oid} TO PUBLIC`);
+    assertMatch(
+      ((await assertRejects(() => store.inspect("SELECT 1"))) as Error).message,
+      /may read large object/,
+    );
+    await role.run(`SELECT lo_unlink(${lo.oid})`);
+    // A temporary table named as a catalog the checks read stands in for nothing.
+    const shadow = await write(
+      "CREATE TEMP TABLE pg_stat_xact_user_tables AS SELECT 1000000::bigint AS n_tup_ins, " +
+        "0::bigint AS n_tup_upd, 0::bigint AS n_tup_del",
+    );
+    assert(shadow.result.changed < 10, `it changed what it changed (${shadow.result.changed})`);
     await done();
   });
 

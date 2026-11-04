@@ -91,6 +91,28 @@ test("statement: nothing, or something unterminated, is refused", () => {
   refused("SELECT 1 /* open");
 });
 
+test("statement: what reaches past the statement is refused, in PostgreSQL", () => {
+  for (
+    const sql of [
+      `ALTER ROLE "m" PASSWORD 'known'`,
+      "alter user current_user SET work_mem = '64kB'",
+      "ALTER GROUP g ADD USER m",
+      "DO $$BEGIN PERFORM 1; END$$",
+      "LOCK TABLE nodes IN ACCESS EXCLUSIVE MODE",
+      "/* first */ LOCK nodes",
+    ]
+  ) {
+    refused(sql, "postgres", "read");
+    refused(sql, "postgres", "write");
+  }
+  // Other ALTERs are the privileges' business; a word in a string is just a word.
+  assertEquals(
+    statement("ALTER TABLE nodes ADD COLUMN x int", "postgres", "write").keyword,
+    "ALTER",
+  );
+  assertEquals(statement("SELECT 'DO' AS lock", "postgres", "read").keyword, "SELECT");
+});
+
 test("statement: what would end its transaction or outlive it is refused", () => {
   for (
     const sql of [

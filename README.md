@@ -598,20 +598,28 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
   table, who). It bypasses schemas and per-document events, so the owner then forgets what it
   derived from documents: its cache empties, observed Views run again, and the clock reads the
   timers again. A statement that ends or nests its transaction (`COMMIT`, `SAVEPOINT`…) or changes
-  its connection (`SET`, `PREPARE`, `LISTEN`, SQLite's `ATTACH`, `PRAGMA`…) doesn't run; one that
-  changes the store's own state (`meta`: the fencing epoch, Processors' positions) or, in SQLite,
-  leaves a temporary object, is rolled back.
+  its connection (`SET`, `PREPARE`, `LISTEN`, SQLite's `ATTACH`, `PRAGMA`…) doesn't run, and in
+  PostgreSQL neither does one that reaches past the statement: `ALTER ROLE` (a role may set its own
+  password and settings, which outlive the key), `DO` (a block runs statements nothing reads first)
+  and `LOCK` (it would hold the store's tables against the app's own writes). One that changes the
+  store's own state (`meta`: the fencing epoch, Processors' positions), or what the role holds (a
+  large object, a setting), or, in SQLite, leaves a temporary object, is rolled back. The record
+  keeps a password literal as `PASSWORD '***'`.
 - **Nothing outlives its statement:** on a PostgreSQL server each statement runs on a connection of
   its own, closed after, so what it sets on its session (a setting, a session lock, a prepared
   statement) goes with it; and it goes over the extended protocol, where the server refuses a second
   statement whatever the check said. PGlite has one session: it forgets what maintenance left there
   (`DISCARD ALL`). A SQLite read runs apart, in a process of this runtime of its own on a read-only
   connection, killed at its timeout: a statement that never ends doesn't hold the app, a core or the
-  WAL. Where no process can start (a database opened another way, `:memory:`, no permission to run
-  one), it reads on the store's reading connection, with no timeout, a pragma only from those that
-  only read. SQLite writes name the store's tables in `main`, so nothing temporary stands in for
-  them. Each store runs at most 2 maintenance statements at once (`maintenance: { connections }`):
-  another answers busy (503).
+  WAL. The process is `deno`, `node` or `bun` itself (never a compiled app, which would be the app
+  again), with an empty environment, and on Deno and Node allowed to read the database's files and
+  nothing else; on Deno it's started only with permission to run already granted, so nothing ever
+  asks mid-request. Where none can start (a database opened another way, `:memory:`, a compiled app,
+  no permission), reads run on the store's reading connection, one at a time, with no timeout, a
+  pragma only from those that only read: the store says so once, with why, and each such answer says
+  `inline: true`. SQLite writes name the store's tables in `main`, so nothing temporary stands in
+  for them. Each store runs at most 2 maintenance statements at once
+  (`maintenance: { connections }`): another answers busy (503).
 - **Where:** SQL needs a SQL store. On a PostgreSQL server only as a role of its own (below), never
   in a schema other tenants share; PGlite, in the app's process, runs it as its one session where it
   reaches no other schema. An orgs host's orgs don't get the plugin at all (one key would reach
@@ -625,21 +633,45 @@ On a PostgreSQL server, raw SQL runs only as a role of its own, named by the sto
 Without one it's refused. The store's role owns the tables, may stop the app's connections and is
 whatever the deployment made it (a superuser, even): nothing that runs at a key's word should be it.
 
-Before each statement, on the connection that runs it, maintenance checks that the role holds
-exactly what the SQL below grants, and refuses it otherwise, saying what's more: an attribute beyond
-`LOGIN` (superuser, `CREATEROLE`…); membership in any role at all, predefined (`pg_*`) or not, and
-whatever its `INHERIT` or `SET` options (a member could `SET ROLE` to it); anything it owns;
-`CREATE` on any schema (`public` too) or on the database; any privilege on a table or a column of
-another schema; on the store's own tables, anything beyond the grants below (no `TRIGGER`,
-`TRUNCATE` or `REFERENCES`; on `events` only `INSERT`); a `SECURITY DEFINER` function it may run
-(one runs as its owner); `dblink` or `postgres_fdw` in the database; and a trigger on the store's
-tables, which the store never makes. A write that makes a trigger is rolled back too.
+Before each statement, on the connection that runs it, and again after a write in its transaction,
+maintenance checks that the role holds exactly what the SQL below grants, and refuses it otherwise
+(rolling a write back), saying what's more: an attribute beyond `LOGIN` (superuser, `CREATEROLE`…);
+membership in any role at all, predefined (`pg_*`) or not, and whatever its `INHERIT` or `SET`
+options (a member could `SET ROLE` to it); settings of its own (`ALTER ROLE … SET`); anything it
+owns, a large object too (what it makes for its own session, a temporary table, goes with its
+connection); anything granted to it outside the store's schema and database; `CREATE` on any schema
+(`public` too) or on the database; any privilege on a table or a column of another schema; on the
+store's own tables, anything beyond the grants below (no `TRIGGER`, `TRUNCATE` or `REFERENCES`; on
+`events` only `INSERT`); a large object it may read (`lo_compat_privileges`, or one granted to
+`PUBLIC`); a `SECURITY DEFINER` function it may run (one runs as its owner); `dblink` or
+`postgres_fdw` in the database; and a trigger on the store's tables, which the store never makes.
+The checks name every catalog they read as `pg_catalog`'s, after setting the search path back to it,
+so nothing a statement made stands in for them.
 
-As the store's role (the schema's owner), with the schema made (the app has started once), and as a
-role that may create roles for the first line:
+Prefer a role with no password at all, signed in by the platform: Cloud SQL's IAM database
+authentication, or a client certificate. A password is a second key, valid for as long as nobody
+changes it. On Cloud SQL, with a service account of its own for maintenance:
+
+```sh
+gcloud sql users create maintenance@PROJECT.iam --instance=INSTANCE --type=cloud_iam_service_account
+gcloud projects add-iam-policy-binding PROJECT \
+  --member=serviceAccount:maintenance@PROJECT.iam.gserviceaccount.com \
+  --role=roles/cloudsql.instanceUser   # and roles/cloudsql.client, to connect
+# The app reaches it through the Cloud SQL Auth Proxy, which signs it in (no password):
+#   cloud-sql-proxy --auto-iam-authn --impersonate-service-account=maintenance@PROJECT.iam.gserviceaccount.com \
+#     --port 5433 PROJECT:REGION:INSTANCE
+# MAINTENANCE_DATABASE_URL=postgres://maintenance%40PROJECT.iam@127.0.0.1:5433/DATABASE
+```
+
+Cloud SQL makes such a role a member of its own marker role (`cloudsqliamserviceaccount`, or
+`cloudsqliamuser` for a person): that one membership is allowed, and the marker is held to the same
+checks (it may hold nothing). Then the grants below, naming `"maintenance@PROJECT.iam"`.
+
+Elsewhere, as the store's role (the schema's owner), with the schema made (the app has started
+once), and as a role that may create roles for the first line:
 
 ```sql
--- LOGIN and nothing else; never grant it a role.
+-- LOGIN and nothing else; never grant it a role. (On Cloud SQL with IAM, gcloud makes it.)
 CREATE ROLE copilotz_maintenance LOGIN PASSWORD '…' NOINHERIT;
 GRANT USAGE ON SCHEMA copilotz TO copilotz_maintenance;
 -- Reading everything there, the collections' views too, now and later.

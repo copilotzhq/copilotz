@@ -511,3 +511,18 @@ test("sqlite: an answer stays within its bytes, and a pipeline within its limit"
     await runtime.close();
   }
 });
+
+test("sqlite: an answer read on the store's own connection says so", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const path = tempFile(".sqlite");
+  const warn = console.warn;
+  console.warn = () => {};
+  const runtime = await open(await sqliteStore({ path, open: (file) => new DatabaseSync(file) }));
+  try {
+    const read = await send(runtime, "POST", "/sql", { body: { sql: "SELECT 1 AS one" } });
+    assertEquals([read.status, read.body.rows, read.body.inline], [200, [{ one: 1 }], true]);
+  } finally {
+    console.warn = warn;
+    await runtime.close();
+  }
+});

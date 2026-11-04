@@ -32,7 +32,13 @@
  * first time, without doing it twice. Reads take at most the settings'
  * `limit` rows and `timeout` ms, and may ask for less.
  */
-import { type Actor, invalid, type Resources, type Runtime } from "../../../../runtime/mod.ts";
+import {
+  type Actor,
+  invalid,
+  redacted,
+  type Resources,
+  type Runtime,
+} from "../../../../runtime/mod.ts";
 import type { MaintenanceActor, MaintenanceLog, MaintenanceSettings } from "../contract.ts";
 import { isRead, READS } from "../actions/read.ts";
 import { isWrite, WRITES } from "../actions/write.ts";
@@ -385,7 +391,7 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
       const write = path === "/sql/write";
       const { sql, ...options } = sqlOf(await bodyOf(request), settings);
       log(write ? "sql.write" : "sql.read", {
-        sql: await hashOf(sql),
+        sql: await hashOf(redacted(sql)),
         params: options.params?.length ?? 0,
       });
       const started = performance.now();
@@ -399,6 +405,8 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
             count: rows.length,
             truncated: read.truncated || cut,
             ms: elapsed(started),
+            // On the store's own connection, one at a time, with no timeout (SQLite).
+            ...(read.inline ? { inline: true } : {}),
           });
         } catch (error) {
           const code = (error as { code?: string }).code;

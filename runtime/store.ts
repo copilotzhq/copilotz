@@ -141,6 +141,14 @@ export type Transaction = Reader & {
 /** A row a SQL statement returned, as the database driver gives it. */
 export type Row = Record<string, unknown>;
 
+/**
+ * What a maintenance read returned: its rows; `cut` when it stopped before
+ * a row that would pass its bytes (more may follow); `inline` when it ran on
+ * the store's own connection, with no timeout (a SQLite store that can't
+ * read apart).
+ */
+export type Inspected = Row[] & { cut?: true; inline?: true };
+
 /** What a maintenance statement did: rows it returned (`RETURNING`), and rows it changed. */
 export type Executed = { rows: Row[]; changed: number };
 
@@ -212,8 +220,8 @@ export type Store = Reader & {
   /**
    * Optional, for maintenance and inspection tools: runs one read-only SQL
    * statement on committed state, with `params` bound ($1, ?1…), and returns
-   * at most `limit` rows, fetching no more once they pass `bytes` (the row
-   * that passes them included); `timeout` (ms) cancels it.
+   * at most `limit` rows, fetching none that would pass `bytes`; `timeout`
+   * (ms) cancels it.
    * A SQL store has it, refusing it where SQL could reach other tenants' data,
    * and leaving nothing of it on a connection the store's other work shares.
    */
@@ -221,7 +229,7 @@ export type Store = Reader & {
     sql: string,
     params?: unknown[],
     options?: { limit?: number; timeout?: number; bytes?: number },
-  ): Promise<Row[]>;
+  ): Promise<Inspected>;
   /**
    * Makes the declared indexes (and drops ones no longer declared). A field's
    * type is what its schema guarantees, so a filter on it may compare it as

@@ -8,9 +8,13 @@
  * the read answers at its timeout, and nothing it set (a pragma, a
  * temporary object) outlives it. Its rows come back within `bytes`.
  *
- * It needs to start a process of this runtime (`process.execPath`; on
- * Deno, permission to run it): where it can't, the read says `unstarted`,
- * and the store reads on its own connection instead.
+ * The process is the runtime itself, never the app: only when the
+ * executable is `deno`, `node` or `bun` (a compiled app runs as itself),
+ * and on Deno only with permission to run it already granted (it never
+ * asks). It gets no more than it needs: an environment of its own (no
+ * `NODE_OPTIONS`, nothing of the app's), and on Deno and Node permission to
+ * read the database's files alone. Where it can't start, the read says
+ * `unstarted` (and why), and the store reads on its own connection instead.
  */
 import { failure } from "../../../runtime/errors.ts";
 
@@ -25,9 +29,13 @@ type Child = {
   on(event: "close", listener: (code: number | null) => void): void;
   kill(signal: string): void;
 };
-type Spawn = (command: string, args: string[], options: { stdio: string[] }) => Child;
+type Spawn = (
+  command: string,
+  args: string[],
+  options: { stdio: string[]; env: Record<string, string> },
+) => Child;
 
-/** The read, in the child: reads its request from stdin, answers on stdout. */
+/** The read, in the child: reads its request from stdin, answers on stdout. Rows past `bytes` aren't sent. */
 const CODE = `
 import process from "node:process";
 let input = "";
@@ -61,13 +69,17 @@ try {
   db.exec("PRAGMA query_only = 1");
   const rows = [];
   let used = 0;
+  let cut = false;
   for (const row of db.prepare(sql).all(...params)) {
     const text = JSON.stringify({ ...row }, plain);
-    rows.push(text);
     used += new TextEncoder().encode(text).length + 1;
-    if (bytes !== null && used > bytes) break;
+    if (bytes !== null && used > bytes) {
+      cut = true;
+      break;
+    }
+    rows.push(text);
   }
-  process.stdout.write('{"rows":[' + rows.join(",") + "]}");
+  process.stdout.write('{"cut":' + cut + ',"rows":[' + rows.join(",") + "]}");
 } catch (error) {
   process.stdout.write(JSON.stringify({
     error: { message: String(error?.message ?? error), errcode: error?.errcode ?? error?.errno },
@@ -77,17 +89,36 @@ try {
 }
 `;
 
-/** How this runtime evaluates a module given as text. */
-const evaluating = () =>
-  "Deno" in globalThis
-    ? ["eval", "--quiet", "--no-config", CODE]
-    : "Bun" in globalThis
-    ? ["-e", CODE]
-    : ["--no-warnings", "--input-type=module", "-e", CODE];
+const SOURCE = `data:text/javascript;base64,${btoa(CODE)}`;
 
-/** A process that couldn't start here (no processes, no permission): then no read runs apart. */
-const unstarted = (cause: unknown) =>
-  Object.assign(new Error("The read's process didn't start."), { code: "unstarted", cause });
+/** The runtimes a read's process may be: the executable's name, without `.exe`. */
+const RUNTIMES = new Set(["deno", "node", "bun"]);
+
+/**
+ * How this runtime runs the read, reading `files` alone where it can say
+ * so: Deno and Node grant it read access to them and nothing else.
+ */
+const running = (runtime: string, files: string[]) =>
+  runtime === "deno"
+    ? ["run", "--quiet", "--no-prompt", "--no-config", `--allow-read=${files.join(",")}`, SOURCE]
+    : runtime === "bun"
+    ? ["-e", CODE]
+    : [
+      "--no-warnings",
+      "--permission",
+      ...files.map((file) => `--allow-fs-read=${file}`),
+      "--input-type=module",
+      "-e",
+      CODE,
+    ];
+
+/** A process that couldn't start here: then no read runs apart, and `why` says so. */
+const unstarted = (why: string, cause?: unknown) =>
+  Object.assign(new Error(`The read's process didn't start: ${why}.`), {
+    code: "unstarted",
+    why,
+    cause,
+  });
 
 const base64 = (bytes: Uint8Array) => {
   let text = "";
@@ -111,7 +142,50 @@ const revive = (_key: string, value: unknown) => {
   return value;
 };
 
-let started: Promise<{ spawn: Spawn; execPath: string } | undefined> | undefined;
+type Here = {
+  spawn: Spawn;
+  execPath: string;
+  /** An environment of its own: nothing of the app's (only Windows' own root, there). */
+  env: Record<string, string>;
+  runtime?: string;
+  why?: string;
+};
+
+let started: Promise<Here | undefined> | undefined;
+
+/** Whether, and how, this process can start the read's: why not, else the runtime it starts. */
+async function look(): Promise<Here | undefined> {
+  const [children, process] = await Promise.all([import(CHILDREN), import(PROCESS)]).catch(
+    () => [undefined, undefined],
+  );
+  if (!children || !process) return undefined;
+  const proc = process.default ?? process;
+  const execPath = String(proc.execPath);
+  const runtime = execPath.split(/[\\/]/).pop()!.replace(/\.exe$/i, "").toLowerCase();
+  // Deno asks for a permission it lacks, mid-request: only one granted already is used.
+  const deno = (globalThis as {
+    Deno?: {
+      permissions?: {
+        querySync?(d: { name: string; command?: string; variable?: string }): { state: string };
+      };
+    };
+  }).Deno;
+  const granted = (d: { name: string; command?: string; variable?: string }) =>
+    (deno?.permissions?.querySync?.(d).state ?? "granted") === "granted";
+  const env: Record<string, string> = {};
+  if (proc.platform === "win32" && granted({ name: "env", variable: "SystemRoot" })) {
+    const root = proc.env.SystemRoot ?? proc.env.SYSTEMROOT;
+    if (root) env.SystemRoot = root;
+  }
+  const here: Here = { spawn: children.spawn as Spawn, execPath, env, runtime };
+  if (!RUNTIMES.has(runtime)) {
+    return { ...here, why: `this program (${runtime}) isn't deno, node or bun, so not itself` };
+  }
+  if (!granted({ name: "run", command: execPath })) {
+    return { ...here, why: "deno has no permission to run itself (--allow-run)" };
+  }
+  return here;
+}
 
 /**
  * Runs `sql` on `path`, read-only, in a child process; rejects with what
@@ -123,20 +197,22 @@ export async function readApart(
   sql: string,
   params: unknown[],
   options: { timeout?: number; bytes?: number } = {},
-): Promise<Record<string, unknown>[]> {
-  const here = await (started ??= Promise.all([import(CHILDREN), import(PROCESS)]).then(
-    ([children, process]) => ({
-      spawn: children.spawn as Spawn,
-      execPath: (process.default ?? process).execPath as string,
-    }),
-    () => undefined,
-  ));
-  if (!here) throw unstarted(undefined);
+): Promise<Record<string, unknown>[] & { cut?: true }> {
+  const here = await (started ??= look());
+  if (!here) throw unstarted("this runtime starts no processes");
+  if (here.why) throw unstarted(here.why);
   let child: Child;
   try {
-    child = here.spawn(here.execPath, evaluating(), { stdio: ["pipe", "pipe", "ignore"] });
+    child = here.spawn(
+      here.execPath,
+      running(here.runtime!, [path, `${path}-wal`, `${path}-shm`]),
+      {
+        stdio: ["pipe", "pipe", "ignore"],
+        env: here.env,
+      },
+    );
   } catch (error) {
-    throw unstarted(error);
+    throw unstarted("it couldn't be started", error);
   }
   const { timeout, bytes } = options;
   return await new Promise((resolve, reject) => {
@@ -149,7 +225,7 @@ export async function readApart(
       clearTimeout(timer);
       done();
     };
-    child.on("error", (error) => settle(() => reject(unstarted(error))));
+    child.on("error", (error) => settle(() => reject(unstarted("it couldn't be started", error))));
     child.stdout.on("data", (chunk) => chunks.push(chunk));
     child.on("close", (code) =>
       settle(() => {
@@ -161,13 +237,21 @@ export async function readApart(
             return joined;
           }, new Uint8Array()),
         );
-        let answer: { rows?: Record<string, unknown>[]; error?: { message: string } };
+        let answer: {
+          rows?: Record<string, unknown>[];
+          cut?: boolean;
+          error?: { message: string };
+        };
         try {
           answer = JSON.parse(text, revive);
         } catch {
           return reject(new Error(`The read's process ended without an answer (exit ${code}).`));
         }
-        if (answer.rows) return resolve(answer.rows);
+        if (answer.rows) {
+          return resolve(
+            answer.cut ? Object.assign(answer.rows, { cut: true as const }) : answer.rows,
+          );
+        }
         reject(Object.assign(new Error(answer.error!.message), answer.error));
       }));
     if (timeout !== undefined && Number.isFinite(timeout) && timeout > 0) {

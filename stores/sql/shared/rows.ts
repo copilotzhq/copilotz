@@ -1,7 +1,7 @@
 /**
  * What a maintenance read's rows weigh, as JSON: bytes as base64, big
  * integers as text (as the maintenance endpoints answer them). A read stops
- * fetching once its rows pass the bytes it may answer with.
+ * fetching before a row would take it past the bytes it may answer with.
  */
 
 const encoder = new TextEncoder();
@@ -17,13 +17,21 @@ const plain = (_key: string, value: unknown) =>
 export const weight = (row: unknown): number =>
   encoder.encode(JSON.stringify(row ?? null, plain)).length + 1;
 
-/** Rows up to the first that takes them past `bytes` (that one included), or all of them. */
-export function upTo<T>(rows: T[], bytes?: number): T[] {
-  if (bytes === undefined) return rows;
+/**
+ * At most `limit` rows, and only those within `bytes`: `cut` when a row
+ * past them was left out (more may follow).
+ */
+export function upTo<T>(
+  rows: T[],
+  limit?: number,
+  bytes?: number,
+): T[] & { cut?: true } {
+  const kept = limit === undefined ? rows : rows.slice(0, limit);
+  if (bytes === undefined) return kept;
   let used = 0;
-  for (const [i, row] of rows.entries()) {
+  for (const [i, row] of kept.entries()) {
     used += weight(row);
-    if (used > bytes) return rows.slice(0, i + 1);
+    if (used > bytes) return Object.assign(kept.slice(0, i), { cut: true as const });
   }
-  return rows;
+  return kept;
 }

@@ -35,6 +35,22 @@ const TRANSACTIONS = new Set([
 ]);
 
 /** Statements whose effect outlives the transaction, on a connection other work shares. */
+/**
+ * PostgreSQL statements that reach past the statement, whatever the role
+ * may otherwise do, and why each is refused.
+ */
+const OUTLIVING: Record<string, string> = {
+  // A role may change its own password and settings: a login that outlives the key, or a
+  // setting every later connection of it starts with.
+  "ALTER ROLE": "a role's password and settings outlive the statement.",
+  "ALTER USER": "a role's password and settings outlive the statement.",
+  "ALTER GROUP": "a role's members outlive the statement.",
+  // An anonymous block is a way around this check: whatever it runs, runs unread.
+  DO: "a block runs statements of its own, which nothing here reads first.",
+  // A lock holds a table against the app's own writes until the statement's transaction ends.
+  LOCK: "it would hold the store's tables against the app's own writes.",
+};
+
 const SESSION: Record<Dialect, Set<string>> = {
   postgres: new Set([
     "PREPARE",
@@ -104,6 +120,8 @@ export function statement(
   const postgres = dialect === "postgres";
   let i = 0;
   let keyword = "";
+  /** The statement's first two words, uppercased: what it is (`ALTER ROLE`). */
+  const words: string[] = [];
   let end: number | undefined;
   /** Parentheses open outside strings and comments: they balance, or it's no statement. */
   let depth = 0;
@@ -175,6 +193,7 @@ export function statement(
       const found = !identifier.test(before) && word.exec(sql)?.[0];
       if (found) {
         keyword ||= found.toUpperCase();
+        if (words.length < 2) words.push(found.toUpperCase());
         i += found.length;
       } else i++;
     }
@@ -190,6 +209,10 @@ export function statement(
   }
   if (!keyword) throw invalid("There's no statement to run.");
   if (depth) throw invalid("The statement leaves a parenthesis open.");
+  if (postgres) {
+    const said = OUTLIVING[keyword] ?? OUTLIVING[words.join(" ")];
+    if (said) throw invalid(`${words.join(" ")} can't run here: ${said}`);
+  }
   if (TRANSACTIONS.has(keyword)) {
     throw invalid(
       `${keyword} can't run here: the statement runs in a transaction of its own, which ` +

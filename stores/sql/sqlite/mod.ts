@@ -59,6 +59,7 @@ import {
   type Event,
   fenced,
   type IndexSpec,
+  type Inspected,
   type Reader,
   type Store,
   type Transaction,
@@ -226,7 +227,7 @@ export async function sqliteStore(options: {
       sql: string,
       params?: unknown[],
       options?: { limit?: number; timeout?: number; bytes?: number },
-    ): Promise<Row[]>;
+    ): Promise<Inspected>;
   }
 > {
   const connect = async () => {
@@ -241,13 +242,19 @@ export async function sqliteStore(options: {
     return db;
   };
   const writer = await connect();
-  /** Whether reads stay on the reading connection: no process of this runtime starts here. */
-  let inline = false;
+  /**
+   * Why reads stay on the reading connection, when they do: the database is
+   * opened another way, is in this process alone, or no process of this
+   * runtime starts here. Said once (a warning), and on every such answer.
+   */
+  let inline: string | false = options.open ? "the database is opened another way (open)" : false;
   /** Maintenance reads apart at once, at most so many. */
   const capped = connections(options.maintenance?.connections ?? 2);
   /** A database in this process alone: nothing else can open it to read it apart. */
   const memory = options.path === ":memory:" || options.path === "" ||
     options.path.startsWith("file::memory:") || /[?&]mode=memory\b/.test(options.path);
+  if (!inline && memory) inline = "the database is in this process alone (:memory:)";
+  let warned = false;
   // Vectors were once keyed by id alone, before any were written: start them over.
   const shape = writer.prepare("PRAGMA main.table_info(vectors)").all() as { name: string }[];
   if (shape.length && !shape.some((column) => column.name === "field")) {
@@ -758,20 +765,27 @@ export async function sqliteStore(options: {
       const query = limit !== undefined && QUERIES.has(keyword)
         ? `SELECT * FROM (\n${text}\n) LIMIT ${Math.max(0, Math.floor(limit))}`
         : text;
-      const cut = (rows: Row[]) => upTo(limit === undefined ? rows : rows.slice(0, limit), bytes);
       try {
-        if (!options.open && !memory && !inline) {
+        if (!inline) {
           try {
-            return cut(
-              await capped(() =>
-                readApart(options.path, query, bound, { timeout: asked.timeout, bytes })
-              ) as Row[],
+            const got = await capped(() =>
+              readApart(options.path, query, bound, { timeout: asked.timeout, bytes })
             );
+            const rows: Inspected = upTo(got as Row[], limit);
+            return got.cut ? Object.assign(rows, { cut: true as const }) : rows;
           } catch (error) {
-            if ((error as { code?: string }).code !== "unstarted") throw error;
+            const { code, why } = error as { code?: string; why?: string };
+            if (code !== "unstarted") throw error;
             // No process of this runtime starts here: read on the reading connection.
-            inline = true;
+            inline = why ?? "no read's process starts here";
           }
+        }
+        if (!warned) {
+          warned = true;
+          console.warn(
+            `copilotz: maintenance reads of ${options.path} run on the store's own connection, ` +
+              `one at a time, with no timeout: ${inline}.`,
+          );
         }
         if (keyword === "PRAGMA" && !reading(text)) {
           throw invalid(
@@ -782,7 +796,12 @@ export async function sqliteStore(options: {
         // Synchronous: nothing else runs on the reading connection meanwhile.
         committed.exec("PRAGMA query_only = 1");
         try {
-          return cut(committed.prepare(query).all(...bound) as Row[]);
+          const rows: Inspected = upTo(
+            committed.prepare(query).all(...bound) as Row[],
+            limit,
+            bytes,
+          );
+          return Object.assign(rows, { inline: true as const });
         } finally {
           committed.exec("PRAGMA query_only = 0");
         }

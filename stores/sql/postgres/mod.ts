@@ -36,6 +36,7 @@ import {
   fenced,
   type Filter,
   type IndexSpec,
+  type Inspected,
   type Reader,
   type Store,
   type Transaction,
@@ -61,7 +62,7 @@ import { dropTenant } from "./tenants.ts";
 import { statement } from "../shared/statement.ts";
 import { allowed, alone, connect, noRole, triggers } from "./maintenance.ts";
 import { connections } from "../shared/capped.ts";
-import { weight } from "../shared/rows.ts";
+import { upTo, weight } from "../shared/rows.ts";
 
 export { type PostgresPool, postgresPool } from "./pool.ts";
 export { copyTenant, dropTenant, exportTenant, type Location } from "./tenants.ts";
@@ -195,7 +196,7 @@ export async function postgresStore(options: {
       sql: string,
       params?: unknown[],
       options?: { limit?: number; timeout?: number; bytes?: number },
-    ): Promise<Row[]>;
+    ): Promise<Inspected>;
     /** Deletes everything this store holds, then closes: a tenant gone for good. */
     drop(): Promise<void>;
   }
@@ -217,15 +218,25 @@ export async function postgresStore(options: {
   /**
    * Maintenance SQL's settings, for its transaction only: strings read as the
    * statement check reads them, the views show this tenant, unqualified names
-   * are the schema's, and a statement runs at most `timeout` ms.
+   * are the schema's (then `public`'s, then the catalog's, and a temporary
+   * object's last: none stands in for a catalog), and a statement runs at
+   * most `timeout` ms.
    */
   const scoped = (timeout?: number) =>
-    `set_config('standard_conforming_strings', 'on', true), ` +
-    `set_config('copilotz.tenant', ${T}, true), set_config('search_path', ` +
-    `${constant(`${ident(schema)}, public`)}, true)` +
+    `pg_catalog.set_config('standard_conforming_strings', 'on', true), ` +
+    `pg_catalog.set_config('copilotz.tenant', ${T}, true), ` +
+    `pg_catalog.set_config('search_path', ` +
+    `${constant(`${ident(schema)}, public, pg_catalog, pg_temp`)}, true)` +
     (timeout !== undefined && Number.isFinite(timeout) && timeout > 0
-      ? `, set_config('statement_timeout', ${constant(String(Math.ceil(timeout)))}, true)`
+      ? `, pg_catalog.set_config('statement_timeout', ${
+        constant(String(Math.ceil(timeout)))
+      }, true)`
       : "");
+  /**
+   * What the store's checks after a statement read by: the catalog, then a
+   * temporary object last, whatever the statement set (in its transaction).
+   */
+  const settled = "SELECT pg_catalog.set_config('search_path', 'pg_catalog, pg_temp', true)";
   let layout: Layout;
   try {
     layout = await prepare(pool, schema);
@@ -744,10 +755,12 @@ export async function postgresStore(options: {
         if (!maintenance) throw invalid("SQL runs only in a maintenance transaction.");
         const { text } = statement(sql, "postgres", "write");
         await flush();
-        const moved = `(SELECT coalesce(sum(n_tup_ins + n_tup_upd + n_tup_del), 0) FROM ` +
-          `pg_stat_xact_user_tables)::bigint`;
-        const state = `(SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb) FROM ` +
-          `${t("meta")} WHERE tenant = ${T})::text`;
+        // Every name the checks read by is qualified: the statement may have made temporary
+        // objects named as catalogs, and set the search path, in this transaction.
+        const moved = `(SELECT coalesce(pg_catalog.sum(n_tup_ins + n_tup_upd + ` +
+          `n_tup_del), 0) FROM pg_catalog.pg_stat_xact_user_tables)::pg_catalog.int8`;
+        const state = `(SELECT coalesce(pg_catalog.jsonb_object_agg(key, value), ` +
+          `'{}'::pg_catalog.jsonb) FROM ${t("meta")} WHERE tenant = ${T})::pg_catalog.text`;
         const [before] = await run(
           tx,
           `SELECT ${scoped(options.timeout)}, ${moved} AS n, ${state} AS state, ` +
@@ -760,13 +773,17 @@ export async function postgresStore(options: {
         } catch (error) {
           throw refused(error);
         }
+        await run(tx, settled);
         const [after] = await run(
           tx,
           `SELECT ${moved} AS n, ${state} AS state, ${triggers(schema)} AS triggers, (SELECT ` +
-            `coalesce(max(seq), 0) FROM ${t("events")} WHERE tenant = ${T}) AS seq`,
+            `coalesce(pg_catalog.max(seq), 0) FROM ${t("events")} WHERE tenant = ` +
+            `${T}) AS seq`,
         );
         if (after.state !== before.state) throw stateChanged();
         if (after.triggers) throw triggered();
+        // What the role holds is as it was: no large object, setting or grant came of it.
+        if (pool.server) await allowed(counted(tx), schema);
         // Events it wrote into the log keep their numbers: this commit's go after them.
         if (last !== undefined) last = Math.max(last, Number(after.seq));
         return { rows, changed: Number(after.n) - Number(before.n) };
@@ -1527,21 +1544,33 @@ export async function postgresStore(options: {
       const read = async (db: Session) => {
         await db.query(`SELECT ${scoped(asked.timeout)}`);
         if ((limit === undefined && bytes === undefined) || !CURSORS.has(keyword)) {
-          const rows = (await db.query(text, params)).rows;
-          return limit !== undefined ? rows.slice(0, limit) : rows;
+          return upTo((await db.query(text, params)).rows, limit, bytes);
         }
         // A cursor fetches only what's asked for, however many rows the query has.
         await db.query(`DECLARE copilotz_inspect NO SCROLL CURSOR FOR ${text}`, params);
-        const rows: Row[] = [];
+        const rows: Inspected = [];
         let used = 0;
         for (;;) {
-          const left = limit === undefined ? 100 : Math.min(100, Math.floor(limit) - rows.length);
+          // One row first, then as many as the bytes left look to hold (rows weigh alike, mostly).
+          const room = bytes === undefined
+            ? 100
+            : !rows.length
+            ? 1
+            : Math.max(1, Math.floor((bytes - used) / (used / rows.length)));
+          const left = Math.min(
+            100,
+            room,
+            limit === undefined ? 100 : Math.floor(limit) - rows.length,
+          );
           if (left <= 0) return rows;
           const batch = (await db.query(`FETCH FORWARD ${left} FROM copilotz_inspect`)).rows;
           for (const row of batch) {
-            rows.push(row);
             used += weight(row);
-            if (bytes !== undefined && used > bytes) return rows;
+            // A row past the bytes isn't kept: the read says it stopped there.
+            if (bytes !== undefined && used > bytes) {
+              return Object.assign(rows, { cut: true as const });
+            }
+            rows.push(row);
           }
           if (batch.length < left) return rows;
         }
@@ -1559,7 +1588,7 @@ export async function postgresStore(options: {
           });
         }
         await reachable(counted(committed));
-        let rows: Row[] = [];
+        let rows: Inspected = [];
         try {
           await committed.transaction(async (tx: Session) => {
             rows = await read(tx);

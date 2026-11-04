@@ -27,17 +27,22 @@
   cache gains `clear()`, observers `stale()`.
   - **PostgreSQL servers:** raw SQL runs only as a role of its own
     (`postgresStore({ maintenance: { url, connections } })`), which must hold exactly maintenance's
-    grants: no attribute but LOGIN, membership in no role, nothing owned, `CREATE` nowhere, no
-    privilege on another schema's tables or columns, nothing on the store's tables beyond what it
-    needs, no `SECURITY DEFINER` function to run, no `dblink` or `postgres_fdw`, no trigger on the
-    store's tables (checked before each statement; a write that makes one is rolled back). Each
-    statement on a connection of its own, over the extended protocol, closed after; at most 2 at
-    once, else `busy`. A read stops fetching once its rows pass its bytes. PGlite runs it as its one
-    session, and discards what it left there.
+    grants: no attribute but LOGIN, membership in no role (but Cloud SQL's IAM marker, itself held
+    to the same), no settings of its own, nothing owned (a large object neither), nothing granted
+    outside the store's schema, `CREATE` nowhere, no large object, table or column of another's to
+    read, nothing on the store's tables beyond what it needs, no `SECURITY DEFINER` function to run,
+    no `dblink` or `postgres_fdw`, no trigger on the store's tables: checked before each statement
+    and again after a write, in its transaction, reading only `pg_catalog`'s names. `ALTER ROLE`,
+    `DO` and `LOCK` don't run; a password literal is kept as `PASSWORD '***'`. Each statement on a
+    connection of its own, over the extended protocol, closed after; at most 2 at once, else `busy`.
+    A read stops fetching before a row would pass its bytes. PGlite runs it as its one session, and
+    discards what it left there.
   - **SQLite:** the store names its tables in `main`, so a temporary object can't stand in for them
-    (a write that leaves one, or a trigger, is rolled back); a read runs in a process of its own on
-    a read-only connection, killed at its timeout (else, on the reading connection, a pragma only
-    from those that only read).
+    (a write that leaves one, or a trigger, is rolled back); a read runs in a process of its own
+    (`deno`, `node` or `bun` itself, never a compiled app; an empty environment; on Deno and Node,
+    read access to the database's files alone), killed at its timeout. Else, on the reading
+    connection, a pragma only from those that only read, said once and on each answer
+    (`inline: true`).
 
 - **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
   ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,

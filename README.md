@@ -98,6 +98,7 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                               |
 | `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                         |
 | `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                              |
+| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account    |
 | `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                             |
 | `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `tool`               |
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`              |
@@ -516,7 +517,8 @@ one conformance suite (`stores/tests/`). [`stores/README.md`](stores/README.md) 
 and lists exactly which parts of the MongoDB collection API they support, and how. A PostgreSQL
 store holds one tenant (an org): many share a schema, each kept apart by the store itself, and an
 org's rows copy elsewhere unchanged (`copyTenant`). Blobs (strings over 16 KiB, files people send)
-live in the store by default, or as files (`fileBlobs`) or in a bucket (`httpBlobs`).
+live in the store by default, or as files (`fileBlobs`), in a bucket (`httpBlobs`), or in Google
+Cloud Storage (`gcsBlobs`).
 
 ## The example app
 
@@ -843,7 +845,7 @@ runtime/        the engine and its ports (Store, Blobs, Exporter, Transport, Clo
                 executor, ops, wire, collection, mongo, the in-memory store; tests/
 stores/         where the runtime keeps things: the Store port's implementations (memory, sql/
                 sqlite and postgres with a shared translation, the latency wrapper) and Blobs'
-                (blobs/files, blobs/http); tests/ (conformance)
+                (blobs/files, blobs/http, blobs/gcs); tests/ (conformance)
 exporters/      where measurements go: the Exporter port's implementations (OTLP, Prometheus)
 plugins/        the features, by theme
   models/       one plugin: llm, embeddings, transcription; shared/ (providers, model choice,

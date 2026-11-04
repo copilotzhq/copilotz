@@ -9,6 +9,7 @@
     "./stores/latency": "./stores/latency/mod.ts",
     "./blobs/files": "./stores/blobs/files/mod.ts",
     "./blobs/http": "./stores/blobs/http/mod.ts",
+    "./blobs/gcs": "./stores/blobs/gcs/mod.ts",
     "./plugins/models": "./plugins/models/mod.ts",
     "./plugins/agents": "./plugins/agents/mod.ts",
     "./plugins/agents/web": "./plugins/agents/web.tsx",

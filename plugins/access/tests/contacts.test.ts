@@ -47,16 +47,32 @@ const code = (p: Promise<unknown>) =>
 /** What agents were sent, and what a tool saw, for each test to look at. */
 const sent: LlmRequest[] = [];
 let peeked: { threads: string[]; messages: string[]; actor?: Actor } | undefined;
+/** A space to hand work to, once a test has one. */
+let financeId: string | undefined;
 
 /** Answers what it was told; asked to peek, looks around first. */
 const echo: LlmAdapter = {
   async *generate(request) {
     sent.push(request);
-    const last = request.messages.at(-1)!;
+    // What was said last, past what contexts add each turn.
+    const last = request.messages.findLast((m) =>
+      !("text" in m && m.text?.startsWith("<context"))
+    )!;
     if (last.role === "tool") return void (yield { type: "text", text: "looked" });
     const text = "text" in last ? last.text ?? "" : "";
     if (text.includes("peek")) {
       return void (yield { type: "tool_call", call: { id: "p", name: "peek", input: {} } });
+    }
+    // Asked to hand it to another space: it does, and waits for that space's answer.
+    if (text.includes("ask finance") && financeId) {
+      return void (yield {
+        type: "tool_call",
+        call: {
+          id: "h",
+          name: "send_message",
+          input: { space: financeId, text: "What's our margin on Santos trips?" },
+        },
+      });
     }
     yield { type: "text", text: `heard ${text}` };
   },
@@ -153,7 +169,7 @@ const app = definePlugin({
         instructions: "Sell tickets.",
         model: "e/lead",
         default: true,
-        tools: ["peek", "ledger"],
+        tools: ["peek", "ledger", "send_message"],
       },
       ops: { instructions: "Run things.", model: "e/ops" },
     },
@@ -177,6 +193,7 @@ type Setup = {
 async function setup(fn: (s: Setup) => Promise<void>) {
   sent.length = 0;
   peeked = undefined;
+  financeId = undefined;
   const runtime = await createRuntime({
     store: memoryStore(),
     plugins: [models, chat, memory, ...access, probe, app],
@@ -311,7 +328,7 @@ test("the agent working for a contact reaches exactly its chat, though it works 
     assert(request.instructions?.includes("People here: Carla."));
     assert(!request.instructions?.includes("memory"), request.instructions);
     // A tool that decides where it's offered isn't, here, though the agent names it.
-    assertEquals(request.tools?.map((t) => t.name), ["peek"]);
+    assertEquals(request.tools?.map((t) => t.name), ["peek", "send_message"]);
   });
 });
 
@@ -509,6 +526,7 @@ test("what staff's agents read stays with staff: in a contact's chat, it's their
       "recall",
       "remember",
       "request_access",
+      "send_message",
     ]);
     // Looking around the shop: its answer draws on it, and Carla doesn't read it.
     await runtime.call("chat.send", { thread: carlas, text: "peek around" }, { actor: ana });
@@ -577,5 +595,41 @@ test("a document shared on its own is never a space; memories and people stay ou
       { actor: { kind: "agent", id: "lead", for: carla } },
     );
     assert(String(asked).startsWith("Not here"), String(asked));
+  });
+});
+
+test("work handed to another space from a contact's chat comes back theirs alone", async () => {
+  await setup(async ({ runtime, carla, carlas, read }) => {
+    const { space } = await runtime.call<{ space: string }>("space.create", { name: "Finance" }, {
+      actor: ana,
+    });
+    financeId = space;
+    // Ana's agent, in Carla's chat, hands it to Finance; Finance's answer comes back there.
+    await runtime.call("chat.send", { thread: carlas, text: "ask finance" }, { actor: ana });
+    await runtime.idle();
+    const history = await runtime.query<Message[]>("message.history", { thread: carlas }, {
+      actor: ana,
+    });
+    const back = history.find((m) => m.via?.kind === "delegated")!;
+    assertEquals(back.sources, [space]);
+    // Carla never reads it; Ana, who reaches Finance, does.
+    assert(!(await read<Message>("message", carla)).some((m) => m._id === back._id));
+    assert((await read<Message>("message", ana)).some((m) => m._id === back._id));
+  });
+});
+
+test("a collection's name is only its own: nothing objects inherit is a shared collection", async () => {
+  await setup(async ({ runtime, carlas }) => {
+    for (const on of ["constructor", "__proto__", "toString"]) {
+      assertEquals(
+        await code(
+          runtime.call("member.set", { space: carlas, on, member: bob, role: "viewer" }, {
+            actor: ana,
+          }),
+        ),
+        "forbidden",
+        on,
+      );
+    }
   });
 });

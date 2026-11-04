@@ -25,6 +25,7 @@ import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { outline } from "./collections/outline.ts";
 import { summary } from "./collections/summary.ts";
 import { compactor } from "./processors/compact.ts";
+import { eraser } from "./processors/erase.ts";
 import { zoom } from "./resources/tools.ts";
 import { settingsOf } from "./shared/settings.ts";
 import { historyView } from "./views/history.ts";
@@ -50,7 +51,7 @@ export const history: Plugin = definePlugin({
     summary: { llm: summaryView },
   },
   resources: { tools: { zoom } },
-  processors: { "history.compact": compactor },
+  processors: { "history.compact": compactor, "history.erase": eraser },
   async check(merged) {
     const { summarizer } = settingsOf(merged);
     if (!summarizer) throw new Error("history: set the history resource's summarizer model");

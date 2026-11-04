@@ -7,6 +7,7 @@ import type { Thread } from "../collections/thread.ts";
 import type { Wait } from "../collections/wait.ts";
 import { agentsNamed, NO_ANSWER, now, SEND } from "./agents.ts";
 import { noted } from "./summary.ts";
+import { sharedWith } from "../../../access/spaces/contract.ts";
 import { DELEGATED, settingsOf, type Step, type Told, type Turn } from "./types.ts";
 
 /** Whether a message after `hops` agent messages in a row may still start a turn. */
@@ -114,7 +115,10 @@ export const answer = async (
     ...(how.state ? { state: how.state } : {}),
     at: now(),
   };
-  // Handed over from another space: the answer goes back there too, where its sender waits.
+  // Handed over from another space: the answer goes back there too, where its sender waits. Into
+  // a chat shared with someone outside its space (a contact), it says where it came from: only
+  // those who reach that space read it there.
+  const outside = back && thread?.in ? (await sharedWith(ctx, "thread", back.thread)).length : 0;
   const returned = back
     ? {
       ...reply,
@@ -131,6 +135,7 @@ export const answer = async (
       },
       told: undefined,
       state: undefined,
+      ...(outside ? { sources: [thread!.in!] } : {}),
     }
     : undefined;
   const writer = returned ? ctx.as() : ctx;

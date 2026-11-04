@@ -33,9 +33,10 @@ async function manages(ctx: Context, space: string, on?: string): Promise<string
     await must(ctx, "manage", space, `You don't manage "${space}".`);
     return space;
   }
-  const shared = ((ctx.resources.shared ?? {}) as Record<string, { field?: string }>)[on];
+  const all = (ctx.resources.shared ?? {}) as Record<string, { field?: string }>;
+  const shared = Object.hasOwn(all, on) ? all[on] : undefined;
   const doc = shared ? await ctx.as().db.collection(on).findOne({ _id: space }) : null;
-  if (!doc) throw forbidden(`No ${on} "${space}".`);
+  if (!doc || !shared) throw forbidden(`No ${on} "${space}".`);
   const key = docKey(on, space);
   const home = String(doc[shared.field ?? "in"]);
   if (!await may(ctx, "manage", space, on)) {

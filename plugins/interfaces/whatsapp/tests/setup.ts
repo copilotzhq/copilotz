@@ -74,6 +74,7 @@ export const reads = definePlugin({
       "whatsapp_phone",
       "whatsapp_code",
       "whatsapp_thread",
+      "whatsapp_rate",
       "thread",
       "message",
       "contact",
@@ -100,6 +101,18 @@ export const reads = definePlugin({
           at: new Date().toISOString(),
         });
       },
+    }),
+    // A rate count from long ago, of a phone that wrote then.
+    "test.stale": defineAction({
+      input: { type: "object" },
+      run: (ctx) =>
+        ctx.db.collection("whatsapp_rate").insertOne({ _id: "old:phone", minute: 1, count: 3 }),
+    }),
+    // A chat moved to another space, as the system does it.
+    "test.move": defineAction({
+      input: { type: "object" },
+      run: (ctx, input: { thread: string; to: string }) =>
+        ctx.db.collection("thread").updateOne({ _id: input.thread }, { $set: { in: input.to } }),
     }),
     // A chat gone quiet for some hours: its last message that long ago.
     "test.age": defineAction({

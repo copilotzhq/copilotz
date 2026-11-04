@@ -41,7 +41,7 @@ const held = (reach: Reach, verb: Verb, on: string): [string, string][] =>
 export const rules: Guard = async (actor, { collection, access, filter }, ctx) => {
   const shared = (ctx.resources.shared ?? {}) as Shared;
   const own = ["space", "member", "request", "invitation"];
-  if (!(collection in shared) && !own.includes(collection)) return undefined;
+  if (!Object.hasOwn(shared, collection) && !own.includes(collection)) return undefined;
   const reach = await reachOf(actor, ctx);
   if (collection === "invitation") {
     const managed = { space: { $in: where(reach, "manage") } };

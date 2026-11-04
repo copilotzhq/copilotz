@@ -34,6 +34,13 @@ export type Agent = {
   icon?: string;
   /** Where one people made belongs (a space). */
   in?: string;
+  /**
+   * How much of a conversation it's sent. `maxAge` (ms): what's older, back
+   * from the newest message it sees, stays out of its prompt (summaries of
+   * it too), and in the chat. The start moves in steps of a tenth of it
+   * (`ageStart`), so the prompt only grows between steps.
+   */
+  history?: { maxAge?: number };
 };
 
 export type Tool<I = Record<string, unknown>> = {

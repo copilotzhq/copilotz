@@ -283,13 +283,25 @@
   - What plugin code writes (documents, updates, upserts' filters, edges, events, records, timers'
     inputs, Action results) and what an Action is called with may hold no `$blob` key: `invalid`.
     The owner checks it as it walks what it offloads, so it costs no extra pass.
+  - No part of an update's field path may start with `$`, or be `__proto__`, `constructor` or
+    `prototype` (`invalid`, as MongoDB refuses `$` fields): `{ $set: { "bio.$blob": … } }` made a
+    reference out of plain strings. On Node and Bun, `{ $set: { "__proto__.x": … } }` set `x` on
+    every object's prototype (Deno has no `__proto__`). Reads follow a document's own fields only: a
+    filter on `constructor` no longer finds `Object` in every document.
+  - An aggregate's `$group` can't name a field `$…` either: `_id: { $blob: …, size, type }` built a
+    reference from strings, which a browser's own read then loaded.
+  - The API's event stream sends a call's result whole; one over 16 KiB went as its reference.
+    Published events (`runtime.subscribe`) have `full()`: the event with its large values.
   - Only an exact reference loads a blob: the keys `$blob`, `size` and `type`, a `sha256-<64 hex>`
     id, a numeric size and a string type. Any other object is data.
   - Every blob store (memory, SQLite, PostgreSQL, `fileBlobs`, `httpBlobs`, `gcsBlobs`) takes only a
     blob's id (`checkBlobId`, exported for your own `Blobs`).
   - Fixed on the way: a timer's input over 16 KiB reached its Action as a reference; it comes whole.
-  - A store may already hold planted references: an exact one whose blob is gone still fails reads.
-    #155 has a read-only query (PostgreSQL, SQLite) that finds them, and what to do with each.
+    An occurrence of one that a deploy to this version cuts short fails once when it resumes
+    (`id_conflict`: it started with the reference as its input); the timer's next ones run.
+  - A store may already hold planted references: an exact one still loads (its blob gone, reads
+    fail), and any other, carried on, is now refused. #155 has read-only queries (PostgreSQL,
+    SQLite) that find them; clean every one, `sys.timers` first.
 
 - **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
   ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,

@@ -3,6 +3,7 @@
  * update is one statement instead of a read and a write.
  */
 import type { Update } from "../../../runtime/store.ts";
+import { isFieldName } from "../../../runtime/mongo.ts";
 import type { Bind } from "../shared/filter.ts";
 
 /**
@@ -23,7 +24,8 @@ export function expression(
   const supported = ["$set", "$unset", "$inc", "$push", "$addToSet", "$pull"];
   if (ops.some((op) => !supported.includes(op))) return undefined;
   const all = supported.flatMap(fields);
-  if (all.some((field) => field.includes(".") || field.startsWith("$") || field === "_id")) {
+  // Paths, `_id`, and names no write may give (the reference refuses those) go to the reference.
+  if (all.some((field) => field.includes(".") || !isFieldName(field) || field === "_id")) {
     return undefined;
   }
   if (Object.values(u.$inc ?? {}).some((by) => typeof by !== "number")) return undefined;

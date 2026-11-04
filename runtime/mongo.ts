@@ -4,17 +4,45 @@
  * queries with it; SQL adapters translate queries instead.
  */
 import type { Doc, Filter, FindOptions, Update } from "./store.ts";
+import { invalid } from "./errors.ts";
 
+/** Names that reach an object's prototype. */
+const PROTOTYPE = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * A field name a write may give: not an operator's or a blob reference's
+ * (`$…`, as MongoDB refuses them), nor one that reaches the prototype; else
+ * `invalid`. `path` is what it's part of, for the message.
+ */
+export function checkName(name: string, path = name): void {
+  if (!isFieldName(name)) {
+    throw invalid(
+      `A write can't name the field "${path.slice(0, 80)}": no part of it may start with "$", ` +
+        `or be __proto__, constructor or prototype`,
+    );
+  }
+}
+
+/** Whether a write may give a field this name (see `checkName`). */
+export const isFieldName = (name: string): boolean => !name.startsWith("$") && !PROTOTYPE.has(name);
+
+/** A dotted path a write may name: every part of it a field name it may give. */
+export function checkPath(path: string): void {
+  for (const name of path.split(".")) checkName(name, path);
+}
+
+/** The value at a dotted path, through the document's own fields only (never its prototype's). */
 export function get(doc: unknown, path: string): unknown {
   let value: unknown = doc;
   for (const key of path.split(".")) {
-    if (value === null || typeof value !== "object") return undefined;
+    if (value === null || typeof value !== "object" || !Object.hasOwn(value, key)) return undefined;
     value = (value as Record<string, unknown>)[key];
   }
   return value;
 }
 
 function set(doc: Record<string, unknown>, path: string, value: unknown) {
+  checkPath(path);
   const keys = path.split(".");
   let target = doc;
   for (const key of keys.slice(0, -1)) {
@@ -25,6 +53,7 @@ function set(doc: Record<string, unknown>, path: string, value: unknown) {
 }
 
 function unset(doc: Record<string, unknown>, path: string) {
+  checkPath(path);
   const keys = path.split(".");
   const parent = keys.length > 1 ? get(doc, keys.slice(0, -1).join(".")) : doc;
   if (parent && typeof parent === "object") {
@@ -201,12 +230,14 @@ export function sortAndPage<T>(docs: T[], options: FindOptions = {}): T[] {
  */
 export function seedOf(filter: Filter): Doc {
   const seed: Record<string, unknown> = {};
+  // What it takes, it writes.
+  const checked = (path: string) => (checkPath(path), path);
   const take = (clause: Filter) => {
     for (const [path, value] of Object.entries(clause)) {
       if (path === "$and") { for (const each of value as Filter[]) take(each); }
       else if (path.startsWith("$")) continue;
-      else if (value === null || typeof value !== "object") seed[path] = value;
-      else if ("$eq" in value && Object.keys(value).length === 1) seed[path] = value.$eq;
+      else if (value === null || typeof value !== "object") seed[checked(path)] = value;
+      else if ("$eq" in value && Object.keys(value).length === 1) seed[checked(path)] = value.$eq;
     }
   };
   take(filter);

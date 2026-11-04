@@ -66,6 +66,9 @@ const bigRef = async (): Promise<BlobRef> => ({
 /** A blob id no blob has. */
 const NONE = `sha256-${"0".repeat(64)}`;
 const code = (error: unknown) => (error as { code?: string }).code;
+/** Refused as forging one: `invalid`, saying the `$blob` it won't take. */
+const refused = (error: unknown) =>
+  code(error) === "invalid" && (error as Error).message.includes("$blob");
 
 /** Forged references: to no blob (a), to another document's blob (b), to a file (c), and more. */
 const forgeries = async (): Promise<Record<string, unknown>> => ({
@@ -83,6 +86,12 @@ const refsIn = (value: unknown): unknown[] =>
     ...Object.values(value).flatMap(refsIn),
   ];
 
+/** `value`'s fields as dotted paths under `prefix`, as an update names them. */
+const dotted = (prefix: string, value: unknown): Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).map(([k, v]) => [`${prefix}.${k}`, v]))
+    : { [`${prefix}.v`]: value };
+
 /** Times an Action ran that must not have. */
 let ran = 0;
 
@@ -99,6 +108,16 @@ const ways: Record<string, (ctx: Context, value: unknown) => unknown> = {
     ctx.db.collection("step").updateOne({ _id: "s" }, { $push: { inputs: value } }, {
       upsert: true,
     }),
+  // `{ "bio.$blob": …, "bio.size": …, "bio.type": … }` would make `bio` a reference.
+  "dotted $set paths": (ctx, value) =>
+    ctx.db.collection("step").updateOne({ _id: "s" }, { $set: dotted("bio", value) }, {
+      upsert: true,
+    }),
+  "dotted paths into an array's element": async (ctx, value) => {
+    const steps = ctx.db.collection("step");
+    await steps.updateOne({ _id: "list" }, { $set: { list: [{}] } }, { upsert: true });
+    return await steps.updateOne({ _id: "list" }, { $set: dotted("list.0", value) });
+  },
   "an upsert's filter": (ctx, value) =>
     ctx.db.collection("step").updateOne({ _id: "u", input: { $eq: value } }, { $set: { n: 1 } }, {
       upsert: true,
@@ -203,13 +222,10 @@ each("each way plugin code writes refuses a forged reference, and stores none", 
     ran = 0;
     for (const [name, forged] of Object.entries(await forgeries())) {
       for (const way of Object.keys(ways)) {
-        const error = await assertRejects(
-          () => runtime.call("vault.write", { way, json: JSON.stringify(forged) }),
-          Error,
-          FORGED,
-          `${way}, ${name}`,
+        const error = await assertRejects(() =>
+          runtime.call("vault.write", { way, json: JSON.stringify(forged) })
         );
-        assertEquals(code(error), "invalid", `${way}, ${name}`);
+        assertEquals(refused(error), true, `${way}, ${name}: ${(error as Error).message}`);
       }
     }
     assertEquals(ran, 0);
@@ -370,6 +386,64 @@ test("with blobs as files, no reference reaches a file outside them", async () =
         "invalid",
       );
     }
+  } finally {
+    await runtime.close();
+  }
+});
+
+/** Each person's notes are theirs alone; one of them has a blob. */
+const notes = definePlugin({
+  name: "notes",
+  collections: { note: defineCollection({ schema: object }) },
+  guard: (actor, { collection }) => collection === "note" ? { owner: actor.id } : undefined,
+  actions: {
+    "note.write": defineAction({
+      input: object,
+      allow: () => true,
+      run: (ctx, input) => ctx.db.collection("note").insertOne({ owner: ctx.actor!.id, ...input }),
+    }),
+    // Runs a pipeline it parses, so its input holds no `$blob` key.
+    "note.group": defineAction({
+      input: { type: "object", properties: { json: { type: "string" } }, required: ["json"] },
+      allow: () => true,
+      run: (ctx, { json }) => ctx.db.collection("note").aggregate(JSON.parse(json)),
+    }),
+  },
+});
+
+each("an aggregate can't name a field $blob: no reference is made from strings", async (make) => {
+  const runtime = await createRuntime({ store: await make(), plugins: [notes] });
+  const ana = { kind: "person", id: "ana" } as const;
+  const mallory = { kind: "person", id: "mallory" } as const;
+  try {
+    const ref = await bigRef();
+    await runtime.call("note.write", { text: big, kind: "x" }, { actor: ana });
+    // Mallory writes plain strings: the hash, and a type.
+    await runtime.call("note.write", { text: `see ${ref.$blob}`, kind: TEXT }, { actor: mallory });
+    const forging = [
+      // Grouped by an object whose fields would be a reference's.
+      [{ $group: { _id: { $blob: { $substr: ["$text", 4, 71] }, size: 1, type: "$kind" } } }],
+      [{ $group: { _id: null, $blob: { $min: "$text" } } }],
+    ];
+    for (const pipeline of forging) {
+      // As a browser reads: the wire's read View, as her.
+      const read = runtime.observe("wire", "core.read", {
+        op: { op: "aggregate", collection: "note", pipeline },
+      }, { actor: mallory });
+      const out = await read.ready as { status: string; error?: { code?: string } };
+      read.close();
+      assertEquals([out.status, out.error?.code], ["failed", "invalid"], JSON.stringify(pipeline));
+      // As plugin code runs it.
+      const error = await assertRejects(() =>
+        runtime.call("note.group", { json: JSON.stringify(pipeline) }, { actor: mallory })
+      );
+      assertEquals(refused(error), true, (error as Error).message);
+    }
+    // Grouping by fields still names them.
+    const kinds = await runtime.call("note.group", {
+      json: JSON.stringify([{ $group: { _id: { kind: "$kind" }, n: { $count: {} } } }]),
+    }, { actor: mallory });
+    assertEquals(kinds, [{ _id: { kind: TEXT }, n: 1 }]);
   } finally {
     await runtime.close();
   }

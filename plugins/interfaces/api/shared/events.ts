@@ -15,7 +15,7 @@
  * the connection open, and checks the key: revoked, the stream says so
  * (`revoked`) and ends.
  */
-import type { Event, Runtime } from "../../../../runtime/mod.ts";
+import type { Event, Feed, Runtime } from "../../../../runtime/mod.ts";
 import type { Proven } from "../collections/key.ts";
 import { CORS } from "./http.ts";
 
@@ -34,10 +34,13 @@ const OWN: Record<string, string> = {
 
 const CHANGE = /^(.+)\.(created|updated|deleted)$/;
 
+/** An event as it's published. */
+type Published = Extract<Feed, { kind: "event" }>;
+
 /** What a batch says: a change to a document in the key's space, or one of its calls' outcomes. */
 type Said =
   | { event: Event; collection: string; _id: string; how: string }
-  | { event: Event; collection?: undefined };
+  | { event: Event; collection?: undefined; full: Published["full"] };
 
 /** One event as the stream says it. */
 const frame = (event: Event, data: Record<string, unknown>) =>
@@ -69,15 +72,15 @@ export function eventStream(
       const send = (text: string) => {
         if (open) controller.enqueue(encoder.encode(text));
       };
-      let queued: Event[] = [];
+      let queued: Published[] = [];
       let chain = Promise.resolve();
       /** The key's own calls started since it connected, until they end. */
       const calls = new Set<string>();
 
       /** A batch, in order: changes read again as the key, its calls' outcomes as they are. */
-      const flush = async (events: Event[]) => {
+      const flush = async (events: Published[]) => {
         const reread = new Map<string, Set<string>>();
-        const wanted = events.flatMap((event): Said[] => {
+        const wanted = events.flatMap(({ event, full }): Said[] => {
           const change = CHANGE.exec(event.type);
           if (change) {
             const [, collection, how] = change;
@@ -97,7 +100,7 @@ export function eventStream(
             (event.type === "action.completed" || event.type === "action.failed") &&
             event.cause && calls.delete(event.cause)
           ) {
-            return [{ event }];
+            return [{ event, full }];
           }
           return [];
         });
@@ -115,7 +118,8 @@ export function eventStream(
         for (const one of wanted) {
           const { event } = one;
           if (one.collection === undefined) {
-            const data = event.data as Record<string, unknown>;
+            // Whole: a result over 16 KiB is a blob reference in the log (its blob gone: as it is).
+            const data = (await one.full().catch(() => event)).data as Record<string, unknown>;
             send(frame(event, {
               call: event.cause,
               action: data.action,
@@ -140,7 +144,7 @@ export function eventStream(
 
       const unsubscribe = runtime.subscribe((item) => {
         if (item.kind !== "event") return;
-        queued.push(item.event);
+        queued.push(item);
         // What one commit published goes as one batch.
         if (queued.length === 1) {
           setTimeout(() => {

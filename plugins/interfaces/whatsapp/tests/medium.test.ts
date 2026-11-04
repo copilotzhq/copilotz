@@ -74,9 +74,14 @@ const booking = definePlugin({
     },
   },
   views: {
+    // Read from the chat, as whom it goes to reads it (as anyone else, there's no chat to read).
     "addition:trips": {
-      whatsapp: ({ answer }: { answer: Message }): Addition<WaPart> | undefined =>
-        said_(answer).includes("trips")
+      whatsapp: (
+        { answer }: { answer: Message },
+        ctx: ViewContext,
+      ): Addition<WaPart> | undefined =>
+        said_(answer).includes("trips") &&
+          ctx.db.collection("thread").findOne({ _id: answer.thread }).value
           ? {
             key: "trips:santos",
             parts: [carousel("Some trips to Santos", cards)],

@@ -86,6 +86,12 @@
     (`chat.send`'s new `quiet`: a durable timer each message sets again, `chat.quiet`, so a restart
     in the window still answers once).
   - **A failed turn** tells a customer only that, in their line's language, never its error.
+  - Each sender's quiet window is their own (`quiet:<thread>:<sender>:<agent>`): a staff member's
+    message never takes a customer's place, nor the reverse. Erasing a chat ends its windows, and a
+    window whose message is gone (or no longer theirs to read) starts no turn.
+  - A declared line is one org's with the orgs host: it names the org (`org`), and every other org's
+    runtime has nothing of it; a line naming none is a single-org app's.
+  - What Meta couldn't deliver is rendered again as its addressee, as any reply is.
 - **Signed links** (the runtime's `signLink` and `verifyLink`, with the app's `links` resource:
   `{ origin, secret }`, a secret of at least 32 bytes, checked at start): the app's origin, a path,
   its params and an expiry (an hour unless said), HMAC-signed, with a line break between origin and

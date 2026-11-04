@@ -9,6 +9,7 @@ import { assert, assertEquals } from "@std/assert";
 import { manualClock } from "../../../../runtime/mod.ts";
 import type { LlmAdapter, LlmMessage } from "../../../models/mod.ts";
 import { test } from "../../../../testing/mod.ts";
+import type { Message, Thread } from "../../../agents/chat/mod.ts";
 import { ana, type Setup, setup } from "./setup.ts";
 
 const CARLA = "5511911112222";
@@ -67,5 +68,42 @@ test("a restart in the window still answers, once", async () => {
     await s.runtime.idle();
     assertEquals(s.graph.texts(CARLA), ["answer 1"]);
     assertEquals(calls.length, 1);
+  }, { llm: counting, clock });
+});
+
+test("each sender's window is their own: a staff member's doesn't take a customer's place", async () => {
+  calls.length = 0;
+  const clock = manualClock(Date.now());
+  await setup(async (s) => {
+    await open(s);
+    await write(s, "oi");
+    const [chat] = await s.runtime.query<Thread[]>("thread.recent", { in: s.launch }, {
+      actor: ana,
+    });
+    await s.runtime.call("chat.send", { thread: chat._id, text: "staff here", quiet: 4_000 }, {
+      actor: ana,
+    });
+    clock.advance(4_500);
+    await s.runtime.idle();
+    assertEquals(calls.length, 2);
+  }, { llm: counting, clock });
+});
+
+test("a turn waiting for quiet in a chat that's erased meanwhile never starts", async () => {
+  calls.length = 0;
+  const clock = manualClock(Date.now());
+  await setup(async (s) => {
+    await open(s);
+    await write(s, "oi");
+    const [chat] = await s.runtime.query<Thread[]>("thread.recent", { in: s.launch }, {
+      actor: ana,
+    });
+    const carla = (await s.runtime.query<Message[]>("message.history", { thread: chat._id }, {
+      actor: ana,
+    })).find((m) => m.from.startsWith("contact:"))!.from.slice("contact:".length);
+    await s.runtime.call("contact.forget", { contact: carla, chats: true }, { actor: ana });
+    clock.advance(4_500);
+    await s.runtime.idle();
+    assertEquals([calls.length, s.graph.texts(CARLA)], [0, []]);
   }, { llm: counting, clock });
 });

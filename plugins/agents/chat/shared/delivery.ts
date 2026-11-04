@@ -10,6 +10,13 @@ import { noted } from "./summary.ts";
 import { sharedWith } from "../../../access/spaces/contract.ts";
 import { DELEGATED, settingsOf, type Step, type Told, type Turn } from "./types.ts";
 
+/**
+ * The timer a sender's quiet window is (see `delivery`'s `quiet`): each of
+ * their messages sets it again, and nobody else's does.
+ */
+export const quietId = (thread: string, sender: string, agent: string) =>
+  `quiet:${thread}:${sender}:${agent}`;
+
 /** Whether a message after `hops` agent messages in a row may still start a turn. */
 export const starts = (ctx: { resources: Resources }, hops: number) => {
   const { maxHops } = settingsOf(ctx);
@@ -68,7 +75,7 @@ export const delivery = async (
         quiet > 0
           ? void tx.schedule("chat.quiet", turn, {
             at: Date.now() + quiet,
-            id: `quiet:${where}:${name}`,
+            id: quietId(where, m.from, name),
           })
           : tx.emit("turn.requested", turn, { id: `${m._id}:${name}` })
       );

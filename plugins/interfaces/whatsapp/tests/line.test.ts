@@ -467,3 +467,34 @@ test("a line the app declares answers customers with no person connecting or ope
     assertEquals(graph.texts(CARLA).at(-1), "heard *Carla: e a volta?*");
   }, { plugins: [declaring] });
 });
+
+test("a declared line is one org's: with the orgs host, only the org it names has it", async () => {
+  const scoped = (org?: string) =>
+    definePlugin({
+      name: "scoped",
+      resources: {
+        ...(org ? { org: { id: org } } : {}),
+        whatsapp: {
+          lines: {
+            acme: {
+              in: "line-space",
+              phoneId: "999888777",
+              token: TOKEN,
+              secret: "the-acme-lines-own-secret-01",
+              verify: "acme-verify",
+              org: "acme",
+            },
+          },
+        },
+      },
+    });
+  const handshake = (s: Setup) =>
+    s.serve(
+      new Request(
+        "http://localhost/hooks/whatsapp/acme?hub.mode=subscribe&hub.verify_token=acme-verify&hub.challenge=1",
+      ),
+    ).then((r) => r.status);
+  await setup(async (s) => assertEquals(await handshake(s), 404), { plugins: [scoped()] });
+  await setup(async (s) => assertEquals(await handshake(s), 404), { plugins: [scoped("other")] });
+  await setup(async (s) => assertEquals(await handshake(s), 200), { plugins: [scoped("acme")] });
+});

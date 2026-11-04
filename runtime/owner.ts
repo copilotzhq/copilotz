@@ -186,7 +186,13 @@ export type Owner = {
       options?: { signal?: AbortSignal },
     ): Promise<WorkerJob>;
   };
-  close(): Promise<void>;
+  /**
+   * Stops. No Processor delivery or timer occurrence starts; those running
+   * get `drain` ms (5 s by default) to finish, then stop where they are. A
+   * delivery that didn't finish keeps its Processor's cursor before its
+   * event, so the next owner delivers it again (`retry`).
+   */
+  close(options?: { drain?: number }): Promise<void>;
 };
 
 const SYSTEM = "sys.";
@@ -201,6 +207,8 @@ const DAY = 86_400_000;
  * it should be).
  */
 const DELIVERY_ATTEMPTS = 3;
+/** How long a closing owner waits for running deliveries to finish, by default (ms). */
+const DRAIN_MS = 5_000;
 
 const aborted = Object.freeze({ aborted: true });
 
@@ -324,6 +332,8 @@ export async function createOwner(
   };
 
   const closing = new AbortController();
+  // Closing begins: nothing new starts (deliveries, timer occurrences), and what runs may finish.
+  const draining = new AbortController();
   // Time calls Actions: one clock, for the earliest timer (see timers.ts).
   const timers = createTimers({
     store,
@@ -333,7 +343,7 @@ export async function createOwner(
     write: (ops) => writeEach(ops),
     call: (action, input, id, scheduled, actor) => begin(action, input, id, true, scheduled, actor),
     track: (work) => track(work),
-    signal: closing.signal,
+    signal: draining.signal,
     metrics,
   });
 
@@ -1523,11 +1533,12 @@ export async function createOwner(
     return !!stop;
   };
 
+  /** Delivers an event to a Processor: false when closing cut it short (it isn't done). */
   const deliver = async (name: string, event: Event, recovered: boolean, lane: string) => {
     const stop = new AbortController();
     active.set(lane, stop);
     try {
-      await attempts(name, event, recovered, stop.signal);
+      return await attempts(name, event, recovered, stop.signal);
     } finally {
       if (active.get(lane) === stop) active.delete(lane);
     }
@@ -1543,9 +1554,10 @@ export async function createOwner(
           event: full,
           retry: recovered || attempt > 1,
         }, stop);
-        return;
+        return true;
       } catch (error) {
-        if (closing.signal.aborted) return;
+        // Cut short by closing: not done, and not failed either.
+        if (closing.signal.aborted) return false;
         // Every failed attempt is on record: the retry that follows, or the final failure.
         const after = (error as { code?: string }).code === "executor_lost" ? "lost" : "failed";
         // A stopped delivery is over, and so is one whose failure says trying again won't help.
@@ -1574,13 +1586,16 @@ export async function createOwner(
               },
             cause: event.id,
           })), false).catch(() => {});
-        if (last) return;
+        if (last) return true;
         await new Promise((resolve) => {
           const timer = setTimeout(resolve, 200 * attempt);
-          stop.addEventListener("abort", () => (clearTimeout(timer), resolve(undefined)), {
-            once: true,
-          });
+          AbortSignal.any([stop, closing.signal]).addEventListener(
+            "abort",
+            () => (clearTimeout(timer), resolve(undefined)),
+            { once: true },
+          );
         });
+        if (closing.signal.aborted) return false;
       }
     }
   };
@@ -1612,7 +1627,8 @@ export async function createOwner(
       inflight.get(name)!.add(event.seq);
       seen.set(name, Math.max(seen.get(name) ?? 0, event.seq));
       const tail = track(lane.tail.then(async () => {
-        await deliver(name, event, retry, key);
+        // One not delivered stays in flight: its Processor's cursor never moves past it.
+        if (draining.signal.aborted || !await deliver(name, event, retry, key)) return;
         inflight.get(name)!.delete(event.seq);
         advance(name);
       })).finally(() => {
@@ -1748,7 +1764,22 @@ export async function createOwner(
       misses: cache?.stats().misses ?? 0,
     }),
     hypervisor,
-    async close() {
+    async close(options = {}) {
+      // What's running (deliveries, timer occurrences) gets a while to finish,
+      // workers still there to serve it; nothing new starts.
+      draining.abort();
+      timers.close();
+      const drain = options.drain ?? DRAIN_MS;
+      if (drain > 0 && pending) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          (async () => {
+            while (pending) await drained.promise;
+          })(),
+          new Promise((resolve) => timer = setTimeout(resolve, drain)),
+        ]);
+        clearTimeout(timer);
+      }
       // Workers still connected go with it: their kinds hear so while it still runs.
       for (const key of connected.keys()) {
         const [kind, id] = key.split("\u0000");
@@ -1757,7 +1788,6 @@ export async function createOwner(
       connected.clear();
       await Promise.all(telling);
       closing.abort();
-      timers.close();
       clearTimeout(flushing);
       // A browser's session is a stream that never ends on its own: end them, so the
       // shutdown's drain doesn't wait them out.

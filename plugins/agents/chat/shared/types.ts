@@ -71,6 +71,15 @@ export type ToolContext = Context & {
   agent: string;
   thread: string;
   trigger: string;
+  /**
+   * This call's id, the same however many times it runs: the idempotency key
+   * for what it does outside (a payment, an email). A call returns once: a
+   * retried turn reuses what it returned. One cut short (its executor lost,
+   * the runtime closed) runs again as itself, with `retry` true, and the
+   * recorded Actions it called answer from the log; `retry` is false when the
+   * call never ran before.
+   */
+  callId: string;
 };
 
 /** A tool whose `run` input type comes from its JSON Schema. */

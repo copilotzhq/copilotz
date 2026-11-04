@@ -1,5 +1,10 @@
 /** Every few shared messages, a model reads them and writes down what's worth keeping. */
-import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
+import {
+  type Context,
+  type Event,
+  principalOf,
+  type ProcessorDef,
+} from "../../../../runtime/mod.ts";
 import type { Completion } from "../../../models/contract.ts";
 import { agentsNamed, type Message } from "../../chat/contract.ts";
 import type { Memory } from "../collections/memory.ts";
@@ -34,6 +39,8 @@ export const extractor: ProcessorDef = {
 
 /** Every few shared messages, the extractor writes down what's worth keeping. */
 async function extract(ctx: Context, event: Event) {
+  // A customer's chat keeps to itself (see `applies`).
+  if (principalOf(ctx.actor)?.kind === "contact") return;
   const { extractor, every = 8 } = settingsOf(ctx);
   const m = event.data.doc as Message;
   const states = ctx.db.collection<{ pending: string[] }>("memoryProgress");

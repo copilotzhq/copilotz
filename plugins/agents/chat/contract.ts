@@ -35,7 +35,6 @@ export type {
   Turn,
 } from "./shared/types.ts";
 export { tool } from "./shared/types.ts";
-export { principalOf } from "./shared/send.ts";
 export { type Origin, originKey, originOf } from "./shared/origin.ts";
 export type { AgentModel, AgentSource, Roster, RosterSource, Team } from "./shared/agents.ts";
 /**

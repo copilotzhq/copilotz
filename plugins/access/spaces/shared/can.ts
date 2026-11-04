@@ -1,7 +1,9 @@
 /**
  * Whether the caller may do something in a space (`read`, `write`, `manage`):
- * what reach says, with every limit on them. Trusted code asks here before it
- * goes on as the system, and no one else works this out.
+ * what reach says, with every limit on them; and whether they're there at all
+ * (`present`: the space, or a document in it, such as a contact's chat).
+ * Trusted code asks here before it goes on as the system, and no one else
+ * works this out.
  */
 import { type Context, forbidden, personOf } from "../../../../runtime/mod.ts";
 import { reachOf, type Verb } from "./reach.ts";
@@ -11,6 +13,18 @@ export async function may(ctx: Context, verb: Verb, space: string): Promise<bool
   if (!actor || actor.kind === "system") return true;
   // Read as the system: what's read to decide labels nothing the caller then writes.
   return (await reachOf(actor, ctx.as())).get(space)?.can.has(verb) ?? false;
+}
+
+/**
+ * Whether the caller is in `space` at all: they reach it, or a document in it
+ * on its own (a contact, its chat there). What's said to anyone there (who
+ * answers in it) is said to them too.
+ */
+export async function present(ctx: Context, space: string): Promise<boolean> {
+  const { actor } = ctx;
+  if (!actor || actor.kind === "system") return true;
+  const reach = await reachOf(actor, ctx.as());
+  return reach.has(space) || [...reach.values()].some((held) => held.home === space);
 }
 
 /** Throws `forbidden`, with `message`, unless the caller may. */

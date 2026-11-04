@@ -180,7 +180,8 @@ export const message = defineCollection({
     },
     /** Questions to `person` that an agent is still waiting on, newest first. */
     questions: {
-      allow: (actor, params: { person: string }) => actor.id === params.person,
+      allow: (actor, params: { person: string }) =>
+        actor.kind === "person" && actor.id === params.person,
       run: async (messages, params: { person: string }, ctx) => {
         const asked = await messages.find(
           { to: params.person, replyTo: { $exists: false }, expectReply: { $ne: false } },

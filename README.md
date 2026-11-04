@@ -103,8 +103,8 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`    |
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`              |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                  |
-| `copilotz/plugins/access`              | `access` (`spaces`, `identity`), `accounts`, `directory`, `googleSignIn`                                     |
-| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`                                                                                   |
+| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `accounts`, `directory`, `googleSignIn`                         |
+| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`                                                                    |
 | `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                             |
 | `copilotz/plugins/billing`             | `usage`: the ledger                                                                                          |
 | `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                   |
@@ -331,6 +331,12 @@ name, never by importing its code.
     the `transcribe` model alias), and agents read the transcript. If it fails nothing is sent
     (`transcription_failed`); `transcribe: false` sends audio as it is. A voice message may say
     nothing else; its file carries `voice` (duration, peaks) for its player.
+  - **In spaces:** chat declares its own `shared` entries (threads, messages with labels, files,
+    what's being written), so an app with the access plugin needn't. A chat's messages, files and
+    live writing are part of it (`part: "thread"`): shared on its own (with a contact), its parts
+    come with it. `chat.open` opens an empty chat in a space; `chat.say` has an agent say a fixed
+    message there without a turn (trusted code only: a payment confirmed), which goes out like any
+    of its answers.
 - **`history`** keeps chat history from outgrowing the prompt
   (`resources: { history: { summarizer: "openai/gpt-5.4-mini" } }`): every message stays whole, a
   cheap model writes a line for each and merges pairs up a binary tree, and an agent gets recent
@@ -386,6 +392,12 @@ name, never by importing its code.
   it's one; a new space has the app's default agents. An answer drawn from a space not everyone in
   the conversation can see shows only to those who see both, marked, until someone shares it.
 - **`identity`**: people, sessions and keys, and who a secret proves.
+- **`contacts`**: people outside the org who talk to its agents (a WhatsApp customer). A contact is
+  its own kind of actor (`{ kind: "contact", id }`), never a person: every Action and query stays
+  shut to it unless it says otherwise (`peopleOrContacts`, as `chat.send` does). Its chat lives in
+  the line's space and is shared with it on its own: it reaches that chat, what's said and filed
+  there, and nothing else; the space's people reach it as any chat there, and the agent working for
+  the contact reaches exactly that chat. Agents are told whom they're talking with.
 - **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client).
 - **`accounts`**: outside accounts a person connects once, for their agents to use: first their
   ChatGPT plan, as a model provider, instead of the app's API key. Tokens are a private field only
@@ -459,7 +471,10 @@ filled by the front ends through resources).
   server-sent events, as that person, in that space only.
 - **`whatsapp`**: people talk to their agents from WhatsApp, through Meta's Cloud API. A space's
   managers connect a number; a person links their phone with a code; what they send becomes their
-  messages, and what agents say to them goes back, a long answer in several messages.
+  messages, and what agents say to them goes back, a long answer in several messages. Opened to
+  anyone (`whatsapp.set`), a number is a customer line: a stranger who writes is a contact, in a
+  chat of their own in the number's space, answered by its agent, and a chat quiet for the number's
+  `gap` (12 hours) is over: their next message starts a new one.
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.

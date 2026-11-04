@@ -9,15 +9,9 @@
  *
  *   agents: { assistant: { tools: ["terminal", "create_computer", "manage_computer"] } }
  */
-import type { Actor, ViewContext } from "../../../../runtime/mod.ts";
-import { personOf } from "../../../../runtime/mod.ts";
-import {
-  principalOf,
-  type Thread,
-  type Tool,
-  tool,
-  type ToolContext,
-} from "../../../agents/chat/contract.ts";
+import type { ViewContext } from "../../../../runtime/mod.ts";
+import { personOf, principalOf } from "../../../../runtime/mod.ts";
+import { type Thread, type Tool, tool, type ToolContext } from "../../../agents/chat/contract.ts";
 import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 import type { CloudComputer } from "../contract.ts";
 import type { Offered } from "../collections/cloud-computer.ts";
@@ -51,8 +45,8 @@ const offer = (_agent: string, thread: Thread, ctx: ViewContext) => {
 
 /** The conversation's space and the person the agent works for, or why there are none. */
 async function whereFor(ctx: ToolContext) {
-  const principal = principalOf(ctx.actor) as Actor | undefined;
-  if (!principal) {
+  const principal = principalOf(ctx.actor);
+  if (principal?.kind !== "person") {
     return { missing: "Computers are a person's, and you aren't working for one here." };
   }
   const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread });

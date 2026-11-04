@@ -17,6 +17,10 @@
  *   turn, kept in memory, swapped for the step or reply it became in one commit.
  * - A person moves a conversation to another space (`chat.move`), with
  *   everything in it; not while an agent is writing in it.
+ * - A chat can be opened empty (`chat.open`), to share it with a contact
+ *   (someone outside the org, who then writes there with `chat.send` and
+ *   reaches only it); trusted code has an agent say a fixed message in one
+ *   without a turn (`chat.say`: a payment confirmed).
  * - Threads record where they came from (`parent`). A fork (a subthread) sees
  *   its parent's conversation up to the message it started at, through every
  *   level, without copying it; a new thread starts from its first message.
@@ -46,6 +50,8 @@
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { forkAction } from "./actions/fork.ts";
 import { moveAction } from "./actions/move.ts";
+import { openAction } from "./actions/open.ts";
+import { sayAction } from "./actions/say.ts";
 import { sendAction } from "./actions/send.ts";
 import { stopAction } from "./actions/stop.ts";
 import { file } from "./collections/file.ts";
@@ -95,14 +101,24 @@ export const chat: Plugin = definePlugin({
   },
   actions: {
     "chat.send": sendAction,
+    "chat.open": openAction,
+    "chat.say": sayAction,
     "chat.fork": forkAction,
     "chat.stop": stopAction,
     "chat.move": moveAction,
   },
   events: { "turn.requested": turnRequested },
-  // Conversations by title on Usage.
   resources: {
+    // Conversations by title on Usage.
     usageNames: { thread: { tag: "tags.thread", collection: "thread", field: "title" } },
+    // With the access plugin, chats live in spaces, and what's in a chat comes with it when it's
+    // shared on its own (with a contact): its messages, files and what's being written.
+    shared: {
+      thread: {},
+      message: { labels: true, part: "thread" },
+      file: { part: "thread" },
+      live: { part: "thread" },
+    },
   },
   processors: {
     "chat.turn": turnProcessor,

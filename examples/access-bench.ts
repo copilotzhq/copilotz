@@ -17,6 +17,14 @@
  *
  * Memberships change rarely, so the owner's cache answers the rules' reads;
  * a query that names a space it reaches goes to the store unchanged.
+ *
+ * And a customer line: 10,000 contacts in one space, each a member of its own
+ * chat only (5 notes each, part of it), read by a contact, by the agent
+ * working for it, and by the space's staff. Median ms, SQLite (2026-11-03):
+ *
+ *                       staff: one chat / the line   contact: its chat / all   its agent: same
+ *   cached              0.33 / 0.40                  0.33 / 0.33               0.32 / 0.33
+ *   uncached            0.42 / 0.53                  0.40 / 0.39               0.43 / 0.43
  */
 import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
 import {
@@ -40,17 +48,33 @@ const store = args.postgres
 if ("drop" in store) Object.assign(store, { close: (store as { drop(): Promise<void> }).drop });
 
 const text = { type: "string" } as const;
+const CONTACTS = 10_000;
 const app = definePlugin({
   name: "bench",
-  resources: { shared: { note: {} } },
+  resources: { shared: { note: { part: "chat" }, chat: {} } },
   collections: {
     note: defineCollection({
-      schema: { type: "object", properties: { in: text, at: text, text }, required: ["in"] },
-      indexes: [["in", "at"], ["at"]],
-      queries: {
-        latest: (notes, p: { in?: string }) =>
-          notes.find(p.in ? { in: p.in } : {}, { sort: { at: -1 }, limit: 50 }),
+      schema: {
+        type: "object",
+        properties: { in: text, chat: text, at: text, text },
+        required: ["in"],
       },
+      indexes: [["in", "at"], ["at"], ["chat", "at"]],
+      queries: {
+        // Anyone asks: the rules keep what each reads to what they reach.
+        latest: {
+          allow: () => true,
+          run: (notes, p: { in?: string; chat?: string }) =>
+            notes.find(p.chat ? { chat: p.chat } : p.in ? { in: p.in } : {}, {
+              sort: { at: -1 },
+              limit: 50,
+            }),
+        },
+      },
+    }),
+    chat: defineCollection({
+      schema: { type: "object", properties: { in: text }, required: ["in"] },
+      indexes: [["in"]],
     }),
   },
   actions: {
@@ -67,6 +91,42 @@ const app = definePlugin({
           };
         }));
       },
+    }),
+    // A customer line: chats in `line`, each shared with its contact alone, five notes each.
+    "bench.line": defineAction({
+      input: { type: "object", properties: { from: { type: "number" } }, required: ["from"] },
+      run: async (ctx, { from }) => {
+        const ids = Array.from({ length: 1_000 }, (_, i) => from + i);
+        await ctx.db.collection("chat").insertMany(ids.map((k) => ({ _id: `c${k}`, in: "line" })));
+        await ctx.db.collection("member").insertMany(ids.map((k) => ({
+          _id: `chat:c${k}|contact:k${k}`,
+          member: `contact:k${k}`,
+          space: `chat:c${k}`,
+          on: "chat",
+          role: "editor",
+        })));
+        await ctx.db.collection("note").insertMany(
+          ids.flatMap((k) =>
+            Array.from({ length: 5 }, (_, j) => ({
+              _id: `l${k}.${j}`,
+              in: "line",
+              chat: `c${k}`,
+              at: new Date(Date.UTC(2026, 1, 1) + (k * 5 + j) * 1000).toISOString(),
+              text: "x".repeat(200),
+            }))
+          ),
+        );
+      },
+    }),
+    "bench.seat": defineAction({
+      input: { type: "object", properties: { member: text }, required: ["member"] },
+      run: (ctx, { member }) =>
+        ctx.db.collection("member").insertOne({
+          _id: `line|${member}`,
+          member,
+          space: "line",
+          role: "editor",
+        }),
     }),
     "bench.join": defineAction({
       input: { type: "object", properties: { who: text, n: { type: "number" } } },
@@ -91,6 +151,10 @@ const runtime = await createRuntime({
 try {
   for (let from = 0; from < N; from += 5_000) await runtime.call("bench.fill", { from });
   for (const n of [10, 100, 500]) await runtime.call("bench.join", { who: `m${n}`, n });
+  for (let from = 0; from < CONTACTS; from += 1_000) await runtime.call("bench.line", { from });
+  // The line's staff, and the agent that answers there.
+  await runtime.call("bench.seat", { member: "person:staff" });
+  await runtime.call("bench.seat", { member: "agent:desk" });
   await runtime.idle();
 
   const time = async (label: string, run: () => Promise<unknown>) => {
@@ -121,6 +185,33 @@ try {
       () => runtime.query("note.latest", {}, { actor: as(n) }),
     );
   }
+  const contact: Actor = { kind: "contact", id: "k4242" };
+  const staff: Actor = { kind: "person", id: "staff" };
+  const desk: Actor = { kind: "agent", id: "desk", for: contact, at: "line" };
+  await time(
+    "line: staff · one chat",
+    () => runtime.query("note.latest", { chat: "c4242" }, { actor: staff }),
+  );
+  await time(
+    "line: staff · all the line",
+    () => runtime.query("note.latest", { in: "line" }, { actor: staff }),
+  );
+  await time(
+    "line: contact · its chat",
+    () => runtime.query("note.latest", { chat: "c4242" }, { actor: contact }),
+  );
+  await time(
+    "line: contact · all it reaches",
+    () => runtime.query("note.latest", {}, { actor: contact }),
+  );
+  await time(
+    "line: agent for contact · its chat",
+    () => runtime.query("note.latest", { chat: "c4242" }, { actor: desk }),
+  );
+  await time(
+    "line: agent for contact · all it reaches",
+    () => runtime.query("note.latest", {}, { actor: desk }),
+  );
 } finally {
   await runtime.close();
   await Deno.remove(path).catch(() => {});

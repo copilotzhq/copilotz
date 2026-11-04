@@ -20,8 +20,16 @@ export type {
   WriteOptions,
 } from "./collection.ts";
 export type { Actor, Doc, Edge, Event, Store } from "./store.ts";
-export { personOf } from "./actor.ts";
-export { failure, forbidden, inPerson, invalid, people } from "./errors.ts";
+export { personOf, principalOf } from "./actor.ts";
+export {
+  contacts,
+  failure,
+  forbidden,
+  inPerson,
+  invalid,
+  people,
+  peopleOrContacts,
+} from "./errors.ts";
 export type { Accumulator, Expr, Pipeline, Stage } from "./aggregate.ts";
 export {
   type Attributes,

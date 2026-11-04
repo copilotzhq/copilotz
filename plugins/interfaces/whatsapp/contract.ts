@@ -6,9 +6,9 @@
  * `whatsapp_phone`, `whatsapp_thread`), its event (`whatsapp.received`) and
  * its Actions (`whatsapp.connect`, `whatsapp.credentials`,
  * `whatsapp.disconnect`, `whatsapp.webhook`, `whatsapp.link`,
- * `whatsapp.unlink`, `whatsapp.move`).
+ * `whatsapp.unlink`, `whatsapp.move`, `whatsapp.set`).
  */
-export type { WhatsAppNumber } from "./collections/number.ts";
+export { GAP, type WhatsAppNumber } from "./collections/number.ts";
 export type { WhatsAppPhone } from "./collections/phone.ts";
 export type { WhatsAppCode } from "./collections/code.ts";
 export type { WhatsAppThread } from "./collections/thread.ts";

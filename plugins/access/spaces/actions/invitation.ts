@@ -9,7 +9,8 @@ import { type Context, defineAction, people } from "../../../../runtime/mod.ts";
 import type { Invitation } from "../collections/invitation.ts";
 import { joinable } from "../shared/personal.ts";
 import { may, must } from "../shared/can.ts";
-import { memberKey, orgRoleOf, ROLES } from "../shared/reach.ts";
+import { memberKey, orgRoleOf, rolesOf } from "../shared/reach.ts";
+import { checkRole } from "../shared/seat.ts";
 import type { DirectoryPort } from "./org.ts";
 import { namesFor } from "../shared/names.ts";
 
@@ -50,7 +51,7 @@ export const sendInvitationAction = defineAction({
     const email = input.email.trim().toLowerCase();
     if (!EMAIL.test(email)) throw refused("invalid", "That isn't an email address.");
     const role = input.role ?? "editor";
-    if (!(role in { ...ROLES, ...(ctx.resources.roles ?? {}) })) {
+    if (!(role in rolesOf(ctx))) {
       throw refused("invalid", `No role "${role}".`);
     }
     await must(ctx, "manage", input.space, `You don't manage "${input.space}".`);
@@ -99,6 +100,8 @@ export const acceptInvitationAction = defineAction({
     const found = await answerable(ctx, input.invitation);
     if (!found.mine) throw refused("forbidden", "No such invitation for you.");
     const key = memberKey(ctx.actor!);
+    // An invitation stored before roles were checked by their own names only is checked here.
+    checkRole(ctx, key, found.role);
     await ctx.as().transaction(async (tx) => {
       const id = `${found.space}|${key}`;
       const members = tx.db.collection("member");

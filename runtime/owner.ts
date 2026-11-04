@@ -46,6 +46,7 @@ import {
   invalid,
   json,
   merge,
+  unprivate,
 } from "./registry.ts";
 import type {
   Actor,
@@ -675,8 +676,7 @@ export async function createOwner(
     const { cause } = by;
     const actor = by.actor ? { actor: by.actor } : {};
     const hidden = unlogged(collection);
-    const open = <D extends Record<string, unknown>>(doc: D): D =>
-      hidden.length ? unprivate(doc, hidden) as D : doc;
+    const open = <D extends Record<string, unknown>>(doc: D): D => unprivate(doc, hidden);
     for (const { _id, before, after } of changes) {
       if (!before) {
         tx.emit({
@@ -1448,10 +1448,13 @@ export async function createOwner(
           emit({
             id,
             type: "action.started",
-            // An unrecorded Action's input stays out of the log, whatever became of it.
+            // An unrecorded Action's input stays out of the log, whatever became of it,
+            // and so do an Action's private fields.
             data: {
               action,
-              input: registry.actions[action]?.record === false ? null : input ?? null,
+              input: registry.actions[action]?.record === false
+                ? null
+                : unprivate(input ?? null, registry.actions[action]?.private ?? []),
               inputHash,
               startedAt,
               attempt,
@@ -1771,18 +1774,6 @@ export async function createOwner(
 }
 
 /** The scalar type a schema gives a dot path (through properties and additionalProperties), if one. */
-/** A copy of `doc` without the private fields at these (dotted) paths. */
-function unprivate(doc: Record<string, unknown>, fields: string[]): Record<string, unknown> {
-  const copy = structuredClone(doc);
-  for (const path of fields) {
-    const keys = path.split(".");
-    let at: Record<string, unknown> | undefined = copy;
-    for (const key of keys.slice(0, -1)) at = at?.[key] as Record<string, unknown> | undefined;
-    if (at && typeof at === "object") delete at[keys.at(-1)!];
-  }
-  return copy;
-}
-
 function scalarOf(schema: unknown, path: string): ScalarType | undefined {
   let node = schema as Record<string, unknown> | undefined;
   for (const key of path.split(".")) {

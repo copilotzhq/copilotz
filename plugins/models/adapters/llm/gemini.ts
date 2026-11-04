@@ -1,6 +1,6 @@
 /** Google Gemini generateContent API, streaming. */
 import type { JSONSchema } from "../../../../runtime/mod.ts";
-import { post, sse, usageOf } from "../../shared/provider.ts";
+import { alive, post, sse, usageOf } from "../../shared/provider.ts";
 import type { ModelInfo } from "../../shared/choice.ts";
 import type { Effort, LlmAdapter, LlmMessage } from "../../shared/types.ts";
 
@@ -165,8 +165,11 @@ export const gemini: LlmAdapter = {
     );
     const signatures: Signatures = {};
     let usage: Record<string, number | undefined> | undefined;
+    // Its thoughts come before it writes: alive all the same.
+    const beat = alive();
     for await (const { data } of sse(response.body!)) {
       const chunk = JSON.parse(data);
+      if (beat()) yield { type: "thinking" };
       if (chunk.error) {
         throw new Error(`Gemini: ${chunk.error.message ?? JSON.stringify(chunk.error)}`);
       }

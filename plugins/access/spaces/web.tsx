@@ -29,6 +29,7 @@
  * lists the ones they're in, and the rest of the org's apart.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { PROFILE } from "./shared/names.ts";
 import { invitationsView } from "./views/web/invitations.tsx";
 import { invitedView } from "./views/web/invited.tsx";
 import { invitingView } from "./views/web/inviting.tsx";
@@ -62,6 +63,8 @@ export const spacesWeb: Plugin = definePlugin({
     "org.members": { web: orgMembersView },
   },
   resources: {
+    // Where people's names are, for Views here too: a browser loads only front ends.
+    names: { collection: PROFILE },
     sidebar: {
       invitations: { view: "invitations", order: 3 },
       spaces: { title: "Spaces", view: "spaces", order: 10 },

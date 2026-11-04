@@ -101,6 +101,7 @@ export {
   namesIn,
   namesOf,
   type NamesResource,
+  picturesIn,
   PROFILE,
   withNames,
 } from "./shared/names.ts";

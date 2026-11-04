@@ -3,11 +3,13 @@
  * tab and the header list each person by their profile's name, never by a
  * sign-in's id; someone without a profile is "someone".
  */
-import { assert, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ViewContext } from "../../../runtime/mod.ts";
+import { merge } from "../../../runtime/registry.ts";
 import type { Member, Reached } from "../spaces/contract.ts";
+import { spacesWeb } from "../spaces/web.tsx";
 import { membersView } from "../spaces/views/web/members.tsx";
 import { SpaceHeader } from "../spaces/views/web/header.tsx";
 import { test } from "../../../testing/mod.ts";
@@ -15,7 +17,10 @@ import { test } from "../../../testing/mod.ts";
 const ANA = "google:113900649446232449762";
 const BOB = "github:7";
 
-/** A View's context over fixed reads: queries by `<collection>.<query>`, finds by collection. */
+/**
+ * A View's context over fixed reads: queries by `<collection>.<query>`, finds
+ * by collection; its resources what a browser has, the front end's alone.
+ */
 const ctxOf = (reads: Record<string, unknown>): ViewContext<ReactNode> => ({
   db: {
     collection: (name: string) => ({
@@ -23,7 +28,7 @@ const ctxOf = (reads: Record<string, unknown>): ViewContext<ReactNode> => ({
       find: () => ({ status: "ready", value: (reads[name] ?? []) as never }),
     }),
   } as unknown as ViewContext<ReactNode>["db"],
-  resources: { names: { collection: "profile" } },
+  resources: merge([spacesWeb], { elsewhere: true }).resources,
   renderer: "web",
   kind: "test",
   viewer: { name: ANA },
@@ -62,6 +67,23 @@ test("the Members tab lists people by name, never by a sign-in's id", () => {
   // Bob has no profile yet: "someone", not his id.
   assertStringIncludes(shown, "someone");
   assert(!shown.includes(ANA) && !shown.includes(BOB), shown);
+});
+
+test("the Members tab shows a person's picture, when they have one", () => {
+  const html = renderToStaticMarkup(
+    <>
+      {membersView(
+        { _id: "launch" },
+        ctxOf({
+          "space.reached": [space],
+          member: members,
+          "profile.names": { [ANA]: "Ana Lima", [BOB]: "Bob Silva" },
+          "profile.pictures": { [ANA]: "https://example.com/ana.png" },
+        }),
+      )}
+    </>,
+  );
+  assertEquals(html.match(/<img[^>]*src="https:\/\/example\.com\/ana\.png"/g)?.length, 1);
 });
 
 test("a space's header shows its people by name", () => {

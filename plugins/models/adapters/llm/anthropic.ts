@@ -1,5 +1,5 @@
 /** Anthropic Messages API, streaming. */
-import { post, sse, usageOf } from "../../shared/provider.ts";
+import { alive, post, sse, usageOf } from "../../shared/provider.ts";
 import type { ModelInfo } from "../../shared/choice.ts";
 import type { Effort, LlmAdapter, LlmMessage, Usage } from "../../shared/types.ts";
 
@@ -149,8 +149,11 @@ export const anthropic: LlmAdapter = {
     const blocks = new Map<number, { id: string; name: string; json: string }>();
     const thoughts = new Map<number, Block>();
     let usage: Usage = { input: 0, output: 0 };
+    // Its thinking comes in pieces long before it writes: alive all the same.
+    const beat = alive();
     for await (const { data } of sse(response.body!)) {
       const event = JSON.parse(data);
+      if (beat()) yield { type: "thinking" };
       switch (event.type) {
         case "message_start": {
           // Anthropic's input_tokens excludes what was read from or written to the cache.

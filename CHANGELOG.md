@@ -21,6 +21,72 @@
   (PostgreSQL ran every statement of an unparameterized `inspect` before). `runtime.maintenance` is
   the owner's way to them; plugin code has none. The cache gains `clear()`, observers `stale()`.
 
+- **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
+  ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,
+  its tools run again, with whatever input the model now chose, and the model never saw the first
+  run. Now a step's calls are written before any of them runs (chat's new `intent` collection, one
+  document per running turn, no events), and what each returns as soon as it does. A retried turn
+  goes on with those calls without asking its model: a call that returned answers from its record,
+  and one cut short (its executor lost, the runtime closed) runs again as itself.
+  - Tools get `ctx.callId`, the same however many times the call runs (`<turn>:<step>:<n>`): the
+    idempotency key for what they do outside. `ctx.retry` is now true only for a call that may have
+    run before. The recorded Actions a tool calls answer from the log when it runs again.
+  - A turn that ends without its step (failed for good, or stopped mid-tool) keeps the step, with
+    what each call returned, or that it never did ("Interrupted before it returned: it may or may
+    not have taken effect…"); a stopped answer no longer repeats that step's text.
+  - A tool step costs one more commit (its calls, before they run) and one per tool call (what it
+    returned). A step that only sends messages costs nothing more: they commit with it.
+- **Closing drops no turn.** `runtime.close()` returned from a delivery it cut short as if it were
+  done, then saved its Processor's cursor past it, so a turn running at a deploy never answered. Now
+  closing starts no more deliveries or timer occurrences, gives the running ones `drain` ms to
+  finish (`close({ drain })`, 5 s by default), and keeps each cursor before an event it didn't
+  finish: the next owner delivers it again, with `retry`, and with the above it doesn't repeat its
+  tools. Workers are told they're gone after the drain, so running work can still use them. The orgs
+  host's `close({ drain })` passes it on to every org's runtime.
+
+- **Fixed: a collection's private fields reached the log on PostgreSQL.** Writes that go as the
+  store's single command (most of them) recorded `.created`, `.updated` and `.deleted` with the
+  whole document, so `private` fields (a computer's `pending` secret, unsealed account tokens) were
+  in the log there; memory and SQLite left them out. The command now records documents without them
+  too. Events already written still hold them.
+
+## 1.0.0-rc.20 — 2026-11-04
+
+- **A model thinking past two minutes isn't a dropped call.** A call counted as dropped once its
+  adapter yielded nothing for `silence` (2 minutes), and was retried or handed to the next model. A
+  reasoning model yields nothing while it thinks, though its provider's stream goes on (GPT-6 Luna
+  at xhigh on a hard problem: 108 s before its first word), so its thinking was thrown away past two
+  minutes while the page showed the agent thinking. Adapters now say a stream is alive (`thinking`
+  chunks, at most about once a second, for every provider); `generate` passes them on without
+  counting them as written, so a model that thinks and then truly stalls still hands over.
+  `complete` no longer reads a chunk it doesn't know as usage.
+- **`terminal`: a running command is seen again by its `commandId` alone.** rc.19 said so, but sent
+  the computer no input with it, and every look at a slow command answered "stdin is required". A
+  `commandId` beside a blank `command` is a look too; beside a real one, the refusal says how to
+  look, type into it or stop it.
+- **An agent's OK shows once its own turn is over.** With agents answering in parallel, the
+  computer's approval cards waited for every agent's turn to end, so one that asked and finished
+  waited on a card that didn't show. Chat's `conversation` Views get `busy` (the agents whose turns
+  run, each held 600 ms after its last step) beside `working`.
+- **People show by name on the web.** The browser loads only front ends, and the `names` resource
+  was declared only by the spaces plugin: everyone signed in with a sign-in id (`google:…`) showed
+  as "someone", in Members, a chat's people and messages, memories, computers and routines. The
+  spaces front end declares it too.
+- **People's pictures beside their names**, in a space's Members, a chat's "In this chat" and a
+  person's messages: a `profile.pictures` query (`{ ids }`), and `picturesIn` for Views.
+- **`openai-compatible` sends a model's thinking back.** `reasoning_content` (DeepSeek, Moonshot,
+  Qwen, vLLM) is kept as the answer's state and goes back with it, as Anthropic's, Gemini's and
+  OpenAI's already did; DeepSeek asks for it once tools are given.
+- **OpenAPI tools** (`openapi({ name, spec })`, in `copilotz/plugins/agents`): an API's operations
+  as recorded Actions (`<name>.<operationId>`, not called again when a turn is retried) and agent
+  tools (`<name>_<operationId>`); settings per deployment in `resources.openapi.<name>` (base URL,
+  headers, query, timeouts, size limits, file fields).
+- **History by age:** an agent's `history: { maxAge }` (ms) leaves older messages out of its prompt
+  (they stay in the chat), counted back from the newest message it sees, its start on a grid of a
+  tenth of `maxAge` so the prompt cache holds between steps.
+- **Blobs in Google Cloud Storage:** `gcsBlobs({ bucket, prefix? })` (`copilotz/blobs/gcs`), signed
+  in as the process's service account on Cloud Run or Compute Engine.
+
 ## 1.0.0-rc.19 — 2026-11-03
 
 - **`terminal` takes the command in `command`.** It took it in `stdin`, while `start_job` takes

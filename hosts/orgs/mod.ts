@@ -174,7 +174,8 @@ export type OrgsHost = {
   serve(request: Request): Promise<Response>;
   openRuntime(request: Request): Runtime | undefined;
   runtime(org: string): Promise<Runtime | undefined>;
-  close(): Promise<void>;
+  /** Closes every open org, each giving its running work `drain` ms (see `Runtime.close`). */
+  close(options?: { drain?: number }): Promise<void>;
 };
 
 export function orgsHost(options: OrgsHostOptions): OrgsHost {
@@ -811,12 +812,12 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
       const info = await orgInfo(org);
       return info ? (await cellOf(info)).runtime : undefined;
     },
-    async close() {
+    async close(options) {
       clearInterval(sweep);
       live.clear();
       const open = await Promise.all([...cells.values()].map((c) => c.catch(() => undefined)));
       cells.clear();
-      await Promise.all(open.map((cell) => cell?.runtime.close().catch(() => {})));
+      await Promise.all(open.map((cell) => cell?.runtime.close(options).catch(() => {})));
     },
   };
 }

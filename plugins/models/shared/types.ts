@@ -43,6 +43,12 @@ export type LlmChunk =
   | { type: "state"; state: LlmState }
   | ({ type: "usage"; model?: string } & Usage)
   /**
+   * The model is at work with nothing to show yet (thinking, before it
+   * writes): its stream is alive, though silent. Adapters send it at most
+   * about once a second while their provider's stream goes on.
+   */
+  | { type: "thinking" }
+  /**
    * The call broke (the network, a silent stream, the provider busy): what it
    * sent so far is void, and it's tried again in `wait` ms (its `attempt`th
    * time). Only `generate` sends it; adapters don't.

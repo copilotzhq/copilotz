@@ -10,7 +10,8 @@ the owner turns each call into an op).
 - **Blobs** (`Blobs`, `runtime/blobs.ts`): large values, kept once by the hash of their content; a
   document holds a reference in their place, and the owner moves them out on write and back in on
   read. Optional: without one, the store keeps them itself. They sit in `blobs/` (`files`: a
-  directory; `http`: a bucket over HTTP).
+  directory; `http`: a bucket over HTTP; `gcs`: a Google Cloud Storage bucket, see
+  [Blobs in GCS](#blobs-in-gcs)).
 
 What the runtime sends out and never reads back (metrics) isn't kept here: that's `exporters/`.
 
@@ -67,6 +68,36 @@ only tenant (`""`), in the same tables.
   nothing is renumbered.
 - **SQLite and memory stay one tenant per store,** a file per org: a file already moves and deletes
   whole, and has a single writer, the org's.
+
+## Blobs in GCS
+
+`gcsBlobs({ bucket, prefix?, token?, timeout?, fetch? })` (`copilotz/blobs/gcs`) keeps each blob as
+the object `<prefix>/<id>` in a Google Cloud Storage bucket, with its content type, through GCS's
+JSON API (fetch alone, no SDK).
+
+- **Written once:** an upload asks GCS to create the object only if it isn't there
+  (`ifGenerationMatch=0`). An id is its content's hash, so when GCS answers 412 the content is there
+  already, and the put succeeds. Nothing is ever overwritten or deleted.
+- **Read:** a blob that isn't there is `null` (404); any other refusal throws, with its `status`.
+- **Signed in** as the service account of the instance it runs on (Cloud Run, Compute Engine): the
+  metadata server's token, kept until a minute before it expires, one request for a new one at a
+  time however many wait. The account needs `storage.objects.create` and `storage.objects.get` on
+  the bucket (Storage Object Creator and Viewer). Elsewhere, `token()` gives a token per request:
+  `googleToken()` from `copilotz/plugins/compute` reads Application Default Credentials.
+- **When it breaks:** each try may take `timeout` ms (default 30 s); the network, a timeout, 429 or
+  a 5xx is tried twice more, about 200 then 400 ms apart. Other 4xx fail at once.
+- **Prefix:** one bucket can hold many runtimes' blobs (`prefix: "org_1/blobs"`). Content dedupes
+  within a prefix: give each org its own to keep them apart, as the Postgres store does.
+
+```ts
+import { gcsBlobs } from "copilotz/blobs/gcs";
+
+const runtime = await createRuntime({
+  store,
+  plugins,
+  blobs: gcsBlobs({ bucket: "acme-copilotz", prefix: `orgs/${org}/blobs` }),
+});
+```
 
 ## MongoDB compatibility
 

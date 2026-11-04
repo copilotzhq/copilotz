@@ -37,6 +37,7 @@
 import type { Actor, Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
 import type { WhatsAppCode } from "../collections/code.ts";
 import type { WhatsAppPhone } from "../collections/phone.ts";
+import { blockedKey } from "../collections/blocked.ts";
 import type { WhatsAppSent } from "../collections/sent.ts";
 import {
   type Command,
@@ -72,7 +73,8 @@ export const receiveProcessor: ProcessorDef = {
       .findOne({ _id: `${on.number._id}:${received.from}` });
     if (phone?.person) return await linked(ctx, on, received, phone, event);
     // Blocked by the number's people: what it sends goes nowhere, and nothing is said.
-    if (phone?.blocked) return;
+    const blocks = ctx.as().db.collection("whatsapp_blocked");
+    if (await blocks.findOne({ _id: await blockedKey(on.number._id, received.from) })) return;
     const code = await tried(ctx, on, received, phone);
     if (code === "linked") return;
     if (on.number.open) return await customer(ctx, on, received, phone, event);
@@ -234,6 +236,8 @@ async function flooding(ctx: Context, on: Connected, phone: string, event: Event
   const had = await counts.findOne({ _id: phone });
   const count = had?.minute === minute ? had.count + 1 : 1;
   await counts.replaceOne({ _id: phone }, { minute, count }, { upsert: true });
+  // Past minutes, no longer counted, go.
+  if (!had || had.minute !== minute) await counts.deleteMany({ minute: { $lt: minute } });
   return count > (on.number.rate ?? RATE);
 }
 

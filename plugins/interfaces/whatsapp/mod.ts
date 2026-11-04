@@ -57,6 +57,7 @@ import { code } from "./collections/code.ts";
 import { number } from "./collections/number.ts";
 import { phone } from "./collections/phone.ts";
 import { rate } from "./collections/rate.ts";
+import { blocked } from "./collections/blocked.ts";
 import { secret } from "./collections/secret.ts";
 import { sent } from "./collections/sent.ts";
 import { chat } from "./collections/thread.ts";
@@ -83,6 +84,7 @@ export const whatsapp: Plugin = definePlugin({
     whatsapp_sent: sent,
     whatsapp_typing: typing,
     whatsapp_rate: rate,
+    whatsapp_blocked: blocked,
   },
   events: { "whatsapp.received": received },
   actions: {

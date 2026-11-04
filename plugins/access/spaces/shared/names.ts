@@ -1,8 +1,8 @@
 /**
  * People by name, wherever an id would show (a page, an agent's prompt): the
  * `profile` collection (any person or agent in the org reads it), and how a
- * person shows from it. Plain functions, for every plugin (through the
- * contract).
+ * person shows from it, with their picture on a page. Plain functions, for
+ * every plugin (through the contract).
  */
 
 /** The collection people's profiles are in, by their id. */
@@ -87,6 +87,20 @@ export function namesIn(
   const wanted = peopleIn(ids);
   if (!collection || !wanted.length) return {};
   const found = ctx.db.collection(collection).query<Record<string, string>>("names", {
+    ids: wanted,
+  }) as { value?: Record<string, string> };
+  return found.value ?? {};
+}
+
+/** Pictures by id, in a View: a face beside a name, for those who have one. */
+export function picturesIn(
+  ctx: { resources: Record<string, unknown>; db: Db },
+  ids: string[],
+): Record<string, string> {
+  const collection = where(ctx.resources);
+  const wanted = peopleIn(ids);
+  if (!collection || !wanted.length) return {};
+  const found = ctx.db.collection(collection).query<Record<string, string>>("pictures", {
     ids: wanted,
   }) as { value?: Record<string, string> };
   return found.value ?? {};

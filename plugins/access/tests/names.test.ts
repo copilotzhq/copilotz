@@ -62,6 +62,15 @@ test("profiles follow sign-in, and anyone in the org reads names", async () => {
     assertEquals(await names([ID]), { [ID]: "Ana L." });
     // No email in it, ever.
     assertEquals(JSON.stringify(await names([ID, "github:7"])).includes("@"), false);
+    // Faces too, for those who have a picture.
+    await runtime.call("person.set", { person: ID, picture: "https://example.com/ana.png" });
+    await runtime.idle();
+    assertEquals(
+      await runtime.query("profile.pictures", { ids: [`person:${ID}`, "github:7"] }, {
+        actor: ana,
+      }),
+      { [ID]: "https://example.com/ana.png" },
+    );
   } finally {
     await runtime.close();
   }

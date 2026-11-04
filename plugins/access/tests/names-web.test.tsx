@@ -3,7 +3,7 @@
  * tab and the header list each person by their profile's name, never by a
  * sign-in's id; someone without a profile is "someone".
  */
-import { assert, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ViewContext } from "../../../runtime/mod.ts";
@@ -67,6 +67,23 @@ test("the Members tab lists people by name, never by a sign-in's id", () => {
   // Bob has no profile yet: "someone", not his id.
   assertStringIncludes(shown, "someone");
   assert(!shown.includes(ANA) && !shown.includes(BOB), shown);
+});
+
+test("the Members tab shows a person's picture, when they have one", () => {
+  const html = renderToStaticMarkup(
+    <>
+      {membersView(
+        { _id: "launch" },
+        ctxOf({
+          "space.reached": [space],
+          member: members,
+          "profile.names": { [ANA]: "Ana Lima", [BOB]: "Bob Silva" },
+          "profile.pictures": { [ANA]: "https://example.com/ana.png" },
+        }),
+      )}
+    </>,
+  );
+  assertEquals(html.match(/<img[^>]*src="https:\/\/example\.com\/ana\.png"/g)?.length, 1);
 });
 
 test("a space's header shows its people by name", () => {

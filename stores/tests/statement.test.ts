@@ -67,6 +67,9 @@ test("statement: what ends a line comment, and an E'…' string, is the database
   refused("SELECT E'a'\n'\\'' ; DELETE FROM nodes; --'");
   refused("SELECT E'a' -- note\n  '\\'' ; DELETE FROM nodes; --'");
   assertEquals(statement("SELECT E'a'\n'b\\'c'", "postgres", "read").keyword, "SELECT");
+  // After a number, `$$` opens a body (as the server reads it): what it holds is a string.
+  refused("SELECT 1$$ ' $$; SELECT 2 --'");
+  assertEquals(statement("SELECT a$b, $1 FROM t", "postgres", "read").keyword, "SELECT");
   // A plain string's continuation has no escapes: `''` in it is a quote, so this is one string.
   assertEquals(
     statement("SELECT 'a'\n'\\'' ; DELETE FROM nodes; --'", "postgres", "read").keyword,
@@ -75,6 +78,10 @@ test("statement: what ends a line comment, and an E'…' string, is the database
 });
 
 test("statement: nothing, or something unterminated, is refused", () => {
+  // Parentheses balance (a read's limit wraps it in a pair of its own).
+  refused("SELECT 1 AS v) UNION ALL SELECT 2 AS v FROM (SELECT 1", "sqlite", "read");
+  refused("SELECT (1", "postgres", "read");
+  assertEquals(statement("SELECT ')(' AS p, (1) AS one -- )", "sqlite", "read").keyword, "SELECT");
   refused("");
   refused("  -- only a comment\n");
   refused(";");

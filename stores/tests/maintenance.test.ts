@@ -7,7 +7,7 @@
  * tenant's rows; a write can't change the store's own state. On PostgreSQL
  * servers it runs as a least-privilege role of its own (maintainer.ts).
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
 import type { Store } from "../../runtime/store.ts";
 import { memoryStore } from "../memory/mod.ts";
 import { sqliteStore } from "../sql/sqlite/mod.ts";
@@ -275,23 +275,60 @@ test("sqlite: a write that leaves a temporary object, or changes meta, is rolled
   await store.close();
 });
 
-test("sqlite: a read runs apart: cut off at its timeout, while the process goes on", async () => {
-  const { store } = await notes();
+test("sqlite: a read runs apart, and a runaway one is killed at its timeout", async () => {
+  const { store, path } = await notes();
   let ticks = 0;
   const ticking = setInterval(() => ticks++, 10);
   const started = performance.now();
+  // It never ends on its own: only killing its process stops it.
   const error = await assertRejects(() =>
     store.inspect(
-      "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 20000000) " +
-        "SELECT count(*) AS n FROM c",
+      "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c",
       [],
-      { timeout: 200 },
+      { timeout: 300 },
     )
   );
   clearInterval(ticking);
   assertEquals(code(error), "timeout");
-  assert(performance.now() - started < 1500, "it answered at its timeout");
+  assert(performance.now() - started < 2000, "it answered at its timeout");
   assert(ticks >= 5, `the event loop ran meanwhile (${ticks} ticks)`);
+  // Gone with its process: nothing holds the log, so it checkpoints whole.
+  const { epoch } = await store.open().catch(() => ({ epoch: 0 }));
+  void epoch;
+  const { DatabaseSync } = await import("node:sqlite");
+  const file = new DatabaseSync(path);
+  assertEquals(file.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get(), {
+    busy: 0,
+    log: 0,
+    checkpointed: 0,
+  });
+  file.close();
+  await store.close();
+});
+
+test("sqlite: reads apart stop at their bytes, and a third at once is busy", async () => {
+  const path = tempFile(".sqlite");
+  const store = await sqliteStore({ path, maintenance: { connections: 1 } });
+  const { epoch } = await store.open();
+  await store.transaction(
+    epoch,
+    (tx) =>
+      tx.insert(
+        "note",
+        Array.from({ length: 50 }, (_, n) => ({ _id: `n${n}`, text: "x".repeat(100) })),
+      ),
+  );
+  const rows = await store.inspect("SELECT id, doc FROM nodes", [], { bytes: 500 });
+  assert(rows.length > 1 && rows.length < 10, `${rows.length} rows within 500 bytes, and one past`);
+  const slow = store.inspect(
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c",
+    [],
+    { timeout: 500 },
+  ).catch((error) => error);
+  const busy = await assertRejects(() => store.inspect("SELECT 1"));
+  assertEquals(code(busy), "busy");
+  assertEquals(code(await slow), "timeout");
+  assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1);
   await store.close();
 });
 
@@ -314,9 +351,49 @@ test("sqlite: a read's errors aren't lost to its limit, nor its pragmas kept", a
 test("sqlite: on a database it can't open apart, a read sets no pragma", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const { store } = await notes((path) => new DatabaseSync(path));
-  const error = await assertRejects(() => store.inspect("PRAGMA cache_size = 1"));
-  assertEquals(code(error), "invalid");
+  for (
+    const sql of [
+      "PRAGMA cache_size = 1",
+      "PRAGMA cache_size /**/ = 1",
+      "PRAGMA reverse_unordered_selects -- x\n= 1",
+      "PRAGMA cache_size(1)",
+      "PRAGMA optimize",
+      "PRAGMA writable_schema",
+    ]
+  ) {
+    assertEquals(code(await assertRejects(() => store.inspect(sql))), "invalid", sql);
+  }
   assert((await store.inspect("PRAGMA table_info(nodes)")).length > 0);
+  assert((await store.inspect('PRAGMA main.index_list("nodes") -- which')).length > 0);
+  assertEquals((await store.inspect("/* a */ PRAGMA user_version"))[0], { user_version: 0 });
+  await store.close();
+});
+
+test("sqlite: a trigger stops maintenance writes: one already there, or one a write makes", async () => {
+  const { store, epoch, path } = await notes();
+  // A single statement can't make one (its body has statements of its own).
+  const made = await assertRejects(() =>
+    store.transaction(
+      epoch,
+      (tx) => tx.execute!("CREATE TRIGGER t AFTER INSERT ON events BEGIN SELECT 1; END"),
+      { maintenance: true },
+    )
+  );
+  assertEquals(code(made), "invalid");
+  // One someone else made: nothing runs while it's there.
+  const { DatabaseSync } = await import("node:sqlite");
+  const file = new DatabaseSync(path);
+  file.exec(
+    "CREATE TRIGGER scrub AFTER INSERT ON events BEGIN DELETE FROM events WHERE " +
+      "type = 'maintenance.sql'; END",
+  );
+  file.close();
+  const refused = await assertRejects(() =>
+    store.transaction(epoch, (tx) => tx.execute!("DELETE FROM nodes WHERE id = 'none'"), {
+      maintenance: true,
+    })
+  );
+  assertEquals(code(refused), "forbidden");
   await store.close();
 });
 
@@ -346,6 +423,22 @@ test("pglite: what maintenance SQL leaves on the one session is discarded", asyn
     )
   );
   assertEquals(code(error), "forbidden");
+  await store.close();
+});
+
+test("pglite: a write that makes a trigger on the store's tables is rolled back", async () => {
+  const store = await postgresStore({ url: ":memory:" });
+  const { epoch } = await store.open();
+  const sql = "CREATE TRIGGER scrub BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION " +
+    "suppress_redundant_updates_trigger()";
+  const error = await assertRejects(() =>
+    store.transaction(epoch, (tx) => tx.execute!(sql), { maintenance: true })
+  );
+  assertEquals(code(error), "forbidden");
+  assertEquals(
+    (await store.inspect("SELECT count(*)::int AS n FROM pg_trigger WHERE NOT tgisinternal"))[0].n,
+    0,
+  );
   await store.close();
 });
 
@@ -466,14 +559,132 @@ if (POSTGRES && ROLES) {
     await done();
   });
 
-  test("postgres: as the store's own role, SQL runs only where it reaches nothing else", async () => {
+  test("postgres: on a server, raw SQL runs only as a role of its own", async () => {
     const schema = schemaName();
     const store = await postgresStore({ url: POSTGRES, schema });
-    await store.open();
-    // The test database holds other schemas of this role's: one, at least.
-    const elsewhere = await postgresStore({ url: POSTGRES, schema: schemaName() });
+    const { epoch } = await store.open();
     assertEquals(code(await assertRejects(() => store.inspect("SELECT 1"))), "unsafe_role");
-    await elsewhere.drop();
+    const write = await assertRejects(() =>
+      store.transaction(epoch, (tx) => tx.execute!("SELECT 1"), { maintenance: true })
+    );
+    assertEquals(code(write), "unsafe_role");
+    // The store itself goes on.
+    await store.transaction(epoch, (tx) => tx.insert("note", [{ _id: "a", text: "A" }]));
+    assertEquals((await store.find("note", {})).length, 1);
     await store.drop();
+  });
+
+  test("postgres: a role that is a member of any role is refused, whatever it inherits", async () => {
+    const { store, role, done } = await owned();
+    const other = `cpz_o_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+    await role.run(`CREATE ROLE "${other}" NOLOGIN`);
+    await role.run(`GRANT "${other}" TO "${role.role}"`);
+    // With it, `set_config('role', …)` would read as the other role, with no DO at all.
+    const error = await assertRejects(() =>
+      store.inspect(
+        `SELECT set_config('role', '${other}', true) AS r, query_to_xml('SELECT 1', false, ` +
+          `false, '') AS x`,
+      )
+    );
+    assertEquals(code(error), "unsafe_role");
+    assertMatch((error as Error).message, new RegExp(`member of ${other}`));
+    await role.run(`REVOKE "${other}" FROM "${role.role}"`);
+    await role.run(`DROP ROLE "${other}"`);
+    assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1);
+    await done();
+  });
+
+  test("postgres: a role holding anything beyond maintenance's grants is refused", async () => {
+    const { store, epoch, schema, role, done } = await owned();
+    const elsewhere = schemaName();
+    await role.run(`CREATE SCHEMA "${elsewhere}"`);
+    await role.run(`CREATE TABLE "${elsewhere}".secrets (x text)`);
+    const r = `"${role.role}"`;
+    const refusedWith = async (grant: string, revoke: string, what: RegExp) => {
+      await role.run(grant);
+      const error = await assertRejects(() => store.inspect("SELECT 1"));
+      assertEquals(code(error), "unsafe_role", grant);
+      assertMatch((error as Error).message, what);
+      await role.run(revoke);
+      assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1, revoke);
+    };
+    // A column of another schema's table.
+    await role.run(`GRANT USAGE ON SCHEMA "${elsewhere}" TO ${r}`);
+    await refusedWith(
+      `GRANT SELECT (x) ON "${elsewhere}".secrets TO ${r}`,
+      `REVOKE SELECT (x) ON "${elsewhere}".secrets FROM ${r}`,
+      /may use/,
+    );
+    // Making anything, anywhere.
+    await refusedWith(
+      `GRANT CREATE ON SCHEMA "${elsewhere}" TO ${r}`,
+      `REVOKE CREATE ON SCHEMA "${elsewhere}" FROM ${r}`,
+      /may create in schema/,
+    );
+    // More than appending to the log.
+    await refusedWith(
+      `GRANT TRIGGER ON "${schema}".events TO ${r}`,
+      `REVOKE TRIGGER ON "${schema}".events FROM ${r}`,
+      /may TRIGGER/,
+    );
+    await refusedWith(
+      `GRANT UPDATE (data) ON "${schema}".events TO ${r}`,
+      `REVOKE UPDATE (data) ON "${schema}".events FROM ${r}`,
+      /may UPDATE/,
+    );
+    // A function that runs as its owner: EXECUTE is everyone's until revoked.
+    await role.run(
+      `CREATE FUNCTION "${elsewhere}".peek() RETURNS SETOF text LANGUAGE sql SECURITY DEFINER ` +
+        `AS $f$ SELECT x FROM "${elsewhere}".secrets $f$`,
+    );
+    const definer = await assertRejects(() => store.inspect("SELECT 1"));
+    assertMatch((definer as Error).message, /SECURITY DEFINER/);
+    await role.run(`REVOKE EXECUTE ON FUNCTION "${elsewhere}".peek() FROM PUBLIC`);
+    assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1);
+    // A trigger the store didn't make, on its tables: nothing runs, a read nor a write.
+    await role.run(
+      `CREATE TRIGGER noted BEFORE UPDATE ON "${schema}".nodes FOR EACH ROW EXECUTE FUNCTION ` +
+        `suppress_redundant_updates_trigger()`,
+    );
+    assertEquals(code(await assertRejects(() => store.inspect("SELECT 1"))), "unsafe_role");
+    const write = await assertRejects(() =>
+      store.transaction(epoch, (tx) => tx.execute!("SELECT 1"), { maintenance: true })
+    );
+    assertEquals(code(write), "unsafe_role");
+    await role.run(`DROP TRIGGER noted ON "${schema}".nodes`);
+    await role.run(`DROP SCHEMA "${elsewhere}" CASCADE`);
+    await done();
+  });
+
+  test("postgres: a read stops fetching at its bytes, and a third at once is busy", async () => {
+    const role = (await maintainer(POSTGRES))!;
+    const schema = schemaName();
+    const store = await postgresStore({
+      url: POSTGRES,
+      schema,
+      maintenance: { url: role.url, connections: 1 },
+    });
+    await role.grant(schema);
+    const { epoch } = await store.open();
+    await store.transaction(
+      epoch,
+      (tx) =>
+        tx.insert(
+          "note",
+          Array.from({ length: 500 }, (_, n) => ({ _id: `n${n}`, text: "x".repeat(100) })),
+        ),
+    );
+    const rows = await store.inspect("SELECT id, doc FROM nodes", [], { bytes: 1000 });
+    assert(
+      rows.length > 1 && rows.length < 20,
+      `${rows.length} rows within 1,000 bytes, and one past`,
+    );
+    const slow = store.inspect("SELECT pg_sleep(0.5)").catch((error) => error);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assertEquals(code(await assertRejects(() => store.inspect("SELECT 1"))), "busy");
+    await slow;
+    assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1);
+    await store.drop();
+    await role.drop();
   });
 }

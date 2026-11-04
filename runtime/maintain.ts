@@ -36,10 +36,13 @@ export const MAINTENANCE_SQL = "maintenance.sql";
 export type Maintenance = {
   /** Whether the store runs SQL (a SQL store; PostgreSQL in a schema of its own). */
   readonly sql: boolean;
-  /** One read-only statement: its rows, at most `limit`, and whether there were more. */
+  /**
+   * One read-only statement: its rows, at most `limit`, and whether there
+   * were more. The store fetches no more once they pass `bytes`.
+   */
   read(
     sql: string,
-    options?: { params?: unknown[]; limit?: number; timeout?: number },
+    options?: { params?: unknown[]; limit?: number; timeout?: number; bytes?: number },
   ): Promise<{ rows: Row[]; truncated: boolean }>;
   /** One statement that writes, as `actor`, with its audit event (see above). */
   write(
@@ -104,11 +107,12 @@ export function createMaintenance(env: {
 
     async read(statement, options = {}) {
       if (!sql) throw unsupported();
-      const { limit, timeout } = options;
+      const { limit, timeout, bytes } = options;
       // One more than asked says whether there were more.
       const rows = await store.inspect!(statement, params(options.params), {
         ...(limit !== undefined ? { limit: limit + 1 } : {}),
         ...(timeout !== undefined ? { timeout } : {}),
+        ...(bytes !== undefined ? { bytes } : {}),
       });
       return cut(rows, limit);
     },

@@ -605,31 +605,42 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
   its own, closed after, so what it sets on its session (a setting, a session lock, a prepared
   statement) goes with it; and it goes over the extended protocol, where the server refuses a second
   statement whatever the check said. PGlite has one session: it forgets what maintenance left there
-  (`DISCARD ALL`). A SQLite read runs apart, in a worker on a read-only connection of its own, so a
-  long one doesn't hold the process (Deno stops it at its timeout; Node can't stop SQLite in the
-  middle of a statement, so there it answers at its timeout and the statement runs on in its thread
-  until it ends). SQLite writes name the store's tables in `main`, so nothing temporary stands in
-  for them.
-- **Where:** SQL needs a SQL store. In PostgreSQL it runs only where it can't reach another tenant:
-  never in a schema other tenants share, nor where its role has privileges on another schema's
-  tables or the database has `dblink` or `postgres_fdw`; an orgs host's orgs don't get the plugin at
-  all (one key would reach every org). Operations and blobs work everywhere, the memory store too.
+  (`DISCARD ALL`). A SQLite read runs apart, in a process of this runtime of its own on a read-only
+  connection, killed at its timeout: a statement that never ends doesn't hold the app, a core or the
+  WAL. Where no process can start (a database opened another way, `:memory:`, no permission to run
+  one), it reads on the store's reading connection, with no timeout, a pragma only from those that
+  only read. SQLite writes name the store's tables in `main`, so nothing temporary stands in for
+  them. Each store runs at most 2 maintenance statements at once (`maintenance: { connections }`):
+  another answers busy (503).
+- **Where:** SQL needs a SQL store. On a PostgreSQL server only as a role of its own (below), never
+  in a schema other tenants share; PGlite, in the app's process, runs it as its one session where it
+  reaches no other schema. An orgs host's orgs don't get the plugin at all (one key would reach
+  every org). Operations, named queries and blobs work everywhere, the memory store too, and need no
+  role.
 
 ### A role of its own
 
-On a PostgreSQL server, SQL runs as the store's own role unless the store names one for maintenance:
-`postgresStore({ url, schema, maintenance: { url: process.env.MAINTENANCE_DATABASE_URL } })`. Give
-it one. The store's role owns the tables: as it, a statement can rewrite the log, stop the app's own
-connections (`pg_terminate_backend`) or read what else the role reaches; that's allowed only for an
-app alone on its database (nothing else in reach), and then at the key holder's word. A role of its
-own reaches the store's schema only, appends to the log without changing it, and can't touch the
-app's connections; maintenance checks before each statement that it is so (not a superuser, not a
-member of the store's role or of `pg_signal_backend` and the other server-wide roles, no other
-schema's tables, no `UPDATE`, `DELETE` or `TRUNCATE` on `events`) and refuses otherwise. As the
-store's role (the schema's owner), with the schema made (the app has started once):
+On a PostgreSQL server, raw SQL runs only as a role of its own, named by the store:
+`postgresStore({ url, schema, maintenance: { url: process.env.MAINTENANCE_DATABASE_URL } })`.
+Without one it's refused. The store's role owns the tables, may stop the app's connections and is
+whatever the deployment made it (a superuser, even): nothing that runs at a key's word should be it.
+
+Before each statement, on the connection that runs it, maintenance checks that the role holds
+exactly what the SQL below grants, and refuses it otherwise, saying what's more: an attribute beyond
+`LOGIN` (superuser, `CREATEROLE`…); membership in any role at all, predefined (`pg_*`) or not, and
+whatever its `INHERIT` or `SET` options (a member could `SET ROLE` to it); anything it owns;
+`CREATE` on any schema (`public` too) or on the database; any privilege on a table or a column of
+another schema; on the store's own tables, anything beyond the grants below (no `TRIGGER`,
+`TRUNCATE` or `REFERENCES`; on `events` only `INSERT`); a `SECURITY DEFINER` function it may run
+(one runs as its owner); `dblink` or `postgres_fdw` in the database; and a trigger on the store's
+tables, which the store never makes. A write that makes a trigger is rolled back too.
+
+As the store's role (the schema's owner), with the schema made (the app has started once), and as a
+role that may create roles for the first line:
 
 ```sql
-CREATE ROLE copilotz_maintenance LOGIN PASSWORD '…' NOINHERIT;  -- as a role that may create roles
+-- LOGIN and nothing else; never grant it a role.
+CREATE ROLE copilotz_maintenance LOGIN PASSWORD '…' NOINHERIT;
 GRANT USAGE ON SCHEMA copilotz TO copilotz_maintenance;
 -- Reading everything there, the collections' views too, now and later.
 GRANT SELECT ON ALL TABLES IN SCHEMA copilotz TO copilotz_maintenance;
@@ -641,10 +652,19 @@ GRANT INSERT, UPDATE, DELETE ON copilotz.nodes, copilotz.edges, copilotz.vectors
 GRANT INSERT ON copilotz.events TO copilotz_maintenance;
 -- Holding the fence while it writes (FOR SHARE needs it); a statement that changes meta is rolled back.
 GRANT UPDATE (value) ON copilotz.meta TO copilotz_maintenance;
+-- PostgreSQL 14 and earlier let everyone create in public.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ```
 
-Replace `copilotz` with the store's schema. `PUBLIC` keeps `CONNECT` on the database and `USAGE` on
-`public`; nothing else needs granting.
+Replace `copilotz` with the store's schema. `PUBLIC` keeps `CONNECT` on the database, `TEMPORARY`,
+and `USAGE` on `public`; those are allowed. A `SECURITY DEFINER` function can be run by everyone
+(`PUBLIC`) unless revoked: find them, and revoke it from each (or maintenance refuses, naming them):
+
+```sql
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.prosecdef
+  AND p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace);
+REVOKE EXECUTE ON FUNCTION some_schema.some_function(…) FROM PUBLIC;
+```
 
 ## The example app
 

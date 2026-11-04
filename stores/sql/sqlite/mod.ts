@@ -13,7 +13,7 @@
  * each collection is also a SQL view (`SELECT * FROM message`). The store
  * names its own tables in `main`, so nothing temporary stands in for them.
  * Maintenance SQL (`inspect`, a transaction's `execute`) runs one statement
- * as it is: a read apart, in a worker on a read-only connection of its own
+ * as it is: a read apart, in a process of its own on a read-only connection
  * (apart.ts), a write in a maintenance transaction on the writer.
  */
 type SQLInputValue = null | number | bigint | string | Uint8Array;
@@ -67,7 +67,9 @@ import { type Bind, page, type Scalars, where } from "../shared/filter.ts";
 import { scalar, sqlite, sqliteAggregates } from "./dialect.ts";
 import { grouped } from "../shared/aggregate.ts";
 import { statement as checked } from "../shared/statement.ts";
-import { apart, readApart } from "./apart.ts";
+import { readApart } from "./apart.ts";
+import { upTo } from "../shared/rows.ts";
+import { connections } from "../shared/capped.ts";
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS main.meta (key TEXT PRIMARY KEY, value ANY) STRICT;
@@ -151,8 +153,8 @@ const refused = (error: unknown) => {
 /** Statements SQLite can hold in a subquery, so a read stops at its limit there. */
 const QUERIES = new Set(["SELECT", "VALUES", "WITH"]);
 
-/** Pragmas that only say something, even with an argument. */
-const TELLING = new Set([
+/** Pragmas a read may ask with an argument: they only say something about it. */
+const ABOUT = new Set([
   "table_info",
   "table_xinfo",
   "table_list",
@@ -165,10 +167,45 @@ const TELLING = new Set([
   "quick_check",
 ]);
 
-/** Whether a pragma sets something (`= value`, or an argument to one that isn't `TELLING`). */
-const setting = (text: string) => {
-  const found = /PRAGMA\s+(?:"?\w+"?\s*\.\s*)?"?(\w+)"?\s*([=(])?/i.exec(text);
-  return !found || found[2] === "=" || (found[2] === "(" && !TELLING.has(found[1].toLowerCase()));
+/** Pragmas a read may ask without one: what they say is all they do, asked so. */
+const SAYING = new Set([
+  ...ABOUT,
+  "application_id",
+  "auto_vacuum",
+  "busy_timeout",
+  "cache_size",
+  "collation_list",
+  "compile_options",
+  "data_version",
+  "database_list",
+  "encoding",
+  "foreign_keys",
+  "freelist_count",
+  "function_list",
+  "journal_mode",
+  "module_list",
+  "page_count",
+  "page_size",
+  "pragma_list",
+  "query_only",
+  "schema_version",
+  "synchronous",
+  "user_version",
+]);
+
+/**
+ * Whether a pragma only reads, on a connection other work shares: comments
+ * set aside, `PRAGMA name` from `SAYING` or `PRAGMA name(argument)` from
+ * `ABOUT`, and nothing else (no `=`, no other pragma).
+ */
+const reading = (text: string) => {
+  const bare = text.replace(/--[^\n]*(\n|$)|\/\*[\s\S]*?\*\//g, " ");
+  const found =
+    /^\s*PRAGMA\s+(?:(?:main|"main")\s*\.\s*)?"?(\w+)"?\s*(\(\s*("?)[\w.]+\3\s*\))?\s*;?\s*$/i
+      .exec(bare);
+  if (!found) return false;
+  const name = found[1].toLowerCase();
+  return found[2] ? ABOUT.has(name) : SAYING.has(name);
 };
 export async function sqliteStore(options: {
   path: string;
@@ -177,6 +214,8 @@ export async function sqliteStore(options: {
   mmapMiB?: number;
   /** Opens a connection (two are opened: one writes, one reads). Default: the runtime's own SQLite. */
   open?: (path: string) => SqliteDatabase | Promise<SqliteDatabase>;
+  /** Maintenance reads at once, each a process of its own (2): past that, `busy`. */
+  maintenance?: { connections?: number };
 }): Promise<
   Store & {
     /** Exposes each collection as a SQL view of its schema's top-level fields. */
@@ -186,7 +225,7 @@ export async function sqliteStore(options: {
     inspect(
       sql: string,
       params?: unknown[],
-      options?: { limit?: number; timeout?: number },
+      options?: { limit?: number; timeout?: number; bytes?: number },
     ): Promise<Row[]>;
   }
 > {
@@ -202,8 +241,10 @@ export async function sqliteStore(options: {
     return db;
   };
   const writer = await connect();
-  /** Whether reads stay on the reading connection: no worker runs here. */
+  /** Whether reads stay on the reading connection: no process of this runtime starts here. */
   let inline = false;
+  /** Maintenance reads apart at once, at most so many. */
+  const capped = connections(options.maintenance?.connections ?? 2);
   /** A database in this process alone: nothing else can open it to read it apart. */
   const memory = options.path === ":memory:" || options.path === "" ||
     options.path.startsWith("file::memory:") || /[?&]mode=memory\b/.test(options.path);
@@ -546,6 +587,17 @@ export async function sqliteStore(options: {
         const { text } = checked(sql, "sqlite", "write");
         const state = () =>
           JSON.stringify(all(writer, "SELECT key, value FROM main.meta ORDER BY key"));
+        // The store makes no triggers: one on its tables is someone else's, and nothing runs.
+        const triggers = () =>
+          Number(
+            one(writer, "SELECT count(*) AS n FROM main.sqlite_master WHERE type = 'trigger'")?.n,
+          );
+        if (triggers()) {
+          throw forbidden(
+            "The store's tables have a trigger, which the store never makes: maintenance SQL " +
+              "doesn't run.",
+          );
+        }
         const was = state();
         const before = changes();
         let rows: Row[];
@@ -560,6 +612,12 @@ export async function sqliteStore(options: {
           throw forbidden(
             "The statement made a temporary object, which would stand in for the store's own " +
               "tables: it was rolled back.",
+          );
+        }
+        if (triggers()) {
+          throw forbidden(
+            "The statement made a trigger, which would act on the store's own writes: it was " +
+              "rolled back.",
           );
         }
         if (state() !== was) {
@@ -686,31 +744,40 @@ export async function sqliteStore(options: {
     },
     /**
      * One read-only statement. On the file itself (the runtime's own SQLite):
-     * apart, in a worker on a read-only connection of its own (apart.ts), cut
-     * off at its timeout. Else on the reading connection, writes refused
-     * meanwhile, a pragma only when it sets nothing, and no timeout. A query
-     * stops at its limit in SQLite.
+     * apart, in a process of its own on a read-only connection (apart.ts),
+     * killed at its timeout. Else (a database opened another way, or none
+     * this process can open again) on the reading connection, writes
+     * refused meanwhile, a pragma only from those that only read, and no
+     * timeout: SQLite runs it synchronously, one at a time. A query stops at
+     * its limit in SQLite, and its rows at `bytes`.
      */
     async inspect(sql, params = [], asked = {}) {
       const { text, keyword } = checked(sql, "sqlite", "read");
       const bound = params.map(bindable);
-      const { limit } = asked;
+      const { limit, bytes } = asked;
       const query = limit !== undefined && QUERIES.has(keyword)
         ? `SELECT * FROM (\n${text}\n) LIMIT ${Math.max(0, Math.floor(limit))}`
         : text;
-      const cut = (rows: Row[]) => limit === undefined ? rows : rows.slice(0, limit);
+      const cut = (rows: Row[]) => upTo(limit === undefined ? rows : rows.slice(0, limit), bytes);
       try {
-        if (!options.open && !memory && !inline && await apart()) {
+        if (!options.open && !memory && !inline) {
           try {
-            return cut(await readApart(options.path, query, bound, asked.timeout) as Row[]);
+            return cut(
+              await capped(() =>
+                readApart(options.path, query, bound, { timeout: asked.timeout, bytes })
+              ) as Row[],
+            );
           } catch (error) {
             if ((error as { code?: string }).code !== "unstarted") throw error;
-            // No worker runs here: read on the reading connection, as without a file.
+            // No process of this runtime starts here: read on the reading connection.
             inline = true;
           }
         }
-        if (keyword === "PRAGMA" && setting(text)) {
-          throw invalid("A pragma here only reads: one that sets would stay on the connection.");
+        if (keyword === "PRAGMA" && !reading(text)) {
+          throw invalid(
+            "A pragma here only reads, as `PRAGMA name` or `PRAGMA name(table)`: one that " +
+              "sets something would stay on the connection.",
+          );
         }
         // Synchronous: nothing else runs on the reading connection meanwhile.
         committed.exec("PRAGMA query_only = 1");

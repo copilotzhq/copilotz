@@ -67,16 +67,14 @@ export const readAction = defineAction({
         return { count: await docs.countDocuments(filter) };
       case "aggregate": {
         const limit = needs(input.limit, "aggregate", "limit");
-        // The store stops at one more than asked, whatever the pipeline said.
+        // The store stops at one more than asked, whatever the pipeline said: a final
+        // `$limit`. A pipeline takes one, last (runtime/aggregate.ts), so one it ends with
+        // already is that final one, lowered to the cap.
         const pipeline = needs(input.pipeline, "aggregate", "pipeline") as Pipeline;
-        const has = pipeline.findIndex((stage) => "$limit" in stage);
-        const capped: Pipeline = has < 0
-          ? [...pipeline, { $limit: limit + 1 }]
-          : pipeline.map((stage, i) =>
-            i === has
-              ? { $limit: Math.min(Number((stage as { $limit: number }).$limit), limit + 1) }
-              : stage
-          );
+        const last = pipeline.at(-1) as { $limit?: unknown } | undefined;
+        const capped: Pipeline = last && Object.keys(last).length === 1 && "$limit" in last
+          ? [...pipeline.slice(0, -1), { $limit: Math.min(Number(last.$limit), limit + 1) }]
+          : [...pipeline, { $limit: limit + 1 }];
         return page(await docs.aggregate(capped), limit);
       }
       case "query":

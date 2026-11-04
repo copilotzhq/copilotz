@@ -60,6 +60,17 @@ const identifier = /[A-Za-z0-9_$\u0080-￿]/;
 const tag = /\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/y;
 
 /**
+ * Whether the `$` at `at` goes on a name (`a$b`): one that starts with a
+ * letter or `_`, as PostgreSQL's names do. After a number, or anything
+ * else, a `$` may open a `$tag$` body.
+ */
+function named(sql: string, at: number): boolean {
+  let start = at;
+  while (start > 0 && identifier.test(sql[start - 1])) start--;
+  return start < at && !/[0-9$]/.test(sql[start]);
+}
+
+/**
  * Where a PostgreSQL string continues, if it does: after its closing quote,
  * space with a line break in it (comments allowed), then a quote (the
  * scanner's `quotecontinue`). The index just past that quote, or undefined.
@@ -94,6 +105,8 @@ export function statement(
   let i = 0;
   let keyword = "";
   let end: number | undefined;
+  /** Parentheses open outside strings and comments: they balance, or it's no statement. */
+  let depth = 0;
   const unterminated = (what: string) => invalid(`The statement has an unterminated ${what}.`);
   /** Skips a comment at `i`; false when there's none. */
   const comment = () => {
@@ -143,7 +156,7 @@ export function statement(
     } else if (c === '"') (i++, quoted('"', "quoted name"));
     else if (!postgres && c === "`") (i++, quoted("`", "quoted name"));
     else if (!postgres && c === "[") (i++, quoted("]", "quoted name"));
-    else if (postgres && c === "$" && !identifier.test(before)) {
+    else if (postgres && c === "$" && !named(sql, i)) {
       tag.lastIndex = i;
       const open = tag.exec(sql)?.[0];
       if (!open) i++; // A parameter ($1), not a body.
@@ -153,7 +166,11 @@ export function statement(
         i = close + open.length;
       }
     } else if (c === ";") end = i;
-    else {
+    else if (c === "(") (depth++, i++);
+    else if (c === ")") {
+      if (--depth < 0) throw invalid("The statement closes a parenthesis it never opened.");
+      i++;
+    } else {
       word.lastIndex = i;
       const found = !identifier.test(before) && word.exec(sql)?.[0];
       if (found) {
@@ -172,6 +189,7 @@ export function statement(
     }
   }
   if (!keyword) throw invalid("There's no statement to run.");
+  if (depth) throw invalid("The statement leaves a parenthesis open.");
   if (TRANSACTIONS.has(keyword)) {
     throw invalid(
       `${keyword} can't run here: the statement runs in a transaction of its own, which ` +

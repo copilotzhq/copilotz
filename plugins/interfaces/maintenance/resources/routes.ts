@@ -144,6 +144,7 @@ const STATUS: Record<string, number> = {
   unsupported: 501,
   shared_schema: 501,
   unsafe_role: 501,
+  busy: 503,
   unavailable: 503,
   fenced: 503,
   timeout: 504,
@@ -390,7 +391,8 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
       const started = performance.now();
       if (!write) {
         try {
-          const read = await runtime.maintenance.read(sql, options);
+          // The store stops fetching once the rows pass the bytes this answer may take.
+          const read = await runtime.maintenance.read(sql, { ...options, bytes });
           const { rows, cut } = fit(read.rows, bytes);
           return json({
             rows,

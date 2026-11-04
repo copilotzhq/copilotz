@@ -1,7 +1,7 @@
 /**
  * A maintenance role of its own on a PostgreSQL server, made as the
- * README's Maintenance sets one up: a login with privileges on one schema
- * only, and on its log only to append. The test database's role makes it,
+ * README's Maintenance sets one up: a login with exactly maintenance's
+ * grants on one schema, and on its log only to append. The test database's role makes it,
  * so it needs CREATEROLE; without, `maintainer` answers undefined and the
  * tests that need one are skipped.
  */
@@ -56,6 +56,8 @@ export async function maintainer(url: string): Promise<Maintainer | undefined> {
       ) await run(sql);
     },
     async drop() {
+      // What it was granted goes with it (where this role may say so), then the role.
+      await run(`DROP OWNED BY ${ident(role)}`).catch(() => {});
       await run(`DROP ROLE IF EXISTS ${ident(role)}`).catch(() => {});
       await pool.close();
     },

@@ -25,14 +25,19 @@
   (PostgreSQL ran every statement of an unparameterized `inspect` before; PostgreSQL's line comments
   end at a CR too). `runtime.maintenance` is the owner's way to them; plugin code has none. The
   cache gains `clear()`, observers `stale()`.
-  - **PostgreSQL servers:** each statement runs on a connection of its own, over the extended
-    protocol, closed after, as a role of its own when the store names one
-    (`postgresStore({ maintenance: { url } })`, least privilege, checked before each statement) or
-    else the store's; it's refused where its role reaches another schema's tables, or the database
-    has `dblink` or `postgres_fdw`. PGlite discards what maintenance left on its session.
+  - **PostgreSQL servers:** raw SQL runs only as a role of its own
+    (`postgresStore({ maintenance: { url, connections } })`), which must hold exactly maintenance's
+    grants: no attribute but LOGIN, membership in no role, nothing owned, `CREATE` nowhere, no
+    privilege on another schema's tables or columns, nothing on the store's tables beyond what it
+    needs, no `SECURITY DEFINER` function to run, no `dblink` or `postgres_fdw`, no trigger on the
+    store's tables (checked before each statement; a write that makes one is rolled back). Each
+    statement on a connection of its own, over the extended protocol, closed after; at most 2 at
+    once, else `busy`. A read stops fetching once its rows pass its bytes. PGlite runs it as its one
+    session, and discards what it left there.
   - **SQLite:** the store names its tables in `main`, so a temporary object can't stand in for them
-    (a write that leaves one is rolled back); a read runs in a worker on a read-only connection of
-    its own, cut off at its timeout.
+    (a write that leaves one, or a trigger, is rolled back); a read runs in a process of its own on
+    a read-only connection, killed at its timeout (else, on the reading connection, a pragma only
+    from those that only read).
 
 - **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
   ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,

@@ -212,14 +212,15 @@ export type Store = Reader & {
   /**
    * Optional, for maintenance and inspection tools: runs one read-only SQL
    * statement on committed state, with `params` bound ($1, ?1…), and returns
-   * at most `limit` rows; `timeout` (ms) cancels it where the database can.
+   * at most `limit` rows, fetching no more once they pass `bytes` (the row
+   * that passes them included); `timeout` (ms) cancels it.
    * A SQL store has it, refusing it where SQL could reach other tenants' data,
    * and leaving nothing of it on a connection the store's other work shares.
    */
   inspect?(
     sql: string,
     params?: unknown[],
-    options?: { limit?: number; timeout?: number },
+    options?: { limit?: number; timeout?: number; bytes?: number },
   ): Promise<Row[]>;
   /**
    * Makes the declared indexes (and drops ones no longer declared). A field's

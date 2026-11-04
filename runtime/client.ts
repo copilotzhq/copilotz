@@ -6,6 +6,14 @@
  * watched there; a read's new result, pushed, runs again the parts that read
  * it. Handlers' calls and events go to the owner, as the person.
  *
+ * Or over a link of its host's (`link`): reads asked and Actions called by
+ * whatever carries them (an outside assistant's widget bridge, a server
+ * answering as the person), with no pushes: what's shown is asked again when
+ * the host says (`refresh`), or set from what came back (`update`). Seeded
+ * with answers already known (`known`: a snapshot), its first pass reads none
+ * of them. What it knows of the reads watched now is `known()`: a snapshot,
+ * by the same keys.
+ *
  * It loads front ends only (their Views, and their resources): the plugins
  * they build on live with the owner.
  */
@@ -31,6 +39,20 @@ import { decode, encode, lines } from "./wire.ts";
 /** What a client's transport is: the one Oxian workers connect with. */
 export type ClientTransport = Parameters<typeof createWorker>[0]["transport"];
 
+/**
+ * What carries a client's reads and calls when it isn't Oxian (see `connect`): each answers as
+ * the person, under the rules, as the owner answers a browser.
+ */
+export type ClientLink = {
+  /** Answers a batch of reads, by the key each was asked under. */
+  read(reads: { key: string; read: Remote }[]): Promise<({ key: string } & Answer)[]>;
+  call(action: string, input: unknown): Promise<unknown>;
+  emit?(type: string, data: Record<string, unknown>): Promise<void>;
+};
+
+/** Reads' answers by their keys: what a client knows (a snapshot), or is seeded with. */
+export type Known = [key: string, answer: Answer][];
+
 export type Client = {
   /** Observes a View here, as the person: its reads come from the owner, and follow its changes. */
   observe: Observers["observe"];
@@ -40,6 +62,14 @@ export type Client = {
   emit(type: string, data?: Record<string, unknown>): Promise<void>;
   /** Resolves when no part is running here. */
   idle(): Promise<void>;
+  /** What it knows of the reads watched now, by key: a snapshot to seed another client with. */
+  known(): Known;
+  /** The reads watched now, by key: what to ask answers for, after a call over a link. */
+  watching(): { key: string; read: Remote }[];
+  /** Asks every read watched here again; what changed shows. For a link, which isn't pushed to. */
+  refresh(): Promise<void>;
+  /** Reads' new answers, by key, from elsewhere (a call's reply): those watched here show them. */
+  update(answers: Known): void;
   /** Connected, and the owner knows who it is. */
   ready: Promise<void>;
   close(): Promise<void>;
@@ -58,19 +88,29 @@ const keyOf = (read: Remote) => canonical(read);
 /** Reads watched elsewhere are collections of their own to `observe`. */
 const WATCHED = "@";
 
-export function connect(options: {
-  transport: ClientTransport;
-  /** What it shows to connect: a one-time ticket from its host, asked for each new connection. */
-  ticket(): Promise<string>;
-  /** Its front ends: the Views it draws, and their resources. */
-  plugins: Plugins;
-  id?: string;
-}): Client {
+export function connect(
+  options:
+    & {
+      /** Its front ends: the Views it draws, and their resources. */
+      plugins: Plugins;
+      /** Answers already known, by read key (a snapshot): the first pass reads none of them. */
+      known?: Known;
+    }
+    & (
+      | {
+        transport: ClientTransport;
+        /** What it shows to connect: a one-time ticket from its host, asked for each new connection. */
+        ticket(): Promise<string>;
+        id?: string;
+        link?: undefined;
+      }
+      | { link: ClientLink; transport?: undefined }
+    ),
+): Client {
   const registry = merge(options.plugins, { elsewhere: true });
-  const id = options.id ?? `browser-${crypto.randomUUID()}`;
 
   /** What the owner said each watched read came to. */
-  const known = new Map<string, Answer>();
+  const known = new Map<string, Answer>(options.known ?? []);
   /** Reads asked for, not yet answered, by key. */
   const asked = new Map<string, Promise<Answer>>();
   /** Every read the Views here are watching, by key: what a new connection asks for again. */
@@ -85,14 +125,14 @@ export function connect(options: {
   let batch: { key: string; read: Remote; done: PromiseWithResolvers<Answer> }[] = [];
 
   /** One enrolment: a worker that comes in with a new ticket, and keeps its connection after. */
-  const enrol = () => {
+  const enrol = (over: { transport: ClientTransport; ticket(): Promise<string>; id: string }) => {
     const attempt = { attemptId: crypto.randomUUID(), epoch: Date.now() };
     return createWorker({
-      id,
-      transport: options.transport,
+      id: over.id,
+      transport: over.transport,
       activate: ({ workerId }: { workerId: string }) => ({ identity: { workerId, ...attempt } }),
       register: async () => ({
-        credential: { kind: "registration" as const, capability: await options.ticket() },
+        credential: { kind: "registration" as const, capability: await over.ticket() },
         expiresAtMs: Date.now() + 60_000,
       }),
       capacity: 1,
@@ -122,31 +162,38 @@ export function connect(options: {
     });
   };
   let closed = false;
-  let worker = enrol();
+  const oxian = options.link === undefined
+    ? {
+      transport: options.transport,
+      ticket: options.ticket,
+      id: options.id ?? `browser-${crypto.randomUUID()}`,
+    }
+    : undefined;
+  let worker = oxian ? enrol(oxian) : undefined;
   /**
    * Once in, its way back refused (who it was ended: signed out, erased, and
    * its resume credential with it; or an owner that never knew it), it comes
    * in again with a new ticket, which only a browser that's still someone gets
    * (a page's `ticket` reloads it otherwise). One never let in stays out.
    */
-  const follow = (current: typeof worker) => {
+  const follow = (current: NonNullable<typeof worker>) => {
     current.closed.catch(() => {});
     void current.ready.then(() =>
       current.closed.then((result) => {
         if (closed || current !== worker || result.reason !== "reenrollment_required") return;
-        worker = enrol();
+        worker = enrol(oxian!);
         follow(worker);
       })
     ).catch(() => {});
   };
-  follow(worker);
+  if (worker) follow(worker);
 
-  /** Asks the owner, as the person. While the connection is coming back, it waits and asks then. */
-  const ask = async <R>(workload: string, body: unknown): Promise<R> => {
-    let call: Awaited<ReturnType<typeof worker.callHost>>;
+  /** Asks the owner over Oxian, as the person. While the connection is coming back, it waits and asks then. */
+  const viaOxian = async <R>(workload: string, body: unknown): Promise<R> => {
+    let call: Awaited<ReturnType<NonNullable<typeof worker>["callHost"]>>;
     for (let waited = 0, delay = 50;; delay = Math.min(delay * 2, 1_000)) {
       try {
-        call = await worker.callHost({ workload, body: encode(body) });
+        call = await worker!.callHost({ workload, body: encode(body) });
         break;
       } catch (error) {
         if (closed || !notStarted(error) || waited >= RECONNECT_MS) throw error;
@@ -160,6 +207,24 @@ export function connect(options: {
     await call.completed;
     if (answer.error) throw Object.assign(new Error(answer.error.message), answer.error);
     return answer.value as R;
+  };
+
+  /** Asks the owner, as the person: over Oxian, or over the host's link. */
+  const ask = async <R>(workload: string, body: Record<string, unknown>): Promise<R> => {
+    const link = options.link;
+    if (!link) return await viaOxian<R>(workload, body);
+    switch (workload) {
+      case READ:
+        return await link.read(body.reads as { key: string; read: Remote }[]) as R;
+      case CALL:
+        return await link.call(body.action as string, body.input) as R;
+      case EMIT:
+        if (!link.emit) throw invalid("This client's link emits no events");
+        return await link.emit(body.type as string, body.data as Record<string, unknown>) as R;
+      default:
+        // Nothing is watched over a link: there's nothing to stop watching.
+        return undefined as R;
+    }
   };
 
   /** Asks for reads; each comes to what it was pushed meanwhile, or else to its answer. */
@@ -280,15 +345,37 @@ export function connect(options: {
     },
   });
 
+  /** New answers, by key: those watched here, when they differ, run again what read them. */
+  const update = (answers: Known) => {
+    const changed: string[] = [];
+    for (const [key, answer] of answers) {
+      if (!watching.has(key)) continue;
+      if (canonical(known.get(key) ?? null) === canonical(answer)) continue;
+      known.set(key, answer);
+      changed.push(WATCHED + key);
+    }
+    if (changed.length) observers.changed(changed.map((c) => [c, [{}]]) as never);
+  };
+
   return {
     observe: observers.observe,
     call: (action, input) => ask(CALL, { action, input: input ?? {} }),
     emit: (type, data) => ask(EMIT, { type, data: data ?? {} }),
     idle: observers.idle,
-    ready: worker.ready.then(() => {}),
+    known: () =>
+      [...watching.keys()].flatMap((key) => known.has(key) ? [[key, known.get(key)!]] : []),
+    watching: () => [...watching].map(([key, read]) => ({ key, read })),
+    refresh: async () => {
+      const reads = [...watching].map(([key, read]) => ({ key, read }));
+      if (!reads.length) return;
+      const answers = await reading(reads);
+      update(answers.map(({ key, ...answer }) => [key, answer as Answer]));
+    },
+    update,
+    ready: worker ? worker.ready.then(() => {}) : Promise.resolve(),
     close: () => {
       closed = true;
-      return worker.stop();
+      return worker ? worker.stop() : Promise.resolve();
     },
   };
 }

@@ -32,7 +32,7 @@ import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, tool } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
 import { createTickets } from "../../../../hosts/web/tickets.ts";
-import { webServer } from "../../../../hosts/web/server.ts";
+import { webServer, type Widgets } from "../../../../hosts/web/server.ts";
 import { mcp } from "../mod.ts";
 import type { McpLine, McpSettings } from "../shared/settings.ts";
 
@@ -458,6 +458,8 @@ export async function setup(
     plugins?: Plugin[];
     /** One store for several runtimes in turn (an owner restarted). */
     store?: Store;
+    /** The web host's widgets (`widgetsOf`): the line's tools drawn by Views. */
+    widgets?: Widgets;
   } = {},
 ) {
   for (const key of Object.keys(runs)) delete runs[key];
@@ -493,6 +495,7 @@ export async function setup(
     tickets: createTickets(),
     code: { entry: "app.js", files: { "app.js": "" } },
     upgrade: () => new Response(null, { status: 501 }),
+    ...(options.widgets ? { widgets: options.widgets } : {}),
   });
   const post: Setup["post"] = async (body, o = {}) => {
     const response = await serve(

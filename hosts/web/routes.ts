@@ -36,6 +36,7 @@
  */
 import { type RouteWebSocket, upgradeWebSocket } from "@oxian/oxian-js/http";
 import type { Actor, Infer, Resources, Runtime } from "../../runtime/mod.ts";
+import type { Widgets } from "./widgets.ts";
 
 export type Route =
   & ({ path: string } | { host: string | ((resources: Resources) => string | undefined) })
@@ -51,6 +52,12 @@ export type Served = {
   runtime: Runtime;
   whom(): Promise<Actor | null>;
   host: string;
+  /**
+   * The app's widgets, when its web host has them (`webServer({ widgets })`): the template
+   * an outside assistant draws its Views in, and snapshots of what a View reads (see
+   * widgets.ts). What the MCP interface's lines show tool calls through.
+   */
+  widgets?: Widgets;
   /**
    * Accepts the request's WebSocket upgrade (a `GET` with `upgrade:
    * websocket`; anything else throws): the socket, open once the route
@@ -340,7 +347,7 @@ export function hostRouted(
 export function hostServer(
   runtime: Runtime,
   whom: (request: Request) => Promise<Actor | null>,
-  options: { front?: Front } = {},
+  options: { front?: Front; widgets?: Widgets } = {},
 ): (request: Request) => Promise<Response> | undefined {
   const { hosts } = declared(runtime);
   return (request) => {
@@ -356,7 +363,7 @@ export function hostServer(
       found.route,
       request,
       new URL(request.url),
-      served(runtime, request, whom, host),
+      served(runtime, request, whom, host, options.widgets),
     );
   };
 }
@@ -369,7 +376,7 @@ export function hostServer(
 export function routeServer(
   runtime: Runtime,
   whom: (request: Request) => Promise<Actor | null>,
-  options: { front?: Front } = {},
+  options: { front?: Front; widgets?: Widgets } = {},
 ): (request: Request) => Promise<Response> | undefined {
   const { paths } = declared(runtime);
   const hosted = hostServer(runtime, whom, options);
@@ -393,7 +400,7 @@ export function routeServer(
       found.route,
       request,
       url,
-      served(runtime, request, whom, hostOf(request, options.front)),
+      served(runtime, request, whom, hostOf(request, options.front), options.widgets),
     );
   };
 }
@@ -404,9 +411,11 @@ const served = (
   request: Request,
   whom: (request: Request) => Promise<Actor | null>,
   host: string,
+  widgets?: Widgets,
 ): Served => ({
   runtime,
   whom: () => whom(request),
   host,
+  ...(widgets ? { widgets } : {}),
   upgrade: (options) => upgradeWebSocket(request, options),
 });

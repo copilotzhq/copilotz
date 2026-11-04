@@ -420,3 +420,60 @@ test("a client without a valid ticket isn't let in", async () => {
     await rt.close();
   }
 });
+
+test("over a link: seeded answers ask nothing; refresh asks again; updates redraw; calls go through it", async () => {
+  const asked: string[][] = [];
+  const called: [string, unknown][] = [];
+  let total = 3;
+  const front = definePlugin({
+    name: "front",
+    views: {
+      tally: {
+        web: (_: unknown, ctx: ViewContext) =>
+          `${ctx.db.collection("tally").query<number>("total").value ?? "…"} notes`,
+      },
+    },
+  });
+  const link = {
+    read: (reads: { key: string; read: unknown }[]) => {
+      asked.push(reads.map((r) => r.key));
+      return Promise.resolve(reads.map(({ key }) => ({ key, value: total })));
+    },
+    call: (action: string, input: unknown) => {
+      called.push([action, input]);
+      return Promise.resolve({ ok: true });
+    },
+  };
+  // First, a client with nothing known: it asks, and what it knows is its snapshot.
+  const first = connect({ plugins: [front], link });
+  const seen = first.observe("web", "tally", {});
+  assertEquals(((await seen.ready) as { value: string }).value, "3 notes");
+  await first.idle();
+  const snapshot = first.known();
+  assertEquals(asked.length, 1);
+  assertEquals(snapshot.map(([, answer]) => answer), [{ value: 3 }]);
+  assertEquals(first.watching().map((w) => w.key), snapshot.map(([key]) => key));
+  seen.close();
+  await first.close();
+
+  // Seeded with it, a client's first paint asks nothing.
+  const client = connect({ plugins: [front], link, known: snapshot });
+  const shown = client.observe("web", "tally", {});
+  assertEquals(((await shown.ready) as { value: string }).value, "3 notes");
+  await client.idle();
+  assertEquals(asked.length, 1);
+  // Asked again (a link is never pushed to): what changed shows.
+  total = 4;
+  await client.refresh();
+  await client.idle();
+  assertEquals(asked.length, 2);
+  assertEquals((shown.get() as { value: string }).value, "4 notes");
+  // New answers from elsewhere (a call's reply) redraw at once.
+  client.update([[snapshot[0][0], { value: 9 }]]);
+  await client.idle();
+  assertEquals((shown.get() as { value: string }).value, "9 notes");
+  assertEquals(await client.call("note.add", { text: "x" }), { ok: true });
+  assertEquals(called, [["note.add", { text: "x" }]]);
+  shown.close();
+  await client.close();
+});

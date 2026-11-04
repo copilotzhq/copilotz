@@ -101,6 +101,31 @@ export function toldTo(actor: Actor | undefined, error: unknown): Failure {
   return { message: "Something went wrong.", ...(said.code ? { code: said.code } : {}) };
 }
 
+/**
+ * One read, answered as an actor outside any connection (a widget's, through the app's MCP
+ * line; a snapshot of what a View reads): a query they may run (its `allow`, under the rules,
+ * without private fields), its failure as they may be told it. A direct read of a collection is
+ * refused: from there, an actor reads through queries.
+ */
+export async function answeredAs(
+  runtime: { query(name: string, params: unknown, options: { actor: Actor }): Promise<unknown> },
+  actor: Actor,
+  key: string,
+  read: Remote,
+): Promise<{ key: string } & Answer> {
+  if (!("query" in read) || typeof read.collection !== "string" || typeof read.query !== "string") {
+    return { key, error: { message: "Read through a query", code: "forbidden" } };
+  }
+  try {
+    const value = await runtime.query(`${read.collection}.${read.query}`, read.params ?? null, {
+      actor,
+    });
+    return { key, value: value ?? null };
+  } catch (error) {
+    return { key, error: toldTo(actor, error) };
+  }
+}
+
 const answer = (output: Output, actor: Actor): Answer =>
   output.status === "failed" ? { error: toldTo(actor, output.error) } : {
     value: (output as { value: unknown }).value ?? null,

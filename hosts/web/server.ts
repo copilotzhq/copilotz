@@ -96,6 +96,7 @@ import { type Front, hostOf, routeServer } from "./routes.ts";
 import { ownPath } from "./theme/own-path.ts";
 import { pictureOf } from "./theme/picture.ts";
 import type { Tickets } from "./tickets.ts";
+import type { Widgets } from "./widgets.ts";
 
 export type WebServerOptions = {
   runtime: Runtime;
@@ -165,9 +166,16 @@ export type WebServerOptions = {
    * Without it, or without the secret, forwarded headers are ignored.
    */
   front?: Front;
+  /**
+   * The app's widgets (`widgetsOf`): its web Views drawn inside an outside assistant (an MCP
+   * Apps host such as ChatGPT), which the MCP interface's routes serve and snapshot. Without
+   * them, MCP's lines offer tools with no widgets.
+   */
+  widgets?: Widgets;
 };
 
 export type { Asset };
+export { type SnapshotOptions, type Widgets, widgetsOf, type WidgetsOptions } from "./widgets.ts";
 export { clientAddress, setClientAddress } from "./address.ts";
 export {
   type Arrived,
@@ -385,7 +393,10 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
   const signInShown = () => shown ??= signInPage(options.signIn?.at ?? runtime);
 
   const files = fileServer(runtime, whom);
-  const routes = routeServer(runtime, whom, front ? { front } : {});
+  const routes = routeServer(runtime, whom, {
+    ...(front ? { front } : {}),
+    ...(options.widgets ? { widgets: options.widgets } : {}),
+  });
 
   /** The service worker, for this version of the code: its version is the code's own. */
   let worker: Promise<string> | undefined;

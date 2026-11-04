@@ -39,19 +39,40 @@
  *   request without `MCP-Protocol-Version` is 2025-03-26). Any other is 400,
  *   -32022, with those it takes.
  * - **Methods.** `initialize`, `server/discover`, `ping`, `tools/list`,
- *   `tools/call` (see tools.ts). Tools are all the server has.
+ *   `tools/call` (see tools.ts); with widgets (a line whose tools are shown
+ *   through the app's web Views, and the web host's `widgets`: see
+ *   widgets.ts), `resources/list` and `resources/read` (the widgets'
+ *   template), and the widgets' own calls: the entries only they may call,
+ *   refused without their grant, which the model never has.
  *
  * Sources: https://modelcontextprotocol.io/specification/2026-07-28 (transport,
  * versioning, tools), https://modelcontextprotocol.io/specification/2025-11-25,
  * https://developers.openai.com/apps-sdk/reference (ChatGPT's `_meta`).
  */
 import { type Caller, callerFrom, linksOf, type Runtime } from "../../../../runtime/mod.ts";
-import { atOnceOf, callerOf, type Line, lineOf, PATH } from "../shared/settings.ts";
-import { isBusy } from "./running.ts";
+import type { Widgets } from "../../../../hosts/web/mod.ts";
+import { addressKey, callIdOf, conversationOf, threadOf, userOf } from "../shared/keys.ts";
+import { appOnly, atOnceOf, callerOf, type Line, lineOf, PATH, READ } from "../shared/settings.ts";
+import { busy, hold, isBusy } from "./running.ts";
 import { called, listed, mirrored, offeredOf, type Said, usable } from "./tools.ts";
+import {
+  appCalled,
+  grantedContact,
+  NOT_YOURS,
+  resourceRead,
+  resourcesListed,
+  templateOf,
+  widgetMeta,
+} from "./widgets.ts";
 
-/** What the web host hands the route: the runtime. */
-export type McpHost = { runtime: Pick<Runtime, "call" | "cancel" | "describe" | "observe"> };
+/**
+ * What the web host hands the route: the runtime, and the app's widgets when it has them
+ * (`webServer({ widgets })`: the template, and snapshots of what a View reads).
+ */
+export type McpHost = {
+  runtime: Pick<Runtime, "call" | "cancel" | "describe" | "observe" | "query">;
+  widgets?: Widgets;
+};
 
 /** The version without a handshake, and the ones with one, newest first. */
 const MODERN = "2026-07-28";
@@ -161,6 +182,8 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
     caller,
     scope: { line: line.name, ...(org ? { org } : {}), secret },
     atOnce: atOnceOf({ resources }),
+    ...(host.widgets ? { widgets: host.widgets } : {}),
+    origin: linksOf(resources)?.origin,
   };
   if (Array.isArray(parsed)) {
     // Batches were MCP's only in 2025-03-26.
@@ -210,6 +233,9 @@ type Context = {
   scope: { line: string; org?: string; secret: string };
   /** Calls the runtime runs at once. */
   atOnce: number;
+  /** The app's widgets, when its web host has them; and the app's own origin (`links`). */
+  widgets?: Widgets;
+  origin?: string;
 };
 
 /** A request's body as text, or undefined past `limit` bytes. */
@@ -302,9 +328,9 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
   try {
     switch (method) {
       case "initialize":
-        return ok(initialized(c.line, params));
+        return ok(initialized(c.line, params, await withWidgets(c)));
       case "server/discover":
-        return ok(discovered(c.line));
+        return ok(discovered(c.line, await withWidgets(c)));
       case "ping":
         return ok({});
       case "tools/list": {
@@ -312,16 +338,45 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
           return failed(status(PARAMS), rpc, PARAMS, "No such cursor");
         }
         const names = await offeredOf(c.runtime, c.line, usable(c.runtime, c.line));
+        const template = await templateOf(c.line, c.widgets, c.origin);
         return ok({
-          tools: listed(c.line, c.resources, names),
+          tools: listed(c.line, c.resources, names, c.runtime.describe().actions, template?.uri),
           ttlMs: TTL_MS,
           cacheScope: "public",
         });
       }
+      case "resources/list":
+      case "resources/templates/list":
+      case "resources/read": {
+        // Resources are the widgets' template: without widgets, there are none to ask about.
+        if (!await withWidgets(c)) return failed(status(METHOD), rpc, METHOD, "Method not found");
+        if (method === "resources/list") {
+          return ok(await resourcesListed(c.line, c.widgets, c.origin));
+        }
+        if (method === "resources/templates/list") return ok({ resourceTemplates: [] });
+        const read = await resourceRead(c.line, c.widgets, c.origin, params.uri);
+        if (!read) {
+          return failed(
+            status(PARAMS),
+            rpc,
+            PARAMS,
+            `No such resource: ${String(params.uri).slice(0, 200)}`,
+          );
+        }
+        return ok(read);
+      }
       case "tools/call": {
         const tool = params.name;
         const input = params.arguments ?? {};
-        if (typeof tool !== "string" || !usable(c.runtime, c.line).includes(tool)) {
+        const template = await templateOf(c.line, c.widgets, c.origin);
+        const theirs = typeof tool === "string" && (
+          tool === READ || (Object.hasOwn(c.line.tools, tool) && appOnly(c.line.tools[tool]))
+        );
+        // What only the widgets call exists only where they do.
+        if (
+          typeof tool !== "string" || (theirs && !template) ||
+          (tool !== READ && !usable(c.runtime, c.line).includes(tool))
+        ) {
           return failed(status(PARAMS), rpc, PARAMS, `Unknown tool: ${String(tool).slice(0, 128)}`);
         }
         if (!isObject(input)) return failed(status(PARAMS), rpc, PARAMS, "arguments is an object");
@@ -331,15 +386,32 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
         if (!conversation) {
           return failed(status(PARAMS), rpc, PARAMS, "openai/session and openai/subject are text");
         }
+        if (theirs) return ok(await widgetCalled(c, tool, input, rpc, conversation, meta));
+        const { conversation: whose, ...result } = await called(c.runtime, c.line, c.scope, {
+          tool,
+          input,
+          request: rpc,
+          said: conversation,
+          caller: c.caller,
+          atOnce: c.atOnce,
+        });
+        // Drawn by a widget: what it draws, for the widget alone (`_meta`: never the model's).
+        const drawn = template && c.widgets && c.line.tools[tool]?.widget && whose &&
+          !(result as { isError?: boolean }).isError;
         return ok(
-          await called(c.runtime, c.line, c.scope, {
-            tool,
-            input,
-            request: rpc,
-            said: conversation,
-            caller: c.caller,
-            atOnce: c.atOnce,
-          }),
+          drawn
+            ? {
+              ...result,
+              _meta: await widgetMeta(
+                c.runtime,
+                c.widgets!,
+                c.line,
+                c.scope,
+                { tool, input },
+                whose,
+              ),
+            }
+            : result,
         );
       }
       default:
@@ -430,6 +502,78 @@ function headerProblem(
   return undefined;
 }
 
+/** Whether the line's widgets are served here: a template to draw them in. */
+const withWidgets = async (c: Context) => !!await templateOf(c.line, c.widgets, c.origin);
+
+/**
+ * A call to what only the line's widgets call (see widgets.ts): refused to anyone without the
+ * widget's grant (the model never has one), and to a grant from another conversation than the
+ * one the call names; else made, as the conversation's contact, within its places at once.
+ */
+async function widgetCalled(
+  c: Context,
+  tool: string,
+  input: Record<string, unknown>,
+  request: string | number,
+  said: Said,
+  meta: Record<string, unknown> | undefined,
+) {
+  const { secret } = c.scope;
+  const contact = await grantedContact(
+    c.scope,
+    input,
+    meta,
+    async () =>
+      said.session === undefined ? undefined : (await conversationOf(secret, c.scope, {
+        session: said.session,
+        ...(said.subject ? { subject: said.subject } : {}),
+      })).contact,
+  );
+  if (!contact) return { content: [{ type: "text", text: NOT_YOURS }], isError: true };
+  const entry = tool === READ ? undefined : c.line.tools[tool];
+  const { _grant: _, ...rest } = input;
+  // A tool only the widgets call runs as any tool does, for the grant's conversation.
+  if (entry && !entry.action) {
+    const { conversation: _whose, ...result } = await called(c.runtime, c.line, c.scope, {
+      tool,
+      input: rest,
+      request,
+      said,
+      caller: c.caller,
+      atOnce: c.atOnce,
+      contact,
+    });
+    return result;
+  }
+  const address = c.caller && !c.caller.exempt ? c.caller.counted : undefined;
+  const release = hold(c.runtime, [
+    { key: "runtime", most: c.atOnce },
+    { key: `line:${c.line.name}`, most: c.line.limits.atOnce },
+    ...(address
+      ? [{ key: `address:${c.line.name}|${address}`, most: c.line.limits.addressAtOnce }]
+      : []),
+  ]);
+  if (!release) throw busy();
+  try {
+    const thread = await threadOf(secret, contact);
+    const [id, user, counted] = await Promise.all([
+      callIdOf(thread, request, tool, rest),
+      said.subject ? userOf(secret, c.scope, said.subject) : undefined,
+      address ? addressKey(secret, address) : undefined,
+    ]);
+    return await appCalled(c.runtime, c.line, {
+      tool,
+      input: rest,
+      contact,
+      id,
+      ...(user ? { user } : {}),
+      ...(counted ? { address: counted } : {}),
+    });
+  } finally {
+    release();
+  }
+}
+
 /** Who the server is. */
 const serverOf = (line: Line) => ({
   name: line.name,
@@ -437,23 +581,24 @@ const serverOf = (line: Line) => ({
   version: line.version,
 });
 
-const CAPABILITIES = { tools: {} };
+/** What the server has: tools, and with widgets, their template (a resource). */
+const capabilitiesOf = (widgets: boolean) => widgets ? { tools: {}, resources: {} } : { tools: {} };
 
 /** A legacy client's handshake: the version it asked for when taken, else the newest legacy one. */
-function initialized(line: Line, params: Params) {
+function initialized(line: Line, params: Params, widgets: boolean) {
   const asked = params.protocolVersion;
   return {
     protocolVersion: typeof asked === "string" && LEGACY.includes(asked) ? asked : LEGACY[0],
-    capabilities: CAPABILITIES,
+    capabilities: capabilitiesOf(widgets),
     serverInfo: serverOf(line),
     ...(line.instructions ? { instructions: line.instructions } : {}),
   };
 }
 
 /** What `server/discover` says: versions, what it has, who it is. */
-const discovered = (line: Line) => ({
+const discovered = (line: Line, widgets: boolean) => ({
   supportedVersions: VERSIONS,
-  capabilities: CAPABILITIES,
+  capabilities: capabilitiesOf(widgets),
   _meta: { "io.modelcontextprotocol/serverInfo": serverOf(line) },
   ...(line.instructions ? { instructions: line.instructions } : {}),
   ttlMs: TTL_MS,

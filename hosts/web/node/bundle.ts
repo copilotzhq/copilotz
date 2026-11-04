@@ -15,6 +15,11 @@ import type { Code } from "../server.ts";
 export type BundleOptions = {
   /** Minified, for production (the default); `false` keeps names and React's checks. */
   minify?: boolean;
+  /**
+   * Split where the code imports lazily (the default); `false` makes one file, lazy imports
+   * inlined: what a widget's template needs (an outside assistant's sandbox loads one page).
+   */
+  split?: boolean;
 };
 
 /** Bundles a page's entry (a path, or a `file:` URL such as `new URL("./browser.tsx", import.meta.url)`). */
@@ -32,7 +37,7 @@ export async function bundle(entry: string | URL, options: BundleOptions = {}): 
   const result = await esbuild.build({
     entryPoints: [path],
     bundle: true,
-    splitting: true,
+    splitting: options.split ?? true,
     format: "esm",
     platform: "browser",
     target: "es2022",

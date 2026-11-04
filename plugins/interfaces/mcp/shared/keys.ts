@@ -93,3 +93,31 @@ export async function callIdOf(
   const [asked, what] = await Promise.all([sha256(["request", request]), sha256([tool, input])]);
   return `mcp:${thread}:${asked.slice(0, 16)}:${what.slice(0, 16)}`;
 }
+
+/**
+ * A widget's grant: what a call from the line's widgets carries to show it's theirs, never the
+ * model's (its widget-only tools, `appOnly`, refuse a call without one). `g1.<contact>.<hmac>`:
+ * the conversation's contact and an HMAC of it, the line and the org, with the app's secret.
+ * It goes out only in results' `_meta` (the host's for the widget; a model never reads it), so
+ * the model can't make one; whoever holds it reaches what the conversation's contact does, no
+ * more (the same as what names the conversation: see mod.ts, "Security notes").
+ */
+export async function grantOf(secret: string, scope: Scope, contact: string): Promise<string> {
+  const said = await mac(secret, ["mcp", "grant", scope.org ?? null, scope.line, contact]);
+  return `g1.${contact}.${said.slice(0, 32)}`;
+}
+
+/** The contact a grant is for, when it's one this app made for this line; else undefined. */
+export async function grantedTo(
+  secret: string,
+  scope: Scope,
+  grant: unknown,
+): Promise<string | undefined> {
+  if (typeof grant !== "string" || grant.length > 120) return undefined;
+  const found = /^g1\.(c-[0-9a-f]{24})\.[0-9a-f]{32}$/.exec(grant);
+  if (!found) return undefined;
+  const expected = await grantOf(secret, scope, found[1]);
+  let differ = expected.length ^ grant.length;
+  for (let i = 0; i < expected.length; i++) differ |= expected.charCodeAt(i) ^ grant.charCodeAt(i);
+  return differ === 0 ? found[1] : undefined;
+}

@@ -674,8 +674,9 @@ test("the pool in a runtime of its own: an org's computers wake and go through r
   const world = fakeCloud(poolTopic, { topics: { [orgApp]: orgTopic } });
   const clock = manualClock(Date.now());
   // The pool's runtime: nothing but cloudPool, its cloud and its settings (as a directory's).
+  const poolStore = memoryStore();
   const pool = await createRuntime({
-    store: memoryStore(),
+    store: poolStore,
     plugins: [
       cloudPool,
       definePlugin({
@@ -701,8 +702,9 @@ test("the pool in a runtime of its own: an org's computers wake and go through r
     clock,
   });
   const forwarded: string[] = [];
+  const orgStore = memoryStore();
   const rt = await createRuntime({
-    store: memoryStore(),
+    store: orgStore,
     plugins: [
       models,
       chat,
@@ -740,6 +742,14 @@ test("the pool in a runtime of its own: an org's computers wake and go through r
     assertEquals(world.vms.get(vm)!.assigned[0].app, orgApp);
     assertEquals((await rt.query<Computer[]>("computer.mine", {}, { actor: ana }))[0].online, true);
     assertEquals(forwarded.slice(0, 2), ["pool.take", "pool.serve"]);
+    // What connected them is in neither runtime's log: the VM's token, the computer's code.
+    const { code } = world.vms.get(vm)!.assigned[0];
+    assertEquals(code?.length, 9);
+    await Promise.all([rt.idle(), pool.idle()]);
+    for (const store of [orgStore, poolStore]) {
+      const logged = JSON.stringify(await store.events(0, 10_000));
+      assertEquals([logged.includes(code!), logged.includes(`fake:${vm}`)], [false, false]);
+    }
 
     // Its ticks renew the VM's lease, at the pool.
     await rt.call("cloud.tick", { now: later(taken.taken, 5 * MIN) });

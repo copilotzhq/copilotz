@@ -45,6 +45,8 @@ async function seen(ctx: Context, vm: string, state: "free" | "gone") {
 }
 
 export const poolAdmitAction = defineAction({
+  // Unrecorded: its input is the VM's identity token, which admits it.
+  record: false,
   input: {
     type: "object",
     properties: { secret: { type: "string" } },

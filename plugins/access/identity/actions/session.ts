@@ -38,6 +38,8 @@ export const startSession = defineAction({
 
 export const endSession = defineAction({
   description: "Ends the session whose secret is shown",
+  // Unrecorded: its input is the secret.
+  record: false,
   input: {
     type: "object",
     properties: { session: { type: "string" } },

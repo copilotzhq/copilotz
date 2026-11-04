@@ -7,7 +7,7 @@
  * the agent working for them (it's shared with them on its own, as their
  * chats are), and no one else's.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { type Actor, defineCollection, type Infer, principalOf } from "../../../../runtime/mod.ts";
 import { namesOf } from "../../spaces/contract.ts";
 
 const contactSchema = {
@@ -55,3 +55,13 @@ export const contact = defineCollection({
 });
 
 export type Contact = Infer<typeof contactSchema> & { _id: string };
+
+/**
+ * The contact whose work this is, if it's a contact's: an event's actor, a
+ * turn's (an agent working for them), a tool's. Undefined for a person's
+ * work, or the system's.
+ */
+export function contactOf(actor: Actor | undefined): string | undefined {
+  const principal = principalOf(actor);
+  return principal?.kind === "contact" ? principal.id : undefined;
+}

@@ -211,7 +211,12 @@ test("a customer taken out of their chat starts a new one; an agent's fixed mess
     const [chat] = await threadsOf(runtime, launch);
     const carla = await contactIn(s, chat._id);
     // Said by trusted code, without a turn: it goes to their phone like any answer.
-    await runtime.call("chat.say", { thread: chat._id, agent: "lead", text: "Payment confirmed!" });
+    await runtime.call("chat.say", {
+      id: "pix-1:paid",
+      thread: chat._id,
+      from: "lead",
+      text: "Payment confirmed!",
+    });
     await runtime.idle();
     assertEquals(graph.texts(CARLA).at(-1), "Payment confirmed!");
     await runtime.call("member.remove", { space: chat._id, on: "thread", member: carla }, {

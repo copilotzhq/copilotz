@@ -18,9 +18,10 @@
   - A contact is let into documents only, never a whole space (`member.set`, a request granted), and
     never manages one. `request_access` isn't offered to agents working for a contact, nor memory: a
     customer's chat keeps to itself.
-  - `contact.start` (trusted code, idempotent by id) and `contact.chat`; agents are told whom they
-    talk with (the `contact` context) and see them by name: the `names` resource is now a map of
-    sources
+  - `contact.start` (trusted code, idempotent by id) and `contact.chat`; `contactOf(actor)` says
+    whose work an event's actor's is (the contact's id, through the agent working for them too);
+    agents are told whom they talk with (the `contact` context) and see them by name: the `names`
+    resource is now a map of sources
     (`{ people: { collection: "profile" }, contact: { collection: "contact", prefix:
     "contact:" } }`),
     replacing `{ collection }`. On the web, add `contactsWeb` to show contacts by name.
@@ -32,9 +33,9 @@
   still links a phone, and linked phones keep working as their person. The `whatsapp` plugin now
   requires `contacts`.
 - **Chat in spaces declares its own `shared` entries** (`thread`, `message` with labels, `file`,
-  `live`, each a part of its thread). `chat.open` opens an empty chat in a space; `chat.say` has an
-  agent say a fixed message in a chat without a turn (trusted code only; `id` makes it once), sent
-  out like any of its answers.
+  `live`, each a part of its thread). `chat.open` opens an empty chat in a space;
+  `chat.say { id, thread, from, text, to? }` has an agent say a fixed message in a chat without a
+  turn (trusted code only; the same `id` is said once), sent out like any of its answers.
 - **Fixed:** `message.questions`, and the terminal's `shell.mine`, `shell.set` and `shell.print`,
   let anyone whose id matched in; they're a person's own now.
 

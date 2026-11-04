@@ -31,7 +31,7 @@ import {
   tiers,
   tool,
 } from "../../agents/mod.ts";
-import { access, accounts, directory, googleSignIn } from "../mod.ts";
+import { access, accounts, contactOf, directory, googleSignIn } from "../mod.ts";
 import { api, terminalPlugin, whatsapp } from "../../interfaces/mod.ts";
 import { apps, cloud, computers } from "../../compute/mod.ts";
 import { credits, stripe, stripeWebhook, usage } from "../../billing/mod.ts";
@@ -404,10 +404,10 @@ test("an agent says a fixed message to a contact's chat without a turn, once", a
     const calls = sent.length;
     for (let i = 0; i < 2; i++) {
       await runtime.call("chat.say", {
-        thread: carlas,
-        agent: "lead",
-        text: "Payment confirmed!",
         id: "pix-123:confirmed",
+        thread: carlas,
+        from: "lead",
+        text: "Payment confirmed!",
       });
     }
     await runtime.idle();
@@ -419,10 +419,13 @@ test("an agent says a fixed message to a contact's chat without a turn, once", a
     assertEquals(confirmed.map((m) => [m._id, m.from, m.to]), [
       ["pix-123:confirmed", "lead", ["contact:c-carla-01"]],
     ]);
+    // Whose work it is, from an event's actor: the contact's, through the agent working for them.
+    assertEquals(contactOf({ kind: "agent", id: "lead", for: carla }), carla.id);
+    assertEquals(contactOf(ana), undefined);
     // Never to an agent: that's a message to send it.
     assertEquals(
       await code(
-        runtime.call("chat.say", { thread: carlas, agent: "lead", text: "x", to: ["ops"] }),
+        runtime.call("chat.say", { id: "x", thread: carlas, from: "lead", text: "x", to: ["ops"] }),
       ),
       "invalid",
     );

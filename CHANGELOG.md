@@ -13,6 +13,8 @@
     writes, fenced by its epoch, with a `maintenance.sql` audit event in the same commit; then the
     owner empties its read cache, runs observed Views again and re-reads its timers. An
     `Idempotency-Key` makes it safe to send again.
+  - `POST /maintenance/queries/<collection>.<name>`: a collection's named query, the body its
+    params, read as the system.
   - `GET /maintenance/blobs/<id>`: a blob's bytes, as a download.
 - **SQL on the store port, for maintenance only:**
   `Store.inspect?(sql, params?, { limit, timeout })` (now SQLite's too), a transaction's

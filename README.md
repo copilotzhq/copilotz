@@ -567,6 +567,7 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
 | `POST /maintenance/sql`                           | `{ sql, params?, limit?, timeout? }`: one read-only statement: `{ rows, count, truncated, ms }`        |
 | `POST /maintenance/sql/write`                     | `{ sql, params?, limit?, timeout? }`: one that writes, in the owner: `{ changed, rows, event }`        |
 | `POST /maintenance/collections/<collection>/<op>` | `insertOne` `{ doc }`… `deleteMany` `{ filter }`, and `find`, `findOne`, `countDocuments`, `aggregate` |
+| `POST /maintenance/queries/<collection>.<name>`   | A collection's named query (`booking.stats`), the body its params: `{ result, ms }`                    |
 | `GET /maintenance/blobs/<sha256-…>`               | A blob's bytes and type, as a download                                                                 |
 
 - **Who:** every request shows the key (`Authorization: Bearer <key>`), compared in constant time,
@@ -578,7 +579,8 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
   transaction (SQLite: `query_only`, on the reading connection), stopped at its limit (a cursor in
   PostgreSQL) and cut off after its timeout (on a PostgreSQL server).
 - **Operations go through the owner's write path:** checked against the collection's schema,
-  recorded as its events, cached and heard by Processors like any write. Prefer them.
+  recorded as its events, cached and heard by Processors like any write. Prefer them. Named queries
+  run as the system does them (`runtime.query` with no actor), and check their own params.
 - **Raw SQL writes run inside the owner** (`runtime.maintenance.write`, see `runtime/maintain.ts`),
   for what operations can't do: alone among its writes (those running end first, the next wait for
   it), in a transaction fenced by its epoch, so an owner that lost the store can't run one, and with

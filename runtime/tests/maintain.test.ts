@@ -186,8 +186,9 @@ for (const [name, make] of Object.entries(databases)) {
   test(`${name}: a fenced owner can't write SQL`, async () => {
     const database = make();
     const first = await createRuntime({ store: await database.open(), plugins: [notes] });
-    await first.call("note.add", { id: "n1", text: "kept" });
     const second = await createRuntime({ store: await database.open(), plugins: [notes] });
+    // Written by the owner that holds the store now: the first has nothing of its own to save.
+    await second.call("note.add", { id: "n1", text: "kept" });
     try {
       const error = await assertRejects(() =>
         first.maintenance.write(sql(database.dialect).text, {
@@ -202,7 +203,7 @@ for (const [name, make] of Object.entries(databases)) {
       );
       assertEquals(Number(audit.rows[0].n), 0);
     } finally {
-      await first.close().catch(() => {});
+      await first.close();
       await second.close();
       await database.done();
     }

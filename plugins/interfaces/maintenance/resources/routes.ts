@@ -23,6 +23,9 @@
  *   `filter: {}`, said so); find `{ filter?, sort?, limit?, skip? }`,
  *   findOne `{ filter?, sort? }`, countDocuments `{ filter? }`, aggregate
  *   `{ pipeline }`.
+ * - `POST /maintenance/queries/<collection>.<name>`: a collection's named
+ *   query (`booking.stats`), the body its params, read through the owner as
+ *   the system on the record: `{ result, ms }`. It checks its params itself.
  * - `GET /maintenance/blobs/<sha256-…>`: a blob's bytes and type, as a download.
  *
  * Writes take an `Idempotency-Key`: sent again, one answers what it did the
@@ -147,7 +150,9 @@ const fault = (code: string, message: string) => Object.assign(new Error(message
 function answerFor(error: unknown): Response {
   const code = (error as { code?: unknown })?.code;
   const message = error instanceof Error ? error.message : String(error);
-  if (/^Unknown (action|collection)/.test(message)) return failure(404, "not_found", message);
+  if (/^Unknown (action|collection|query)/.test(message)) {
+    return failure(404, "not_found", message);
+  }
   if (typeof code === "string" && STATUS[code]) {
     const state = (error as { state?: unknown }).state;
     return json(
@@ -298,6 +303,7 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
           "POST /maintenance/sql": "{ sql, params?, limit?, timeout? }: one read-only statement",
           "POST /maintenance/sql/write": "{ sql, params?, limit?, timeout? }: one that writes",
           "POST /maintenance/collections/<collection>/<op>": [...WRITES, ...READS].join(", "),
+          "POST /maintenance/queries/<collection>.<name>": "a named query, the body its params",
           "GET /maintenance/blobs/<id>": "a blob's bytes",
         },
       });
@@ -358,6 +364,24 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
         );
       }
       throw fault("not_found", `No operation "${op}": ${[...WRITES, ...READS].join(", ")}.`);
+    }
+    const query = /^\/queries\/([^/]+)$/.exec(path);
+    if (query) {
+      method("POST");
+      const named = decodeURIComponent(query[1]);
+      const dot = named.lastIndexOf(".");
+      if (dot <= 0 || dot === named.length - 1) {
+        throw fault("not_found", `No query "${named}": name it <collection>.<query>.`);
+      }
+      const params = await bodyOf(request);
+      const started = performance.now();
+      const { result } = await runtime.call<{ result: unknown }>("maintenance.read", {
+        collection: named.slice(0, dot),
+        op: "query",
+        name: named.slice(dot + 1),
+        params,
+      }, { actor });
+      return json({ result, ms: elapsed(started) });
     }
     const blob = /^\/blobs\/([^/]+)$/.exec(path);
     if (blob) {

@@ -12,6 +12,7 @@ import {
   defineCollection,
   definePlugin,
   type Event,
+  invalid,
   type Runtime,
   type Store,
 } from "../../../../runtime/mod.ts";
@@ -46,7 +47,17 @@ const notes = definePlugin({
   collections: {
     note: defineCollection({
       schema: { type: "object", properties: { text, n: { type: "number" } }, required: ["text"] },
-      queries: { one: (notes, { id }: { id: string }) => notes.findOne({ _id: id }) },
+      queries: {
+        one: (notes, { id }: { id: string }) => notes.findOne({ _id: id }),
+        // An app's numbers (as Mobizap's `booking.stats`): it checks its own params.
+        stats: (notes, { by }: { by?: string }) => {
+          if (by !== "text") throw invalid('stats takes `by: "text"`');
+          return notes.aggregate([
+            { $group: { _id: "$text", n: { $count: {} } } },
+            { $sort: { _id: 1 } },
+          ]);
+        },
+      },
     }),
   },
   actions: {
@@ -223,6 +234,29 @@ for (const [name, make] of Object.entries(stores)) {
         body: { filters: {} },
       });
       assertEquals([misspelt.status, misspelt.body.error.code], [400, "invalid"]);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`${name}: a collection's named query, its params the body`, async () => {
+    const runtime = await open(await make());
+    try {
+      for (const [id, text] of [["n1", "a"], ["n2", "b"], ["n3", "a"]]) {
+        await runtime.call("note.add", { id, text });
+      }
+      const stats = await send(runtime, "POST", "/queries/note.stats", { body: { by: "text" } });
+      assertEquals(stats.status, 200);
+      assertEquals(stats.body.result, [{ _id: "a", n: 2 }, { _id: "b", n: 1 }]);
+      const one = await send(runtime, "POST", "/queries/note.one", { body: { id: "n2" } });
+      assertEquals(one.body.result.text, "b");
+      // Its params are the query's to check; unknown names aren't there.
+      const wrong = await send(runtime, "POST", "/queries/note.stats", { body: { by: "day" } });
+      assertEquals([wrong.status, wrong.body.error.code], [400, "invalid"]);
+      for (const path of ["/queries/note.nope", "/queries/nowhere.stats", "/queries/stats"]) {
+        assertEquals((await send(runtime, "POST", path, { body: {} })).status, 404, path);
+      }
+      assertEquals((await send(runtime, "GET", "/queries/note.stats")).status, 405);
     } finally {
       await runtime.close();
     }

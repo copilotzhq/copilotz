@@ -16,7 +16,8 @@
  *   store's `inspect`): at most `limit` rows, cut off after `timeout`.
  * - **Writes through the owner**: the collections' operations (insertOne…
  *   deleteMany, and find…aggregate), checked against their schemas, recorded
- *   as events, cached and heard by Processors like any write.
+ *   as events, cached and heard by Processors like any write; and the
+ *   collections' named queries (`booking.stats`), read as the system.
  * - **Raw SQL writes, inside the owner** (`runtime.maintenance.write`), for
  *   what operations can't do: one statement, in line with the owner's
  *   writes, fenced by its epoch, with one `maintenance.sql` audit event in

@@ -15,6 +15,11 @@
  *   reply to it.
  * - What an agent is writing shows as it comes: a `live` document per running
  *   turn, kept in memory, swapped for the step or reply it became in one commit.
+ * - A step's tool calls are written (an `intent`) before any of them runs, and
+ *   what each returns as it does: a retried turn goes on with those calls
+ *   instead of asking its model again, so a call that returned never runs
+ *   twice, and one cut short runs again as itself (`ctx.callId`, the key for
+ *   what it does outside).
  * - A person moves a conversation to another space (`chat.move`), with
  *   everything in it; not while an agent is writing in it.
  * - Threads record where they came from (`parent`). A fork (a subthread) sees
@@ -49,6 +54,7 @@ import { moveAction } from "./actions/move.ts";
 import { sendAction } from "./actions/send.ts";
 import { stopAction } from "./actions/stop.ts";
 import { file } from "./collections/file.ts";
+import { intent } from "./collections/intent.ts";
 import { live } from "./collections/live.ts";
 import { message } from "./collections/message.ts";
 import { thread } from "./collections/thread.ts";
@@ -69,7 +75,7 @@ export { lineage } from "./shared/lineage.ts";
 export const chat: Plugin = definePlugin({
   name: "chat",
   requires: ["models"],
-  collections: { thread, message, wait, live, file },
+  collections: { thread, message, wait, live, file, intent },
   views: {
     thread: { llm: prompt },
     participants: { llm: participants },

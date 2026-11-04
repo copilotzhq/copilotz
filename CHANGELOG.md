@@ -1,5 +1,16 @@
 ## Unreleased
 
+- **Private fields for recorded Actions.** `private: ["buyer", "passengers"]` on an Action (dot
+  paths, as a collection's): its calls are recorded without them, in `action.started`'s input and
+  `action.completed`'s result alike, so the personal data a booking's buyer gives (names, CPFs,
+  emails) never lands in the log, while the calls are still recorded, retried and deduplicated.
+  - The call's `inputHash`, and so a nested call's id, still covers the whole input: a retry with
+    the same input answers from the log, and a changed one is a new call (under an outside call id,
+    `id_conflict`).
+  - A result that had private fields is kept whole in `sys.results` (a document by call id, written
+    in the completion's commit, no events), and `action.completed` says `private: true`: a retry
+    answers with all of it, as it would without them.
+
 - **A host without the web app: `serveRoutes`** (`copilotz/web/node`), for an app people use on
   WhatsApp or on the phone. Given the runtime, it serves the app's routes alone (webhooks),
   `/health` (unless a route takes it), and 404 for anything else: no page, no code, no sign-in; a

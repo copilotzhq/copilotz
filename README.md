@@ -665,6 +665,14 @@ The log records what happened, with no bookkeeping tables beside it:
     completion is the only extra commit.
   - `started` records the call's own `startedAt`; `completed` and `failed` record its duration in
     `ms`. An event's `at` is its commit time. An action opts out with `record: false`.
+  - **Private fields** (`private: ["buyer", "passengers"]` on an Action, dot paths as a
+    collection's): its calls are recorded without them, in `started`'s input and `completed`'s
+    result alike, so personal data a call is given stays out of the log while the call is still
+    recorded and retried. Its `inputHash` (and a nested call's id) still covers the whole input: a
+    retry with the same input finds the call, and a changed one is a new call. That hash is in the
+    log: whoever knows the rest of an input could check a guess of a field easy to guess alone (a
+    CPF) against it. A result that had any is kept whole in `sys.results`, with the completion
+    (`private: true` there), so a retry answers with all of it.
 - **Retries.** The log is the receipt store; no other table holds them.
   - `runtime.call(action, input, { id })` makes a call retryable. If that id already completed, the
     call returns its recorded result without running; if it's still running, the call joins it;
@@ -895,7 +903,7 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   - Remote executors prove the deployment key, compared in constant time.
   - **Private fields** (`private: ["token"]` on a collection): what an actor's queries and Views
     read comes without them; Actions and Processors acting for them still read them. No event holds
-    them, on any store.
+    them, on any store, and none holds an Action's (`private: ["buyer"]`) either.
 - **Processors:** per-key ordering, a durable cursor, at-least-once delivery, made idempotent by
   deterministic ids. A `where` MongoDB filter on event data keeps unwanted events from being
   dispatched at all.

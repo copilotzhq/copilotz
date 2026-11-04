@@ -9,8 +9,9 @@
 import { assert, assertEquals, assertMatch, assertNotEquals, assertRejects } from "@std/assert";
 import { test } from "../../../../testing/mod.ts";
 import type { Message, Step } from "../../../agents/chat/mod.ts";
-import { callIdOf, conversationOf } from "../shared/keys.ts";
-import { charges, handleIn, hangs, runs, said, SECRET, setup, state } from "./setup.ts";
+import { callIdOf, conversationOf, sameCallOf } from "../shared/keys.ts";
+import { charges, closed, handleIn, hangs, runs, said, SECRET, setup, state } from "./setup.ts";
+import { memoryStore } from "../../../../stores/memory/mod.ts";
 
 const SCOPE = { line: "chatgpt" };
 const chatOf = (session: string, subject?: string) =>
@@ -265,7 +266,11 @@ test("a call cut short runs again as itself: the same step, the same callId, wit
     const call = await callIdOf(thread, 5, "whoami", {});
     // It began (its receipt, written before the tool ran), then its executor was lost.
     await s.call("search", { to: "Rio" }, { session: "c" });
-    await s.runtime.call("test.cut", { call, step: `${call}@cut` });
+    // Its receipt is by what it asks in the conversation, whatever the request's id.
+    await s.runtime.call("test.cut", {
+      call: await sameCallOf(thread, "whoami", {}),
+      step: `${call}@cut`,
+    });
     const who = JSON.parse(said(await s.call("whoami", {}, { session: "c", id: 5 })));
     assertEquals([who.callId, who.trigger, who.retry], [`${call}@cut`, `${call}@cut`, true]);
     const steps = await s.steps(thread);
@@ -564,6 +569,69 @@ test("a call still running past stop is stopped; asked again, it runs again as i
     await new Promise((resolve) => setTimeout(resolve, 250));
     assertEquals(hangs, [rerun.callId, rerun.callId]);
   }, { line: { limits: { timeout: 0.03, stop: 0.1 } } });
+});
+
+test("after a stop, the model asking again under a new request id runs the same call again", async () => {
+  await setup(async (s) => {
+    assertMatch(said(await s.call("hang", { ms: 300 }, { session: "h", id: 1 })), /^Still working/);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    // Stopped at 0.1 s. Asked again with another id: the same step, the same callId, a retry.
+    const again = JSON.parse(said(await s.call("hang", { ms: 300 }, { session: "h", id: 2 })));
+    assertEquals(again.retry, true);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assertEquals(hangs.length, 2);
+    assertEquals(new Set(hangs).size, 1);
+  }, { line: { limits: { timeout: 0.03, stop: 0.1 } } });
+});
+
+test("an owner restarted mid-call: asked again under any id, the same call runs again as itself", async () => {
+  const store = memoryStore();
+  await setup(async (a) => {
+    assertMatch(said(await a.call("hang", { ms: 300 }, { session: "r", id: 1 })), /^Still working/);
+    await a.runtime.close({ drain: 0 });
+    closed.add(a.runtime);
+  }, { store, line: { limits: { timeout: 0.03 } } });
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  await setup(async (b) => {
+    // A new runtime, nothing in its memory: the receipt, kept with the store, says how it went.
+    const again = JSON.parse(said(await b.call("hang", { ms: 300 }, { session: "r", id: 2 })));
+    assertEquals(again.retry, true);
+    const same = said(await b.call("hang", { ms: 300 }, { session: "r", id: 1 }));
+    assertEquals(JSON.parse(same).callId, again.callId);
+    // The first run's tool, ignoring its signal, ended too: every effect under one callId.
+    assertEquals(new Set(hangs).size, 1);
+  }, { store, line: { limits: { timeout: 0.03 } } });
+});
+
+test("past the timeout, few calls go on: 1 started from an address, 2 on the line; the rest stop", async () => {
+  await setup(async (s) => {
+    const from = (ip: string) => ({ "cf-connecting-ip": ip });
+    const ask = (session: string, ip: string) =>
+      s.call("hang", { ms: 400 }, { session, headers: from(ip) });
+    // One address: its first goes on past the timeout; its second, at the same time, is stopped.
+    const [one, two] = await Promise.all([ask("a1", "203.0.113.60"), ask("a2", "203.0.113.60")]);
+    assertEquals([said(one), said(two)].map((t) => t.slice(0, 13)).sort(), [
+      "It took too l",
+      "Still working",
+    ]);
+    // A second address takes the line's other place past it; a third finds none.
+    assertMatch(said(await ask("b1", "203.0.113.61")), /^Still working/);
+    assertMatch(said(await ask("c1", "203.0.113.62")), /^It took too long, while too many/);
+  }, { line: { limits: { timeout: 0.03, stop: 5 } } });
+});
+
+test("at the cap, tools that change things run together without losing the executor", async () => {
+  for (let round = 0; round < 5; round++) {
+    await setup(async (s) => {
+      const all = await Promise.all([0, 1, 2, 3].map((i) =>
+        s.call("pick", { trip: `T${round}` }, {
+          session: `cap-${round}-${i}`,
+          headers: { "cf-connecting-ip": `198.51.100.${Math.floor(i / 2)}` },
+        })
+      ));
+      assertEquals(all.map((r) => [r.status, said(r)]), all.map(() => [200, `Picked T${round}.`]));
+    });
+  }
 });
 
 test("who the user is and where they call from are in no event", async () => {

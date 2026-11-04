@@ -17,10 +17,12 @@
  *    single writes: calls at once (8 on a line) can pass a limit by as many.
  * 3. **Offered?** A tool whose `offer` is a function decides, for the
  *    contact in its chat (see views/offered.ts).
- * 4. **A tool that changes things** keeps a receipt, written before it runs
- *    (see collections/receipt.ts): the same request again within two
- *    minutes of its answer is answered from it; one cut short runs again as
- *    the same step. A read-only tool keeps none: it always runs.
+ * 4. **A tool that changes things** keeps a receipt, by what it asks in the
+ *    conversation (its tool and input, whatever the request's id), written
+ *    before it runs (see collections/receipt.ts): asked again within two
+ *    minutes of its answer, it's answered what it said; begun and never
+ *    done (stopped, an owner restarted), it runs again as the same step. A
+ *    read-only tool keeps none: it always runs.
  * 5. **A new conversation** is made, as the system: its contact
  *    (`contact.start`, `via: "mcp"`) and its chat in the line's space,
  *    shared with it on its own (`contact.chat`).
@@ -51,7 +53,7 @@ import { type Context, defineAction, failure, isPublic, linksOf } from "../../..
 import type { Step, Thread, Tool } from "../../../agents/chat/contract.ts";
 import { runTool } from "../../../agents/chat/contract.ts";
 import { RERUN_MS, RESEND_MS } from "../collections/receipt.ts";
-import { threadOf } from "../shared/keys.ts";
+import { sameCallOf, threadOf } from "../shared/keys.ts";
 import { hintsOf, type Line, lineOf } from "../shared/settings.ts";
 import type { Offering } from "../views/offered.ts";
 
@@ -78,7 +80,17 @@ const UPSERT = { upsert: true, writeConcern: { w: 0 } } as const;
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
 
-type Receipt = { _id: string; step: string; at: number; done?: boolean; said?: string };
+type Receipt = {
+  _id: string;
+  step: string;
+  at: number;
+  done?: boolean;
+  text?: string;
+  failed?: boolean;
+};
+
+/** The longest answer a receipt keeps (characters); a longer one is shown again from its step. */
+const KEPT = 8_000;
 type Counter = { _id: string; until: number; most: number; say: string };
 
 export const callAction = defineAction({
@@ -117,6 +129,9 @@ export const callAction = defineAction({
     }
     const readOnly = hintsOf(line, input.tool, tool).readOnly === true;
     const thread = await threadOf(links.secret, contact);
+    // A tool that changes things keeps its receipt by what it asks here, whatever the request's
+    // id: a model asking again under a new one, after a stop or a restart, finds it.
+    const same = await sameCallOf(thread, input.tool, input.input);
     const now = Date.now();
     const { calls, chats } = countersOf(line, thread, input, now);
     const system = ctx.as();
@@ -130,7 +145,7 @@ export const callAction = defineAction({
       }),
       system.db.collection<{ count: number }>("mcp_rate")
         .find({ _id: { $in: [...calls, ...chats].map((c) => c._id) } }),
-      readOnly ? null : system.db.collection<Receipt>("mcp_receipt").findOne({ _id: input.call }),
+      readOnly ? null : system.db.collection<Receipt>("mcp_receipt").findOne({ _id: same }),
     ]);
     if (over || (there && !reached)) return { text: SAID.closed, isError: true, ran: false };
     if (!there && input.by === "handle") return { text: SAID.unknown, isError: true, ran: false };
@@ -145,6 +160,8 @@ export const callAction = defineAction({
       }
     }
 
+    // Done lately: answered with what it said. Begun, never done (stopped, an owner restarted):
+    // run again as the same step, the same callId, told it's a retry.
     const answered = receipt?.done && now - receipt.at < RESEND_MS ? receipt : undefined;
     const cut = receipt && !receipt.done && now - receipt.at < RERUN_MS ? receipt : undefined;
     const step = cut?.step ?? `${input.call}@${now.toString(36)}`;
@@ -159,11 +176,7 @@ export const callAction = defineAction({
         );
       }
       if (!readOnly && !answered && !cut) {
-        await tx.db.collection("mcp_receipt").replaceOne(
-          { _id: input.call },
-          { step, at: now },
-          UPSERT,
-        );
+        await tx.db.collection("mcp_receipt").replaceOne({ _id: same }, { step, at: now }, UPSERT);
       }
     });
     if (answered) return { ...await again(ctx, line, answered), ran: true };
@@ -182,6 +195,8 @@ export const callAction = defineAction({
       : input.input;
     const call: Step = { id: input.call, name: input.tool, input: given, output: ran.output };
     const told = ran.error === undefined ? undefined : toldOf(ran.error);
+    // What it answers, before it's written: the receipt keeps it, for the same call asked again.
+    const text = told ?? await shown(ctx, line, call);
     await system.transaction(async (tx) => {
       // A try cut short after its step was written writes it again, the same; in the chat's space.
       await tx.db.collection("message").replaceOne({ _id: step }, {
@@ -194,11 +209,13 @@ export const callAction = defineAction({
         at: new Date(cut?.at ?? now).toISOString(),
       }, UPSERT);
       if (!readOnly) {
-        await tx.db.collection("mcp_receipt").replaceOne(
-          { _id: input.call },
-          { step, at: Date.now(), done: true, ...(told ? { said: told } : {}) },
-          UPSERT,
-        );
+        await tx.db.collection("mcp_receipt").replaceOne({ _id: same }, {
+          step,
+          at: Date.now(),
+          done: true,
+          ...(text.length <= KEPT ? { text } : {}),
+          ...(told ? { failed: true } : {}),
+        }, UPSERT);
       }
       // A new conversation counts once it's made.
       if (fresh) {
@@ -212,8 +229,7 @@ export const callAction = defineAction({
         }
       }
     });
-    if (told) return { text: told, isError: true, ran: true };
-    return { text: await shown(ctx, line, call), ran: true };
+    return { text, ...(told ? { isError: true as const } : {}), ran: true };
   },
 });
 
@@ -279,9 +295,11 @@ async function shown(ctx: Context, line: Line, step: Step): Promise<string> {
   }
 }
 
-/** A call answered lately, answered again from its step. */
+/** A call answered lately, answered again: what it said, kept, else shown again from its step. */
 async function again(ctx: Context, line: Line, receipt: Receipt) {
-  if (receipt.said) return { text: receipt.said, isError: true as const };
+  if (receipt.text !== undefined) {
+    return { text: receipt.text, ...(receipt.failed ? { isError: true as const } : {}) };
+  }
   const found = await ctx.as().db.collection<{ toolCalls?: Step[] }>("message")
     .findOne({ _id: receipt.step });
   const step = found?.toolCalls?.[0];

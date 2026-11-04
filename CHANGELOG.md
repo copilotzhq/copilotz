@@ -85,25 +85,28 @@
     public error (below) says its message. `ctx.callId` is the step's id (the call's,
     `mcp:<thread>:<hash of the request id>:<hash of tool and input>`, and when it began), the same
     however often a call cut short runs again; a new call has a new one. A tool that changes things
-    keeps a receipt (`mcp_receipt`, durable, no events, gone after 15 minutes): the same request
-    while it runs joins it, within two minutes of its answer is answered from it, and cut short runs
-    again as the same step with `retry`. A read-only tool always runs.
-  - **Limits** (`limits`): calls at once in the runtime (`mcp.atOnce`, 8: each org's own under the
-    orgs host), on the line (8), from one caller's address (2; a batch's every call counts) and in
-    one conversation (2), past any of which it's 503 busy, -31000 (a batch, an error for each of its
-    requests; a batch with more tool calls than `addressAtOnce` is refused, -32600); how long the
-    route waits for an answer (`timeout`, 20 s: then the model is told it's still working, and the
-    same call asked again, under any request id, waits for that run, or gets what it did for two
-    minutes after: a tool that changes things does it once) and a call may run (`stop`, 120 s: then
-    it's stopped, and asked again runs again as itself, with `retry`); a request's body (64 KiB),
-    calls a minute by conversation (30), by caller's address (60) and on the line (600), new
-    conversations an hour by user (30, ChatGPT's `openai/subject`), by address (20) and on the line
-    (600), and an answer's length (100,000 characters). Only calls taken count, and a new
-    conversation once it's made. The address is believed only as the app's front says it (`caller`:
-    its header, with the front's secret, a request without which is refused, or the proxies' `hops`,
-    which a list header such as `x-forwarded-for` needs); IPv6 is counted by its /64, IPv4 written
-    as IPv6 as IPv4, and an address that can't be read with every other such call, as one. Ranges in
-    `caller.exempt` (OpenAI's) aren't limited by address.
+    keeps a receipt (`mcp_receipt`, durable, no events, gone after 15 minutes) by what it asks in
+    its conversation (tool and input), whatever the request's id: the same call while it runs waits
+    for that run; asked again, under any id, within two minutes of its end it's answered what it
+    said (kept up to 8,000 characters); begun and never done (stopped, an owner restarted), it runs
+    again as the same step, with `retry` and the same `callId`. A read-only tool always runs.
+  - **Limits** (`limits`): calls at once in the runtime (`mcp.atOnce`, 4: each org's own under the
+    orgs host), on the line (4: an executor's connection takes about that many tools that change
+    things at once until Oxian's send backpressure is released), from one caller's address (2; a
+    batch's every call counts) and in one conversation (2), past any of which it's 503 busy, -31000
+    (a batch, an error for each of its requests; a batch with more tool calls than `addressAtOnce`
+    is refused, -32600); how long the route waits for an answer (`timeout`, 20 s: then the model is
+    told it's still working, as long as few calls are, `lateAtOnce` 2 on the line and
+    `addressLateAtOnce` 1 from an address, else it's stopped) and a call may run (`stop`, 60 s: then
+    it's stopped; tools should honour `ctx.signal`); a request's body (64 KiB), calls a minute by
+    conversation (30), by caller's address (60) and on the line (600), new conversations an hour by
+    user (30, ChatGPT's `openai/subject`), by address (20) and on the line (600), and an answer's
+    length (100,000 characters). Only calls taken count, and a new conversation once it's made. The
+    address is believed only as the app's front says it (`caller`: its header, with the front's
+    secret, a request without which is refused, or the proxies' `hops`, which a list header such as
+    `x-forwarded-for` needs); IPv6 is counted by its /64, IPv4 written as IPv6 as IPv4, and an
+    address that can't be read with every other such call, as one. Ranges in `caller.exempt`
+    (OpenAI's) aren't limited by address.
 - **A failure can be public** (`failure(code, message, { public: true })`, `isPublic`): its message
   is for any caller, even a model outside the app over MCP, which no other error's words reach. It
   stays public from job to job. A code alone isn't public: libraries' errors have codes too.

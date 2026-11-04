@@ -24,9 +24,11 @@
  *   conversation's contact (with who the user and the address are, as
  *   HMACs, for their limits: in its input, which no log keeps). The route
  *   waits the line's `timeout` (20 s) for its answer; past it, the model is
- *   told it's still working, and to ask again: the call goes on, and asked
- *   again it answers what it did (a tool that changes things does it once).
- *   One still running past `stop` (120 s) is stopped. A call that names no conversation gets a handle, said once, at the
+ *   told it's still working, and to ask again: the call goes on (while few
+ *   do: `lateAtOnce`, 2 on the line, 1 from an address; else it's stopped),
+ *   and asked again, under any request id, it answers what it did, from its
+ *   receipt (a tool that changes things does it once). One still running
+ *   past `stop` (60 s) is stopped: tools should honour `ctx.signal`. A call that names no conversation gets a handle, said once, at the
  *   end of its answer (`chat: <handle>`): a model reads only an answer's
  *   content (a result's `_meta` is the host's, never the model's), so
  *   that's where it must be. On a line without handles, it's refused.
@@ -276,24 +278,21 @@ export async function called(
     sameCallOf(thread, call.tool, input),
   ]);
   const user = call.said.subject ? await userOf(secret, scope, call.said.subject) : undefined;
-  const address = call.caller && !call.caller.exempt
+  const counted = call.caller && !call.caller.exempt
     ? await addressKey(secret, call.caller.counted)
     : undefined;
   // The same call already running in this conversation (sent again, from anywhere, under any
-  // request id), or one that was answered "still working" and has ended since: its answer, not
-  // a second run.
-  const tool = toolsOf(runtime.describe().resources)[call.tool];
-  const changes = hintsOf(line, call.tool, tool).readOnly !== true;
+  // request id): it waits for that run. Once it's ended, its receipt answers (see mcp.call).
   const pending = runningOf(runtime);
-  const owed = pending.get(same);
-  if (owed?.until !== undefined && Date.now() >= owed.until) pending.delete(same);
-  let entry = pending.get(same);
-  if (!entry) {
+  sweep(runtime, pending, line);
+  const address = call.caller && !call.caller.exempt ? call.caller.counted : undefined;
+  let run = pending.get(same);
+  if (!run) {
     const release = hold(runtime, [
       { key: "runtime", most: call.atOnce },
       { key: `line:${line.name}`, most: line.limits.atOnce },
-      ...(call.caller && !call.caller.exempt
-        ? [{ key: `address:${line.name}|${call.caller.counted}`, most: line.limits.addressAtOnce }]
+      ...(address
+        ? [{ key: `address:${line.name}|${address}`, most: line.limits.addressAtOnce }]
         : []),
       { key: `chat:${line.name}|${thread}`, most: line.limits.chatAtOnce },
     ]);
@@ -309,7 +308,7 @@ export async function called(
         call: id,
         by,
         ...(user ? { user } : {}),
-        ...(address ? { address } : {}),
+        ...(counted ? { address: counted } : {}),
       },
       { actor: { kind: "contact", id: contact, mcp: line.name, client: line.client }, id },
     );
@@ -320,21 +319,21 @@ export async function called(
       line.limits.stop * 1000,
     );
     const mine: Run = {
+      id,
+      at: Date.now(),
+      ...(address ? { address } : {}),
       settled: started.then((done) => ({ done }), (error) => ({ error })),
     };
-    entry = mine;
+    run = mine;
     pending.set(same, mine);
-    void mine.settled.then((outcome) => {
+    void mine.settled.then(() => {
+      mine.ended = true;
       clearTimeout(stop);
       release();
-      if (pending.get(same) !== mine) return;
-      // Owed: told "still working", a call that changes things answers what it did to the same
-      // call asked again, for a while. Anything else is done with.
-      if (mine.late && changes && !("error" in outcome)) mine.until = Date.now() + OWED_MS;
-      else pending.delete(same);
+      mine.late?.();
+      if (pending.get(same) === mine) pending.delete(same);
     });
   }
-  const run = entry;
   // Waited for `timeout`; then it goes on, and the model is told to ask again.
   let waiting: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<"late">((resolve) => {
@@ -342,15 +341,30 @@ export async function called(
   });
   const outcome = await Promise.race([run.settled, late]).finally(() => clearTimeout(waiting));
   if (outcome === "late") {
-    run.late = true;
-    return answer(STILL, true);
+    // Past the timeout, a call goes on only while few do: from one address, on the line. Past
+    // those, it's stopped, so cheap requests can't keep the line's places for slow tools.
+    if (!run.late && !run.ended) {
+      const going = hold(runtime, [
+        { key: `late:${line.name}`, most: line.limits.lateAtOnce },
+        ...(run.address
+          ? [{ key: `late:${line.name}|${run.address}`, most: line.limits.addressLateAtOnce }]
+          : []),
+      ]);
+      if (!going) {
+        void runtime.cancel({ call: run.id }).catch(() => {});
+        return answer(CROWDED, true);
+      }
+      run.late = going;
+    }
+    if (!run.ended) return answer(STILL, true);
   }
-  if ("error" in outcome) {
-    // Stopped past `stop`: asked again, it runs again as itself.
-    if ((outcome.error as { code?: string }).code === "cancelled") return answer(STOPPED, true);
-    throw outcome.error;
+  const ended = await run.settled;
+  if ("error" in ended) {
+    // Stopped: asked again, it runs again as itself.
+    if ((ended.error as { code?: string }).code === "cancelled") return answer(STOPPED, true);
+    throw ended.error;
   }
-  const done = outcome.done;
+  const done = ended.done;
   const text = done.text.length > line.limits.result
     ? `${done.text.slice(0, line.limits.result)}\n[…cut]`
     : done.text;
@@ -362,29 +376,51 @@ export async function called(
 type Settled = { done: Called } | { error: unknown };
 
 /**
- * A call running, or owed: how it ends; whether someone was told it's still working; and, once
- * it's ended, until when the same call asked again gets its answer.
+ * A call running here: its id, when it began, the address it came from (counted, when it's
+ * limited), how it ends, whether it has, and its place among calls past the timeout.
  */
-type Run = { settled: Promise<Settled>; late?: true; until?: number };
-
-/** How long a call told "still working" owes its answer to the same call asked again. */
-const OWED_MS = 120_000;
+type Run = {
+  id: string;
+  at: number;
+  address?: string;
+  settled: Promise<Settled>;
+  ended?: true;
+  late?: () => void;
+};
 
 /** What the model is told of a call stopped past the line's `stop`. */
 const STOPPED = "It was stopped before it finished: ask again with the same request to run it " +
   "again.";
 
+/** What it's told of a call stopped at the timeout, when too many already run past it. */
+const CROWDED = "It took too long, while too many calls here already do, so it was stopped: ask " +
+  "again with the same request in a moment to run it again.";
+
 /** What the model is told of a call still running past the line's `timeout`. */
 const STILL = "Still working on it: the outcome isn't known yet. Ask again with the same request " +
   "(the same tool and input) to get it.";
 
-/** Calls running now (and owed), by runtime, by conversation and what they ask (`sameCallOf`). */
+/** Calls running now, by runtime, by conversation and what they ask (`sameCallOf`). */
 const runs = new WeakMap<object, Map<string, Run>>();
 const runningOf = (runtime: object) => {
   const found = runs.get(runtime) ?? new Map<string, Run>();
   runs.set(runtime, found);
   return found;
 };
+
+/**
+ * Drops, at most once a minute, runs that should have ended long ago (past `stop` and a
+ * margin): a run ends itself when its call does, so this only guards against one that never
+ * settles. Swept as calls come, not by a timer, which would keep a host's process from ending.
+ */
+const swept = new WeakMap<object, number>();
+function sweep(runtime: object, pending: Map<string, Run>, line: Line) {
+  const now = Date.now();
+  if (now - (swept.get(runtime) ?? 0) < 60_000) return;
+  swept.set(runtime, now);
+  const oldest = now - line.limits.stop * 1000 - 60_000;
+  for (const [key, run] of pending) if (run.at < oldest) pending.delete(key);
+}
 
 const answer = (text: string, isError: boolean) => ({
   content: [{ type: "text", text }],

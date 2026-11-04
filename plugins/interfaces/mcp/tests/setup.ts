@@ -21,6 +21,7 @@ import {
   type Plugin,
   principalOf,
   type Runtime,
+  type Store,
 } from "../../../../runtime/mod.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
@@ -437,6 +438,8 @@ export async function setup(
     lines?: Record<string, McpLine>;
     settings?: Omit<McpSettings, "lines">;
     plugins?: Plugin[];
+    /** One store for several runtimes in turn (an owner restarted). */
+    store?: Store;
   } = {},
 ) {
   for (const key of Object.keys(runs)) delete runs[key];
@@ -444,7 +447,7 @@ export async function setup(
   charges.length = 0;
   hangs.length = 0;
   const runtime = await createRuntime({
-    store: memoryStore(),
+    store: options.store ?? memoryStore(),
     plugins: [
       models,
       chat,
@@ -565,9 +568,13 @@ export async function setup(
   try {
     await fn(s);
   } finally {
-    await runtime.close();
+    // A test may have closed it already (an owner restarted mid-call).
+    if (!closed.has(runtime)) await runtime.close();
   }
 }
+
+/** Runtimes a test closed itself. */
+export const closed = new WeakSet<Runtime>();
 
 /** The text an answer says. */
 export const said = (rpc: Rpc) => rpc.body.result?.content?.[0]?.text ?? "";

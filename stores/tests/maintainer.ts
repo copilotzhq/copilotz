@@ -3,7 +3,8 @@
  * README's Maintenance sets one up: a login with exactly maintenance's
  * grants on one schema, and on its log only to append. The test database's role makes it,
  * so it needs CREATEROLE; without, `maintainer` answers undefined and the
- * tests that need one are skipped.
+ * tests that need one are skipped. And a store's own role (`storeLogin`),
+ * for maintenance SQL as it (`storeRole`).
  */
 import { postgresPool } from "../sql/postgres/mod.ts";
 
@@ -57,6 +58,48 @@ export async function maintainer(url: string): Promise<Maintainer | undefined> {
     },
     async drop() {
       // What it was granted goes with it (where this role may say so), then the role.
+      await run(`DROP OWNED BY ${ident(role)}`).catch(() => {});
+      await run(`DROP ROLE IF EXISTS ${ident(role)}`).catch(() => {});
+      await pool.close();
+    },
+  };
+}
+
+/** A store's own role, made for a test: where it connects, and how to drop it. */
+export type Login = Omit<Maintainer, "grant">;
+
+/**
+ * A role for a store of its own, as an app's own role is: a login that may
+ * make schemas in the test database (and so owns the store's), with
+ * `attributes` beyond LOGIN (`CREATEROLE`). Made as the test database's
+ * role, which needs CREATEROLE, as for `maintainer`; else undefined. Drop
+ * the store first: the role goes only once its schema has.
+ */
+export async function storeLogin(url: string, attributes = ""): Promise<Login | undefined> {
+  const pool = await postgresPool({ url, writes: 1, reads: 1 });
+  const [can] = (await pool.writes.query(
+    "SELECT rolcreaterole OR rolsuper AS can, current_database() AS db FROM pg_roles WHERE " +
+      "rolname = current_user",
+  )).rows;
+  if (!can?.can) {
+    await pool.close();
+    return undefined;
+  }
+  const role = `cpz_s_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+  const password = crypto.randomUUID();
+  const run = async (sql: string) => (await pool.writes.query(sql)).rows;
+  await run(`CREATE ROLE ${ident(role)} LOGIN ${attributes} PASSWORD '${password}'`);
+  await run(`GRANT CREATE ON DATABASE ${ident(String(can.db))} TO ${ident(role)}`);
+  const login = new URL(url);
+  login.username = role;
+  login.password = password;
+  return {
+    url: login.toString(),
+    role,
+    run,
+    async drop() {
+      await run(`REVOKE CREATE ON DATABASE ${ident(String(can.db))} FROM ${ident(role)}`)
+        .catch(() => {});
       await run(`DROP OWNED BY ${ident(role)}`).catch(() => {});
       await run(`DROP ROLE IF EXISTS ${ident(role)}`).catch(() => {});
       await pool.close();

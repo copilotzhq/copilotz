@@ -3,7 +3,8 @@
  * it: the shapes of its documents (a space, a membership, a request to join,
  * an invitation, a person's profile) and of the resource kinds its web front
  * end reads, and how people show by name (`PROFILE`, `nameOf`, `namesOf`,
- * `withNames`: wherever a person's id would show, their name does). They
+ * `withNames`: wherever a person's id would show, their name does; a page
+ * adds their face, `picturesIn`). They
  * reach the rest by name: its collections (`space`, `member`, `request`,
  * `invitation`, `profile`), its queries `space.reached` (each space with what the asker
  * may do there) and `invitation.mine` (those to the asker's email), and its
@@ -67,6 +68,7 @@ export {
   namesIn,
   namesOf,
   type NamesResource,
+  picturesIn,
   PROFILE,
   withNames,
 } from "./shared/names.ts";

@@ -1,5 +1,39 @@
 ## Unreleased
 
+- **Security: a forged blob reference is refused, never loaded.** Large strings are kept as blobs
+  and documents hold `{ $blob, size, type }` in their place; the owner loaded any object with a
+  string `$blob` on every read. So an Action that stores what it's given (a tool's input, a
+  webhook's body) could plant one: an id no blob has made every read of that document fail (a chat
+  that can't be read or erased, Processors giving up on its events); another document's hash pulled
+  that content in; and a path or a name read a file (`fileBlobs`) or any object in the bucket
+  (`gcsBlobs` without a prefix).
+  - What plugin code writes (documents, updates, upserts' filters, edges, events, records, timers'
+    inputs, Action results) and what an Action is called with may hold no `$blob` key: `invalid`.
+    The owner checks it as it walks what it offloads, so it costs no extra pass.
+  - No part of an update's field path may start with `$` (as MongoDB refuses) or be `__proto__`
+    (`invalid`): `{ $set: { "bio.$blob": … } }` made a reference out of plain strings, and on Node
+    and Bun `{ $set: { "__proto__.x": … } }` set `x` on every object's prototype (Deno has no
+    `__proto__`). `constructor` and `prototype` are fields like any other: paths read and make a
+    document's own fields only, so a filter on `constructor` no longer finds `Object` in every
+    document.
+  - A path ends at a blob reference as it does at a string, so a large string is treated like a
+    small one (`$set: { "text.note": 1 }` replaced the reference's insides, losing the text), and at
+    any other object with a `$blob` key, so no update turns a planted one into a reference.
+  - An aggregate's `$group` can't name a field `$…` either: `_id: { $blob: …, size, type }` built a
+    reference from strings, which a browser's own read then loaded.
+  - The API's event stream sends a call's result whole; one over 16 KiB went as its reference.
+    Published events (`runtime.subscribe`) have `full()`: the event with its large values.
+  - Only an exact reference loads a blob: the keys `$blob`, `size` and `type`, a `sha256-<64 hex>`
+    id, a numeric size and a string type. Any other object is data.
+  - Every blob store (memory, SQLite, PostgreSQL, `fileBlobs`, `httpBlobs`, `gcsBlobs`) takes only a
+    blob's id (`checkBlobId`, exported for your own `Blobs`).
+  - Fixed on the way: a timer's input over 16 KiB reached its Action as a reference; it comes whole.
+    An occurrence of one that a deploy to this version cuts short fails once when it resumes
+    (`id_conflict`: it started with the reference as its input); the timer's next ones run.
+  - A store may already hold planted references: an exact one still loads (its blob gone, reads
+    fail), and any other, carried on, is now refused. #155 has read-only queries (PostgreSQL,
+    SQLite) that find them; clean every one, `sys.timers` first.
+
 - **Contacts: people outside the org who talk to its agents** (the new `contacts` plugin, part of
   `access`). A WhatsApp customer is a contact, its own kind of actor (`{ kind: "contact", id }`),
   never a person: every `allow: people` Action and query stays shut to it, and nothing that asks for

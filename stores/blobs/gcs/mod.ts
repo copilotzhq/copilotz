@@ -12,8 +12,12 @@
  * Application Default Credentials). Each try may take `timeout` ms; a request the
  * network, a timeout, 429 or a 5xx breaks is tried twice more, waiting a
  * little longer each time. Other 4xx fail at once. Web standards only.
+ *
+ * An id is only ever a blob's (`sha256-` and hex): never the name of another
+ * object in the bucket.
  */
 import type { Blobs } from "../../../runtime/mod.ts";
+import { checkBlobId } from "../../../runtime/blobs.ts";
 
 /** GCS's JSON API. */
 const API = "https://storage.googleapis.com";
@@ -86,7 +90,7 @@ export function gcsBlobs(options: {
   const token = options.token ?? metadataToken(go, timeout);
   const bucket = encodeURIComponent(options.bucket);
   const prefix = (options.prefix ?? "").replace(/^\/+|\/+$/g, "");
-  const name = (id: string) => prefix ? `${prefix}/${id}` : id;
+  const name = (id: string) => prefix ? `${prefix}/${checkBlobId(id)}` : checkBlobId(id);
 
   /** A request, tried again while it breaks in passing; `read` takes its answer. */
   const request = async <T>(
@@ -113,13 +117,13 @@ export function gcsBlobs(options: {
   };
 
   return {
-    put({ id, data, type }) {
+    async put({ id, data, type }) {
       const query = new URLSearchParams({
         uploadType: "media",
         name: name(id),
         ifGenerationMatch: "0",
       });
-      return request(
+      return await request(
         `${API}/upload/storage/v1/b/${bucket}/o?${query}`,
         {
           method: "POST",
@@ -133,8 +137,8 @@ export function gcsBlobs(options: {
         },
       );
     },
-    get(id) {
-      return request(
+    async get(id) {
+      return await request(
         `${API}/storage/v1/b/${bucket}/o/${encodeURIComponent(name(id))}?alt=media`,
         {},
         async (response) => {

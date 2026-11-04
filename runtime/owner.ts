@@ -20,7 +20,7 @@ import type {
   ViewDef,
   WorkerJob,
 } from "./define.ts";
-import { type Blobs, hydrate, offload } from "./blobs.ts";
+import { type Blobs, hydrate, offload, refuseBlobKeys } from "./blobs.ts";
 import { createCache } from "./cache.ts";
 import { createObservers, type Observation, type ObserveOptions } from "./observe.ts";
 import { reading, startup } from "./reads.ts";
@@ -37,7 +37,7 @@ import {
   type StoreOp,
   type WriteOp,
 } from "./ops.ts";
-import { check, matches } from "./mongo.ts";
+import { check, checkPath, matches } from "./mongo.ts";
 import {
   canonical,
   checked,
@@ -77,7 +77,13 @@ import {
 export type Transport = HypervisorOptions["transports"][number];
 
 export type Feed =
-  | { kind: "event"; event: Event }
+  | {
+    kind: "event";
+    /** As the log holds it: a large value is a blob reference. */
+    event: Event;
+    /** The event with its large values in place of their references, read when asked. */
+    full(): Promise<Event>;
+  }
   | { kind: "frame"; channel: string; data: unknown };
 
 export type Stats = {
@@ -302,6 +308,19 @@ export async function createOwner(
   const memory = fleeting.size ? memoryStore() : undefined;
   const inMemory = (op: Op): boolean => "collection" in op && fleeting.has(op.collection);
   const known = (op: Op) => {
+    // What plugin code writes holds no `$blob` key (see blobs.ts). Offloading looks as it walks
+    // what's stored; an upsert's filter (it seeds the new document) and in-memory writes (never
+    // offloaded) are looked at here. So are an update's field paths: `{ $set: { "a.$blob": … } }`
+    // would make one, as would a path through `__proto__` reach every object's prototype.
+    if ((op.op === "update" || op.op === "replace") && op.options?.upsert) {
+      refuseBlobKeys(op.filter);
+    }
+    if (op.op === "update" && Object.keys(op.update).some((key) => key.startsWith("$"))) {
+      for (const fields of Object.values(op.update)) {
+        for (const path of Object.keys(fields ?? {})) checkPath(path);
+      }
+    }
+    if (inMemory(op) && !isRead(op)) refuseBlobKeys(op);
     if (!("collection" in op) || op.collection.startsWith(SYSTEM)) return;
     if (!validators[op.collection]) throw invalid(`Unknown collection "${op.collection}"`);
     // A pipeline the stores can't run fails here, before any store sees it.
@@ -343,7 +362,9 @@ export async function createOwner(
     schedules: registry.schedules,
     actions: registry.actions,
     write: (ops) => writeEach(ops),
-    call: (action, input, id, scheduled, actor) => begin(action, input, id, true, scheduled, actor),
+    // A timer keeps its input as stored, large values as blob references: the Action gets it whole.
+    call: async (action, input, id, scheduled, actor) =>
+      await begin(action, await hydrate(input, blobsOf(store)), id, true, scheduled, actor),
     track: (work) => track(work),
     signal: draining.signal,
     metrics,
@@ -450,7 +471,7 @@ export async function createOwner(
     for (const [name, seq] of saving) if (unsaved.get(name) === seq) unsaved.delete(name);
     for (const event of events) {
       measure.events.add(1, { type: event.type });
-      publish({ kind: "event", event });
+      publish({ kind: "event", event, full: () => whole(event) });
       route(event, true);
     }
     if (seen.length) observers.changed(seen);
@@ -474,6 +495,11 @@ export async function createOwner(
   type By = {
     cause?: string;
     actor?: Actor;
+    /**
+     * The writes are plugin code's or a caller's, not the owner's own: what they store may
+     * hold no `$blob` key, as only the owner makes references (offloading refuses one).
+     */
+    foreign?: true;
     keep?: Map<string, Filter>;
     /** Hears what each read returned (for labels). */
     saw?: (op: ReadOp, value: unknown) => void;
@@ -515,7 +541,7 @@ export async function createOwner(
       }
       const blobs: Blob[] = [];
       const put = (blob: Blob) => (blobs.push(blob), Promise.resolve());
-      const large = <T>(value: T) => offload(value, put, options.blobThreshold);
+      const large = <T>(value: T) => offload(value, put, options.blobThreshold, by.foreign);
       // The same values perform() offloads: documents, updates, edge data, event data.
       const steps: Command["steps"] = await Promise.all(ops.map(async (op) => {
         switch (op.op) {
@@ -573,6 +599,11 @@ export async function createOwner(
   // Large values: in the configured blob store, or in the store's own blobs.
   const blobsOf = (reader: Reader) => (id: string) =>
     options.blobs ? options.blobs.get(id) : reader.blob(id);
+  /** A committed event with its large values in place. */
+  const whole = async (event: Event): Promise<Event> => ({
+    ...event,
+    data: await hydrate(event.data, blobsOf(store)),
+  });
   // Reads of committed state go through the cache; reads in a transaction see its own writes.
   const cache = options.cache === false ? undefined : createCache({
     ...options.cache,
@@ -631,7 +662,7 @@ export async function createOwner(
         op: "emit",
         event: { type, data: json(data), ...(options.id ? { id: options.id } : {}) },
       }],
-      options.actor ? { actor: options.actor } : {},
+      { ...(options.actor ? { actor: options.actor } : {}), foreign: true },
     );
   };
   const observers = createObservers({
@@ -660,7 +691,7 @@ export async function createOwner(
           const _id = typeof doc._id === "string" ? doc._id : crypto.randomUUID();
           const op: StoreOp = { op: "insert", collection, docs: [{ ...doc, _id }] };
           known(op);
-          void writeEach([op]).catch(() => {});
+          void writeEach([op], { foreign: true }).catch(() => {});
           return _id;
         },
         metrics,
@@ -741,6 +772,7 @@ export async function createOwner(
           value,
           (blob) => options.blobs ? options.blobs.put(blob) : tx.putBlob(blob),
           options.blobThreshold,
+          by.foreign,
         ),
       changed: (collection, changes) => {
         // What an actor's write leaves must stay within what they reach.
@@ -968,6 +1000,7 @@ export async function createOwner(
                 ...(request.actor ? { actor: request.actor } : {}),
                 ...(request.keep?.size ? { keep: request.keep } : {}),
                 ...(request.saw ? { saw: request.saw } : {}),
+                foreign: true,
               },
               seen,
               later,
@@ -1045,6 +1078,7 @@ export async function createOwner(
         ...(request.actor ? { actor: request.actor } : {}),
         ...(keep.size ? { keep } : {}),
         saw,
+        foreign: true,
       });
     }
     let transaction = held.get(request.tx);
@@ -1550,7 +1584,7 @@ export async function createOwner(
   const attempts = async (name: string, event: Event, recovered: boolean, stop: AbortSignal) => {
     for (let attempt = 1;; attempt++) {
       try {
-        const full = { ...event, data: await hydrate(event.data, blobsOf(store)) };
+        const full = await whole(event);
         await run({
           kind: "process",
           processor: name,
@@ -1694,8 +1728,15 @@ export async function createOwner(
       if (actor && actor.kind !== "system" && !def.allow?.(actor, input)) {
         return Promise.reject(forbidden(`${actor.kind} ${actor.id} may not call "${action}".`));
       }
+      const given = json(input);
+      // What an Action is given goes on record as it is: it may hold no `$blob` key.
+      try {
+        refuseBlobKeys(given);
+      } catch (error) {
+        return Promise.reject(error);
+      }
       const id = options.id ?? crypto.randomUUID();
-      return begin(action, json(input), id, options.id !== undefined, undefined, actor) as never;
+      return begin(action, given, id, options.id !== undefined, undefined, actor) as never;
     },
     async render(medium, kind, item, options = {}) {
       return await run({

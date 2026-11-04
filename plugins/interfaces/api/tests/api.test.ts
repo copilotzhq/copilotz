@@ -74,6 +74,12 @@ const notes = definePlugin({
     }),
     // The system's alone: no `allow`.
     "note.wipe": defineAction({ input: { type: "object" }, run: () => ({ wiped: true }) }),
+    // Answers over 16 KiB: the log keeps it as a blob.
+    "note.long": defineAction({
+      input: { type: "object" },
+      allow: (actor) => actor.kind === "person",
+      run: () => ({ text: "long ".repeat(5_000) }),
+    }),
   },
   views: {
     "note.count": {
@@ -479,6 +485,17 @@ test("events: what happens in the key's space as it happens, as the key reads it
     const done = events.filter((e) => e.event === "action.completed");
     assertEquals(done.map((e) => e.data.action), ["chat.send"]);
     assert(typeof done[0].data.call === "string");
+  });
+});
+
+test("events: a call's large result comes whole, not as the log's blob reference", async () => {
+  await setup(async ({ launch, key, call }) => {
+    const secret = await key({ in: launch, actions: ["note.long"] });
+    const stream = await call(secret, "/api/events");
+    assertEquals((await call(secret, "/api/actions/note.long", post({}))).status, 200);
+    const events = await follow(stream, (seen) => seen.some((e) => e.event === "action.completed"));
+    const [done] = events.filter((e) => e.event === "action.completed");
+    assertEquals(done.data.result, { text: "long ".repeat(5_000) });
   });
 });
 

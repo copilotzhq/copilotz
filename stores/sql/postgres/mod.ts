@@ -23,6 +23,7 @@
  */
 import type { JSONSchema } from "../../../runtime/define.ts";
 import { applyUpdate, seedOf } from "../../../runtime/mongo.ts";
+import { checkBlobId } from "../../../runtime/blobs.ts";
 import { canonical } from "../../../runtime/registry.ts";
 import {
   type Blob,
@@ -355,7 +356,7 @@ export async function postgresStore(options: {
         const [row] = await run(
           db,
           `SELECT data, type FROM ${t("blobs")} WHERE tenant = ${T} AND id = $1`,
-          [id],
+          [checkBlobId(id)],
         );
         if (!row) return null;
         return {
@@ -624,9 +625,9 @@ export async function postgresStore(options: {
           [edge.from, edge.type, edge.to],
         );
       },
-      putBlob(value: Blob) {
+      async putBlob(value: Blob) {
+        checkBlobId(value.id);
         held.blobs.push(value);
-        return Promise.resolve();
       },
       async putVector(value) {
         await run(
@@ -881,6 +882,11 @@ export async function postgresStore(options: {
    * transaction).
    */
   const command = (owner: number, c: Command) => {
+    try {
+      for (const blob of c.blobs) checkBlobId(blob.id);
+    } catch (error) {
+      return Promise.reject(error);
+    }
     const writes = c.steps.flatMap((step, i) => "write" in step ? [{ ...step, i }] : []);
     const touched = new Map<string, string>();
     for (const { write: op } of writes) {

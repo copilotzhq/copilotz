@@ -58,6 +58,6 @@ export {
   TIMERS,
   type When,
 } from "./schedules.ts";
-export type { BlobRef, Blobs } from "./blobs.ts";
+export { type BlobRef, type Blobs, checkBlobId } from "./blobs.ts";
 /** A JSON Schema check, as the runtime runs them: throws `invalid` with where it failed. */
 export { compile as validator } from "./registry.ts";

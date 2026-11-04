@@ -1796,8 +1796,13 @@ export async function createOwner(
       // shutdown's drain doesn't wait them out.
       browsers.closeAll();
       await hypervisor.shutdown();
-      if (unsaved.size) await commit(async () => {});
-      await store.close();
+      // Processors' last positions are saved if they can be (a fenced owner can't): the store
+      // closes either way, and a failure still reaches the caller.
+      try {
+        if (unsaved.size) await commit(async () => {});
+      } finally {
+        await store.close();
+      }
     },
   };
   return api;

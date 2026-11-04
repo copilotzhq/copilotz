@@ -15,7 +15,10 @@
  *   (someone outside the org), in a chat of their own in the number's
  *   space, answered by its agent: they reach that chat and nothing else; the
  *   space's members read it. A chat quiet for the number's `gap` (12 hours)
- *   is over, and their next message starts a new one.
+ *   is over, and their next message starts a new one. Its managers block a
+ *   customer's phone (`whatsapp.block`); a customer sending more than the
+ *   number's `rate` a minute (20) goes unanswered. Erasing a contact
+ *   (`contact.forget`) erases its phone here too.
  * - **What they send** becomes `chat.send`, as them, in their WhatsApp
  *   conversation, in the space they choose (their Personal space unless
  *   they say: `whatsapp.move`, or `/space <name>` from the phone); photos,
@@ -47,15 +50,17 @@ import { connectAction, credentialsAction } from "./actions/connect.ts";
 import { disconnectAction, webhookAction } from "./actions/disconnect.ts";
 import { hookAction, HOOKS } from "./actions/hook.ts";
 import { linkAction, moveAction, unlinkAction } from "./actions/link.ts";
-import { setAction } from "./actions/set.ts";
+import { blockAction, setAction } from "./actions/set.ts";
 import { code } from "./collections/code.ts";
 import { number } from "./collections/number.ts";
 import { phone } from "./collections/phone.ts";
+import { rate } from "./collections/rate.ts";
 import { secret } from "./collections/secret.ts";
 import { sent } from "./collections/sent.ts";
 import { chat } from "./collections/thread.ts";
 import { typing } from "./collections/typing.ts";
 import { received } from "./events/received.ts";
+import { forgetProcessor } from "./processors/forget.ts";
 import { receiveProcessor } from "./processors/receive.ts";
 import { replyProcessor } from "./processors/reply.ts";
 import { typingProcessor } from "./processors/typing.ts";
@@ -75,6 +80,7 @@ export const whatsapp: Plugin = definePlugin({
     whatsapp_thread: chat,
     whatsapp_sent: sent,
     whatsapp_typing: typing,
+    whatsapp_rate: rate,
   },
   events: { "whatsapp.received": received },
   actions: {
@@ -87,11 +93,13 @@ export const whatsapp: Plugin = definePlugin({
     "whatsapp.unlink": unlinkAction,
     "whatsapp.move": moveAction,
     "whatsapp.set": setAction,
+    "whatsapp.block": blockAction,
   },
   processors: {
     "whatsapp.receive": receiveProcessor,
     "whatsapp.reply": replyProcessor,
     "whatsapp.typing": typingProcessor,
+    "whatsapp.forget": forgetProcessor,
   },
   // WhatsApp as a medium: what a message is there (a feature's additions bring their own).
   views: { message: { whatsapp: messageView } },

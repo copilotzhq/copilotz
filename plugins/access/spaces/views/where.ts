@@ -1,11 +1,13 @@
 /**
  * Where you are, for agents (the chat plugin's `where` context): the space a
- * conversation is in, who its members are, and what it draws on, so an agent
- * knows who will see what it writes there.
+ * conversation is in, who its members are, what it draws on, and who it's
+ * shared with on its own (a contact: someone outside the org, who sees only
+ * it), so an agent knows who will see what it writes there.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
 import { nameOf, namesIn } from "../shared/names.ts";
+import { docKey } from "../shared/reach.ts";
 
 type Space = { _id: string; name: string; kind: string; owner?: string };
 
@@ -17,19 +19,28 @@ const who = (key: string) => {
 /** `a shared space`, `an org space`. */
 const kindOf = (kind: string) => `${/^[aeiou]/i.test(kind) ? "an" : "a"} ${kind} space`;
 
-export const whereView = (thread: { in?: string }, ctx: ViewContext<string>) => {
+export const whereView = (thread: { _id?: string; in?: string }, ctx: ViewContext<string>) => {
   if (!thread.in) return undefined;
   const space = ctx.db.collection<Space>("space").findOne({ _id: thread.in }).value;
   const members = ctx.db.collection<Member>("member").find({ space: thread.in }).value ?? [];
   const sources =
     ctx.db.collection<Member>("member").find({ member: `space:${thread.in}` }).value ??
       [];
+  const outside = thread._id
+    ? ctx.db.collection<Member>("member").find({ space: docKey("thread", thread._id) }).value ?? []
+    : [];
   if (!space) return undefined;
   // People by name.
   const names = namesIn(ctx, [
     ...(space.owner ? [space.owner] : []),
     ...members.filter((m) => m.member.startsWith("person:")).map((m) => m.member),
+    ...outside.map((m) => m.member),
   ]);
+  const shared = outside.length
+    ? `Also in it, from outside the org: ${
+      outside.map((m) => nameOf(m.member, names)).join(", ")
+    }. They see only this conversation: whatever you write here, they read too.`
+    : "";
   if (space.kind === "personal") {
     const owner = nameOf(space.owner ?? "", names);
     return `This conversation is in ${owner}'s Personal space: only ${owner} sees what's here.`;
@@ -50,5 +61,6 @@ export const whereView = (thread: { in?: string }, ctx: ViewContext<string>) => 
     sources.length
       ? `It draws on: ${sources.map((s) => `${s.space} (${s.role})`).join(", ")}.`
       : "",
+    shared,
   ].filter(Boolean).join("\n");
 };

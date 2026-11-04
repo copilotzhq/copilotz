@@ -92,6 +92,24 @@ export const reads = definePlugin({
           $set: { shown: new Date(Date.now() - input.seconds * 1000).toISOString() },
         }),
     }),
+    // An agent's message in a chat, as trusted code writes one (with what it drew on, maybe).
+    "test.said": defineAction({
+      input: { type: "object" },
+      run: async (ctx, input: { thread: string; to: string; text: string; sources?: string[] }) => {
+        const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: input.thread });
+        await ctx.db.collection("message").insertOne({
+          _id: crypto.randomUUID(),
+          thread: input.thread,
+          ...(thread?.in ? { in: thread.in } : {}),
+          from: "lead",
+          to: [input.to],
+          text: input.text,
+          hops: 1,
+          ...(input.sources ? { sources: input.sources } : {}),
+          at: new Date().toISOString(),
+        });
+      },
+    }),
     // A chat gone quiet for some hours: its last message that long ago.
     "test.age": defineAction({
       input: { type: "object" },

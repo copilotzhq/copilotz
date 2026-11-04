@@ -16,8 +16,6 @@ const apiKey = process.env.OPENAI_API_KEY;
 const app = definePlugin({
   name: "web-node",
   resources: {
-    // What each person reaches: their spaces' memories (chat shares its conversations and files).
-    shared: { memory: {} },
     provider: apiKey ? { openai: { apiKey } } : {},
     model: {
       main: apiKey ? { model: "openai/gpt-5.4-mini", effort: "low" } : "fake/echo",

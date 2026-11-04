@@ -14,6 +14,8 @@
  *   for a contact reaches what both reach: that chat.
  * - **Agents are told** who they're talking with (the `contact` context),
  *   and see them by name ("People here: Ana": a `names` source, `contact:`).
+ * - **Erasing one** (`contact.forget`, by its space's managers) ends its
+ *   access at once and deletes its record, and with `chats` its chats.
  *
  * ```ts
  * plugins: [models, chat, ...access]   // access brings contacts
@@ -21,6 +23,7 @@
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { chatAction } from "./actions/chat.ts";
+import { forgetAction } from "./actions/forget.ts";
 import { startAction } from "./actions/start.ts";
 import { CONTACT, contact } from "./collections/contact.ts";
 import { contactView } from "./views/contact.ts";
@@ -34,11 +37,13 @@ export const contacts: Plugin = definePlugin({
   actions: {
     "contact.start": startAction,
     "contact.chat": chatAction,
+    "contact.forget": forgetAction,
   },
   views: { "context:contact": { llm: contactView } },
   resources: {
-    // A contact's record lives in its line's space; only trusted code changes it.
-    shared: { contact: { write: "manage" } },
+    // A contact's record lives in its line's space; only trusted code changes it. A contact is a
+    // member (of its chats, and of its own record): reading it labels nothing, as for an agent.
+    shared: { contact: { write: "manage", member: "contact" } },
     names: { contact: { collection: "contact", prefix: CONTACT } },
     context: { contact: { place: "system" } },
   },

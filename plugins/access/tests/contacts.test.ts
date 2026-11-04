@@ -13,6 +13,7 @@ import {
   defineAction,
   definePlugin,
   peopleOrContacts,
+  principalOf,
   type Runtime,
   type ViewContext,
 } from "../../../runtime/mod.ts";
@@ -36,6 +37,7 @@ import { api, terminalPlugin, whatsapp } from "../../interfaces/mod.ts";
 import { apps, cloud, computers } from "../../compute/mod.ts";
 import { credits, stripe, stripeWebhook, usage } from "../../billing/mod.ts";
 import { test } from "../../../testing/mod.ts";
+import { tools as spacesTools } from "../spaces/resources/tools.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -79,25 +81,30 @@ const peek = tool({
 const probe = definePlugin({
   name: "probe",
   views: Object.fromEntries(
-    ["thread", "message", "file", "contact", "space", "member"].map((c) => [
-      c,
-      { test: (_: unknown, ctx: ViewContext) => ctx.db.collection(c).find({}).value ?? [] },
-    ]),
+    ["thread", "message", "file", "contact", "space", "member", "memory", "person", "credential"]
+      .map((c) => [
+        c,
+        { test: (_: unknown, ctx: ViewContext) => ctx.db.collection(c).find({}).value ?? [] },
+      ]),
   ),
   actions: {
     "test.write": defineAction({
       input: { type: "object" },
       allow: peopleOrContacts,
-      run: async (ctx, input: { thread?: string; update?: boolean }) => {
-        if (input.update) {
+      run: async (
+        ctx,
+        input: { thread?: string; in?: string; update?: boolean; move?: string },
+      ) => {
+        if (input.update || input.move) {
           const changed = await ctx.db.collection("message").updateMany({}, {
-            $set: { text: "changed" },
+            $set: input.move ? { in: input.move } : { text: "changed" },
           });
           return changed.acknowledged ? changed.modifiedCount : 0;
         }
         await ctx.db.collection("message").insertOne({
           _id: crypto.randomUUID(),
           thread: input.thread,
+          ...(input.in ? { in: input.in } : {}),
           from: "x",
           to: [],
           text: "slipped in",
@@ -105,6 +112,19 @@ const probe = definePlugin({
         });
         return 1;
       },
+    }),
+    // A memory of a space, as the system keeps one.
+    "test.remember": defineAction({
+      input: { type: "object" },
+      run: (ctx, input: { in: string }) =>
+        ctx.db.collection("memory").insertOne({
+          _id: crypto.randomUUID(),
+          in: input.in,
+          text: "Our margin is 12%",
+          about: "everyone",
+          by: "lead",
+          at: new Date().toISOString(),
+        }),
     }),
     // Who answers in a space, asked as the caller (chat asks this way).
     "test.roster": defineAction({
@@ -115,13 +135,26 @@ const probe = definePlugin({
   },
 });
 
+/** A tool that's never for a contact's chat, even named. */
+const ledger = tool({
+  description: "The shop's books",
+  input: { type: "object", properties: {} },
+  offer: (_agent, _thread, ctx) => principalOf(ctx.actor)?.kind !== "contact",
+  run: () => "books",
+});
+
 const app = definePlugin({
   name: "app",
   resources: {
     provider: { e: { adapter: "e" } },
-    tools: { peek },
+    tools: { peek, ledger },
     agents: {
-      lead: { instructions: "Sell tickets.", model: "e/lead", default: true, tools: ["peek"] },
+      lead: {
+        instructions: "Sell tickets.",
+        model: "e/lead",
+        default: true,
+        tools: ["peek", "ledger"],
+      },
       ops: { instructions: "Run things.", model: "e/ops" },
     },
   },
@@ -237,7 +270,24 @@ test("a contact reaches its own chat, what's said and filed in it, and nothing e
       await code(runtime.call("test.write", { thread: danis }, { actor: carla })),
       "forbidden",
     );
-    assertEquals(await runtime.call("test.write", { thread: carlas }, { actor: carla }), 1);
+    assertEquals(
+      await runtime.call("test.write", { thread: carlas, in: shop }, { actor: carla }),
+      1,
+    );
+    // Its chat's part only where its chat lives: never written into another space, nor moved there.
+    const { space: other } = await runtime.call<{ space: string }>("space.create", {
+      name: "Other",
+    }, { actor: ana });
+    for (const somewhere of [other, undefined]) {
+      assertEquals(
+        await code(runtime.call("test.write", { thread: carlas, in: somewhere }, { actor: carla })),
+        "forbidden",
+      );
+    }
+    assertEquals(
+      await code(runtime.call("test.write", { move: other }, { actor: carla })),
+      "forbidden",
+    );
     // An update reaches only its own chat's messages.
     const before = (await said(runtime, staff)).length;
     assertEquals(await runtime.call("test.write", { update: true }, { actor: carla }), 3);
@@ -260,6 +310,7 @@ test("the agent working for a contact reaches exactly its chat, though it works 
     assert(request.instructions?.includes("You're talking with Carla, a customer, writing on "));
     assert(request.instructions?.includes("People here: Carla."));
     assert(!request.instructions?.includes("memory"), request.instructions);
+    // A tool that decides where it's offered isn't, here, though the agent names it.
     assertEquals(request.tools?.map((t) => t.name), ["peek"]);
   });
 });
@@ -417,8 +468,13 @@ test("an agent says a fixed message to a contact's chat without a turn, once", a
     });
     const confirmed = history.filter((m) => m.text === "Payment confirmed!");
     assertEquals(confirmed.map((m) => [m._id, m.from, m.to]), [
-      ["pix-123:confirmed", "lead", ["contact:c-carla-01"]],
+      [`${carlas}:say:pix-123:confirmed`, "lead", ["contact:c-carla-01"]],
     ]);
+    // Said only by an agent that answers in the chat.
+    assertEquals(
+      await code(runtime.call("chat.say", { id: "y", thread: carlas, from: "ops", text: "hi" })),
+      "not_here",
+    );
     // Whose work it is, from an event's actor: the contact's, through the agent working for them.
     assertEquals(contactOf({ kind: "agent", id: "lead", for: carla }), carla.id);
     assertEquals(contactOf(ana), undefined);
@@ -429,5 +485,97 @@ test("an agent says a fixed message to a contact's chat without a turn, once", a
       ),
       "invalid",
     );
+  });
+});
+
+test("what staff's agents read stays with staff: in a contact's chat, it's theirs alone", async () => {
+  await setup(async ({ runtime, carla, carlas, staff, read }) => {
+    const last = async () =>
+      (await runtime.query<Message[]>("message.history", { thread: carlas }, { actor: ana }))
+        .findLast((m) => m.from === "lead")!;
+    // Ana's agent in Carla's chat, reading only the chat: Carla reads its answer.
+    await runtime.call("chat.send", { thread: carlas, text: "hello" }, { actor: ana });
+    await runtime.idle();
+    const hello = await last();
+    assertEquals(hello.sources, undefined);
+    assert((await read<Message>("message", carla)).some((m) => m._id === hello._id));
+    // Its agent is told who else is in the chat, and its tools are the staff's.
+    const request = sent.at(-1)!;
+    assert(request.instructions?.includes("Also in it, from outside the org: Carla."));
+    assertEquals(request.tools?.map((t) => t.name).sort(), [
+      "forget",
+      "ledger",
+      "peek",
+      "recall",
+      "remember",
+      "request_access",
+    ]);
+    // Looking around the shop: its answer draws on it, and Carla doesn't read it.
+    await runtime.call("chat.send", { thread: carlas, text: "peek around" }, { actor: ana });
+    await runtime.idle();
+    const answer = await last();
+    assert(answer.sources?.length, "labelled with the shop");
+    assert(!(await read<Message>("message", carla)).some((m) => m._id === answer._id));
+    // A reply to a message of another chat replies to nothing.
+    const [elsewhere] = await runtime.query<Message[]>("message.history", { thread: staff }, {
+      actor: ana,
+    });
+    const { message } = await runtime.call<{ message: string }>("chat.send", {
+      thread: carlas,
+      text: "about that",
+      replyTo: elsewhere._id,
+    }, { actor: ana });
+    await runtime.idle();
+    const mine = (await runtime.query<Message[]>("message.history", { thread: carlas }, {
+      actor: ana,
+    })).find((m) => m._id === message)!;
+    assertEquals(mine.replyTo, undefined);
+  });
+});
+
+test("a contact talks with whom its chat is with: naming another agent there changes nothing", async () => {
+  await setup(async ({ runtime, shop, carla, carlas }) => {
+    await runtime.call("member.set", {
+      space: shop,
+      member: { kind: "agent", id: "ops" },
+      role: "editor",
+    }, { actor: ana });
+    const { message } = await runtime.call<{ message: string }>("chat.send", {
+      thread: carlas,
+      text: "@ops open the books",
+      to: ["ops"],
+    }, { actor: carla });
+    await runtime.idle();
+    const history = await runtime.query<Message[]>("message.history", { thread: carlas }, {
+      actor: ana,
+    });
+    assertEquals(history.find((m) => m._id === message)?.to, ["lead"]);
+    assert(!history.some((m) => m.from === "ops"));
+  });
+});
+
+test("a document shared on its own is never a space; memories and people stay out of reach", async () => {
+  await setup(async ({ runtime, shop, staff, carla, dani, read }) => {
+    // Bob sees Ana's chat on its own: he may read that chat, not a space of its key.
+    await runtime.call("member.set", { space: staff, on: "thread", member: bob, role: "viewer" }, {
+      actor: ana,
+    });
+    const can = (space: string) =>
+      runtime.call<{ can: boolean }>("space.can", { space, verb: "read" }, { actor: bob })
+        .then((r) => r.can);
+    assertEquals(await can(`thread:${staff}`), false);
+    assertEquals(await can(shop), false);
+    // A memory of the shop, and a person whose id is a contact's: neither reaches a contact.
+    await runtime.call("test.remember", { in: shop });
+    await runtime.call("person.set", { person: dani.id, email: "dani@example.com" });
+    assertEquals(await read("memory", carla), []);
+    assertEquals(await read("person", dani), []);
+    assertEquals(await read("credential", dani), []);
+    // Asking for access, for a contact, asks for nothing.
+    const asked = await (spacesTools.request_access.run as (i: unknown, c: unknown) => unknown)(
+      { space: "Shop", reason: "let me in" },
+      { actor: { kind: "agent", id: "lead", for: carla } },
+    );
+    assert(String(asked).startsWith("Not here"), String(asked));
   });
 });

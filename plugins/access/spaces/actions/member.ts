@@ -38,7 +38,7 @@ async function manages(ctx: Context, space: string, on?: string): Promise<string
   if (!doc) throw forbidden(`No ${on} "${space}".`);
   const key = docKey(on, space);
   const home = String(doc[shared.field ?? "in"]);
-  if (!await may(ctx, "manage", key)) {
+  if (!await may(ctx, "manage", space, on)) {
     await must(ctx, "manage", home, `You don't manage "${home}".`);
   }
   return key;

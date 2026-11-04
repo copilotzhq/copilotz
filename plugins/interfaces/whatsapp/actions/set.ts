@@ -4,12 +4,15 @@
  * contact, in a chat of their own, answered by its agent), choose who
  * answers there (`agent`: one that answers in the space; null, who answers
  * new chats there) and how long a chat stays quiet before a customer's next
- * message starts a new one (`gap`, in hours: 12 unless set). Closed again,
+ * message starts a new one (`gap`, in hours: 12 unless set), how many
+ * messages a customer may send a minute (`rate`: 20), and the language
+ * customers are told things in (`language`: `en`, `pt`). Closed again,
  * strangers are told how to link their phone; its chats stay where they are.
  * A Personal space's number isn't opened: it's its person's alone.
  */
 import { defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
 import { GAP, type WhatsAppNumber } from "../collections/number.ts";
+import type { WhatsAppThread } from "../collections/thread.ts";
 import { mustManage } from "./connect.ts";
 import { PERSONAL } from "../../../access/spaces/contract.ts";
 
@@ -23,6 +26,9 @@ export const setAction = defineAction({
       agent: { type: ["string", "null"] },
       /** Hours. */
       gap: { type: "number", minimum: 1, maximum: 720 },
+      /** Messages a customer may send a minute. */
+      rate: { type: "integer", minimum: 1, maximum: 600 },
+      language: { type: "string", enum: ["en", "pt"] },
     },
     required: ["number"],
     additionalProperties: false,
@@ -56,6 +62,8 @@ export const setAction = defineAction({
       ...(input.open ? { open: true } : {}),
       ...(agent ? { agent } : {}),
       ...(input.gap !== undefined ? { gap: input.gap } : {}),
+      ...(input.rate !== undefined ? { rate: input.rate } : {}),
+      ...(input.language ? { language: input.language } : {}),
     };
     const unset = {
       ...(input.open === false ? { open: "" } : {}),
@@ -70,5 +78,36 @@ export const setAction = defineAction({
     }
     const now = await numbers.findOne({ _id: found._id });
     return { open: !!now?.open, agent: now?.agent ?? null, gap: now?.gap ?? GAP };
+  },
+});
+
+/**
+ * `whatsapp.block`: those who manage a number's space block the phone of
+ * one of its chats (a customer who abuses the line), or let it in again:
+ * what a blocked phone sends goes nowhere, and nothing is said to it.
+ */
+export const blockAction = defineAction({
+  description: "Blocks the phone behind a WhatsApp chat, or lets it in again",
+  input: {
+    type: "object",
+    properties: { thread: { type: "string" }, blocked: { type: "boolean" } },
+    required: ["thread", "blocked"],
+    additionalProperties: false,
+  },
+  allow: inPerson,
+  run: async (ctx, input) => {
+    const system = ctx.as().db;
+    const chat = await system.collection<WhatsAppThread>("whatsapp_thread")
+      .findOne({ _id: input.thread });
+    const number = chat
+      ? await system.collection<WhatsAppNumber>("whatsapp_number").findOne({ _id: chat.number })
+      : null;
+    if (!chat || !number) throw failure("not_found", "No WhatsApp chat here.");
+    await mustManage(ctx, number.in, "block a phone");
+    await system.collection("whatsapp_phone").updateOne(
+      { _id: `${number._id}:${chat.phone}` },
+      input.blocked ? { $set: { blocked: new Date().toISOString() } } : { $unset: { blocked: "" } },
+    );
+    return { blocked: input.blocked };
   },
 });

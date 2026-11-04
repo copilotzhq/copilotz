@@ -12,7 +12,17 @@ import { assert, assertEquals } from "@std/assert";
 import { test } from "../../../../testing/mod.ts";
 import type { VoiceCall } from "../collections/call.ts";
 import type { VoicePhone } from "../collections/phone.ts";
-import { ACCOUNT, CARLA, heard, LINE_NUMBER, say, setup, until, VERIFIED } from "./setup.ts";
+import {
+  ACCOUNT,
+  callSid,
+  CARLA,
+  heard,
+  LINE_NUMBER,
+  say,
+  setup,
+  until,
+  VERIFIED,
+} from "./setup.ts";
 
 const over = (s: { docs<T>(c: string): Promise<T[]> }) =>
   until(async () => (await s.docs<VoiceCall>("voice_call")).every((c) => c.state === "over"));
@@ -149,17 +159,18 @@ test("two calls from one number, both starting at once, never share a chat", asy
   await setup(async (s) => {
     (await s.call({ from: CARLA, form: VERIFIED })).hangUp();
     await over(s);
-    // Two more, their sockets open, Twilio's setups told at the same moment.
-    const relays = await Promise.all([0, 1].map(async () => {
-      const { relay } = await s.open(await (await s.ring({ from: CARLA, form: VERIFIED })).text());
-      return relay;
+    // Two more, their sockets open, Twilio's setups told at the same moment. Each socket is
+    // told its own call (rung in parallel, they may be stored in either order).
+    const calls = [callSid(901), callSid(902)];
+    const relays = await Promise.all(calls.map(async (call) => {
+      const twiml = await (await s.ring({ from: CARLA, call, form: VERIFIED })).text();
+      return (await s.open(twiml)).relay;
     }));
-    const rang = (await s.docs<VoiceCall>("voice_call")).slice(1);
     for (const [i, relay] of relays.entries()) {
       relay.tell({
         type: "setup",
         accountSid: ACCOUNT,
-        callSid: rang[i]._id,
+        callSid: calls[i],
         from: CARLA,
         to: LINE_NUMBER,
         direction: "inbound",
@@ -168,7 +179,9 @@ test("two calls from one number, both starting at once, never share a chat", asy
     await until(async () =>
       (await s.docs<VoiceCall>("voice_call")).filter((c) => c.state === "live").length === 2
     );
-    const [first, a, b] = await s.docs<VoiceCall>("voice_call");
+    const all = await s.docs<VoiceCall>("voice_call");
+    const [a, b] = calls.map((id) => all.find((c) => c._id === id)!);
+    const first = all.find((c) => !calls.includes(c._id))!;
     assert(a.thread !== b.thread);
     // One of them may go on in the chat before; never both.
     assert([a.thread, b.thread].filter((t) => t === first.thread).length <= 1);

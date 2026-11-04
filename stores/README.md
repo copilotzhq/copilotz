@@ -34,11 +34,12 @@ only, always rolled back, up to a limit, its bytes and a timeout), and a mainten
 `execute` writes (alone among the store's writes, fenced, refused if it changes `meta` or makes a
 trigger). On a PostgreSQL server only as a role of its own
 (`postgresStore({ maintenance: { url }
-})`), checked against an allowlist before each statement, on
-a connection of its own over the extended protocol, closed after; PGlite discards what it left on
-its one session; a SQLite read runs in a process of its own on a read-only connection, killed at its
-timeout, and a SQLite write is refused if it leaves a temporary object (the store names its tables
-in `main`). See the README's Maintenance.
+})`), checked against an allowlist before each statement, or,
+told so (`maintenance: { storeRole: true }`), as the store's own role, never one that could run
+server commands or reach its files; either on a connection of its own over the extended protocol,
+closed after; PGlite discards what it left on its one session; a SQLite read runs in a process of
+its own on a read-only connection, killed at its timeout, and a SQLite write is refused if it leaves
+a temporary object (the store names its tables in `main`). See the README's Maintenance.
 
 ## Tenants
 

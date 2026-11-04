@@ -18,7 +18,9 @@
  * - **Read SQL**, one read-only statement (`runtime.maintenance.read`, the
  *   store's `inspect`): at most `limit` rows and `bytes`, cut off after
  *   `timeout`. On a PostgreSQL server, as a role of its own
- *   (`postgresStore({ maintenance: { url } })`; the README's Maintenance).
+ *   (`postgresStore({ maintenance: { url } })`), or, told so, as the
+ *   store's own (`maintenance: { storeRole: true }`); the README's
+ *   Maintenance says what each costs.
  * - **Writes through the owner**: the collections' operations (insertOne…
  *   deleteMany, and find…aggregate), checked against their schemas, recorded
  *   as events, cached and heard by Processors like any write; and the

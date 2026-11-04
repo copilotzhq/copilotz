@@ -1,7 +1,8 @@
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { LlmFile, LlmMessage, LlmState } from "../../../models/contract.ts";
 import { type File, FILE_CHARS, text, textual } from "../collections/file.ts";
-import type { Message } from "../collections/message.ts";
+import { isAnswer, type Message } from "../collections/message.ts";
+import type { AdditionShown } from "../collections/shown.ts";
 import { DELEGATED, type Step, type Told } from "../shared/types.ts";
 import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
 
@@ -41,14 +42,29 @@ function attached(m: Message, ctx: ViewContext): { text: string; files: LlmFile[
 }
 
 /**
+ * What went out after an answer beyond its text (an addition: a carousel of
+ * trips), as the model is told: `[then shown: <note>]`. One read per pass,
+ * for the whole chat.
+ */
+function shownAfter(m: Message, ctx: ViewContext): string {
+  if (!isAnswer(m)) return "";
+  const shown = ctx.db.collection<AdditionShown>("shown").find({ thread: m.thread }).value ?? [];
+  return shown.filter((s) => s.after === m._id && s.note)
+    .map((s) => `\n[then shown: ${s.note}${s.fallback ? " (as text)" : ""}]`).join("");
+}
+
+/**
  * A message as the viewing agent sees it: its own as its turns (after what it
  * was told then), others' as labelled input. So is what it handed between
- * spaces itself: that was other work, in another chat, not this turn's.
+ * spaces itself: that was other work, in another chat, not this turn's. A
+ * choice tapped says what it was (`[tapped: trip:123]`); an answer, what went
+ * out after it.
  */
 
 export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
   const me = ctx.viewer?.name;
   const handed = m.via?.kind === DELEGATED;
+  const then = shownAfter(m, ctx);
   if (m.from !== me || handed) {
     // People by name (an agent's own name is as it is).
     const names = namesIn(ctx, [m.from, ...m.to]);
@@ -58,9 +74,12 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
     const { text: notes, files } = attached(m, ctx);
     // Sent for them, not typed now: they may not be there to answer.
     const via = m.via ? ` (via ${m.via.kind} "${m.via.name}")` : "";
+    const tapped = m.tap ? ` [tapped: ${m.tap.id}]` : "";
     return [{
       role: "user",
-      text: `${m.from === me ? "You" : nameOf(m.from, names)}${via}${to}: ${m.text ?? ""}${notes}`,
+      text: `${m.from === me ? "You" : nameOf(m.from, names)}${via}${to}: ${
+        m.text ?? ""
+      }${tapped}${notes}${then}`,
       ...(files.length ? { files } : {}),
     }];
   }
@@ -70,7 +89,9 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
     : [];
   // Its model's state goes back with it: thinking, signatures (only to the model that wrote them).
   const state = m.state ? { state: m.state as LlmState } : {};
-  if (!m.toolCalls?.length) return [...told, { role: "assistant", text: m.text ?? "", ...state }];
+  if (!m.toolCalls?.length) {
+    return [...told, { role: "assistant", text: `${m.text ?? ""}${then}`, ...state }];
+  }
   const calls = m.toolCalls as Step[];
   return [
     ...told,

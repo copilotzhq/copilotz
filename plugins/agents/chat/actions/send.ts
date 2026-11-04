@@ -9,7 +9,8 @@
  * nothing is sent and the call fails with `transcription_failed`;
  * `transcribe: false` sends it as it is. `via` says what sent it for the
  * person (a routine); a new thread takes `title` and `renamable` in the same
- * commit, so its first turn already has them.
+ * commit, so its first turn already has them. `tap` says it was a choice
+ * tapped (a button), not typed.
  */
 import { type Actor, defineAction, peopleOrContacts } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
@@ -87,6 +88,21 @@ export const sendAction = defineAction({
       },
       /** What a new thread is called (an existing one keeps its name). */
       title: { type: "string", minLength: 1, maxLength: 120 },
+      /**
+       * A choice tapped, not typed (a button's): what it means (`id`), what it
+       * said (`title`, the message's text when it says none) and the addition
+       * it was in (`key`).
+       */
+      tap: {
+        type: "object",
+        properties: {
+          id: { type: "string", minLength: 1, maxLength: 256 },
+          title: { type: "string", maxLength: 256 },
+          key: { type: "string", maxLength: 120 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
       /** A new thread an agent may name, as what it found. */
       renamable: { type: "boolean" },
     },
@@ -95,7 +111,7 @@ export const sendAction = defineAction({
   // People and contacts write as themselves: their own messages.
   allow: peopleOrContacts,
   run: async (ctx, input) => {
-    const said = input.text ?? "";
+    const said = input.text ?? input.tap?.title ?? "";
     if (!said.trim() && !input.files?.length) {
       throw Object.assign(new Error("A message says something, or sends a file"), {
         code: "invalid",
@@ -186,6 +202,7 @@ export const sendAction = defineAction({
       hops: 0,
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       ...(input.via ? { via: input.via } : {}),
+      ...(input.tap ? { tap: input.tap } : {}),
       at: now(),
     };
     const deliver = await delivery(ctx, sent);

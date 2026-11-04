@@ -21,6 +21,10 @@
  *   (someone outside the org, who then writes there with `chat.send` and
  *   reaches only it); trusted code has an agent say a fixed message in one
  *   without a turn (`chat.say`: a payment confirmed).
+ * - After an agent's answer, a medium may show more (additions: a carousel
+ *   of trips after the answer that found them), each once per chat per key,
+ *   recorded in `shown` (`chat.shown`), and told to the model after that
+ *   answer (`[then shown: …]`). A choice tapped comes with its id (`tap`).
  * - Threads record where they came from (`parent`). A fork (a subthread) sees
  *   its parent's conversation up to the message it started at, through every
  *   level, without copying it; a new thread starts from its first message.
@@ -45,7 +49,9 @@
  * - `tools`:  { description, input?, run(input) };
  * - `agentSources`: { action }: `{ names }` in, the definitions of those the asker meets out;
  * - `roster`: { action }: `{ space }` in, `{ agents, default? }` out;
- * - `agentModel`: { action }: `{ agent, space? }` in, a model or null out.
+ * - `agentModel`: { action }: `{ agent, space? }` in, a model or null out;
+ * - `additions`: { order?, agents? }, each with an `addition:<name>` View in
+ *   the medium that shows it, given `{ thread, answer }` (see `Addition`).
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { forkAction } from "./actions/fork.ts";
@@ -53,10 +59,12 @@ import { moveAction } from "./actions/move.ts";
 import { openAction } from "./actions/open.ts";
 import { sayAction } from "./actions/say.ts";
 import { sendAction } from "./actions/send.ts";
+import { shownAction } from "./actions/shown.ts";
 import { stopAction } from "./actions/stop.ts";
 import { file } from "./collections/file.ts";
 import { live } from "./collections/live.ts";
 import { message } from "./collections/message.ts";
+import { shown } from "./collections/shown.ts";
 import { thread } from "./collections/thread.ts";
 import { wait } from "./collections/wait.ts";
 import { turnRequested } from "./events/turn-requested.ts";
@@ -75,7 +83,7 @@ export { lineage } from "./shared/lineage.ts";
 export const chat: Plugin = definePlugin({
   name: "chat",
   requires: ["models"],
-  collections: { thread, message, wait, live, file },
+  collections: { thread, message, wait, live, file, shown },
   views: {
     thread: { llm: prompt },
     participants: { llm: participants },
@@ -103,6 +111,7 @@ export const chat: Plugin = definePlugin({
     "chat.send": sendAction,
     "chat.open": openAction,
     "chat.say": sayAction,
+    "chat.shown": shownAction,
     "chat.fork": forkAction,
     "chat.stop": stopAction,
     "chat.move": moveAction,
@@ -118,6 +127,7 @@ export const chat: Plugin = definePlugin({
       message: { labels: true, part: "thread" },
       file: { part: "thread" },
       live: { part: "thread" },
+      shown: { part: "thread" },
     },
   },
   processors: {

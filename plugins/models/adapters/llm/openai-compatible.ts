@@ -3,7 +3,7 @@
  * providers speak it (DeepSeek, Groq, Together, OpenRouter, Ollama…); the
  * catalog knows their URLs, or `baseURL` points at one.
  */
-import { post, sse, usageOf } from "../../shared/provider.ts";
+import { alive, post, sse, usageOf } from "../../shared/provider.ts";
 import type { LlmAdapter, LlmMessage } from "../../shared/types.ts";
 
 export const OPENAI = {
@@ -85,9 +85,12 @@ export const openaiCompletions: LlmAdapter = {
     }, signal);
     // Tool calls arrive in pieces, by index; they are complete when the stream ends.
     const calls = new Map<number, { id: string; name: string; args: string }>();
+    // A model that thinks first (DeepSeek's reasoning) sends it before it writes: alive all the same.
+    const beat = alive();
     for await (const { data } of sse(response.body!)) {
       if (data === "[DONE]") break;
       const chunk = JSON.parse(data);
+      if (beat()) yield { type: "thinking" };
       if (chunk.error) {
         throw new Error(`OpenAI: ${chunk.error.message ?? JSON.stringify(chunk.error)}`);
       }

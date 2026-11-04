@@ -140,6 +140,18 @@ async function server() {
     "/v1/audio/transcriptions": () =>
       Response.json({ text: "hello there", usage: { type: "duration", seconds: 3 } }),
     "/v1/fail/chat/completions": () => new Response("nope", { status: 401 }),
+    // A model thinking: only its reasoning's items, before it writes.
+    "/v1/thinking/responses": () =>
+      new Response(sse([
+        { type: "response.created" },
+        { type: "response.output_item.added", item: { type: "reasoning" } },
+        {
+          type: "response.output_item.done",
+          item: { id: "rs_1", type: "reasoning", encrypted_content: "E1", summary: [] },
+        },
+        { type: "response.output_text.delta", delta: "Done." },
+        { type: "response.completed", response: {} },
+      ], true)),
     // A reasoning model: its reasoning, encrypted, before and between what it writes and calls.
     "/v1/reasoning/responses": () =>
       new Response(sse([
@@ -318,6 +330,21 @@ test("openai-compatible (Chat Completions): request and streamed answer", async 
       { role: "user", content: "again" },
     ]);
     assertEquals((body.tools as { function: { name: string } }[])[0].function.name, "roll");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("openai (Responses): a model thinking before it writes says it's at work", async () => {
+  const mock = await server();
+  try {
+    const chunks = await run(openaiResponses, {
+      model: "m",
+      baseURL: `${mock.url}/v1/thinking`,
+      apiKey: "k",
+    }, { effort: "xhigh" });
+    // At work before its first word (once: at most about once a second), then what it wrote.
+    assertEquals(chunks.slice(0, 2), [{ type: "thinking" }, { type: "text", text: "Done." }]);
   } finally {
     await mock.close();
   }

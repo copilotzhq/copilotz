@@ -46,7 +46,10 @@ const SAID = {
   again: "This chat needs a fresh start: reload the page.",
   files: "This chat takes no files.",
   many: (n: number) => `This chat takes ${n} file${n === 1 ? "" : "s"} a message at most.`,
-  large: (mb: number) => `Each file may be ${mb} MB at most.`,
+  large: (bytes: number) =>
+    `Each file may be ${
+      bytes >= 1_000_000 ? `${bytes / 1_000_000} MB` : `${Math.ceil(bytes / 1_000)} KB`
+    } at most.`,
 } as const;
 
 /** Writes whose answer isn't needed. */
@@ -93,7 +96,7 @@ export const sendingAction = defineAction({
         throw failure("invalid", SAID.many(line.files.count), { public: true });
       }
       if (files.some((f) => f.size > line.files!.bytes || (f.name ?? "").length > 255)) {
-        throw failure("invalid", SAID.large(line.files.bytes / 1_000_000), { public: true });
+        throw failure("invalid", SAID.large(line.files.bytes), { public: true });
       }
     }
     const contact = actor.id;

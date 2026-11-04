@@ -10,9 +10,9 @@
  * from limits by address).
  *
  * - **Back with its secret** (`secret`: its cookie, which says nobody yet:
- *   it hasn't spoken): the same visitor, while the secret lasts and its line
- *   is the app's. Not counted again. One erased, or past its time, is a
- *   newcomer.
+ *   it hasn't spoken), by the same line: the same visitor, while the secret
+ *   lasts and its line is the app's. Not counted again. One erased, past its
+ *   time, or of another line, is a newcomer.
  * - **A newcomer:** counted on its address, within the line's new visitors
  *   an hour from one (`ipVisitorsPerHour`), taken in one write that counts
  *   only while there's room; past it, that address is refused (`too_many`,
@@ -77,9 +77,9 @@ export const arriveAction = defineAction({
       return { actor: { kind: "contact", id: contact, web: line.name }, secret, days: left };
     };
 
-    // Back with its secret, not yet spoken: the same visitor, while it lasts and isn't erased.
+    // Back with its secret, not yet spoken, by the same line: the same visitor, while it lasts.
     const back = ring && input.secret ? await visitOf(ring, input.secret) : undefined;
-    const backLine = back ? lineOf(ctx, back.line) : undefined;
+    const backLine = back?.line === input.line ? lineOf(ctx, back.line) : undefined;
     if (back && backLine && back.issued + backLine.days * DAY > now + 60_000) {
       const known = await system.collection<Visitor>("contact_visitor")
         .findOne({ _id: await contactOf(ring!, back) });

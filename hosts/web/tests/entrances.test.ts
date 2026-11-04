@@ -268,6 +268,11 @@ test("a visitor: let in by a line its page names, nothing made until it speaks, 
     // Back with its cookie, asking again: the same visitor, though it's said nothing.
     const back = await connect(serve, { cookie: first.cookie, body: { line: "site" } });
     assertEquals([back.status, back.said.actor], [200, visitor]);
+    // On another line's page, before it speaks: another visitor, that line's.
+    const shop = await connect(serve, { cookie: first.cookie, body: { line: "shop" } });
+    assertEquals(shop.status, 200);
+    assertNotEquals(shop.said.actor!.id, visitor.id);
+    assertMatch(shop.set!, /^visitor=vis_shop\./);
 
     // It speaks: now a contact in the line's space, by the web, with one chat shared with it.
     const { thread } = await runtime.call<{ thread: string }>("chat.send", { text: "hi" }, {

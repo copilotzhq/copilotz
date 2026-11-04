@@ -17,7 +17,6 @@ import { createRuntime } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { devSignIn, identity } from "../../plugins/access/mod.ts";
 import { directory } from "../../plugins/access/directory/mod.ts";
-import { socket } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
 import { orgsHost } from "../../hosts/orgs/mod.ts";
 import { bundle, listen } from "../../hosts/web/node/mod.ts";

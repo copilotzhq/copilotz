@@ -4,6 +4,7 @@
  * org is a runtime of its own, opened when first used.
  *
  *   deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/orgs.ts [--port 8800]
+ *     [--hostname 0.0.0.0]        everyone's, not this machine's alone: then no sign-in by name
  *     [--postgres=postgres://…]   every org a tenant of one shared schema, on one
  *                                 pool of connections (else in memory); staff
  *                                 can then move, export and delete orgs
@@ -30,8 +31,12 @@ import { themeOf } from "../../hosts/web/theme/css.ts";
 import { type OrgInfo, orgsHost } from "../../hosts/orgs/mod.ts";
 import { plugins } from "./app.ts";
 
-const args = parseArgs(Deno.args, { string: ["port", "postgres"] });
+const args = parseArgs(Deno.args, { string: ["port", "postgres", "hostname"] });
 const port = Number(args.port ?? 8800);
+/** Where it listens: this machine alone, unless said (`--hostname 0.0.0.0`: everyone's). */
+const hostname = args.hostname ?? "127.0.0.1";
+/** Signing in by name (staff's emails among them) only while nobody else can reach it. */
+const local = hostname === "127.0.0.1" || hostname === "localhost";
 const clientId = Deno.env.get("GOOGLE_CLIENT_ID");
 const google = clientId
   ? [googleSignIn, definePlugin({ name: "google", resources: { google: { clientId } } })]
@@ -62,8 +67,9 @@ const dir = await createRuntime({
   plugins: [
     identity,
     directory,
-    // Sign in by name on this machine, and with Google when GOOGLE_CLIENT_ID is set.
-    devSignIn,
+    // Sign in by name on this machine (listening on it alone), and with Google when
+    // GOOGLE_CLIENT_ID is set.
+    ...(local ? [devSignIn] : []),
     ...google,
     definePlugin({
       name: "directory-settings",
@@ -125,8 +131,8 @@ async function bundle() {
   return { entry: "browser.js", files };
 }
 
-// This machine alone (dev sign-in is its own); each request says where it came from, as the socket did.
+// Each request says where it came from, as the socket did: dev sign-in takes this machine's alone.
 Deno.serve(
-  { port, hostname: "127.0.0.1", onListen: () => console.log(`http://localhost:${port}`) },
+  { port, hostname, onListen: () => console.log(`http://${hostname}:${port}`) },
   (request, info) => host.serve(setClientAddress(request, info.remoteAddr.hostname)),
 );

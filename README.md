@@ -304,11 +304,15 @@ name, never by importing its code.
 **`agents/`**: conversations and the agents in them.
 
 - **`chat`**: threads, messages, and agents
-  (`{ instructions, model, effort?, maxTokens?, temperature?, tools? }`) that answer with tools,
-  calling models through `llm`. A reasoning model's thinking (its provider state) is kept on the
-  agent's tool steps and goes back to that model while its turn goes on.
+  (`{ instructions, model, effort?, maxTokens?, temperature?, tools?, history? }`) that answer with
+  tools, calling models through `llm`. A reasoning model's thinking (its provider state) is kept on
+  the agent's tool steps and goes back to that model while its turn goes on.
   - **Several agents** take turns in parallel. With `send_message` an agent messages another agent
     or a person, and waits for the replies before it continues.
+  - **History by age:** an agent with `history: { maxAge: 4 * 3_600_000 }` (ms) is sent only the
+    last four hours of a conversation, back from its newest message (summaries too, with `history`);
+    what's older stays in the chat. The start moves in steps of a tenth of `maxAge`, so prompts keep
+    hitting the provider's cache ([design](design/views.md#history-as-views)).
   - **Subthreads are forks:** whoever works in one sees the conversation up to the message it hangs
     from, through every level, without anything being copied. A new thread starts from its first
     message and records the thread it came from.

@@ -18,6 +18,8 @@
  *   estimated tokens: its text, files' content, transcripts, images and PDFs,
  *   and agents' tool steps (which leave it without a line). Until it first
  *   overflows, every message is sent whole.
+ * - An agent with a window by age (`history: { maxAge }`) is sent only the
+ *   lines whose newest message is in it: each line says when that was.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { outline } from "./collections/outline.ts";

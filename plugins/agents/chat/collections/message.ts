@@ -63,6 +63,19 @@ const messageSchema = {
     /** Its turn was stopped (`chat.stop`): what it had written so far. */
     stopped: { type: "boolean" },
     /**
+     * What it answers by a tap, not typed: the choice tapped (`id`: what it
+     * means, as the app gave it; its text is the `title`, what was read), and
+     * the addition it was in (`key`). A choice, not a permission: anyone can
+     * send any id, and agents read it as it came (`[tapped: <id>]`), so a
+     * tool acting on one checks it against what was shown there (`shown`, or
+     * the app's own record of what it offered).
+     */
+    tap: {
+      type: "object",
+      properties: { id: { type: "string" }, title: { type: "string" }, key: { type: "string" } },
+      required: ["id"],
+    },
+    /**
      * How a person's message came, when not typed there: sent for them by what
      * they set up (a routine). It's still theirs; people and agents are told.
      */
@@ -187,7 +200,8 @@ export const message = defineCollection({
     },
     /** Questions to `person` that an agent is still waiting on, newest first. */
     questions: {
-      allow: (actor, params: { person: string }) => actor.id === params.person,
+      allow: (actor, params: { person: string }) =>
+        actor.kind === "person" && actor.id === params.person,
       run: async (messages, params: { person: string }, ctx) => {
         const asked = await messages.find(
           { to: params.person, replyTo: { $exists: false }, expectReply: { $ne: false } },
@@ -202,3 +216,7 @@ export const message = defineCollection({
 });
 
 export type Message = Infer<typeof messageSchema> & { _id: string };
+
+/** Whether a message is an agent's final answer in its turn (`<run>:reply`), one that didn't fail. */
+export const isAnswer = (m: Pick<Message, "_id" | "turn" | "failed" | "stopped">): boolean =>
+  !!m.turn && m._id === `${m.turn}:reply` && !m.failed && !m.stopped;

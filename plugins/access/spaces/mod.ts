@@ -36,6 +36,11 @@
  *   and each turn, the other spaces they can read for their person
  *   (`elsewhere` context), to look in when what they need isn't here.
  *
+ * - **The app's own spaces** (the `spaces` resource, by id: a name and its
+ *   agents) are made and kept by the system when something needs them
+ *   (`space.keep`), owned by no person; people neither rename them nor take
+ *   their agents out.
+ *
  * Collections opt in through the `shared` resource:
  *
  * ```ts
@@ -47,6 +52,7 @@
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { agentAction, rosterAction } from "./actions/agents.ts";
 import { createAction } from "./actions/create.ts";
+import { keepAction } from "./actions/keep.ts";
 import { archiveAction } from "./actions/archive.ts";
 import { canAction } from "./actions/can.ts";
 import { leaveAction } from "./actions/leave.ts";
@@ -101,6 +107,7 @@ export {
   namesIn,
   namesOf,
   type NamesResource,
+  type NamesSource,
   picturesIn,
   PROFILE,
   withNames,
@@ -117,6 +124,7 @@ export {
   type Verb,
 } from "./shared/reach.ts";
 export type { Shared } from "./shared/rules.ts";
+export type { DeclaredSpace } from "./shared/declared.ts";
 
 export const spaces: Plugin = definePlugin({
   name: "spaces",
@@ -125,6 +133,7 @@ export const spaces: Plugin = definePlugin({
   collections: { space, member, request, invitation, profile },
   actions: {
     "space.create": createAction,
+    "space.keep": keepAction,
     "space.personal": personalAction,
     "space.rename": renameAction,
     "space.can": canAction,
@@ -166,7 +175,7 @@ export const spaces: Plugin = definePlugin({
     // Who works in a space, for chat: its agents.
     roster: { spaces: { action: "space.roster" } },
     // Where people's names are, for whatever shows a person (pages, agents' prompts).
-    names: { collection: PROFILE },
+    names: { people: { collection: PROFILE } },
     // Spaces by name on Usage (a Personal space says whose it is).
     usageNames: {
       space: { tag: "tags.space", collection: "space", field: "name", owner: "owner" },

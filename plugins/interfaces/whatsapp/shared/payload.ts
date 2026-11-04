@@ -2,7 +2,8 @@
  * What a webhook delivery says, as WhatsApp's Cloud API sends it: for each
  * business number (by its phone number id), the messages people sent it,
  * with who sent each (their WhatsApp id, the phone number they write from)
- * and the name their profile shows. Statuses of what was sent are left out.
+ * and the name their profile shows; and what was sent that failed to arrive
+ * (its `failed` statuses). Other statuses of what was sent are left out.
  *
  * ```json
  * { "object": "whatsapp_business_account", "entry": [{ "changes": [{ "field": "messages",
@@ -27,10 +28,13 @@ export type WaMessage = {
   document?: WaMedia & { filename?: string };
   sticker?: WaMedia;
   location?: { latitude: number; longitude: number; name?: string; address?: string };
-  button?: { text?: string };
+  /** A template's quick reply, tapped. */
+  button?: { text?: string; payload?: string };
+  /** A button, a list's row or a carousel card's quick reply, tapped. */
   interactive?: {
-    button_reply?: { title?: string };
-    list_reply?: { title?: string; description?: string };
+    type?: string;
+    button_reply?: { id?: string; title?: string };
+    list_reply?: { id?: string; title?: string; description?: string };
   };
   [more: string]: unknown;
 };
@@ -64,6 +68,32 @@ export function inboundOf(payload: unknown): Inbound[] {
             phoneId,
             message: m as WaMessage,
             ...(names.get(m.from) ? { name: names.get(m.from) } : {}),
+          }]
+          : []
+      );
+    })
+  );
+}
+
+/** A message the number sent that Meta couldn't deliver: its id, whom to, and why. */
+export type Undelivered = { phoneId: string; wamid: string; to: string; errors?: unknown[] };
+
+/** The failed statuses a delivery carries (what was sent and didn't arrive), each with its number. */
+export function undeliveredOf(payload: unknown): Undelivered[] {
+  if (!isObject(payload) || !Array.isArray(payload.entry)) return [];
+  return payload.entry.flatMap((entry) =>
+    (isObject(entry) && Array.isArray(entry.changes) ? entry.changes : []).flatMap((change) => {
+      const value = isObject(change) && isObject(change.value) ? change.value : undefined;
+      const phoneId = isObject(value?.metadata) ? value.metadata.phone_number_id : undefined;
+      if (typeof phoneId !== "string" || !Array.isArray(value?.statuses)) return [];
+      return value.statuses.flatMap((st): Undelivered[] =>
+        isObject(st) && st.status === "failed" && typeof st.id === "string" &&
+          typeof st.recipient_id === "string"
+          ? [{
+            phoneId,
+            wamid: st.id,
+            to: st.recipient_id,
+            ...(Array.isArray(st.errors) ? { errors: st.errors } : {}),
           }]
           : []
       );
@@ -128,4 +158,19 @@ export function wordsOf(m: WaMessage): string {
     }
   }
   return "";
+}
+
+/**
+ * The choice a message taps, if it's one: a button's, a list row's or a
+ * carousel card's (they come as a button's), or a template's quick reply,
+ * with what it meant (`id`) and said (`title`). Typing a button's title is
+ * just text.
+ */
+export function tapOf(m: WaMessage): { id: string; title: string } | undefined {
+  const reply = m.type === "interactive"
+    ? m.interactive?.button_reply ?? m.interactive?.list_reply
+    : m.type === "button"
+    ? { id: m.button?.payload, title: m.button?.text }
+    : undefined;
+  return reply?.id ? { id: reply.id, title: reply.title ?? "" } : undefined;
 }

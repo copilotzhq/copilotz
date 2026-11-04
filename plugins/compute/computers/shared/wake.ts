@@ -11,7 +11,7 @@
  * resources: { computerWake: { wake: "cloud.wake", touch: "cloud.touch" } }
  * ```
  */
-import type { Context } from "../../../../runtime/mod.ts";
+import { type Context, personOf } from "../../../../runtime/mod.ts";
 import type { Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
 import { desksIn, named, type Where, whereFor } from "./where.ts";
@@ -83,6 +83,8 @@ export async function whereAwake(
   who: string,
   computer?: string,
 ): Promise<Where | { missing: string }> {
+  // Nobody's work, or a contact's (a customer's chat): nothing to wake, or bill, before saying so.
+  if (!personOf(ctx.actor)) return await whereFor(ctx, thread, who, computer);
   if (hookOf(ctx)?.wake) {
     // Read as the agent, as whereFor does: a conversation they don't reach wakes nothing.
     const talk = await ctx.db.collection<Thread>("thread").findOne({ _id: thread });

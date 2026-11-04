@@ -1,5 +1,11 @@
 /** Memory's settings (the `memory` resource, which an app patches), and its embedding cache. */
-import type { Context, ReadContext, Resources } from "../../../../runtime/mod.ts";
+import {
+  type Actor,
+  type Context,
+  principalOf,
+  type ReadContext,
+  type Resources,
+} from "../../../../runtime/mod.ts";
 import type { Embedding as Vectors, ModelRef } from "../../../models/contract.ts";
 
 export type MemorySettings = {
@@ -17,8 +23,13 @@ export type MemorySettings = {
 export const settingsOf = (ctx: { resources: Resources }): MemorySettings =>
   (ctx.resources.memory ?? {}) as MemorySettings;
 
-/** Whether `agent` has memory. */
-export const applies = (ctx: { resources: Resources }, agent: string) => {
+/**
+ * Whether `agent` has memory, here: not working for a contact (in a
+ * customer's chat, which keeps to itself: what's said there isn't for the
+ * space's memories, and theirs aren't for the customer).
+ */
+export const applies = (ctx: { resources: Resources; actor?: Actor }, agent: string) => {
+  if (principalOf(ctx.actor)?.kind === "contact") return false;
   const { agents } = settingsOf(ctx);
   return !agents || agents.includes(agent);
 };

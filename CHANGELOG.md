@@ -1,5 +1,144 @@
 ## Unreleased
 
+- **Contacts: people outside the org who talk to its agents** (the new `contacts` plugin, part of
+  `access`). A WhatsApp customer is a contact, its own kind of actor (`{ kind: "contact", id }`),
+  never a person: every `allow: people` Action and query stays shut to it, and nothing that asks for
+  a person (`personOf`) finds one. The runtime's `principalOf` says whom work is for, a person or a
+  contact (it moved there from chat), and `peopleOrContacts` is what an Action opened to contacts
+  allows: today only `chat.send`, whose message is then from `contact:<id>`.
+  - A contact's chat is shared with it on its own (a membership `on` the thread, made by
+    `contact.chat`): it reaches that chat, what's said and filed there, and its own record, nothing
+    else. The space's people reach it as any chat there; the agent working for the contact reaches
+    exactly that chat. Three generic completions in spaces make it so, and help people too (a person
+    can now share one chat): a shared collection's documents can be part of another's (`part`: a
+    message's `thread`), reached with it; an agent working for someone reaches a document one of
+    them reaches on its own in a space the other reaches; and `present(ctx, space)` says whether
+    someone reaches a space or a document in it, so `space.roster` tells a contact in its chat who
+    answers (agents only).
+  - A contact is let into documents only, never a whole space (`member.set`, a request granted), and
+    never manages one. `request_access` isn't offered to agents working for a contact, nor memory: a
+    customer's chat keeps to itself.
+  - `contact.start` (trusted code, idempotent by id) and `contact.chat`; `contactOf(actor)` says
+    whose work an event's actor's is (the contact's id, through the agent working for them too);
+    agents are told whom they talk with (the `contact` context) and see them by name: the `names`
+    resource is now a map of sources
+    (`{ people: { collection: "profile" }, contact: { collection: "contact", prefix:
+    "contact:" } }`),
+    replacing `{ collection }`. On the web, add `contactsWeb` to show contacts by name.
+- **A WhatsApp number can be a customer line.** Its space's managers open it to anyone
+  (`whatsapp.set { number, open, agent, gap }`). A stranger who writes is then a contact, in a chat
+  of their own in the number's space, answered by the number's agent (or who answers new chats
+  there); a chat quiet for `gap` hours (12 by default) is over, and their next message starts a new
+  one. Their text always goes to the agent (commands stay linked people's); a code from the app
+  still links a phone, and linked phones keep working as their person. The `whatsapp` plugin now
+  requires `contacts`.
+- **WhatsApp is a medium.** A View for it (renderer `whatsapp`) returns parts, each one WhatsApp
+  message, built with the toolkit in WhatsApp's contract (`text`, `buttons`, `list`, `carousel`,
+  `image`, `document`, and `clip` for titles), which checks Meta's limits and throws `invalid`
+  instead of cutting anything short. A message goes out as its `message` View there (the plugin's:
+  its text as WhatsApp formats it; an app's replaces it).
+  - **Additions:** chat declares the `additions` resource kind (`{ order?, agents? }`, each an
+    `addition:<name>` View in the medium, given `{ thread, answer }`, returning `Addition`s:
+    `{ key, parts, fallback?, note? }`). After an agent's final answer that didn't fail
+    (`isAnswer`), each goes once per chat per key, recorded in chat's new `shown` ledger through
+    `chat.shown` (trusted code, unrecorded); its `note` is told to the model after that answer
+    (`[then shown: …]`).
+  - **One message, not two:** an answer's last text goes as the first addition's body (or caption)
+    when there's room, as Meta charges per message. A part Meta refuses (a 400 that isn't the token
+    or the 24-hour window) sends the addition's fallback instead, with the answer joined to it;
+    without one, it's logged. A retried delivery sends only what didn't go (`whatsapp_sent` now
+    keeps each part by id, with its addition's `key` and `thread`).
+  - **Taps:** a button's, a list row's, a carousel card's or a template's reply comes as its title
+    with `tap: { id, title, key }` (`chat.send` takes `tap`; messages keep it), answering the
+    message it was on; agents read `Carla: PIX [tapped: pay:pix]`. Typing the title is just text. A
+    tap is a choice, not a permission: anyone can send any id, so a tool acting on one checks it
+    against what was shown there. A quote or a tap answers only what went out in its own chat.
+  - What a message and its additions show is read as whom they go to, never with the reach of
+    whoever's work the answer was.
+  - **"Typing…" while agents work:** each step an agent takes in a WhatsApp chat shows it again once
+    WhatsApp may have hidden it (after 20 s, for up to five minutes); nothing says "please wait".
+  - **Media:** a part's picture or file is a public https link (as given), one of the app's routes
+    (`{ route, params }`: a link signed for a day with its params, which the route checks with
+    `verifyLink`), or a chat's file (`{ file }`: a signed link to `/files/<id>`, or, without the
+    app's `links`, uploaded to Meta and sent by its id). A carousel's pictures must be links: a file
+    with nowhere to link it sends the fallback. A message's files go as images (jpeg, png up to 5
+    MB) or documents, a short text as the first one's caption.
+- **WhatsApp lines for an app, as it uses them** (for Mobizap):
+  - **A line the app declares** in its settings (`resources.whatsapp.lines.<name>`: the space,
+    Meta's number id, token and app secret, its own verify token, a webhook path it routes to
+    `whatsapp.hook`, its agent, gap, rate, quiet window and language): open to anyone, kept as the
+    settings say at every use, with no person connecting or opening it; people can't change it
+    (`whatsapp.set`, `whatsapp.credentials` and `whatsapp.disconnect` refuse), and the web tab
+    leaves it alone. `whatsapp.set` stays for numbers people connect.
+  - **Spaces the app declares** (the spaces plugin's `spaces` resource, by id: `{ name, agents }`):
+    the app's own, owned by no person, made and kept by the system when something needs them
+    (`space.keep`, trusted code; a declared line keeps the space it's `in`). Its agents are editors
+    there, the first answering its new chats; people neither take them out, nor change their role,
+    nor rename the space. Otherwise it's a space like any other.
+  - **The reply is the body:** after an answer, an addition's own words (a question its buttons ask)
+    are what it says without one; with the answer, the answer is its whole body. A fallback keeps
+    its words after the answer.
+  - **What Meta took but couldn't deliver** (a failed status on the webhook, such as a picture it
+    couldn't fetch: `whatsapp.undelivered`) sends that addition's fallback, once, with the answer's
+    text when it went in the same message.
+  - **A burst gets one answer:** a customer's messages wait for the line's quiet window (`quiet`, 4
+    s by default, up to 30) before the agent answers, all of them in one turn and one reply
+    (`chat.send`'s new `quiet`: a durable timer each message sets again, `chat.quiet`, so a restart
+    in the window still answers once).
+  - **A failed turn** tells a customer only that, in their line's language, never its error.
+  - Each sender's quiet window is their own (`quiet:<thread>:<sender>:<agent>`): a staff member's
+    message never takes a customer's place, nor the reverse. Erasing a chat ends its windows, and a
+    window whose message is gone (or no longer theirs to read) starts no turn.
+  - A declared line is one org's with the orgs host: it names the org (`org`), and every other org's
+    runtime has nothing of it; a line naming none is a single-org app's.
+  - What Meta couldn't deliver is rendered again as its addressee, as any reply is.
+- **Signed links** (the runtime's `signLink` and `verifyLink`, with the app's `links` resource:
+  `{ origin, secret }`, a secret of at least 32 bytes, checked at start): the app's origin, a path,
+  its params and an expiry (an hour unless said), HMAC-signed, with a line break between origin and
+  path, so a link for one app or org never opens another (under `hosts/orgs`, give each org its own
+  origin). The web host checks the secret as it starts serving. A chat's file is linked or uploaded
+  only for someone who may read it. The web host serves a file at a signed `/files/<id>` link
+  without a session, as the system; expired or altered, a 404.
+- **Chat in spaces declares its own `shared` entries** (`thread`, `message` with labels, `file`,
+  `live` and `shown`, each a part of its thread). `chat.open` opens an empty chat in a space;
+  `chat.say { id, thread, from, text, to? }` has an agent say a fixed message in a chat without a
+  turn (trusted code only; the same `id` is said once), sent out like any of its answers.
+- **What a contact's chat shows stays theirs to see** (from a security review):
+  - A document others are parts of (a chat) labels as itself, and so do its parts: a write into a
+    chat shared with someone outside its space (a contact) that drew on anything else, even the same
+    space, carries that space as its source (staff read it; the contact doesn't), or an agent
+    writing it is refused (`needs_share`). WhatsApp sends only what its addressee may read.
+  - Agents are told who else is in a chat from outside the org (the `where` context), from a chat's
+    members on its own, which its space's people now read by asking for that chat.
+  - A part of a shared document, and a document shared on its own, are reached only where it lives:
+    nothing written as one lands in another space. `may`, `must` and `present` never take a document
+    shared on its own for a space (`may(ctx, verb, id, on)` asks about the document).
+  - A contact's message goes to whom its chat is with (or the agent that wrote what it replies to):
+    never to agents it names. Anyone's `replyTo` is kept only for a message of the same chat that
+    they read.
+  - A tool whose `offer` is a function decides for agents that name it too; `request_access` refuses
+    for a contact; computers aren't woken (or billed) for work that's no person's; memory declares
+    its own `shared` entry; the identity guard keeps people's records to people.
+  - `chat.say`'s message is `<thread>:say:<id>`, said only by an agent answering in that chat.
+  - Work handed to another space from a chat shared with a contact comes back labelled with that
+    space (`sources`): the contact doesn't read it (spaces' contract: `sharedWith`).
+  - The `shared` resource's entries are its own keys: a collection named like what objects inherit
+    (`constructor`) is none.
+- **Erasure:** `contact.forget { contact, chats? }` (managers of its space) ends a contact's access
+  at once, deletes its record (`contact.deleted`: WhatsApp erases its phone, but a block on it
+  stays, by the phone's hash) and, with `chats`, its chats, each for someone who manages that chat's
+  space (chat's new `chat.erase`, trusted code only: messages, files, waits, steps in flight; the
+  history plugin erases its summaries on `thread.deleted`). The event log keeps what happened (what
+  WhatsApp delivered, each change with its document) until retention removes it; memories learned in
+  staff's chats, and chats a hand-over opened elsewhere, aren't erased.
+- **An open line, kept in hand:** `whatsapp.block { thread, blocked }` (managers) blocks the phone
+  behind a chat: what it sends goes nowhere, unanswered. A customer sending more than the number's
+  `rate` a minute (20) goes unanswered. One taken out of their chat is heard again once it's been
+  quiet for the gap. Customers are told what can't go on in the number's `language` (`en`, `pt`),
+  never in an error's own words.
+- **Fixed:** `message.questions`, and the terminal's `shell.mine`, `shell.set` and `shell.print`,
+  let anyone whose id matched in; they're a person's own now.
+
 - **Private fields for recorded Actions.** `private: ["buyer", "passengers"]` on an Action (dot
   paths, as a collection's): its calls are recorded without them, in `action.started`'s input and
   `action.completed`'s result alike, so the personal data a booking's buyer gives (names, CPFs,

@@ -109,6 +109,9 @@ export const credentialsAction = defineAction({
       .findOne({ _id: input.number });
     if (!found) throw failure("not_found", "No such number here.");
     await mustManage(ctx, found.in, "change its number");
+    if (found.declared) {
+      throw failure("invalid", "This number is the app's own: its settings say how it works.");
+    }
     const token = input.token?.trim();
     if (token) await checked(ctx, found.phoneId, token);
     const system = ctx.as().db;

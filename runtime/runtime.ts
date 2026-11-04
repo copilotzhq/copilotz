@@ -74,8 +74,8 @@ export async function createRuntime(
   await Promise.all(executors.map((executor) => executor.ready));
   return {
     ...owner,
-    async close() {
-      await owner.close();
+    async close(options) {
+      await owner.close(options);
       await Promise.all(executors.map((executor) => executor.stop()));
     },
   };

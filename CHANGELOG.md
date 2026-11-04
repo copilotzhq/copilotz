@@ -52,6 +52,19 @@ upgrading, every deployment should:
 - **Contacts: a start cut short after a contact's record, before sharing it with the contact, is
   finished when it's started again** (`contact.start`, on WhatsApp, voice and MCP): the contact, and
   the agent working for it, read the record again. A known contact was returned as it was.
+- **Maintenance SQL can run as the store's own role, told so:**
+  `postgresStore({ url, schema, maintenance: { storeRole: true } })`, beside a role of its own
+  (`maintenance: { url }`; both at once stop the store from opening, and neither still refuses raw
+  SQL on a server, its message naming both). Anyone holding the maintenance key can then do whatever
+  the store's role can: drop or truncate its tables, delete from the log, read every schema it
+  reaches. Only the allowlist check is skipped; the statement filter, a connection of its own for
+  each statement over the extended protocol, the timeouts, caps and `connections`, fenced writes in
+  the owner with their `maintenance.sql` event, the rollback of what changes `meta` or makes a
+  trigger, and the emptied cache all hold. Still refused, before each statement and after a write: a
+  role that is or may become a superuser, a member of `pg_execute_server_program`,
+  `pg_read_server_files` or `pg_write_server_files`, one with `CREATEROLE` before PostgreSQL 16, or
+  one that may run the server's file functions (`pg_read_file`, `lo_import`, `lo_export`…). Cloud
+  SQL's `postgres` user passes from PostgreSQL 16. An orgs host's orgs still don't get the plugin.
 
 ## 1.0.0-rc.21 — 2026-11-04
 

@@ -75,8 +75,13 @@ export async function createRuntime(
   return {
     ...owner,
     async close(options) {
-      await owner.close(options);
-      await Promise.all(executors.map((executor) => executor.stop()));
+      // The executors stop even when the owner's close fails (a fenced owner's last save):
+      // left running, they'd keep the process alive.
+      try {
+        await owner.close(options);
+      } finally {
+        await Promise.all(executors.map((executor) => executor.stop()));
+      }
     },
   };
 }

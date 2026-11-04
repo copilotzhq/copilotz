@@ -3,7 +3,7 @@
  * encrypted, as its answer's state, and goes back with its answer in the next
  * calls: between tool steps it carries on from it instead of thinking again.
  */
-import { post, sse, usageOf } from "../../shared/provider.ts";
+import { alive, post, sse, usageOf } from "../../shared/provider.ts";
 import type { LlmAdapter, LlmFile, LlmMessage } from "../../shared/types.ts";
 import { OPENAI } from "./openai-compatible.ts";
 
@@ -184,8 +184,11 @@ export const openaiResponses: LlmAdapter = {
     }
     // What goes back with the answer: its reasoning, in its place among what it wrote and called.
     const kept: Kept[] = [];
+    // Thinking, it sends its reasoning's items for minutes before it writes: alive all the same.
+    const beat = alive();
     for await (const { data } of sse(response.body!)) {
       const event = JSON.parse(data);
+      if (beat()) yield { type: "thinking" };
       if (event.type === "response.output_text.delta") {
         yield { type: "text", text: event.delta };
       } else if (event.type === "response.output_item.done") {

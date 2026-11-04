@@ -5,7 +5,7 @@
  * its thinking (`reasoning_content`: DeepSeek, Moonshot, Qwen, vLLM) gets it
  * back on its answer (its state), as DeepSeek requires once tools are given.
  */
-import { post, sse, usageOf } from "../../shared/provider.ts";
+import { alive, post, sse, usageOf } from "../../shared/provider.ts";
 import type { LlmAdapter, LlmMessage } from "../../shared/types.ts";
 
 export const OPENAI = {
@@ -93,9 +93,12 @@ export const openaiCompletions: LlmAdapter = {
     // What it thought, in pieces too: sent back with its answer.
     let thought = "";
     let thinking: number | undefined;
+    // A model that thinks first (DeepSeek's reasoning) sends it before it writes: alive all the same.
+    const beat = alive();
     for await (const { data } of sse(response.body!)) {
       if (data === "[DONE]") break;
       const chunk = JSON.parse(data);
+      if (beat()) yield { type: "thinking" };
       if (chunk.error) {
         throw new Error(`OpenAI: ${chunk.error.message ?? JSON.stringify(chunk.error)}`);
       }

@@ -254,6 +254,9 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
               tags: m.tags ? { ...m.tags, ...request.tags } : request.tags,
             });
             yield { ...chunk, model: m.id };
+          } else if (chunk.type === "thinking") {
+            // At work, nothing written yet: the silence it ends isn't a dropped call.
+            yield chunk;
           } else {
             wrote = true;
             call.first();
@@ -310,7 +313,7 @@ export async function complete(
       answer.text = "";
       answer.toolCalls = [];
       delete answer.state;
-    } else {
+    } else if (chunk.type === "usage") {
       const { type: _, ...usage } = chunk;
       answer.usage = usage;
     }

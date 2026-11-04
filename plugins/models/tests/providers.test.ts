@@ -162,6 +162,18 @@ async function server() {
         },
         "[DONE]",
       ])),
+    // A model thinking: only its reasoning's items, before it writes.
+    "/v1/thinking/responses": () =>
+      new Response(sse([
+        { type: "response.created" },
+        { type: "response.output_item.added", item: { type: "reasoning" } },
+        {
+          type: "response.output_item.done",
+          item: { id: "rs_1", type: "reasoning", encrypted_content: "E1", summary: [] },
+        },
+        { type: "response.output_text.delta", delta: "Done." },
+        { type: "response.completed", response: {} },
+      ], true)),
     // A reasoning model: its reasoning, encrypted, before and between what it writes and calls.
     "/v1/reasoning/responses": () =>
       new Response(sse([
@@ -381,6 +393,21 @@ test("openai-compatible: what a model thinks comes back as state, and goes back 
     assertEquals(sent[1], { role: "assistant", content: "Hm." });
     assertEquals(sent[3].reasoning_content, "Two dice? One.");
     assertEquals(sent[3].content, null);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("openai (Responses): a model thinking before it writes says it's at work", async () => {
+  const mock = await server();
+  try {
+    const chunks = await run(openaiResponses, {
+      model: "m",
+      baseURL: `${mock.url}/v1/thinking`,
+      apiKey: "k",
+    }, { effort: "xhigh" });
+    // At work before its first word (once: at most about once a second), then what it wrote.
+    assertEquals(chunks.slice(0, 2), [{ type: "thinking" }, { type: "text", text: "Done." }]);
   } finally {
     await mock.close();
   }

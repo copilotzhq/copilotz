@@ -102,6 +102,20 @@ export async function post(
 }
 
 /** Server-sent events: each event's name (if any) and its data. */
+/**
+ * Whether to say a stream is alive now (a `thinking` chunk): at most once
+ * every `ms`, however often its provider sends. Asked on each event.
+ */
+export function alive(ms = 1_000): () => boolean {
+  let last = 0;
+  return () => {
+    const now = Date.now();
+    if (now - last < ms) return false;
+    last = now;
+    return true;
+  };
+}
+
 export async function* sse(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<{ event?: string; data: string }> {

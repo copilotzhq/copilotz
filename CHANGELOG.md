@@ -1,3 +1,17 @@
+## Unreleased
+
+- **A host without the web app: `serveRoutes`** (`copilotz/web/node`), for an app people use on
+  WhatsApp or on the phone. Given the runtime, it serves the app's routes alone (webhooks),
+  `/health` (unless a route takes it), and 404 for anything else: no page, no code, no sign-in; a
+  route's Action is called as a visitor. Its `close({ drain })` stops listening, letting running
+  requests finish, then closes the runtime with those options. A runtime that declares the `socket`
+  transport still takes its sockets at `/oxian`. `routeHost(runtime)` (`copilotz/web/server`) is the
+  same as a fetch handler. On Node, Deno and Bun (`examples/web-node/routes.ts`).
+- **A route can take a WebSocket** (a voice call's relay): a `serve` route calls `host.upgrade()`,
+  and answers with the response it gives; its `socket` is a browser's `WebSocket` as far as
+  `onmessage`, `send` and `close` go. It can refuse first, before any handshake. `serveRoutes` and
+  the web host's `serve` take it, through Oxian's adapter (route sockets, Oxian 0.23).
+
 ## 1.0.0-rc.20 — 2026-11-04
 
 - **A model thinking past two minutes isn't a dropped call.** A call counted as dropped once its

@@ -117,10 +117,10 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                    |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                    |
 | `copilotz/web`                         | the web host in the browser (`web`), and its toolkit (`Button`, `Markdown`…)                                 |
-| `copilotz/web/server`                  | its server half: `webServer`, `socket`                                                                       |
+| `copilotz/web/server`                  | its server half: `webServer`, `socket`; `routeHost` (the app's routes alone)                                 |
 | `copilotz/web/tickets`                 | `createTickets`: sessions traded for one-time tickets                                                        |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                              |
-| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve`, `listen` (HTTP, sockets)                               |
+| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve`, `serveRoutes`, `listen` (HTTP, sockets)                |
 | `copilotz/orgs`                        | `orgsHost`: many orgs behind one address, each a runtime of its own                                          |
 | `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                              |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                     |
@@ -193,6 +193,48 @@ first used. Node takes a socket before any handler runs, so `listen` serves the 
 each socket to the runtime of the org its request is for:
 `listen({ fetch: host.serve, hypervisor: (request) => host.openRuntime(request)?.hypervisor })`
 (`examples/web-node/orgs.ts`).
+
+### Without the web app
+
+An app people use on WhatsApp or on the phone needs no page: `serveRoutes` serves its plugins'
+routes alone (`routes` resources: Meta's webhook, Twilio's), `GET /health` for whatever watches it,
+and 404 for anything else. Nobody signs in there: a route's Action is called as a visitor, and its
+`allow` decides (a webhook checks the request's signature, then acts for the person it's from with
+`ctx.as`). Deno and Bun run it too.
+
+```ts
+import { createRuntime } from "copilotz";
+import { serveRoutes } from "copilotz/web/node";
+
+const runtime = await createRuntime({ store, plugins });
+const server = await serveRoutes({ runtime, hostname: "0.0.0.0", port: 8080 });
+// A deploy's SIGTERM: stop listening, give running turns a while, close the runtime.
+process.once("SIGTERM", () => server.close({ drain: 8_000 }));
+```
+
+A `serve` route may take a WebSocket of its own (a voice call's relay): `host.upgrade()` accepts the
+request's upgrade, and the route answers with the response it gives. It can refuse first (`403`,
+before any handshake). The socket is a browser's `WebSocket` as far as `onmessage`, `send` and
+`close` go; the listener (`serveRoutes`, or the web host's `serve`) takes it.
+
+```ts
+routes: {
+  relay: {
+    path: "/voice/relay",
+    serve: (request, host) => {
+      if (!signed(request)) return new Response("Forbidden", { status: 403 });
+      const { socket, response } = host.upgrade();
+      socket.onmessage = async (event) => socket.send(await answer(host.runtime, event.data));
+      return response;
+    },
+  },
+},
+```
+
+A runtime that declares the `socket` transport (remote executors) still takes its sockets at
+`/oxian`. `routeHost(runtime)` (`copilotz/web/server`) is the same as a fetch handler, for another
+listener; a route's socket needs Oxian's (`copilotz/web/node`'s). The example is
+`examples/web-node/routes.ts`.
 
 ## Installing a computer
 
@@ -794,8 +836,8 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   beside the runtime, which declares the `socket` transport). A browser reads a collection directly
   only when a rule speaks for it; anything else, through queries that let its person. Writes are
   Actions. Plugins answer their own HTTP through the `routes` resource (a webhook, an OAuth
-  callback, an API, a download), and files people sent are served at `/files/<id>` to whoever may
-  read them, with ranges.
+  callback, an API, a download, a socket of their own), and files people sent are served at
+  `/files/<id>` to whoever may read them, with ranges.
 - **The design system** (`design/views.md`, "The design system"): the web host owns a token
   vocabulary (shadcn's names) and its defaults, which are Copilotz's look (navy, the logo's cyan and
   blue, Manrope and Space Grotesk, its logo and icon), and an app rebrands with a `theme` resource

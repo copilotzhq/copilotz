@@ -2,7 +2,8 @@
  * Plugins' routes: a request becomes a call to their Action, as whoever its
  * session signs in or a visitor, and its answer becomes the response; a
  * `serve` route answers itself; the more specific path wins; the host's own
- * paths can't be taken; failures say only what they should.
+ * paths can't be taken; failures say only what they should. Without the web
+ * app (`routeHost`), routes are all there is, and `/health`.
  */
 import { assertEquals, assertRejects } from "@std/assert";
 import { createRuntime, defineAction, definePlugin, type Plugins } from "../../../runtime/mod.ts";
@@ -10,7 +11,7 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import { identity } from "../../../plugins/access/mod.ts";
 import { test } from "../../../testing/mod.ts";
 import { createTickets } from "../tickets.ts";
-import { httpRequest, webServer } from "../server.ts";
+import { httpRequest, routeHost, webServer } from "../server.ts";
 
 const hooks = definePlugin({
   name: "hooks",
@@ -174,4 +175,45 @@ test("the host's own paths can't be taken", async () => {
     Error,
     "is the web host's own",
   );
+});
+
+test("without the web app: the routes, /health unless a route takes it, and 404", async () => {
+  const preview = definePlugin({
+    name: "preview",
+    resources: {
+      routes: {
+        preview: { host: "*-preview.example.com", serve: () => new Response("the preview") },
+      },
+    },
+  });
+  const health = definePlugin({
+    name: "health",
+    resources: { routes: { health: { path: "/health", serve: () => new Response("mine") } } },
+  });
+  const rt = await createRuntime({ store: memoryStore(), plugins: [hooks, preview] });
+  const own = await createRuntime({ store: memoryStore(), plugins: [health] });
+  try {
+    const serve = routeHost(rt);
+    const text = async (url: string, init?: RequestInit) => {
+      const answered = await serve(new Request(url, init));
+      return [answered.status, await answered.text()];
+    };
+    const echoed = await serve(new Request("http://localhost/hooks/echo", { method: "POST" }));
+    assertEquals([echoed.status, echoed.headers.get("x-who")], [201, "visitor"]);
+    await echoed.body?.cancel();
+    assertEquals(await text("http://localhost/download/a.zip"), [200, "file /download/a.zip"]);
+    assertEquals(await text("http://localhost/health"), [200, "ok"]);
+    assertEquals(await text("http://localhost/health", { method: "POST" }), [404, "Not found"]);
+    assertEquals(await text("http://localhost/"), [404, "Not found"]);
+    assertEquals(await text("http://localhost/app/app.js"), [404, "Not found"]);
+    // A host a route takes is all its own, /health too.
+    assertEquals(await text("http://ab1-preview.example.com/health"), [200, "the preview"]);
+    assertEquals(
+      await (await routeHost(own)(new Request("http://localhost/health"))).text(),
+      "mine",
+    );
+  } finally {
+    await rt.close();
+    await own.close();
+  }
 });

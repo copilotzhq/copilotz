@@ -52,12 +52,17 @@ export function prompt(thread: Thread, ctx: ViewContext): Prompt {
     if (m.from === name) { for (const c of (m.told ?? []) as Told[]) last.set(c.name, c.text); }
   }
   const resources = (ctx.resources.tools ?? {}) as Record<string, Tool>;
+  const says = (tool: string) => {
+    const offer = resources[tool]?.offer;
+    return typeof offer === "function" ? offer(name, thread, ctx) : undefined;
+  };
   const offered = Object.keys(resources).filter((tool) => {
     const offer = resources[tool].offer;
-    return offer === true || (Array.isArray(offer) && offer.includes(name)) ||
-      (typeof offer === "function" && offer(name, thread, ctx));
+    return offer === true || (Array.isArray(offer) && offer.includes(name)) || says(tool) === true;
   });
-  const listed = [...new Set([...(agent?.tools ?? []), ...offered])];
+  // A tool that decides where it's offered decides for agents that name it too (not for a contact).
+  const named = (agent?.tools ?? []).filter((tool) => says(tool) !== false);
+  const listed = [...new Set([...named, ...offered])];
   const tools: LlmTool[] = listed.filter((tool) => tool !== SEND).map((tool) => {
     if (!resources[tool]) throw new Error(`Agent "${name}" uses unknown tool "${tool}"`);
     return {

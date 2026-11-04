@@ -24,6 +24,9 @@ export const tools: Record<string, Tool> = {
       const { space, reason } = input as { space: string; reason: string };
       const who = (ctx.actor?.for ?? ctx.actor) as { kind: string; id: string } | undefined;
       if (!who) return "Nobody to ask for.";
+      if (principalOf(ctx.actor)?.kind === "contact") {
+        return "Not here: someone outside the org is let into this conversation alone.";
+      }
       // Found by name, whoever can see it: the person named it. Nobody asks into a Personal space.
       const system = ctx.as();
       const found = (await system.db.collection<{ _id: string; name: string }>("space")

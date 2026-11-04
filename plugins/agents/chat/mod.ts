@@ -20,7 +20,8 @@
  * - A chat can be opened empty (`chat.open`), to share it with a contact
  *   (someone outside the org, who then writes there with `chat.send` and
  *   reaches only it); trusted code has an agent say a fixed message in one
- *   without a turn (`chat.say`: a payment confirmed).
+ *   without a turn (`chat.say`: a payment confirmed), and erases one with
+ *   everything in it (`chat.erase`: someone's data, gone).
  * - Threads record where they came from (`parent`). A fork (a subthread) sees
  *   its parent's conversation up to the message it started at, through every
  *   level, without copying it; a new thread starts from its first message.
@@ -48,6 +49,7 @@
  * - `agentModel`: { action }: `{ agent, space? }` in, a model or null out.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { eraseAction } from "./actions/erase.ts";
 import { forkAction } from "./actions/fork.ts";
 import { moveAction } from "./actions/move.ts";
 import { openAction } from "./actions/open.ts";
@@ -103,6 +105,7 @@ export const chat: Plugin = definePlugin({
     "chat.send": sendAction,
     "chat.open": openAction,
     "chat.say": sayAction,
+    "chat.erase": eraseAction,
     "chat.fork": forkAction,
     "chat.stop": stopAction,
     "chat.move": moveAction,

@@ -12,7 +12,7 @@
  */
 import type { Actor, Filter, Guard } from "../../../../runtime/mod.ts";
 import { membersOf } from "./agents.ts";
-import { memberKey, reachOf, type Verb, where } from "./reach.ts";
+import { homeOf, memberKey, type Reach, reachOf, type Verb, where } from "./reach.ts";
 
 /**
  * The `shared` resource: collections whose documents live in spaces, the
@@ -29,6 +29,14 @@ export type Shared = Record<
   string,
   { field?: string; labels?: boolean; write?: Verb; member?: string; part?: string }
 >;
+
+/** The documents of `on` reached on their own with `verb`: each id, and the space it lives in. */
+const held = (reach: Reach, verb: Verb, on: string): [string, string][] =>
+  [...reach].flatMap(([key, r]) =>
+    r.on === on && r.home && r.can.has(verb)
+      ? [[key.slice(on.length + 1), r.home] as [string, string]]
+      : []
+  );
 
 export const rules: Guard = async (actor, { collection, access, filter }, ctx) => {
   const shared = (ctx.resources.shared ?? {}) as Shared;
@@ -51,7 +59,14 @@ export const rules: Guard = async (actor, { collection, access, filter }, ctx) =
     // Who's where isn't content: an agent reads it as far as the person it works for reaches.
     const by = access === "read" && actor.for ? await reachOf(actor.for as Actor, ctx) : reach;
     const spaces = where(by, access === "read" ? "read" : "manage");
-    return collection === "space" ? { _id: { $in: spaces } } : { space: { $in: spaces } };
+    if (collection === "space") return { _id: { $in: spaces } };
+    // Who a document of a space is shared with on its own (a contact, in a chat), asked by its key.
+    const named = filter?.space;
+    if (access === "read" && typeof named === "string" && !spaces.includes(named)) {
+      const home = await homeOf(named, ctx);
+      if (by.has(named) || (home && spaces.includes(home))) return { space: named };
+    }
+    return { space: { $in: spaces } };
   }
   const { field = "in", labels, write = "write", member, part } = shared[collection];
   const verb = access === "read" ? "read" : write;
@@ -62,19 +77,22 @@ export const rules: Guard = async (actor, { collection, access, filter }, ctx) =
     : undefined;
   const named = filter?.[field];
   if (typeof named === "string" && spaces.includes(named)) return sourced ?? true;
-  // Parts of documents shared on their own (the messages of a chat shared with a contact).
-  const wholes = part ? where(reach, verb, part) : [];
+  const and = (f: Filter) => sourced ? { $and: [f, sourced] } : f;
+  // Documents shared on their own, and their parts (a chat shared with a contact, its messages):
+  // each only where it lives, so nothing written as one of them lands in another space.
+  const docs = held(reach, verb, collection);
+  const wholes = part ? held(reach, verb, part) : [];
   const whole = part ? filter?.[part] : undefined;
-  if (typeof whole === "string" && wholes.includes(whole)) return sourced ?? true;
-  const docs = where(reach, verb, collection);
+  const asked = wholes.find(([id]) => id === whole);
+  if (asked) return and({ [field]: asked[1] });
   // Documents that are members (agents) are read where they work too.
-  if (member && access === "read") docs.push(...await membersOf(ctx, spaces, member));
+  const members = member && access === "read" ? await membersOf(ctx, spaces, member) : [];
   // Only what's reached, so a store can use its indexes (a contact reaches no space at all).
   const anyOf: Filter[] = [
     ...(spaces.length ? [{ [field]: { $in: spaces } }] : []),
-    ...(docs.length ? [{ _id: { $in: docs } }] : []),
-    ...(wholes.length ? [{ [part!]: { $in: wholes } }] : []),
+    ...docs.map(([id, home]) => ({ _id: id, [field]: home })),
+    ...(members.length ? [{ _id: { $in: members } }] : []),
+    ...wholes.map(([id, home]) => ({ [part!]: id, [field]: home })),
   ];
-  const reached = anyOf.length > 1 ? { $or: anyOf } : anyOf[0] ?? { [field]: { $in: [] } };
-  return sourced ? { $and: [reached, sourced] } : reached;
+  return and(anyOf.length > 1 ? { $or: anyOf } : anyOf[0] ?? { [field]: { $in: [] } });
 };

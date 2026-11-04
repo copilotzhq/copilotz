@@ -7,8 +7,9 @@
  * pause. Their steps (private) and what agents say to each other there stay
  * in the app.
  *
- * Each part sent is recorded (`whatsapp_sent`), so a retried delivery sends
- * only what's left. It reads the conversation's number as the system: its
+ * Only what they may read goes: a message drawing on what they can't see
+ * (its `sources`) stays in the app. Each part sent is recorded
+ * (`whatsapp_sent`), so a retried delivery sends only what's left. It reads the conversation's number as the system: its
  * token is what sends.
  */
 import type { ProcessorDef } from "../../../../runtime/mod.ts";
@@ -36,6 +37,11 @@ export const replyProcessor: ProcessorDef = {
     // Whom it's with: a person by id, a contact as messages name them.
     const to = chat?.person ?? (chat?.contact ? `${CONTACT}${chat.contact}` : undefined);
     if (!chat || !to || !said.to?.includes(to)) return;
+    // Only what they may read: an answer drawing on what they can't see (its sources) stays here.
+    const reader = chat.person
+      ? { kind: "person", id: chat.person }
+      : { kind: "contact", id: chat.contact! };
+    if (!await ctx.as(reader).db.collection("message").findOne({ _id: said._id })) return;
     const text = toWhatsApp(said.text ?? "");
     if (!text) return;
     const on = await connected(ctx, chat.number);

@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.21 — 2026-11-04
 
 - **MCP: models outside the app call its tools** (the new `mcp` interface; widgets come next). An
   app declares lines in `resources.mcp.lines.<name>`, each an MCP server at `POST /mcp/<name>`

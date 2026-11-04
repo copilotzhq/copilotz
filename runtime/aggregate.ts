@@ -14,7 +14,7 @@
  *   strings, as MongoDB orders them; other types are left out).
  * - Groups come out ordered by `_id`, unless `$sort` says otherwise.
  */
-import { get, matches, sortAndPage } from "./mongo.ts";
+import { checkName, get, matches, sortAndPage } from "./mongo.ts";
 import { check } from "./mongo.ts";
 import type { Doc, Filter } from "./store.ts";
 
@@ -88,10 +88,16 @@ export function plan(pipeline: Pipeline): Plan {
     } else if (name === "$group" && stage <= 1) {
       const { _id, ...rest } = (arg ?? {}) as Record<string, unknown>;
       if (!("_id" in (arg as object))) throw invalid("$group needs an _id (null for one group)");
+      // The fields it names, it makes: never a `$…` one (a blob reference's `$blob`, say).
+      const named = ([k, e]: [string, unknown]): [string, Expr] => {
+        checkName(k, `_id.${k}`);
+        return [k, checkExpr(e)];
+      };
       const key = _id !== null && typeof _id === "object" && !("$substr" in _id)
-        ? { fields: Object.entries(_id).map(([k, e]) => [k, checkExpr(e)] as [string, Expr]) }
+        ? { fields: Object.entries(_id).map(named) }
         : { expr: checkExpr(_id) };
       const fields = Object.entries(rest).map(([field, acc]): [string, Operator, Expr] => {
+        checkName(field);
         const [op, ...more] = Object.keys(acc ?? {});
         if (!OPERATORS.has(op as Operator) || more.length) {
           throw invalid(`Unsupported accumulator for "${field}": $sum, $count, $avg, $min, $max`);

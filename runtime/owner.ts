@@ -36,7 +36,7 @@ import {
   type StoreOp,
   type WriteOp,
 } from "./ops.ts";
-import { check, matches } from "./mongo.ts";
+import { check, checkPath, matches } from "./mongo.ts";
 import {
   canonical,
   checked,
@@ -75,7 +75,13 @@ import {
 export type Transport = HypervisorOptions["transports"][number];
 
 export type Feed =
-  | { kind: "event"; event: Event }
+  | {
+    kind: "event";
+    /** As the log holds it: a large value is a blob reference. */
+    event: Event;
+    /** The event with its large values in place of their references, read when asked. */
+    full(): Promise<Event>;
+  }
   | { kind: "frame"; channel: string; data: unknown };
 
 export type Stats = {
@@ -302,9 +308,15 @@ export async function createOwner(
   const known = (op: Op) => {
     // What plugin code writes holds no `$blob` key (see blobs.ts). Offloading looks as it walks
     // what's stored; an upsert's filter (it seeds the new document) and in-memory writes (never
-    // offloaded) are looked at here.
+    // offloaded) are looked at here. So are an update's field paths: `{ $set: { "a.$blob": … } }`
+    // would make one, as would a path through `__proto__` reach every object's prototype.
     if ((op.op === "update" || op.op === "replace") && op.options?.upsert) {
       refuseBlobKeys(op.filter);
+    }
+    if (op.op === "update" && Object.keys(op.update).some((key) => key.startsWith("$"))) {
+      for (const fields of Object.values(op.update)) {
+        for (const path of Object.keys(fields ?? {})) checkPath(path);
+      }
     }
     if (inMemory(op) && !isRead(op)) refuseBlobKeys(op);
     if (!("collection" in op) || op.collection.startsWith(SYSTEM)) return;
@@ -457,7 +469,7 @@ export async function createOwner(
     for (const [name, seq] of saving) if (unsaved.get(name) === seq) unsaved.delete(name);
     for (const event of events) {
       measure.events.add(1, { type: event.type });
-      publish({ kind: "event", event });
+      publish({ kind: "event", event, full: () => whole(event) });
       route(event, true);
     }
     if (seen.length) observers.changed(seen);
@@ -585,6 +597,11 @@ export async function createOwner(
   // Large values: in the configured blob store, or in the store's own blobs.
   const blobsOf = (reader: Reader) => (id: string) =>
     options.blobs ? options.blobs.get(id) : reader.blob(id);
+  /** A committed event with its large values in place. */
+  const whole = async (event: Event): Promise<Event> => ({
+    ...event,
+    data: await hydrate(event.data, blobsOf(store)),
+  });
   // Reads of committed state go through the cache; reads in a transaction see its own writes.
   const cache = options.cache === false ? undefined : createCache({
     ...options.cache,
@@ -1564,7 +1581,7 @@ export async function createOwner(
   const attempts = async (name: string, event: Event, recovered: boolean, stop: AbortSignal) => {
     for (let attempt = 1;; attempt++) {
       try {
-        const full = { ...event, data: await hydrate(event.data, blobsOf(store)) };
+        const full = await whole(event);
         await run({
           kind: "process",
           processor: name,

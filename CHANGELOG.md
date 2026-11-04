@@ -23,6 +23,24 @@
   tools. Workers are told they're gone after the drain, so running work can still use them. The orgs
   host's `close({ drain })` passes it on to every org's runtime.
 
+- **Fixed: messages in a row ended an agent's prompt with its own answer.** A person writing several
+  messages a few seconds apart starts a turn for each; one that ran after the agent had answered
+  (while it wrote, or with the next turn) was sent a conversation ending with that answer, which
+  Anthropic's newer models refuse ("assistant message prefill", HTTP 400), so it failed. Now an
+  answer keeps how far its turn had read its thread (`knew`, the `at` of the newest message there);
+  the prompt reads what others said after that, while it wrote, after the answer; and the turn of a
+  person's message that an answer to them had already read ends without a model call. Adapters never
+  send a conversation ending with the model's own message: a user turn ("Continue.") follows it, for
+  every provider alike.
+- **Fixed: a failed turn's answer said what its provider said.** "booking failed: Anthropic 400:
+  {…}" was written in the chat, where everyone there read it (and a WhatsApp customer got it). It
+  now says "booking failed: something went wrong, so it couldn't answer. Try again in a moment."
+  What went wrong stays in the `processor.failed` event; a missing key still says who can add one.
+- **Fixed: MiniMax's usage counted no input.** Anthropic's adapter read input and cache counts only
+  from `message_start`; MiniMax (on Anthropic's protocol) says them in `message_delta`, so its calls
+  were recorded with 0 input tokens. It now reads every count from both, the greatest of each (they
+  are totals so far), so Anthropic's, said in both, count once.
+
 - **Fixed: a collection's private fields reached the log on PostgreSQL.** Writes that go as the
   store's single command (most of them) recorded `.created`, `.updated` and `.deleted` with the
   whole document, so `private` fields (a computer's `pending` secret, unsealed account tokens) were

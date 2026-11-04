@@ -64,7 +64,8 @@ export const memory: Plugin = definePlugin({
       },
     }),
   },
-  resources: { memory: { every: 8 }, context: contexts, tools },
+  // With the access plugin, a memory lives in a space (where it was learned): its members reach it.
+  resources: { memory: { every: 8 }, context: contexts, tools, shared: { memory: {} } },
   async check(merged) {
     const { embedder } = settingsOf(merged);
     if (embedder) await merged.call("models.check", { model: embedder, port: "embeddings" });

@@ -1,9 +1,11 @@
 /**
  * `space.create`: a new space (shared by default), managed by whoever makes
- * it, with the app's default agents working there.
+ * it, with the app's default agents working there. Not one the app declares
+ * (see shared/declared.ts): those are the app's, made by `space.keep`.
  */
 import { defineAction, people } from "../../../../runtime/mod.ts";
 import { seat } from "../shared/agents.ts";
+import { declaredOf } from "../shared/declared.ts";
 import { memberKey, orgRoleOf } from "../shared/reach.ts";
 
 export const createAction = defineAction({
@@ -18,6 +20,13 @@ export const createAction = defineAction({
   run: async (ctx, input) => {
     if (await orgRoleOf(ctx.actor!, ctx.as()) === "guest") {
       throw Object.assign(new Error("Guests work in the spaces they're invited to."), {
+        code: "forbidden",
+      });
+    }
+    // A space the app declares is the app's (`space.keep` makes it): made first by a person,
+    // they would manage it, and the app's customers with it.
+    if (input.id !== undefined && declaredOf(ctx, input.id)) {
+      throw Object.assign(new Error(`Space "${input.id}" is the app's own.`), {
         code: "forbidden",
       });
     }

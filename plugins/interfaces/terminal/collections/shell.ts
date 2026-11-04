@@ -24,7 +24,8 @@ export const shell = defineCollection({
   queries: {
     /** This person's state (empty until they go somewhere). */
     mine: {
-      allow: (actor, params: { person: string }) => actor.id === params.person,
+      allow: (actor, params: { person: string }) =>
+        actor.kind === "person" && actor.id === params.person,
       run: async (shells, params: { person: string }) =>
         await shells.findOne({ _id: params.person }) ?? { _id: params.person },
     },

@@ -25,7 +25,7 @@ export const setAction = defineAction({
   },
   record: false,
   // Your own shell, and nobody else's.
-  allow: (actor, input) => actor.id === input.person,
+  allow: (actor, input) => actor.kind === "person" && actor.id === input.person,
   run: async (ctx, { person, ...fields }) => {
     const set = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null));
     const unset = Object.fromEntries(

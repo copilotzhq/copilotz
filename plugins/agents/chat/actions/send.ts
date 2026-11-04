@@ -1,15 +1,22 @@
 /**
- * A person's message. It goes to `to` when given, else to the agents
- * `@mentioned` in it, else to the sender of the message it replies to,
- * else to the thread's agents (a new thread's: those it names, or who
- * answers new chats in its space). Only agents answering in its space
- * answer there: naming one that doesn't fails (`not_here`). Audio sent with it is transcribed first
- * (what agents read): if that fails, nothing is sent and the call fails
- * with `transcription_failed`; `transcribe: false` sends it as it is. `via`
- * says what sent it for the person (a routine); a new thread takes `title`
- * and `renamable` in the same commit, so its first turn already has them.
+ * A person's message, or a contact's (someone outside the org, in a chat
+ * shared with them: the rules keep them to it). It goes to `to` when given,
+ * else to the agents `@mentioned` in it, else to the sender of the message
+ * it replies to, else to the thread's agents (a new thread's: those it
+ * names, or who answers new chats in its space). A contact's goes to the
+ * sender of what it replies to, else the thread's agents: never whom it
+ * names. It replies only to a message of the same conversation that its
+ * sender reads. Only agents answering in
+ * its space answer there: naming one that doesn't fails (`not_here`). Audio
+ * sent with it is transcribed first (what agents read): if that fails,
+ * nothing is sent and the call fails with `transcription_failed`;
+ * `transcribe: false` sends it as it is. `via` says what sent it for the
+ * person (a routine); a new thread takes `title` and `renamable` in the same
+ * commit, so its first turn already has them. `tap` says it was a choice
+ * tapped (a button), not typed. With `quiet`, agents answer once the sender
+ * has been quiet that long (a burst of short messages, answered together).
  */
-import { defineAction, people } from "../../../../runtime/mod.ts";
+import { type Actor, defineAction, peopleOrContacts } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
@@ -19,6 +26,14 @@ import { movedBy, startedWith } from "../shared/summary.ts";
 import { settingsOf } from "../shared/types.ts";
 
 const names = { type: "array", items: { type: "string" } } as const;
+
+/** Who a message is from, pinned to whoever sends it: a person by id, a contact as `contact:<id>`. */
+const fromOf = (actor?: Actor) =>
+  actor?.kind === "person"
+    ? actor.id
+    : actor?.kind === "contact"
+    ? `contact:${actor.id}`
+    : undefined;
 
 export const sendAction = defineAction({
   input: {
@@ -77,15 +92,35 @@ export const sendAction = defineAction({
       },
       /** What a new thread is called (an existing one keeps its name). */
       title: { type: "string", minLength: 1, maxLength: 120 },
+      /**
+       * A choice tapped, not typed (a button's): what it means (`id`), what it
+       * said (`title`, the message's text when it says none) and the addition
+       * it was in (`key`).
+       */
+      tap: {
+        type: "object",
+        properties: {
+          id: { type: "string", minLength: 1, maxLength: 256 },
+          title: { type: "string", maxLength: 256 },
+          key: { type: "string", maxLength: 120 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
       /** A new thread an agent may name, as what it found. */
       renamable: { type: "boolean" },
+      /**
+       * Ms the sender may write on before agents answer (a customer writing in
+       * bursts): they answer once it's been quiet that long, everything at once.
+       */
+      quiet: { type: "integer", minimum: 0, maximum: 30_000 },
     },
     additionalProperties: false,
   },
-  // People write as themselves: their own messages.
-  allow: people,
+  // People and contacts write as themselves: their own messages.
+  allow: peopleOrContacts,
   run: async (ctx, input) => {
-    const said = input.text ?? "";
+    const said = input.text ?? input.tap?.title ?? "";
     if (!said.trim() && !input.files?.length) {
       throw Object.assign(new Error("A message says something, or sends a file"), {
         code: "invalid",
@@ -94,14 +129,18 @@ export const sendAction = defineAction({
     const threads = ctx.db.collection<Thread>("thread");
     const threadId = input.thread ?? crypto.randomUUID();
     const existing = input.thread ? await threads.findOne({ _id: threadId }) : null;
-    const replied = input.replyTo
+    // What it answers: a message the sender reads, in this conversation (else it answers nothing).
+    const found = input.replyTo
       ? await ctx.db.collection<Message>("message").findOne({ _id: input.replyTo })
       : null;
+    const replied = found?.thread === threadId ? found : null;
     const where = existing ? existing.in : input.in;
     const roster = await rosterOf(ctx, where);
     const members = existing ? existing.agents ?? [] : roster.default;
-    const mentioned = mentions(said);
-    const asked = input.to ??
+    // A contact talks with whom its chat is with: what it says names nobody else.
+    const contact = ctx.actor?.kind === "contact";
+    const mentioned = contact ? [] : mentions(said);
+    const asked = (contact ? undefined : input.to) ??
       (mentioned.length ? mentioned : replied ? [replied.from] : members);
     // Agents answer only where they work: one named that doesn't is refused; one gone, left out.
     const agents = await agentsNamed(ctx, asked);
@@ -169,16 +208,17 @@ export const sendAction = defineAction({
         }
         : {}),
       thread: threadId,
-      from: ctx.actor?.kind === "person" ? ctx.actor.id : input.from ?? "user",
+      from: fromOf(ctx.actor) ?? input.from ?? "user",
       ...(where ? { in: where } : {}),
       to: [...to],
       text: said,
       hops: 0,
-      ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      ...(replied ? { replyTo: replied._id } : {}),
       ...(input.via ? { via: input.via } : {}),
+      ...(input.tap ? { tap: input.tap } : {}),
       at: now(),
     };
-    const deliver = await delivery(ctx, sent);
+    const deliver = await delivery(ctx, sent, sent.thread, true, input.quiet ?? 0);
     await ctx.transaction(async (tx) => {
       // The chat's summary moves with the write that touches it anyway.
       if (existing) {

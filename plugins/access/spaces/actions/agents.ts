@@ -3,11 +3,13 @@
  * answering there answers its new chats (its managers choose); `space.roster`
  * says who answers there, for chat (its `roster` resource): the agents
  * that are editors there, and that one. As the asker: a space they don't
- * reach has nobody for them.
+ * reach has nobody for them, unless they're present there through a document
+ * of it (a contact, in its chat): who answers isn't content, and only agents
+ * are listed, so it's read for them as the system.
  */
-import { defineAction, people } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, people } from "../../../../runtime/mod.ts";
 import { rosterIn } from "../shared/agents.ts";
-import { must } from "../shared/can.ts";
+import { must, present } from "../shared/can.ts";
 
 export const agentAction = defineAction({
   description: "Chooses the agent that answers a space's new chats: one working there",
@@ -44,11 +46,16 @@ export const rosterAction = defineAction({
   },
   record: false,
   run: async (ctx, input) => {
-    const space = await ctx.db.collection<{ agent?: string }>("space").findOne({
-      _id: input.space,
-    });
+    let reader: Context = ctx;
+    const find = () =>
+      reader.db.collection<{ agent?: string }>("space").findOne({ _id: input.space });
+    let space = await find();
+    if (!space && await present(ctx, input.space)) {
+      reader = ctx.as();
+      space = await find();
+    }
     if (!space) return { agents: [] };
-    const agents = await rosterIn(ctx, input.space);
+    const agents = await rosterIn(reader, input.space);
     const answers = space.agent && agents.includes(space.agent) ? space.agent : agents[0];
     return { agents, ...(answers ? { default: answers } : {}) };
   },

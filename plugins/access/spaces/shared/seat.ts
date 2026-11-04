@@ -1,7 +1,8 @@
 /**
  * Giving a member a role in a space, however they came to it (a manager
- * setting it, a request granted): the role is one this app has, an agent never
- * manages, and a space keeps a manager.
+ * setting it, a request granted): the role is one this app has, an agent or a
+ * contact never manages, a contact is let into documents only (its chat),
+ * never a whole space, and a space keeps a manager.
  */
 import { type Context, invalid } from "../../../../runtime/mod.ts";
 import { keepsAManager } from "./managers.ts";
@@ -14,10 +15,16 @@ export function checkRole(ctx: Context, member: string, role: string) {
   if (member.startsWith("agent:") && verbs.includes("manage")) {
     throw invalid("Agents work here as viewers or editors.");
   }
+  if (member.startsWith("contact:") && verbs.includes("manage")) {
+    throw invalid("A contact reads or writes in what's shared with them, never manages it.");
+  }
 }
 
 export async function seat(ctx: Context, space: string, member: string, role: string) {
   checkRole(ctx, member, role);
+  if (member.startsWith("contact:")) {
+    throw invalid("A contact is let into a document (its chat), never into a whole space.");
+  }
   await keepsAManager(ctx, space, member, role);
   await ctx.as().db.collection("member").replaceOne(
     { _id: `${space}|${member}` },

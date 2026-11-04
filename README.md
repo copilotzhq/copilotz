@@ -103,8 +103,8 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`    |
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`              |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                  |
-| `copilotz/plugins/access`              | `access` (`spaces`, `identity`), `accounts`, `directory`, `googleSignIn`                                     |
-| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`                                                                                   |
+| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `accounts`, `directory`, `googleSignIn`                         |
+| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`                                                                    |
 | `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                             |
 | `copilotz/plugins/billing`             | `usage`: the ledger                                                                                          |
 | `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                   |
@@ -117,10 +117,10 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                    |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                    |
 | `copilotz/web`                         | the web host in the browser (`web`), and its toolkit (`Button`, `Markdown`…)                                 |
-| `copilotz/web/server`                  | its server half: `webServer`, `socket`                                                                       |
+| `copilotz/web/server`                  | its server half: `webServer`, `socket`; `routeHost` (the app's routes alone)                                 |
 | `copilotz/web/tickets`                 | `createTickets`: sessions traded for one-time tickets                                                        |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                              |
-| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve`, `listen` (HTTP, sockets)                               |
+| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve`, `serveRoutes`, `listen` (HTTP, sockets)                |
 | `copilotz/orgs`                        | `orgsHost`: many orgs behind one address, each a runtime of its own                                          |
 | `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                              |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                     |
@@ -193,6 +193,48 @@ first used. Node takes a socket before any handler runs, so `listen` serves the 
 each socket to the runtime of the org its request is for:
 `listen({ fetch: host.serve, hypervisor: (request) => host.openRuntime(request)?.hypervisor })`
 (`examples/web-node/orgs.ts`).
+
+### Without the web app
+
+An app people use on WhatsApp or on the phone needs no page: `serveRoutes` serves its plugins'
+routes alone (`routes` resources: Meta's webhook, Twilio's), `GET /health` for whatever watches it,
+and 404 for anything else. Nobody signs in there: a route's Action is called as a visitor, and its
+`allow` decides (a webhook checks the request's signature, then acts for the person it's from with
+`ctx.as`). Deno and Bun run it too.
+
+```ts
+import { createRuntime } from "copilotz";
+import { serveRoutes } from "copilotz/web/node";
+
+const runtime = await createRuntime({ store, plugins });
+const server = await serveRoutes({ runtime, hostname: "0.0.0.0", port: 8080 });
+// A deploy's SIGTERM: stop listening, give running turns a while, close the runtime.
+process.once("SIGTERM", () => server.close({ drain: 8_000 }));
+```
+
+A `serve` route may take a WebSocket of its own (a voice call's relay): `host.upgrade()` accepts the
+request's upgrade, and the route answers with the response it gives. It can refuse first (`403`,
+before any handshake). The socket is a browser's `WebSocket` as far as `onmessage`, `send` and
+`close` go; the listener (`serveRoutes`, or the web host's `serve`) takes it.
+
+```ts
+routes: {
+  relay: {
+    path: "/voice/relay",
+    serve: (request, host) => {
+      if (!signed(request)) return new Response("Forbidden", { status: 403 });
+      const { socket, response } = host.upgrade();
+      socket.onmessage = async (event) => socket.send(await answer(host.runtime, event.data));
+      return response;
+    },
+  },
+},
+```
+
+A runtime that declares the `socket` transport (remote executors) still takes its sockets at
+`/oxian`. `routeHost(runtime)` (`copilotz/web/server`) is the same as a fetch handler, for another
+listener; a route's socket needs Oxian's (`copilotz/web/node`'s). The example is
+`examples/web-node/routes.ts`.
 
 ## Installing a computer
 
@@ -339,6 +381,16 @@ name, never by importing its code.
     the `transcribe` model alias), and agents read the transcript. If it fails nothing is sent
     (`transcription_failed`); `transcribe: false` sends audio as it is. A voice message may say
     nothing else; its file carries `voice` (duration, peaks) for its player.
+  - **In spaces:** chat declares its own `shared` entries (threads, messages with labels, files,
+    what's being written), so an app with the access plugin needn't. A chat's messages, files and
+    live writing are part of it (`part: "thread"`): shared on its own (with a contact), its parts
+    come with it. `chat.open` opens an empty chat in a space; `chat.say` has an agent say a fixed
+    message there without a turn (trusted code only: a payment confirmed), which goes out like any
+    of its answers.
+  - **After an answer:** a medium that can (WhatsApp) shows features' additions
+    (`resources.additions.<name> = { order?, agents? }` and an `addition:<name>` View there), each
+    once per chat per key, recorded in `shown`; the model is told what went (`[then shown: …]`). A
+    message tapped from a button carries `tap: { id, title, key }`, and agents read the id.
 - **`history`** keeps chat history from outgrowing the prompt
   (`resources: { history: { summarizer: "openai/gpt-5.4-mini" } }`): every message stays whole, a
   cheap model writes a line for each and merges pairs up a binary tree, and an agent gets recent
@@ -394,6 +446,12 @@ name, never by importing its code.
   it's one; a new space has the app's default agents. An answer drawn from a space not everyone in
   the conversation can see shows only to those who see both, marked, until someone shares it.
 - **`identity`**: people, sessions and keys, and who a secret proves.
+- **`contacts`**: people outside the org who talk to its agents (a WhatsApp customer). A contact is
+  its own kind of actor (`{ kind: "contact", id }`), never a person: every Action and query stays
+  shut to it unless it says otherwise (`peopleOrContacts`, as `chat.send` does). Its chat lives in
+  the line's space and is shared with it on its own: it reaches that chat, what's said and filed
+  there, and nothing else; the space's people reach it as any chat there, and the agent working for
+  the contact reaches exactly that chat. Agents are told whom they're talking with.
 - **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client).
 - **`accounts`**: outside accounts a person connects once, for their agents to use: first their
   ChatGPT plan, as a model provider, instead of the app's API key. Tokens are a private field only
@@ -467,7 +525,17 @@ filled by the front ends through resources).
   server-sent events, as that person, in that space only.
 - **`whatsapp`**: people talk to their agents from WhatsApp, through Meta's Cloud API. A space's
   managers connect a number; a person links their phone with a code; what they send becomes their
-  messages, and what agents say to them goes back, a long answer in several messages.
+  messages, and what agents say to them goes back, a long answer in several messages. It's a medium
+  for Views (renderer `whatsapp`, parts built with its toolkit: text, buttons, a list, a carousel,
+  an image, a document, each checked against Meta's limits): after an answer, features show more
+  (`additions`: a carousel of trips, buttons to pay), once per chat per key, the answer's text in
+  the same message when there's room, a fallback when Meta refuses one; taps come back with their
+  ids. Pictures and files go as public links, signed links to the app's routes or files (the `links`
+  resource, `{ origin, secret }`; the runtime's `signLink`, `verifyLink`), or uploads. Opened to
+  anyone (`whatsapp.set`, or declared in the app's settings: `whatsapp.lines`), a number is a
+  customer line: a stranger who writes is a contact, in a chat of their own in the number's space,
+  answered by its agent, and a chat quiet for the number's `gap` (12 hours) is over: their next
+  message starts a new one.
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.
@@ -623,6 +691,14 @@ The log records what happened, with no bookkeeping tables beside it:
     completion is the only extra commit.
   - `started` records the call's own `startedAt`; `completed` and `failed` record its duration in
     `ms`. An event's `at` is its commit time. An action opts out with `record: false`.
+  - **Private fields** (`private: ["buyer", "passengers"]` on an Action, dot paths as a
+    collection's): its calls are recorded without them, in `started`'s input and `completed`'s
+    result alike, so personal data a call is given stays out of the log while the call is still
+    recorded and retried. Its `inputHash` (and a nested call's id) still covers the whole input: a
+    retry with the same input finds the call, and a changed one is a new call. That hash is in the
+    log: whoever knows the rest of an input could check a guess of a field easy to guess alone (a
+    CPF) against it. A result that had any is kept whole in `sys.results`, with the completion
+    (`private: true` there), so a retry answers with all of it.
 - **Retries.** The log is the receipt store; no other table holds them.
   - `runtime.call(action, input, { id })` makes a call retryable. If that id already completed, the
     call returns its recorded result without running; if it's still running, the call joins it;
@@ -811,8 +887,8 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   beside the runtime, which declares the `socket` transport). A browser reads a collection directly
   only when a rule speaks for it; anything else, through queries that let its person. Writes are
   Actions. Plugins answer their own HTTP through the `routes` resource (a webhook, an OAuth
-  callback, an API, a download), and files people sent are served at `/files/<id>` to whoever may
-  read them, with ranges.
+  callback, an API, a download, a socket of their own), and files people sent are served at
+  `/files/<id>` to whoever may read them, with ranges.
 - **The design system** (`design/views.md`, "The design system"): the web host owns a token
   vocabulary (shadcn's names) and its defaults, which are Copilotz's look (navy, the logo's cyan and
   blue, Manrope and Space Grotesk, its logo and icon), and an app rebrands with a `theme` resource
@@ -858,7 +934,7 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   - Remote executors prove the deployment key, compared in constant time.
   - **Private fields** (`private: ["token"]` on a collection): what an actor's queries and Views
     read comes without them; Actions and Processors acting for them still read them. No event holds
-    them, on any store.
+    them, on any store, and none holds an Action's (`private: ["buyer"]`) either.
 - **Processors:** per-key ordering, a durable cursor, at-least-once delivery, made idempotent by
   deterministic ids. A `where` MongoDB filter on event data keeps unwanted events from being
   dispatched at all.

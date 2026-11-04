@@ -76,11 +76,11 @@ const echoes = definePlugin({
 });
 
 /** An echoer, as a computer would run: its work, nothing of plugin code. */
-function echoer(topic: string, secret: string) {
+function echoer(topic: string, secret: string, id = `echoer-${crypto.randomUUID()}`) {
   // One attempt per worker, as a computer has.
   const attempt = { attemptId: crypto.randomUUID(), epoch: Date.now() };
   return createWorker({
-    id: `echoer-${crypto.randomUUID()}`,
+    id,
     transport: { type: "in-process", config: { topic } },
     activate: ({ workerId }: { workerId: string }) => ({ identity: { workerId, ...attempt } }),
     register: () =>
@@ -199,4 +199,25 @@ test("a runtime closing tells its workers' kinds they went", async () => {
   } finally {
     await worker.stop().catch(() => {});
   }
+});
+
+test("a worker back on a new connection before its old one closes is still there", async () => {
+  // A computer whose network blinked, or Oxian moving a worker to a fresh connection: the
+  // new connection is ready first, then the old one goes. The worker never left.
+  await setup(async (rt, topic) => {
+    const online = async () => (await rt.query<{ online: boolean } | null>("echoer.state"))?.online;
+    const id = `echoer-${crypto.randomUUID()}`;
+    const first = echoer(topic, "s3cret", id);
+    await first.ready;
+    await until(async () => await online() === true, "ready was told");
+    const second = echoer(topic, "s3cret", id);
+    await second.ready;
+    await first.stop();
+    // Give a wrong "gone" time to be told.
+    await new Promise((r) => setTimeout(r, 200));
+    assertEquals(await online(), true);
+    assertEquals(await rt.call("echo.ask", { text: "still here" }), { said: "still here" });
+    await second.stop();
+    await until(async () => await online() === false, "gone was told once it really left");
+  });
 });

@@ -3,6 +3,7 @@
  * space keeps its name: it's what everyone's own is called.
  */
 import { defineAction, people } from "../../../../runtime/mod.ts";
+import { declaredOf } from "../shared/declared.ts";
 import type { Space } from "../collections/space.ts";
 import { PERSONAL } from "../shared/personal.ts";
 import { may } from "../shared/can.ts";
@@ -30,6 +31,9 @@ export const renameAction = defineAction({
       throw refuse(`You don't manage "${input.space}".`);
     }
     if (found.kind === PERSONAL) throw refuse("A Personal space keeps its name.", "invalid");
+    if (declaredOf(ctx, input.space)) {
+      throw refuse("This space is the app's own: its name is in its settings.", "invalid");
+    }
     await system.db.collection("space").updateOne({ _id: input.space }, { $set: { name } });
     return { space: input.space, name };
   },

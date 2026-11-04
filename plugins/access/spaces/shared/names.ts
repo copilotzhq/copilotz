@@ -60,11 +60,14 @@ export const idsIn = (text: string): string[] => [
 ];
 
 /**
- * The `names` resource: where people's names are (`{ collection }`: the
- * spaces plugin's profiles), read through that collection's `names` query
- * (`{ ids }` → names by id). An app without it shows ids as they are.
+ * The `names` resource: where names are, by source: people's (the spaces
+ * plugin's profiles, `{ collection }`), and other kinds of actors whose ids
+ * start with a prefix (contacts: `{ collection: "contact", prefix: "contact:" }`),
+ * each read through its collection's `names` query (`{ ids }` → names by id,
+ * as the asker may read them). An app without it shows ids as they are.
  */
-export type NamesResource = { collection: string };
+export type NamesResource = Record<string, NamesSource>;
+export type NamesSource = { collection: string; prefix?: string };
 
 type Db = {
   collection(name: string): {
@@ -72,35 +75,54 @@ type Db = {
   };
 };
 
-const where = (resources: Record<string, unknown>) =>
-  (resources.names as NamesResource | undefined)?.collection;
 /** The people among ids, each once, in order (the same read for the same people). */
 export const peopleIn = (ids: string[]): string[] =>
   [...new Set(ids.filter(Boolean).map(bare))].sort();
+
+/**
+ * Ids by the source that names them (the one whose prefix they start with,
+ * else people's), each list once and in order: the same read for the same ids.
+ */
+function bySource(resources: Record<string, unknown>, ids: string[]) {
+  const sources = Object.values((resources.names ?? {}) as NamesResource).filter(Boolean);
+  const people = sources.find((s) => !s.prefix);
+  const found = new Map<NamesSource, string[]>();
+  for (const id of ids) {
+    if (!id) continue;
+    const source = sources.find((s) => s.prefix && id.startsWith(s.prefix)) ?? people;
+    if (source) found.set(source, [...found.get(source) ?? [], id]);
+  }
+  return [...found].map(([source, wanted]) => ({
+    collection: source.collection,
+    ids: source.prefix ? [...new Set(wanted)].sort() : peopleIn(wanted),
+  }));
+}
 
 /** Names by id, in a View (in a page too: its reads answer at once, or once they're in). */
 export function namesIn(
   ctx: { resources: Record<string, unknown>; db: Db },
   ids: string[],
 ): Record<string, string> {
-  const collection = where(ctx.resources);
-  const wanted = peopleIn(ids);
-  if (!collection || !wanted.length) return {};
-  const found = ctx.db.collection(collection).query<Record<string, string>>("names", {
-    ids: wanted,
-  }) as { value?: Record<string, string> };
-  return found.value ?? {};
+  const names: Record<string, string> = {};
+  for (const { collection, ids: wanted } of bySource(ctx.resources, ids)) {
+    const found = ctx.db.collection(collection).query<Record<string, string>>("names", {
+      ids: wanted,
+    }) as { value?: Record<string, string> };
+    Object.assign(names, found.value ?? {});
+  }
+  return names;
 }
 
-/** Pictures by id, in a View: a face beside a name, for those who have one. */
+/** Pictures by id, in a View: a face beside a name, for the people who have one. */
 export function picturesIn(
   ctx: { resources: Record<string, unknown>; db: Db },
   ids: string[],
 ): Record<string, string> {
-  const collection = where(ctx.resources);
+  const people = Object.values((ctx.resources.names ?? {}) as NamesResource)
+    .find((s) => s && !s.prefix);
   const wanted = peopleIn(ids);
-  if (!collection || !wanted.length) return {};
-  const found = ctx.db.collection(collection).query<Record<string, string>>("pictures", {
+  if (!people || !wanted.length) return {};
+  const found = ctx.db.collection(people.collection).query<Record<string, string>>("pictures", {
     ids: wanted,
   }) as { value?: Record<string, string> };
   return found.value ?? {};
@@ -111,10 +133,12 @@ export async function namesFor(
   ctx: { resources: Record<string, unknown>; db: Db },
   ids: string[],
 ): Promise<Record<string, string>> {
-  const collection = where(ctx.resources);
-  const wanted = peopleIn(ids);
-  if (!collection || !wanted.length) return {};
-  return await (ctx.db.collection(collection).query<Record<string, string>>("names", {
-    ids: wanted,
-  }) as PromiseLike<Record<string, string>>);
+  const found = await Promise.all(
+    bySource(ctx.resources, ids).map(({ collection, ids: wanted }) =>
+      ctx.db.collection(collection).query<Record<string, string>>("names", {
+        ids: wanted,
+      }) as PromiseLike<Record<string, string>>
+    ),
+  );
+  return Object.assign({}, ...found);
 }

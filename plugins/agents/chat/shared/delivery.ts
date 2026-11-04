@@ -7,7 +7,15 @@ import type { Thread } from "../collections/thread.ts";
 import type { Wait } from "../collections/wait.ts";
 import { agentsNamed, NO_ANSWER, now, SEND } from "./agents.ts";
 import { noted } from "./summary.ts";
+import { sharedWith } from "../../../access/spaces/contract.ts";
 import { DELEGATED, settingsOf, type Step, type Told, type Turn } from "./types.ts";
+
+/**
+ * The timer a sender's quiet window is (see `delivery`'s `quiet`): each of
+ * their messages sets it again, and nobody else's does.
+ */
+export const quietId = (thread: string, sender: string, agent: string) =>
+  `quiet:${thread}:${sender}:${agent}`;
 
 /** Whether a message after `hops` agent messages in a row may still start a turn. */
 export const starts = (ctx: { resources: Resources }, hops: number) => {
@@ -35,6 +43,12 @@ export const delivery = async (
   where = m.thread,
   /** False: it checks off waits but starts no turn (an answer to a stop). */
   start = true,
+  /**
+   * Ms its sender may write on before agents answer (a customer who writes in
+   * bursts): each turn it starts waits that long, and a message sent meanwhile
+   * waits again in its place, so the agent answers them all, once.
+   */
+  quiet = 0,
 ) => {
   const agents = await agentsNamed(ctx, m.to);
   const waits = ctx.db.collection<Wait>("wait");
@@ -56,12 +70,14 @@ export const delivery = async (
         )
       );
     } else if (start && starts(ctx, m.hops)) {
+      const turn = { thread: where, agent: name, trigger: m._id, hops: m.hops };
       steps.push((tx) =>
-        tx.emit(
-          "turn.requested",
-          { thread: where, agent: name, trigger: m._id, hops: m.hops },
-          { id: `${m._id}:${name}` },
-        )
+        quiet > 0
+          ? void tx.schedule("chat.quiet", turn, {
+            at: Date.now() + quiet,
+            id: quietId(where, m.from, name),
+          })
+          : tx.emit("turn.requested", turn, { id: `${m._id}:${name}` })
       );
     }
   }
@@ -82,7 +98,13 @@ export const answer = async (
   t: Turn,
   run: string,
   text: string,
-  how: { failed?: boolean; stopped?: boolean; told?: Told[]; state?: LlmState } = {},
+  how: {
+    failed?: boolean;
+    stopped?: boolean;
+    told?: Told[];
+    state?: LlmState;
+    knew?: string;
+  } = {},
   /** The turn's thread, when it has it already. */
   known?: Pick<Thread, "in">,
 ) => {
@@ -112,9 +134,14 @@ export const answer = async (
     ...(how.told?.length ? { told: how.told } : {}),
     // Its model's state (its thinking), for that model's next calls: private, like `told`.
     ...(how.state ? { state: how.state } : {}),
+    // How far its turn had read this thread.
+    ...(how.knew ? { knew: how.knew } : {}),
     at: now(),
   };
-  // Handed over from another space: the answer goes back there too, where its sender waits.
+  // Handed over from another space: the answer goes back there too, where its sender waits. Into
+  // a chat shared with someone outside its space (a contact), it says where it came from: only
+  // those who reach that space read it there.
+  const outside = back && thread?.in ? (await sharedWith(ctx, "thread", back.thread)).length : 0;
   const returned = back
     ? {
       ...reply,
@@ -131,6 +158,8 @@ export const answer = async (
       },
       told: undefined,
       state: undefined,
+      knew: undefined,
+      ...(outside ? { sources: [thread!.in!] } : {}),
     }
     : undefined;
   const writer = returned ? ctx.as() : ctx;
@@ -151,7 +180,7 @@ export const answer = async (
     await tx.db.collection("message").insertOne(reply);
     await noted(tx, reply);
     if (returned) {
-      const { told: _, state: __, ...copy } = returned;
+      const { told: _, state: __, knew: ___, ...copy } = returned;
       await tx.db.collection("message").insertOne(copy);
       await noted(tx, copy);
     }

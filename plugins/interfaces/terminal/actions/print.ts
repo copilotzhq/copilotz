@@ -21,7 +21,7 @@ export const printAction = defineAction({
     additionalProperties: false,
   },
   record: false,
-  allow: (actor, input) => actor.id === input.person,
+  allow: (actor, input) => actor.kind === "person" && actor.id === input.person,
   run: async (ctx, input) => {
     const output = ctx.db.collection("output");
     await output.insertOne({ ...input, at: now() });

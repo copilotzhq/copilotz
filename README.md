@@ -840,7 +840,8 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
     system, which no rule restricts; its events say `via` whom.
   - Remote executors prove the deployment key, compared in constant time.
   - **Private fields** (`private: ["token"]` on a collection): what an actor's queries and Views
-    read comes without them; Actions and Processors acting for them still read them.
+    read comes without them; Actions and Processors acting for them still read them. No event holds
+    them, on any store.
 - **Processors:** per-key ordering, a durable cursor, at-least-once delivery, made idempotent by
   deterministic ids. A `where` MongoDB filter on event data keeps unwanted events from being
   dispatched at all.

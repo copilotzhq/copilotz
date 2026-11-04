@@ -151,9 +151,10 @@ export type Command = {
    * Each write is validated, with large values already offloaded to `blobs`.
    * With `record`, it records `<collection>.created/updated/deleted` for each
    * document it changes, right after it: `{ _id, doc }`, plus `changed` and
-   * `removed` (sorted) for updates.
+   * `removed` (sorted) for updates. The documents it records go without the
+   * collection's `private` fields (dot paths), as the log always does.
    */
-  steps: ({ write: WriteOp; record: boolean } | { emit: Emitted })[];
+  steps: ({ write: WriteOp; record: boolean; private?: string[] } | { emit: Emitted })[];
   cause?: string;
   /** Who the recorded events' writes were done by. */
   actor?: Actor;

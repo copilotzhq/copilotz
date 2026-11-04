@@ -8,11 +8,11 @@ browser.
 
 An app is plugins: agents that answer with tools and talk to each other and to people, conversations
 in shared spaces, memory, skills and routines, a usage ledger, people's computers, sign-in and
-connected accounts, a developer API, WhatsApp. Each is a plain object built from the same few
-primitives (collections, Actions, Processors, Views, resources and adapters), and the runtime knows
-nothing else. Everything durable is an event, a document, an edge, a vector or a blob, written by
-one owner to one store (memory, SQLite or PostgreSQL), so every change is on the record and every
-screen follows it live: in a terminal, in a browser, or in an agent's prompt.
+connected accounts, a developer API, WhatsApp, phone calls. Each is a plain object built from the
+same few primitives (collections, Actions, Processors, Views, resources and adapters), and the
+runtime knows nothing else. Everything durable is an event, a document, an edge, a vector or a blob,
+written by one owner to one store (memory, SQLite or PostgreSQL), so every change is on the record
+and every screen follows it live: in a terminal, in a browser, or in an agent's prompt.
 
 ## Install
 
@@ -113,6 +113,7 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/compute/web`         | `computersWeb`                                                                                               |
 | `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                          |
 | `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`                                           |
 | `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `maintenance`                                     |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                    |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                    |
@@ -540,6 +541,18 @@ filled by the front ends through resources).
   customer line: a stranger who writes is a contact, in a chat of their own in the number's space,
   answered by its agent, and a chat quiet for the number's `gap` (12 hours) is over: their next
   message starts a new one.
+- **`voice`**: people call the app's phone number and talk to its agents, through Twilio's
+  ConversationRelay (Twilio hears them and speaks; the app gets and sends text). The app declares
+  its lines (`voice.lines`: the space, Twilio's account and auth token, the app's public address,
+  the agent, language, voice, greeting and limits); Twilio's webhook is checked against its
+  signature, a call is taken within its caller's limits and the line's (calls at once, a day: else
+  busy, nothing spent) and opens the line's socket with a one-time ticket. A caller is a contact in
+  a chat of their own, the same one when they call back only if Twilio verified their number; what
+  the agent writes for them is said as it writes it (a medium for Views: renderer `voice`), a caller
+  speaking over it cuts it there (the agent is told what was heard), a failed or slow answer says a
+  short line in the line's language, and silence, a call too long or too many prompts, or the
+  agent's `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that
+  takes a route's socket (`serveRoutes`).
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.
@@ -1127,7 +1140,7 @@ plugins/        the features, by theme
                 directory of orgs
   compute/      computers: desks per space, agents' tools, approvals; program/, the computer program
   interfaces/   terminal (where each person is, the shell View), web (the web shell), the developer
-                API and WhatsApp; features'
+                API, WhatsApp and voice (phone calls); features'
                 own front ends live with them (chat/terminal.ts, chat/web.tsx…), gathered by theme
 hosts/          the media the app is used through: terminal (the Ink host and its toolkit); web
                 (the React host in the browser: theme/, the tokens and their defaults, Copilotz's

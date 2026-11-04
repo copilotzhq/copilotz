@@ -26,4 +26,13 @@
  * ```
  */
 export { bundle, type BundleOptions } from "./bundle.ts";
-export { listen, type Listener, type ListenOptions, serve, type ServeOptions } from "./serve.ts";
+export {
+  listen,
+  type Listener,
+  type ListenOptions,
+  type RouteListener,
+  type RoutesOptions,
+  serve,
+  type ServeOptions,
+  serveRoutes,
+} from "./serve.ts";

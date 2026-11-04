@@ -2,6 +2,7 @@
  * OpenAI Responses API, streaming. A reasoning model's reasoning comes back
  * encrypted, as its answer's state, and goes back with its answer in the next
  * calls: between tool steps it carries on from it instead of thinking again.
+ * So OpenAI keeps nothing (`store: false`): each call brings what it needs.
  */
 import { alive, post, sse, usageOf } from "../../shared/provider.ts";
 import { answerable, type LlmAdapter, type LlmFile, type LlmMessage } from "../../shared/types.ts";
@@ -106,12 +107,16 @@ const pointless = new Set<string>();
 /** Servers that refused to send reasoning back encrypted: not asked again. */
 const unreasoned = new Set<string>();
 
+/** Servers that refused to be told not to store: not told again. */
+const storing = new Set<string>();
+
 /** Whether a refusal is of this part of the request, as its message names it. */
 const refusedFor = (named: RegExp) => (error: unknown) =>
   (error as { status?: number }).status === 400 && named.test(String((error as Error).message));
 const refusedPoints = refusedFor(/prompt_cache_breakpoint/);
 // The parameter itself (`"param": "include"`, "Unrecognized … argument: include"), not what's in it.
 const refusedInclude = refusedFor(/"param":\s*"include|['"]include['"]|argument[^.]*\binclude\b/i);
+const refusedStore = refusedFor(/"param":\s*"store|['"]store['"]|argument[^.]*\bstore\b/i);
 
 /** What's asked to come back with the answer: its reasoning, encrypted, to go back to it. */
 const REASONING = ["reasoning.encrypted_content"];
@@ -134,10 +139,11 @@ export const openaiResponses: LlmAdapter = {
   ) {
     const where = `${connection.baseURL ?? OPENAI.baseURL} ${connection.model}`;
     const asked = answerable(messages);
-    // Breakpoints, and its reasoning back (from a model that reasons), unless this server refused
-    // them once: then it's asked again without, from then on.
+    // Breakpoints, its reasoning back (from a model that reasons), and nothing stored, unless this
+    // server refused them once: then it's asked again without, from then on.
     let points = pointless.has(where) ? new Set<number>() : pointsOf(asked);
     let include = info?.reasoning !== false && !unreasoned.has(where);
+    let unstored = !storing.has(where);
     const body = (input: Record<string, unknown>[]) => ({
       model: connection.model,
       ...(instructions ? { instructions } : {}),
@@ -160,6 +166,7 @@ export const openaiResponses: LlmAdapter = {
       ...(maxTokens ? { max_output_tokens: maxTokens } : {}),
       ...(temperature !== undefined ? { temperature } : {}),
       ...(include ? { include: REASONING } : {}),
+      ...(unstored ? { store: false } : {}),
       ...options,
     });
     let response: Response;
@@ -180,6 +187,9 @@ export const openaiResponses: LlmAdapter = {
         } else if (include && refusedInclude(error)) {
           unreasoned.add(where);
           include = false;
+        } else if (unstored && refusedStore(error)) {
+          storing.add(where);
+          unstored = false;
         } else throw error;
       }
     }

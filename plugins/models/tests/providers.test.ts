@@ -279,6 +279,16 @@ async function server() {
         { type: "response.output_text.delta", delta: "Hi" },
         { type: "response.completed", response: { usage: { input_tokens: 3, output_tokens: 1 } } },
       ], true));
+  // A server that doesn't know `store`.
+  const storing = (body: string) =>
+    "store" in JSON.parse(body)
+      ? Response.json({
+        error: { message: "Unknown parameter: 'store'.", param: "store", code: "unknown" },
+      }, { status: 400 })
+      : new Response(sse([
+        { type: "response.output_text.delta", delta: "Hi" },
+        { type: "response.completed", response: { usage: { input_tokens: 3, output_tokens: 1 } } },
+      ], true));
   const http = await serve(async (request) => {
     const url = new URL(request.url);
     const multipart = request.headers.get("content-type")?.startsWith("multipart/");
@@ -295,6 +305,7 @@ async function server() {
     });
     if (url.pathname === "/v1/pointless/responses") return pointless(text);
     if (url.pathname === "/v1/unreasoned/responses") return unreasoned(text);
+    if (url.pathname === "/v1/storing/responses") return storing(text);
     return (replies[url.pathname] ?? (() => new Response("unknown", { status: 404 })))();
   });
   return { url: http.url, seen, close: () => http.close() };
@@ -458,6 +469,8 @@ test("openai (Responses): request and streamed answer", async () => {
     assertEquals(req.path, "/v1/responses");
     const body = req.body as Record<string, unknown>;
     assertEquals(body.instructions, "Be brief.");
+    // Nothing kept at OpenAI: what a call needs (its reasoning too) comes with it.
+    assertEquals(body.store, false);
     assertEquals(body.input, [
       { role: "user", content: "roll a die" },
       { role: "assistant", content: "Rolling." },
@@ -697,6 +710,21 @@ test("openai (Responses): a server that refuses `include` is asked again without
       false,
       false,
     ]);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("openai (Responses): a server that refuses `store` is asked again without, from then on", async () => {
+  const mock = await server();
+  try {
+    const connection = { model: "m", baseURL: `${mock.url}/v1/storing`, apiKey: "k" };
+    assertEquals(answer(await run(openaiResponses, connection)).text, "Hi");
+    await run(openaiResponses, connection);
+    const bodies = mock.seen.map((s) => s.body as { store?: boolean; include?: string[] });
+    assertEquals(bodies.map((b) => b.store), [false, undefined, undefined]);
+    // Its reasoning is still asked for.
+    assertEquals(bodies.map((b) => b.include !== undefined), [true, true, true]);
   } finally {
     await mock.close();
   }

@@ -355,6 +355,14 @@ name, never by importing its code.
     last four hours of a conversation, back from its newest message (summaries too, with `history`);
     what's older stays in the chat. The start moves in steps of a tenth of `maxAge`, so prompts keep
     hitting the provider's cache ([design](design/views.md#history-as-views)).
+  - **A tool call runs once:** before a step's tools run, the step's calls are written (an
+    `intent`), and what each returns as soon as it does. A retried turn (it failed after its tools
+    ran, its executor died, the runtime restarted) goes on with those calls instead of asking its
+    model again: a call that returned isn't run again, and one cut short runs again as itself, with
+    the same `ctx.callId` and `ctx.retry` true. Pass `callId` to an outside API as the idempotency
+    key, or call recorded Actions (they answer from the log), and a payment behind a tool is made
+    once. A turn that ends without its step (failed for good, stopped) keeps it, saying which calls
+    never returned, so people and its later turns know what happened.
   - **Subthreads are forks:** whoever works in one sees the conversation up to the message it hangs
     from, through every level, without anything being copied. A new thread starts from its first
     message and records the thread it came from.
@@ -674,6 +682,10 @@ The log records what happened, with no bookkeeping tables beside it:
   - **Processor deliveries:** every failed attempt records `processor.retried`
     `{ attempt, after, error }` before the next one. After the last attempt, `processor.failed`
     `{ attempts, error }` is the dead letter.
+  - **Closing:** `runtime.close()` starts no more deliveries or timer occurrences, and gives the
+    running ones `drain` ms to finish (`close({ drain })`, 5 s by default); what's still running
+    then stops where it is. A delivery that didn't finish keeps its Processor's cursor before its
+    event, so the next owner delivers it again, with `retry`: a deploy never drops one.
   - **Outside effects (payments, emails, outside APIs):** write the intent first, call out with its
     id as the idempotency key, then write the result. The intent's commit carries the call's start,
     so the attempt is on record before anything leaves the system.

@@ -7,6 +7,7 @@ import type {
   ModelRef,
   ToolCall,
 } from "../../../models/contract.ts";
+import type { Intent } from "../collections/intent.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import {
@@ -14,6 +15,7 @@ import {
   agentsNamed,
   check,
   modelOf,
+  NO_ANSWER,
   now,
   peopleIn,
   SEND,
@@ -85,14 +87,21 @@ const turn = async (ctx: Context, event: Event) => {
   const agent = (await agentsNamed(ctx, [t.agent]))[t.agent];
   if (!agent) throw new Error(`No agent "${t.agent}" works here`);
   const messages = ctx.db.collection<Message>("message");
+  const intents = ctx.db.collection<Intent>("intent");
 
-  // A retried run continues after the steps it committed, if it didn't finish.
+  // A retried run continues after the steps it committed, if it didn't finish,
+  // and goes on with the step it was taking if that step's calls were written.
   let step = 0;
+  let open: Intent | null = null;
   if (ctx.retry) {
-    const done = await messages.find({ turn: run });
-    if (done.some((m) => m._id === `${run}:reply`)) return;
-    if (await ctx.db.collection("wait").findOne({ _id: `${run}:wait` })) return;
+    const [done, waiting, taking] = await Promise.all([
+      messages.find({ turn: run }),
+      ctx.db.collection("wait").findOne({ _id: `${run}:wait` }),
+      intents.findOne({ _id: run }),
+    ]);
+    if (done.some((m) => m._id === `${run}:reply`) || waiting) return;
     step = done.length;
+    if (taking?.step === step) open = taking;
   }
 
   // What it is sent is the thread's llm View: its instructions, the
@@ -138,8 +147,13 @@ const turn = async (ctx: Context, event: Event) => {
     let text = "";
     let state: LlmState | undefined;
     const calls: ToolCall[] = [];
+    // A step whose calls were written goes on with them: its model isn't asked again.
+    const resumed = open;
+    open = null;
+    const ask = (input: Record<string, unknown>) =>
+      resumed ? replay(resumed) : ctx.call<AsyncIterable<LlmChunk>>("llm.stream", input);
     for await (
-      const chunk of await ctx.call<AsyncIterable<LlmChunk>>("llm.stream", {
+      const chunk of await ask({
         model,
         instructions,
         messages: conversation,
@@ -177,7 +191,25 @@ const turn = async (ctx: Context, event: Event) => {
 
     // Ids derive from the run, so a retry rewrites nothing it already committed.
     const id = `${run}:${step}`;
-    const at = now(); // The step comes before what it sends.
+    const at = resumed?.at ?? now(); // The step comes before what it sends.
+    // The turn's first message keeps what it was told.
+    const kept = told.length && step === first ? { told } : {};
+    // Before any of its calls runs, the step is written, so a retry runs these
+    // same calls rather than ask again. Messages need none: they go with the step.
+    const intended = !!resumed || calls.some((call) => !(messaging && call.name === SEND));
+    if (intended && !resumed) {
+      await intents.replaceOne({ _id: run }, {
+        thread: t.thread,
+        agent: t.agent,
+        step,
+        ...(text ? { text } : {}),
+        ...(state ? { state } : {}),
+        ...kept,
+        calls,
+        outputs: {},
+        at,
+      }, { upsert: true });
+    }
     // The step's calls run together, each in a branch of its own, so a retry
     // finds what each one called whatever order they started in. Their
     // results keep the model's order.
@@ -185,9 +217,13 @@ const turn = async (ctx: Context, event: Event) => {
       live.call({ id: call.id, name: call.name, input: call.input });
       let output: string;
       let send: Send | undefined;
+      const returned = resumed?.outputs[i];
       if (messaging && call.name === SEND) {
         send = await prepare(ctx, t, id, `${id}:${i}`, call.input, here, known, current.in);
         output = send.output;
+      } else if (returned !== undefined) {
+        // It returned before the retry: it doesn't run again.
+        output = returned;
       } else {
         try {
           if (!offered.some((tool) => tool.name === call.name)) {
@@ -199,11 +235,18 @@ const turn = async (ctx: Context, event: Event) => {
             agent: t.agent,
             thread: t.thread,
             trigger: t.trigger,
+            callId: `${id}:${i}`,
+            // Only a call that was written and never returned may have run already.
+            retry: !!resumed,
           });
           output = typeof result === "string" ? result : JSON.stringify(result);
         } catch (error) {
           output = `Error: ${error instanceof Error ? error.message : String(error)}`;
         }
+        // What it returned is on record at once: a retry won't run it again. If
+        // that write fails, a retry runs it again, as itself.
+        await intents.updateOne({ _id: run }, { $set: { [`outputs.${i}`]: output } })
+          .catch(() => {});
       }
       live.result(call.id, output);
       const made: Step = { ...call, output, ...(send?.message ? { sent: send.message._id } : {}) };
@@ -236,12 +279,11 @@ const turn = async (ctx: Context, event: Event) => {
     const deliveries = await Promise.all(
       sends.map((s) => delivery(writer, s.message!, s.message!.subthread)),
     );
-    // The turn's first message keeps what it was told.
-    const kept = told.length && step === first ? { told } : {};
     await live.settle();
     await writer.transaction(async (tx) => {
-      // What showed live becomes the step.
+      // What showed live becomes the step, and so does what was written of it.
       await live.done(tx);
+      if (intended) await tx.db.collection("intent").deleteOne({ _id: run }, NO_ANSWER);
       const step = {
         _id: id,
         thread: t.thread,
@@ -285,3 +327,10 @@ const turn = async (ctx: Context, event: Event) => {
   }
   throw new Error(`Agent "${t.agent}" did not finish within ${maxSteps} steps`);
 };
+
+/** What a written step's model said, said again: what it wrote, its state and its calls. */
+async function* replay(intent: Intent): AsyncIterable<LlmChunk> {
+  if (intent.text) yield { type: "text", text: intent.text };
+  if (intent.state) yield { type: "state", state: intent.state };
+  for (const call of intent.calls) yield { type: "tool_call", call };
+}

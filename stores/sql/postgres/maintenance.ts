@@ -2,12 +2,18 @@
  * Maintenance SQL's connection to a PostgreSQL server, and the role it runs
  * as (runtime/maintain.ts; the store's `inspect` and `execute`).
  *
- * - **A role of its own, required on a server**
+ * - **A role of its own, by default required on a server**
  *   (`postgresStore({ maintenance: { url } })`): the store's own role owns
  *   the tables, may stop the app's connections, and is whatever the
  *   deployment made it (a superuser, even). Without one, raw SQL is
  *   refused; the collections' operations, named queries and blobs don't
  *   need it. PGlite, in this process, runs it as its one session.
+ * - **Or, deliberately, the store's own role**
+ *   (`postgresStore({ maintenance: { storeRole: true } })`): the key's
+ *   holder may then do whatever that role may (drop its tables, read every
+ *   schema it reaches). Only the allowlist below is skipped, which that role
+ *   couldn't pass; `confined` still refuses one that would turn SQL into
+ *   server commands or file access.
  * - **Exactly the grants maintenance needs, checked before every
  *   statement** (`allowed`), on the connection that runs it: an allowlist,
  *   not a list of what's refused. The role has no attribute beyond LOGIN,
@@ -20,10 +26,11 @@
  *   function (one runs as its owner: revoke EXECUTE from PUBLIC), and the
  *   database has no `dblink` or `postgres_fdw`. The store makes no
  *   triggers: one on its tables means someone else did, and nothing runs.
- * - **A connection of its own for each statement, closed after:** whatever
- *   the statement leaves on its session goes with it. It speaks `pg`
- *   itself, the driver Ominipg loads, so every query goes over the
- *   extended protocol, where the server refuses more than one statement.
+ * - **A connection of its own for each statement, closed after,** as
+ *   either role: whatever the statement leaves on its session goes with
+ *   it. It speaks `pg` itself, the driver Ominipg loads, so every query
+ *   goes over the extended protocol, where the server refuses more than
+ *   one statement.
  * - **At most `connections` at once** (2 by default; ../shared/capped.ts).
  */
 import { failure } from "../../../runtime/errors.ts";
@@ -78,12 +85,14 @@ export async function connect(
 
 const unsafe = (message: string) => failure("unsafe_role", message);
 
-/** Refuses raw SQL on a server whose store names no maintenance role. */
+/** Refuses raw SQL on a server whose store names no role for it. */
 export const noRole = () =>
   unsafe(
-    "Raw SQL on a PostgreSQL server runs only as a maintenance role of its own: " +
-      "postgresStore({ maintenance: { url } }), set up as the README's Maintenance says. " +
-      "The collections' operations, named queries and blobs work without it.",
+    "Raw SQL on a PostgreSQL server runs as a maintenance role of its own, " +
+      "postgresStore({ maintenance: { url } }), set up as the README's Maintenance says; or, " +
+      "deliberately, as the store's own role, postgresStore({ maintenance: { storeRole: true } }), " +
+      "which lets the key do whatever that role may (the README says what that costs). " +
+      "The collections' operations, named queries and blobs work without either.",
   );
 
 /**
@@ -260,6 +269,68 @@ export async function allowed(db: Session, schema: string): Promise<void> {
   throw unsafe(
     `The maintenance role holds more than maintenance needs: it ${shown}. It must hold the ` +
       `README's grants on "${schema}" and nothing else.`,
+  );
+}
+
+/** The predefined roles whose members PostgreSQL lets run server programs or reach its files. */
+const SERVER = ["pg_execute_server_program", "pg_read_server_files", "pg_write_server_files"];
+
+/**
+ * What the session's role (`session_user`) may do that turns SQL into
+ * server commands or file access, one line for each, none when nothing:
+ * being a superuser, or able to become one (a member of a superuser role
+ * could `set_config('role', …)` to it within a statement); being a member,
+ * by any path, of a role in `$1`; before PostgreSQL 16, `CREATEROLE`
+ * (enough to grant itself any of them, and a function it made could use
+ * one within the same statement, before the check after it); and running
+ * a function that reads or writes the server's files (`pg_read_file`,
+ * `lo_import`, `lo_export`…, refused to everyone unless granted). Cloud
+ * SQL's `postgres` user isn't a superuser (a member of
+ * `cloudsqlsuperuser`, which isn't one either), and from PostgreSQL 16 its
+ * `CREATEROLE` grants nothing it doesn't administer. Every catalog name is
+ * `pg_catalog`'s.
+ */
+const UNCONFINED = `
+WITH me AS (
+  SELECT oid, rolsuper, rolcreaterole FROM pg_catalog.pg_roles WHERE rolname = session_user
+)
+SELECT problem FROM (
+  SELECT 1 AS n, 'is a superuser' AS problem FROM me WHERE rolsuper
+  UNION ALL SELECT 2, 'may become superuser ' || r.rolname::pg_catalog.text ||
+      ' (it is a member of it)'
+    FROM pg_catalog.pg_roles r, me
+    WHERE NOT me.rolsuper AND r.rolsuper AND r.oid <> me.oid
+      AND pg_catalog.pg_has_role(me.oid, r.oid, 'MEMBER')
+  UNION ALL SELECT 3, 'is a member of ' || r.rolname::pg_catalog.text
+    FROM pg_catalog.pg_roles r, me
+    WHERE NOT me.rolsuper AND r.rolname::pg_catalog.text = ANY ($1::pg_catalog.text[])
+      AND pg_catalog.pg_has_role(me.oid, r.oid, 'MEMBER')
+  UNION ALL SELECT 4, 'may create roles (CREATEROLE), and before PostgreSQL 16 so grant itself ' ||
+      'any of them'
+    FROM me WHERE NOT me.rolsuper AND me.rolcreaterole
+      AND pg_catalog.current_setting('server_version_num')::pg_catalog.int4 < 160000
+  UNION ALL SELECT 5, 'may run ' || p.oid::pg_catalog.regprocedure::pg_catalog.text
+    FROM pg_catalog.pg_proc p, me
+    WHERE NOT me.rolsuper AND p.pronamespace = 'pg_catalog'::pg_catalog.regnamespace
+      AND p.proname IN ('pg_read_file', 'pg_read_binary_file', 'lo_import', 'lo_export',
+        'pg_file_write', 'pg_file_rename', 'pg_file_unlink')
+      AND pg_catalog.has_function_privilege(me.oid, p.oid, 'EXECUTE')
+) found ORDER BY n, problem`;
+
+/**
+ * Refuses maintenance SQL as the store's own role (`storeRole`) when that
+ * role, on `db`, could turn SQL into server commands or file access
+ * (`UNCONFINED`). Whatever else the role may do, the key may too: that's
+ * what the store's options chose.
+ */
+export async function confined(db: Session): Promise<void> {
+  const problems = (await db.query(UNCONFINED, [SERVER])).rows.map((row) => row.problem);
+  if (!problems.length) return;
+  throw unsafe(
+    `Raw SQL as the store's own role (storeRole) could run commands on the database server or ` +
+      `reach its files: the role ${problems.join("; ")}. Use a store role that can't (Cloud ` +
+      `SQL's postgres user can't, from PostgreSQL 16), or a maintenance role of its own ` +
+      `(maintenance: { url }).`,
   );
 }
 

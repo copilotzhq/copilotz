@@ -501,7 +501,7 @@
     app's `links`, uploaded to Meta and sent by its id). A carousel's pictures must be links: a file
     with nowhere to link it sends the fallback. A message's files go as images (jpeg, png up to 5
     MB) or documents, a short text as the first one's caption.
-- **WhatsApp lines for an app, as it uses them** (for Mobizap):
+- **WhatsApp lines for an app, as it uses them**:
   - **A line the app declares** in its settings (`resources.whatsapp.lines.<name>`: the space,
     Meta's number id, token and app secret, its own verify token, a webhook path it routes to
     `whatsapp.hook`, its agent, gap, rate, quiet window and language): open to anyone, kept as the
@@ -650,6 +650,19 @@
   whole document, so `private` fields (a computer's `pending` secret, unsealed account tokens) were
   in the log there; memory and SQLite left them out. The command now records documents without them
   too. Events already written still hold them.
+- **Maintenance SQL can run as the store's own role, told so:**
+  `postgresStore({ url, schema, maintenance: { storeRole: true } })`, beside a role of its own
+  (`maintenance: { url }`; both at once stop the store from opening, and neither still refuses raw
+  SQL on a server, its message naming both). Anyone holding the maintenance key can then do whatever
+  the store's role can: drop or truncate its tables, delete from the log, read every schema it
+  reaches. Only the allowlist check is skipped; the statement filter, a connection of its own for
+  each statement over the extended protocol, the timeouts, caps and `connections`, fenced writes in
+  the owner with their `maintenance.sql` event, the rollback of what changes `meta` or makes a
+  trigger, and the emptied cache all hold. Still refused, before each statement and after a write: a
+  role that is or may become a superuser, a member of `pg_execute_server_program`,
+  `pg_read_server_files` or `pg_write_server_files`, one with `CREATEROLE` before PostgreSQL 16, or
+  one that may run the server's file functions (`pg_read_file`, `lo_import`, `lo_export`…). Cloud
+  SQL's `postgres` user passes from PostgreSQL 16. An orgs host's orgs still don't get the plugin.
 
 ## 1.0.0-rc.20 — 2026-11-04
 

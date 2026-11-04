@@ -688,10 +688,11 @@ test("seats: a waiver that's ended no longer applies; one naming nobody is every
       what: "seats",
       reason: "soon",
       people: ["bob"],
-      until: new Date(Date.now() + 40).toISOString(),
+      // Long enough that a slow machine reads it before it ends (40 ms wasn't, on Windows CI).
+      until: new Date(Date.now() + 1000).toISOString(),
     }, { actor: staff });
     assertEquals(await billed(), 1);
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
     assertEquals(await billed(), 2);
   });
 });

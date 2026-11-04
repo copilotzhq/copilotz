@@ -1,7 +1,7 @@
 /**
  * Private fields: what an actor's queries and Views read comes without
  * them; code acting for them (an Action) still reads them, and the system
- * reads everything.
+ * reads everything. No event ever holds them, on any store.
  */
 import { assertEquals } from "@std/assert";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
+import { postgresStore } from "../../stores/sql/postgres/mod.ts";
 import { tempFile, test } from "../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
@@ -41,6 +42,23 @@ const plugin = definePlugin({
           token: "tok_123",
           owner: { id: "ana", secret: "s3cr3t" },
         }),
+    }),
+    "account.rotate": defineAction({
+      input: { type: "object" },
+      run: (ctx) =>
+        ctx.db.collection("account").updateOne({ _id: "a1" }, {
+          $set: { token: "tok_456", "owner.secret": "n3w" },
+        }),
+    }),
+    "account.drop": defineAction({
+      input: { type: "object" },
+      run: (ctx) => ctx.db.collection("account").deleteOne({ _id: "a1" }),
+    }),
+    // A private path through an array reaches nothing there.
+    "account.listed": defineAction({
+      input: { type: "object" },
+      run: (ctx) =>
+        ctx.db.collection("account").insertOne({ _id: "a2", token: "tok_789", owner: ["ana"] }),
     }),
     // Code acting for Ana uses the token: it reads it, and says only what it did.
     "account.use": defineAction({
@@ -83,21 +101,37 @@ for (const [name, make] of Object.entries(stores)) {
   });
 }
 
-test("the event log never holds a private field: not when made, changed or deleted", async () => {
-  const store = memoryStore();
-  const rt = await createRuntime({ store, plugins: [plugin] });
-  try {
-    await rt.call("account.add", {});
-    const events = (await store.events(0, 100)).filter((e) => e.type.startsWith("account."));
-    assertEquals(events.map((e) => e.type), ["account.created"]);
-    const logged = JSON.stringify(events);
-    assertEquals([logged.includes("tok_123"), logged.includes("s3cr3t")], [false, false]);
-    assertEquals((events[0].data as { doc: unknown }).doc, {
-      _id: "a1",
-      name: "mail",
-      owner: { id: "ana" },
-    });
-  } finally {
-    await rt.close();
-  }
-});
+const sql: Record<string, () => Store | Promise<Store>> = {
+  ...stores,
+  pglite: () => postgresStore({ url: ":memory:" }),
+};
+
+for (const [name, make] of Object.entries(sql)) {
+  test(`${name}: the event log never holds a private field: not when made, changed or deleted`, async () => {
+    const store = await make();
+    const rt = await createRuntime({ store, plugins: [plugin] });
+    try {
+      for (const action of ["account.add", "account.rotate", "account.drop", "account.listed"]) {
+        await rt.call(action, {});
+      }
+      const events = (await store.events(0, 100)).filter((e) => e.type.startsWith("account."));
+      assertEquals(events.map((e) => e.type), [
+        "account.created",
+        "account.updated",
+        "account.deleted",
+        "account.created",
+      ]);
+      const logged = JSON.stringify(events);
+      assertEquals(["tok_", "s3cr3t", "n3w"].filter((secret) => logged.includes(secret)), []);
+      const docs = events.map((e) => (e.data as { doc: unknown }).doc);
+      assertEquals(docs, [
+        { _id: "a1", name: "mail", owner: { id: "ana" } },
+        { _id: "a1", name: "mail", owner: { id: "ana" } },
+        { _id: "a1", name: "mail", owner: { id: "ana" } },
+        { _id: "a2", owner: ["ana"] },
+      ]);
+    } finally {
+      await rt.close();
+    }
+  });
+}

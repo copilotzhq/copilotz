@@ -6,9 +6,12 @@
  * keep it to its own chat. In order:
  *
  * 1. **Its chat**, which comes from the contact (see shared/keys.ts): in
- *    use, or new (the first call of a conversation), or over (erased, or its
- *    people took the contact out of it: it stays so), or unknown (a handle
- *    the app never gave: refused). Nothing is counted or made for these.
+ *    use, or new (the first call of a conversation), or begun (a first call
+ *    cut short between making the chat and sharing it with the contact, as
+ *    an owner restarting does: it goes on as new; see
+ *    collections/opening.ts), or over (erased, or its people took the
+ *    contact out of it: it stays so), or unknown (a handle the app never
+ *    gave: refused). Nothing is counted or made for these last two.
  * 2. **The line's limits:** its conversation's calls a minute, the caller's
  *    address's, the line's; for a new conversation, new ones an hour, the
  *    line's, the user's, the address's. Past one, the call is refused with a
@@ -27,7 +30,8 @@
  *    it always runs.
  * 5. **A new conversation** is made, as the system: its contact
  *    (`contact.start`, `via: "mcp"`) and its chat in the line's space,
- *    shared with it on its own (`contact.chat`).
+ *    shared with it on its own (`contact.chat`). Its opening is noted with
+ *    the call's counts (`mcp_opening`), and goes once the chat is shared.
  * 6. **The tool runs** through chat's runner, as the contact: its input
  *    checked, its `ctx.agent` the client (`ChatGPT`), its `ctx.thread` the
  *    chat, its `ctx.callId` and `ctx.trigger` the step (the same however
@@ -80,7 +84,8 @@ const SAID = {
 } as const;
 
 /** Writes whose answer isn't needed: a transaction of only these is one command, never held. */
-const UPSERT = { upsert: true, writeConcern: { w: 0 } } as const;
+const UNANSWERED = { writeConcern: { w: 0 } } as const;
+const UPSERT = { upsert: true, ...UNANSWERED } as const;
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -141,8 +146,8 @@ export const callAction = defineAction({
     const { calls, chats } = countersOf(line, thread, input, now);
     const system = ctx.as();
     // What it needs to know first, read together: its chat (as the system, and as its contact,
-    // who still reaches it or not), whether it's over, the counts, a receipt.
-    const [there, reached, over, counted, receipt] = await Promise.all([
+    // who still reaches it or not), whether it's over, the counts, a receipt, an opening noted.
+    const [there, reached, over, counted, receipt, noted] = await Promise.all([
       system.db.collection<Thread>("thread").findOne({ _id: thread }),
       ctx.db.collection<Thread>("thread").findOne({ _id: thread }),
       system.db.collection("mcp_closed").findOne({
@@ -151,10 +156,16 @@ export const callAction = defineAction({
       system.db.collection<{ count: number }>("mcp_rate")
         .find({ _id: { $in: [...calls, ...chats].map((c) => c._id) } }),
       readOnly ? null : system.db.collection<Receipt>("mcp_receipt").findOne({ _id: same }),
+      system.db.collection<{ at: number }>("mcp_opening").findOne({ _id: thread }),
     ]);
-    if (over || (there && !reached)) return { text: SAID.closed, isError: true, ran: false };
+    if (over) return { text: SAID.closed, isError: true, ran: false };
+    // A chat out of its contact's reach: its people took the contact out (over), unless its
+    // first call was cut short before sharing it (an owner restarted): that opening goes on.
+    const begun = !!there && !reached && !!noted && now - noted.at < RERUN_MS &&
+      !!await system.db.collection("contact").findOne({ _id: contact });
+    if (there && !reached && !begun) return { text: SAID.closed, isError: true, ran: false };
     if (!there && input.by === "handle") return { text: SAID.unknown, isError: true, ran: false };
-    const fresh = !there;
+    const fresh = !there || begun;
     const counts = new Map(counted.map((c) => [c._id, c.count]));
     const past = [...calls, ...fresh ? chats : []].find((c) => (counts.get(c._id) ?? 0) >= c.most);
     if (past) return { text: past.say, isError: true, ran: false };
@@ -170,7 +181,9 @@ export const callAction = defineAction({
     const answered = receipt?.done && now - receipt.at < RESEND_MS ? receipt : undefined;
     const cut = receipt && !receipt.done && now - receipt.at < RERUN_MS ? receipt : undefined;
     const step = cut?.step ?? `${input.call}@${now.toString(36)}`;
-    // Taken: counted, and (a tool that changes things) noted before it runs: one command.
+    // Taken: counted, and (a tool that changes things) noted before it runs, as a new
+    // conversation's opening is before it's made (one cut short just after its share is done
+    // now): one command.
     await system.transaction(async (tx) => {
       const rates = tx.db.collection("mcp_rate");
       for (const c of calls) {
@@ -183,6 +196,9 @@ export const callAction = defineAction({
       if (!readOnly && !answered && !cut) {
         await tx.db.collection("mcp_receipt").replaceOne({ _id: same }, { step, at: now }, UPSERT);
       }
+      const openings = tx.db.collection("mcp_opening");
+      if (fresh && !answered) await openings.replaceOne({ _id: thread }, { at: now }, UPSERT);
+      else if (noted && !fresh) await openings.deleteOne({ _id: thread }, UNANSWERED);
     });
     if (answered) return { ...await again(ctx, line, answered), ran: true, again: true };
     if (fresh) await opened(ctx, line, contact, thread);
@@ -318,8 +334,10 @@ async function again(ctx: Context, line: Line, receipt: Receipt) {
 /**
  * A new conversation's contact and chat, as the system: the line's space
  * (made or kept, when the app declares it), the contact, and its chat
- * there, shared with it. Two first calls at once may both try: the one that
- * finds the other's work done goes on.
+ * there, shared with it; then its opening, noted before, goes. Each step
+ * finds what's done already and goes on: two first calls at once may both
+ * try, and a first call cut short before the share (an owner restarted)
+ * is asked again and does the rest.
  */
 async function opened(ctx: Context, line: Line, contact: string, thread: string) {
   const system = ctx.as();
@@ -339,4 +357,6 @@ async function opened(ctx: Context, line: Line, contact: string, thread: string)
     if ((error as { code?: string }).code !== "duplicate_key") throw error;
     await open();
   }
+  // Shared: from here, a chat out of the contact's reach is one its people took it out of.
+  await system.db.collection("mcp_opening").deleteOne({ _id: thread });
 }

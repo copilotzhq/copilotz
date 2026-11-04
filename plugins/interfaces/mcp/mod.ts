@@ -82,6 +82,7 @@ import { definePlugin, linksOf, type Plugin } from "../../../runtime/mod.ts";
 import { callAction } from "./actions/call.ts";
 import { pruneAction } from "./actions/prune.ts";
 import { closed } from "./collections/closed.ts";
+import { opening } from "./collections/opening.ts";
 import { rate } from "./collections/rate.ts";
 import { receipt } from "./collections/receipt.ts";
 import { erasedProcessor, forgottenProcessor } from "./processors/closed.ts";
@@ -94,10 +95,15 @@ export * from "./contract.ts";
 export const mcp: Plugin = definePlugin({
   name: "mcp",
   requires: ["chat", "spaces", "contacts"],
-  collections: { mcp_receipt: receipt, mcp_rate: rate, mcp_closed: closed },
+  collections: {
+    mcp_receipt: receipt,
+    mcp_rate: rate,
+    mcp_closed: closed,
+    mcp_opening: opening,
+  },
   actions: { "mcp.call": callAction, "mcp.prune": pruneAction },
   processors: { "mcp.forgotten": forgottenProcessor, "mcp.erased": erasedProcessor },
-  // What's past goes: counters, receipts.
+  // What's past goes: counters, receipts, openings.
   schedules: { "mcp.prune": { every: "10m", call: "mcp.prune", input: {} } },
   // Which tools a contact is offered, as each tool's `offer` says.
   views: { "mcp:offered": { mcp: offeredView } },

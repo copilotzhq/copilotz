@@ -74,7 +74,7 @@ export {
   PROFILE,
   withNames,
 } from "./shared/names.ts";
-export { may, must, mustOwnOr, present } from "./shared/can.ts";
+export { may, must, mustOwnOr, present, sharedWith } from "./shared/can.ts";
 export { ORG, runsOrg } from "./shared/reach.ts";
 export { PERSONAL } from "./shared/personal.ts";
 export { AGENT_ROLES } from "./views/web/who.ts";

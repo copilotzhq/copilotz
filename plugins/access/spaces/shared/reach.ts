@@ -163,7 +163,7 @@ async function housed(reach: Reach, ctx: ReadContext): Promise<Reach> {
   const shared = (ctx.resources.shared ?? {}) as Record<string, { field?: string }>;
   const ids = new Map<string, string[]>();
   for (const [key, held] of reach) {
-    if (held.on && shared[held.on]) {
+    if (held.on && Object.hasOwn(shared, held.on)) {
       ids.set(held.on, [...ids.get(held.on) ?? [], key.slice(held.on.length + 1)]);
     }
   }
@@ -189,7 +189,7 @@ export async function homeOf(key: string, ctx: ReadContext): Promise<string | un
   const at = key.indexOf(":");
   const [on, id] = [key.slice(0, at), key.slice(at + 1)];
   const shared = (ctx.resources.shared ?? {}) as Record<string, { field?: string }>;
-  if (at < 1 || !shared[on]) return undefined;
+  if (at < 1 || !Object.hasOwn(shared, on)) return undefined;
   const doc = await ctx.db.collection(on).findOne({ _id: id });
   const home = doc?.[shared[on].field ?? "in"];
   return typeof home === "string" ? home : undefined;

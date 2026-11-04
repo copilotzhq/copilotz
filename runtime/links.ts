@@ -8,8 +8,10 @@
  * The app sets where it is and the secret in the `links` resource, from its
  * settings at start: `resources: { links: { origin: "https://app.example",
  * secret: env.LINK_SECRET } }` (at least 32 bytes). Without them, nothing is
- * signed. The origin is signed too, so a link made for one app (or one org,
- * `https://app.example/o/acme`) never opens another, whatever their secrets.
+ * signed. The origin is signed too, so a link made for one app never opens
+ * another, whatever their secrets. An app serving many orgs (`hosts/orgs`)
+ * gives each org's runtime its own origin (`https://app.example/o/acme`):
+ * with one origin for all, an org's links would open another's files.
  */
 import type { Resources } from "./define.ts";
 import { invalid } from "./errors.ts";
@@ -33,9 +35,13 @@ export function linksOf(resources: Resources): LinksSettings | undefined {
   return { origin: set.origin.replace(/\/+$/, ""), secret: set.secret };
 }
 
-/** What's signed: the origin and path, then the params (`exp` among them) in order, not the signature. */
+/**
+ * What's signed: the origin, a line break (which neither an origin nor a
+ * path holds), the path, then the params (`exp` among them) in order, never
+ * the signature.
+ */
 const signedText = (origin: string, path: string, params: Record<string, string>) =>
-  `${origin}${path}?${
+  `${origin}\n${path}?${
     Object.keys(params).filter((k) => k !== "sig").sort()
       .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`).join("&")
   }`;

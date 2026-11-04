@@ -53,6 +53,8 @@
     message it was on; agents read `Carla: PIX [tapped: pay:pix]`. Typing the title is just text. A
     tap is a choice, not a permission: anyone can send any id, so a tool acting on one checks it
     against what was shown there. A quote or a tap answers only what went out in its own chat.
+  - What a message and its additions show is read as whom they go to, never with the reach of
+    whoever's work the answer was.
   - **"Typing…" while agents work:** each step an agent takes in a WhatsApp chat shows it again once
     WhatsApp may have hidden it (after 20 s, for up to five minutes); nothing says "please wait".
   - **Media:** a part's picture or file is a public https link (as given), one of the app's routes
@@ -86,10 +88,11 @@
   - **A failed turn** tells a customer only that, in their line's language, never its error.
 - **Signed links** (the runtime's `signLink` and `verifyLink`, with the app's `links` resource:
   `{ origin, secret }`, a secret of at least 32 bytes, checked at start): the app's origin, a path,
-  its params and an expiry (an hour unless said), HMAC-signed, so a link for one app or org never
-  opens another. A chat's file is linked or uploaded only for someone who may read it. The web host
-  serves a file at a signed `/files/<id>` link without a session, as the system; expired or altered,
-  a 404.
+  its params and an expiry (an hour unless said), HMAC-signed, with a line break between origin and
+  path, so a link for one app or org never opens another (under `hosts/orgs`, give each org its own
+  origin). The web host checks the secret as it starts serving. A chat's file is linked or uploaded
+  only for someone who may read it. The web host serves a file at a signed `/files/<id>` link
+  without a session, as the system; expired or altered, a 404.
 - **Chat in spaces declares its own `shared` entries** (`thread`, `message` with labels, `file`,
   `live` and `shown`, each a part of its thread). `chat.open` opens an empty chat in a space;
   `chat.say { id, thread, from, text, to? }` has an agent say a fixed message in a chat without a
@@ -111,9 +114,17 @@
     for a contact; computers aren't woken (or billed) for work that's no person's; memory declares
     its own `shared` entry; the identity guard keeps people's records to people.
   - `chat.say`'s message is `<thread>:say:<id>`, said only by an agent answering in that chat.
+  - Work handed to another space from a chat shared with a contact comes back labelled with that
+    space (`sources`): the contact doesn't read it (spaces' contract: `sharedWith`).
+  - The `shared` resource's entries are its own keys: a collection named like what objects inherit
+    (`constructor`) is none.
 - **Erasure:** `contact.forget { contact, chats? }` (managers of its space) ends a contact's access
-  at once, deletes its record (`contact.deleted`: WhatsApp erases its phone) and, with `chats`, its
-  chats with everything in them (chat's new `chat.erase`, trusted code only).
+  at once, deletes its record (`contact.deleted`: WhatsApp erases its phone, but a block on it
+  stays, by the phone's hash) and, with `chats`, its chats, each for someone who manages that chat's
+  space (chat's new `chat.erase`, trusted code only: messages, files, waits, steps in flight; the
+  history plugin erases its summaries on `thread.deleted`). The event log keeps what happened (what
+  WhatsApp delivered, each change with its document) until retention removes it; memories learned in
+  staff's chats, and chats a hand-over opened elsewhere, aren't erased.
 - **An open line, kept in hand:** `whatsapp.block { thread, blocked }` (managers) blocks the phone
   behind a chat: what it sends goes nowhere, unanswered. A customer sending more than the number's
   `rate` a minute (20) goes unanswered. One taken out of their chat is heard again once it's been

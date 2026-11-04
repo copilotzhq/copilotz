@@ -15,6 +15,7 @@
 import { defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
 import { GAP, type WhatsAppNumber } from "../collections/number.ts";
 import type { WhatsAppThread } from "../collections/thread.ts";
+import { blockedKey } from "../collections/blocked.ts";
 import { mustManage } from "./connect.ts";
 import { PERSONAL } from "../../../access/spaces/contract.ts";
 
@@ -92,7 +93,8 @@ export const setAction = defineAction({
 /**
  * `whatsapp.block`: those who manage a number's space block the phone of
  * one of its chats (a customer who abuses the line), or let it in again:
- * what a blocked phone sends goes nowhere, and nothing is said to it.
+ * what a blocked phone sends goes nowhere, and nothing is said to it, even
+ * once the contact is erased (the block is kept by the phone's hash).
  */
 export const blockAction = defineAction({
   description: "Blocks the phone behind a WhatsApp chat, or lets it in again",
@@ -112,10 +114,13 @@ export const blockAction = defineAction({
       : null;
     if (!chat || !number) throw failure("not_found", "No WhatsApp chat here.");
     await mustManage(ctx, number.in, "block a phone");
-    await system.collection("whatsapp_phone").updateOne(
-      { _id: `${number._id}:${chat.phone}` },
-      input.blocked ? { $set: { blocked: new Date().toISOString() } } : { $unset: { blocked: "" } },
-    );
+    const _id = await blockedKey(number._id, chat.phone);
+    const blocks = system.collection("whatsapp_blocked");
+    if (input.blocked) {
+      await blocks.replaceOne({ _id }, { number: number._id, at: new Date().toISOString() }, {
+        upsert: true,
+      });
+    } else await blocks.deleteOne({ _id });
     return { blocked: input.blocked };
   },
 });

@@ -28,8 +28,6 @@ const phoneSchema = {
     thread: { type: "string" },
     /** On an open number, the contact it is (someone outside the org). */
     contact: { type: "string" },
-    /** When the number's people blocked it: what it sends then goes nowhere. */
-    blocked: { type: "string" },
     /** When it was last told how to link: once a day. */
     told: { type: "string" },
     /** Codes it sent that didn't match, since `since`. */

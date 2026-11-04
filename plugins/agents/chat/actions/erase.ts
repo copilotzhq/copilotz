@@ -1,8 +1,12 @@
 /**
- * `chat.erase`: a chat, gone with everything in it (its messages, files,
- * what's being written, and the subthreads hanging from it), for erasing
- * someone's personal data (LGPD, GDPR). Trusted code only: it calls this
- * once it decided whose data goes (`contact.forget`).
+ * `chat.erase`: a chat, gone with everything chat keeps of it (its messages,
+ * files, waits, what's being written, the steps in flight, and the
+ * subthreads hanging from it), for erasing someone's personal data (LGPD,
+ * GDPR). Other plugins erase what they keep of it on `thread.deleted` (the
+ * history plugin, its summaries). Ledgers (records: what was `shown` after
+ * its answers, what went out to WhatsApp) can't be changed, and the event
+ * log keeps what happened: both stay until retention removes them. Trusted
+ * code only: it calls this once it decided whose data goes (`contact.forget`).
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Message } from "../collections/message.ts";
@@ -25,7 +29,7 @@ export const eraseAction = defineAction({
       all.push(...level);
     }
     await ctx.transaction(async (tx) => {
-      for (const collection of ["message", "file", "live", "wait"]) {
+      for (const collection of ["message", "file", "live", "wait", "intent"]) {
         await tx.db.collection(collection).deleteMany({ thread: { $in: all } });
       }
       await tx.db.collection("thread").deleteMany({ _id: { $in: all } });

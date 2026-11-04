@@ -3,7 +3,10 @@
  * signing with another secret, breaks it.
  */
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { linksOf, signLink, verifyLink } from "../mod.ts";
+import { createRuntime, definePlugin, linksOf, signLink, verifyLink } from "../mod.ts";
+import { memoryStore } from "../../stores/memory/mod.ts";
+import { webServer } from "../../hosts/web/server.ts";
+import { createTickets } from "../../hosts/web/tickets.ts";
 import { test } from "../../testing/mod.ts";
 
 const links = { origin: "https://app.example", secret: "a-secret-only-the-app-has-32-bytes!" };
@@ -33,6 +36,9 @@ test("a signed link opens with its params, until it expires", async () => {
     undefined,
   );
   assertEquals(await verifyLink(links, path, { ...query, sig: "nope" }), undefined);
+  // Where the origin ends and the path begins is part of what's signed.
+  const moved = { origin: "https://app.example/media", secret: links.secret };
+  assertEquals(await verifyLink(moved, "/trip-card", query), undefined);
   const [, old] = opened(await signLink(links, "/media/trip-card", { trip: "123" }, -1_000));
   assertEquals(await verifyLink(links, path, old), undefined);
 });
@@ -49,4 +55,29 @@ test("the app's links: an origin and a secret of 32 bytes or more, or none", () 
   );
   assertEquals(linksOf({ links: { origin: "https://app.example" } }), undefined);
   assertEquals(linksOf({}), undefined);
+});
+
+test("a web server with a links secret too short refuses to start, rather than fail each file", async () => {
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [definePlugin({
+      name: "short",
+      resources: { links: { origin: "https://app.example", secret: "short" } },
+    })],
+  });
+  try {
+    assertThrows(
+      () =>
+        webServer({
+          runtime,
+          tickets: createTickets(),
+          code: { entry: "app.js", files: { "app.js": "" } },
+          upgrade: () => new Response(null, { status: 299 }),
+        }),
+      Error,
+      "at least 32 bytes",
+    );
+  } finally {
+    await runtime.close();
+  }
 });

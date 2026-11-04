@@ -6,48 +6,56 @@
 import type { Doc, Filter, FindOptions, Update } from "./store.ts";
 import { invalid } from "./errors.ts";
 
-/** Names that reach an object's prototype. */
-const PROTOTYPE = new Set(["__proto__", "constructor", "prototype"]);
-
 /**
  * A field name a write may give: not an operator's or a blob reference's
- * (`$…`, as MongoDB refuses them), nor one that reaches the prototype; else
- * `invalid`. `path` is what it's part of, for the message.
+ * (`$…`, as MongoDB refuses them), nor `__proto__`, which reaches the
+ * prototype; else `invalid`. `constructor` and `prototype` are names like any
+ * other: paths follow and make an object's own fields only. `path` is what
+ * the name is part of, for the message.
  */
 export function checkName(name: string, path = name): void {
   if (!isFieldName(name)) {
     throw invalid(
       `A write can't name the field "${path.slice(0, 80)}": no part of it may start with "$", ` +
-        `or be __proto__, constructor or prototype`,
+        `or be __proto__`,
     );
   }
 }
 
 /** Whether a write may give a field this name (see `checkName`). */
-export const isFieldName = (name: string): boolean => !name.startsWith("$") && !PROTOTYPE.has(name);
+export const isFieldName = (name: string): boolean => !name.startsWith("$") && name !== "__proto__";
 
 /** A dotted path a write may name: every part of it a field name it may give. */
 export function checkPath(path: string): void {
   for (const name of path.split(".")) checkName(name, path);
 }
 
+/**
+ * Whether a path goes on into `value`: an object or array, but not a blob
+ * reference, which stands for a (large) string, nor any other object with a
+ * `$blob` key (planted). A path ends at those as it does at a string.
+ */
+const branch = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Object.hasOwn(value, "$blob");
+
 /** The value at a dotted path, through the document's own fields only (never its prototype's). */
 export function get(doc: unknown, path: string): unknown {
   let value: unknown = doc;
   for (const key of path.split(".")) {
-    if (value === null || typeof value !== "object" || !Object.hasOwn(value, key)) return undefined;
-    value = (value as Record<string, unknown>)[key];
+    if (!branch(value) || !Object.hasOwn(value, key)) return undefined;
+    value = value[key];
   }
   return value;
 }
 
+/** Sets a dotted path's value, making objects on the way (in place of anything else there). */
 function set(doc: Record<string, unknown>, path: string, value: unknown) {
   checkPath(path);
   const keys = path.split(".");
   let target = doc;
   for (const key of keys.slice(0, -1)) {
-    if (target[key] === null || typeof target[key] !== "object") target[key] = {};
-    target = target[key] as Record<string, unknown>;
+    const next = Object.hasOwn(target, key) ? target[key] : undefined;
+    target = (branch(next) ? next : (target[key] = {})) as Record<string, unknown>;
   }
   target[keys.at(-1)!] = value;
 }
@@ -56,9 +64,7 @@ function unset(doc: Record<string, unknown>, path: string) {
   checkPath(path);
   const keys = path.split(".");
   const parent = keys.length > 1 ? get(doc, keys.slice(0, -1).join(".")) : doc;
-  if (parent && typeof parent === "object") {
-    delete (parent as Record<string, unknown>)[keys.at(-1)!];
-  }
+  if (branch(parent)) delete parent[keys.at(-1)!];
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);

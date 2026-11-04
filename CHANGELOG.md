@@ -10,11 +10,15 @@
   - What plugin code writes (documents, updates, upserts' filters, edges, events, records, timers'
     inputs, Action results) and what an Action is called with may hold no `$blob` key: `invalid`.
     The owner checks it as it walks what it offloads, so it costs no extra pass.
-  - No part of an update's field path may start with `$`, or be `__proto__`, `constructor` or
-    `prototype` (`invalid`, as MongoDB refuses `$` fields): `{ $set: { "bio.$blob": … } }` made a
-    reference out of plain strings. On Node and Bun, `{ $set: { "__proto__.x": … } }` set `x` on
-    every object's prototype (Deno has no `__proto__`). Reads follow a document's own fields only: a
-    filter on `constructor` no longer finds `Object` in every document.
+  - No part of an update's field path may start with `$` (as MongoDB refuses) or be `__proto__`
+    (`invalid`): `{ $set: { "bio.$blob": … } }` made a reference out of plain strings, and on Node
+    and Bun `{ $set: { "__proto__.x": … } }` set `x` on every object's prototype (Deno has no
+    `__proto__`). `constructor` and `prototype` are fields like any other: paths read and make a
+    document's own fields only, so a filter on `constructor` no longer finds `Object` in every
+    document.
+  - A path ends at a blob reference as it does at a string, so a large string is treated like a
+    small one (`$set: { "text.note": 1 }` replaced the reference's insides, losing the text), and at
+    any other object with a `$blob` key, so no update turns a planted one into a reference.
   - An aggregate's `$group` can't name a field `$…` either: `_id: { $blob: …, size, type }` built a
     reference from strings, which a browser's own read then loaded.
   - The API's event stream sends a call's result whole; one over 16 KiB went as its reference.

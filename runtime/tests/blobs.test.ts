@@ -168,6 +168,16 @@ const vault = definePlugin({
       run: async (ctx, input) => (await ctx.db.collection("step").insertOne({ input })).insertedId,
     }),
     "vault.noop": defineAction({ input: object, run: () => void ran++ }),
+    // Updates a step as it's told, in JSON.
+    "vault.update": defineAction({
+      input: {
+        type: "object",
+        properties: { id: { type: "string" }, json: { type: "string" } },
+        required: ["id", "json"],
+      },
+      run: (ctx, { id, json }) =>
+        ctx.db.collection("step").updateOne({ _id: id }, JSON.parse(json), { upsert: true }),
+    }),
     // Changes a document with operators, without touching its large field.
     "vault.touch": defineAction({
       input: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
@@ -349,6 +359,71 @@ each(
     }
   },
 );
+
+each("a path ends at a large string's reference as at a small string", async (make) => {
+  const runtime = await createRuntime({ store: await make(), plugins: [vault] });
+  const update = (id: string, value: unknown) =>
+    runtime.call("vault.update", { id, json: JSON.stringify(value) });
+  const read = async (id: string, text: string) => {
+    const { text: got } = await runtime.query<{ text: unknown }>("step.one", { id });
+    return got === text ? "the text" : got;
+  };
+  try {
+    for (
+      const op of [
+        { $set: { "text.note": 1 } },
+        { $unset: { "text.size": "" } },
+        { $inc: { "text.size": 1 } },
+        { $push: { "text.list": 1 } },
+        { $set: { "text.$blob.x": 1 } },
+      ]
+    ) {
+      await update("small", { $set: { text: "short" } });
+      await update("large", { $set: { text: big } });
+      const done = await Promise.allSettled([update("small", op), update("large", op)]);
+      assertEquals(done[0].status, done[1].status, JSON.stringify(op));
+      assertEquals(await read("large", big), await read("small", "short"), JSON.stringify(op));
+    }
+  } finally {
+    await runtime.close();
+  }
+});
+
+each("no update turns a planted object into a reference that loads", async (make) => {
+  const store = await make();
+  const ref = await bigRef();
+  // As a store may hold them from before writes were checked: none of them loads.
+  const planted: Record<string, unknown> = {
+    "more keys": { ...ref, also: 1 },
+    "no size": { $blob: ref.$blob, type: TEXT },
+    "a string size": { ...ref, size: String(ref.size) },
+  };
+  const { epoch } = await store.open();
+  await store.transaction(epoch, async (tx) => {
+    await tx.putBlob({ id: ref.$blob, data: encoder.encode(big), type: TEXT });
+    await tx.insert(
+      "step",
+      Object.entries(planted).map(([_id, input]) => ({ _id, input })),
+    );
+  });
+  const runtime = await createRuntime({ store, plugins: [vault] });
+  try {
+    // What would make each one exact, through its sibling fields.
+    const revive: [string, unknown][] = [
+      ["more keys", { $unset: { "input.also": "" } }],
+      ["no size", { $set: { "input.size": ref.size } }],
+      ["a string size", { $inc: { "input.size": 0 } }],
+    ];
+    for (const [id, op] of revive) {
+      await runtime.call("vault.update", { id, json: JSON.stringify(op) }).catch(() => {});
+      const { input } = await runtime.query<{ input: unknown }>("step.one", { id });
+      assert(input !== big, id);
+      assert(!isBlobRef((await store.find("step", { _id: id }))[0].input), id);
+    }
+  } finally {
+    await runtime.close();
+  }
+});
 
 test("with blobs as files, no reference reaches a file outside them", async () => {
   const dir = tempDir();

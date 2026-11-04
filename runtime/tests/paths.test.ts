@@ -3,9 +3,10 @@
  * an update build what plugin code can't write whole (`{ $set: { "a.$blob":
  * … } }` makes a blob reference), and one through `__proto__` would change
  * every object's prototype (Node and Bun follow it; Deno has no `__proto__`).
- * So no part of an update's path, or an upsert's seed, may start with `$`, or
- * be `__proto__`, `constructor` or `prototype`; and reads follow only a
- * document's own fields.
+ * So no part of an update's path, or an upsert's seed, may start with `$` or
+ * be `__proto__`. `constructor` and `prototype` are ordinary names: paths
+ * read and make a document's own fields only. A path ends at a blob
+ * reference (a large string's stand-in) as it does at a string.
  */
 import { assertEquals, assertThrows } from "@std/assert";
 import { createRuntime, defineAction, defineCollection, definePlugin, type Store } from "../mod.ts";
@@ -39,8 +40,7 @@ const BAD = [
   "a.$",
   "__proto__.polluted",
   "a.__proto__.polluted",
-  "constructor.prototype.polluted",
-  "prototype.polluted",
+  "constructor.__proto__.polluted",
 ];
 
 /** An update naming `path` with each operator. */
@@ -53,7 +53,7 @@ const updates = (path: string) => [
   { $pull: { [path]: "yes" } },
 ];
 
-test("an update names no $ field and never the prototype, with any operator", () => {
+test("an update names no $ field and never __proto__, with any operator", () => {
   for (const path of BAD) {
     for (const update of updates(path)) {
       // As it comes over the wire: JSON, where `__proto__` is an ordinary key.
@@ -64,10 +64,30 @@ test("an update names no $ field and never the prototype, with any operator", ()
     }
   }
   // An upsert's seed is written too.
-  for (const path of ["__proto__", "a.__proto__", "constructor", "a.$blob"]) {
+  for (const path of ["__proto__", "a.__proto__", "a.$blob"]) {
     const filter = JSON.parse(`{"${path}": {"$eq": {"polluted": "yes"}}, "_id": "a"}`);
     assertEquals(code(assertThrows(() => seedOf(filter))), "invalid", path);
   }
+  assertEquals(polluted(), undefined);
+});
+
+test("constructor and prototype are fields like any other, the document's own", () => {
+  const parsed = JSON.parse(JSON.stringify({
+    $set: { "constructor.prototype.polluted": "yes", prototype: "v2", "a.constructor": 1 },
+  }));
+  const done = applyUpdate({ _id: "a", a: {} }, parsed);
+  assertEquals(done, {
+    _id: "a",
+    a: { constructor: 1 },
+    constructor: { prototype: { polluted: "yes" } },
+    prototype: "v2",
+  });
+  assertEquals(polluted(), undefined);
+  assertEquals(({}).constructor, Object);
+  const unset = applyUpdate(done, { $unset: { "constructor.prototype": true } });
+  assertEquals(get(unset, "constructor"), {});
+  assertEquals(get(done, "constructor.prototype.polluted"), "yes");
+  assertEquals(seedOf({ _id: "s", constructor: "c" }), { _id: "s", constructor: "c" });
   assertEquals(polluted(), undefined);
 });
 

@@ -703,16 +703,15 @@ for (const [name, database] of Object.entries(shared)) {
 }
 
 for (const [name, make] of Object.entries(adapters)) {
-  test(`${name}: an update names no $ field and never the prototype`, async () => {
+  test(`${name}: an update names no $ field and never __proto__`, async () => {
     const { store, epoch } = await seeded(make);
     // As JSON brings them: `__proto__` is an ordinary key there.
     const bad = [
       '{"$set": {"bio.$blob": "x", "bio.size": 1, "bio.type": "t"}}',
       '{"$set": {"__proto__.polluted": "yes"}}',
       '{"$set": {"__proto__": {"polluted": "yes"}}}',
-      '{"$set": {"constructor": 1}}',
       '{"$inc": {"tags.0.$blob": 1}}',
-      '{"$push": {"prototype": 1}}',
+      '{"$push": {"a.__proto__": 1}}',
       '{"$unset": {"__proto__": true}}',
     ];
     for (const update of bad) {
@@ -736,6 +735,19 @@ for (const [name, make] of Object.entries(adapters)) {
     );
     assertEquals(({} as Record<string, unknown>).polluted, undefined);
     assertEquals(await store.find("things", { _id: "a" }), [DOCS[0]]);
+    // `constructor` and `prototype` are fields like any other.
+    await store.transaction(epoch, (tx) =>
+      tx.update("things", { _id: "a" }, {
+        $set: { constructor: "c", "nested.prototype": "p" },
+        $push: { prototype: 1 },
+      }));
+    const [a] = await store.find("things", { _id: "a" });
+    assertEquals([a["constructor" as string], a.nested, a.prototype], [
+      "c",
+      { k: 1, prototype: "p" },
+      [1],
+    ]);
+    assertEquals(({} as Record<string, unknown>).polluted, undefined);
     await store.close();
   });
 }

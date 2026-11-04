@@ -4,14 +4,17 @@
  * run as that contact, written as a step, answered as the app's agents
  * read it; errors that say only what's public; a request sent again
  * answered once (tools that change things), or fresh (read-only ones);
- * erasure that sticks; and no way into another conversation.
+ * erasure that sticks; an owner that stops mid-call, wherever it stops;
+ * and no way into another conversation.
  */
 import { assert, assertEquals, assertMatch, assertNotEquals, assertRejects } from "@std/assert";
 import { test } from "../../../../testing/mod.ts";
 import type { Message, Step } from "../../../agents/chat/mod.ts";
 import { callIdOf, conversationOf, sameCallOf } from "../shared/keys.ts";
+import { RERUN_MS } from "../collections/receipt.ts";
 import {
   AGAIN,
+  begun,
   charges,
   closed,
   handleIn,
@@ -20,8 +23,13 @@ import {
   runs,
   said,
   SECRET,
+  type Setup,
   setup,
   state,
+  stopping,
+  until,
+  within,
+  type Write,
 } from "./setup.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 
@@ -639,21 +647,105 @@ test("after a stop, the model asking again under a new request id runs the same 
 
 test("an owner restarted mid-call: asked again under any id, the same call runs again as itself", async () => {
   const store = memoryStore();
+  let first = "";
   await setup(async (a) => {
     assertMatch(said(await a.call("hang", { ms: 300 }, { session: "r", id: 1 })), /^Still working/);
-    await a.runtime.close({ drain: 0 });
+    // The owner stops while its tool runs, however slow the machine is to get there.
+    first = await until(() => begun[0], "the first call's tool began");
     closed.add(a.runtime);
+    await a.runtime.close({ drain: 0 });
+    // Its tool, ignoring its signal, ends too, in the owner that stopped: nothing it writes lands.
+    await until(() => hangs.includes(first), "the first call's tool ended");
   }, { store, line: { limits: { timeout: 0.03 } } });
-  await new Promise((resolve) => setTimeout(resolve, 350));
+  // A new runtime, nothing in its memory: the receipt, kept with the store, says how it went.
+  // It waits as long as it takes (the line's own timeout): what's tested is the restart.
   await setup(async (b) => {
-    // A new runtime, nothing in its memory: the receipt, kept with the store, says how it went.
     const again = JSON.parse(said(await b.call("hang", { ms: 300 }, { session: "r", id: 2 })));
-    assertEquals(again.retry, true);
+    assertEquals([again.callId, again.retry], [first, true]);
     const same = said(await b.call("hang", { ms: 300 }, { session: "r", id: 1 }));
-    assertEquals(JSON.parse(own(same)).callId, again.callId);
-    // The first run's tool, ignoring its signal, ended too: every effect under one callId.
-    assertEquals(new Set(hangs).size, 1);
-  }, { store, line: { limits: { timeout: 0.03 } } });
+    assertMatch(same, AGAIN);
+    // Every effect under one callId: the first run's, and the one that ran again.
+    assertEquals(JSON.parse(own(same)).callId, first);
+    assertEquals(hangs, [first]);
+  }, { store });
+});
+
+/** The writes of a conversation's first call an owner may stop at, in order. */
+const WRITES: Record<string, (w: Write) => boolean> = {
+  "its contact": (w) => w.op === "insert" && w.collection === "contact",
+  "its contact's own record, shared with it": (w) =>
+    w.collection === "member" && w.doc?.on === "contact",
+  "its chat": (w) => w.op === "insert" && w.collection === "thread",
+  "its chat, shared with its contact": (w) => w.collection === "member" && w.doc?.on === "thread",
+  "its opening, done": (w) => w.op === "delete" && w.collection === "mcp_opening",
+  "its step": (w) => w.collection === "message",
+};
+
+/**
+ * A conversation's first call, its owner stopped at one of its writes (that
+ * write never lands, nor anything after it), and a new owner on the same
+ * store, asked again: `then` gets it, and the conversation's ids.
+ */
+async function stoppedAt(
+  at: (w: Write) => boolean,
+  then: (b: Setup, ids: { contact: string; thread: string; first: string }) => Promise<void>,
+) {
+  const store = memoryStore();
+  const owner = stopping(store, at);
+  await setup(async (a) => {
+    try {
+      const asked = a.call("hang", { ms: 0 }, { session: "r", id: 1 });
+      await within(owner.reached, "the first call got there");
+      await asked;
+    } finally {
+      // Stopped and closed whatever happened, so nothing waits on it.
+      owner.stop();
+      closed.add(a.runtime);
+      // Gone, it can't even save its Processors' positions.
+      await a.runtime.close({ drain: 0 }).catch(() => {});
+    }
+  }, { store: owner.store, line: { limits: { timeout: 0.03 } } });
+  const { contact, thread } = await chatOf("r");
+  // The step the first call began, which it's asked as again: request 1's, whatever the id.
+  const first = await callIdOf(thread, 1, "hang", { ms: 0 });
+  await setup((b) => then(b, { contact, thread, first }), { store });
+}
+
+test("an owner stopped at any write of a conversation's first call: asked again, it goes on", async () => {
+  for (const [write, at] of Object.entries(WRITES)) {
+    await stoppedAt(at, async (b, { contact, thread, first }) => {
+      const again = said(await b.call("hang", { ms: 0 }, { session: "r", id: 2 }));
+      assertMatch(again, /^\{/, `stopped at ${write}: ${again}`);
+      // The same call, run again as itself.
+      const { callId, retry } = JSON.parse(again);
+      assertEquals([callId.startsWith(`${first}@`), retry], [true, true], write);
+      // Made, as if it had never stopped: one contact, its chat shared with it, opened.
+      const shares = (await b.docs<{ _id: string }>("member")).map((m) => m._id);
+      assert(shares.includes(`thread:${thread}|contact:${contact}`), write);
+      assert(shares.includes(`contact:${contact}|contact:${contact}`), write);
+      assertEquals((await b.docs("contact")).length, 1, write);
+      assertEquals(await b.docs("mcp_opening"), [], write);
+      // From here, taken out of its chat, the contact is out for good.
+      await b.runtime.call("test.out", { thread, contact });
+      assertMatch(said(await b.call("hang", { ms: 0 }, { session: "r", id: 3 })), /over/, write);
+    });
+  }
+});
+
+test("stopped before its chat was shared: past 15 minutes, or erased, the conversation is over", async () => {
+  const share = WRITES["its chat, shared with its contact"];
+  // Asked again too late: what began is gone, as a call begun and never done is.
+  await stoppedAt(share, async (b) => {
+    await b.runtime.call("test.age", { ms: RERUN_MS });
+    assertMatch(said(await b.call("hang", { ms: 0 }, { session: "r", id: 2 })), /over/);
+    assertEquals(begun, []);
+  });
+  // Erased in between (contact.forget, its chat kept): over at once, the contact never made again.
+  await stoppedAt(share, async (b, { contact, thread }) => {
+    await b.runtime.call("test.forget", { contact, thread, chats: false });
+    assertMatch(said(await b.call("hang", { ms: 0 }, { session: "r", id: 2 })), /over/);
+    assertEquals([begun, await b.docs("contact")], [[], []]);
+  });
 });
 
 test("past the timeout, few calls go on: 1 started from an address, 2 on the line; the rest stop", async () => {

@@ -20,7 +20,13 @@ import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { devSignIn, googleSignIn } from "../../plugins/access/mod.ts";
 import { createTickets } from "../../hosts/web/tickets.ts";
-import { type Asset, type Code, socket, webServer } from "../../hosts/web/server.ts";
+import {
+  type Asset,
+  type Code,
+  setClientAddress,
+  socket,
+  webServer,
+} from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
 import { computerDownloads } from "../../plugins/compute/computers/resources/downloads.ts";
 import { VERSION } from "../../plugins/compute/computers/program/version.ts";
@@ -119,15 +125,17 @@ async function bundle(): Promise<Code> {
 }
 
 const code = await bundle();
+const serve = webServer({
+  runtime,
+  tickets,
+  code,
+  upgrade: handler(runtime.hypervisor),
+  title: brand.title,
+  theme: themeOf(brand.theme),
+  assets,
+});
+// This machine alone (dev sign-in is its own); each request says where it came from, as the socket did.
 Deno.serve(
   { port, hostname: "127.0.0.1", onListen: () => console.log(`http://localhost:${port}`) },
-  webServer({
-    runtime,
-    tickets,
-    code,
-    upgrade: handler(runtime.hypervisor),
-    title: brand.title,
-    theme: themeOf(brand.theme),
-    assets,
-  }),
+  (request, info) => serve(setClientAddress(request, info.remoteAddr.hostname)),
 );

@@ -11,12 +11,19 @@
  *   one session stream per connection. A read is watched by observing a View
  *   that makes it, as the person: what the rules read to know their reach is
  *   followed too, so being let in shows at once.
+ * - **How much:** an actor has 16 connections at most (one more is refused
+ *   at admission), each 512 reads watched (one more is refused, `too_many`,
+ *   and those watched keep working; a read asked again is the same one), and
+ *   16 resume credentials, each for a day (a new one drops their oldest).
+ *   What's past its day is dropped as it passes (see expiring.ts).
  */
 import type { JsonObject, WorkInput } from "@oxian/oxian-js";
 import type { ViewContext } from "./define.ts";
 import type { Observers, Output } from "./observe.ts";
 import type { ReadOp } from "./ops.ts";
 import type { Actor } from "./store.ts";
+import { failure as refusal } from "./errors.ts";
+import { expiring } from "./expiring.ts";
 import { decode, encode, failure } from "./wire.ts";
 
 /** A browser connection's provider id, set at admission. */
@@ -76,6 +83,12 @@ const answer = (output: Output): Answer =>
     value: (output as { value: unknown }).value ?? null,
   };
 
+/** How much a browser may hold: see the module's header. */
+export type BrowserLimits = { sockets?: number; watches?: number; resumes?: number };
+
+/** Who an actor is, for counting what they hold. */
+const whoOf = (actor: Actor) => `${actor.kind}:${actor.id}`;
+
 type Connection = {
   actor: Actor;
   /** The transport connection it came on: only that one going closes it. */
@@ -95,11 +108,17 @@ export function createBrowsers(env: {
   call(action: string, input: unknown, actor: Actor): Promise<unknown>;
   emit(type: string, data: Record<string, unknown>, actor: Actor): Promise<void>;
   dispatch(input: WorkInput): Promise<unknown>;
+  limits?: BrowserLimits;
 }) {
+  const limits = { sockets: 16, watches: 512, resumes: 16, ...env.limits };
   const connections = new Map<string, Connection>();
-  /** What a browser shows to reconnect without a new ticket: a secret of its own, for a day. */
-  const resumes = new Map<string, { actor: Actor; until: number }>();
+  /** Each actor's connections, by worker id. */
+  const held = new Map<string, Set<string>>();
   const DAY = 24 * 60 * 60 * 1000;
+  /** What a browser shows to reconnect without a new ticket: a secret of its own, for a day. */
+  const resumes = expiring<string, Actor>(DAY);
+  /** Each actor's resume credentials, oldest first. */
+  const lately = expiring<string, string[]>(DAY);
 
   /** A ready browser: its session stream opens, and its reads may come. */
   const ready = (workerId: string, actor: Actor, via: string) => {
@@ -131,10 +150,17 @@ export function createBrowsers(env: {
         connection.watches.clear();
         if (open) lines.close();
         open = false;
-        if (connections.get(workerId) === connection) connections.delete(workerId);
+        if (connections.get(workerId) !== connection) return;
+        connections.delete(workerId);
+        const theirs = held.get(whoOf(actor));
+        theirs?.delete(workerId);
+        if (!theirs?.size) held.delete(whoOf(actor));
       },
     };
     connections.set(workerId, connection);
+    const who = whoOf(actor);
+    if (!held.has(who)) held.set(who, new Set());
+    held.get(who)!.add(workerId);
     void env.dispatch({ workload: SESSION, target: { workerId }, body }).catch(() =>
       connection.close()
     );
@@ -142,6 +168,16 @@ export function createBrowsers(env: {
 
   /** A read, watched: its first result now, and each new one pushed. */
   const watch = (connection: Connection, key: string, remote: Remote): Promise<Answer> => {
+    // Checked and taken at once, nothing awaited between: a batch can't overrun it.
+    if (!connection.watches.has(key) && connection.watches.size >= limits.watches) {
+      return Promise.resolve({
+        error: {
+          message: `This connection watches ${limits.watches} reads, the most it may: ` +
+            "stop watching some first",
+          code: "too_many",
+        },
+      });
+    }
     const first = Promise.withResolvers<Answer>();
     // Asked again: the new watch replaces the old, whose first answer, if still due, is the new one's.
     connection.watches.get(key)?.close(first.promise);
@@ -219,28 +255,48 @@ export function createBrowsers(env: {
   return {
     /** How many browsers are connected. */
     count: () => connections.size,
-    /** Ends every browser's session stream: closing the runtime doesn't wait them out. */
-    closeAll: () => {
+    /**
+     * Ends every browser's session stream (closing the runtime doesn't wait
+     * them out), and forgets every resume credential.
+     */
+    close: () => {
       for (const connection of [...connections.values()]) connection.close();
+      resumes.close();
+      lately.close();
     },
     /** A connection's provider config at admission: who it is. */
     config: (actor: Actor): JsonObject => ({ actor: actor as unknown as JsonObject }),
-    /** A resume credential for a browser just admitted. */
+    /**
+     * Refuses (`too_many`, thrown) a browser coming in as `actor` on
+     * `workerId` when they hold as many connections as they may, this one
+     * aside (a browser back on a new connection is the same one).
+     */
+    room: (actor: Actor, workerId: string) => {
+      const theirs = held.get(whoOf(actor));
+      const others = (theirs?.size ?? 0) - (theirs?.has(workerId) ? 1 : 0);
+      if (others < limits.sockets) return;
+      throw refusal(
+        "too_many",
+        `Connected ${limits.sockets} times already, the most anyone may: close a tab first`,
+        { public: true },
+      );
+    },
+    /** A resume credential for a browser just admitted: a new one drops their oldest past 16. */
     resume: (actor: Actor) => {
-      const now = Date.now();
-      for (const [secret, kept] of resumes) if (kept.until < now) resumes.delete(secret);
       const secret = crypto.randomUUID() + crypto.randomUUID();
-      resumes.set(secret, { actor, until: now + DAY });
+      resumes.set(secret, actor);
+      const who = whoOf(actor);
+      const theirs = (lately.get(who) ?? []).filter((kept) => resumes.get(kept));
+      theirs.push(secret);
+      while (theirs.length > limits.resumes) resumes.delete(theirs.shift()!);
+      lately.set(who, theirs);
       return {
         credential: { kind: "resume" as const, capability: secret },
-        expiresAtMs: now + DAY,
+        expiresAtMs: Date.now() + DAY,
       };
     },
     /** Who a resume credential is, while it lasts. */
-    resumed: (secret: string): Actor | undefined => {
-      const kept = resumes.get(secret);
-      return kept && kept.until > Date.now() ? kept.actor : undefined;
-    },
+    resumed: (secret: string): Actor | undefined => resumes.get(secret),
     /** Oxian's ready hook, for a browser's connection (`via`, the transport connection it came on). */
     ready: (workerId: string, config: JsonObject, via: string) =>
       ready(workerId, config.actor as unknown as Actor, via),

@@ -8,37 +8,84 @@
   and `dev` options; `serve` answers a `Server`, whose `close({ drain })` stops listening and then
   closes the runtime.
   - **Entrances:** each is a cookie and the query that says who its secret is (`{ secret }` in, an
-    actor out), asked in `order`; one may let a newcomer in on `POST /connect` (`arrive`), and end
-    what it is on sign-out (`end`). The host keeps every cookie (httpOnly, `Secure` but on this
-    machine over http; `sameSite` lax or strict), clears one that's no one (forged, ended), and
-    never takes a store's failure for no one. Identity declares the session (`session`, read by
-    `credential.actor`, ended by `session.end`, which now takes `{ secret }` and is unrecorded: its
-    secret was in the log). `/connect` answers `{ ticket, actor, name? }` (`person` is gone);
-    `web()` connects as whoever it is (`start(client, actor)`), and `web({ arrive })` is what the
-    page asks coming in.
-  - **Sign-in:** `POST /signin/<name>` for each way a plugin declares: an Action called as the
-    system with the request's JSON, answering `{ person, session }`, `local` ones from this machine
-    only. `googleSignIn` declares `google` (the page shows its button for the first client id); the
-    new `devSignIn` plugin declares `dev` (by name or email, this machine only). The orgs host signs
-    in with whatever its directory declares (`signIn: { at: directory }` for its orgs' pages).
+    actor out), asked in `order`; one may let a newcomer in on `POST /connect` (`arrive`, given the
+    socket's address and the secret its cookie holds when that's no one yet), and end what it is on
+    sign-out (`end`). The host keeps every cookie (httpOnly; `Secure` but over plain http to this
+    machine or a LAN host, by the host the request is for as the app's front says it; `sameSite` lax
+    or strict; `hostOnly`: `__Host-<name>` wherever it's Secure), clears one that's no one (forged,
+    ended), and never takes a store's failure for no one. Identity declares the session (`session`,
+    host-only, read by `credential.actor`, ended by `session.end`, which now takes `{ secret }` and
+    is unrecorded: its secret was in the log). `/connect` answers `{ ticket, actor, name? }`
+    (`person` is gone); `web()` connects as whoever it is (`start(client, actor)`), and
+    `web({ arrive })` is what the page asks coming in, at the app's `base` (an org's, with many).
+  - **Sign-in:** `POST /signin/<name>` for each way a plugin declares: an unrecorded Action (the
+    host refuses to start with a recorded one), called as the system with the request's JSON,
+    answering `{ person, session }`; `local` ones from this machine only: the socket's address (as
+    the listener saw it, `clientAddress`) and the host must both be loopback, and a request whose
+    address nobody set is refused. `googleSignIn` declares `google` (the page shows its button for
+    the first client id); the new `devSignIn` plugin declares `dev` (by name or email, this machine
+    only). The orgs host signs in with whatever its directory declares (`signIn: { at: directory }`
+    for its orgs' pages). `describe()` marks unrecorded Actions (`record: false`).
   - **Visitors** (the contacts plugin's web lines, `resources.web.lines.<name>`: `in`, `agent`,
-    `title`, `days`, `limits`, `org`; and `web.caller`, as MCP's): a page asking to come in by a
-    line (`{ line }`) that isn't anyone becomes a contact (`via: "web"`) in the line's space, with a
-    chat of its own, its browser keeping a 256-bit secret in a `SameSite=Strict` cookie (only its
-    hash is kept, in `contact_visitor`) that's the same contact for `days` (30). New visitors are
-    limited an hour from one caller's address (`ipVisitorsPerHour`, 20; IPv6 by its /64) and on the
-    line (`visitorsPerHour`, 600), each place taken in one conditional write, so arrivals at once
-    can't pass a limit; past one it's a plain 429. `contact.forget` ends a visitor's cookie at once.
-    Checked at start.
+    `title`, `days`, `limits`, `files`, `transcribe`, `org`; `web.caller`, as MCP's; and the app's
+    `links` secret, which visitors' cookies are signed with): a page asking to come in by a line
+    (`{ line }`) that isn't anyone becomes a visitor, its browser keeping a signed secret in a
+    `SameSite=Strict` cookie (`__Host-visitor` wherever it's Secure) that's the same visitor for
+    `days` (30). Coming in makes and keeps nothing. Its first message (`chat.send`, naming no chat)
+    makes its contact (`via: "web"`), its own chat in the line's space and its record
+    (`contact_visitor`), through chat's new `contactSend` hook (`contact.sending`). Limits, each a
+    plain 429 for that caller alone: new visitors an hour from one address (`ipVisitorsPerHour`, 20;
+    IPv6 by its /64), counted by the address the app's front says, else the socket's (with neither,
+    nobody's let in, said loudly); a visitor's messages a minute and a day (`perMinute` 10, `perDay`
+    200), its address's (`ipPerMinute` 30, `ipPerDay` 1,000), the line's a minute (`linePerMinute`
+    300), and new visitors who speak an hour (`visitorsPerHour`, 600), each place taken in one
+    conditional write, so messages at once can't pass a limit. Files only on a line that takes them
+    (`files: { count, bytes }`, 1 of 5 MB unless said); audio transcribed only with
+    `transcribe: true`. `contact.forget` ends a visitor's cookie at once, and so does removing its
+    line. Every ten minutes (`contact.prune`) what's past goes: counters, records past their time, a
+    contact made for a first message that never went in. A visitor fetches its own chat's files
+    (`file.content` is open to contacts, under the rules). Checked at start.
+  - **What a contact reads:** never an agent's private steps (each tool's input and output), a tool
+    call being written, nor a tool's files. The access rules' `shared` resource takes `contact`, a
+    filter a contact acting itself (never the agent working for it) reads and writes through: chat's
+    messages without `private` or `toolCalls`, `live` without a tool call, files without a tool's
+    (`private`, as OpenAPI's are now). The voice relay reads its call as the line's agent working
+    for the caller, so a step's words before its tools are still said, and only what both may read.
+    A contact's message says 4,096 characters at most (`CONTACT_TEXT`). WhatsApp, voice and MCP
+    contacts never held a browser connection: they read only through the app's own code.
   - **Security:** `/connect`, sign-in and sign-out (and the orgs host's own POSTs) answer only the
     app's own page: an `Origin` that isn't this host (as the front says it), over https off this
-    machine, or a cross-site `Sec-Fetch-Site`, is a 403, so another site can't make its visitors
-    arrive here or sign anyone in. Bodies there are JSON objects of 16 KiB at most. The caller's
-    address parser (`callerFrom`, `callerProblem`, `CallerSettings`) moved from MCP into the
-    runtime, so MCP and web lines read callers one way.
+    machine and its LAN, or a cross-site `Sec-Fetch-Site`, is a 403, so another site can't make its
+    visitors arrive here or sign anyone in. Bodies there are JSON objects of 16 KiB at most; route
+    bodies are refused (413) as soon as `content-length` is over 10 MB, and read no further than
+    that while streaming. What either host answers in JSON is `cache-control: no-store`, and what
+    goes wrong says only its public words, with its code's status (500s are logged). The caller's
+    address parser (`callerFrom`, `callerProblem`, `CallerSettings`, and `countedOf` for a socket's)
+    moved from MCP into the runtime, so MCP and web lines read callers one way. `mcp.call` refuses a
+    contact without an MCP line (a web visitor), naming a line or not.
+  - **Limits on browsers:** 30 tickets per actor a minute (`createTickets({ perMinute })`; past them
+    `/connect` is a 429 with `retry-after`, and `issue` throws `too_many`), 16 sockets per actor,
+    512 watched reads per connection (past them, `too_many`; those watched keep going), 16 resume
+    credentials per actor (the oldest dropped). Tickets and resumes expire on a timer
+    (`runtime/expiring.ts`), never by looking through them all on each one issued.
+  - **Cookie names, and a one-time sign-out:** identity's session is `__Host-session` wherever it's
+    Secure, and the orgs host's own cookies (`dir`, `org`, `s_<org>`) and every org's entrances' are
+    `__Host-` too, so no other host under the domain (a preview's page) can set one to make a
+    browser someone it chose. The names change: every browser signed in before is signed out once,
+    on upgrade. Stripping `Domain` from a preview's Set-Cookie (as previews do) doesn't stop that by
+    itself: a preview's page script can still set `document.cookie` with `Domain=<parent>`; the
+    `__Host-` names are what stop it.
   - **Migration:** `serveRoutes({ runtime, … })` is `serve({ runtime, … })` with no `code`.
     `google: { clientId }` and `dev: true` are the plugins' resources now: add `googleSignIn` (with
-    the `google` resource) and `devSignIn` to the runtime's plugins (the directory's, with orgs).
+    the `google` resource) and `devSignIn` to the runtime's plugins (the directory's, with orgs). A
+    listener of the app's own (`Deno.serve`) says where each request came from
+    (`setClientAddress(request, info.remoteAddr.hostname)`, from `copilotz/web/server`), and so do
+    tests that sign in with dev sign-in through a hand-made `Request`
+    (`setClientAddress(request, "127.0.0.1")`); `serve` and `listen` do it themselves. Web lines
+    need the `links` resource. `whomOf(runtime, { cookie?, front? })` (was
+    `whomOf(runtime,
+    cookie?)`), and `setCookie` takes the request's site
+    (`siteOf(request, front)`).
 
 ## 1.0.0-rc.21 — 2026-11-04
 

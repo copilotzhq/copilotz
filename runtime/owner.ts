@@ -26,6 +26,7 @@ import { createMaintenance, type Maintenance } from "./maintain.ts";
 import { createObservers, type Observation, type ObserveOptions } from "./observe.ts";
 import { reading, startup } from "./reads.ts";
 import { BROWSER, createBrowsers, READ_VIEW, readView, SESSION, WIRE } from "./browsers.ts";
+import { expiring } from "./expiring.ts";
 import { memoryStore } from "./memory.ts";
 import {
   type Hooks,
@@ -108,7 +109,8 @@ export type Stats = {
 /** What a runtime's plugins declare, for hosts: help, forms, defaults. */
 export type Description = {
   collections: Record<string, { schema: unknown }>;
-  actions: Record<string, { description?: string; input?: unknown }>;
+  /** `record: false`: unrecorded, so nothing of its calls is in the log (a sign-in's). */
+  actions: Record<string, { description?: string; input?: unknown; record?: false }>;
   /** The media each kind has a View for. */
   views: Record<string, string[]>;
   resources: Resources;
@@ -1098,7 +1100,8 @@ export async function createOwner(
 
   // Workers of plugins' kinds (computers…): admitted by their kind's Action, then found by id.
   const connected = workerPresence();
-  const resumed = new Map<string, { kind: string; id: string; until: number }>();
+  /** What a worker shows to reconnect: a secret of its own, for a day. */
+  const resumed = expiring<string, { kind: string; id: string }>(DAY);
   /** Who a worker of a plugin's kind is, from `<kind>:<secret>`; undefined: not one. */
   const workerOf = async (credential: { kind: string; capability: unknown }) => {
     const capability = String(credential.capability);
@@ -1107,7 +1110,7 @@ export async function createOwner(
     if (!def) return undefined;
     if (credential.kind === "resume") {
       const kept = resumed.get(capability);
-      if (!kept || kept.until < Date.now()) throw invalid(`Unknown ${kind}.`);
+      if (!kept) throw invalid(`Unknown ${kind}.`);
       return kept;
     }
     const who = await api.call<{ id: string } | null>(def.admit, {
@@ -1127,9 +1130,8 @@ export async function createOwner(
     const worker = await workerOf(credential);
     if (worker) {
       const now = Date.now();
-      for (const [kept, { until }] of resumed) if (until < now) resumed.delete(kept);
       const again = `${worker.kind}:${crypto.randomUUID()}${crypto.randomUUID()}`;
-      resumed.set(again, { ...worker, until: now + DAY });
+      resumed.set(again, { kind: worker.kind, id: worker.id });
       return {
         definition: {
           workerId: identity.workerId,
@@ -1156,6 +1158,7 @@ export async function createOwner(
         ? await options.admit(secret)
         : undefined;
       if (!actor) throw invalid("Unknown executor key.");
+      browsers.room(actor, identity.workerId);
       // A browser: its person rides on the connection, and it takes no work but its session.
       return {
         definition: {
@@ -1777,6 +1780,7 @@ export async function createOwner(
         Object.entries(registry.actions).map(([name, def]) => [name, {
           ...(def.description ? { description: def.description } : {}),
           ...(def.input ? { input: def.input } : {}),
+          ...(def.record === false ? { record: false as const } : {}),
         }]),
       ),
       views: Object.fromEntries(
@@ -1851,7 +1855,8 @@ export async function createOwner(
       clearTimeout(flushing);
       // A browser's session is a stream that never ends on its own: end them, so the
       // shutdown's drain doesn't wait them out.
-      browsers.closeAll();
+      browsers.close();
+      resumed.close();
       await hypervisor.shutdown();
       // Processors' last positions are saved if they can be (a fenced owner can't): the store
       // closes either way, and a failure still reaches the caller.

@@ -1,9 +1,14 @@
 /**
  * A web line's visitor over the real socket (Oxian's Node adapter, as a
- * browser connects): let in by `/connect`, it connects with its ticket as
- * the contact it is, says something in its own chat, reads it, and reaches
- * nothing of another visitor's chat nor anything only people may do. A
- * ticket admits once. A frame larger than the protocol takes closes the
+ * browser connects): let in by `/connect`, counted by the address its socket
+ * came from, it connects with its ticket as the visitor it is, and nothing
+ * is made until it speaks: its first message makes its contact and its own
+ * chat. It reads what's said there, never its agent's private steps (a
+ * tool's input and output) nor a tool call being written, and nothing of
+ * another visitor's chat nor anything only people may do. Its messages are
+ * limited (a minute, at once too), as large as a contact's may be, with no
+ * files unless the line takes them, and audio transcribed only when it says.
+ * A ticket admits once. A frame larger than the protocol takes closes the
  * socket that sent it, and the host goes on. Deno and Bun run it too,
  * through their Node compatibility.
  */
@@ -17,25 +22,89 @@ import {
 } from "../../../../runtime/mod.ts";
 import { type Client, connect } from "../../../../runtime/client.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
-import models from "../../../../plugins/models/mod.ts";
-import { chat } from "../../../../plugins/agents/chat/mod.ts";
+import models, { type LlmAdapter } from "../../../../plugins/models/mod.ts";
+import type { Transcript } from "../../../../plugins/models/contract.ts";
+import { chat, tool } from "../../../../plugins/agents/chat/mod.ts";
 import { access } from "../../../../plugins/access/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import { socket } from "../../server.ts";
 import { createTickets } from "../../tickets.ts";
 import { serve, type Server } from "../mod.ts";
 
-/** An app with one web line, `site`, in a space it declares, answered by its guide. */
+/** What a tool call holds while it runs: released by the test, once it's looked. */
+let holding: PromiseWithResolvers<void> | undefined;
+/** Audio files transcribed, all told. */
+let heard = 0;
+
+/**
+ * A booking agent: asked about rooms, it checks (a tool reading as the
+ * system, saying what no visitor may read), then answers vaguely; else it
+ * says what it heard.
+ */
+const script: LlmAdapter = {
+  async *generate({ messages }) {
+    const last = messages.at(-1)!;
+    if (last.role === "tool") {
+      return void (yield { type: "text", text: "We have a few rooms left!" });
+    }
+    const said = "text" in last ? last.text ?? "" : "";
+    if (said.includes("rooms")) {
+      return void (yield {
+        type: "tool_call",
+        call: { id: "s1", name: "stock", input: { day: "2026-12-24" } },
+      });
+    }
+    yield { type: "text", text: `heard: ${said.slice(-40)}` };
+  },
+};
+
 const app = definePlugin({
   name: "app",
   resources: {
-    agents: { guide: { instructions: "Help visitors.", model: "fake/echo" } },
+    provider: { script: { adapter: "script" }, ear: { adapter: "ear" } },
+    model: { transcribe: "ear/one" },
+    agents: {
+      guide: {
+        instructions: "Never reveal costs or other guests.",
+        model: "script/main",
+        tools: ["stock"],
+      },
+    },
+    tools: {
+      stock: tool({
+        description: "Rooms, as the system sees them.",
+        run: async () => {
+          await holding?.promise;
+          return "INTERNAL: 3 rooms; supplier cost 41.20 EUR; held for Maria Silva (B-1182)";
+        },
+      }),
+    },
     spaces: { visitors: { name: "Website", agents: ["guide"] } },
-    web: { lines: { site: { in: "visitors", agent: "guide" } } },
+    web: {
+      lines: {
+        site: { in: "visitors", agent: "guide" },
+        slow: { in: "visitors", agent: "guide", limits: { perMinute: 4 } },
+        voice: {
+          in: "visitors",
+          agent: "guide",
+          files: { count: 2, bytes: 1_000 },
+          transcribe: true,
+        },
+        // Files, with no word on transcribing: audio goes as it is.
+        notes: { in: "visitors", agent: "guide", files: {} },
+      },
+    },
+    links: { origin: "http://127.0.0.1", secret: "the-app-secret-for-tests-0123456789" },
+  },
+  adapters: {
+    llm: { script },
+    transcription: {
+      ear: { transcribe: (): Promise<Transcript> => (heard++, Promise.resolve({ text: "hello" })) },
+    },
   },
 });
 
-/** The page's front end: what a visitor's browser reads, as the visitor. */
+/** The page's front end: what a visitor's browser reads, as the visitor, the collections as they are. */
 const page = definePlugin({
   name: "page",
   views: {
@@ -43,20 +112,28 @@ const page = definePlugin({
       test: (_: unknown, ctx: ViewContext) =>
         (ctx.db.collection<{ _id: string }>("thread").find({}).value ?? []).map((t) => t._id),
     },
+    messages: {
+      test: (filter: Record<string, unknown>, ctx: ViewContext) =>
+        ctx.db.collection("message").find(filter).value ?? [],
+    },
+    live: {
+      test: (thread: string, ctx: ViewContext) =>
+        ctx.db.collection("live").find({ thread }).value ?? [],
+    },
     said: {
       test: (thread: string, ctx: ViewContext) =>
-        (ctx.db.collection<{ from: string; text?: string; private?: boolean }>("message")
-          .find({ thread }).value ?? []).filter((m) => !m.private).map((m) => m.text ?? ""),
+        (ctx.db.collection<{ text?: string }>("message").find({ thread }).value ?? [])
+          .map((m) => m.text ?? ""),
     },
   },
 });
 
-/** A visitor's way in: `/connect` asking for the line, from the app's page. */
-async function arrive(server: Server) {
+/** A visitor's way in: `/connect` asking for a line, from the app's page. */
+async function arrive(server: Server, line = "site") {
   const response = await fetch(`${server.url.origin}/connect`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: server.url.origin },
-    body: JSON.stringify({ line: "site" }),
+    body: JSON.stringify({ line }),
   });
   assertEquals(response.status, 200);
   const { ticket, actor } = await response.json() as { ticket: string; actor: Actor };
@@ -97,11 +174,28 @@ async function until(check: () => Promise<boolean>, what: string, ms = 3_000) {
   assert(await check(), what);
 }
 
+/** What the system reads: every document of a collection; what's being written in a thread. */
+const kept = definePlugin({
+  name: "kept",
+  views: {
+    all: {
+      test: (collection: string, ctx: ViewContext) =>
+        ctx.db.collection(collection).find({}).value ?? [],
+    },
+    "live-all": {
+      test: (thread: string, ctx: ViewContext) =>
+        ctx.db.collection("live").find({ thread }).value ?? [],
+    },
+  },
+});
+
 async function setup(fn: (server: Server, runtime: Runtime) => Promise<void>) {
+  holding = undefined;
+  heard = 0;
   const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, app],
+    plugins: [models, chat, ...access, app, kept],
     transports: [socket],
     admit: tickets.admit,
   });
@@ -115,56 +209,75 @@ async function setup(fn: (server: Server, runtime: Runtime) => Promise<void>) {
   }
 }
 
+/** What the system reads: how many of each the app keeps. */
+async function counts(runtime: Runtime) {
+  const of = async (collection: string) => {
+    const observed = runtime.observe<unknown[]>("test", "all", collection);
+    try {
+      const output = await observed.ready;
+      return output.status === "ready" ? output.value.length : -1;
+    } finally {
+      observed.close();
+    }
+  };
+  return {
+    contacts: await of("contact"),
+    threads: await of("thread"),
+    visitors: await of("contact_visitor"),
+    members: await of("member"),
+  };
+}
+
 const code = (p: Promise<unknown>) =>
   p.then(() => "done", (e) => (e as { code?: string }).code ?? String(e));
 
-test("a visitor on the socket: its own chat, as itself; nothing of another's, nor of people's", async () => {
+test("a visitor on the socket: nothing made until it speaks, then its own chat, as itself", async () => {
   await setup(async (server, runtime) => {
     const carla = await arrive(server);
     const dani = await arrive(server);
     assert(carla.actor.id !== dani.actor.id);
+    // Coming in made nobody and nothing: no contact, no chat, no membership, no record.
+    assertEquals(await counts(runtime), { contacts: 0, threads: 0, visitors: 0, members: 0 });
     const clients: Client[] = [];
     try {
       const asCarla = browser(server, carla.ticket);
       const asDani = browser(server, dani.ticket);
       clients.push(asCarla, asDani);
       await Promise.all([asCarla.ready, asDani.ready]);
+      assertEquals(await seen<string[]>(asCarla, "chats"), []);
 
-      // Each reads exactly one chat: its own.
-      const [carlas] = await seen<string[]>(asCarla, "chats");
-      const [danis] = await seen<string[]>(asDani, "chats");
-      assertEquals((await seen<string[]>(asCarla, "chats")).length, 1);
-      assert(carlas && danis && carlas !== danis);
-
-      // Carla says something in hers, as herself; the guide answers there.
-      await asCarla.call("chat.send", { thread: carlas, text: "a trip to the coast" });
+      // Her first message, naming no chat: her own, made with it, answered by the guide.
+      const { thread: carlas } = await asCarla.call<{ thread: string }>("chat.send", {
+        text: "a trip to the coast",
+      });
       await runtime.idle();
+      assertEquals(await seen<string[]>(asCarla, "chats"), [carlas]);
       await until(
         async () => (await seen<string[]>(asCarla, "said", carlas)).length >= 2,
         "the guide answers her",
       );
-      const hers = await seen<string[]>(asCarla, "said", carlas);
-      assertEquals(hers[0], "a trip to the coast");
-      const history = await runtime.query<{ from: string; text?: string }[]>(
-        "message.history",
-        { thread: carlas },
-      );
+      assertEquals((await seen<string[]>(asCarla, "said", carlas))[0], "a trip to the coast");
+      const history = await runtime.query<{ from: string }[]>("message.history", {
+        thread: carlas,
+      });
       assertEquals(history[0].from, `contact:${carla.actor.id}`);
+      // Her next, naming none, goes there too.
+      const again = await asCarla.call<{ thread: string }>("chat.send", { text: "and back" });
+      assertEquals(again.thread, carlas);
+      assertEquals((await counts(runtime)).contacts, 1);
 
-      // Dani's chat: she reads nothing of it, and can't write there.
+      // Dani speaks too: her own chat, which Carla reads nothing of, nor writes in.
+      const { thread: danis } = await asDani.call<{ thread: string }>("chat.send", { text: "hi" });
+      assert(danis !== carlas);
       assertEquals(await seen<string[]>(asCarla, "said", danis), []);
       assert(
         ["forbidden", "duplicate_key"].includes(
           await code(asCarla.call("chat.send", { thread: danis, text: "hi" })),
         ),
       );
-      // Nor open another chat anywhere: in the line's space, in none, under a new id.
+      // Nor opens another chat anywhere: in the line's space, under a new id.
       for (
-        const input of [
-          { in: "visitors", text: "hi" },
-          { text: "hi" },
-          { thread: "a-chat-of-my-own", text: "hi" },
-        ]
+        const input of [{ in: "visitors", text: "hi", thread: "x" }, { thread: "mine", text: "hi" }]
       ) {
         assertEquals(
           await code(asCarla.call("chat.send", input)),
@@ -172,13 +285,11 @@ test("a visitor on the socket: its own chat, as itself; nothing of another's, no
           JSON.stringify(input),
         );
       }
-      assertEquals(
-        (await runtime.query<unknown[]>("message.history", { thread: danis })).length,
-        0,
-      );
       // What only people may do, and what's only the system's, she can't.
       assertEquals(await code(asCarla.call("space.personal", {})), "forbidden");
-      for (const action of ["contact.arrive", "contact.start", "session.start"]) {
+      for (
+        const action of ["contact.arrive", "contact.start", "contact.sending", "session.start"]
+      ) {
         assertEquals(
           await code(asCarla.call(action, { line: "site", in: "visitors", via: "web" })),
           "forbidden",
@@ -191,13 +302,163 @@ test("a visitor on the socket: its own chat, as itself; nothing of another's, no
   });
 });
 
+test("a visitor reads what's said, never its agent's private steps, nor a tool call being written", async () => {
+  await setup(async (server, runtime) => {
+    const carla = await arrive(server);
+    const client = browser(server, carla.ticket);
+    try {
+      await client.ready;
+      holding = Promise.withResolvers<void>();
+      const { thread } = await client.call<{ thread: string }>("chat.send", {
+        text: "any rooms on xmas eve?",
+      });
+      // While the tool runs: the people of the space see the call being written; she doesn't.
+      await until(
+        async () => (await liveOf(runtime, thread)).some((l) => l.calls.length > 0),
+        "the tool is being called",
+      );
+      assertEquals(await seen<unknown[]>(client, "live", thread), []);
+      holding.resolve();
+      await runtime.idle();
+      await until(
+        async () => (await seen<string[]>(client, "said", thread)).length >= 2,
+        "the guide answers",
+      );
+      // Its step is there, with what the tool said; the people of the space read it.
+      const all = await runtime.query<{ private?: boolean; toolCalls?: unknown[] }[]>(
+        "message.history",
+        { thread },
+      );
+      assert(JSON.stringify(all.filter((m) => m.private)).includes("supplier cost 41.20"));
+      // She reads what was said, and nothing of the step: among the rest, or asked for.
+      const hers = await seen<{ private?: boolean; toolCalls?: unknown; text?: string }[]>(
+        client,
+        "messages",
+        { thread },
+      );
+      assertEquals(hers.map((m) => m.text), [
+        "any rooms on xmas eve?",
+        "We have a few rooms left!",
+      ]);
+      assert(hers.every((m) => !m.private && m.toolCalls === undefined));
+      assert(!JSON.stringify(hers).includes("41.20"));
+      assertEquals(await seen(client, "messages", { thread, private: true }), []);
+      assertEquals(await seen(client, "messages", { toolCalls: { $exists: true } }), []);
+    } finally {
+      holding?.resolve();
+      await client.close();
+    }
+  });
+});
+
+/** What's being written in a thread, as the system reads it. */
+async function liveOf(runtime: Runtime, thread: string) {
+  const observed = runtime.observe<{ calls: unknown[] }[]>("test", "live-all", thread);
+  try {
+    const output = await observed.ready;
+    return output.status === "ready" ? output.value : [];
+  } finally {
+    observed.close();
+  }
+}
+
+test("a visitor's messages: a few a minute, at once too, as large as a contact's, files as its line says", async () => {
+  await setup(async (server, runtime) => {
+    const carla = await arrive(server, "slow");
+    const client = browser(server, carla.ticket);
+    try {
+      await client.ready;
+      // Four a minute on this line: the fifth is refused, saying so; nothing more is sent.
+      for (let i = 0; i < 4; i++) {
+        assertEquals(await code(client.call("chat.send", { text: `hello ${i}` })), "done");
+      }
+      const past = await client.call("chat.send", { text: "one more" }).catch((e) => e);
+      assertEquals((past as { code?: string }).code, "too_many");
+      assertEquals(
+        (past as Error).message,
+        "You're sending messages too fast: wait a minute, then try again.",
+      );
+      await runtime.idle();
+      const [thread] = await seen<string[]>(client, "chats");
+      assertEquals(
+        (await seen<string[]>(client, "said", thread)).filter((t) => t.startsWith("hello")).length,
+        4,
+      );
+
+      // Another visitor, sending many at once: no more than the line takes go in.
+      const dani = await arrive(server, "slow");
+      const other = browser(server, dani.ticket);
+      try {
+        await other.ready;
+        const all = await Promise.all(
+          Array.from(
+            { length: 12 },
+            (_, i) => code(other.call("chat.send", { text: `burst ${i}` })),
+          ),
+        );
+        assertEquals(all.filter((c) => c === "done").length, 4);
+        assertEquals(all.filter((c) => c === "too_many").length, 8);
+      } finally {
+        await other.close();
+      }
+
+      // As large as a contact's message may be, and no larger.
+      const eve = browser(server, (await arrive(server)).ticket);
+      try {
+        await eve.ready;
+        assertEquals(await code(eve.call("chat.send", { text: "x".repeat(4_097) })), "invalid");
+        assertEquals(await code(eve.call("chat.send", { text: "x".repeat(4_096) })), "done");
+        // No files on a line that takes none.
+        const file = { name: "a.txt", type: "text/plain", data: btoa("hi") };
+        assertEquals(await code(eve.call("chat.send", { text: "see", files: [file] })), "invalid");
+      } finally {
+        await eve.close();
+      }
+
+      // A line that takes files: as many and as large as it says; audio transcribed, as it says.
+      const voice = browser(server, (await arrive(server, "voice")).ticket);
+      try {
+        await voice.ready;
+        const audio = { name: "v.ogg", type: "audio/ogg", data: btoa("\0".repeat(500)) };
+        assertEquals(await code(voice.call("chat.send", { files: [audio] })), "done");
+        assertEquals(heard, 1);
+        assertEquals(
+          await code(voice.call("chat.send", { files: [audio, audio, audio] })),
+          "invalid",
+        );
+        const large = { ...audio, data: btoa("\0".repeat(2_000)) };
+        assertEquals(await code(voice.call("chat.send", { files: [large] })), "invalid");
+        assertEquals(heard, 1);
+      } finally {
+        await voice.close();
+      }
+      const notes = browser(server, (await arrive(server, "notes")).ticket);
+      try {
+        await notes.ready;
+        const audio = { name: "n.ogg", type: "audio/ogg", data: btoa("\0".repeat(500)) };
+        const { thread } = await notes.call<{ thread: string }>("chat.send", { files: [audio] });
+        assertEquals(heard, 1);
+        const [sent] = await runtime.query<{ files: { transcript?: string }[] }[]>(
+          "message.history",
+          { thread },
+        );
+        assertEquals(sent.files[0].transcript, undefined);
+      } finally {
+        await notes.close();
+      }
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 test("a ticket admits once: the same one again is refused", async () => {
   await setup(async (server) => {
     const carla = await arrive(server);
     const first = browser(server, carla.ticket);
     try {
       await first.ready;
-      assertEquals((await seen<string[]>(first, "chats")).length, 1);
+      assertEquals(await seen<string[]>(first, "chats"), []);
     } finally {
       await first.close();
     }
@@ -224,17 +485,19 @@ test("a ticket admits once: the same one again is refused", async () => {
     } finally {
       await replayed.close().catch(() => {});
     }
-    // Her cookie trades for a new one, as her.
+    // Her cookie trades for a new one, as her: the same visitor, though she hasn't spoken.
     const response = await fetch(`${server.url.origin}/connect`, {
       method: "POST",
       headers: { origin: server.url.origin, cookie: carla.cookie },
+      body: JSON.stringify({ line: "site" }),
     });
     const { ticket, actor } = await response.json() as { ticket: string; actor: Actor };
     assertEquals(actor, carla.actor);
     const back = browser(server, ticket);
     try {
       await back.ready;
-      assertEquals((await seen<string[]>(back, "chats")).length, 1);
+      const { thread } = await back.call<{ thread: string }>("chat.send", { text: "hi" });
+      assertEquals(await seen<string[]>(back, "chats"), [thread]);
     } finally {
       await back.close();
     }
@@ -267,7 +530,7 @@ test("a frame larger than the protocol takes closes its socket; the host goes on
     const client = browser(server, carla.ticket);
     try {
       await client.ready;
-      assertEquals((await seen<string[]>(client, "chats")).length, 1);
+      assertEquals(await seen<string[]>(client, "chats"), []);
     } finally {
       await client.close();
     }

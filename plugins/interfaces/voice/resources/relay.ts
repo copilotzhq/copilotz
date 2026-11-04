@@ -432,12 +432,17 @@ export function talk(
       // Twilio says the greeting itself.
       if (on.greeting) done.add(on.greeting);
       const { thread, since } = on;
+      // Read as the line's agent working for the caller: what it says to them, its steps' words
+      // before its tools too (a contact itself never reads a step), and only what both may read.
       seeing = runtime.observe<Saying>("voice", "voice_call", {
         _id: call._id,
         thread,
         contact: on.contact,
         since,
-      }, { actor: contact, viewer: { kind: "contact", name: `contact:${on.contact}` } });
+      }, {
+        actor: { kind: "agent", id: on.agent, for: contact },
+        viewer: { kind: "contact", name: `contact:${on.contact}` },
+      });
       seeing.subscribe(saying);
       saying();
       idle();

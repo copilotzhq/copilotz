@@ -42,8 +42,17 @@ export const identity: Plugin = definePlugin({
     "person.email": emailOf,
   },
   // A browser is the person its session cookie proves (the web host's entrances), first of all.
+  // The cookie is the host's alone (`__Host-session` wherever it's Secure): no other host under
+  // the domain (a preview's) can put a session of its choosing in its place.
   resources: {
-    entrances: { session: { cookie: "session", query: "credential.actor", end: "session.end" } },
+    entrances: {
+      session: {
+        cookie: "session",
+        query: "credential.actor",
+        end: "session.end",
+        hostOnly: true,
+      },
+    },
   },
   // Each person sees only themselves, and their own credentials: nobody else does, whatever their id.
   guard: (actor, { collection }) => {

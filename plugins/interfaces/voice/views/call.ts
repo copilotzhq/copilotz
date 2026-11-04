@@ -1,13 +1,16 @@
 /**
  * What's being said in a call (the `voice_call` View, renderer `voice`),
- * read as its caller: what agents wrote for them since the call began, in
- * order (their answers, and a step's words before its tools: "One moment,
- * I'll look"), each as its `message` View here says it; what an agent is
- * writing right now (`live`), said the same way; and whether the agent ended
- * the call (`end`). The call's socket (resources/relay.ts) observes it, and
- * says what's new as it comes, of the turns the caller's own words started.
- * Only what the caller may read is here: an answer drawing on what they
- * can't see isn't.
+ * read as the line's agent working for its caller (a contact itself never
+ * reads an agent's step, its tools' calls): what agents wrote for them since
+ * the call began, in order (their answers, and a step's words before its
+ * tools: "One moment, I'll look"), each as its `message` View here says it;
+ * what an agent is writing right now (`live`), said the same way; and
+ * whether the agent ended the call (`end`). The call's socket
+ * (resources/relay.ts) observes it, and says what's new as it comes, of the
+ * turns the caller's own words started.
+ * Only what the caller may read is here (the agent working for them reads
+ * what both may): an answer drawing on what they can't see isn't; of a
+ * step, only its words.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { Live, Message } from "../../../agents/chat/contract.ts";

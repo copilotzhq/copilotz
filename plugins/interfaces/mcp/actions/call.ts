@@ -122,7 +122,10 @@ export const callAction = defineAction({
   // Only a contact the MCP route made for this line: no other actor names a conversation here.
   // Who the user is and where they call from are in the input, never on the actor: an unrecorded
   // Action's input is in no event, and the actor is in every one its work causes.
-  allow: (actor, input) => actor.kind === "contact" && actor.mcp === input.line,
+  // A contact with no line (a web visitor) is never one, even naming none.
+  allow: (actor, input) =>
+    actor.kind === "contact" && typeof actor.mcp === "string" &&
+    actor.mcp === (input as { line?: unknown })?.line,
   run: async (ctx, input): Promise<Called> => {
     const line = lineOf(ctx, input.line);
     const links = linksOf(ctx.resources);

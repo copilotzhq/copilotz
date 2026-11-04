@@ -48,8 +48,8 @@
  * }
  * ```
  *
- * The socket needs a host that takes a route's socket (`serveRoutes`, or the
- * web host, from `copilotz/web/node`).
+ * The socket needs a host that takes a route's socket: the web host's
+ * listener (`serve`, from `copilotz/web/node`), with or without a page.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { hookAction } from "./actions/hook.ts";

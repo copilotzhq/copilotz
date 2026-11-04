@@ -16,7 +16,9 @@
  *
  * A route may take a socket of its own (`host.upgrade()`, see `routes.ts`):
  * any path but the runtime's goes to the handler, upgrades too, and Oxian's
- * adapter takes the socket the handler accepts.
+ * adapter takes the socket the handler accepts. Each request it hands on
+ * says where it came from (the socket's peer: `clientAddress`), which what's
+ * this machine's alone goes by (dev sign-in).
  */
 import type { Hypervisor, HypervisorRequestDecision } from "@oxian/oxian-js";
 import { serve as oxian } from "@oxian/oxian-js/adapters/node";

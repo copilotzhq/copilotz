@@ -1,7 +1,9 @@
 /**
  * The web host's server half: signing in sets an httpOnly cookie the page's
- * code never sees; the cookie trades for a ticket that admits once; signing
- * out ends the session. Signing in by name is for this machine only. Given
+ * code never sees; the cookie trades for a ticket that admits once, so many a
+ * minute; signing out ends the session; none of it is cached. Signing in by
+ * name is for this machine only, by the socket's address and the host. What
+ * goes wrong says only what's for anyone. Given
  * the app's theme, the page carries it for its first paint, with its icons,
  * its colour and its fonts (fetched, not waited on). The app's own files are
  * served under /assets/ only, by exact path, typed and cached; the host's
@@ -16,7 +18,7 @@ import { chat } from "../../../plugins/agents/chat/mod.ts";
 import models from "../../../plugins/models/mod.ts";
 import { test } from "../../../testing/mod.ts";
 import { createTickets, type Tickets } from "../tickets.ts";
-import { socket, webServer, type WebServerOptions } from "../server.ts";
+import { setClientAddress, socket, webServer, type WebServerOptions } from "../server.ts";
 import { themeOf } from "../theme/css.ts";
 import type { Theme } from "../theme/default.ts";
 
@@ -53,15 +55,19 @@ async function setup(
   }
 }
 
-const post = (url: string, body?: unknown, cookie?: string) =>
-  new Request(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(cookie ? { cookie } : {}),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+/** A POST from this machine (its socket's address: a listener's says so). */
+const post = (url: string, body?: unknown, cookie?: string, address = "127.0.0.1") =>
+  setClientAddress(
+    new Request(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(cookie ? { cookie } : {}),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+    address,
+  );
 
 /** The cookie a response sets, as a browser sends it back. */
 const sent = (response: Response) => response.headers.get("set-cookie")!.split(";")[0];
@@ -406,7 +412,9 @@ test("signing in sets a session cookie, traded for a ticket that admits once", a
     const cookie = signed.headers.get("set-cookie")!;
     assertMatch(cookie, /^session=ses_[^;]+; HttpOnly; SameSite=Lax; Path=\/; Max-Age=\d+$/);
 
+    assertEquals(signed.headers.get("cache-control"), "no-store");
     const connect = await serve(post("http://localhost:8790/connect", undefined, sent(signed)));
+    assertEquals(connect.headers.get("cache-control"), "no-store");
     const { ticket, actor, name } = await connect.json();
     assertEquals([actor, name], [{ kind: "person", id: "ana" }, "ana"]);
     assertEquals(tickets.admit(ticket), { kind: "person", id: "ana" } satisfies Actor);
@@ -414,18 +422,43 @@ test("signing in sets a session cookie, traded for a ticket that admits once", a
   });
 });
 
-test("the cookie is Secure anywhere but this machine over http", async () => {
+test("the cookie is Secure, and the host's alone, anywhere but this machine over http", async () => {
   await setup(async (serve) => {
     const secure = await serve(post("https://localhost:8790/signin/dev", { name: "ana" }));
-    assertMatch(secure.headers.get("set-cookie")!, /; Secure$/);
+    assertMatch(secure.headers.get("set-cookie")!, /^__Host-session=ses_[^;]+; .*; Secure$/);
   });
 });
 
 test("signing in by name: this machine only, when allowed, with a plain name", async () => {
   await setup(async (serve) => {
-    assertEquals((await serve(post("http://app.example/signin/dev", { name: "ana" }))).status, 404);
+    const status = async (request: Request) => (await serve(request)).status;
+    // A host that isn't this machine's, from this machine.
+    assertEquals(await status(post("http://app.example/signin/dev", { name: "ana" })), 404);
+    // `Host: localhost` says nothing of where it came from: another machine's socket, or none.
+    assertEquals(
+      await status(post("http://localhost:8790/signin/dev", { name: "ana" }, "", "192.168.1.20")),
+      404,
+    );
+    const nowhere = new Request("http://localhost:8790/signin/dev", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "ana" }),
+    });
+    assertEquals(await status(nowhere), 404);
+    // This machine's socket, to a host whose name points here (a page rebinding it): no.
+    assertEquals(await status(post("http://evil.example/signin/dev", { name: "ana" })), 404);
+    // This machine's, to this machine.
+    assertEquals(await status(post("http://localhost:8790/signin/dev", { name: "ana" })), 200);
+    assertEquals(
+      await status(post("http://[::1]:8790/signin/dev", { name: "ana" }, "", "::1")),
+      200,
+    );
+    // A name it won't take says why.
     const bad = await serve(post("http://localhost:8790/signin/dev", { name: "ana; drop" }));
-    assertEquals(bad.status, 400);
+    assertEquals([bad.status, (await bad.json()).error], [
+      400,
+      "A name (letters, digits, . _ -) or an email",
+    ]);
   });
   await setup(async (serve) => {
     assertEquals(
@@ -440,6 +473,7 @@ test("signing out ends the session and clears the cookie", async () => {
     const signed = await serve(post("http://localhost:8790/signin/dev", { name: "ana" }));
     const out = await serve(post("http://localhost:8790/signout", undefined, sent(signed)));
     assertMatch(out.headers.get("set-cookie")!, /^session=; .*Max-Age=0/);
+    assertEquals(out.headers.get("cache-control"), "no-store");
     const connect = await serve(post("http://localhost:8790/connect", undefined, sent(signed)));
     assertEquals(connect.status, 401);
   });
@@ -533,6 +567,134 @@ test("a file someone sent: theirs to fetch, in parts, inline or saved; nobody el
     assertEquals((await get(png, bob)).status, 404);
     assertEquals((await get("/files/nope", ana)).status, 404);
     assertEquals((await get("/files/%E0%A4%A", ana)).status, 404);
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a person has 30 tickets a minute; past them, /connect says when to come back", async () => {
+  await setup(async (serve, _tickets, rt) => {
+    const ana = sent(await serve(post("http://localhost:8790/signin/dev", { name: "ana" })));
+    const connect = (cookie: string) =>
+      serve(post("http://localhost:8790/connect", undefined, cookie));
+    for (let i = 0; i < 30; i++) assertEquals((await connect(ana)).status, 200, `ticket ${i}`);
+    const refused = await connect(ana);
+    assertEquals(refused.status, 429);
+    assertEquals(refused.headers.get("cache-control"), "no-store");
+    const wait = Number(refused.headers.get("retry-after"));
+    assert(wait >= 1 && wait <= 60, `retry-after ${wait}`);
+    assertEquals(await refused.json(), {
+      error: "Too many connections at once: try again in a minute",
+    });
+    // Anyone else still connects.
+    const { session } = await rt.call<{ session: string }>("session.start", { person: "bob" });
+    assertEquals((await connect(`session=${session}`)).status, 200);
+  });
+});
+
+test("tickets are counted per actor and minute, and dropped as they pass, unswept", async () => {
+  const tickets = createTickets({ ms: 20, perMinute: 2 });
+  const ana: Actor = { kind: "person", id: "ana" };
+  const kept = [tickets.issue(ana), tickets.issue(ana)];
+  const refused = (() => {
+    try {
+      tickets.issue(ana);
+    } catch (error) {
+      return error as { code?: string; public?: boolean; retryAfter?: number };
+    }
+  })();
+  assertEquals([refused?.code, refused?.public], ["too_many", true]);
+  assert(refused!.retryAfter! >= 1 && refused!.retryAfter! <= 60);
+  // Someone else's are their own.
+  assert(tickets.admit(tickets.issue({ kind: "person", id: "bob" })));
+  await new Promise((r) => setTimeout(r, 40));
+  assertEquals(kept.map((t) => tickets.admit(t)), [undefined, undefined]);
+});
+
+test("what goes wrong says only what's for anyone: its status by its code", async () => {
+  const rt = await createRuntime({ store: memoryStore(), plugins: [identity, devSignIn] });
+  const logged = console.error;
+  console.error = () => {};
+  try {
+    const serve = webServer({
+      runtime: rt,
+      tickets: createTickets(),
+      code: () => {
+        throw new Error("the bundler's path: /home/app/secret");
+      },
+    });
+    const page = await serve(new Request("http://localhost:8790/"));
+    assertEquals([page.status, await page.json()], [500, { error: "Something went wrong" }]);
+    assertEquals(page.headers.get("cache-control"), "no-store");
+  } finally {
+    console.error = logged;
+    await rt.close();
+  }
+});
+
+test("a way to sign in whose Action is recorded stops the start: its session would be in the log", async () => {
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      identity,
+      definePlugin({
+        name: "careless",
+        actions: {
+          "careless.sign-in": {
+            input: { type: "object" },
+            run: () => ({ person: "ana", session: "ses_0123456789abcdef" }),
+          },
+        },
+        resources: { signIn: { careless: { action: "careless.sign-in" } } },
+      }),
+    ],
+  });
+  try {
+    assertThrows(
+      () => webServer({ runtime: rt, tickets: createTickets() }),
+      Error,
+      'signIn.careless: "careless.sign-in" is recorded',
+    );
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a session cookie another host under the domain set isn't anyone, on https", async () => {
+  // A guest entrance, asked after the session (as a web line's visitors are).
+  const guest = definePlugin({
+    name: "guest",
+    collections: {
+      guest: {
+        schema: { type: "object" },
+        queries: {
+          actor: (_c, { secret }: { secret: string }) =>
+            secret === "guest-0123456789abcdef" ? { kind: "contact", id: "g1" } : null,
+        },
+      },
+    },
+    resources: {
+      entrances: {
+        guest: { cookie: "guest", query: "guest.actor", order: 100, hostOnly: true },
+      },
+    },
+  });
+  const rt = await createRuntime({ store: memoryStore(), plugins: [identity, guest] });
+  try {
+    const serve = webServer({ runtime: rt, tickets: createTickets() });
+    const { session } = await rt.call<{ session: string }>("session.start", { person: "mallory" });
+    const connect = async (cookie: string) => {
+      const answer = await serve(post("https://app.example/connect", undefined, cookie));
+      return answer.status === 200 ? (await answer.json()).actor : answer.status;
+    };
+    // A preview's page script sets `session=…; domain=example` in the guest's browser.
+    assertEquals(await connect(`__Host-guest=guest-0123456789abcdef; session=${session}`), {
+      kind: "contact",
+      id: "g1",
+    });
+    assertEquals(await connect(`session=${session}`), 401);
+    // The host's own cookie, which only it can set, is who it says.
+    assertEquals(await connect(`__Host-session=${session}`), { kind: "person", id: "mallory" });
   } finally {
     await rt.close();
   }

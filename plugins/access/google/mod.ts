@@ -12,7 +12,7 @@
  *   resources: { google: { clientId: "1234.apps.googleusercontent.com" } },
  * })]
  * const { session } = await runtime.call("google.sign-in", { idToken });
- * // Set-Cookie: session=<session>; HttpOnly; Secure; SameSite=Lax; Path=/
+ * // Set-Cookie: __Host-session=<session>; HttpOnly; SameSite=Lax; Path=/; …; Secure
  * ```
  */
 import { definePlugin, type Plugin, type Resources } from "../../../runtime/mod.ts";

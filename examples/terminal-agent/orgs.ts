@@ -25,7 +25,7 @@ import {
 } from "../../stores/sql/postgres/mod.ts";
 import { devSignIn, googleSignIn, identity } from "../../plugins/access/mod.ts";
 import { directory } from "../../plugins/access/directory/mod.ts";
-import { socket } from "../../hosts/web/server.ts";
+import { setClientAddress } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
 import { type OrgInfo, orgsHost } from "../../hosts/orgs/mod.ts";
 import { plugins } from "./app.ts";
@@ -125,7 +125,8 @@ async function bundle() {
   return { entry: "browser.js", files };
 }
 
+// This machine alone (dev sign-in is its own); each request says where it came from, as the socket did.
 Deno.serve(
   { port, hostname: "127.0.0.1", onListen: () => console.log(`http://localhost:${port}`) },
-  host.serve,
+  (request, info) => host.serve(setClientAddress(request, info.remoteAddr.hostname)),
 );

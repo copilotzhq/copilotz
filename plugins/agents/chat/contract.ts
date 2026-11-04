@@ -2,8 +2,8 @@
  * The chat plugin's contract: what plugins built on chat (memory, history,
  * spaces, computers) may import from it: the shapes of its documents and of
  * the resource kinds it reads (`agents`, `tools`, `context`, `additions`,
- * `roster`, `agentSources`, `agentModel`; on the web, `conversation`, `home`, `toolViews`,
- * `refusals` and `composerNotes`),
+ * `roster`, `agentSources`, `agentModel`, `contactSend`; on the web,
+ * `conversation`, `home`, `toolViews`, `refusals` and `composerNotes`),
  * `tool()` to declare a tool, its runner (`runTool`, `toolText`: how a turn
  * runs one, for interfaces that run them for a model outside), and what
  * knowing agents takes (`agentsOf`, `defaults`, `modelOf`, `agentsNamed`,
@@ -49,6 +49,7 @@ export { tool } from "./shared/types.ts";
 export { runTool, type ToolAt, type ToolRun, toolText } from "./shared/tools.ts";
 export { type Origin, originKey, originOf } from "./shared/origin.ts";
 export type { AgentModel, AgentSource, Roster, RosterSource, Team } from "./shared/agents.ts";
+export { CONTACT_TEXT, type ContactSend } from "./actions/send.ts";
 /**
  * The app's agents (`agentsOf`), who of them answer new conversations
  * (`defaults`), an agent's model (`modelOf`), which names are agents and

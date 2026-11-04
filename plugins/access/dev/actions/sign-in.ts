@@ -26,6 +26,7 @@ export const signInAction = defineAction({
     if (!email && !NAME.test(person)) {
       throw Object.assign(new Error("A name (letters, digits, . _ -) or an email"), {
         code: "invalid",
+        public: true,
       });
     }
     await ctx.call("person.set", {

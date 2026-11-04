@@ -837,3 +837,21 @@ test("staff read a conversation's chat as any in their space: its steps, in orde
     assertEquals(messages.every((m) => m.private), true);
   });
 });
+
+test("only a contact the MCP route made for a line calls it: a web visitor never, naming a line or not", async () => {
+  await setup(async (s) => {
+    const visitor = { kind: "contact", id: "c-web-visitor", web: "site" };
+    for (
+      const input of [
+        { line: "chatgpt", tool: "search", input: {}, call: "c", by: "new" },
+        { tool: "search", input: {}, call: "c", by: "new" },
+        { line: undefined, tool: "search", input: {}, call: "c", by: "new" },
+      ]
+    ) {
+      const error = await assertRejects(() =>
+        s.runtime.call("mcp.call", input, { actor: visitor })
+      );
+      assertEquals((error as { code?: string }).code, "forbidden", JSON.stringify(input));
+    }
+  });
+});

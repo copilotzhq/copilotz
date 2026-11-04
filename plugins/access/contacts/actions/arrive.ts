@@ -1,33 +1,41 @@
 /**
- * `contact.arrive`: a newcomer on one of the app's web lines (a browser that
- * isn't anyone, asking to come in): a contact now (`via: "web"`), in the
- * line's space, with a chat of its own there (`contact.chat`, answered by
- * the line's agent), and the secret its browser keeps, in an httpOnly
- * cookie the web host sets. Only the system calls it: the contacts'
- * entrance, for the web host, with the caller's address as the app's front
- * says it (`address`).
+ * `contact.arrive`: a browser on one of the app's web lines that isn't
+ * anyone yet, asking to come in: the visitor it is, and the secret its
+ * browser keeps, in an httpOnly cookie the web host sets. Nothing is made
+ * or kept: the secret stands on its own (signed, see shared/secret.ts), and
+ * the visitor's contact, chat and record come with its first message
+ * (`contact.sending`). Only the system calls it: the contacts' entrance, for
+ * the web host, with the caller's address as it's counted (`address`: the
+ * app's front's word for it, else its socket's; none for a caller exempt
+ * from limits by address).
  *
- * Within the line's limits first: new visitors this hour from the caller's
- * address (`ipVisitorsPerHour`), then on the line (`visitorsPerHour`). Each
- * place is taken in one write, which counts only while there's room, before
- * anything's made: arrivals at once can't pass a limit, and past one, it's
- * refused (`too_many`, saying so to anyone) with nothing made. A place taken
- * by an arrival that then failed stays taken: the count leans to no.
+ * - **Back with its secret** (`secret`: its cookie, which says nobody yet:
+ *   it hasn't spoken): the same visitor, while the secret lasts and its line
+ *   is the app's. Not counted again. One erased, or past its time, is a
+ *   newcomer.
+ * - **A newcomer:** counted on its address, within the line's new visitors
+ *   an hour from one (`ipVisitorsPerHour`), taken in one write that counts
+ *   only while there's room; past it, that address is refused (`too_many`,
+ *   saying so to anyone), and nobody else.
  *
- * Unrecorded: its result is the secret. What it makes (the contact, its chat,
- * its membership) is on the record as each of those Actions and writes is;
- * the visitor's record keeps only the secret's hash.
+ * Either way it notes, in memory, where the visitor's messages are counted
+ * from (the tag of its address, never the address) until its first message
+ * keeps it with the visitor. Unrecorded: its result is the secret.
  */
 import { defineAction, failure } from "../../../../runtime/mod.ts";
-import { lineOf } from "../shared/web.ts";
-import { hashOf, newSecret } from "../shared/secret.ts";
+import type { Visitor } from "../collections/visitor.ts";
+import { contactOf, newSecret, tagOf, type Visit, visitOf } from "../shared/secret.ts";
+import { keyringOf, lineOf } from "../shared/web.ts";
 
 const HOUR = 3_600_000;
+const DAY = 86_400_000;
+
+/** The tag of visitors exempt from limits by address: counted by none. */
+export const EXEMPT = "0".repeat(16);
 
 /** What a newcomer is told when a line can't take them. */
 const SAID = {
   address: "Too many new visitors from here: try again later.",
-  busy: "This chat is busy right now: try again in a few minutes.",
   none: "There's no such chat here.",
 } as const;
 
@@ -35,61 +43,67 @@ const SAID = {
 const UNANSWERED = { writeConcern: { w: 0 } } as const;
 
 export const arriveAction = defineAction({
-  description: "Lets a newcomer in by one of the app's web lines: a contact, its chat, its secret",
+  description: "Lets a newcomer in by one of the app's web lines: the visitor, and its secret",
   record: false,
   input: {
     type: "object",
     properties: {
       line: { type: "string", minLength: 1, maxLength: 60 },
-      /** The caller's address, as the app's front says it (counted; never kept). */
+      /** The caller's address, as it's counted (never kept: its tag is, an HMAC of it). */
       address: { type: "string", minLength: 1, maxLength: 80 },
+      /** The secret its cookie holds, which says nobody yet. */
+      secret: { type: "string", maxLength: 512 },
     },
     required: ["line"],
     additionalProperties: false,
   },
   run: async (ctx, input) => {
-    const line = lineOf(ctx, input.line);
-    if (!line) throw failure("not_found", SAID.none, { public: true });
+    const ring = keyringOf(ctx);
     const now = Date.now();
-    const hour = Math.floor(now / HOUR) * HOUR;
-    const rates = ctx.db.collection<{ until: number; count: number }>("contact_rate");
-    /** Takes a place under a counter, in one write: none left, it's refused. */
-    const take = async (what: string, most: number, say: string) => {
+    const system = ctx.as().db;
+    const rates = system.collection<{ until: number; count?: number; tag?: string }>(
+      "contact_rate",
+    );
+    /** Where its messages are counted from, until its first message keeps it with it. */
+    const noted = async (visit: Visit, secret: string) => {
+      const contact = await contactOf(ring!, visit);
+      await rates.updateOne(
+        { _id: `from|${contact}` },
+        { $set: { tag: visit.tag, until: now + DAY } },
+        { upsert: true, ...UNANSWERED },
+      );
+      const line = lineOf(ctx, visit.line)!;
+      const left = (visit.issued + line.days * DAY - now) / DAY;
+      return { actor: { kind: "contact", id: contact, web: line.name }, secret, days: left };
+    };
+
+    // Back with its secret, not yet spoken: the same visitor, while it lasts and isn't erased.
+    const back = ring && input.secret ? await visitOf(ring, input.secret) : undefined;
+    const backLine = back ? lineOf(ctx, back.line) : undefined;
+    if (back && backLine && back.issued + backLine.days * DAY > now + 60_000) {
+      const known = await system.collection<Visitor>("contact_visitor")
+        .findOne({ _id: await contactOf(ring!, back) });
+      if (!known) return await noted(back, input.secret!);
+    }
+
+    const line = lineOf(ctx, input.line);
+    if (!line || !ring) throw failure("not_found", SAID.none, { public: true });
+    const tag = input.address ? await tagOf(ring, line.name, input.address) : EXEMPT;
+    if (input.address) {
+      const hour = Math.floor(now / HOUR) * HOUR;
       try {
         await rates.updateOne(
-          { _id: `${line.name}|${what}@${hour}`, count: { $lt: most } },
+          { _id: `${line.name}|ip|${tag}@${hour}`, count: { $lt: line.limits.ipVisitorsPerHour } },
           { $inc: { count: 1 }, $set: { until: hour + HOUR } },
           { upsert: true },
         );
       } catch (error) {
         // Full: the counter is there, past the filter, so the upsert finds its id taken.
         if ((error as { code?: string }).code !== "duplicate_key") throw error;
-        throw failure("too_many", say, { public: true });
+        throw failure("too_many", SAID.address, { public: true });
       }
-    };
-    await rates.deleteMany({ until: { $lte: now } }, UNANSWERED);
-    if (input.address) {
-      await take(`ip|${input.address}`, line.limits.ipVisitorsPerHour, SAID.address);
     }
-    await take("all", line.limits.visitorsPerHour, SAID.busy);
-
-    const contact = `c-${crypto.randomUUID()}`;
-    await ctx.call("space.keep", { id: line.in });
-    await ctx.call("contact.start", { id: contact, in: line.in, via: "web" });
-    const { thread } = await ctx.call<{ thread: string }>("contact.chat", {
-      contact,
-      in: line.in,
-      ...(line.agent ? { agent: line.agent } : {}),
-      title: (line.title ?? line.name).slice(0, 120),
-    });
-    const secret = newSecret();
-    await ctx.db.collection("contact_visitor").insertOne({
-      _id: await hashOf(secret),
-      contact,
-      line: line.name,
-      expires: new Date(now + line.days * 86_400_000).toISOString(),
-      at: new Date(now).toISOString(),
-    });
-    return { actor: { kind: "contact", id: contact }, secret, days: line.days, thread };
+    const secret = await newSecret(ring, line.name, tag);
+    return await noted((await visitOf(ring, secret))!, secret);
   },
 });

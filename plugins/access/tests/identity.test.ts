@@ -1,7 +1,8 @@
 /**
  * Identity: keys and sessions prove someone (hashed at rest, revoked by
  * deleting them); Google sign-in turns a verified ID token into a person and
- * a session, and refuses anything else.
+ * a session, and refuses anything else. No secret, nor Google's token, is
+ * ever in the log.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { type Actor, createRuntime, definePlugin, type Runtime } from "../../../runtime/mod.ts";
@@ -51,9 +52,9 @@ const google = await (async () => {
   return { jwk, sign, claims };
 })();
 
-async function start(): Promise<Runtime> {
+async function start(store = memoryStore()): Promise<Runtime> {
   return await createRuntime({
-    store: memoryStore(),
+    store,
     plugins: [
       ...access,
       googleSignIn,
@@ -163,6 +164,22 @@ test("a session's or a key's secret never lands in the log", async () => {
     const { key } = await rt.call<{ key: string }>("key.create", { name: "ci" }, { actor: ana });
     const logged = JSON.stringify(await store.events(0, 1000));
     assertEquals([logged.includes(session), logged.includes(key)], [false, false]);
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a Google sign-in's session, and the ID token it took, never land in the log", async () => {
+  const store = memoryStore();
+  const rt = await start(store);
+  try {
+    const idToken = await google.sign(google.claims());
+    const { session } = await rt.call<{ session: string }>("google.sign-in", { idToken });
+    await rt.idle();
+    const logged = JSON.stringify(await store.events(0, 10_000));
+    assertEquals([logged.includes(session), logged.includes(idToken)], [false, false]);
+    // What it did is still there: the person it made.
+    assert(logged.includes("google:123"));
   } finally {
     await rt.close();
   }

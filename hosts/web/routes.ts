@@ -146,7 +146,7 @@ export const VISITOR: Actor = { kind: "visitor", id: "" };
 /** Paths the web host answers itself. */
 const OWN = ["/app/", "/assets/", "/files/", "/oxian", "/connect", "/signin", "/signout"];
 
-/** Bodies larger than this are refused (10 MB). */
+/** Bodies larger than this are refused (10 MB): a 413 once that's known, the rest never read. */
 const MAX_BODY = 10 * 1024 * 1024;
 
 const textual = (type: string) =>
@@ -162,6 +162,39 @@ const STATUS: Record<string, number> = {
 const plain = (status: number, text: string) =>
   new Response(text, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 
+/**
+ * A request's body, `most` bytes at most: undefined past it, said by its
+ * `content-length` before anything is read, or found while reading, which
+ * stops there (the rest is never read).
+ */
+export async function bodyOf(request: Request, most: number): Promise<Uint8Array | undefined> {
+  if (!request.body) return new Uint8Array();
+  if (Number(request.headers.get("content-length") ?? 0) > most) {
+    await request.body.cancel().catch(() => {});
+    return undefined;
+  }
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > most) {
+      await reader.cancel().catch(() => {});
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.length;
+  }
+  return bytes;
+}
+
 /** Reads a request as an Action takes it. */
 async function read(request: Request, url: URL): Promise<HttpRequest | Response> {
   const headers: Record<string, string> = {};
@@ -176,8 +209,8 @@ async function read(request: Request, url: URL): Promise<HttpRequest | Response>
     headers,
   };
   if (!request.body) return asked;
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.length > MAX_BODY) return plain(413, "Too large");
+  const bytes = await bodyOf(request, MAX_BODY);
+  if (!bytes) return plain(413, "Too large");
   if (textual(headers["content-type"] ?? "")) {
     return { ...asked, body: new TextDecoder().decode(bytes) };
   }

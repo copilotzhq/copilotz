@@ -27,7 +27,7 @@ import { type Computer, computers, type Desk } from "../mod.ts";
 import { tools } from "../computers/resources/tools.ts";
 import { type HttpRequestHead, type Job, WORK } from "../computers/shared/workloads.ts";
 import { createTickets } from "../../../hosts/web/tickets.ts";
-import { webServer } from "../../../hosts/web/server.ts";
+import { setClientAddress, webServer } from "../../../hosts/web/server.ts";
 import { test } from "../../../testing/mod.ts";
 import { fakeComputer } from "./fake-computer.ts";
 
@@ -126,7 +126,10 @@ function browser(serve: (request: Request) => Promise<Response>) {
     const cookie = [...jar].map(([n, v]) => `${n}=${v}`).join("; ");
     const headers = new Headers(init.headers);
     if (cookie && !headers.has("cookie")) headers.set("cookie", cookie);
-    const response = await serve(new Request(url, { ...init, headers }));
+    // From this machine (a listener says so).
+    const response = await serve(
+      setClientAddress(new Request(url, { ...init, headers }), "127.0.0.1"),
+    );
     for (const line of response.headers.getSetCookie()) {
       set.push(line);
       const [pair] = line.split(";");
@@ -249,7 +252,8 @@ async function setup(fn: (world: World) => Promise<void>, more: Plugin[] = []) {
             person: who.id,
           });
           const b = browser(serve);
-          b.jars.set(new URL(APP).host, new Map([["session", session]]));
+          // Its session, as the app's own host keeps it on https: a cookie no other host can set.
+          b.jars.set(new URL(APP).host, new Map([["__Host-session", session]]));
           return b;
         },
         tool: async (input, actor = bob) =>

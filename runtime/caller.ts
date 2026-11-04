@@ -86,10 +86,21 @@ export function callerFrom(
   const entry = caller.hops ? list.at(-caller.hops) : list.length === 1 ? list[0] : undefined;
   const at = entry ? addressOf(entry) : undefined;
   if (!at) return { counted: UNVOUCHED, exempt: false };
-  return {
-    counted: at.size === 32 ? `4:${at.bits.toString(16)}` : `6:${(at.bits >> 64n).toString(16)}`,
-    exempt: inRanges(at, caller.exempt),
-  };
+  return { counted: countOf(at), exempt: inRanges(at, caller.exempt) };
+}
+
+/** What an address is counted as: IPv4 by itself, IPv6 by its /64. */
+const countOf = (at: Bits) =>
+  at.size === 32 ? `4:${at.bits.toString(16)}` : `6:${(at.bits >> 64n).toString(16)}`;
+
+/**
+ * What an address the network gave (a socket's peer, as the listener saw it)
+ * is counted as, as `callerFrom` counts a front's: IPv4 by itself, IPv6 by
+ * its /64. Undefined when it isn't an address.
+ */
+export function countedOf(address: string): string | undefined {
+  const at = addressOf(address.replace(/^\[|\]$/g, "").replace(/%.*$/, ""));
+  return at ? countOf(at) : undefined;
 }
 
 type Bits = { bits: bigint; size: 32 | 128 };

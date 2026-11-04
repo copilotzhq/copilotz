@@ -144,10 +144,13 @@ workspace, a public site where visitors chat with an agent, or a WhatsApp app wi
 | Browsers connecting                          | `tickets`, for whoever an entrance says a request is                                     | no browser connects                |
 | Signing in (`POST /signin/<name>`)           | the `signIn` resource: `googleSignIn` (`google`), `devSignIn` (`dev`, this machine only) | none                               |
 
-The host keeps every cookie: httpOnly, so the page's code never sees a session's secret, `Secure`
-anywhere but this machine over http. A page connects by trading its cookie for a one-time ticket
-(`POST /connect`, which answers only the app's own page: its `Origin`), then talks to the owner over
-Oxian as an untrusted worker bound to that actor, under the access rules. On Node:
+The host keeps every cookie: httpOnly, so the page's code never sees a session's secret, and
+`Secure` anywhere but over plain http to this machine or one on its network (a private address, a
+`.local` name), the session's named `__Host-session` there, so no other host under the domain (a
+preview's) can set one. A page connects by trading its cookie for a one-time ticket (`/connect`,
+which answers only the app's own page: its `Origin`), then talks to the owner over Oxian as an
+untrusted worker bound to that actor, under the access rules. Signing in by name (`devSignIn`) is
+for this machine only: the socket's address and the host must both be this machine's. On Node:
 
 ```ts
 // server.ts
@@ -160,10 +163,13 @@ import { themeOf } from "copilotz/web/theme";
 import { bundle, serve } from "copilotz/web/node";
 import { plugins } from "./app.ts"; // models, chat, access, … and the app's own
 
+// This machine alone, unless HOST says (0.0.0.0: everyone's).
+const hostname = process.env.HOST ?? "127.0.0.1";
 const tickets = createTickets();
 const runtime = await createRuntime({
   store: memoryStore(),
-  plugins: [...plugins, devSignIn], // sign in by name, from this machine only
+  // Sign in by name: only while it listens on this machine alone.
+  plugins: [...plugins, ...(hostname === "127.0.0.1" ? [devSignIn] : [])],
   transports: [socket], // browsers connect to the owner here
   admit: tickets.admit,
 });
@@ -172,6 +178,7 @@ const server = await serve({
   tickets,
   code: await bundle(new URL("./browser.tsx", import.meta.url)),
   theme: themeOf([]), // Copilotz's look; a brand passes its theme plugins
+  hostname,
   port: 8080,
 });
 console.log(`${server.url}`);
@@ -196,9 +203,11 @@ await web({
 ```
 
 `bundle` splits the code where it imports lazily (math, a terminal), and `serve` takes browsers'
-sockets through Oxian's Node adapter; Bun and Deno run it too. On Deno,
-`Deno.serve(webServer({ …, upgrade: handler(runtime.hypervisor) }))` with Oxian's Deno adapter, and
-`deno bundle` for the code (`examples/terminal-agent/web.ts`). The whole example is in
+sockets through Oxian's Node adapter, and says where each request came from; Bun and Deno run it
+too. On Deno, `Deno.serve` serves `webServer({ …, upgrade: handler(runtime.hypervisor) })` with
+Oxian's Deno adapter, each request given the address it came from first
+(`setClientAddress(request, info.remoteAddr.hostname)`: without it, no request is this machine's),
+and `deno bundle` makes the code (`examples/terminal-agent/web.ts`). The whole example is in
 `examples/web-node/` (`node examples/web-node/server.ts`). Google sign-in is `googleSignIn` with the
 `google` resource's `clientId`: the page shows its button.
 
@@ -212,15 +221,34 @@ a runtime of its own, opened when first used. Node takes a socket before any han
 ### Visitors
 
 A public site where anyone chats with the app's agent, signed in or not: the contacts plugin's web
-lines (`resources.web.lines.<name>`). A page that asks to come in by one
-(`web({ arrive: { line } })`) and isn't anyone yet becomes a visitor: a contact in the line's space
-with a chat of its own, answered by the line's agent, its browser keeping a secret in an httpOnly,
-`SameSite=Strict` cookie (only its hash is kept) that is the same contact for the line's `days`
-(30). Someone signed in comes in as themselves. A visitor reaches what any contact does: their chat,
-what's said and filed there, and nothing else. New visitors are limited an hour from one caller's
-address (`ipVisitorsPerHour`, 20) and on the line (`visitorsPerHour`, 600), refused plainly past
-either (429); the caller's address is believed only as the app's front says it (`caller`, as MCP's
-lines take it). Erasing the contact (`contact.forget`) ends its cookie at once.
+lines (`resources.web.lines.<name>`), with the app's secret (`links`), which visitors' cookies are
+signed with. A page that asks to come in by one (`web({ arrive: { line } })`) and isn't anyone yet
+becomes a visitor, its browser keeping a signed secret in an httpOnly, `SameSite=Strict` cookie
+(`__Host-visitor` wherever it's Secure) that is the same visitor for the line's `days` (30). Coming
+in makes and keeps nothing: the visitor's first message (`chat.send`, naming no chat) makes it a
+contact in the line's space, with a chat of its own, answered by the line's agent. Someone signed in
+comes in as themselves. A visitor reaches what any contact does: their chat, what's said and filed
+there (`/files/<id>` too), never the agent's private steps (its tools' calls, with what each
+returned), and nothing else.
+
+Its limits, each refused plainly (429) and only for that caller:
+
+| Limit                     | Default  | Counted                                             |
+| ------------------------- | -------- | --------------------------------------------------- |
+| `ipVisitorsPerHour`       | 20       | new visitors from one address (IPv6 by its /64)     |
+| `perMinute`, `perDay`     | 10, 200  | one visitor's messages                              |
+| `ipPerMinute`, `ipPerDay` | 30, 1000 | messages from the visitors one address brought      |
+| `linePerMinute`           | 300      | the line's messages, all its visitors               |
+| `visitorsPerHour`         | 600      | new visitors who speak (contacts made), on the line |
+
+The caller's address is the one the app's front says (`caller`, as MCP's lines take it), else the
+one its socket came from (`serve` and `listen` know it; a listener of your own says it with
+`setClientAddress`); with neither, nobody's let in. A message says 4,096 characters at most; files
+only on a line that takes them (`files: { count, bytes }`, 1 of 5 MB unless said), and audio is
+transcribed (a model's call) only with `transcribe: true`. Erasing the contact (`contact.forget`)
+ends its cookie at once, and so does removing its line; what's past (counters, records, a contact
+whose first message never went in) is collected every ten minutes. With the orgs host, a line names
+its org (`org`), and its page is the org's, at `/o/<org>/`.
 
 ```ts
 resources: {
@@ -230,11 +258,13 @@ resources: {
     caller: { header: "cf-connecting-ip", front: env.FRONT_SECRET },
     lines: { site: { in: "visitors", agent: "guide" } },
   },
+  links: { origin: "https://example.com", secret: env.LINKS_SECRET },
 }
 ```
 
 ```tsx
-// The app's own shell for visitors (a chat window), and chat's front end.
+// The app's own shell for visitors (a chat window): it sends with `chat.send`, naming no chat at
+// first, and reads its chat's messages.
 await web({ root, plugins: [siteShell, chatWeb], arrive: { line: "site" } });
 ```
 
@@ -494,8 +524,9 @@ name, never by importing its code.
   shut to it unless it says otherwise (`peopleOrContacts`, as `chat.send` does). Its chat lives in
   the line's space and is shared with it on its own: it reaches that chat, what's said and filed
   there, and nothing else; the space's people reach it as any chat there, and the agent working for
-  the contact reaches exactly that chat. Agents are told whom they're talking with. Its web lines
-  (`web.lines`) let a browser that isn't anyone in as one, a visitor (see "Visitors").
+  the contact reaches exactly that chat, never its agents' private steps. Agents are told whom
+  they're talking with. Its web lines (`web.lines`) let a browser that isn't anyone in as a visitor,
+  a contact once it speaks (see "Visitors").
 - **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client); the
   web host's page shows its button.
 - **`devSignIn`**: sign-in by name or email, from this machine only, for trying an app out.

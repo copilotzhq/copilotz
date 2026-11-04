@@ -3,7 +3,7 @@
  * blob, by the hash of what it holds: the same file attached twice is stored
  * once, and a store's blobs can live elsewhere (a directory, a bucket).
  */
-import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, peopleOrContacts } from "../../../../runtime/mod.ts";
 
 const fileSchema = {
   type: "object",
@@ -29,6 +29,11 @@ const fileSchema = {
     thread: { type: "string" },
     /** The space its thread is in. */
     in: { type: "string" },
+    /**
+     * A tool's, from what it was given (an API's response), as an agent's
+     * step is: those in the conversation from outside (a contact) never read it.
+     */
+    private: { type: "boolean" },
     at: { type: "string" },
   },
   required: ["name", "type", "size", "data", "thread", "at"],
@@ -37,9 +42,13 @@ const fileSchema = {
 export const file = defineCollection({
   schema: fileSchema,
   queries: {
-    /** One file, content and all, as its reader reaches it: what the web serves at `/files/<id>`. */
+    /**
+     * One file, content and all, as its reader reaches it: what the web serves
+     * at `/files/<id>`. A contact reaches those of its own chat (what was sent
+     * there), never a tool's.
+     */
     content: {
-      allow: people,
+      allow: peopleOrContacts,
       run: (files, params: { id: string }) => files.findOne({ _id: params.id }),
     },
   },

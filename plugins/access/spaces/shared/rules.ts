@@ -4,7 +4,9 @@
  * field): an actor reads those in spaces they may read, and writes those in
  * spaces they may write (or manage, for some), plus documents shared with
  * them on their own and those documents' parts (a chat's messages come with
- * it); documents that are members (agents) are read where they work too. A
+ * it), a contact only what its collection lets one read (a chat's messages,
+ * not its agents' private steps); documents that are members (agents) are
+ * read where they work too. A
  * query that names a space, or a document it reaches, needs nothing more:
  * it goes to the store as it is. Spaces and memberships are readable where reached and
  * changed only by those who manage them; invitations are their managers',
@@ -23,11 +25,21 @@ import { homeOf, memberKey, type Reach, reachOf, type Verb, where } from "./reac
  * readable too where they're members, and whether each is part of a document
  * of another shared collection (`part`: that collection, which its field of
  * the same name names: a message's `thread`), reached with it when that
- * document is shared on its own.
+ * document is shared on its own, and what of it a contact reads (`contact`:
+ * a filter its documents must match too, for a contact acting itself, never
+ * the agent working for it: a chat's messages without its agents' private
+ * steps).
  */
 export type Shared = Record<
   string,
-  { field?: string; labels?: boolean; write?: Verb; member?: string; part?: string }
+  {
+    field?: string;
+    labels?: boolean;
+    write?: Verb;
+    member?: string;
+    part?: string;
+    contact?: Filter;
+  }
 >;
 
 /** The documents of `on` reached on their own with `verb`: each id, and the space it lives in. */
@@ -68,13 +80,16 @@ export const rules: Guard = async (actor, { collection, access, filter }, ctx) =
     }
     return { space: { $in: spaces } };
   }
-  const { field = "in", labels, write = "write", member, part } = shared[collection];
+  const { field = "in", labels, write = "write", member, part, contact } = shared[collection];
   const verb = access === "read" ? "read" : write;
   const spaces = where(reach, verb);
-  // A labelled document needs its sources reached too, to read or change it.
-  const sourced: Filter | undefined = labels
-    ? { sources: { $not: { $elemMatch: { $nin: where(reach, "read") } } } }
-    : undefined;
+  // A labelled document needs its sources reached too, to read or change it; a contact acting
+  // itself, what its collection lets a contact reach of it (not an agent's private steps).
+  const also: Filter[] = [
+    ...(labels ? [{ sources: { $not: { $elemMatch: { $nin: where(reach, "read") } } } }] : []),
+    ...(contact && actor.kind === "contact" ? [contact] : []),
+  ];
+  const sourced: Filter | undefined = also.length > 1 ? { $and: also } : also[0];
   const named = filter?.[field];
   if (typeof named === "string" && spaces.includes(named)) return sourced ?? true;
   const and = (f: Filter) => sourced ? { $and: [f, sourced] } : f;

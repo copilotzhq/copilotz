@@ -17,17 +17,23 @@
  * - **Erasing one** (`contact.forget`, by its space's managers) ends its
  *   access at once and deletes its record, and with `chats` its chats.
  * - **Web lines** (`resources.web.lines.<name>`, declared in the app's
- *   settings): a front door for browsers that aren't anyone. A page that
- *   comes in by one (`web({ arrive: { line } })`, `POST /connect` `{ line }`)
- *   is a new visitor: a contact in the line's space with a chat of its own,
- *   answered by the line's agent, its browser keeping a secret in an
- *   httpOnly cookie (the web host's `visitor` entrance) that is the same
- *   contact while it lasts (`days`, 30). Only the secret's hash is kept.
- *   New visitors an hour are limited from the caller's address (as the app's
- *   front says it: `web.caller`, as MCP's) and on the line, and past either
- *   it's refused plainly (429). A visitor reaches what any contact does:
- *   their chat, and what's shared with them. Erasing the contact ends its
- *   cookie with it.
+ *   settings, with the app's secret, `links`): a front door for browsers
+ *   that aren't anyone. A page that comes in by one (`web({ arrive: { line }
+ *   })`, `POST /connect` `{ line }`) is a visitor, its browser keeping a
+ *   secret in an httpOnly cookie (the web host's `visitor` entrance) that is
+ *   the same visitor while it lasts (`days`, 30). Coming in makes and keeps
+ *   nothing: the secret is signed. Its first message makes it a contact in
+ *   the line's space, with a chat of its own answered by the line's agent
+ *   (`contact.sending`, chat's `contactSend` hook). New visitors an hour are
+ *   limited by the caller's address (as the app's front says it:
+ *   `web.caller`, as MCP's; else as the socket's), and a visitor's messages
+ *   a minute and a day, its address's, and the line's; past any, it's
+ *   refused plainly (429), only that caller. Files only when the line takes
+ *   them, transcribed only when it says. A visitor reaches what any contact
+ *   does: their chat, never its agents' private steps, and what's shared
+ *   with them. Erasing the contact ends its cookie with it; what's past is
+ *   collected every ten minutes (`contact.prune`), a contact never heard
+ *   from too.
  *
  * ```ts
  * plugins: [models, chat, ...access]   // access brings contacts
@@ -37,6 +43,7 @@
  *     caller: { header: "cf-connecting-ip", front: env.FRONT_SECRET },
  *     lines: { site: { in: "visitors", agent: "guide" } },
  *   },
+ *   links: { origin: "https://example.com", secret: env.LINKS_SECRET },
  * }
  * ```
  */
@@ -44,6 +51,8 @@ import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { arriveAction } from "./actions/arrive.ts";
 import { chatAction } from "./actions/chat.ts";
 import { forgetAction } from "./actions/forget.ts";
+import { pruneAction } from "./actions/prune.ts";
+import { sendingAction } from "./actions/sending.ts";
 import { startAction } from "./actions/start.ts";
 import { CONTACT, contact } from "./collections/contact.ts";
 import { rate } from "./collections/rate.ts";
@@ -66,7 +75,10 @@ export const contacts: Plugin = definePlugin({
     "contact.chat": chatAction,
     "contact.forget": forgetAction,
     "contact.arrive": arriveAction,
+    "contact.sending": sendingAction,
+    "contact.prune": pruneAction,
   },
+  schedules: { "contact.prune": { every: "10m", call: "contact.prune", input: {} } },
   views: { "context:contact": { llm: contactView } },
   // Visitors' secrets and counters are nobody's to read but the system's, a contact's least.
   guard: (_actor, { collection }) =>
@@ -85,6 +97,8 @@ export const contacts: Plugin = definePlugin({
     context: { contact: { place: "system" } },
     // A browser that's a visitor of a web line, asked after people's sessions.
     entrances: { visitor: visitorEntrance },
+    // What a contact sends goes in through here first: a web visitor's limits, and its own chat.
+    contactSend: { contacts: { action: "contact.sending" } },
   },
 });
 

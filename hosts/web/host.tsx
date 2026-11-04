@@ -95,13 +95,19 @@ const config = () =>
     signIn?: Record<string, Record<string, unknown>>;
     /** Where the socket connects, when not `/oxian` (see `WebServerOptions.socket`). */
     socket?: string;
+    /** Where the app is under its host, when not the root (an org's, `/o/<org>`). */
+    base?: string;
   };
 
-/** A ticket for one connection, or nothing when the browser is nobody. */
+/**
+ * A ticket for one connection, or nothing when the browser is nobody: from
+ * the app the page is (its `base`, with many orgs: an org's web line is its
+ * own, there).
+ */
 async function ticket(
   arrive: Record<string, unknown> | undefined,
 ): Promise<{ ticket: string; actor: Who; name?: string } | undefined> {
-  const response = await fetch("/connect", {
+  const response = await fetch(`${config().base ?? ""}/connect`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(arrive ?? {}),

@@ -23,7 +23,14 @@ export type { Actor, Doc, Edge, Event, Executed, Inspected, Row, Store } from ".
 export { type Maintenance, MAINTENANCE_SQL, redacted, type Written } from "./maintain.ts";
 export { personOf, principalOf } from "./actor.ts";
 export { linksOf, type LinksSettings, signLink, verifyLink } from "./links.ts";
-export { type Caller, callerFrom, callerProblem, type CallerSettings } from "./caller.ts";
+export {
+  type Caller,
+  callerFrom,
+  callerProblem,
+  type CallerSettings,
+  countedOf,
+  UNVOUCHED,
+} from "./caller.ts";
 export {
   contacts,
   failure,

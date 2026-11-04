@@ -100,7 +100,10 @@ const probe = definePlugin({
     ["thread", "message", "file", "contact", "space", "member", "memory", "person", "credential"]
       .map((c) => [
         c,
-        { test: (_: unknown, ctx: ViewContext) => ctx.db.collection(c).find({}).value ?? [] },
+        {
+          test: (filter: Record<string, unknown> | undefined, ctx: ViewContext) =>
+            ctx.db.collection(c).find(filter ?? {}).value ?? [],
+        },
       ]),
   ),
   actions: {
@@ -109,7 +112,14 @@ const probe = definePlugin({
       allow: peopleOrContacts,
       run: async (
         ctx,
-        input: { thread?: string; in?: string; update?: boolean; move?: string },
+        input: {
+          thread?: string;
+          in?: string;
+          update?: boolean;
+          move?: string;
+          private?: boolean;
+          toolCalls?: unknown[];
+        },
       ) => {
         if (input.update || input.move) {
           const changed = await ctx.db.collection("message").updateMany({}, {
@@ -124,6 +134,8 @@ const probe = definePlugin({
           from: "x",
           to: [],
           text: "slipped in",
+          ...(input.private ? { private: true } : {}),
+          ...(input.toolCalls ? { toolCalls: input.toolCalls } : {}),
           at: new Date().toISOString(),
         });
         return 1;
@@ -187,7 +199,7 @@ type Setup = {
   dani: Actor;
   carlas: string;
   danis: string;
-  read<T>(collection: string, actor: Actor): Promise<T[]>;
+  read<T>(collection: string, actor: Actor, filter?: Record<string, unknown>): Promise<T[]>;
 };
 
 async function setup(fn: (s: Setup) => Promise<void>) {
@@ -225,8 +237,8 @@ async function setup(fn: (s: Setup) => Promise<void>) {
       dani: { kind: "contact", id: "c-dani-002" },
       carlas,
       danis,
-      read: async <T>(collection: string, actor: Actor) => {
-        const seen = runtime.observe<T[]>("test", collection, {}, { actor });
+      read: async <T>(collection: string, actor: Actor, filter: Record<string, unknown> = {}) => {
+        const seen = runtime.observe<T[]>("test", collection, filter, { actor });
         const output = await seen.ready;
         seen.close();
         return output.status === "ready" ? output.value : [];
@@ -329,6 +341,48 @@ test("the agent working for a contact reaches exactly its chat, though it works 
     assert(!request.instructions?.includes("memory"), request.instructions);
     // A tool that decides where it's offered isn't, here, though the agent names it.
     assertEquals(request.tools?.map((t) => t.name), ["peek", "send_message"]);
+  });
+});
+
+test("a contact reads what's said in its chat, never its agent's private steps; the agent does", async () => {
+  await setup(async ({ runtime, carla, carlas, read }) => {
+    // The agent looks around first (a tool call: its private step), then answers.
+    await runtime.call("chat.send", { thread: carlas, text: "peek please" }, { actor: carla });
+    await runtime.idle();
+    const all = await runtime.query<Message[]>("message.history", { thread: carlas }, {
+      actor: ana,
+    });
+    const [step] = all.filter((m) => m.private);
+    const [call] = step.toolCalls as { name: string; output: string }[];
+    assertEquals([call.name, call.output], ["peek", "seen"]);
+    // The contact reads what was said, and none of the step: not among the rest, nor asked for.
+    const hers = await read<Message>("message", carla);
+    assertEquals(hers.map((m) => [m.from, m.text]), [
+      ["contact:c-carla-01", "peek please"],
+      ["lead", "looked"],
+    ]);
+    assert(hers.every((m) => !m.private && m.toolCalls === undefined));
+    for (
+      const filter of [{ _id: step._id }, { private: true }, { thread: carlas, private: true }]
+    ) {
+      assertEquals(await read("message", carla, filter), [], JSON.stringify(filter));
+    }
+    assertEquals((await read("message", ana, { _id: step._id })).length, 1);
+    // Nor does it write one: a private message, or one with tool calls, would be out of its reach.
+    for (const what of [{ private: true }, { toolCalls: [] }]) {
+      assertEquals(
+        await code(
+          runtime.call("test.write", { thread: carlas, in: step.in, ...what }, { actor: carla }),
+        ),
+        "forbidden",
+        JSON.stringify(what),
+      );
+    }
+    // The agent working for it reads its own step: asked again, it goes on from it.
+    await runtime.call("chat.send", { thread: carlas, text: "and now?" }, { actor: carla });
+    await runtime.idle();
+    const told = sent.at(-1)!.messages;
+    assert(told.some((m) => m.role === "tool"), "its step is in its history");
   });
 });
 
@@ -462,7 +516,8 @@ test("every Action, query and event stays shut to contacts, but those opened to 
       .map(([type]) => type),
   ]).sort();
   // `whatsapp.hook` is Meta's webhook: anyone may call it, and only what Meta signed goes on.
-  assertEquals(open, ["chat.send", "whatsapp.hook"]);
+  // `file.content` is a file as its reader reaches it: a contact, its own chat's.
+  assertEquals(open, ["chat.send", "file.content", "whatsapp.hook"]);
 });
 
 test("an agent says a fixed message to a contact's chat without a turn, once", async () => {

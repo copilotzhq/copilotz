@@ -2,8 +2,9 @@
  * Who a browser is, and how people sign in, as the app's plugins declare
  * them and the web host answers them. The host keeps every cookie: it reads
  * them, sets them (httpOnly, so the page's code never sees them; `Secure`
- * anywhere but this machine over http) and clears them; plugins see only
- * the secret a cookie holds, and say who it is.
+ * anywhere but over http to this machine or one on its network, as the host
+ * the request is for says: the front's word for it, see `siteOf`) and clears
+ * them; plugins see only the secret a cookie holds, and say who it is.
  *
  * - **Entrances** (the `entrances` resource, by name): each is a cookie and
  *   the query that says who its secret is (`{ secret }` in, an actor or null
@@ -14,11 +15,12 @@
  *   that's anyone (`POST /connect`), it makes them someone and gives the
  *   secret the host keeps in its cookie, or refuses (a limit), or passes.
  * - **Sign-in** (the `signIn` resource, by name: `POST /signin/<name>`): an
- *   Action, called as the system with the request's JSON, that answers a
+ *   unrecorded Action (`record: false`: what it answers stays out of the
+ *   log), called as the system with the request's JSON, that answers a
  *   person and a session; the host keeps the session in its entrance's
  *   cookie. Google sign-in declares `google`; dev sign-in, `dev` (this
- *   machine only: `local`). What the page's sign-in shows of each is its
- *   `page` (Google's client id, for its button).
+ *   machine only: `local`, see `fromHere`). What the page's sign-in shows of
+ *   each is its `page` (Google's client id, for its button).
  * - **From the app's page only:** a browser says where a request comes from
  *   (`Origin`, `Sec-Fetch-Site`), and connecting, signing in and out from
  *   any other site is refused, so another site can't make its visitors
@@ -32,7 +34,8 @@
  * ```
  */
 import type { Actor, Resources, Runtime } from "../../runtime/mod.ts";
-import { type Front, hostOf } from "./routes.ts";
+import { clientAddress, loopbackAddress } from "./address.ts";
+import { bodyOf, type Front, hostOf } from "./routes.ts";
 
 /** One way a browser is someone: a cookie, and who its secret is. */
 export type Entrance = {
@@ -66,7 +69,8 @@ export type Entrance = {
    * Its cookie is this host's alone: named `__Host-<cookie>` wherever it's
    * Secure, so no other host under the same domain (a preview's, a sibling
    * app's) can set one in its place, to make a browser someone it chose.
-   * Over http on this machine, where nothing's Secure, it's its plain name.
+   * Over http to this machine or one on its network, where nothing's
+   * Secure, it's its plain name.
    */
   hostOnly?: boolean;
 };
@@ -78,6 +82,17 @@ export type Door = {
   asked: Record<string, unknown>;
   /** The host the request is for, as the app's front says. */
   host: string;
+  /**
+   * Where the request came from, as its socket says (see address.ts): the
+   * peer the listener saw, never a header. Undefined when nothing says.
+   */
+  address?: string;
+  /**
+   * The secret this entrance's cookie holds, when the request carries one
+   * that its query says is no one (yet): an entrance whose secrets stand on
+   * their own (signed, nothing kept) lets them back in as who they were.
+   */
+  secret?: string;
 };
 
 /** Someone let in: who, and the secret their cookie keeps, for `days` (30 unless said). */
@@ -85,9 +100,12 @@ export type Arrived = { actor: Actor; secret: string; days?: number };
 
 /** One way to sign in: `POST /signin/<name>`. */
 export type SignIn = {
-  /** Signs someone in: called as the system with the request's JSON; answers `{ person, session }`. */
+  /**
+   * Signs someone in: an unrecorded Action (`record: false`), called as the
+   * system with the request's JSON; answers `{ person, session }`.
+   */
   action: string;
-  /** From this machine only (a loopback address): for trying things out. */
+  /** From this machine only, to this machine (`fromHere`): for trying things out. */
   local?: boolean;
   /** What the page's sign-in shows of it (plain JSON), or a function of the app's resources. */
   page?: Record<string, unknown> | ((resources: Resources) => Record<string, unknown> | undefined);
@@ -100,32 +118,106 @@ export const cookieOf = (request: Request, name: string): string | undefined =>
   request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${name}=`))
     ?.slice(name.length + 1);
 
-export const loopback = (url: URL): boolean =>
-  ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+/** Whether a URL's host is this machine's own name: `localhost`, 127.0.0.0/8, `::1`. */
+export const loopback = (url: URL): boolean => loopbackName(url.hostname);
 
-/** Whether the host's cookies are Secure for a request: anywhere but this machine over http. */
-const secure = (url: URL) => url.protocol === "https:" || !loopback(url);
+const loopbackName = (hostname: string) =>
+  hostname.toLowerCase() === "localhost" || loopbackAddress(hostname);
 
 /**
- * A cookie as the host sets it: httpOnly, on the whole app, Secure unless
- * this is the machine itself over http. `maxAge` 0 clears it.
+ * Whether a host name is this machine's or one on its network: loopback, a
+ * private or link-local address (10/8, 172.16/12, 192.168/16, 169.254/16,
+ * fc00::/7, fe80::/10), or a `.local` name. Plain http there is a LAN's.
+ */
+export function nearby(hostname: string): boolean {
+  const name = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (loopbackName(name) || name.endsWith(".local")) return true;
+  const four = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(name);
+  if (four) {
+    const [a, b] = [Number(four[1]), Number(four[2])];
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+      (a === 169 && b === 254);
+  }
+  if (!name.includes(":")) return false;
+  const first = parseInt(name.split(":")[0] || "0", 16);
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+}
+
+/**
+ * Whether a request is this machine's, to this machine: the socket it came
+ * on is loopback (its client address, see address.ts), and so is the host
+ * it's for, as its URL says and as the front does. No header makes it so
+ * (`Host: localhost` from elsewhere isn't), nor does a page another site
+ * served whose name now points here; a request whose address nobody set is
+ * from nowhere known, never here.
+ */
+export function fromHere(request: Request, front?: Front): boolean {
+  if (!loopbackAddress(clientAddress(request))) return false;
+  if (!loopback(new URL(request.url))) return false;
+  try {
+    return loopback(new URL(`http://${hostOf(request, front)}`));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The address a request is for, as its browser asked for it: its URL, on
+ * the host the front says when the front vouches for it (`hostOf`). What
+ * the host's cookies go by: a front's request is for a public host, though
+ * it reaches the app at a private address.
+ */
+export function siteOf(request: Request, front?: Front): URL {
+  const url = new URL(request.url);
+  const host = hostOf(request, front);
+  if (host === url.host) return url;
+  try {
+    const said = new URL(`http://${host}`);
+    url.hostname = said.hostname;
+    url.port = said.port;
+  } catch {
+    // Not a host at all: the front's word is no one's.
+  }
+  return url;
+}
+
+/**
+ * Whether the host's cookies are Secure, for a request to `site`
+ * (`siteOf`): anywhere but over http to this machine or one on its network,
+ * where a browser would drop them.
+ */
+const secure = (site: URL) => site.protocol === "https:" || !nearby(site.hostname);
+
+/**
+ * The name a cookie of the host's alone goes by, for a request to `site`
+ * (`siteOf`): `__Host-<name>` wherever it's Secure (no other host under the
+ * domain can set one), its plain name where nothing's Secure.
+ */
+export const hostCookie = (site: URL, name: string): string =>
+  `${secure(site) ? "__Host-" : ""}${name}`;
+
+/**
+ * A cookie as the host sets it, for a request to `site` (`siteOf`):
+ * httpOnly, on the whole app, Secure unless this is plain http to this
+ * machine or one on its network. `maxAge` 0 clears it.
  */
 export const setCookie = (
-  url: URL,
+  site: URL,
   value: string,
   maxAge: number,
   name: string,
   sameSite: "lax" | "strict" = "lax",
 ): string =>
   `${name}=${value}; HttpOnly; SameSite=${sameSite === "strict" ? "Strict" : "Lax"}; Path=/; ` +
-  `Max-Age=${maxAge}${secure(url) ? "; Secure" : ""}`;
+  `Max-Age=${maxAge}${secure(site) ? "; Secure" : ""}`;
 
 /**
  * Whether a request comes from the app's own page. A browser says where a
  * request is from: `Sec-Fetch-Site`, and `Origin` (on every cross-site
  * request, and every POST), which must be this host (as the app's front says
- * it), over https anywhere but this machine. Without either, it's not a
- * browser's (or an old one's), and nothing a site does can send it.
+ * it), over https anywhere but this machine or one on its network. Without
+ * either, it's not a browser's (or an old one's), and nothing a site does
+ * can send it.
  */
 export function fromPage(request: Request, front?: Front): boolean {
   const site = request.headers.get("sec-fetch-site");
@@ -139,7 +231,9 @@ export function fromPage(request: Request, front?: Front): boolean {
     return false;
   }
   if (from.origin !== origin) return false;
-  if (from.protocol !== "https:" && !(from.protocol === "http:" && loopback(from))) return false;
+  if (from.protocol !== "https:" && !(from.protocol === "http:" && nearby(from.hostname))) {
+    return false;
+  }
   return from.host === hostOf(request, front);
 }
 
@@ -188,12 +282,17 @@ export function entrancesOf(runtime: Runtime): (Entrance & { name: string })[] {
   return found.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.name < b.name ? -1 : 1));
 }
 
-/** A runtime's ways to sign in, checked, by name. */
+/**
+ * A runtime's ways to sign in, checked, by name. Each Action is unrecorded:
+ * what it answers is a session's secret, and what it's given may be one too
+ * (Google's ID token), so neither may be in the log.
+ */
 export function signInsOf(
   runtime: Runtime,
   entrances: { name: string }[],
 ): Map<string, SignIn & { entrance: string }> {
-  const declared = (runtime.describe().resources.signIn ?? {}) as Record<string, SignIn | null>;
+  const described = runtime.describe();
+  const declared = (described.resources.signIn ?? {}) as Record<string, SignIn | null>;
   const found = new Map<string, SignIn & { entrance: string }>();
   for (const [name, method] of Object.entries(declared)) {
     if (!method) continue;
@@ -206,6 +305,14 @@ export function signInsOf(
     const entrance = method.entrance ?? "session";
     if (!entrances.some((e) => e.name === entrance)) {
       throw new Error(`signIn.${name}: no entrance "${entrance}" keeps its session`);
+    }
+    const action = described.actions[method.action];
+    if (!action) throw new Error(`signIn.${name}: no Action "${method.action}"`);
+    if (action.record !== false) {
+      throw new Error(
+        `signIn.${name}: "${method.action}" is recorded, so the session it answers would be ` +
+          "in the log: make it record: false",
+      );
     }
     found.set(name, { ...method, entrance });
   }
@@ -235,27 +342,38 @@ export type Whom = {
   /** Who a request is, by the first entrance whose cookie is someone; null: nobody. */
   (request: Request): Promise<Actor | null>;
   entrances: (Entrance & { name: string })[];
-  /** The name an entrance's cookie goes by here, for a request to `url`. */
-  named(entrance: Entrance, url: URL): string;
+  /** The address a request is for, as the front says (`siteOf`): what its cookies go by. */
+  site(request: Request): URL;
+  /** The name an entrance's cookie goes by here, for a request to `site`. */
+  named(entrance: Entrance, site: URL): string;
 };
 
 /**
  * Who requests are, by a runtime's entrances. `cookie` names a declared
- * cookie here (a host serving many orgs keeps each org's apart).
+ * cookie here (a host serving many orgs keeps each org's apart), and makes
+ * every cookie the host's alone (`hostCookie`), as `hostOnly` makes one.
+ * `front` is the app's (see `siteOf`).
  */
-export function whomOf(runtime: Runtime, cookie: (name: string) => string = (n) => n): Whom {
+export function whomOf(
+  runtime: Runtime,
+  options: { cookie?: (name: string) => string; front?: Front } = {},
+): Whom {
+  const { cookie, front } = options;
   const entrances = entrancesOf(runtime);
-  const named = (entrance: Entrance, url: URL) =>
-    `${entrance.hostOnly && secure(url) ? "__Host-" : ""}${cookie(entrance.cookie)}`;
+  const site = (request: Request) => siteOf(request, front);
+  const named = (entrance: Entrance, at: URL) =>
+    entrance.hostOnly || cookie
+      ? hostCookie(at, cookie ? cookie(entrance.cookie) : entrance.cookie)
+      : entrance.cookie;
   const whom = async (request: Request): Promise<Actor | null> => {
-    const url = new URL(request.url);
+    const at = site(request);
     for (const entrance of entrances) {
-      const actor = await recognise(runtime, entrance, cookieOf(request, named(entrance, url)));
+      const actor = await recognise(runtime, entrance, cookieOf(request, named(entrance, at)));
       if (actor) return actor;
     }
     return null;
   };
-  return Object.assign(whom, { entrances, named });
+  return Object.assign(whom, { entrances, site, named });
 }
 
 /**
@@ -278,28 +396,9 @@ const BODY = 16_384;
 
 /** A request's JSON object (`{}` with no body); undefined when it's too large or not one. */
 export async function jsonOf(request: Request): Promise<Record<string, unknown> | undefined> {
-  if (Number(request.headers.get("content-length") ?? 0) > BODY) return undefined;
-  if (!request.body) return {};
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.length;
-    if (size > BODY) {
-      await reader.cancel().catch(() => {});
-      return undefined;
-    }
-    chunks.push(value);
-  }
-  if (!size) return {};
-  const bytes = new Uint8Array(size);
-  let at = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, at);
-    at += chunk.length;
-  }
+  const bytes = await bodyOf(request, BODY);
+  if (!bytes) return undefined;
+  if (!bytes.length) return {};
   try {
     const parsed = JSON.parse(new TextDecoder().decode(bytes));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
@@ -339,21 +438,26 @@ export async function arriving(
 ): Promise<
   { actor: Actor; cookies: string[] } | { actor: null; cookies: string[] }
 > {
-  const url = new URL(request.url);
-  const stale: { name: string; sameSite?: "lax" | "strict" }[] = [];
+  const url = whom.site(request);
+  const stale: { name: string; sameSite?: "lax" | "strict"; secret: string }[] = [];
   for (const entrance of whom.entrances) {
     const name = whom.named(entrance, url);
     const secret = cookieOf(request, name);
     if (secret === undefined) continue;
     const actor = await recognise(runtime, entrance, secret);
     if (actor) return { actor, cookies: [] };
-    stale.push({ name, ...(entrance.sameSite ? { sameSite: entrance.sameSite } : {}) });
+    stale.push({ name, secret, ...(entrance.sameSite ? { sameSite: entrance.sameSite } : {}) });
   }
   const clear = (except?: string) =>
     stale.filter((s) => s.name !== except).map((s) => setCookie(url, "", 0, s.name, s.sameSite));
   for (const entrance of whom.entrances) {
     if (!entrance.arrive) continue;
-    const arrived = await entrance.arrive(request, door);
+    // Its own cookie, held but no one to its query: the entrance may know it still (signed).
+    const held = stale.find((s) => s.name === whom.named(entrance, url))?.secret;
+    const arrived = await entrance.arrive(
+      request,
+      held && cookieSafe(held) ? { ...door, secret: held } : door,
+    );
     if (!arrived) continue;
     if (!actorish(arrived.actor) || !cookieSafe(arrived.secret)) {
       throw new Error(

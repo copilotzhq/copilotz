@@ -21,10 +21,13 @@
  *   entrance's that's someone; with none, an entrance may let them in now
  *   (a visitor of a web line, from what the page asks: `{ line }`), setting
  *   its cookie. From the app's own page only (`Origin`); 401 for nobody, 429
- *   past a limit.
+ *   (with `retry-after`) past a limit: a web line's, or the tickets anyone
+ *   may have in a minute (`createTickets`).
  * - `POST /signin/<name>` (a way the app's plugins declare; `local` ones
- *   from this machine only): a session, set as an httpOnly cookie.
- *   `POST /signout`: ends it, and clears every entrance's cookie.
+ *   from this machine, to this machine only: `fromHere`, by the socket's
+ *   address and the host): a session, set as an httpOnly cookie.
+ *   `POST /signout`: ends it, and clears every entrance's cookie. What the
+ *   host answers in JSON (these, `/connect`) is never cached (`no-store`).
  * - The socket (`/oxian`): Oxian's worker protocol, which the app hands over. The
  *   runtime takes browsers there once it declares it: `transports: [socket]`.
  * - `GET /assets/…`: the app's own files (`assets`: a brand's fonts and their
@@ -54,18 +57,24 @@
  *   `GET /health` says it's up (unless a route takes it), and anything else
  *   is a 404.
  *
+ * Something going wrong answers its code's status (`refusal`: 400, 403, 404,
+ * 429, else 500, logged), and its words only when they're for anyone.
+ *
  * It answers `Request`s with `Response`s and nothing else (no files, no
- * sockets of its own), so it runs on Deno, Node, Bun or a worker alike.
+ * sockets of its own), so it runs on Deno, Node, Bun or a worker alike. A
+ * listener of the app's own says where each request came from
+ * (`setClientAddress`), as Copilotz's (`copilotz/web/node`) and Oxian's do.
  */
 import type { Runtime } from "../../runtime/mod.ts";
+import { clientAddress } from "./address.ts";
 import { type Asset, assetServer } from "./assets.ts";
 import {
   arriving,
   cookieOf,
   cookieSafe,
+  fromHere,
   fromPage,
   jsonOf,
-  loopback,
   recognise,
   refusal,
   setCookie,
@@ -106,7 +115,10 @@ export type WebServerOptions = {
   title?: string;
   /**
    * The name each cookie an entrance declares goes by here (its own, unless
-   * said): a host serving many orgs keeps each org's apart (`hosts/orgs`).
+   * said), each then this host's alone (`__Host-` wherever it's Secure, as an
+   * entrance's `hostOnly` makes it): a host serving many orgs keeps each
+   * org's apart, and none that another host under its domain could set
+   * (`hosts/orgs`).
    */
   cookie?: (name: string) => string;
   /**
@@ -152,13 +164,16 @@ export type WebServerOptions = {
 };
 
 export type { Asset };
+export { clientAddress, setClientAddress } from "./address.ts";
 export {
   type Arrived,
   cookieOf,
   type Door,
   type Entrance,
+  hostCookie,
   setCookie,
   type SignIn,
+  siteOf,
   type Whom,
   whomOf,
 } from "./entrances.ts";
@@ -194,8 +209,9 @@ const HEALTH = "/health";
 /** Where browsers connect: the runtime's transport for them, which `upgrade` serves. */
 export const socket = { type: "websocket", config: { path: "/oxian" } } as const;
 
+/** What the host answers in JSON is someone's (a ticket, a session's cookie): never kept. */
 const json = (value: unknown, init: ResponseInit & { cookies?: string[] } = {}) => {
-  const headers = new Headers({ "content-type": "application/json" });
+  const headers = new Headers({ "content-type": "application/json", "cache-control": "no-store" });
   for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
   for (const cookie of init.cookies ?? []) headers.append("set-cookie", cookie);
   return new Response(JSON.stringify(value), { status: init.status ?? 200, headers });
@@ -203,6 +219,22 @@ const json = (value: unknown, init: ResponseInit & { cookies?: string[] } = {}) 
 
 const plain = (status: number, text: string) =>
   new Response(text, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+
+/**
+ * An error as the host answers it (see `refusal`), and past a limit, when to
+ * try again (`retryAfter`, in seconds, when the error says; else a minute).
+ */
+const refused = (error: unknown, fallback: string, cookies: string[] = []) => {
+  const { status, error: said } = refusal(error, fallback);
+  const wait = (error as { retryAfter?: unknown } | null)?.retryAfter;
+  return json({ error: said }, {
+    status,
+    cookies,
+    ...(status === 429
+      ? { headers: { "retry-after": String(typeof wait === "number" ? wait : 60) } }
+      : {}),
+  });
+};
 
 /** The page's icons: the mark (as the host draws it, or the image it is) and the theme's PNG. */
 const icons = (theme: Theme) => {
@@ -337,7 +369,10 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
       });
 
   // Who a request is, by the app's entrances (checked now: a bad declaration stops the start).
-  const whom = whomOf(runtime, options.cookie);
+  const whom = whomOf(runtime, {
+    ...(options.cookie ? { cookie: options.cookie } : {}),
+    ...(front ? { front } : {}),
+  });
   const signIns = here ? signInsOf(runtime, whom.entrances) : new Map();
   /** Whether browsers connect here: someone to be, and tickets to connect with. */
   const connecting = !!tickets && whom.entrances.length > 0;
@@ -374,20 +409,24 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
     if (!asked) return json({ error: "Send a JSON object, of 16 KiB at most" }, { status: 400 });
     let came: Awaited<ReturnType<typeof arriving>>;
     try {
+      const address = clientAddress(request);
       came = await arriving(runtime, whom, request, {
         runtime,
         asked,
         host: hostOf(request, front),
+        ...(address ? { address } : {}),
       });
     } catch (error) {
-      const { status, error: said } = refusal(error, "Couldn't connect");
-      return json({ error: said }, {
-        status,
-        ...(status === 429 ? { headers: { "retry-after": "60" } } : {}),
-      });
+      return refused(error, "Couldn't connect");
     }
     const { actor, cookies } = came;
     if (!actor) return json({ error: "Not signed in" }, { status: 401, cookies });
+    let ticket: string;
+    try {
+      ticket = tickets!.issue(actor);
+    } catch (error) {
+      return refused(error, "Couldn't connect", cookies);
+    }
     // What the page shows them as: a person's name as they signed in, else their email.
     const profile = actor.kind === "person"
       ? await runtime.query<{ name?: string; email?: string } | null>("person.profile", {
@@ -396,47 +435,52 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
       : null;
     const name = profile?.name ?? profile?.email;
     return json({
-      ticket: tickets!.issue(actor),
+      ticket,
       actor: { kind: actor.kind, id: actor.id },
       ...(name ? { name } : {}),
     }, { cookies });
   };
 
   /** `POST /signin/<name>`: a way the app declares, its session kept in its entrance's cookie. */
-  const signIn = async (request: Request, url: URL, name: string): Promise<Response> => {
+  const signIn = async (request: Request, name: string): Promise<Response> => {
     const method = signIns.get(name);
-    if (!method || (method.local && !loopback(url))) return notFound();
+    if (!method || (method.local && !fromHere(request, front))) return notFound();
     if (!fromPage(request, front)) return elsewhere();
     const asked = await jsonOf(request);
     if (!asked) return json({ error: "Send a JSON object, of 16 KiB at most" }, { status: 400 });
-    const { person, session } = await runtime.call<{ person?: unknown; session?: unknown }>(
-      method.action,
-      asked,
-    );
+    let answered: { person?: unknown; session?: unknown };
+    try {
+      answered = await runtime.call(method.action, asked);
+    } catch (error) {
+      return refused(error, "Couldn't sign in");
+    }
+    const { person, session } = answered;
     if (typeof person !== "string" || !person || !cookieSafe(session)) {
       throw new Error(`signIn.${name}: ${method.action} answered no person, or no session`);
     }
     const entrance = whom.entrances.find((e) => e.name === method.entrance)!;
+    const site = whom.site(request);
     return json({ person }, {
       cookies: [
-        setCookie(url, session, SESSION, whom.named(entrance, url), entrance.sameSite),
+        setCookie(site, session, SESSION, whom.named(entrance, site), entrance.sameSite),
       ],
     });
   };
 
   /** `POST /signout`: what each entrance's cookie is ends, and every cookie goes. */
-  const signOut = async (request: Request, url: URL): Promise<Response> => {
+  const signOut = async (request: Request): Promise<Response> => {
     if (!fromPage(request, front)) return elsewhere();
+    const site = whom.site(request);
     const cookies: string[] = [];
     for (const entrance of whom.entrances) {
-      const name = whom.named(entrance, url);
+      const name = whom.named(entrance, site);
       const secret = cookieOf(request, name);
       if (secret === undefined) continue;
       const actor = entrance.end
         ? await recognise(runtime, entrance, secret).catch(() => null)
         : null;
       if (actor) await runtime.call(entrance.end!, { secret }, { actor }).catch(() => {});
-      cookies.push(setCookie(url, "", 0, name, entrance.sameSite));
+      cookies.push(setCookie(site, "", 0, name, entrance.sameSite));
     }
     return json({}, { cookies });
   };
@@ -486,9 +530,9 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
       if (route === "POST /connect" && (paged || connecting)) return await connect(request);
       if (here && connecting && request.method === "POST") {
         if (url.pathname.startsWith("/signin/")) {
-          return await signIn(request, url, url.pathname.slice("/signin/".length));
+          return await signIn(request, url.pathname.slice("/signin/".length));
         }
-        if (url.pathname === "/signout") return await signOut(request, url);
+        if (url.pathname === "/signout") return await signOut(request);
       }
       if (url.pathname === socket.config.path) {
         return options.upgrade ? await options.upgrade(request) : notFound();
@@ -500,9 +544,7 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
       }
       return notFound();
     } catch (error) {
-      return json({ error: error instanceof Error ? error.message : String(error) }, {
-        status: 400,
-      });
+      return refused(error, "Something went wrong");
     }
   };
 }

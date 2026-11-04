@@ -120,7 +120,7 @@ test("erasing a contact, or its chat, takes what was kept of the caller with it"
   await setup(async (s) => {
     const call = await s.call({ from: CARLA, form: VERIFIED });
     say(call, "long, please");
-    await until(() => call.sent.filter((m) => m.type === "text").length >= 3, 3_000, "words");
+    await heard(call, 1, 5_000);
     call.tell({ type: "interrupt", utteranceUntilInterrupt: "Temos muitas" });
     await until(async () => !!(await s.docs<VoiceCall>("voice_call"))[0].cut, 5_000, "the cut");
     const [c] = await s.docs<VoiceCall>("voice_call");

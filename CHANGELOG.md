@@ -72,14 +72,17 @@
     does, a contact sees only that the agent is at work); files without a tool's (`private`, as
     OpenAPI's are now). A turn stopped mid-step keeps its words only when they were surely an
     answer. A contact's own reads from its browser name what of its own they read (its chat:
-    `thread`, or `_id`), else they're refused and never watched; it reads no `aggregate` or
-    `nearest` directly. The voice relay reads its call as the line's agent working for the caller,
-    so a step's words before its tools are still said, and only what both may read. A contact's
-    message says 4,096 characters at most (`CONTACT_TEXT`), never what sent it (`via`), and never
-    titles its chat or lets an agent rename it (`title`, `renamable`); a file's media type is one
-    (`MEDIA_TYPE`, 127 characters at most, `MEDIA_TYPE_LENGTH`), which the agent is told. WhatsApp,
-    voice and MCP contacts never held a browser connection: they read only through the app's own
-    code.
+    `thread`, or `_id`, 32 at most, its read 2 KB of JSON at most: `CONTACT_READ`; of spaces and
+    memberships, only its memberships by its key), else they're refused and never watched; it reads
+    no `aggregate` or `nearest` directly. The voice relay reads its call as the line's agent working
+    for the caller (only what both may read), and says what a web visitor reads: answers, never a
+    step's words before its tools, and words as they're written only of a turn that offers no tools
+    but those called beside an answer (a tool's new `aside: true`, as the voice plugin's `end_call`
+    is): one with other tools says its answer once it's whole. A contact's message says 4,096
+    characters at most (`CONTACT_TEXT`), never what sent it (`via`), and never titles its chat or
+    lets an agent rename it (`title`, `renamable`); a file's media type is one (`MEDIA_TYPE`, 127
+    characters at most, `MEDIA_TYPE_LENGTH`), which the agent is told. WhatsApp, voice and MCP
+    contacts never held a browser connection: they read only through the app's own code.
   - **Security:** `/connect`, sign-in and sign-out (and the orgs host's own POSTs) answer only the
     app's own page: an `Origin` that isn't this host (as the front says it), over https off this
     machine and its LAN, or a cross-site `Sec-Fetch-Site`, is a 403, so another site can't make its
@@ -93,15 +96,24 @@
     web lines read callers one way. `mcp.call` refuses a contact without an MCP line (a web
     visitor), naming a line or not.
   - **Limits on browsers:** 30 tickets per actor a minute (`createTickets({ perMinute })`; past them
-    `/connect` is a 429 with `retry-after`, and `issue` throws `too_many`), 16 sockets per actor,
-    512 watched reads per connection (past them, `too_many`; those watched keep going), 16 resume
-    credentials per actor (the oldest dropped). A contact far less: 2 sockets, 32 watched reads on
-    each; and contacts together 16 sockets from a network (as many times as it counts: by the tags
-    of `actor.from`, `scaleOf`), 1,000 on a web line, 2,000 in all (`BrowserLimits` `contact`,
-    `network`, `line`, `contacts`); people never count against those. A contact's browser is told a
-    failure's words only when they're for anyone (`public`), as MCP's callers are: never a
-    provider's (a transcription's raw error said a key's prefix). Tickets and resumes expire on a
-    timer (`runtime/expiring.ts`), never by looking through them all on each one issued.
+    `/connect` is a 429 with `retry-after`, and `issue` throws `too_many`), 16 browsers (worker ids)
+    per actor, each on two connections at most (one coming while the last goes), 512 watched reads
+    per connection (past them, `too_many`; those watched keep going), 16 resume credentials per
+    actor (the oldest dropped), each working once, for the browser it was given to. A connection
+    counts from the moment it's let in (Welcome) until it goes, ready or not, and one that doesn't
+    say it's ready within 10 seconds is closed (the owner's Hypervisor `readyTimeoutMs`, for every
+    worker: none starts anything before Ready). A contact far less: 2 browsers, 32 watched reads on
+    each connection; and contacts together 16 connections from a network (as many times as it
+    counts: by the tags of `actor.from`, `scaleOf`), 300 on a web line, 400 in all: well under what
+    a listener holds (`LISTENER`, Oxian's Node adapter's 1,000), so people find room. Runtimes on
+    one listener count their contacts together with one `contactsPool()`: the orgs host gives each
+    org one (`open`'s `given.browsers`, for `createRuntime({ browsers })`). The limits are settings:
+    `createRuntime({ browsers })` (`BrowserLimits`: `sockets`, `watches`, `resumes`, `contact`,
+    `network`, `line`, `contacts`, `pool`), checked at start; people never count against contacts'.
+    A contact's browser is told a failure's words only when they're for anyone (`public`), as MCP's
+    callers are: never a provider's (a transcription's raw error said a key's prefix). Tickets and
+    resumes expire on a timer (`runtime/expiring.ts`), never by looking through them all on each one
+    issued.
   - **Cookie names, and a one-time sign-out:** every entrance's cookie is the host's alone unless it
     says `hostOnly: false`: identity's session is `__Host-session` wherever it's Secure, and the
     orgs host's own cookies (`dir`, `org`, `s_<org>`) and every org's entrances' are `__Host-` too,
@@ -116,8 +128,11 @@
     `ctx.disconnect` from an Action): their resume credentials go and each connection closes. A
     browser comes back only with a new ticket: the client now asks for one when its way back is
     refused (it used to stop, until its page reloaded), which only a cookie that's still someone
-    gets; another device of the same person comes straight back. With the orgs host, sign-out ends
-    every open org's session the browser holds.
+    gets; another device of the same person comes straight back. A connection let in before (not yet
+    ready) is never ready, and tickets handed out to them not yet used are no one's (`Tickets.end`,
+    which sign-out calls). An org's own (`bound:`) executor can't end anyone's browsers; plugins are
+    trusted code, as with `cancel`. With the orgs host, sign-out ends every open org's session the
+    browser holds.
   - **Migration:** `serveRoutes({ runtime, … })` is `serve({ runtime, … })` with no `code`.
     `google: { clientId }` and `dev: true` are the plugins' resources now: add `googleSignIn` (with
     the `google` resource) and `devSignIn` to the runtime's plugins (the directory's, with orgs). A
@@ -144,14 +159,41 @@
     secret; web visitors' cookies use another), never the secret itself, and the `links` resource
     takes the one before it (`previous`), while what it signed should still open: a link until it
     expires, a visitor's cookie (the same contact) while it lasts. **Breaking:** links signed before
-    upgrading (an hour's) no longer open. MCP's ids from the secret are unchanged.
+    upgrading (an hour's) no longer open. A secret that leaked is never given as `previous`: it goes
+    at once.
   - **A rule hears a browser's own reads** (`Guard`'s `direct`, asked with the read's filter before
     it's watched) and may refuse one it won't watch, throwing. Plugins' `check` sees every Action
-    (`merged.actions`). An actor reads its own memberships by its key.
+    (`merged.actions`). A contact reads its own memberships by its key (anyone else, memberships as
+    far as they reach: a key `within` a space, that space's).
   - **An aggregate with its own `$match` works under a rule:** the rule's filter joins it in one
     `$match`; before, every such read failed `invalid`.
   - **Who calls, by network:** `networksOf(counted)` (an address's wider networks, each with its
     prefix and `scale`), `SCALE`, `scaleOf(tag)`, `privateAddress(address)`.
+- **From the third security review of the one host:**
+  - **A watched read is matched only against changes it could concern.** A read whose filter names
+    values of a field of its own (a string, `$eq`, `$in` of up to 256 strings: a chat's `thread`, an
+    `_id`) is filed under them; a change to a document holding none of them (before or after, in
+    that field or an array there) skips it before any matching. The owner's read cache does the same
+    for the queries it keeps. Results are exactly as before. New in the reference
+    (`runtime/mongo.ts`): `namedBy(filter)`, `valuesAt(doc, field)`.
+  - **A web line's budget holds, and fails closed.** Each visitor's message holds an estimate of its
+    turn's cost as it goes in (the most one of the line's visitors' model calls cost lately; before
+    any is known, the rest of the day's budget, so one turn goes at a time until a cost is),
+    released as its first call is charged, or lapsing in two minutes: messages at once can't all
+    pass a budget only one fits. Before each model call (and transcription) for a visitor, a spent
+    budget refuses it, for good, so a turn's tool loop stops there: the models plugin's `modelUse`
+    listeners may now refuse a call before it's made (`may`, its refusal `final`; `mayUse`,
+    `ModelCall`). Use the ledger prices at nothing (no price for the model, or pricing failing)
+    closes the line for the day, said in the log. New: `contact.budget`; `contact.spent` takes
+    `contact`, and `unpriced`.
+  - **Web visitors:** a secret dated more than 5 minutes ahead is nobody's. An erased visitor's
+    record is kept as long as any cookie made before could last (400 days, the most a line may say,
+    `MOST_DAYS`), so raising a line's `days` can't bring an erased visitor back.
+  - **MCP's ids** (contacts, chats, users, addresses) are HMACs with the `mcp` key of the app's
+    secret (`keyOf`), never the secret itself; with `links.previous`, a conversation made under the
+    one before goes on as itself (the new system-only `mcp.conversation`; `mcp.call` takes the chat
+    the route found, `thread`). **Breaking:** every MCP conversation from before is new once (no
+    deployment uses the MCP interface yet).
 - **Security: a Google sign-in no longer writes the session's secret to the log.** `google.sign-in`
   was a recorded Action, so the event log kept its input, the Google ID token, and its result,
   `{ person, session }`, with the new session's secret in plain text. Anyone who could read the log
@@ -459,7 +501,7 @@
     app's `links`, uploaded to Meta and sent by its id). A carousel's pictures must be links: a file
     with nowhere to link it sends the fallback. A message's files go as images (jpeg, png up to 5
     MB) or documents, a short text as the first one's caption.
-- **WhatsApp lines for an app, as it uses them** (for Mobizap):
+- **WhatsApp lines for an app, as it uses them**:
   - **A line the app declares** in its settings (`resources.whatsapp.lines.<name>`: the space,
     Meta's number id, token and app secret, its own verify token, a webhook path it routes to
     `whatsapp.hook`, its agent, gap, rate, quiet window and language): open to anyone, kept as the
@@ -608,6 +650,19 @@
   whole document, so `private` fields (a computer's `pending` secret, unsealed account tokens) were
   in the log there; memory and SQLite left them out. The command now records documents without them
   too. Events already written still hold them.
+- **Maintenance SQL can run as the store's own role, told so:**
+  `postgresStore({ url, schema, maintenance: { storeRole: true } })`, beside a role of its own
+  (`maintenance: { url }`; both at once stop the store from opening, and neither still refuses raw
+  SQL on a server, its message naming both). Anyone holding the maintenance key can then do whatever
+  the store's role can: drop or truncate its tables, delete from the log, read every schema it
+  reaches. Only the allowlist check is skipped; the statement filter, a connection of its own for
+  each statement over the extended protocol, the timeouts, caps and `connections`, fenced writes in
+  the owner with their `maintenance.sql` event, the rollback of what changes `meta` or makes a
+  trigger, and the emptied cache all hold. Still refused, before each statement and after a write: a
+  role that is or may become a superuser, a member of `pg_execute_server_program`,
+  `pg_read_server_files` or `pg_write_server_files`, one with `CREATEROLE` before PostgreSQL 16, or
+  one that may run the server's file functions (`pg_read_file`, `lo_import`, `lo_export`…). Cloud
+  SQL's `postgres` user passes from PostgreSQL 16. An orgs host's orgs still don't get the plugin.
 
 ## 1.0.0-rc.20 — 2026-11-04
 

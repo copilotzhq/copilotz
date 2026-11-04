@@ -315,6 +315,123 @@ test("a line's budget: what its visitors' turns cost today, as the ledger prices
   );
 });
 
+/** A model that looks something up, a dollar a call, until it has looked 6 times. */
+const looking: LlmAdapter = {
+  async *generate(request) {
+    const looked = request.messages.filter((m) => m.role === "tool").length;
+    yield { type: "usage", input: 1_000_000, output: 0 };
+    if (looked < 6) {
+      yield { type: "tool_call", call: { id: `l${looked}`, name: "look", input: {} } };
+    } else yield { type: "text", text: "found it" };
+  },
+};
+/** A model that fails before it says anything (nothing used). */
+const broken: LlmAdapter = {
+  // deno-lint-ignore require-yield
+  async *generate() {
+    throw Object.assign(new Error("down"), { final: true });
+  },
+};
+const spending = definePlugin({
+  name: "spending",
+  adapters: { llm: { dollar, looking, broken } },
+  resources: {
+    tools: { look: { description: "Looks", run: () => "nothing yet" } },
+  },
+});
+const charged = (runtime: Runtime) =>
+  all<{ _id: string; spent?: number }>(runtime, "contact_rate").then((rs) =>
+    rs.filter((r) => r._id.startsWith("site|spent@")).map((r) => r.spent ?? 0)
+  );
+
+test("a line's budget holds against messages at once: each holds its turn's cost as it goes in", async () => {
+  await setup(async ({ runtime, visitor, send }) => {
+    const actors = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => visitor(`198.51.100.${40 + i}`)),
+    );
+    // Before: all ten let in, $10 of a $2 budget.
+    const said = await Promise.all(actors.map((a) => send(a, "hi")));
+    await runtime.idle();
+    assertEquals(said.filter((s) => s === "done").length, 1);
+    assert(said.includes("too_many: This chat is busy right now: try again in a moment."));
+    // What one cost is known now: each message holds that, so one more fits the day.
+    assertEquals(await send(actors[1], "again"), "done");
+    await runtime.idle();
+    assertEquals(await charged(runtime), [2]);
+    assertEquals(
+      await send(actors[2], "and again"),
+      "too_many: This chat has done all it can for today: come back tomorrow.",
+    );
+  }, { plugins: [usage, spending], resources: prices, line: { budget: 2 } });
+});
+
+test("a line's budget stops a turn's tool loop once it's spent", async () => {
+  await setup(async ({ runtime, visitor, send }) => {
+    const carla = await visitor("198.51.100.30");
+    assertEquals(await send(carla, "look it up"), "done");
+    await runtime.idle();
+    // Before: seven calls, $7 of a $3 budget; now its turn stops where the day is spent.
+    assertEquals(await charged(runtime), [3]);
+    const said = await all<{ thread?: string; failed?: boolean; text?: string }>(
+      runtime,
+      "message",
+    );
+    assert(said.some((m) => m.failed), "the turn stopped");
+  }, {
+    plugins: [usage, spending],
+    resources: {
+      ...prices,
+      agents: { guide: { instructions: "Help.", model: "looking/main", tools: ["look"] } },
+      provider: { looking: { adapter: "looking" } },
+      price: { "looking/*": { input: 1 } },
+    },
+    line: { budget: 3 },
+  });
+});
+
+test("a line's budget: use nothing prices closes the line for the day; a hold never charged lapses", async () => {
+  await setup(async ({ runtime, visitor, send }) => {
+    const carla = await visitor("198.51.100.30");
+    const dani = await visitor("198.51.100.31");
+    // The line's model has no price: its first turn goes, then the line takes nothing more today.
+    assertEquals(await send(carla, "one"), "done");
+    await runtime.idle();
+    // Before: every message went, nothing counted.
+    assertEquals(
+      await send(dani, "two"),
+      "too_many: This chat has done all it can for today: come back tomorrow.",
+    );
+    at(realNow() + 86_400_000);
+    assertEquals(await send(dani, "a new day"), "done");
+  }, {
+    plugins: [usage, spending],
+    resources: { ...prices, price: {} },
+    line: { budget: 2 },
+  });
+  await setup(async ({ runtime, visitor, send }) => {
+    const carla = await visitor("198.51.100.30");
+    const dani = await visitor("198.51.100.31");
+    // A turn that fails before anything's used holds the day's rest (nothing's known yet)…
+    assertEquals(await send(carla, "one"), "done");
+    await runtime.idle();
+    assertEquals(
+      await send(dani, "two"),
+      "too_many: This chat is busy right now: try again in a moment.",
+    );
+    // …two minutes at most.
+    at(realNow() + 121_000);
+    assertEquals(await send(dani, "two"), "done");
+  }, {
+    plugins: [usage, spending],
+    resources: {
+      ...prices,
+      agents: { guide: { instructions: "Help.", model: "broken/main" } },
+      provider: { broken: { adapter: "broken" } },
+    },
+    line: { budget: 2 },
+  });
+});
+
 /** A CAPTCHA's check, as the app's Action: the answer "human" passes. */
 const captcha = definePlugin({
   name: "captcha",

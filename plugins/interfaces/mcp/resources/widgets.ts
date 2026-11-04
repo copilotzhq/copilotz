@@ -144,7 +144,7 @@ export async function widgetMeta(
   runtime: Pick<Runtime, "query">,
   widgets: Widgets,
   line: Line,
-  scope: Scope & { secret: string },
+  scope: Scope & { secrets: string[] },
   call: { tool: string; input: Record<string, unknown> },
   conversation: { contact: string; thread: string; output?: string; call?: string },
 ) {
@@ -176,7 +176,7 @@ export async function widgetMeta(
       hints,
       viewer,
       reads,
-      grant: await grantOf(scope.secret, scope, conversation.contact),
+      grant: await grantOf(scope.secrets[0], scope, conversation.contact),
       tools: actionsOf(line),
       read: READ,
     },
@@ -205,14 +205,16 @@ export const NOT_YOURS = "This tool is the app's widget's own: only the widget c
  * names a conversation too (`openai/session`), that conversation's; else undefined (refused).
  */
 export async function grantedContact(
-  scope: Scope & { secret: string },
+  scope: Scope & { secrets: string[] },
   line: Line,
   input: Record<string, unknown>,
   meta: Record<string, unknown> | undefined,
   named: () => Promise<string | undefined>,
 ): Promise<string | undefined> {
   const grant = input[GRANT] ?? meta?.["copilotz/grant"];
-  const contact = await grantedTo(scope.secret, scope, grant);
+  // Made with the app's own secret; one made with the secret before it is still good, its hours.
+  let contact: string | undefined;
+  for (const secret of scope.secrets) contact ??= await grantedTo(secret, scope, grant);
   if (!contact) return undefined;
   const session = await named();
   // Where every conversation names itself (ChatGPT's lines, no handles), so must a widget's call:
@@ -251,11 +253,13 @@ async function readsOf(
 export async function appCalled(
   runtime: Pick<Runtime, "call" | "query">,
   line: Line,
-  scope: Scope & { secret: string },
+  scope: Scope & { secrets: string[] },
   call: {
     tool: string;
     input: Record<string, unknown>;
     contact: string;
+    /** Its chat, as the route found it (under whichever of the app's secrets it was made). */
+    thread: string;
     /** The call's id, for the Action: the same request sent again runs once. */
     id: string;
     user?: string;
@@ -267,6 +271,7 @@ export async function appCalled(
     tool: call.tool,
     input: {},
     call: call.id.slice(0, 120),
+    thread: call.thread,
     by: "handle",
     app: true,
     ...(call.user ? { user: call.user } : {}),
@@ -281,7 +286,7 @@ export async function appCalled(
   }
   const actor = contactActor(line, call.contact);
   const { [GRANT]: _, [READS]: after, [CALL]: _call, ...input } = call.input;
-  const grant = { "copilotz/grant": await grantOf(scope.secret, scope, call.contact) };
+  const grant = { "copilotz/grant": await grantOf(scope.secrets[0], scope, call.contact) };
   if (call.tool === READ) {
     return reply("Read.", {
       "copilotz/reads": await readsOf(runtime, actor, input.reads),

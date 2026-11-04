@@ -18,7 +18,9 @@
  * so what one signs the other never takes. To change the secret, give the
  * one before it as `previous` for a while: what it signed still opens (a
  * link until it expires, a visitor's cookie while it lasts), and only the new
- * one signs.
+ * one signs. That's for a secret changed on schedule: one that leaked is
+ * never given as `previous` (whoever holds it could sign anything the app
+ * takes while it's there). It goes at once, and what it signed with it.
  */
 import type { Resources } from "./define.ts";
 import { invalid } from "./errors.ts";
@@ -26,7 +28,7 @@ import { invalid } from "./errors.ts";
 /**
  * The `links` resource: the app's public origin (https), the secret links
  * are signed with, and the one before it (`previous`), while what it signed
- * should still open.
+ * should still open: never a secret that leaked.
  */
 export type LinksSettings = { origin: string; secret: string; previous?: string };
 

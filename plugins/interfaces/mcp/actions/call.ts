@@ -5,7 +5,8 @@
  * owner checks it may, and everything it does is that contact's: the rules
  * keep it to its own chat. In order:
  *
- * 1. **Its chat**, which comes from the contact (see shared/keys.ts): in
+ * 1. **Its chat**, which comes from the contact (see shared/keys.ts; under
+ *    the app's secret, or the one before it for a conversation made then): in
  *    use, or new (the first call of a conversation), or begun (a first call
  *    cut short between making the chat and sharing it with the contact, as
  *    an owner restarting does: it goes on as new; see
@@ -63,7 +64,14 @@
  * It isn't recorded: the step is the call's record, and a tool's own
  * Actions are recorded as they are.
  */
-import { type Context, defineAction, failure, isPublic, linksOf } from "../../../../runtime/mod.ts";
+import {
+  type Context,
+  defineAction,
+  failure,
+  isPublic,
+  linksOf,
+  secretsOf,
+} from "../../../../runtime/mod.ts";
 import type { Step, Thread, Tool } from "../../../agents/chat/contract.ts";
 import { runTool } from "../../../agents/chat/contract.ts";
 import { RERUN_MS, RESEND_MS } from "../collections/receipt.ts";
@@ -133,6 +141,11 @@ export const callAction = defineAction({
       input: { type: "object" },
       /** The call's id (`mcp:<thread>:<request>:<what>`), as the route made it. */
       call: { type: "string", maxLength: 120 },
+      /**
+       * Its chat, as the route found it: the contact's under one of the app's
+       * secrets (else the one under its own).
+       */
+      thread: { type: "string", maxLength: 60 },
       /** What named its conversation: a session, a handle the app gave, or a handle just made. */
       by: { enum: ["session", "handle", "new"] },
       /** Who started it, when the client says (an HMAC of `openai/subject`): for their limit. */
@@ -164,7 +177,12 @@ export const callAction = defineAction({
       throw failure("not_found", "No such tool on this line.");
     }
     const readOnly = hintsOf(line, input.tool, tool).readOnly === true;
-    const thread = await threadOf(links.secret, contact);
+    // Its chat comes from its contact: under the app's secret, or the one before it (a
+    // conversation from before the secret changed), as the route found it.
+    const threads = await Promise.all(secretsOf(links).map((key) => threadOf(key, contact)));
+    const thread = input.thread !== undefined && threads.includes(input.thread)
+      ? input.thread
+      : threads[0];
     // A tool that changes things keeps its receipt by what it asks here, whatever the request's
     // id: a model asking again under a new one, after a stop or a restart, finds it.
     const same = await sameCallOf(thread, input.tool, input.input);
@@ -294,7 +312,7 @@ export const callAction = defineAction({
  */
 async function admitted(
   ctx: Context,
-  input: { line: string; tool: string; address?: string; user?: string },
+  input: { line: string; tool: string; address?: string; user?: string; thread?: string },
 ): Promise<Called> {
   const line = lineOf(ctx, input.line);
   const links = linksOf(ctx.resources);
@@ -303,7 +321,12 @@ async function admitted(
   if (!line || !links || !contact || !(input.tool === READ || (entry && appOnly(entry)))) {
     throw failure("not_found", "No such tool on this line.");
   }
-  const thread = await threadOf(links.secret, contact);
+  // Its chat, under whichever of the app's secrets the conversation was made with (as the route
+  // found it), else the app's own.
+  const threads = await Promise.all(secretsOf(links).map((key) => threadOf(key, contact)));
+  const thread = input.thread !== undefined && threads.includes(input.thread)
+    ? input.thread
+    : threads[0];
   const now = Date.now();
   const { calls } = countersOf(line, thread, input, now);
   const system = ctx.as();

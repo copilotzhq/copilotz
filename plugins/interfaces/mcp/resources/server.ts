@@ -49,12 +49,26 @@
  * versioning, tools), https://modelcontextprotocol.io/specification/2025-11-25,
  * https://developers.openai.com/apps-sdk/reference (ChatGPT's `_meta`).
  */
-import { type Caller, callerFrom, linksOf, type Runtime } from "../../../../runtime/mod.ts";
+import {
+  type Caller,
+  callerFrom,
+  linksOf,
+  type Runtime,
+  secretsOf,
+} from "../../../../runtime/mod.ts";
 import type { Widgets } from "../../../../hosts/web/mod.ts";
-import { addressKey, callIdOf, conversationOf, threadOf, userOf } from "../shared/keys.ts";
+import { addressKey, callIdOf, threadOf, userOf } from "../shared/keys.ts";
 import { appOnly, atOnceOf, callerOf, type Line, lineOf, PATH, READ } from "../shared/settings.ts";
 import { busy, hold, isBusy } from "./running.ts";
-import { called, listed, mirrored, offeredOf, type Said, usable } from "./tools.ts";
+import {
+  called,
+  conversationHere,
+  listed,
+  mirrored,
+  offeredOf,
+  type Said,
+  usable,
+} from "./tools.ts";
 import {
   appCalled,
   CALL,
@@ -171,8 +185,8 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
   } catch {
     return respond(400, fault(undefined, PARSE, "Parse error"));
   }
-  const secret = linksOf(resources)?.secret;
-  if (!secret) return respond(500, fault(undefined, INTERNAL, "Internal error"));
+  const links = linksOf(resources);
+  if (!links) return respond(500, fault(undefined, INTERNAL, "Internal error"));
   const org = (resources.org as { id?: string } | undefined)?.id;
   const { runtime } = host;
   const context: Context = {
@@ -181,7 +195,7 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
     resources,
     request,
     caller,
-    scope: { line: line.name, ...(org ? { org } : {}), secret },
+    scope: { line: line.name, ...(org ? { org } : {}), secrets: secretsOf(links) },
     atOnce: atOnceOf({ resources }),
     ...(host.widgets ? { widgets: host.widgets } : {}),
     origin: linksOf(resources)?.origin,
@@ -231,7 +245,7 @@ type Context = {
   request: Request;
   /** Who calls, as the front says (undefined without the app's `caller` settings). */
   caller?: Exclude<Caller, "refused">;
-  scope: { line: string; org?: string; secret: string };
+  scope: { line: string; org?: string; secrets: string[] };
   /** Calls the runtime runs at once. */
   atOnce: number;
   /** The app's widgets, when its web host has them; and the app's own origin (`links`). */
@@ -541,17 +555,21 @@ async function widgetCalled(
   said: Said,
   meta: Record<string, unknown> | undefined,
 ) {
-  const { secret } = c.scope;
+  const [secret] = c.scope.secrets;
+  // The conversation the call names (ChatGPT's always do): its contact and chat, under whichever
+  // of the app's secrets it was made with.
+  const named = said.session === undefined
+    ? undefined
+    : await conversationHere(c.runtime, c.scope, {
+      session: said.session,
+      ...(said.subject ? { subject: said.subject } : {}),
+    });
   const contact = await grantedContact(
     c.scope,
     c.line,
     input,
     meta,
-    async () =>
-      said.session === undefined ? undefined : (await conversationOf(secret, c.scope, {
-        session: said.session,
-        ...(said.subject ? { subject: said.subject } : {}),
-      })).contact,
+    () => Promise.resolve(named?.contact),
   );
   if (!contact) return { content: [{ type: "text", text: NOT_YOURS }], isError: true };
   const entry = tool === READ ? undefined : c.line.tools[tool];
@@ -568,11 +586,12 @@ async function widgetCalled(
       caller: c.caller,
       atOnce: c.atOnce,
       contact,
+      ...(named ? { thread: named.thread } : {}),
     });
     return result;
   }
   const address = c.caller && !c.caller.exempt ? c.caller.counted : undefined;
-  const thread = await threadOf(secret, contact);
+  const thread = named?.thread ?? await threadOf(secret, contact);
   const release = hold(c.runtime, [
     { key: "runtime", most: c.atOnce },
     { key: `line:${c.line.name}`, most: c.line.limits.atOnce },
@@ -597,6 +616,7 @@ async function widgetCalled(
       tool,
       input: rest,
       contact,
+      thread,
       id,
       ...(user ? { user } : {}),
       ...(counted ? { address: counted } : {}),

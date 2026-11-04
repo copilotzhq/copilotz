@@ -8,6 +8,7 @@
  * and no way into another conversation.
  */
 import { assert, assertEquals, assertMatch, assertNotEquals, assertRejects } from "@std/assert";
+import { definePlugin } from "../../../../runtime/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import type { Message, Step } from "../../../agents/chat/mod.ts";
 import { callIdOf, conversationOf, sameCallOf } from "../shared/keys.ts";
@@ -946,4 +947,63 @@ test("only a contact the MCP route made for a line calls it: a web visitor never
       assertEquals((error as { code?: string }).code, "forbidden", JSON.stringify(input));
     }
   });
+});
+
+/** What a conversation's contact was under the old scheme: an HMAC with the app's secret itself. */
+async function rawContact(secret: string, session: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const parts = ["mcp", "contact", null, SCOPE.line, "session", session, null];
+  const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(JSON.stringify(parts)));
+  return `c-${
+    [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 24)
+  }`;
+}
+
+test("ids come from the MCP key of the app's secret, never the secret itself", async () => {
+  const { contact } = await chatOf("conv-1");
+  assertNotEquals(contact, await rawContact(SECRET, "conv-1"));
+  assertMatch(contact, /^c-[0-9a-f]{24}$/);
+});
+
+test("the app's secret changed, the one before given: a conversation goes on as itself", async () => {
+  const store = memoryStore();
+  const NEW = "a-new-secret-for-signing-links-in-tests-0123456789";
+  const rotated = (previous?: string) =>
+    definePlugin({
+      name: "rotated",
+      resources: {
+        links: { origin: "https://app.example", secret: NEW, ...(previous ? { previous } : {}) },
+      },
+    });
+  const before = await chatOf("conv-1");
+  await setup(async (a) => {
+    assertEquals(
+      said(await a.call("pick", { trip: "Rio 10:30" }, { session: "conv-1" })),
+      "Picked Rio 10:30.",
+    );
+  }, { store });
+  await setup(async (b) => {
+    // Made under the secret before: the same contact, in the same chat, its booking there.
+    const who = JSON.parse(said(await b.call("whoami", {}, { session: "conv-1" })));
+    assertEquals([who.id, who.thread], [before.contact, before.thread]);
+    assertEquals(said(await b.call("peek", {}, { session: "conv-1" })), "Booked: Rio 10:30");
+    assertEquals((await b.steps(before.thread)).length, 3);
+    // A new conversation is the new secret's.
+    const fresh = JSON.parse(said(await b.call("whoami", {}, { session: "conv-2" })));
+    const made = await conversationOf(NEW, SCOPE, { session: "conv-2" });
+    assertEquals([fresh.id, fresh.thread], [made.contact, made.thread]);
+  }, { store, plugins: [rotated(SECRET)] });
+  // The secret before no longer given: what it made is out of reach, a new conversation instead.
+  await setup(async (c) => {
+    const who = JSON.parse(said(await c.call("whoami", {}, { session: "conv-1" })));
+    assertNotEquals(who.id, before.contact);
+    assertEquals(said(await c.call("peek", {}, { session: "conv-1" })), "No booking.");
+  }, { store, plugins: [rotated()] });
 });

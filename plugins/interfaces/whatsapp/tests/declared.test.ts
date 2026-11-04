@@ -29,11 +29,11 @@ test("an app with only a declared line answers strangers, in a space of its own 
     resources: {
       provider: { e: { adapter: "e" } },
       agents: { booking: { instructions: "Sell tickets.", model: "e/booking" } },
-      spaces: { line: { name: "Mobifácil", agents: ["booking"] } },
+      spaces: { line: { name: "Viação Azul", agents: ["booking"] } },
       whatsapp: {
         graph: `${graph.url}/v23.0`,
         lines: {
-          mobifacil: {
+          azul: {
             in: "line",
             phoneId: PHONE,
             token: TOKEN,
@@ -69,7 +69,7 @@ test("an app with only a declared line answers strangers, in a space of its own 
       upgrade: () => new Response(null, { status: 299 }),
     });
     const answered = await serve(
-      new Request("http://localhost/hooks/whatsapp/mobifacil", {
+      new Request("http://localhost/hooks/whatsapp/azul", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -89,7 +89,7 @@ test("an app with only a declared line answers strangers, in a space of its own 
     // Its space is the app's: as declared, with its agent answering there.
     assertEquals(
       (await spaces()).map((s) => [s._id, s.name, s.declared, s.agent]),
-      [["line", "Mobifácil", true, "booking"]],
+      [["line", "Viação Azul", true, "booking"]],
     );
     assertEquals((await chats()).map((t) => [t.in, t.agents]), [["line", ["booking"]]]);
     // Restarted: the same space, and the same chat goes on.
@@ -142,7 +142,7 @@ test("a declared space is the app's: nobody makes it first, and one a person mad
   const start = (spaces: Record<string, unknown>) =>
     createRuntime({ store, plugins: [models, chat, ...access, whatsapp, plugin(spaces)] });
   const ops = { kind: "person", id: "ops", staff: true };
-  let runtime = await start({ line: { name: "Mobifácil", agents: ["booking"] } });
+  let runtime = await start({ line: { name: "Viação Azul", agents: ["booking"] } });
   try {
     // Before the line's first message, a person can't make its space and manage it.
     await assertRejects(
@@ -153,7 +153,7 @@ test("a declared space is the app's: nobody makes it first, and one a person mad
     // A space a person made before a release declares its id: refused, never adopted.
     await runtime.call("space.create", { id: "later", name: "mine" }, { actor: ops });
     await runtime.close();
-    runtime = await start({ later: { name: "Mobifácil", agents: ["booking"] } });
+    runtime = await start({ later: { name: "Viação Azul", agents: ["booking"] } });
     await assertRejects(
       () => runtime.call("space.keep", { id: "later" }),
       Error,

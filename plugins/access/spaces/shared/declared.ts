@@ -6,7 +6,7 @@
  * the app's, so people neither rename it nor take its agents out.
  *
  * ```ts
- * resources: { spaces: { line: { name: "Mobifácil", agents: ["booking"] } } }
+ * resources: { spaces: { line: { name: "Viação Azul", agents: ["booking"] } } }
  * ```
  */
 import type { Context } from "../../../../runtime/mod.ts";

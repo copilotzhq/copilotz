@@ -57,7 +57,7 @@ import { chatAction } from "./actions/chat.ts";
 import { forgetAction } from "./actions/forget.ts";
 import { pruneAction } from "./actions/prune.ts";
 import { sendingAction } from "./actions/sending.ts";
-import { spentAction } from "./actions/spent.ts";
+import { budgetAction, spentAction } from "./actions/spent.ts";
 import { startAction } from "./actions/start.ts";
 import { CONTACT, contact } from "./collections/contact.ts";
 import { rate } from "./collections/rate.ts";
@@ -84,6 +84,7 @@ export const contacts: Plugin = definePlugin({
     "contact.sending": sendingAction,
     "contact.prune": pruneAction,
     "contact.spent": spentAction,
+    "contact.budget": budgetAction,
   },
   schedules: { "contact.prune": { every: "10m", call: "contact.prune", input: {} } },
   views: { "context:contact": { llm: contactView } },

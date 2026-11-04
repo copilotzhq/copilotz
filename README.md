@@ -813,18 +813,19 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
   `inline: true`. SQLite writes name the store's tables in `main`, so nothing temporary stands in
   for them. Each store runs at most 2 maintenance statements at once
   (`maintenance: { connections }`): another answers busy (503).
-- **Where:** SQL needs a SQL store. On a PostgreSQL server only as a role of its own (below), never
-  in a schema other tenants share; PGlite, in the app's process, runs it as its one session where it
-  reaches no other schema. An orgs host's orgs don't get the plugin at all (one key would reach
-  every org). Operations, named queries and blobs work everywhere, the memory store too, and need no
-  role.
+- **Where:** SQL needs a SQL store. On a PostgreSQL server only as a role of its own (below) or,
+  told so, as the store's own role (below that), never in a schema other tenants share; PGlite, in
+  the app's process, runs it as its one session where it reaches no other schema. An orgs host's
+  orgs don't get the plugin at all (one key would reach every org). Operations, named queries and
+  blobs work everywhere, the memory store too, and need no role.
 
 ### A role of its own
 
 On a PostgreSQL server, raw SQL runs only as a role of its own, named by the store:
 `postgresStore({ url, schema, maintenance: { url: process.env.MAINTENANCE_DATABASE_URL } })`.
-Without one it's refused. The store's role owns the tables, may stop the app's connections and is
-whatever the deployment made it (a superuser, even): nothing that runs at a key's word should be it.
+Without one it's refused, unless the store is told to run it as its own role (below). The store's
+role owns the tables, may stop the app's connections and is whatever the deployment made it (a
+superuser, even): nothing that runs at a key's word should be it.
 
 Before each statement, on the connection that runs it, and again after a write in its transaction,
 maintenance checks that the role holds exactly what the SQL below grants, and refuses it otherwise
@@ -892,6 +893,34 @@ SELECT p.oid::regprocedure FROM pg_proc p WHERE p.prosecdef
   AND p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace);
 REVOKE EXECUTE ON FUNCTION some_schema.some_function(…) FROM PUBLIC;
 ```
+
+### Or the store's own role
+
+Where a role of its own is more than a deployment wants, raw SQL can run as the store's own role
+instead, said in so many words: `postgresStore({ url, schema, maintenance: { storeRole: true } })`
+(`connections` as above). Each statement then connects as the role in the store's `url` (or its
+pool's). Naming `url` and `storeRole` together stops the store from opening.
+
+**What it costs:** anyone holding the maintenance key can do whatever the store's role can. It owns
+the store's tables, so a statement can drop or truncate them, delete from the log, or rewrite any
+document without an event; it can read every schema the role reaches (another app's on the same
+database too, if it may), stop the app's own connections, and create roles or databases if the role
+may. A leaked key is then almost the app's own database login. Only the check above is skipped,
+which the store's role couldn't pass. Everything else holds: the statement filter (no `COMMIT`,
+`SET`, `ALTER ROLE`, `DO`, `LOCK`…); the extended protocol and a connection of its own for each
+statement, closed after; timeouts, the row and byte caps, and at most `connections` at once; writes
+inside the owner, fenced, with their `maintenance.sql` event; a statement that changes `meta` or
+makes a trigger rolled back; the owner's cache emptied after a write; the key and the log line.
+
+Still refused, before each statement and again after a write in its transaction, saying why: a role
+that could turn SQL into commands on the database server or access to its files. That is a
+superuser; a member, by any path, of a superuser role (it could switch to it within a statement), or
+of `pg_execute_server_program`, `pg_read_server_files` or `pg_write_server_files`; before PostgreSQL
+16, one with `CREATEROLE` (enough to grant itself any of those); and one that may run
+`pg_read_file`, `pg_read_binary_file`, `lo_import`, `lo_export` or adminpack's file functions. Cloud
+SQL's `postgres` user isn't a superuser (it's a member of `cloudsqlsuperuser`, which isn't one
+either): from PostgreSQL 16 it passes; on 15 or earlier its `CREATEROLE` is refused, so use a role
+of its own there.
 
 ## The example app
 

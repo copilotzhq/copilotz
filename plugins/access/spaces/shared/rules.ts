@@ -9,9 +9,11 @@
  * read where they work too. A
  * query that names a space, or a document it reaches, needs nothing more:
  * it goes to the store as it is. Spaces and memberships are readable where reached and
- * changed only by those who manage them (and one's own memberships read by
- * its own key: where a contact's chats are); invitations are their
+ * changed only by those who manage them (and a contact's own memberships read by
+ * its own key: where its chats are); invitations are their
  * managers', and read by whom they're to (by the email they signed in with).
+ * A contact's own read from its browser (`direct`) names what of its own it
+ * reads, 32 ids at most: its chats or documents, or its memberships by its key.
  */
 import { type Actor, failure, type Filter, type Guard } from "../../../../runtime/mod.ts";
 import { membersOf } from "./agents.ts";
@@ -64,10 +66,27 @@ const idsIn = (condition: unknown): string[] | undefined => {
   return undefined;
 };
 
+/** The most ids a contact's own read names (each its own: a chat, a document). */
+export const NAMED = 32;
+
+/** Refuses a contact's own read that doesn't name what of its own it reads. */
+const unnamed = (collection: string, what: string) =>
+  failure("forbidden", `A contact reads "${collection}" naming what of its own it reads: ${what}`, {
+    public: true,
+  });
+
 export const rules: Guard = async (actor, { collection, access, filter, direct }, ctx) => {
   const shared = (ctx.resources.shared ?? {}) as Shared;
   const own = ["space", "member", "request", "invitation"];
   if (!Object.hasOwn(shared, collection) && !own.includes(collection)) return undefined;
+  // A contact's own read from its browser names what of its own it reads (anything wider would
+  // run again on every change to the collection): of these, only its memberships, by its key.
+  const mineOnly = direct && actor.kind === "contact";
+  if (mineOnly && own.includes(collection)) {
+    if (collection !== "member" || filter?.member !== memberKey(actor)) {
+      throw unnamed(collection, "its memberships, by its own key (member)");
+    }
+  }
   const reach = await reachOf(actor, ctx);
   if (collection === "invitation") {
     const managed = { space: { $in: where(reach, "manage") } };
@@ -86,8 +105,9 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
     const by = access === "read" && actor.for ? await reachOf(actor.for as Actor, ctx) : reach;
     const spaces = where(by, access === "read" ? "read" : "manage");
     if (collection === "space") return { _id: { $in: spaces } };
-    // Where one is a member, asked by its own key: a contact finds its chats so.
-    if (access === "read" && filter?.member === memberKey(actor)) {
+    // Where a contact is a member, asked by its own key: it finds its chats so. (Anyone else
+    // reads memberships as far as they reach, as below: a key `within` a space, that space.)
+    if (access === "read" && actor.kind === "contact" && filter?.member === memberKey(actor)) {
       return { member: memberKey(actor) };
     }
     // Who a document of a space is shared with on its own (a contact, in a chat), asked by its key.
@@ -117,15 +137,17 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
   const wholes = part ? held(reach, verb, part) : [];
   // A contact's own read from its browser names what of its own it reads: documents it holds, or
   // its chats' parts. Anything wider would run again on every change to the collection.
-  if (direct && actor.kind === "contact") {
+  if (mineOnly) {
+    // So many at most (a name said again counts again): what's watched is matched against
+    // every change it might see.
     const mine = (ids: string[] | undefined, of: [string, string][]) =>
-      !!ids?.length && ids.every((id) => of.some(([held]) => held === id));
+      !!ids?.length && ids.length <= NAMED &&
+      [...new Set(ids)].every((id) => of.some(([held]) => held === id));
     if (!mine(idsIn(filter?._id), docs) && !(part && mine(idsIn(filter?.[part]), wholes))) {
-      throw failure(
-        "forbidden",
-        `A contact reads "${collection}" naming what of its own it reads: ` +
-          (part ? `a ${part} of its own (${part})` : "a document of its own (_id)"),
-        { public: true },
+      throw unnamed(
+        collection,
+        `${part ? `a ${part} of its own (${part})` : "a document of its own (_id)"}, ` +
+          `${NAMED} at most`,
       );
     }
   }

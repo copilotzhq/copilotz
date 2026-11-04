@@ -12,7 +12,12 @@
  * address), and an HMAC of all of it. From it, through HMACs with the same
  * key, come the contact it is (`c-…`) and the contact's chat (`web-…`), the
  * same for as long as the secret lasts. A secret signed with the app's
- * previous secret (`links.previous`) is good too, and is the contact it was.
+ * previous secret (`links.previous`) is good too, and is the contact it was:
+ * that's for a secret changed on schedule. A secret that leaked is never
+ * given as `previous` (whoever has it could make any visitor): it goes at
+ * once, and every visitor it signed is a newcomer. One made later than now
+ * (past a few minutes of clocks' skew) is nobody's: no secret lasts longer
+ * than its line says from when it was made.
  */
 import { keyOf } from "../../../../runtime/mod.ts";
 
@@ -50,6 +55,8 @@ export type Keyring = { secrets: string[]; org?: string };
 export type Visit = { line: string; id: string; issued: number; tags: string[]; secret: string };
 
 const TAG = /^\d{1,2}-[0-9a-f]{16}$/;
+/** How far ahead of this machine's clock a secret's making may be (another's clock): 5 minutes. */
+const SKEW = 5 * 60_000;
 const SHAPE =
   /^vis_([\w-]{1,60})\.([A-Za-z0-9_-]{22})\.([0-9a-z]{1,12})\.(-|\d{1,2}-[0-9a-f]{16}(?:~\d{1,2}-[0-9a-f]{16}){0,3})\.([0-9a-f]{32})$/;
 
@@ -83,6 +90,7 @@ export async function visitOf(ring: Keyring, secret: unknown): Promise<Visit | u
   const tags = tagged === "-" ? [] : tagged.split("~");
   if (tags.some((tag) => !TAG.test(tag))) return undefined;
   const visit = { line, id, issued: parseInt(issued, 36), tags };
+  if (visit.issued > Date.now() + SKEW) return undefined;
   for (const key of ring.secrets) {
     if (same(said, await signed(ring, key, visit))) return { ...visit, secret: key };
   }

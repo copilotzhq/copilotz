@@ -25,6 +25,14 @@ type Draft = { _id: string; note: string; text: string };
 type Board = { notes: unknown[]; drafts: string[]; add(text: string): Promise<unknown> };
 
 const runs: Record<string, number> = {};
+/** How many times a filter's `$or` was looked into: each time one is matched against a document. */
+let looked = 0;
+const lookedInto = new Proxy([{}], {
+  get(target, key, receiver) {
+    if (typeof key === "string" && /^\d+$/.test(key)) looked++;
+    return Reflect.get(target, key, receiver);
+  },
+});
 const ran = (kind: string) => runs[kind] = (runs[kind] ?? 0) + 1;
 const count = (kind: string) => runs[kind] ?? 0;
 
@@ -45,6 +53,9 @@ const plugin = definePlugin({
     like: defineCollection({
       schema: { type: "object", properties: { note: text }, required: ["note"] },
     }),
+    tagged: defineCollection({
+      schema: { type: "object", properties: { tags: { type: "array", items: text } } },
+    }),
     // What someone is typing: only live, never kept.
     draft: defineCollection({
       durable: false,
@@ -59,6 +70,10 @@ const plugin = definePlugin({
           ...(input.id ? { _id: input.id } : {}),
           text: input.text,
         }),
+    }),
+    "tagged.add": defineAction({
+      input: { type: "object", properties: { tags: { type: "array", items: text } } },
+      run: (ctx, input) => ctx.db.collection("tagged").insertOne({ tags: input.tags ?? [] }),
     }),
     "like.add": defineAction({
       input: { type: "object", properties: { note: text }, required: ["note"] },
@@ -106,6 +121,11 @@ const plugin = definePlugin({
         const likes = ctx.db.collection("like").countDocuments({ note: n._id });
         return `${n.text} (${likes.value ?? 0})`;
       },
+    },
+    // How many documents of a collection match, the filter's `$or` looked into each time.
+    matching: {
+      test: (asked: { c: string; f: Record<string, unknown> }, ctx: ViewContext) =>
+        (ctx.db.collection(asked.c).find({ $or: lookedInto, ...asked.f }).value ?? []).length,
     },
     // The drafts alone; the notes alone, slowly.
     drafts: {
@@ -302,3 +322,38 @@ each("closed, an observation runs no more", async (rt) => {
   await settle();
   assertEquals([count("board"), count("note:a"), count("note:b")], [boards, notes, 0]);
 });
+
+each(
+  "a read naming what it reads (a field equal to strings) is matched only against changes to those",
+  async (rt) => {
+    const likes = rt.observe<number>("test", "matching", { c: "like", f: { note: "a" } });
+    const either = rt.observe<number>("test", "matching", {
+      c: "like",
+      f: { note: { $in: ["b", "c"] } },
+    });
+    const tagged = rt.observe<number>("test", "matching", { c: "tagged", f: { tags: "x" } });
+    assertEquals([shown(await likes.ready), shown(await either.ready), shown(await tagged.ready)], [
+      0,
+      0,
+      0,
+    ]);
+    await rt.idle();
+    looked = 0;
+    // Changes elsewhere: nothing of these reads is looked into (before: each, every change).
+    for (let i = 0; i < 10; i++) await rt.call("like.add", { note: `other-${i}` });
+    await rt.call("tagged.add", { tags: ["y", "z"] });
+    await rt.idle();
+    assertEquals(looked, 0);
+    // What each names: it shows, an array holding the value too.
+    await rt.call("like.add", { note: "a" });
+    await rt.call("like.add", { note: "c" });
+    await rt.call("tagged.add", { tags: ["y", "x"] });
+    await until(likes, (n) => n === 1);
+    await until(either, (n) => n === 1);
+    await until(tagged, (n) => n === 1);
+    assert(looked > 0);
+    likes.close();
+    either.close();
+    tagged.close();
+  },
+);

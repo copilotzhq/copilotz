@@ -9,6 +9,13 @@ export {
   type Transport,
 } from "./owner.ts";
 export { createExecutor, type Executor } from "./executor.ts";
+export {
+  type BrowserLimits,
+  CONTACT_READ,
+  type ContactsPool,
+  contactsPool,
+  LISTENER,
+} from "./browsers.ts";
 export type { Observation, Observed, ObserveOptions, Output } from "./observe.ts";
 export type {
   Collection,

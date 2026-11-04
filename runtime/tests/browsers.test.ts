@@ -8,7 +8,16 @@
  */
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { type Actor, createRuntime, definePlugin } from "../mod.ts";
-import { BROWSER, type BrowserLimits, CALL, createBrowsers, READ, UNWATCH } from "../browsers.ts";
+import {
+  BROWSER,
+  type BrowserLimits,
+  CALL,
+  contactsPool,
+  createBrowsers,
+  LISTENER,
+  READ,
+  UNWATCH,
+} from "../browsers.ts";
 import { failure } from "../errors.ts";
 import { connect } from "../client.ts";
 import { decode, encode } from "../wire.ts";
@@ -20,6 +29,17 @@ const stream = (bytes: Uint8Array) =>
   new ReadableStream<Uint8Array>({
     start: (c) => (c.enqueue(bytes), c.close()),
   });
+
+type Browsers = ReturnType<typeof createBrowsers>;
+
+/** A browser let in on `via` (its place taken, as at Welcome), then ready. */
+const connected = (browsers: Browsers, workerId: string, actor: Actor, via: string) => {
+  browsers.take(workerId, via, browsers.config(actor, browsers.ends()));
+  browsers.ready(workerId, via);
+};
+/** Whether a browser may come in as `actor` on `workerId` now (`room`), else its refusal. */
+const room = (browsers: Browsers, actor: Actor, workerId: string) =>
+  browsers.room(actor, workerId, browsers.ends());
 
 test("a browser back on a new connection keeps it when the old one is noticed gone", async () => {
   const browsers = createBrowsers({
@@ -34,7 +54,7 @@ test("a browser back on a new connection keeps it when the old one is noticed go
     emit: () => Promise.resolve(),
     dispatch: () => new Promise(() => {}),
   });
-  const ana = browsers.config({ kind: "person", id: "ana" });
+  const ana: Actor = { kind: "person", id: "ana" };
   /** Whether the browser's calls are taken: its connection is open. */
   const open = async () => {
     const run = browsers.admit({
@@ -46,10 +66,10 @@ test("a browser back on a new connection keeps it when the old one is noticed go
     );
     return !answer.error;
   };
-  browsers.ready("w1", ana, "first");
+  connected(browsers, "w1", ana, "first");
   assertEquals(await open(), true);
   // Back on a new connection; then the first one is noticed gone.
-  browsers.ready("w1", ana, "second");
+  connected(browsers, "w1", ana, "second");
   browsers.gone("w1", "first");
   assertEquals(await open(), true);
   // The one it's on going closes it.
@@ -99,7 +119,7 @@ const reading = (
 
 test("a connection watches so many reads; past them one is refused, and the others keep working", async () => {
   const { browsers, ask, read } = reading({ watches: 3 });
-  browsers.ready("w1", browsers.config(ana), "c1");
+  connected(browsers, "w1", ana, "c1");
   const codes = (answers: unknown) =>
     (answers as { key: string; error?: { code: string } }[]).map((a) => a.error?.code ?? a.key);
   assertEquals(codes(await ask("w1", READ, { reads: ["a", "b", "c", "d"].map(read) })), [
@@ -114,36 +134,37 @@ test("a connection watches so many reads; past them one is refused, and the othe
   await ask("w1", UNWATCH, { keys: ["b"] });
   assertEquals(codes(await ask("w1", READ, { reads: [read("e")] })), ["e"]);
   // Another connection's are its own.
-  browsers.ready("w2", browsers.config(ana), "c2");
+  connected(browsers, "w2", ana, "c2");
   assertEquals(codes(await ask("w2", READ, { reads: ["a", "b", "c"].map(read) })), ["a", "b", "c"]);
   browsers.close();
 });
 
 test("an actor has so many connections; one back on a new connection is the same", () => {
   const { browsers } = reading({ sockets: 2 });
-  browsers.ready("w1", browsers.config(ana), "c1");
-  browsers.ready("w2", browsers.config(ana), "c2");
-  const refused = assertThrows(() => browsers.room(ana, "w3")) as { code?: string };
+  connected(browsers, "w1", ana, "c1");
+  connected(browsers, "w2", ana, "c2");
+  const refused = assertThrows(() => room(browsers, ana, "w3")) as { code?: string };
   assertEquals(refused.code, "too_many");
   // Back on a new connection, a browser is the one it was; someone else is their own.
-  browsers.room(ana, "w1");
-  browsers.room(bob, "w9");
+  room(browsers, ana, "w1");
+  room(browsers, bob, "w9");
   // One going makes room.
   browsers.gone("w1", "c1");
-  browsers.room(ana, "w3");
+  room(browsers, ana, "w3");
   browsers.close();
 });
 
 test("an actor's resume credentials: so many, the oldest dropped; all forgotten on close", () => {
   const { browsers } = reading({ resumes: 2 });
-  const secret = (actor: Actor) => browsers.resume(actor).credential.capability;
+  const secret = (actor: Actor) => browsers.resume(actor, "w1").credential.capability;
   const [first, second, third] = [secret(ana), secret(ana), secret(ana)];
   const theirs = secret(bob);
-  assertEquals(browsers.resumed(first), undefined);
-  assertEquals([browsers.resumed(second), browsers.resumed(third)], [ana, ana]);
-  assertEquals(browsers.resumed(theirs), bob);
+  assertEquals(browsers.resumed(first, "w1"), undefined);
+  assertEquals([browsers.resumed(second, "w1"), browsers.resumed(third, "w1")], [ana, ana]);
+  assertEquals(browsers.resumed(theirs, "w1"), bob);
+  const later = secret(ana);
   browsers.close();
-  assertEquals(browsers.resumed(third), undefined);
+  assertEquals(browsers.resumed(later, "w1"), undefined);
 });
 
 test("the owner refuses an actor's seventeenth connection, and takes one when another goes", async () => {
@@ -206,19 +227,19 @@ const NEAR = "56-00000000000000aa";
 test("a contact holds two connections, 32 reads on each; a person as many as ever", async () => {
   const { browsers, ask, read } = reading({});
   const carla = visitor("carla", [HOME, NEAR]);
-  browsers.ready("w1", browsers.config(carla), "c1");
-  browsers.ready("w2", browsers.config(carla), "c2");
+  connected(browsers, "w1", carla, "c1");
+  connected(browsers, "w2", carla, "c2");
   assertEquals(
-    (assertThrows(() => browsers.room(carla, "w3")) as { code?: string }).code,
+    (assertThrows(() => room(browsers, carla, "w3")) as { code?: string }).code,
     "too_many",
   );
   const reads = Array.from({ length: 33 }, (_, i) => read(`r${i}`));
   const answers = await ask("w1", READ, { reads }) as { error?: { code: string } }[];
   assertEquals(answers.filter((a) => !a.error).length, 32);
   assertEquals(answers.at(-1)!.error!.code, "too_many");
-  for (let i = 0; i < 16; i++) browsers.ready(`p${i}`, browsers.config(ana), `pc${i}`);
+  for (let i = 0; i < 16; i++) connected(browsers, `p${i}`, ana, `pc${i}`);
   assertEquals(
-    (assertThrows(() => browsers.room(ana, "p16")) as { code?: string }).code,
+    (assertThrows(() => room(browsers, ana, "p16")) as { code?: string }).code,
     "too_many",
   );
   browsers.close();
@@ -227,34 +248,34 @@ test("a contact holds two connections, 32 reads on each; a person as many as eve
 test("contacts together: so many from a network (as many times as it counts), on a line, in all; people apart", () => {
   const { browsers } = reading({ network: 2, line: 6, contacts: 8 });
   const full = (actor: Actor, workerId: string) =>
-    (assertThrows(() => browsers.room(actor, workerId)) as Error).message;
+    (assertThrows(() => room(browsers, actor, workerId)) as Error).message;
   // Two from one /64; its /56 counts four times that.
-  browsers.ready("a", browsers.config(visitor("a", [HOME, NEAR])), "a");
-  browsers.ready("b", browsers.config(visitor("b", [HOME, NEAR])), "b");
+  connected(browsers, "a", visitor("a", [HOME, NEAR]), "a");
+  connected(browsers, "b", visitor("b", [HOME, NEAR]), "b");
   assertEquals(
     full(visitor("c", [HOME, NEAR]), "c"),
     "Too many connections from here: close a tab, or try again later",
   );
   const nearby = (n: number) => visitor(`n${n}`, [`64-00000000000${n}bbbb`, NEAR]);
   for (let n = 0; n < 4; n++) {
-    browsers.room(nearby(n), `n${n}`);
-    browsers.ready(`n${n}`, browsers.config(nearby(n)), `n${n}`);
+    room(browsers, nearby(n), `n${n}`);
+    connected(browsers, `n${n}`, nearby(n), `n${n}`);
   }
   // The line's six: anyone else on it waits; on another line, not.
   const elsewhere = visitor("e", ["64-00000000000ecccc"]);
   assertEquals(full(elsewhere, "e"), "This chat is busy right now: try again in a few minutes");
-  browsers.room(visitor("o", ["64-00000000000ecccc"], "other"), "o");
-  browsers.ready("o", browsers.config(visitor("o", ["64-00000000000ecccc"], "other")), "o");
-  browsers.ready("o2", browsers.config(visitor("o2", ["64-00000000000ecccd"], "other")), "o2");
+  room(browsers, visitor("o", ["64-00000000000ecccc"], "other"), "o");
+  connected(browsers, "o", visitor("o", ["64-00000000000ecccc"], "other"), "o");
+  connected(browsers, "o2", visitor("o2", ["64-00000000000ecccd"], "other"), "o2");
   // Eight in all: a contact anywhere waits, a person never.
   assertEquals(
     full(visitor("x", ["64-00000000000edddd"], "third"), "x"),
     "This chat is busy right now: try again in a few minutes",
   );
-  browsers.room(ana, "p1");
+  room(browsers, ana, "p1");
   // One going makes room.
   browsers.gone("a", "a");
-  browsers.room(visitor("x", ["64-00000000000edddd"], "third"), "x");
+  room(browsers, visitor("x", ["64-00000000000edddd"], "third"), "x");
   browsers.close();
 });
 
@@ -274,8 +295,8 @@ test("a contact reads directly only with find, findOne or count, as the rules le
       ),
   });
   const carla = visitor("carla", [HOME]);
-  browsers.ready("w1", browsers.config(carla), "c1");
-  browsers.ready("p1", browsers.config(ana), "pc1");
+  connected(browsers, "w1", carla, "c1");
+  connected(browsers, "p1", ana, "pc1");
   const op = (o: Record<string, unknown>) => ({
     key: JSON.stringify(o),
     read: { op: { collection: "live", ...o } },
@@ -314,14 +335,89 @@ test("a contact reads directly only with find, findOne or count, as the rules le
 
 test("an actor's browsers ended: their connections drained, their way back gone", () => {
   const { browsers } = reading({});
-  browsers.ready("w1", browsers.config(ana), "c1");
-  browsers.ready("w2", browsers.config(ana), "c2");
-  browsers.ready("w3", browsers.config(bob), "c3");
-  const back = browsers.resume(ana).credential.capability;
+  connected(browsers, "w1", ana, "c1");
+  connected(browsers, "w2", ana, "c2");
+  connected(browsers, "w3", bob, "c3");
+  const back = browsers.resume(ana, "w1").credential.capability;
   const drained: string[] = [];
   assertEquals(browsers.end(ana, (workerId) => drained.push(workerId)), 2);
   assertEquals(drained.sort(), ["w1", "w2"]);
-  assertEquals(browsers.resumed(back), undefined);
+  assertEquals(browsers.resumed(back, "w1"), undefined);
   assertEquals(browsers.count(), 1);
   browsers.close();
+});
+
+test("a connection counts from the moment it's let in, ready or not", () => {
+  const { browsers } = reading({});
+  const carla = visitor("carla", [HOME]);
+  // Two let in (their places taken at Welcome), neither ready yet: a third browser waits.
+  browsers.take("w1", "c1", browsers.config(carla, browsers.ends()));
+  browsers.take("w2", "c2", browsers.config(carla, browsers.ends()));
+  assertEquals(browsers.count(), 0);
+  assertThrows(() => room(browsers, carla, "w3"));
+  assertThrows(() => browsers.take("w3", "c3", browsers.config(carla, browsers.ends())));
+  // One never ready goes (its socket closed, Oxian's ready timeout): its place is free.
+  browsers.gone("w2", "c2");
+  browsers.take("w3", "c3", browsers.config(carla, browsers.ends()));
+  browsers.close();
+});
+
+test("contacts take 300 connections on a line and 400 in all, well under what a listener holds; people find room", () => {
+  const { browsers } = reading({});
+  const on = (line: string, n: number) => visitor(`${line}${n}`, [`64-${line}${n}`], line);
+  for (let n = 0; n < 300; n++) connected(browsers, `s${n}`, on("site", n), `s${n}`);
+  assertEquals(
+    (assertThrows(() => room(browsers, on("site", 300), "s300")) as Error).message,
+    "This chat is busy right now: try again in a few minutes",
+  );
+  for (let n = 0; n < 100; n++) connected(browsers, `o${n}`, on("other", n), `o${n}`);
+  assertThrows(() => room(browsers, on("third", 0), "t0"));
+  room(browsers, ana, "p1");
+  assert(LISTENER - 400 >= 600);
+  browsers.close();
+});
+
+test("runtimes on one listener count their contacts together, with one pool", () => {
+  const pool = contactsPool(3);
+  const one = reading({ pool }).browsers;
+  const two = reading({ pool }).browsers;
+  connected(one, "a", visitor("a", ["64-a"]), "a");
+  connected(one, "b", visitor("b", ["64-b"]), "b");
+  connected(two, "c", visitor("c", ["64-c"]), "c");
+  assertThrows(() => room(two, visitor("d", ["64-d"]), "d"));
+  assertThrows(() => room(one, visitor("d", ["64-d"]), "d"));
+  // People never count in it.
+  room(two, ana, "p");
+  one.gone("a", "a");
+  connected(two, "d", visitor("d", ["64-d"]), "d");
+  // A runtime closing (an org nobody uses) gives back its places.
+  one.close();
+  assertEquals(pool.held.size, 2);
+  two.close();
+  assertEquals(pool.held.size, 0);
+});
+
+test("an actor ended: a connection let in before is never ready, one let in after is", () => {
+  const { browsers } = reading({});
+  const before = browsers.ends();
+  browsers.take("w1", "c1", browsers.config(ana, before));
+  browsers.end(ana, () => {});
+  assertEquals(
+    (assertThrows(() => browsers.ready("w1", "c1")) as { code?: string }).code,
+    "forbidden",
+  );
+  // Let in before the end, its place taken after: refused too.
+  assertThrows(() => browsers.take("w2", "c2", browsers.config(ana, before)));
+  // Back with a new ticket after: in.
+  connected(browsers, "w3", ana, "c3");
+  assertEquals(browsers.count(), 1);
+  browsers.close();
+});
+
+test("browser limits are checked as the runtime starts: contacts stay under a listener", async () => {
+  for (const browsers of [{ contacts: LISTENER }, { line: 0 }, { contact: { sockets: 1.5 } }]) {
+    await assertRejects(() =>
+      createRuntime({ store: memoryStore(), plugins: [definePlugin({ name: "x" })], browsers })
+    );
+  }
 });

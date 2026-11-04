@@ -2,7 +2,7 @@
 import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
 import { calledBy, type Endpoint, type Usage } from "./provider.ts";
 import { adapterFor, type ModelInfo, type ModelRef, resolve, type Resolved } from "./choice.ts";
-import { used } from "./use.ts";
+import { mayUse, used } from "./use.ts";
 import { measure } from "./telemetry.ts";
 
 /** What a transcription model choice may set, next to `model`. */
@@ -57,6 +57,12 @@ export async function transcribe(
 ): Promise<Transcript> {
   const choices = transcribers(ctx, request.model);
   for (const [i, m] of choices.entries()) {
+    // Whoever listens to model use may refuse it first (a web line's budget, spent): for good.
+    await mayUse(ctx, {
+      meter: "transcription",
+      subject: m.id,
+      ...(request.tags ? { tags: request.tags } : {}),
+    });
     const call = measure(ctx.metrics, m, "transcription");
     try {
       const { options } = m.settings as TranscriptionSettings;

@@ -14,7 +14,7 @@ import {
 import { filesFor } from "./files.ts";
 import { calledBy } from "./provider.ts";
 import { backoff, quietly, RETRY, SILENCE, transient, wait } from "./retry.ts";
-import { used } from "./use.ts";
+import { mayUse, used } from "./use.ts";
 import { measure } from "./telemetry.ts";
 import {
   EFFORTS,
@@ -152,8 +152,15 @@ async function keyed(ctx: Reach, m: Resolved): Promise<Resolved> {
  * trying again won't help.
  */
 async function mayRun(ctx: Reach, m: Resolved, request: Generate): Promise<void> {
+  if (m.tags?.paid) return;
+  // Whoever listens to model use may refuse it first (a web line's budget, spent).
+  await mayUse(ctx, {
+    meter: "llm",
+    subject: m.id,
+    ...(request.tags ? { tags: request.tags } : {}),
+  });
   const spending = ctx.resources.spending as { check?: string } | undefined;
-  if (!spending?.check || !ctx.as || m.tags?.paid) return;
+  if (!spending?.check || !ctx.as) return;
   const purpose = request.tags?.purpose;
   const verdict = await ctx.as().call<{ ok: boolean; why?: string; message?: string }>(
     spending.check,

@@ -96,6 +96,7 @@ const host = orgsHost({
       executors: 2,
       transports: given.transports,
       admit: given.admit,
+      browsers: given.browsers,
     }),
   upgrade: (runtime, request) => handler(runtime.hypervisor)(request),
   ...(operations ? { operations } : {}),

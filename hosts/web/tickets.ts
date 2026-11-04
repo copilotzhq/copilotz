@@ -7,7 +7,8 @@
  * tabs and reconnects that is: past it, `issue` refuses (a public `too_many`
  * failure, its `retryAfter` the seconds until the minute's out), and
  * `/connect` answers 429. Tickets past their minute are dropped as they pass
- * (see runtime/expiring.ts), never by looking through them all.
+ * (see runtime/expiring.ts), never by looking through them all. Signing out
+ * ends an actor's tickets not yet used (`end`).
  *
  * ```ts
  * const tickets = createTickets();
@@ -23,15 +24,23 @@ export type Tickets = {
   issue(actor: Actor): string;
   /** Who a ticket is for, once; undefined when it's unknown, used or old. */
   admit(ticket: string): Actor | undefined;
+  /**
+   * Their tickets not yet used are no one's (signed out): what was handed
+   * out before lets nobody in after.
+   */
+  end?(actor: Actor): void;
 };
 
 const MINUTE = 60_000;
 
 export function createTickets(options: { ms?: number; perMinute?: number } = {}): Tickets {
   const perMinute = options.perMinute ?? 30;
-  const issued = expiring<string, Actor>(options.ms ?? 60_000);
+  const ms = options.ms ?? 60_000;
+  const issued = expiring<string, Actor>(ms);
   /** Each actor's tickets this minute, and when its minute began. */
   const counted = expiring<string, { count: number; since: number }>(MINUTE);
+  /** Each actor's tickets handed out lately (some used, or past), to end them all at once. */
+  const theirs = expiring<string, string[]>(ms);
   return {
     issue(actor) {
       const who = `${actor.kind}:${actor.id}`;
@@ -50,12 +59,19 @@ export function createTickets(options: { ms?: number; perMinute?: number } = {})
       const bytes = crypto.getRandomValues(new Uint8Array(32));
       const ticket = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
       issued.set(ticket, actor);
+      const kept = (theirs.get(who) ?? []).filter((t) => issued.get(t));
+      theirs.set(who, [...kept, ticket]);
       return ticket;
     },
     admit(ticket) {
       const actor = issued.get(ticket);
       issued.delete(ticket);
       return actor;
+    },
+    end(actor) {
+      const who = `${actor.kind}:${actor.id}`;
+      for (const ticket of theirs.get(who) ?? []) issued.delete(ticket);
+      theirs.delete(who);
     },
   };
 }

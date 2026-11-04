@@ -147,18 +147,19 @@ async function keyed(ctx: Reach, m: Resolved): Promise<Resolved> {
 
 /**
  * Whether what's about to run may spend (the `spending` resource: whoever
- * keeps an org's limits). Not asked from a read, for a model the app doesn't
- * pay for (the org's own key, a person's subscription). Saying no is final:
+ * keeps an org's limits), which isn't asked for a model the app doesn't pay for
+ * (the org's own key, a person's subscription). Saying no is final:
  * trying again won't help.
  */
 async function mayRun(ctx: Reach, m: Resolved, request: Generate): Promise<void> {
-  if (m.tags?.paid) return;
-  // Whoever listens to model use may refuse it first (a web line's budget, spent).
+  // Whoever listens to model use may refuse it first (a web line's budget, spent): a model
+  // the app doesn't pay for too, since the line's budget counts a visitor's use of any.
   await mayUse(ctx, {
     meter: "llm",
     subject: m.id,
     ...(request.tags ? { tags: request.tags } : {}),
   });
+  if (m.tags?.paid) return;
   const spending = ctx.resources.spending as { check?: string } | undefined;
   if (!spending?.check || !ctx.as) return;
   const purpose = request.tags?.purpose;

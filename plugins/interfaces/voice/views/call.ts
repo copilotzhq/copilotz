@@ -34,7 +34,7 @@ export type Said = {
 export type Saying = {
   said: Said[];
   /** The turn writing now, and its words so far when they may be said (else none). */
-  live?: { turn: string; text: string };
+  live?: { turn: string; text: string; tools?: true };
   end?: { reason: string; after?: string };
 };
 
@@ -77,6 +77,10 @@ export const callView = (
         live: {
           turn: writing.turn,
           text: sayable(writing) ? say({ text: writing.text, from: writing.agent }) : "",
+          // Tools running before any answer (not those called beside one: `open`, nor ending the call).
+          ...(!writing.open && writing.calls?.some((c) => c.name !== "end_call")
+            ? { tools: true as const }
+            : {}),
         },
       }
       : {}),

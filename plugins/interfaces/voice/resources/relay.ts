@@ -183,6 +183,8 @@ export function talk(
   /** The turn of theirs writing now, turns whose words aren't said any more, and how much each said. */
   let working: string | undefined;
   const muted = new Set<string>();
+  /** Turns whose `waiting` phrase was said. */
+  const filled = new Set<string>();
   const spoken = new Map<string, number>();
   /** What's being said as it's written: its turn, the words sent, and, once cut, what was heard. */
   let current: { turn: string; sent: string; cut?: string } | undefined;
@@ -379,6 +381,14 @@ export function talk(
         current.sent = ready;
         if (left) speak(live.turn, left, false);
       }
+    }
+    // Tools run before any answer: the line's `waiting` phrase fills the silence, once per turn.
+    if (
+      line.waiting && live?.tools && working === live.turn && !ending && !muted.has(live.turn) &&
+      !spoken.has(live.turn) && !filled.has(live.turn)
+    ) {
+      filled.add(live.turn);
+      say(line.waiting, false);
     }
     if (end && !end.after && !waiting) hangUp(end.reason, false);
   }

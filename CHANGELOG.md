@@ -1,17 +1,4 @@
-## 1.0.0-rc.22 — 2026-11-04
-
-**A security release: upgrade now.** Before it, a Google sign-in wrote the new session's secret to
-the event log, and connecting a computer wrote the computer's secret (the first entry below). After
-upgrading, every deployment should:
-
-1. **End every session made before the upgrade:** delete the `credential` documents of
-   `kind: "session"`, so every signed-in person signs in again. Keys are unaffected.
-2. **Scrub the old events that hold these secrets**, from the store and from anything that copied it
-   (backups, exports, exporters): the `action.started` and `action.completed` events of
-   `google.sign-in`, `computer.code`, `computer.enrollment` and `computer.work`, and the
-   `action.started` events of `session.end`, `computer.admit`, `pool.admit` and `pool.serve`.
-3. **Reconnect computers whose log may have been read:** forget each one (`computer.forget`) and
-   connect it again with a new code. A computer's secret can't be rotated yet.
+## Unreleased
 
 - **One web host, its parts from the app's plugins.** `serve` (and `webServer` beneath it) is the
   host for every app: routes from `routes` resources, as before; the page and its code from `code`
@@ -207,6 +194,34 @@ upgrading, every deployment should:
     one before goes on as itself (the new system-only `mcp.conversation`; `mcp.call` takes the chat
     the route found, `thread`). **Breaking:** every MCP conversation from before is new once (no
     deployment uses the MCP interface yet).
+- **A tab comes back after a network flap.** A new connection on a worker id that already has two
+  closes the oldest instead of being refused (a Welcome lost on the way no longer locks the tab
+  out), and a client that was in once keeps re-enrolling, longer apart, when it's refused.
+- **A model the app doesn't pay for is checked against a web line's budget too** (`paid`-tagged ones
+  skipped `may`, so a visitor's tool loop could go on past a spent day).
+- **A web line's budget loses no charge under load:** `charge` is one atomic write (`$inc` the
+  spend, `$unset` the hold), and `hold` retries with jitter until a deadline instead of eight
+  immediate tries (no more false "busy"). One call costing more than the whole budget no longer
+  closes the line for 30 days: with nothing held, a message holds at most what's left.
+- **Voice: a line's `waiting` phrase** (`voice.lines.<name>.waiting`, none by default) is spoken
+  once when a turn starts running tools before any answer, so a caller doesn't hear silence. Never
+  for an answer without tools, nor for `end_call`.
+
+## 1.0.0-rc.22 — 2026-11-04
+
+**A security release: upgrade now.** Before it, a Google sign-in wrote the new session's secret to
+the event log, and connecting a computer wrote the computer's secret (the first entry below). After
+upgrading, every deployment should:
+
+1. **End every session made before the upgrade:** delete the `credential` documents of
+   `kind: "session"`, so every signed-in person signs in again. Keys are unaffected.
+2. **Scrub the old events that hold these secrets**, from the store and from anything that copied it
+   (backups, exports, exporters): the `action.started` and `action.completed` events of
+   `google.sign-in`, `computer.code`, `computer.enrollment` and `computer.work`, and the
+   `action.started` events of `session.end`, `computer.admit`, `pool.admit` and `pool.serve`.
+3. **Reconnect computers whose log may have been read:** forget each one (`computer.forget`) and
+   connect it again with a new code. A computer's secret can't be rotated yet.
+
 - **Security: a Google sign-in no longer writes the session's secret to the log.** `google.sign-in`
   was a recorded Action, so the event log kept its input, the Google ID token, and its result,
   `{ person, session }`, with the new session's secret in plain text. Anyone who could read the log

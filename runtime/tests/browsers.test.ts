@@ -362,6 +362,24 @@ test("a connection counts from the moment it's let in, ready or not", () => {
   browsers.close();
 });
 
+test("a third connection on a worker id closes the oldest instead of being refused", () => {
+  const { browsers } = reading({});
+  const carla = visitor("carla", [HOME]);
+  browsers.take("w1", "c1", browsers.config(carla, browsers.ends()));
+  browsers.take("w1", "c2", browsers.config(carla, browsers.ends()));
+  // Before: refused ("This tab is connecting already"), and a tab whose Welcome was lost stayed out.
+  room(browsers, carla, "w1");
+  browsers.take("w1", "c3", browsers.config(carla, browsers.ends()));
+  // The oldest is no longer let in: it is never ready. The other two are.
+  assertThrows(() => browsers.ready("w1", "c1"), Error, "Signed out");
+  browsers.ready("w1", "c3");
+  // Still two places at most for the visitor: a different tab can't be a third browser's room
+  // beyond its caps, and the pool holds two.
+  browsers.take("w1", "c4", browsers.config(carla, browsers.ends()));
+  assertThrows(() => browsers.ready("w1", "c2"), Error, "Signed out");
+  browsers.close();
+});
+
 test("contacts take 300 connections on a line and 400 in all, well under what a listener holds; people find room", () => {
   const { browsers } = reading({});
   const on = (line: string, n: number) => visitor(`${line}${n}`, [`64-${line}${n}`], line);

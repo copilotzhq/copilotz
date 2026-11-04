@@ -251,7 +251,7 @@ test("a resume credential works once, for the browser it was given to: one ticke
   });
 });
 
-test("one browser holds two connections at most while it comes back; a third waits", async () => {
+test("one browser holds two connections at most while it comes back; a third closes the oldest", async () => {
   await setup(async (server) => {
     const { ticket } = await arrive(server);
     const workers: Raw[] = [];
@@ -265,13 +265,129 @@ test("one browser holds two connections at most while it comes back; a third wai
       const second = raw(server, { kind: "resume", capability: credential }, "tab", held.promise);
       workers.push(second);
       credential = await second.welcomed;
-      // A third, the first two still there: refused (before: let in, as many as it liked).
+      // A third, the first two still there: let in, and the oldest closed (before: refused, so a
+      // tab whose Welcome was lost on a network flap stayed locked out). Still two at most.
       const third = raw(server, { kind: "resume", capability: credential }, "tab", held.promise);
       workers.push(third);
-      assertNotEquals(await settle(third.welcomed, 5_000), "ok");
+      assertEquals(await settle(third.welcomed, 5_000), "ok");
     } finally {
       held.resolve();
       await Promise.all(workers.map((w) => w.worker.stop().catch(() => {})));
+    }
+  });
+});
+
+/**
+ * A WebSocket whose network can fail: `kill()` tells the worker it closed (1006) while the real
+ * socket stays open and silent (half-open, as the server sees it); `dropWelcome` kills it as the
+ * Welcome arrives, before the worker sees it.
+ */
+class Flaky extends EventTarget {
+  real: WebSocket;
+  dead = false;
+  constructor(url: string, protocol: string | string[] | undefined, dropWelcome: boolean) {
+    super();
+    this.real = new WebSocket(url, protocol);
+    for (const type of ["open", "error", "close"]) {
+      this.real.addEventListener(type, (e) => {
+        if (this.dead) return;
+        const close = e as CloseEvent;
+        this.dispatchEvent(
+          type === "close"
+            ? new CloseEvent("close", { code: close.code, reason: close.reason })
+            : new Event(type),
+        );
+      });
+    }
+    this.real.addEventListener("message", (e) => {
+      if (this.dead) return;
+      if (typeof e.data === "string" && dropWelcome) {
+        try {
+          if (JSON.parse(e.data).type === "welcome") return this.kill();
+        } catch { /* not JSON */ }
+      }
+      this.dispatchEvent(new MessageEvent("message", { data: e.data }));
+    });
+  }
+  get readyState() {
+    return this.dead ? 3 : this.real.readyState;
+  }
+  get bufferedAmount() {
+    return this.real.bufferedAmount;
+  }
+  get protocol() {
+    return this.real.protocol;
+  }
+  get extensions() {
+    return this.real.extensions;
+  }
+  get url() {
+    return this.real.url;
+  }
+  get binaryType() {
+    return this.real.binaryType;
+  }
+  set binaryType(v: BinaryType) {
+    this.real.binaryType = v;
+  }
+  send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    if (!this.dead) this.real.send(data);
+  }
+  close(code?: number, reason?: string) {
+    if (!this.dead) this.real.close(code, reason);
+  }
+  kill() {
+    if (this.dead) return;
+    this.dead = true;
+    queueMicrotask(() =>
+      super.dispatchEvent(new CloseEvent("close", { code: 1006, reason: "", wasClean: false }))
+    );
+  }
+  override dispatchEvent(e: Event) {
+    return this.dead && e.type !== "close" ? false : super.dispatchEvent(e);
+  }
+}
+
+test("a tab comes back after a network flap whose reconnect's Welcome is lost", async () => {
+  await setup(async (server, _runtime, tickets) => {
+    const ana = { kind: "person" as const, id: "ana" };
+    const sockets: Flaky[] = [];
+    const client = connect({
+      transport: {
+        type: "websocket",
+        config: {
+          url: `ws://127.0.0.1:${server.port}${socket.config.path}`,
+          allowInsecureLoopback: true,
+          // The second socket (the reconnect) loses its Welcome: the network went as it came.
+          socket: (context: { url: string; protocol: string }) => {
+            const s = new Flaky(context.url, context.protocol, sockets.length === 1);
+            sockets.push(s);
+            return s;
+          },
+        },
+      } as never,
+      ticket: () => Promise.resolve(tickets.issue(ana)),
+      plugins: [],
+    });
+    try {
+      await client.ready;
+      // The network drops; the server isn't told (the first socket is half-open there).
+      sockets[0].kill();
+      // Before: the resume credential was spent unwelcomed, the third connection refused, and the
+      // client gave up: locked out for good. Now it re-enrols, and is back within seconds.
+      let back = "never";
+      for (let i = 0; i < 20 && back !== "ok"; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        back = await settle(client.call("space.create", { id: `s${i}`, name: "S" }), 2_000);
+      }
+      assertEquals(back, "ok");
+    } finally {
+      await client.close().catch(() => {});
+      for (const s of sockets) {
+        try {
+          s.real.close();
+        } catch { /* closed */ }
+      }
     }
   });
 });

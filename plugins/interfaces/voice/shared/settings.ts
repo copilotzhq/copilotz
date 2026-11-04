@@ -30,6 +30,11 @@ export type VoiceLine = {
   /** Lines said to callers, instead of the language's own (see `TEXTS`); `greeting: ""` says none. */
   texts?: Partial<Texts>;
   /**
+   * Said once when a turn starts running tools before any answer ("One moment, let me check"), so
+   * a caller doesn't hear silence meanwhile. None by default; never said for an answer without tools.
+   */
+  waiting?: string;
+  /**
    * Hours of quiet after which a caller's next call starts a new chat (`GAP`). Calling back goes
    * on in the same chat only when Twilio verified the number (STIR/SHAKEN), or with
    * `trustCallerId`: a number alone isn't proof of who's calling.

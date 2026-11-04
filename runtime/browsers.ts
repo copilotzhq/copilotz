@@ -298,11 +298,8 @@ export function createBrowsers(env: {
     const theirs = held.get(whoOf(actor));
     const same = theirs?.get(workerId);
     const most = own(actor).sockets;
-    if (same && same.size >= 2) {
-      return refusal("too_many", "This tab is connecting already: wait a moment", {
-        public: true,
-      });
-    }
+    // A tab already on two connections (one maybe half-open, after a network flap) isn't
+    // refused: `take` closes its oldest, and Oxian replaces the older at Ready anyway.
     if (!same && (theirs?.size ?? 0) >= most) {
       return refusal(
         "too_many",
@@ -325,8 +322,11 @@ export function createBrowsers(env: {
 
   /** A connection let in takes its place: as its actor's (its browser's), and in its pools. */
   const take = (place: Place) => {
-    places.set(place.via, place);
     const who = whoOf(place.actor);
+    // A tab on two connections already gives up its oldest (never ready after this: refused there).
+    const old = held.get(who)?.get(place.workerId);
+    while (old && old.size >= 2) release(old.values().next().value!);
+    places.set(place.via, place);
     if (!held.has(who)) held.set(who, new Map());
     const theirs = held.get(who)!;
     if (!theirs.has(place.workerId)) theirs.set(place.workerId, new Set());
@@ -538,8 +538,7 @@ export function createBrowsers(env: {
     }),
     /**
      * Refuses (thrown) a browser coming in as `actor` on `workerId` now: as
-     * many browsers as they may (`too_many`), or that tab on two connections
-     * already; a pool it's in full; or ended since it began coming in
+     * many browsers as they may (`too_many`), a pool it's in full; or ended since it began coming in
      * (`forbidden`). Only checks: `take` takes its place.
      */
     room: (actor: Actor, workerId: string, since: number) => {

@@ -7,7 +7,8 @@
  *   token, and the call must be an inbound one to the line's account. A
  *   caller the line's people blocked (`voice.block`) isn't taken. Then it's
  *   taken only within its caller's limits (`callerAtOnce`, 1; `callerPerDay`,
- *   10; hidden numbers are one caller), then the line's (`atOnce`, 2;
+ *   10; hidden numbers, together, their own: `hiddenAtOnce`, `hiddenPerDay`),
+ *   then the line's (`atOnce`, 2;
  *   `perDay`, 50 calls that went on in the last 24 hours); else Twilio is
  *   told to reject it as busy (a busy tone, and nothing is spent). Whether
  *   Twilio verified the number (`StirVerstat`) is noted on the call. A call
@@ -28,6 +29,7 @@ import type { VoiceCall } from "../collections/call.ts";
 import { HOOKS, type Line, lineOf } from "../shared/settings.ts";
 import { signed } from "../shared/signature.ts";
 import { blockedKey, callerKey, VERIFIED } from "../shared/caller.ts";
+import type { VoiceBlock } from "../collections/blocked.ts";
 
 /** A request as the web host hands it to a route's Action (hosts/web/routes.ts' `httpRequest`). */
 const httpRequest = {
@@ -105,6 +107,13 @@ const decoded = (part: string) => {
   }
 };
 
+/** Whether a caller is blocked on a line now (a block past its `until` is over). */
+async function blockedNow(ctx: Context, line: string, from: string, now: number) {
+  const block = await ctx.as().db.collection<VoiceBlock>("voice_blocked")
+    .findOne({ key: await blockedKey(line, from) });
+  return !!block && (!block.until || Date.parse(block.until) > now);
+}
+
 /**
  * A call coming in: taken unless its caller is blocked, and within its
  * caller's limits and then the line's, with a ticket for its socket; else
@@ -121,11 +130,7 @@ async function taken(ctx: Context, line: Line, id: string, form: URLSearchParams
   const from = form.get("From") ?? "";
   const caller = callerKey(from);
   const system = ctx.as();
-  if (
-    await system.db.collection("voice_blocked").findOne({ _id: await blockedKey(line.name, from) })
-  ) {
-    return BUSY;
-  }
+  if (await blockedNow(ctx, line.name, from, now)) return BUSY;
   // One transaction: the owner writes one at a time, so two calls can't both take the last place.
   const took = await system.transaction(async (tx) => {
     const calls = tx.db.collection<VoiceCall>("voice_call");
@@ -143,9 +148,12 @@ async function taken(ctx: Context, line: Line, id: string, form: URLSearchParams
     const holding = (c: VoiceCall) => c.state !== "over" && Date.parse(c.until) > now;
     const theirs = recent.filter((c) => callerKey(c.from) === caller);
     const { limits } = line;
+    // Hidden numbers, together, have an allowance of their own: one caller's would lock them all out.
+    const hidden = caller === "hidden";
     if (
-      theirs.filter(holding).length >= limits.callerAtOnce ||
-      theirs.filter((c) => c.started).length >= limits.callerPerDay ||
+      theirs.filter(holding).length >= (hidden ? limits.hiddenAtOnce : limits.callerAtOnce) ||
+      theirs.filter((c) => c.started).length >=
+        (hidden ? limits.hiddenPerDay : limits.callerPerDay) ||
       recent.filter(holding).length >= limits.atOnce ||
       recent.filter((c) => c.started).length >= limits.perDay
     ) return false;

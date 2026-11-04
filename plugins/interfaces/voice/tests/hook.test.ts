@@ -176,7 +176,7 @@ test("the line's limits: two calls at once, then so many a day; busy, nothing sp
   }, { line: { limits: { atOnce: 10, perDay: 2 } } });
 });
 
-test("a caller's own limits come first: one call at once, so many a day; hidden numbers are one", async () => {
+test("a caller's own limits come first: one call at once, so many a day", async () => {
   await setup(async (s) => {
     const ring = async (from: string) =>
       (await (await s.ring({ from })).text()).includes("ConversationRelay");
@@ -184,12 +184,6 @@ test("a caller's own limits come first: one call at once, so many a day; hidden 
       true,
       false,
       true,
-    ]);
-    // Withheld numbers can't be told apart: they're one caller, with or without the "+".
-    assertEquals([await ring("+266696687"), await ring("266696687"), await ring("anonymous")], [
-      true,
-      false,
-      false,
     ]);
   }, { line: { limits: { atOnce: 10 } } });
 
@@ -206,19 +200,49 @@ test("a caller's own limits come first: one call at once, so many a day; hidden 
   }, { line: { limits: { callerPerDay: 2 } } });
 });
 
-test("a blocked caller is rejected as busy; only the line's managers block, and lift it", async () => {
+test("hidden numbers, together, have an allowance of their own: one caller's would lock them out", async () => {
+  // By default: the line's calls at once, and half its day.
+  await setup(async (s) => {
+    const ring = async (from: string) =>
+      (await (await s.ring({ from })).text()).includes("ConversationRelay");
+    // Two at once, not one caller's one: with or without "+", and no number at all.
+    assertEquals([await ring("+266696687"), await ring("anonymous"), await ring("7378742833")], [
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  await setup(async (s) => {
+    for (const from of ["+266696687", "anonymous", "+7378742833"]) {
+      (await s.call({ from })).hangUp();
+      await until(async () =>
+        (await s.docs<VoiceCall>("voice_call")).every((c) => c.state === "over")
+      );
+    }
+    const ring = async (from: string) =>
+      (await (await s.ring({ from })).text()).includes("ConversationRelay");
+    // Half the line's 6 a day went to hidden numbers: the next one waits; a known number calls.
+    assertEquals([await ring("+86282452253"), await ring(CARLA)], [false, true]);
+  }, { line: { limits: { atOnce: 10, perDay: 6 } } });
+});
+
+test("a blocked caller is rejected as busy, until a manager lifts the block, or it runs out", async () => {
   await setup(async (s) => {
     const call = await s.call({ from: CARLA });
     call.hangUp();
     const [c] = await s.docs<VoiceCall>("voice_call");
-    const block = (blocked: boolean, person: string) =>
-      s.runtime.call("voice.block", { thread: c.thread, blocked }, {
-        actor: { kind: "person", id: person },
-      });
+    const as = (person: string) => ({ actor: { kind: "person", id: person } });
     await s.runtime.call("test.member", { person: "eve", role: "editor" });
-    await assertRejects(() => block(true, "eve"), Error, "manage");
+    await assertRejects(
+      () => s.runtime.call("voice.block", { thread: c.thread }, as("eve")),
+      Error,
+      "manage",
+    );
     await s.runtime.call("test.member", { person: "ana", role: "manager" });
-    await block(true, "ana");
+    const { block } = await s.runtime.call<{ block: string }>("voice.block", {
+      thread: c.thread,
+    }, as("ana"));
     const busy = '<Response><Reject reason="busy"/></Response>';
     const rang = async () =>
       (await (await s.ring({ from: CARLA })).text()).replace(/^<\?xml[^>]*>/, "");
@@ -227,11 +251,35 @@ test("a blocked caller is rejected as busy; only the line's managers block, and 
     await s.runtime.call("test.erase", { contact: c.contact });
     await s.runtime.idle();
     assertEquals(await rang(), busy);
-    const [blockedRow] = await s.docs<{ _id: string }>("voice_blocked");
-    assert(!blockedRow._id.includes(CARLA.slice(1)));
-    // Lifted (from a newer call of theirs: the erased one doesn't know the number any more).
-    await assertRejects(() => block(false, "ana"), Error, "isn't known");
+    // The space's members see the block (its chat), never the number's hash.
+    const [row] = await s.docs<{ _id: string; key: string; thread: string }>("voice_blocked");
+    assertEquals([row._id, row.thread], [block, c.thread]);
+    assert(!row.key.includes(CARLA.slice(1)));
+    const seen = await s.docs<Record<string, unknown>>("voice_blocked", as("eve").actor);
+    assertEquals(seen.map((b) => [b._id, b.thread, "key" in b]), [[block, c.thread, false]]);
+    // Lifted by its id, though the call's record no longer knows the number: by a manager only.
+    await assertRejects(
+      () => s.runtime.call("voice.unblock", { block }, as("eve")),
+      Error,
+      "manage",
+    );
+    await s.runtime.call("voice.unblock", { block }, as("ana"));
+    assert((await rang()).includes("ConversationRelay"));
   });
+
+  await setup(async (s) => {
+    (await s.call({ from: CARLA })).hangUp();
+    const [c] = await s.docs<VoiceCall>("voice_call");
+    await s.runtime.call("test.member", { person: "ana", role: "manager" });
+    const { block } = await s.runtime.call<{ block: string }>("voice.block", {
+      thread: c.thread,
+      days: 1,
+    }, { actor: { kind: "person", id: "ana" } });
+    const rang = async () => (await (await s.ring({ from: CARLA })).text()).includes("Reject");
+    assertEquals(await rang(), true);
+    await s.runtime.call("test.expire", { block });
+    assertEquals(await rang(), false);
+  }, { line: { limits: { callerAtOnce: 5 } } });
 });
 
 test("Twilio's verification of the number is noted on the call", async () => {
@@ -282,7 +330,7 @@ test("a call's relay is over: Twilio says why, and is told to hang up", async ()
 });
 
 test("a line's settings are checked at start", async () => {
-  const start = (line: Record<string, unknown>) =>
+  const start = (line: Record<string, unknown>, keep?: number) =>
     createRuntime({
       store: memoryStore(),
       plugins: [
@@ -297,6 +345,7 @@ test("a line's settings are checked at start", async () => {
               lines: {
                 help: { in: "line", account: ACCOUNT, token: TOKEN, origin: ORIGIN, ...line },
               },
+              ...(keep !== undefined ? { keep } : {}),
             },
           },
         }),
@@ -314,7 +363,10 @@ test("a line's settings are checked at start", async () => {
   ) {
     await assertRejects(() => start(line), Error, said);
   }
+  // Calls' records are kept a day at least: what's going on is never so old.
+  await assertRejects(() => start({}, 0.5), Error, "voice.keep is days, 1 or more");
   await (await start({})).close();
+  await (await start({}, 1)).close();
 });
 
 // The caller's number never shows in what Twilio is told.

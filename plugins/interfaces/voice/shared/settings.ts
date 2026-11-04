@@ -53,9 +53,15 @@ export type Limits = {
   /** Calls at once, and calls that went on in any 24 hours, on the line. */
   atOnce: number;
   perDay: number;
-  /** The same, from one caller (by number; hidden numbers count as one caller), checked first. */
+  /** The same, from one caller (by number), checked first. */
   callerAtOnce: number;
   callerPerDay: number;
+  /**
+   * The same, for all callers whose number is hidden, who can't be told apart: their own
+   * allowance, instead of one caller's (by default the line's `atOnce`, and half its `perDay`).
+   */
+  hiddenAtOnce: number;
+  hiddenPerDay: number;
   /** Seconds for an answer, of silence, and for a whole call. */
   turn: number;
   idle: number;
@@ -67,14 +73,17 @@ export type Limits = {
 
 /**
  * 0.x's limits, kept (2 at once, 50 a day, 25 s an answer, 90 s of silence, 10 minutes, 30
- * things said a call), with a caller's own: 1 call at once, 10 a day; and 1,200 characters an
- * answer (about 80 seconds said).
+ * things said a call), with a caller's own: 1 call at once, 10 a day; hidden numbers', together:
+ * the line's at once, half its day (here 2 and 25); and 1,200 characters an answer (about 80
+ * seconds said).
  */
 export const LIMITS: Limits = {
   atOnce: 2,
   perDay: 50,
   callerAtOnce: 1,
   callerPerDay: 10,
+  hiddenAtOnce: 2,
+  hiddenPerDay: 25,
   turn: 25,
   idle: 90,
   call: 600,
@@ -107,7 +116,10 @@ export const TEXTS: Record<string, Texts> = {
 
 export type VoiceSettings = {
   lines?: Record<string, VoiceLine>;
-  /** Days calls' records are kept (`KEEP`, 30); then they go, with the number they had. */
+  /**
+   * Days calls' records are kept, once they're over (`KEEP`, 30; 1 at least); then they go, with
+   * the number they had.
+   */
   keep?: number;
 };
 
@@ -164,7 +176,7 @@ export function lineOf(ctx: { resources: Resources }, name: string): Line | unde
     name,
     language,
     texts: { ...own, ...line.texts },
-    limits: { ...LIMITS, ...line.limits },
+    limits: limitsOf(line.limits),
     gap: line.gap ?? GAP,
     urls: {
       hook,
@@ -173,6 +185,16 @@ export function lineOf(ctx: { resources: Resources }, name: string): Line | unde
       }/relay`,
       over: `${hook}/over`,
     },
+  };
+}
+
+/** A line's limits, the defaults filled in: hidden numbers' from the line's own. */
+function limitsOf(given: Partial<Limits> = {}): Limits {
+  const merged = { ...LIMITS, ...given };
+  return {
+    ...merged,
+    hiddenAtOnce: given.hiddenAtOnce ?? merged.atOnce,
+    hiddenPerDay: given.hiddenPerDay ?? Math.floor(merged.perDay / 2),
   };
 }
 

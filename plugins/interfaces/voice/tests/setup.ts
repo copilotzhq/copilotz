@@ -4,7 +4,13 @@
  * words, a fake Twilio (its webhook requests, signed, and a socket that
  * plays ConversationRelay's part) and a way to wait for what follows.
  */
-import { createRuntime, definePlugin, type Plugin, type Runtime } from "../../../../runtime/mod.ts";
+import {
+  type Actor,
+  createRuntime,
+  definePlugin,
+  type Plugin,
+  type Runtime,
+} from "../../../../runtime/mod.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, tool } from "../../../agents/chat/mod.ts";
@@ -150,8 +156,8 @@ export type Setup = {
   call(
     options?: { from?: string; call?: string; form?: Record<string, string> },
   ): Promise<Relay & { id: string }>;
-  /** What's in a collection, as the system reads it. */
-  docs<T = Record<string, unknown>>(collection: string): Promise<T[]>;
+  /** What's in a collection, as the system reads it (or as `actor` does). */
+  docs<T = Record<string, unknown>>(collection: string, actor?: Actor): Promise<T[]>;
   /** The messages of a chat. */
   messages(thread: string): Promise<Message[]>;
 };
@@ -289,8 +295,8 @@ export async function setup(
       );
       return Object.assign(relay, { id });
     },
-    docs: async <T>(collection: string) => {
-      const seen = runtime.observe<T[]>("test", collection, {});
+    docs: async <T>(collection: string, actor?: Actor) => {
+      const seen = runtime.observe<T[]>("test", collection, {}, actor ? { actor } : {});
       const output = await seen.ready;
       seen.close();
       return output.status === "ready" ? output.value : [];
@@ -346,19 +352,29 @@ export const hands = definePlugin({
           $set: { at: new Date(Date.now() - input.hours * 3_600_000).toISOString() },
         }),
     },
-    // A call back in time: when it rang (`at`) and its place (`until`).
+    // A call back in time: when it rang (`at`) and, unless `held`, its place (`until`).
     "test.age": {
       input: { type: "object" },
-      run: async (ctx, input: { call: string; ms: number }) => {
+      run: async (ctx, input: { call: string; ms: number; held?: boolean }) => {
         const calls = ctx.db.collection<{ at: string; until: string }>("voice_call");
         const found = await calls.findOne({ _id: input.call });
         await calls.updateOne({ _id: input.call }, {
           $set: {
             at: new Date(Date.parse(found!.at) - input.ms).toISOString(),
-            until: new Date(Date.parse(found!.until) - input.ms).toISOString(),
+            ...(input.held
+              ? {}
+              : { until: new Date(Date.parse(found!.until) - input.ms).toISOString() }),
           },
         });
       },
+    },
+    // A block that has run out.
+    "test.expire": {
+      input: { type: "object" },
+      run: (ctx, input: { block: string }) =>
+        ctx.db.collection("voice_blocked").updateOne({ _id: input.block }, {
+          $set: { until: new Date(Date.now() - 1_000).toISOString() },
+        }),
     },
     "test.erase": {
       input: { type: "object" },

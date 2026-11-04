@@ -6,9 +6,10 @@
  * (`twilioSignature`, for a test's fake Twilio). They reach the rest by
  * name: its collections (`voice_call`, `voice_phone`, `voice_blocked`), its
  * Views (`message` and `voice_call`, renderer `voice`), its tool
- * (`end_call`) and its Action for managers (`voice.block`).
+ * (`end_call`) and its Actions for managers (`voice.block`, `voice.unblock`).
  */
 export type { VoiceCall } from "./collections/call.ts";
+export type { VoiceBlock } from "./collections/blocked.ts";
 export {
   GAP as VOICE_GAP,
   KEEP as VOICE_KEEP,

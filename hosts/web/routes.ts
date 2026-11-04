@@ -9,7 +9,9 @@
  * - `{ path, serve }`: a function that answers the request itself, here in
  *   the host's process: files as they are (downloads), or an API that must
  *   stream, choose call ids or keep a request's secrets out of the log. It's
- *   given the runtime and who the request's session signs in (`Served`).
+ *   given the runtime and who the request's session signs in (`Served`). It
+ *   may take a WebSocket (a voice call's relay): `host.upgrade()` accepts
+ *   the request's upgrade, and it answers with the response that gives.
  * - `{ host, serve }` (or `action`): every request to a host, whatever its
  *   path, and never the app's page, code or socket there: what a computer
  *   serves (a preview), an app of the app's own. `host` is a pattern: a host
@@ -31,6 +33,7 @@
  * resources: { routes: { "whatsapp.hook": { path: "/hooks/whatsapp", action: "whatsapp.hook" } } }
  * ```
  */
+import { type RouteWebSocket, upgradeWebSocket } from "@oxian/oxian-js/http";
 import type { Actor, Infer, Resources, Runtime } from "../../runtime/mod.ts";
 
 export type Route =
@@ -43,7 +46,21 @@ export type Route =
  * signs in, and the host the request is for (as the front says, when it's
  * trusted: not always `request.url`'s).
  */
-export type Served = { runtime: Runtime; whom(): Promise<Actor | null>; host: string };
+export type Served = {
+  runtime: Runtime;
+  whom(): Promise<Actor | null>;
+  host: string;
+  /**
+   * Accepts the request's WebSocket upgrade (a `GET` with `upgrade:
+   * websocket`; anything else throws): the socket, open once the route
+   * answers with `response`, as it is. `protocol` is one the client offered.
+   * The host's listener takes it (`copilotz/web/node`), on Node, Deno and Bun.
+   */
+  upgrade(options?: { protocol?: string }): { socket: RouteSocket; response: Response };
+};
+
+/** A route's WebSocket: a browser's `WebSocket`, as far as `onmessage`, `send` and `close` go. */
+export type RouteSocket = RouteWebSocket;
 
 /** The app's front (a Cloudflare worker before it): the secret it vouches for requests with. */
 export type Front = { secret: string };
@@ -287,11 +304,14 @@ export function hostServer(
       hostMatches(h.pattern, host) && (!h.route.methods || h.route.methods.includes(request.method))
     );
     if (!found) return undefined;
-    return answered(runtime, found.name, found.route, request, new URL(request.url), {
+    return answered(
       runtime,
-      whom: () => whom(request),
-      host,
-    });
+      found.name,
+      found.route,
+      request,
+      new URL(request.url),
+      served(runtime, request, whom, host),
+    );
   };
 }
 
@@ -321,10 +341,50 @@ export function routeServer(
     const url = new URL(request.url);
     const found = match(url, request.method);
     if (!found) return undefined;
-    return answered(runtime, found.name, found.route, request, url, {
+    return answered(
       runtime,
-      whom: () => whom(request),
-      host: hostOf(request, options.front),
-    });
+      found.name,
+      found.route,
+      request,
+      url,
+      served(runtime, request, whom, hostOf(request, options.front)),
+    );
   };
 }
+
+/** Where a host without the web app says it's up. */
+const HEALTH = "/health";
+
+/**
+ * A host for an app without the web app (on WhatsApp, on the phone): its
+ * routes alone, by host and then by path, their sockets included; `GET
+ * /health`, unless a route takes it; and 404 for anything else. Nobody signs
+ * in here: a route's Action is called as a visitor, and its `allow` decides.
+ * `serveRoutes` (`copilotz/web/node`) listens with it.
+ */
+export function routeHost(
+  runtime: Runtime,
+  options: { front?: Front } = {},
+): (request: Request) => Promise<Response> {
+  const routes = routeServer(runtime, () => Promise.resolve(null), options);
+  return async (request) => {
+    const answering = routes(request);
+    if (answering) return await answering;
+    const healthy = (request.method === "GET" || request.method === "HEAD") &&
+      new URL(request.url).pathname === HEALTH;
+    return healthy ? plain(200, "ok") : plain(404, "Not found");
+  };
+}
+
+/** What a `serve` route is given for a request. */
+const served = (
+  runtime: Runtime,
+  request: Request,
+  whom: (request: Request) => Promise<Actor | null>,
+  host: string,
+): Served => ({
+  runtime,
+  whom: () => whom(request),
+  host,
+  upgrade: (options) => upgradeWebSocket(request, options),
+});

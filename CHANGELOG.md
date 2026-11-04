@@ -38,6 +38,11 @@
   turn (trusted code only; the same `id` is said once), sent out like any of its answers.
 - **Fixed:** `message.questions`, and the terminal's `shell.mine`, `shell.set` and `shell.print`,
   let anyone whose id matched in; they're a person's own now.
+- **Fixed: a collection's private fields reached the log on PostgreSQL.** Writes that go as the
+  store's single command (most of them) recorded `.created`, `.updated` and `.deleted` with the
+  whole document, so `private` fields (a computer's `pending` secret, unsealed account tokens) were
+  in the log there; memory and SQLite left them out. The command now records documents without them
+  too. Events already written still hold them.
 
 ## 1.0.0-rc.20 — 2026-11-04
 

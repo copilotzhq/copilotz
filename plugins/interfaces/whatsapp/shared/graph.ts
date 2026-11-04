@@ -1,9 +1,11 @@
 /**
- * Meta's Graph API, as a connected number uses it: sending text, marking
- * what was read (and showing it's typing), fetching media people sent, and
- * what a number is. Its access token goes in each request and nowhere else:
- * a failure says what Meta said, never the token.
+ * Meta's Graph API, as a connected number uses it: sending a message (text,
+ * buttons, a list, a carousel, an image, a document), marking what was read
+ * (and showing it's typing), fetching media people sent, and what a number
+ * is. Its access token goes in each request and nowhere else: a failure
+ * says what Meta said, never the token.
  */
+import type { WaMedia, WaPart } from "./parts.ts";
 
 /** A number to call the Graph API for: where it is, its phone number id, its token. */
 export type Graph = { base: string; phoneId: string; token: string };
@@ -49,8 +51,108 @@ export const numberInfo = (graph: Graph) =>
     `${encodeURIComponent(graph.phoneId)}?fields=display_phone_number,verified_name`,
   );
 
-/** Sends text to someone (their WhatsApp id), and returns the sent message's id. */
-export async function sendText(graph: Graph, to: string, body: string): Promise<string> {
+/** Whether Meta refused what was sent as it was (a part it won't take), not why it couldn't go. */
+export const refused = (error: unknown) => {
+  const e = error as Partial<GraphError>;
+  // Not the token (190), not the 24 hours to answer freely (131047), not a rate (130429).
+  return e?.code === "graph" && e.status === 400 &&
+    ![190, 131047, 130429, 131056].includes(e.graph ?? 0);
+};
+
+/** Media as the Graph API takes it: a link, or the id of one uploaded. */
+export type Sendable = { link: string } | { id: string };
+
+/** What sends a part's media: its link, as the number sends it. */
+export type Resolve = (media: WaMedia) => Promise<Sendable>;
+
+/** A part, as the Graph API's message (its media resolved). */
+async function wireOf(part: WaPart, resolve: Resolve): Promise<Record<string, unknown>> {
+  const footer = (text?: string) => text ? { footer: { text } } : {};
+  switch (part.type) {
+    case "text":
+      return {
+        type: "text",
+        text: { body: part.text, preview_url: /https?:\/\//.test(part.text) },
+      };
+    case "buttons": {
+      const header = typeof part.header === "string"
+        ? { header: { type: "text", text: part.header } }
+        : part.header
+        ? { header: { type: "image", image: await resolve(part.header) } }
+        : {};
+      return {
+        type: "interactive",
+        interactive: {
+          type: "button",
+          ...header,
+          body: { text: part.text },
+          ...footer(part.footer),
+          action: {
+            buttons: part.buttons.map((b) => ({
+              type: "reply",
+              reply: { id: b.id, title: b.title },
+            })),
+          },
+        },
+      };
+    }
+    case "list":
+      return {
+        type: "interactive",
+        interactive: {
+          type: "list",
+          ...(part.header ? { header: { type: "text", text: part.header } } : {}),
+          body: { text: part.text },
+          ...footer(part.footer),
+          action: { button: part.button, sections: part.sections },
+        },
+      };
+    case "carousel":
+      return {
+        type: "interactive",
+        interactive: {
+          type: "carousel",
+          body: { text: part.text },
+          action: {
+            cards: await Promise.all(part.cards.map(async (card, i) => ({
+              card_index: i,
+              type: "cta_url",
+              header: { type: "image", image: await resolve(card.image) },
+              ...(card.body ? { body: { text: card.body } } : {}),
+              action: {
+                buttons: card.buttons.map((b) => ({
+                  type: "quick_reply",
+                  quick_reply: { id: b.id, title: b.title },
+                })),
+              },
+            }))),
+          },
+        },
+      };
+    case "image":
+      return {
+        type: "image",
+        image: { ...await resolve(part.image), ...(part.caption ? { caption: part.caption } : {}) },
+      };
+    case "document":
+      return {
+        type: "document",
+        document: {
+          ...await resolve(part.document),
+          filename: part.filename,
+          ...(part.caption ? { caption: part.caption } : {}),
+        },
+      };
+  }
+}
+
+/** Sends a part to someone (their WhatsApp id), and returns the sent message's id. */
+export async function sendPart(
+  graph: Graph,
+  to: string,
+  part: WaPart,
+  resolve: Resolve,
+): Promise<string> {
   const sent = await call<{ messages?: { id: string }[] }>(
     graph,
     `${encodeURIComponent(graph.phoneId)}/messages`,
@@ -58,8 +160,7 @@ export async function sendText(graph: Graph, to: string, body: string): Promise<
       messaging_product: "whatsapp",
       recipient_type: "individual",
       to,
-      type: "text",
-      text: { body, preview_url: /https?:\/\//.test(body) },
+      ...await wireOf(part, resolve),
     },
   );
   return sent.messages?.[0]?.id ?? "";

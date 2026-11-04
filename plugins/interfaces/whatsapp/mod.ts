@@ -22,7 +22,17 @@
  *   documents and voice notes too (chat transcribes audio). `/new` starts a
  *   new conversation. Meta delivering a message again changes nothing.
  * - **What agents say there** to them goes back to the phone, as WhatsApp
- *   formats it, a long answer in several messages.
+ *   formats it, a long answer in several messages; "typing…" shows while
+ *   they work, and nothing says "please wait".
+ * - **WhatsApp is a medium:** a View for it (renderer `whatsapp`) returns
+ *   parts, each one WhatsApp message, built with the toolkit in the contract
+ *   (`text`, `buttons`, `list`, `carousel`, `image`, `document`), which
+ *   checks Meta's limits. A message shows through its `message` View (this
+ *   plugin's: its text). After an answer come the features' additions
+ *   (chat's `additions` resource, an `addition:<name>` View here): each goes
+ *   once per chat per key, the answer's text in the first one's body when
+ *   there's room (one message, not two: Meta charges each), and its fallback
+ *   when Meta refuses it. A tap comes back as its title, with its id.
  * - **The webhook** (`/hooks/whatsapp/<number>`, the web host's `routes`
  *   resource) checks Meta's signature before anything else. Credentials are
  *   kept where no event and no reader outside reaches them.
@@ -44,9 +54,12 @@ import { phone } from "./collections/phone.ts";
 import { secret } from "./collections/secret.ts";
 import { sent } from "./collections/sent.ts";
 import { chat } from "./collections/thread.ts";
+import { typing } from "./collections/typing.ts";
 import { received } from "./events/received.ts";
 import { receiveProcessor } from "./processors/receive.ts";
 import { replyProcessor } from "./processors/reply.ts";
+import { typingProcessor } from "./processors/typing.ts";
+import { messageView } from "./views/message.ts";
 import { rules } from "./shared/rules.ts";
 
 export * from "./contract.ts";
@@ -61,6 +74,7 @@ export const whatsapp: Plugin = definePlugin({
     whatsapp_code: code,
     whatsapp_thread: chat,
     whatsapp_sent: sent,
+    whatsapp_typing: typing,
   },
   events: { "whatsapp.received": received },
   actions: {
@@ -77,7 +91,10 @@ export const whatsapp: Plugin = definePlugin({
   processors: {
     "whatsapp.receive": receiveProcessor,
     "whatsapp.reply": replyProcessor,
+    "whatsapp.typing": typingProcessor,
   },
+  // WhatsApp as a medium: what a message is there (a feature's additions bring their own).
+  views: { message: { whatsapp: messageView } },
   guard: rules,
   resources: {
     whatsapp: {},

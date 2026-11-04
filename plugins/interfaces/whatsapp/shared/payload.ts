@@ -27,10 +27,13 @@ export type WaMessage = {
   document?: WaMedia & { filename?: string };
   sticker?: WaMedia;
   location?: { latitude: number; longitude: number; name?: string; address?: string };
-  button?: { text?: string };
+  /** A template's quick reply, tapped. */
+  button?: { text?: string; payload?: string };
+  /** A button, a list's row or a carousel card's quick reply, tapped. */
   interactive?: {
-    button_reply?: { title?: string };
-    list_reply?: { title?: string; description?: string };
+    type?: string;
+    button_reply?: { id?: string; title?: string };
+    list_reply?: { id?: string; title?: string; description?: string };
   };
   [more: string]: unknown;
 };
@@ -128,4 +131,19 @@ export function wordsOf(m: WaMessage): string {
     }
   }
   return "";
+}
+
+/**
+ * The choice a message taps, if it's one: a button's, a list row's or a
+ * carousel card's (they come as a button's), or a template's quick reply,
+ * with what it meant (`id`) and said (`title`). Typing a button's title is
+ * just text.
+ */
+export function tapOf(m: WaMessage): { id: string; title: string } | undefined {
+  const reply = m.type === "interactive"
+    ? m.interactive?.button_reply ?? m.interactive?.list_reply
+    : m.type === "button"
+    ? { id: m.button?.payload, title: m.button?.text }
+    : undefined;
+  return reply?.id ? { id: reply.id, title: reply.title ?? "" } : undefined;
 }

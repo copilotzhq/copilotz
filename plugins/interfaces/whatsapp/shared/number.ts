@@ -1,13 +1,15 @@
 /**
  * A connected number, as Processors use it: its document, the Graph API
- * with its token, and sending text from it. What Meta refuses about its
- * token is noted on the number (`problem`), for those who manage it to
- * see, and cleared once it works again.
+ * with its token, and sending from it (text, or any part). What Meta refuses
+ * about its token is noted on the number (`problem`), for those who manage
+ * it to see, and cleared once it works again.
  */
 import type { Context } from "../../../../runtime/mod.ts";
 import type { WhatsAppNumber } from "../collections/number.ts";
 import type { WhatsAppSecret } from "../collections/secret.ts";
-import { type Graph, sendText, tokenRefused } from "./graph.ts";
+import { type Graph, sendPart, tokenRefused } from "./graph.ts";
+import { sendable } from "./media.ts";
+import type { WaPart } from "./parts.ts";
 import { settingsOf } from "./settings.ts";
 
 export type Connected = { number: WhatsAppNumber; graph: Graph };
@@ -26,11 +28,20 @@ export async function connected(ctx: Context, id: string): Promise<Connected | n
   };
 }
 
-/** Sends text from the number, noting on it when Meta refuses its token; returns WhatsApp's id. */
-export async function send(ctx: Context, on: Connected, to: string, text: string): Promise<string> {
+/**
+ * Sends text or a part from the number, noting on it when Meta refuses its
+ * token; returns WhatsApp's id.
+ */
+export async function send(
+  ctx: Context,
+  on: Connected,
+  to: string,
+  what: string | WaPart,
+): Promise<string> {
   const numbers = ctx.as().db.collection("whatsapp_number");
+  const part: WaPart = typeof what === "string" ? { type: "text", text: what } : what;
   try {
-    const id = await sendText(on.graph, to, text);
+    const id = await sendPart(on.graph, to, part, (media) => sendable(ctx, media));
     if (on.number.problem) {
       await numbers.updateOne({ _id: on.number._id }, { $unset: { problem: "" } });
       delete on.number.problem;

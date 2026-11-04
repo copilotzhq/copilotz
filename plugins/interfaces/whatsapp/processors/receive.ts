@@ -20,6 +20,9 @@
  *   quoting an agent's message, or one sent while an agent waits on their
  *   answer there, answers it. `/new`, `/space` and `/help` are commands
  *   (see shared/commands.ts).
+ * - **A tap** (a button, a list's row, a carousel card's reply) comes as its
+ *   title, with what it meant (`tap.id`) and the addition it was in
+ *   (`tap.key`), answering the message it was on.
  *
  * It reads the number, its phones and codes as the system (who's linked is
  * what it's here to find out), and acts as the person, or the contact, for
@@ -42,7 +45,7 @@ import {
 } from "../shared/commands.ts";
 import { fetchMedia, markRead } from "../shared/graph.ts";
 import { type Connected, connected, send } from "../shared/number.ts";
-import { mediaOf, type WaMessage, wordsOf } from "../shared/payload.ts";
+import { mediaOf, tapOf, type WaMessage, wordsOf } from "../shared/payload.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { may } from "../../../access/spaces/contract.ts";
 import { CONTACT } from "../../../access/contacts/contract.ts";
@@ -191,11 +194,8 @@ async function customer(
   if (!brings) return;
 
   const as = ctx.as({ kind: "contact", id: contact });
-  const sender = `${CONTACT}${contact}`;
-  const sending = async (thread: string) => {
-    const replyTo = await answering(ctx, as, sender, thread, message);
-    return await as.call("chat.send", { thread, ...brings, ...(replyTo ? { replyTo } : {}) });
-  };
+  const sending = (thread: string) =>
+    written(ctx, on, as, `${CONTACT}${contact}`, thread, message, brings);
   const quiet = (on.number.gap ?? GAP) * HOUR;
   const current = phone?.thread
     ? await system.db.collection<{ _id: string; at: string }>("thread")
@@ -394,15 +394,8 @@ async function linked(
   if (!brings) return;
 
   const space = await spaceOf(ctx, person, phone.space);
-  const sending = async (thread: string) => {
-    const replyTo = await answering(ctx, as, person.id, thread, message);
-    return await as.call("chat.send", {
-      thread,
-      in: space._id,
-      ...brings,
-      ...(replyTo ? { replyTo } : {}),
-    });
-  };
+  const sending = (thread: string) =>
+    written(ctx, on, as, person.id, thread, message, { ...brings, in: space._id });
   try {
     await sending(phone.thread ?? await opened(ctx, on, phone, event));
   } catch (error) {
@@ -458,23 +451,54 @@ const digest = async (text: string) =>
     .map((b) => b.toString(16).padStart(2, "0")).join("");
 
 /**
- * The message this one answers: the agent's message it quotes, else the
- * latest question an agent waits on them (`sender`, as messages name them)
- * for in this conversation (only its messages are read, as them: what this
- * job reads labels what it writes).
+ * Says what a message brings, as them (`as`, whom messages name `sender`),
+ * in `thread`: as the reply to what it answers, a tap with what it meant and
+ * the addition it was in. "Typing…" is kept up while agents answer it (see
+ * processors/typing.ts).
  */
-async function answering(
+async function written(
+  ctx: Context,
+  on: Connected,
+  as: Context,
+  sender: string,
+  thread: string,
+  message: WaMessage,
+  brings: Record<string, unknown>,
+) {
+  const { replyTo, key } = await answered(ctx, as, sender, thread, message);
+  const tap = tapOf(message);
+  const at = new Date().toISOString();
+  await ctx.as().db.collection("whatsapp_typing").replaceOne(
+    { _id: thread },
+    { number: on.number._id, wamid: message.id, at, shown: at },
+    { upsert: true },
+  );
+  return await as.call("chat.send", {
+    thread,
+    ...brings,
+    ...(replyTo ? { replyTo } : {}),
+    ...(tap ? { tap: { ...tap, ...(key ? { key } : {}) } } : {}),
+  });
+}
+
+/**
+ * The message this one answers: the agent's message it quotes or taps (and
+ * the addition the tap was in), else the latest question an agent waits on
+ * them (`sender`, as messages name them) for in this conversation (only its
+ * messages are read, as them: what this job reads labels what it writes).
+ */
+async function answered(
   ctx: Context,
   as: Context,
   sender: string,
   thread: string,
   message: WaMessage,
-) {
+): Promise<{ replyTo?: string; key?: string }> {
   const quoted = message.context?.id;
   if (quoted) {
     const sent = await ctx.as().db.collection<WhatsAppSent>("whatsapp_sent")
       .findOne({ wamid: quoted });
-    if (sent) return sent.message;
+    if (sent) return { replyTo: sent.message, ...(sent.key ? { key: sent.key } : {}) };
   }
   const asked = await as.db.collection<{ _id: string }>("message").find(
     { thread, to: sender, replyTo: { $exists: false }, expectReply: { $ne: false } },
@@ -482,9 +506,9 @@ async function answering(
   );
   const waits = ctx.as().db.collection("wait");
   for (const question of asked) {
-    if (await waits.findOne({ waitingFor: question._id })) return question._id;
+    if (await waits.findOne({ waitingFor: question._id })) return { replyTo: question._id };
   }
-  return undefined;
+  return {};
 }
 
 /** `/new`, `/space [name]`, `/help`. */

@@ -8,6 +8,7 @@ import {
   createRuntime,
   defineAction,
   definePlugin,
+  type Plugin,
   type Runtime,
   type ViewContext,
 } from "../../../../runtime/mod.ts";
@@ -83,6 +84,14 @@ export const reads = definePlugin({
     ]),
   ),
   actions: {
+    // "Typing…" shown a while ago, for every chat being answered.
+    "test.typed": defineAction({
+      input: { type: "object" },
+      run: (ctx, input: { seconds: number }) =>
+        ctx.db.collection("whatsapp_typing").updateMany({}, {
+          $set: { shown: new Date(Date.now() - input.seconds * 1000).toISOString() },
+        }),
+    }),
     // A chat gone quiet for some hours: its last message that long ago.
     "test.age": defineAction({
       input: { type: "object" },
@@ -114,6 +123,9 @@ export async function fakeGraph() {
     "media-huge": { type: "video/mp4", bytes: new Uint8Array(1) },
   };
   let sent = 0;
+  /** What Meta refuses (a 400, as for a part it won't take), and what fails once (a 500). */
+  const refusing: { refuse?: (body: Record<string, unknown>) => boolean } = {};
+  let failing: ((body: Record<string, unknown>) => boolean) | undefined;
   const server = await listen(async (request) => {
     const url = new URL(request.url);
     if (request.headers.get("authorization") !== `Bearer ${TOKEN}`) {
@@ -135,6 +147,19 @@ export async function fakeGraph() {
         display_phone_number: id === PHONE_ID ? "+1 555-0100" : `+${id}`,
         verified_name: "Example Support",
       });
+    }
+    if (more === "messages" && body?.status !== "read") {
+      if (failing?.(body)) {
+        failing = undefined;
+        return Response.json({ error: { message: "Service unavailable", code: 2 } }, {
+          status: 500,
+        });
+      }
+      if (refusing.refuse?.(body)) {
+        return Response.json({
+          error: { message: "(#131009) Parameter value is not valid", code: 131009 },
+        }, { status: 400 });
+      }
     }
     if (more === "messages") {
       return Response.json(
@@ -160,6 +185,20 @@ export async function fakeGraph() {
     texts: (to: string) =>
       requests.filter((r) => r.body?.to === to && r.body?.type === "text")
         .map((r) => (r.body!.text as { body: string }).body),
+    /** Every message sent to a phone (read marks aside), as the Graph API got it, in order. */
+    sent: (to: string) =>
+      requests.filter((r) => r.body?.to === to && r.body?.status !== "read").map((r) => r.body!),
+    /** Read marks for a phone's messages that showed "typing…". */
+    typing: () =>
+      requests.filter((r) => r.body?.status === "read" && r.body?.typing_indicator).length,
+    /** Meta refuses what this says (a 400). */
+    refuse: (when?: (body: Record<string, unknown>) => boolean) => {
+      refusing.refuse = when;
+    },
+    /** The next message this says fails once (a 500), as Meta's outages do. */
+    failOnce: (when: (body: Record<string, unknown>) => boolean) => {
+      failing = when;
+    },
   };
 }
 
@@ -183,7 +222,10 @@ export type Setup = {
   bobJoins(): Promise<void>;
 };
 
-export async function setup(fn: (s: Setup) => Promise<void>) {
+export async function setup(
+  fn: (s: Setup) => Promise<void>,
+  options: { plugins?: Plugin[]; llm?: LlmAdapter } = {},
+) {
   const graph = await fakeGraph();
   const app = definePlugin({
     name: "app",
@@ -197,11 +239,11 @@ export async function setup(fn: (s: Setup) => Promise<void>) {
       },
       whatsapp: { graph: `${graph.url}/v23.0` },
     },
-    adapters: { llm: { e: echo } },
+    adapters: { llm: { e: options.llm ?? echo } },
   });
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, whatsapp, reads, app],
+    plugins: [models, chat, ...access, whatsapp, reads, app, ...options.plugins ?? []],
   });
   try {
     const { space: personal } = await runtime.call<{ space: string }>("space.personal", {}, {

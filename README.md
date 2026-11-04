@@ -387,6 +387,10 @@ name, never by importing its code.
     come with it. `chat.open` opens an empty chat in a space; `chat.say` has an agent say a fixed
     message there without a turn (trusted code only: a payment confirmed), which goes out like any
     of its answers.
+  - **After an answer:** a medium that can (WhatsApp) shows features' additions
+    (`resources.additions.<name> = { order?, agents? }` and an `addition:<name>` View there), each
+    once per chat per key, recorded in `shown`; the model is told what went (`[then shown: …]`). A
+    message tapped from a button carries `tap: { id, title, key }`, and agents read the id.
 - **`history`** keeps chat history from outgrowing the prompt
   (`resources: { history: { summarizer: "openai/gpt-5.4-mini" } }`): every message stays whole, a
   cheap model writes a line for each and merges pairs up a binary tree, and an agent gets recent
@@ -521,10 +525,14 @@ filled by the front ends through resources).
   server-sent events, as that person, in that space only.
 - **`whatsapp`**: people talk to their agents from WhatsApp, through Meta's Cloud API. A space's
   managers connect a number; a person links their phone with a code; what they send becomes their
-  messages, and what agents say to them goes back, a long answer in several messages. Opened to
-  anyone (`whatsapp.set`), a number is a customer line: a stranger who writes is a contact, in a
-  chat of their own in the number's space, answered by its agent, and a chat quiet for the number's
-  `gap` (12 hours) is over: their next message starts a new one.
+  messages, and what agents say to them goes back, a long answer in several messages. It's a medium
+  for Views (renderer `whatsapp`, parts built with its toolkit: text, buttons, a list, a carousel,
+  an image, a document, each checked against Meta's limits): after an answer, features show more
+  (`additions`: a carousel of trips, buttons to pay), once per chat per key, the answer's text in
+  the same message when there's room, a fallback when Meta refuses one; taps come back with their
+  ids. Opened to anyone (`whatsapp.set`), a number is a customer line: a stranger who writes is a
+  contact, in a chat of their own in the number's space, answered by its agent, and a chat quiet for
+  the number's `gap` (12 hours) is over: their next message starts a new one.
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.

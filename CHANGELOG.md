@@ -84,8 +84,30 @@
   one. Their text always goes to the agent (commands stay linked people's); a code from the app
   still links a phone, and linked phones keep working as their person. The `whatsapp` plugin now
   requires `contacts`.
+- **WhatsApp is a medium.** A View for it (renderer `whatsapp`) returns parts, each one WhatsApp
+  message, built with the toolkit in WhatsApp's contract (`text`, `buttons`, `list`, `carousel`,
+  `image`, `document`, and `clip` for titles), which checks Meta's limits and throws `invalid`
+  instead of cutting anything short. A message goes out as its `message` View there (the plugin's:
+  its text as WhatsApp formats it; an app's replaces it).
+  - **Additions:** chat declares the `additions` resource kind (`{ order?, agents? }`, each an
+    `addition:<name>` View in the medium, given `{ thread, answer }`, returning `Addition`s:
+    `{ key, parts, fallback?, note? }`). After an agent's final answer that didn't fail
+    (`isAnswer`), each goes once per chat per key, recorded in chat's new `shown` ledger through
+    `chat.shown` (trusted code, unrecorded); its `note` is told to the model after that answer
+    (`[then shown: …]`).
+  - **One message, not two:** an answer's last text goes as the first addition's body (or caption)
+    when there's room, as Meta charges per message. A part Meta refuses (a 400 that isn't the token
+    or the 24-hour window) sends the addition's fallback instead, with the answer joined to it;
+    without one, it's logged. A retried delivery sends only what didn't go (`whatsapp_sent` now
+    keeps each part by id, with its addition's `key` and `thread`).
+  - **Taps:** a button's, a list row's, a carousel card's or a template's reply comes as its title
+    with `tap: { id, title, key }` (`chat.send` takes `tap`; messages keep it), answering the
+    message it was on; agents read `Carla: PIX [tapped: pay:pix]`. Typing the title is just text.
+  - **"Typing…" while agents work:** each step an agent takes in a WhatsApp chat shows it again once
+    WhatsApp may have hidden it (after 20 s, for up to five minutes); nothing says "please wait".
+    Media other than public https links (a chat's files, signed links) comes next.
 - **Chat in spaces declares its own `shared` entries** (`thread`, `message` with labels, `file`,
-  `live`, each a part of its thread). `chat.open` opens an empty chat in a space;
+  `live` and `shown`, each a part of its thread). `chat.open` opens an empty chat in a space;
   `chat.say { id, thread, from, text, to? }` has an agent say a fixed message in a chat without a
   turn (trusted code only; the same `id` is said once), sent out like any of its answers.
 - **Fixed:** `message.questions`, and the terminal's `shell.mine`, `shell.set` and `shell.print`,

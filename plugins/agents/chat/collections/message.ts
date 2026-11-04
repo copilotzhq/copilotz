@@ -63,6 +63,16 @@ const messageSchema = {
     /** Its turn was stopped (`chat.stop`): what it had written so far. */
     stopped: { type: "boolean" },
     /**
+     * What it answers by a tap, not typed: the choice tapped (`id`: what it
+     * means, as the app gave it; its text is the `title`, what was read), and
+     * the addition it was in (`key`). A choice, not a permission: tools check it.
+     */
+    tap: {
+      type: "object",
+      properties: { id: { type: "string" }, title: { type: "string" }, key: { type: "string" } },
+      required: ["id"],
+    },
+    /**
      * How a person's message came, when not typed there: sent for them by what
      * they set up (a routine). It's still theirs; people and agents are told.
      */
@@ -196,3 +206,7 @@ export const message = defineCollection({
 });
 
 export type Message = Infer<typeof messageSchema> & { _id: string };
+
+/** Whether a message is an agent's final answer in its turn (`<run>:reply`), one that didn't fail. */
+export const isAnswer = (m: Pick<Message, "_id" | "turn" | "failed" | "stopped">): boolean =>
+  !!m.turn && m._id === `${m.turn}:reply` && !m.failed && !m.stopped;

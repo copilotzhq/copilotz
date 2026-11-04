@@ -1,4 +1,17 @@
-## Unreleased
+## 1.0.0-rc.22 — 2026-11-04
+
+**A security release: upgrade now.** Before it, a Google sign-in wrote the new session's secret to
+the event log, and connecting a computer wrote the computer's secret (the first entry below). After
+upgrading, every deployment should:
+
+1. **End every session made before the upgrade:** delete the `credential` documents of
+   `kind: "session"`, so every signed-in person signs in again. Keys are unaffected.
+2. **Scrub the old events that hold these secrets**, from the store and from anything that copied it
+   (backups, exports, exporters): the `action.started` and `action.completed` events of
+   `google.sign-in`, `computer.code`, `computer.enrollment` and `computer.work`, and the
+   `action.started` events of `session.end`, `computer.admit`, `pool.admit` and `pool.serve`.
+3. **Reconnect computers whose log may have been read:** forget each one (`computer.forget`) and
+   connect it again with a new code. A computer's secret can't be rotated yet.
 
 - **Security: a Google sign-in no longer writes the session's secret to the log.** `google.sign-in`
   was a recorded Action, so the event log kept its input, the Google ID token, and its result,

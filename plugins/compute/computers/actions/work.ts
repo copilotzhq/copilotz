@@ -36,6 +36,9 @@ const READS = new Set(["jobs.list", "jobs.logs", "files.list", "files.read", "se
 
 export const workAction = defineAction({
   description: "Works on a space's computer, in its folder there",
+  // Unrecorded: what's typed and shown in a shell, files' contents and env values
+  // given over the space's pass through; they often hold secrets.
+  record: false,
   input: {
     type: "object",
     properties: {

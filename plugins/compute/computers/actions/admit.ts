@@ -12,6 +12,8 @@ import { deskIn } from "../shared/desks.ts";
 import { hash, same, secret } from "../shared/secret.ts";
 
 export const admitAction = defineAction({
+  // Unrecorded: its input is the computer's secret, or a code to connect one.
+  record: false,
   input: {
     type: "object",
     properties: { secret: { type: "string" } },

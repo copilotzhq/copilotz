@@ -18,6 +18,8 @@ import { must } from "../../../access/spaces/contract.ts";
 
 export const codeAction = defineAction({
   description: "A one-time code to connect a computer to a space",
+  // Unrecorded: its result is the code, which connects a computer as the person.
+  record: false,
   input: {
     type: "object",
     properties: { in: { type: "string" } },

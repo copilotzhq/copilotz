@@ -15,10 +15,11 @@
  *   the line's `gap`, 12 hours, and never one with another call on), only
  *   when Twilio verified their number (STIR/SHAKEN), or the line trusts
  *   numbers (`trustCallerId`); else, and for a hidden number, each call is a
- *   new contact. Its managers block a caller (`voice.block`), by a hash of
- *   their number. Erasing a contact (`contact.forget`) erases its number
- *   here too, and erasing a chat what was kept of it; calls' records go
- *   after the plugin's `keep` days (30).
+ *   new contact. Its managers block a caller (`voice.block`, for good or so
+ *   many days), by a hash of their number, and lift it (`voice.unblock`).
+ *   Erasing a contact (`contact.forget`) erases its number here too, and
+ *   erasing a chat what was kept of it; calls' records go after the
+ *   plugin's `keep` days (30), once they're over.
  * - **A call** (see actions/hook.ts and resources/relay.ts): Twilio's
  *   webhook is checked against Twilio's signature, taken within its
  *   caller's limits and the line's (else rejected as busy: nothing is
@@ -53,7 +54,7 @@
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { hookAction } from "./actions/hook.ts";
 import { admitAction, heardAction, overAction, startAction } from "./actions/call.ts";
-import { blockAction } from "./actions/block.ts";
+import { blockAction, unblockAction } from "./actions/block.ts";
 import { pruneAction } from "./actions/prune.ts";
 import { blocked } from "./collections/blocked.ts";
 import { call } from "./collections/call.ts";
@@ -79,6 +80,7 @@ export const voice: Plugin = definePlugin({
     "voice.heard": heardAction,
     "voice.over": overAction,
     "voice.block": blockAction,
+    "voice.unblock": unblockAction,
     "voice.prune": pruneAction,
   },
   processors: { "voice.forget": forgetProcessor, "voice.erased": erasedProcessor },
@@ -93,7 +95,7 @@ export const voice: Plugin = definePlugin({
   // At start: every line the app declares has what it needs.
   check: (merged) => {
     const keep = keepOf(merged);
-    if (!(typeof keep === "number" && keep > 0)) throw new Error("voice.keep is days, over 0");
+    if (!(typeof keep === "number" && keep >= 1)) throw new Error("voice.keep is days, 1 or more");
     for (const [name, line] of Object.entries(linesOf(merged))) {
       const problem = problemOf(name, line);
       if (problem) throw new Error(`voice.lines.${name} ${problem}`);
@@ -107,6 +109,9 @@ export const voice: Plugin = definePlugin({
       "voice.relay": { path: HOOKS, serve: serveRelay, methods: ["GET"] },
     },
     tools: { end_call: endCall },
+    // A line's blocks live in its space: its members see them (never the number's hash), its
+    // managers change them.
+    shared: { voice_blocked: { write: "manage" } },
     context: { voice: { place: "turn" } },
   },
 });

@@ -13,7 +13,8 @@
  *   is goes by their number only when Twilio verified it, or the line
  *   trusts numbers (`trustCallerId`): then it's the contact that number was
  *   before, in the chat they were in, unless it's been quiet for the line's
- *   `gap`, or another call is on in it. Any other call, a hidden number's
+ *   `gap`, or another call is on in it (checked in the very write that puts
+ *   this call live, so two at once can't both join). Any other call, a hidden number's
  *   too, is a new contact in a new chat. The greeting Twilio says is
  *   written there too, as the agent's (`chat.say`), so the agent knows it
  *   was said and doesn't greet them again.
@@ -25,7 +26,7 @@
  * None is recorded: they're the call's own bookkeeping, and the ticket
  * stays out of the log.
  */
-import { type Context, defineAction } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, type TransactionScope } from "../../../../runtime/mod.ts";
 import type { VoiceCall } from "../collections/call.ts";
 import type { VoicePhone } from "../collections/phone.ts";
 import type { Thread } from "../../../agents/chat/contract.ts";
@@ -137,27 +138,35 @@ export const startAction = defineAction({
       in: line.in,
       via: "voice",
     });
-    const thread = await chatOf(ctx, line, call, contact, known?.thread) ??
-      await chatFor(ctx, line, contact, call);
+    // The chat they were in, if it goes on; else a new one. Another call on in it (two at once
+    // from one number) is checked again with the write that puts this one live: nobody joins.
+    let thread = await chatOf(ctx, line, contact, known?.thread);
     const now = new Date().toISOString();
-    await system.transaction(async (tx) => {
+    const live = async (tx: TransactionScope, chat: string, joining: boolean) => {
+      const calls = tx.db.collection<VoiceCall>("voice_call");
+      if (joining && (await calls.find({ thread: chat, state: "live" })).length) return false;
       if (trusted) {
         await tx.db.collection("voice_phone").replaceOne(
           { _id: key },
-          { line: line.name, phone: trusted, contact, thread, at: now },
+          { line: line.name, phone: trusted, contact, thread: chat, at: now },
           { upsert: true },
         );
       }
-      await tx.db.collection("voice_call").updateOne({ _id: call._id }, {
+      await calls.updateOne({ _id: call._id }, {
         $set: {
           state: "live",
           contact,
-          thread,
+          thread: chat,
           started: now,
           ...(input.session ? { session: input.session } : {}),
         },
       });
-    });
+      return true;
+    };
+    if (!thread || !await system.transaction((tx) => live(tx, thread!, true))) {
+      thread = await chatFor(ctx, line, contact, call);
+      await system.transaction((tx) => live(tx, thread!, false));
+    }
     const { agent } = await whom(ctx, line, thread);
     // What Twilio says first, in the chat: the agent doesn't say it again.
     const text = line.texts.greeting;
@@ -195,22 +204,18 @@ async function whom(ctx: Context, line: Line, thread: string): Promise<{ agent: 
 
 /**
  * The chat a known caller was in, read as them, when it goes on: one they
- * no longer reach (taken out of it), quiet for the line's gap, or with
- * another call on in it, doesn't.
+ * no longer reach (taken out of it), or quiet for the line's gap, doesn't.
  */
 async function chatOf(
   ctx: Context,
   line: Line,
-  call: VoiceCall,
   contact: string,
   thread: string | undefined,
 ): Promise<string | undefined> {
   if (!thread) return undefined;
   const current = await ctx.as({ kind: "contact", id: contact }).db
     .collection<{ at: string }>("thread").findOne({ _id: thread });
-  if (!current || Date.now() - Date.parse(current.at) >= line.gap * 3_600_000) return undefined;
-  const on = await calls(ctx).find({ thread, state: "live" });
-  return on.some((c) => c._id !== call._id) ? undefined : thread;
+  return current && Date.now() - Date.parse(current.at) < line.gap * 3_600_000 ? thread : undefined;
 }
 
 /**

@@ -68,14 +68,24 @@ test("a number Twilio didn't verify is a new contact each call, unless the line 
 
 test("a withheld number is nobody: each call a contact of its own, whatever Twilio says it is", async () => {
   await setup(async (s) => {
-    // Twilio's placeholders (anonymous, unavailable), with and without "+", and no number at all.
-    for (const from of ["+266696687", "266696687", "+86282452253", "anonymous"]) {
+    // Twilio's placeholders (anonymous, unavailable, restricted), with and without "+", and no
+    // number at all.
+    for (
+      const from of [
+        "+266696687",
+        "266696687",
+        "+86282452253",
+        "+7378742833",
+        "7378742833",
+        "anonymous",
+      ]
+    ) {
       (await s.call({ from, form: VERIFIED })).hangUp();
       await over(s);
     }
     const calls = await s.docs<VoiceCall>("voice_call");
-    assertEquals(new Set(calls.map((c) => c.contact)).size, 4);
-    assertEquals(new Set(calls.map((c) => c.thread)).size, 4);
+    assertEquals(new Set(calls.map((c) => c.contact)).size, 6);
+    assertEquals(new Set(calls.map((c) => c.thread)).size, 6);
     assertEquals(await s.docs("voice_phone"), []);
   }, { line: { trustCallerId: true, limits: { callerPerDay: 10 } } });
 });
@@ -120,16 +130,50 @@ test("erasing a contact, or its chat, takes what was kept of the caller with it"
   });
 });
 
-test("calls' records go after the plugin's keep days", async () => {
+test("calls' records go after the plugin's keep days, once they're over; a call on stays", async () => {
   await setup(async (s) => {
     (await s.call({ from: CARLA, form: VERIFIED })).hangUp();
-    (await s.call()).hangUp();
     await over(s);
-    const [old] = await s.docs<VoiceCall>("voice_call");
+    const live = await s.call();
+    const [old, on] = await s.docs<VoiceCall>("voice_call");
     await s.runtime.call("test.age", { call: old._id, ms: 31 * 86_400_000 });
+    // Rung long ago (as far as its record says), but holding its place still: it's going on.
+    await s.runtime.call("test.age", { call: on._id, ms: 31 * 86_400_000, held: true });
     assertEquals(await s.runtime.call("voice.prune", {}), { pruned: 1 });
-    assertEquals((await s.docs<VoiceCall>("voice_call")).length, 1);
+    assertEquals((await s.docs<VoiceCall>("voice_call")).map((c) => c._id), [on._id]);
+    live.hangUp();
   });
+});
+
+test("two calls from one number, both starting at once, never share a chat", async () => {
+  await setup(async (s) => {
+    (await s.call({ from: CARLA, form: VERIFIED })).hangUp();
+    await over(s);
+    // Two more, their sockets open, Twilio's setups told at the same moment.
+    const relays = await Promise.all([0, 1].map(async () => {
+      const { relay } = await s.open(await (await s.ring({ from: CARLA, form: VERIFIED })).text());
+      return relay;
+    }));
+    const rang = (await s.docs<VoiceCall>("voice_call")).slice(1);
+    for (const [i, relay] of relays.entries()) {
+      relay.tell({
+        type: "setup",
+        accountSid: ACCOUNT,
+        callSid: rang[i]._id,
+        from: CARLA,
+        to: LINE_NUMBER,
+        direction: "inbound",
+      });
+    }
+    await until(async () =>
+      (await s.docs<VoiceCall>("voice_call")).filter((c) => c.state === "live").length === 2
+    );
+    const [first, a, b] = await s.docs<VoiceCall>("voice_call");
+    assert(a.thread !== b.thread);
+    // One of them may go on in the chat before; never both.
+    assert([a.thread, b.thread].filter((t) => t === first.thread).length <= 1);
+    for (const relay of relays) relay.hangUp();
+  }, { line: { limits: { callerAtOnce: 2, callerPerDay: 10 } } });
 });
 
 test("a line whose agent doesn't answer in its space fails the call, with a short line", async () => {

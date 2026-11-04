@@ -6,10 +6,12 @@
   `trustCallerId`, `keys`, `limits`, `org`), each a Twilio number open to anyone who calls; their
   settings are checked at start.
   - **Twilio's webhook** is `POST /hooks/voice/<line>` (the `voice.hook` route): checked against
-    `X-Twilio-Signature` with the line's auth token. A caller the line's managers blocked
-    (`voice.block`, kept by the number's hash) isn't taken; then a call is taken within its caller's
-    limits (`callerAtOnce` 1, `callerPerDay` 10; withheld numbers are one caller), then the line's
-    (`atOnce` 2, `perDay` 50 calls that went on in any 24 hours), or rejected as busy
+    `X-Twilio-Signature` with the line's auth token. A caller the line's managers blocked isn't
+    taken (`voice.block { thread, days? }`, kept by the number's hash; `voice.unblock { block }`
+    lifts it by its id, whatever is left of the call); then a call is taken within its caller's
+    limits (`callerAtOnce` 1, `callerPerDay` 10; withheld numbers, together, their own
+    `hiddenAtOnce` and `hiddenPerDay`, by default the line's `atOnce` and half its `perDay`), then
+    the line's (`atOnce` 2, `perDay` 50 calls that went on in any 24 hours), or rejected as busy
     (`<Reject reason="busy"/>`: nothing is spent). A call taken gets TwiML that opens the line's
     socket (`<Connect><ConversationRelay>`, the line's language, greeting and voice) with a ticket
     good once, for a minute; `POST /hooks/voice/<line>/over` hears the relay end and hangs up.
@@ -18,9 +20,10 @@
     contact (`via: "voice"`) in a chat of their own in the line's space, answered by the line's
     agent (a line whose agent doesn't answer there fails the call). A number isn't proof of who's
     calling: calling back goes on in the same contact and chat (until the line's `gap`, 12 hours,
-    and never into a chat with another call on) only when Twilio verified the number (`StirVerstat`
-    `TN-Validation-Passed-A`) or the line sets `trustCallerId`; otherwise, and for withheld numbers
-    (Twilio's placeholders, `+266696687` and the like), each call is a new contact.
+    and never into a chat with another call on, checked in the write that puts the call live) only
+    when Twilio verified the number (`StirVerstat` `TN-Validation-Passed-A`) or the line sets
+    `trustCallerId`; otherwise, and for withheld numbers (Twilio's placeholders, `+266696687`,
+    `+7378742833` and the like), each call is a new contact.
   - **What's said:** what the caller says goes to the agent at once, one prompt after the other; a
     prompt said while the answer to the one before is still being written stops that turn, and the
     next turn reads both (Twilio already waits for the caller to finish: a quiet window would add to
@@ -44,8 +47,9 @@
     number was verified; the caller's number private), and `voice_phone` keeps each verified
     caller's contact and chat. Erasing a contact erases its number from both; erasing a chat
     (`chat.erase`, `contact.forget` with `chats`) erases what the calls kept of it. Calls' records
-    go after the plugin's `keep` days (30: `voice.prune`, daily). Agents working for a caller are
-    told it's a phone call, and that the number isn't proof of who they are (the `contact` context).
+    go after the plugin's `keep` days (30, at least 1: `voice.prune`, daily), once they're over: a
+    call going on is never pruned. Agents working for a caller are told it's a phone call, and that
+    the number isn't proof of who they are (the `contact` context).
   - It needs a host that takes a route's socket (`host.upgrade()`: `serveRoutes`, or `serve`, from
     `copilotz/web/node`).
 - **Contacts: people outside the org who talk to its agents** (the new `contacts` plugin, part of

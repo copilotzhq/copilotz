@@ -10,8 +10,11 @@
  * `StirVerstat: TN-Validation-Passed-A`), unless the line trusts numbers.
  */
 
-/** Twilio's placeholders for a caller ID it doesn't give: anonymous, unavailable, unknown, blocked. */
-const PLACEHOLDERS = new Set(["266696687", "86282452253", "8656696", "2562533"]);
+/**
+ * Twilio's placeholders for a caller ID it doesn't give: anonymous, unavailable, unknown,
+ * blocked, restricted.
+ */
+const PLACEHOLDERS = new Set(["266696687", "86282452253", "8656696", "2562533", "7378742833"]);
 
 /** What Twilio says when it verified the number calls from whom it says (STIR/SHAKEN "A"). */
 export const VERIFIED = "TN-Validation-Passed-A";
@@ -24,7 +27,8 @@ export function numberOf(from: string | undefined): string | undefined {
 
 /**
  * The key a line's limits and blocks know a caller by: their number, or
- * `hidden` for every call whose number is (they can't be told apart).
+ * `hidden` for every call whose number is (they can't be told apart, so
+ * they share an allowance of their own: the line's `hidden…` limits).
  */
 export const callerKey = (from: string | undefined) => numberOf(from) ?? "hidden";
 

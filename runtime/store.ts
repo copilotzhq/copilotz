@@ -127,7 +127,30 @@ export type Transaction = Reader & {
   deleteVectors(collection: string, docs: string[], field?: string): Promise<void>;
   /** Appends an event; it gets its `seq` when the transaction commits. */
   emit(event: Emitted): void;
+  /**
+   * Optional, for maintenance only (runtime/maintain.ts): runs one SQL
+   * statement as it is, in this transaction, and says how many rows it
+   * changed. It bypasses schemas and per-document events, so it runs only in
+   * a `maintenance` transaction, and a statement that changes the store's own
+   * state (its fencing epoch, Processors' positions) is refused. A SQL store
+   * has it, where SQL can reach nothing but this store's own data.
+   */
+  execute?(sql: string, params?: unknown[], options?: { timeout?: number }): Promise<Executed>;
 };
+
+/** A row a SQL statement returned, as the database driver gives it. */
+export type Row = Record<string, unknown>;
+
+/**
+ * What a maintenance read returned: its rows; `cut` when it stopped before
+ * a row that would pass its bytes (more may follow); `inline` when it ran on
+ * the store's own connection, with no timeout (a SQLite store that can't
+ * read apart).
+ */
+export type Inspected = Row[] & { cut?: true; inline?: true };
+
+/** What a maintenance statement did: rows it returned (`RETURNING`), and rows it changed. */
+export type Executed = { rows: Row[]; changed: number };
 
 /** A declared index: its fields, each a scalar of one type. */
 export type IndexSpec = { fields: { path: string; type: ScalarType }[] };
@@ -170,11 +193,14 @@ export type Store = Reader & {
    * Runs `work` as one atomic, fenced transaction and returns its result with
    * the committed events. Throws `fenced` if another owner claimed the store.
    * `positions` (Processor positions) are saved with the commit.
+   * `maintenance`: a transaction for maintenance SQL (`execute`). It runs
+   * alone (the writes running end first, and the next wait for it), and a
+   * store may run it on a connection of its own.
    */
   transaction<T>(
     epoch: number,
     work: (tx: Transaction) => Promise<T>,
-    options?: { positions?: Record<string, number> },
+    options?: { positions?: Record<string, number>; maintenance?: boolean },
   ): Promise<{ result: T; events: Event[] }>;
   /** Each Processor's saved position: the last event it has finished with. */
   positions(): Promise<Record<string, number>>;
@@ -191,6 +217,19 @@ export type Store = Reader & {
   ): Promise<{ results: unknown[]; events: Event[]; changes: Change[][] }> | undefined;
   /** Optional: lets an adapter present each collection natively, for example as a SQL view. */
   describe?(collections: Record<string, JSONSchema>): void | Promise<void>;
+  /**
+   * Optional, for maintenance and inspection tools: runs one read-only SQL
+   * statement on committed state, with `params` bound ($1, ?1…), and returns
+   * at most `limit` rows, fetching none that would pass `bytes`; `timeout`
+   * (ms) cancels it.
+   * A SQL store has it, refusing it where SQL could reach other tenants' data,
+   * and leaving nothing of it on a connection the store's other work shares.
+   */
+  inspect?(
+    sql: string,
+    params?: unknown[],
+    options?: { limit?: number; timeout?: number; bytes?: number },
+  ): Promise<Inspected>;
   /**
    * Makes the declared indexes (and drops ones no longer declared). A field's
    * type is what its schema guarantees, so a filter on it may compare it as

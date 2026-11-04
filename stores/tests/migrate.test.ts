@@ -131,8 +131,9 @@ for (const [name, url] of Object.entries(databases)) {
       });
       assertEquals(events.map((e) => e.seq), [6]);
       assertEquals((await store.find("things")).map((d) => d._id), ["x", "y", "z"]);
-      const inspected = await store.inspect("SELECT _id, n FROM things");
-      assertEquals(inspected, [{ _id: "x", n: "1" }, { _id: "y", n: "2" }, { _id: "z", n: "3" }]);
+      // The collection's view shows them (the tenant "", a session that names none).
+      const viewed = (await pool.reads.query(`SELECT _id, n FROM "${schema}".things`)).rows;
+      assertEquals(viewed, [{ _id: "x", n: "1" }, { _id: "y", n: "2" }, { _id: "z", n: "3" }]);
 
       // Exactly a fresh schema's tables, keys, indexes and views.
       const fresh = schemaName();

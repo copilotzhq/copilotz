@@ -113,7 +113,7 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/compute/web`         | `computersWeb`                                                                                               |
 | `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                          |
 | `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                |
-| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`                                                    |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `maintenance`                                     |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                    |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                    |
 | `copilotz/web`                         | the web host in the browser (`web`), and its toolkit (`Button`, `Markdown`…)                                 |
@@ -525,6 +525,10 @@ filled by the front ends through resources).
   server-sent events, as that person, in that space only.
 - **`whatsapp`**: people talk to their agents from WhatsApp, through Meta's Cloud API. A space's
   managers connect a number; a person links their phone with a code; what they send becomes their
+  messages, and what agents say to them goes back, a long answer in several messages.
+- **`maintenance`**: HTTP for an app's operators when they can't reach its database, with one key:
+  read SQL, the collections' operations through the owner, raw SQL writes inside it, blobs by id
+  (see [Maintenance](#maintenance)).
   messages, and what agents say to them goes back, a long answer in several messages. It's a medium
   for Views (renderer `whatsapp`, parts built with its toolkit: text, buttons, a list, a carousel,
   an image, a document, each checked against Meta's limits): after an answer, features show more
@@ -612,6 +616,161 @@ org's rows copy elsewhere unchanged (`copyTenant`). Blobs (strings over 16 KiB, 
 live in the store by default, or as files (`fileBlobs`), in a bucket (`httpBlobs`), or in Google
 Cloud Storage (`gcsBlobs`).
 
+## Maintenance
+
+When an app's operators can't reach its database (a client's network that keeps their database user
+out), the `maintenance` plugin (`copilotz/plugins/interfaces`) answers for it over HTTP, under
+`/maintenance/`, with a key the app gives it:
+`resources: { maintenance: { key: process.env.MAINTENANCE_KEY } }`. It's the one place an app runs
+SQL of its own: plugin code never does.
+
+```sh
+curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
+  -d '{"sql": "SELECT _id, text FROM message WHERE thread = $1", "params": ["t1"]}'
+```
+
+| Endpoint                                          | What it does                                                                                           |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /maintenance/`                               | What's here: whether the store runs SQL, the collections, the limits                                   |
+| `POST /maintenance/sql`                           | `{ sql, params?, limit?, timeout? }`: one read-only statement: `{ rows, count, truncated, ms }`        |
+| `POST /maintenance/sql/write`                     | `{ sql, params?, limit?, timeout? }`: one that writes, in the owner: `{ changed, rows, event }`        |
+| `POST /maintenance/collections/<collection>/<op>` | `insertOne` `{ doc }`… `deleteMany` `{ filter }`, and `find`, `findOne`, `countDocuments`, `aggregate` |
+| `POST /maintenance/queries/<collection>.<name>`   | A collection's named query (`booking.stats`), the body its params: `{ result, ms }`                    |
+| `GET /maintenance/blobs/<sha256-…>`               | A blob's bytes and type, as a download                                                                 |
+
+- **Keys:** `key`, or several in `keys` while one rotates (add the new, move clients, drop the old).
+  Each is at least 32 random characters: a short one, or one plainly not random, stops the app from
+  starting. Every request shows one (`Authorization: Bearer <key>`), compared in constant time;
+  without a key configured, every request is unauthorized, the same answer as a wrong key.
+- **Who:** a request acts as the maintenance actor
+  (`{ kind: "maintenance", id: "maintenance", by }`, `by` from `X-Maintenance-By`, as said). Its
+  Actions let only it call them, and run as the system on the record (`ctx.as()`): no rule keeps it
+  from a document, and every event says `via` it. Writes take an `Idempotency-Key`: sent again, one
+  answers what it did the first time.
+- **On record twice:** before it runs, each request writes a line (`log`, by default JSON on
+  standard output, which Cloud Run keeps): who, what (a statement's SHA-256, its params' count; an
+  operation, a query, a blob), which key, when. A SQL write also records a `maintenance.sql` event
+  in the same commit. The line is the record the key's holder can't rewrite.
+- **Limits:** `limit` rows (1,000), `timeout` ms (30 s) and `bytes` of rows in an answer (8 MB; past
+  it the rows are cut, and `truncated` says so). A request may ask for less. A pipeline stops at the
+  limit too.
+- **Operations go through the owner's write path:** checked against the collection's schema,
+  recorded as its events, cached and heard by Processors like any write. Prefer them. Named queries
+  run as the system does them (`runtime.query` with no actor), and check their own params.
+- **Read SQL** is one statement (a `;` outside its strings and comments ends it; PostgreSQL's line
+  comments end at a CR too, and maintenance reads strings with `standard_conforming_strings` on) in
+  a read-only transaction, always rolled back, stopped at its limit and cut off at its timeout.
+- **Raw SQL writes run inside the owner** (`runtime.maintenance.write`, see `runtime/maintain.ts`),
+  for what operations can't do: alone among its writes (those running end first, the next wait for
+  it), in a transaction fenced by its epoch, so an owner that lost the store can't run one, with its
+  `maintenance.sql` event in the same commit (the statement, its params, the rows it changed in any
+  table, who). It bypasses schemas and per-document events, so the owner then forgets what it
+  derived from documents: its cache empties, observed Views run again, and the clock reads the
+  timers again. A statement that ends or nests its transaction (`COMMIT`, `SAVEPOINT`…) or changes
+  its connection (`SET`, `PREPARE`, `LISTEN`, SQLite's `ATTACH`, `PRAGMA`…) doesn't run, and in
+  PostgreSQL neither does one that reaches past the statement: `ALTER ROLE` (a role may set its own
+  password and settings, which outlive the key), `DO` (a block runs statements nothing reads first)
+  and `LOCK` (it would hold the store's tables against the app's own writes). A write still holds
+  the row locks it takes (the rows an `UPDATE` changes) until it commits: app writes to those rows
+  wait, at most its `timeout`, and with at most 2 maintenance statements at once. One that changes
+  the store's own state (`meta`: the fencing epoch, Processors' positions), or what the role holds
+  (a large object, a setting), or, in SQLite, leaves a temporary object, is rolled back. The record
+  keeps a password literal as `PASSWORD '***'`.
+- **Nothing outlives its statement:** on a PostgreSQL server each statement runs on a connection of
+  its own, closed after, so what it sets on its session (a setting, a session lock, a prepared
+  statement) goes with it; and it goes over the extended protocol, where the server refuses a second
+  statement whatever the check said. PGlite has one session: it forgets what maintenance left there
+  (`DISCARD ALL`). A SQLite read runs apart, in a process of this runtime of its own on a read-only
+  connection, killed at its timeout: a statement that never ends doesn't hold the app, a core or the
+  WAL. The process is `deno`, `node` or `bun` itself (never a compiled app, which would be the app
+  again), with an empty environment, and on Deno and Node allowed to read the database's files and
+  nothing else; on Deno it's started only with permission to run already granted, so nothing ever
+  asks mid-request. Where none can start (a database opened another way, `:memory:`, a compiled app,
+  no permission), reads run on the store's reading connection, one at a time, with no timeout, a
+  pragma only from those that only read: the store says so once, with why, and each such answer says
+  `inline: true`. SQLite writes name the store's tables in `main`, so nothing temporary stands in
+  for them. Each store runs at most 2 maintenance statements at once
+  (`maintenance: { connections }`): another answers busy (503).
+- **Where:** SQL needs a SQL store. On a PostgreSQL server only as a role of its own (below), never
+  in a schema other tenants share; PGlite, in the app's process, runs it as its one session where it
+  reaches no other schema. An orgs host's orgs don't get the plugin at all (one key would reach
+  every org). Operations, named queries and blobs work everywhere, the memory store too, and need no
+  role.
+
+### A role of its own
+
+On a PostgreSQL server, raw SQL runs only as a role of its own, named by the store:
+`postgresStore({ url, schema, maintenance: { url: process.env.MAINTENANCE_DATABASE_URL } })`.
+Without one it's refused. The store's role owns the tables, may stop the app's connections and is
+whatever the deployment made it (a superuser, even): nothing that runs at a key's word should be it.
+
+Before each statement, on the connection that runs it, and again after a write in its transaction,
+maintenance checks that the role holds exactly what the SQL below grants, and refuses it otherwise
+(rolling a write back), saying what's more: an attribute beyond `LOGIN` (superuser, `CREATEROLE`…);
+membership in any role at all, predefined (`pg_*`) or not, and whatever its `INHERIT` or `SET`
+options (a member could `SET ROLE` to it); settings of its own (`ALTER ROLE … SET`); anything it
+owns, a large object too (what it makes for its own session, a temporary table, goes with its
+connection); anything granted to it outside the store's schema and database; `CREATE` on any schema
+(`public` too) or on the database; any privilege on a table or a column of another schema; on the
+store's own tables, anything beyond the grants below (no `TRIGGER`, `TRUNCATE` or `REFERENCES`; on
+`events` only `INSERT`); a large object it may read (`lo_compat_privileges`, or one granted to
+`PUBLIC`); a `SECURITY DEFINER` function it may run (one runs as its owner); `dblink` or
+`postgres_fdw` in the database; and a trigger on the store's tables, which the store never makes.
+The checks name every catalog they read as `pg_catalog`'s, after setting the search path back to it,
+so nothing a statement made stands in for them.
+
+Prefer a role with no password at all, signed in by the platform: Cloud SQL's IAM database
+authentication, or a client certificate. A password is a second key, valid for as long as nobody
+changes it. On Cloud SQL, with a service account of its own for maintenance:
+
+```sh
+gcloud sql users create maintenance@PROJECT.iam --instance=INSTANCE --type=cloud_iam_service_account
+gcloud projects add-iam-policy-binding PROJECT \
+  --member=serviceAccount:maintenance@PROJECT.iam.gserviceaccount.com \
+  --role=roles/cloudsql.instanceUser   # and roles/cloudsql.client, to connect
+# The app reaches it through the Cloud SQL Auth Proxy, which signs it in (no password):
+#   cloud-sql-proxy --auto-iam-authn --impersonate-service-account=maintenance@PROJECT.iam.gserviceaccount.com \
+#     --port 5433 PROJECT:REGION:INSTANCE
+# MAINTENANCE_DATABASE_URL=postgres://maintenance%40PROJECT.iam@127.0.0.1:5433/DATABASE
+```
+
+Cloud SQL makes such a role a member of its own marker role (`cloudsqliamserviceaccount`, or
+`cloudsqliamuser` for a person): that one membership is allowed, without ADMIN OPTION. Every IAM
+user is a member of the marker too, so the marker may hold nothing at all: grant it nothing, not
+even the grants below (maintenance refuses a marker that holds anything). Then the grants below,
+naming `"maintenance@PROJECT.iam"`.
+
+Elsewhere, as the store's role (the schema's owner), with the schema made (the app has started
+once), and as a role that may create roles for the first line:
+
+```sql
+-- LOGIN and nothing else; never grant it a role. (On Cloud SQL with IAM, gcloud makes it.)
+CREATE ROLE copilotz_maintenance LOGIN PASSWORD '…' NOINHERIT;
+GRANT USAGE ON SCHEMA copilotz TO copilotz_maintenance;
+-- Reading everything there, the collections' views too, now and later.
+GRANT SELECT ON ALL TABLES IN SCHEMA copilotz TO copilotz_maintenance;
+ALTER DEFAULT PRIVILEGES IN SCHEMA copilotz GRANT SELECT ON TABLES TO copilotz_maintenance;
+-- Changing documents, edges, vectors and blobs.
+GRANT INSERT, UPDATE, DELETE ON copilotz.nodes, copilotz.edges, copilotz.vectors, copilotz.blobs
+  TO copilotz_maintenance;
+-- Appending to the log (its own audit events), never changing it.
+GRANT INSERT ON copilotz.events TO copilotz_maintenance;
+-- Holding the fence while it writes (FOR SHARE needs it); a statement that changes meta is rolled back.
+GRANT UPDATE (value) ON copilotz.meta TO copilotz_maintenance;
+-- PostgreSQL 14 and earlier let everyone create in public.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+Replace `copilotz` with the store's schema. `PUBLIC` keeps `CONNECT` on the database, `TEMPORARY`,
+and `USAGE` on `public`; those are allowed. A `SECURITY DEFINER` function can be run by everyone
+(`PUBLIC`) unless revoked: find them, and revoke it from each (or maintenance refuses, naming them):
+
+```sql
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.prosecdef
+  AND p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace);
+REVOKE EXECUTE ON FUNCTION some_schema.some_function(…) FROM PUBLIC;
+```
+
 ## The example app
 
 `examples/terminal-agent` is an app on all of it: an assistant and a researcher, notes in spaces,
@@ -649,7 +808,7 @@ connects a computer to it; `/approve once|thread|always|no` answers what agents 
 
 Inside the chat: `/new`, `/threads`, `/open <n>`, `/history`, `/memories`, `/usage [all]`,
 `/metrics [name]` (with `OTEL_EXPORTER_OTLP_ENDPOINT` set, metrics also go to that collector),
-`/prompt [agent]`, `/fork`, `/retry`, `/events [n]`, `/stats`, `/sql <query>` (SQLite only),
+`/prompt [agent]`, `/fork`, `/retry`, `/events [n]`, `/stats`, `/sql <query>` (a SQL store),
 `/quit`. Every turn prints its time, its database round trips, the jobs sent to executors and the
 calls they made back to the owner.
 
@@ -791,6 +950,8 @@ changed, a limited result lost a member, or an existing document newly matched a
   differs between stores); reads inside a transaction, which see the transaction's own writes.
 - **Freshness:** a read that raced a commit to its collection doesn't fill the cache, and a
   transaction's changes reach the cache only once committed, before its events go out.
+- **Maintenance SQL** (see [Maintenance](#maintenance)) changes what the cache can't follow: the
+  owner empties it after one commits, and a read in flight across that fills nothing.
 
 `runtime/tests/cache.test.ts` checks every cached query against a direct store read after each of
 900 random writes, on every store. `createRuntime({ cache: false })` turns the cache off; `stats()`

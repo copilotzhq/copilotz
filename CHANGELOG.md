@@ -1,5 +1,49 @@
 ## Unreleased
 
+- **Maintenance endpoints** (the new `maintenance` plugin, in `copilotz/plugins/interfaces`): HTTP
+  under `/maintenance/` for an app's operators when they can't reach its database. A key (`key`, or
+  several in `keys` to rotate one; 32 random characters at least, a weak one stops the app),
+  compared in constant time; without one, every request is unauthorized. Requests act as the
+  maintenance actor (`{ kind: "maintenance", by }`), whose Actions run as the system on the record,
+  and each writes a line (`log`) before it runs. An orgs host's orgs don't get it.
+  - `POST /maintenance/sql`: one read-only statement, with `params`, at most `limit` rows and
+    `bytes`, cut off after `timeout`.
+  - `POST /maintenance/collections/<collection>/<op>`: insertOne… deleteMany, find… aggregate,
+    through the owner's write path: schema-checked, recorded, cached, heard by Processors.
+  - `POST /maintenance/queries/<collection>.<name>`: a collection's named query, the body its
+    params, read as the system.
+  - `POST /maintenance/sql/write`: one statement that writes, run by the owner alone among its
+    writes, fenced by its epoch, with a `maintenance.sql` audit event in the same commit; then the
+    owner empties its read cache, runs observed Views again and re-reads its timers. A statement
+    that changes `meta` (the epoch, Processors' positions) is rolled back. An `Idempotency-Key`
+    makes it safe to send again.
+  - `GET /maintenance/blobs/<id>`: a blob's bytes, as a download.
+- **SQL on the store port, for maintenance only:**
+  `Store.inspect?(sql, params?, { limit, timeout })` (now SQLite's too), a transaction's
+  `execute?(sql, params?)` and `transaction(…, { maintenance })`. Both run exactly one statement: a
+  second, or one that ends the transaction or changes the connection (`COMMIT`, `SET`…), is refused
+  (PostgreSQL ran every statement of an unparameterized `inspect` before; PostgreSQL's line comments
+  end at a CR too). `runtime.maintenance` is the owner's way to them; plugin code has none. The
+  cache gains `clear()`, observers `stale()`.
+  - **PostgreSQL servers:** raw SQL runs only as a role of its own
+    (`postgresStore({ maintenance: { url, connections } })`), which must hold exactly maintenance's
+    grants: no attribute but LOGIN, membership in no role (but Cloud SQL's IAM marker, itself held
+    to the same), no settings of its own, nothing owned (a large object neither), nothing granted
+    outside the store's schema, `CREATE` nowhere, no large object, table or column of another's to
+    read, nothing on the store's tables beyond what it needs, no `SECURITY DEFINER` function to run,
+    no `dblink` or `postgres_fdw`, no trigger on the store's tables: checked before each statement
+    and again after a write, in its transaction, reading only `pg_catalog`'s names. `ALTER ROLE`,
+    `DO` and `LOCK` don't run; a password literal is kept as `PASSWORD '***'`. Each statement on a
+    connection of its own, over the extended protocol, closed after; at most 2 at once, else `busy`.
+    A read stops fetching before a row would pass its bytes. PGlite runs it as its one session, and
+    discards what it left there.
+  - **SQLite:** the store names its tables in `main`, so a temporary object can't stand in for them
+    (a write that leaves one, or a trigger, is rolled back); a read runs in a process of its own
+    (`deno`, `node` or `bun` itself, never a compiled app; an empty environment; on Deno and Node,
+    read access to the database's files alone), killed at its timeout. Else, on the reading
+    connection, a pragma only from those that only read, said once and on each answer
+    (`inline: true`).
+
 - **Security: a forged blob reference is refused, never loaded.** Large strings are kept as blobs
   and documents hold `{ $blob, size, type }` in their place; the owner loaded any object with a
   string `$blob` on every read. So an Action that stores what it's given (a tool's input, a

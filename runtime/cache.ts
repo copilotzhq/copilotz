@@ -9,6 +9,9 @@
  * read fetches it again: a sort key changed, a limited result lost a member,
  * or an existing document newly matched among ties. Queries with `skip`, or
  * that compare whole objects or arrays, are never cached.
+ *
+ * A change made beside the collections (maintenance SQL) can't be followed:
+ * the owner then forgets everything (`clear`).
  */
 import { compareBy, get, matches } from "./mongo.ts";
 import { canonical } from "./registry.ts";
@@ -64,6 +67,8 @@ export function createCache(
   /** Aggregates, kept until their collection changes. */
   const aggregates = new Map<string, { collection: string; docs: Doc[] }>();
   const generations = new Map<string, number>();
+  /** Times everything was forgotten: a read in flight across one fills nothing. */
+  let cleared = 0;
   let hits = 0;
   let misses = 0;
 
@@ -74,7 +79,8 @@ export function createCache(
     map.set(key, value);
     if (map.size > max) map.delete(map.keys().next().value!);
   };
-  const generation = (collection: string) => generations.get(collection) ?? 0;
+  // Both only grow, so any change to the collection, or a clear, moves the sum.
+  const generation = (collection: string) => (generations.get(collection) ?? 0) + cleared;
 
   const remember = (collection: string, doc: Doc | null, id: string) =>
     touch(documents, docKey(collection, id), doc, maxDocuments);
@@ -177,6 +183,19 @@ export function createCache(
             Number(Boolean(before && matches(before, query.filter)));
         }
       }
+    },
+
+    /**
+     * Forgets everything: for a change it can't follow (maintenance SQL,
+     * which may have changed any document). Reads in flight across it don't
+     * fill the cache; the next read of anything goes to the store.
+     */
+    clear() {
+      cleared++;
+      documents.clear();
+      finds.clear();
+      counts.clear();
+      aggregates.clear();
     },
 
     stats: () => ({ hits, misses }),

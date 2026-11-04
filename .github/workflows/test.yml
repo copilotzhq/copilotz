@@ -11,6 +11,13 @@ on:
   pull_request:
   workflow_call:
 
+# A newer push to the same branch (or PR) cancels the run before it: only the latest commit's
+# result counts, and runners aren't held by superseded runs. Release runs (a tag, through the
+# publish workflow) each have their own tag, so nothing cancels them.
+concurrency:
+  group: test-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: ${{ matrix.runtime }}
@@ -19,6 +26,8 @@ jobs:
       matrix:
         runtime: [deno, node, bun]
     runs-on: ubuntu-latest
+    # A test that hangs fails here, instead of holding a runner for GitHub's 6 hours.
+    timeout-minutes: 40
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -68,6 +77,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

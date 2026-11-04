@@ -11,6 +11,7 @@ import type { Filter, FindOptions } from "../store.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../stores/sql/postgres/mod.ts";
+import { createCache } from "../cache.ts";
 import { env, tempFile, temporary, test } from "../../testing/mod.ts";
 
 const POSTGRES = env("COPILOTZ_TEST_POSTGRES_URL");
@@ -174,4 +175,30 @@ test("a write to one collection leaves other collections' cached queries alone",
   await runtime.query("item.find", query);
   assertEquals(runtime.stats().hits - before.hits, 1);
   await runtime.close();
+});
+
+test("clear forgets everything, and a read in flight across it fills nothing", async () => {
+  const cache = createCache();
+  let stored = [{ _id: "a", text: "old" }];
+  let loads = 0;
+  const load = () => (loads++, Promise.resolve(stored.map((doc) => ({ ...doc }))));
+  const byId = () => cache.find("note", { _id: "a" }, {}, load);
+  const all = (from = load) => cache.find("note", {}, { sort: { _id: 1 } }, from);
+  await byId();
+  await cache.count("note", {}, () => Promise.resolve(1));
+  assertEquals([(await byId())[0].text, loads], ["old", 1]);
+  // A read that started before SQL changed the store, and ends after the clear.
+  let late!: () => void;
+  const slow = all(() =>
+    new Promise((resolve) => late = () => resolve([{ _id: "a", text: "old" }]))
+  );
+  cache.clear();
+  stored = [{ _id: "a", text: "new" }];
+  late();
+  assertEquals((await slow)[0].text, "old");
+  // Neither it nor what was cached before answers now: the store does.
+  assertEquals([(await all())[0].text, loads], ["new", 2]);
+  // What that read brought is cached again, as it is now.
+  assertEquals([(await byId())[0].text, loads], ["new", 2]);
+  assertEquals(await cache.count("note", {}, () => Promise.resolve(7)), 7);
 });

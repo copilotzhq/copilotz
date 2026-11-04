@@ -19,7 +19,8 @@ export type {
   WithId,
   WriteOptions,
 } from "./collection.ts";
-export type { Actor, Doc, Edge, Event, Store } from "./store.ts";
+export type { Actor, Doc, Edge, Event, Executed, Row, Store } from "./store.ts";
+export { type Maintenance, MAINTENANCE_SQL, type Written } from "./maintain.ts";
 export { personOf } from "./actor.ts";
 export { failure, forbidden, inPerson, invalid, people } from "./errors.ts";
 export type { Accumulator, Expr, Pipeline, Stage } from "./aggregate.ts";

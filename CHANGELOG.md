@@ -1,3 +1,26 @@
+## Unreleased
+
+- **Maintenance endpoints** (the new `maintenance` plugin, in `copilotz/plugins/interfaces`): HTTP
+  under `/maintenance/` for an app's operators when they can't reach its database, with one key
+  (`resources.maintenance.key`, at least 32 characters, compared in constant time). Requests act as
+  the maintenance actor (`{ kind: "maintenance", by }`), whose Actions run as the system on the
+  record.
+  - `POST /maintenance/sql`: one read-only statement, with `params`, at most `limit` rows (a cursor
+    in PostgreSQL), cut off after `timeout`.
+  - `POST /maintenance/collections/<collection>/<op>`: insertOne… deleteMany, find… aggregate,
+    through the owner's write path: schema-checked, recorded, cached, heard by Processors.
+  - `POST /maintenance/sql/write`: one statement that writes, run by the owner alone among its
+    writes, fenced by its epoch, with a `maintenance.sql` audit event in the same commit; then the
+    owner empties its read cache, runs observed Views again and re-reads its timers. An
+    `Idempotency-Key` makes it safe to send again.
+  - `GET /maintenance/blobs/<id>`: a blob's bytes, as a download.
+- **SQL on the store port, for maintenance only:**
+  `Store.inspect?(sql, params?, { limit, timeout })` (now SQLite's too), a transaction's
+  `execute?(sql, params?)` and `transaction(…, { alone })`. Both run exactly one statement: a
+  second, or one that ends the transaction or changes the connection (`COMMIT`, `SET`…), is refused
+  (PostgreSQL ran every statement of an unparameterized `inspect` before). `runtime.maintenance` is
+  the owner's way to them; plugin code has none. The cache gains `clear()`, observers `stale()`.
+
 ## 1.0.0-rc.19 — 2026-11-03
 
 - **`terminal` takes the command in `command`.** It took it in `stdin`, while `start_job` takes

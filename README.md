@@ -806,9 +806,9 @@ The log records what happened, with no bookkeeping tables beside it:
   values out on write and back in on read, so plugin code never sees a reference. Only the owner
   makes them: a `$blob` key anywhere in what plugin code writes, or in what an Action is called
   with, is refused (`invalid`), and so is any part of an update's field path that starts with `$` or
-  is `__proto__`, `constructor` or `prototype` (an aggregate's `$group` names no `$…` field either).
-  On read, only an exact reference (those three keys, a `sha256-<64 hex>` id) loads a blob; any
-  other object is data. Blob stores take no other id.
+  is `__proto__` (an aggregate's `$group` names no `$…` field either). A path ends at a reference as
+  at a string. On read, only an exact reference (those three keys, a `sha256-<64 hex>` id) loads a
+  blob; any other object is data. Blob stores take no other id.
 
 ## Schedules
 

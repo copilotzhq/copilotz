@@ -9,11 +9,13 @@
  *   route does that);
  * - asked again, under any request id, up to two minutes after it ended,
  *   it's answered what it said (kept, up to 8,000 characters; a longer
- *   answer is shown again from its step), and the tool doesn't run again;
+ *   answer is shown again from its step), beginning with a line saying it
+ *   wasn't done again, and the tool doesn't run again; a public refusal
+ *   ("That date is in the past.") is such an answer too;
  * - begun and never done (stopped past the line's `stop`, an owner that
- *   restarted mid-call), asked again within 15 minutes, it runs again as
- *   the same step, its tool told it's a retry, with the same `callId`: the
- *   key for what it does outside;
+ *   restarted mid-call, a failure by accident, told "try again"), asked
+ *   again within 15 minutes, it runs again as the same step, its tool told
+ *   it's a retry, with the same `callId`: the key for what it does outside;
  * - later, it's a new call.
  *
  * A read-only tool keeps none: it always runs, and answers what is true now.

@@ -10,7 +10,19 @@ import { assert, assertEquals, assertMatch, assertNotEquals, assertRejects } fro
 import { test } from "../../../../testing/mod.ts";
 import type { Message, Step } from "../../../agents/chat/mod.ts";
 import { callIdOf, conversationOf, sameCallOf } from "../shared/keys.ts";
-import { charges, closed, handleIn, hangs, runs, said, SECRET, setup, state } from "./setup.ts";
+import {
+  AGAIN,
+  charges,
+  closed,
+  handleIn,
+  hangs,
+  own,
+  runs,
+  said,
+  SECRET,
+  setup,
+  state,
+} from "./setup.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 
 const SCOPE = { line: "chatgpt" };
@@ -224,16 +236,19 @@ test("a tool that changes things: sent again, answered from the first; asked aga
   await setup(async (s) => {
     const first = await s.call("pick", { trip: "T1" }, { session: "c", id: 7 });
     const again = await s.call("pick", { trip: "T1" }, { session: "c", id: 7 });
-    assertEquals(said(again), said(first));
+    // Said again, saying so: a model asking twice on purpose isn't told it was done twice.
+    assertMatch(said(again), AGAIN);
+    assertEquals(own(said(again)), said(first));
     assertEquals(runs.pick, 1);
     const { thread } = await chatOf("c");
     assertEquals((await s.steps(thread)).length, 1);
     // A client that numbers each call from 1: the same id, asking something else, runs.
     assertEquals(said(await s.call("pick", { trip: "T2" }, { session: "c", id: 7 })), "Picked T2.");
     assertEquals(runs.pick, 2);
+    // A failure by accident ("try again") isn't kept: asked again, it runs again, as itself.
     await s.call("boom", {}, { session: "c", id: 8 });
     const boomAgain = await s.call("boom", {}, { session: "c", id: 8 });
-    assertEquals([boomAgain.body.result?.isError, runs.boom], [true, 1]);
+    assertEquals([boomAgain.body.result?.isError, runs.boom], [true, 2]);
     // Two minutes after its answer, the same request is asked again for a reason: it runs, as a
     // new call, with a callId of its own (what it does outside isn't taken for the first's).
     const before = JSON.parse(said(await s.call("whoami", {}, { session: "c", id: 9 })));
@@ -244,6 +259,41 @@ test("a tool that changes things: sent again, answered from the first; asked aga
     assertNotEquals(after.callId, before.callId);
     const names = (await s.steps(thread)).map((m) => (m.toolCalls as Step[])[0].name);
     assertEquals(names, ["pick", "pick", "boom", "whoami", "pick", "whoami"]);
+  });
+});
+
+test("a deliberate second, identical call is told it wasn't done again, never that it was", async () => {
+  await setup(async (s) => {
+    assertEquals(said(await s.call("pick", { trip: "T1" }, { session: "d", id: 1 })), "Picked T1.");
+    const second = said(await s.call("pick", { trip: "T1" }, { session: "d", id: 2 }));
+    assertMatch(second, /^This same request was made moments ago, and it wasn't done again/);
+    assertEquals(own(second), "Picked T1.");
+    assertEquals(runs.pick, 1);
+    // Another conversation's identical call is its own.
+    assertEquals(said(await s.call("pick", { trip: "T1" }, { session: "e", id: 1 })), "Picked T1.");
+    assertEquals(runs.pick, 2);
+  });
+});
+
+test("a failure by accident: the retry it asks for runs again, as itself; a refusal is said again", async () => {
+  await setup(async (s) => {
+    // `boom` fails as a bare throw: "try again in a moment". The model does, under a new id.
+    const first = await s.call("boom", {}, { session: "f", id: 1 });
+    assertMatch(said(first), /Try again in a moment/);
+    const retry = await s.call("boom", {}, { session: "f", id: 2 });
+    assertEquals(runs.boom, 2);
+    assert(!AGAIN.test(said(retry)));
+    // The same step, the same callId: the tool knows it's the retry.
+    const { thread } = await chatOf("f");
+    assertEquals(
+      (await s.steps(thread)).filter((m) => (m.toolCalls as Step[])[0].name === "boom").length,
+      1,
+    );
+    // A public refusal is a deliberate answer: asked again, it's said again, not run.
+    const refused = said(await s.call("refuse", {}, { session: "f", id: 3 }));
+    const again = said(await s.call("refuse", {}, { session: "f", id: 4 }));
+    assertEquals([refused, own(again), runs.refuse], ["That date is in the past.", refused, 1]);
+    assertMatch(again, AGAIN);
   });
 });
 
@@ -284,7 +334,9 @@ test("the same request twice at once runs once; two different first calls share 
       s.call("slow", {}, { session: "c", id: "same" }),
       s.call("slow", {}, { session: "c", id: "same" }),
     ]);
-    assertEquals([said(a), said(b)], ["Done, slowly.", "Done, slowly."]);
+    assertEquals([own(said(a)), own(said(b))], ["Done, slowly.", "Done, slowly."]);
+    // The one that joined says it wasn't done again.
+    assertEquals([said(a), said(b)].filter((t) => AGAIN.test(t)).length, 1);
     assertEquals(runs.slow, 1);
     const [c, d] = await Promise.all([
       s.call("search", { to: "A" }, { session: "new" }),
@@ -530,7 +582,7 @@ test("past the line's timeout, the model is told it's still working; asked again
     assertMatch(said(late), /^Still working on it/);
     // It goes on: asked again (any request id), it waits for the same run, then answers from it.
     await new Promise((resolve) => setTimeout(resolve, 200));
-    assertEquals(said(await s.call("slow", {}, { session: "c", id: 1 })), "Done, slowly.");
+    assertEquals(own(said(await s.call("slow", {}, { session: "c", id: 1 }))), "Done, slowly.");
     assertEquals(runs.slow, 1);
     const { thread } = await chatOf("c");
     const [step] = await s.steps(thread);
@@ -548,10 +600,11 @@ test("a tool that ignores its signal, past the timeout: one effect, however ofte
     }
     // Each is told it's still working, or, once it's done, what it did.
     assertMatch(said(asks[0]), /^Still working on it/);
-    assert(asks.every((a) => /^(Still working on it|Charged once)/.test(said(a))));
+    assert(asks.every((a) => /^(Still working on it|Charged once)/.test(own(said(a)))));
     await new Promise((resolve) => setTimeout(resolve, 300));
     const answered = said(await s.call("charge", {}, { session: "pay", id: 1 }));
-    assertMatch(answered, /^Charged once, with key mcp:/);
+    assertMatch(answered, AGAIN);
+    assertMatch(own(answered), /^Charged once, with key mcp:/);
     assertEquals(charges.length, 1);
   }, { line: { limits: { timeout: 0.03 } } });
 });
@@ -597,7 +650,7 @@ test("an owner restarted mid-call: asked again under any id, the same call runs 
     const again = JSON.parse(said(await b.call("hang", { ms: 300 }, { session: "r", id: 2 })));
     assertEquals(again.retry, true);
     const same = said(await b.call("hang", { ms: 300 }, { session: "r", id: 1 }));
-    assertEquals(JSON.parse(same).callId, again.callId);
+    assertEquals(JSON.parse(own(same)).callId, again.callId);
     // The first run's tool, ignoring its signal, ended too: every effect under one callId.
     assertEquals(new Set(hangs).size, 1);
   }, { store, line: { limits: { timeout: 0.03 } } });
@@ -689,12 +742,13 @@ test("the same request while it runs, from another address, joins it", async () 
         });
       })(),
     ]);
-    assertEquals([a.status, said(a), b.status, said(b)], [
+    assertEquals([a.status, said(a), b.status, own(said(b))], [
       200,
       "Done, slowly.",
       200,
       "Done, slowly.",
     ]);
+    assertMatch(said(b), AGAIN);
     assertEquals(runs.slow, 1);
   });
 });

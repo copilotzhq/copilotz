@@ -287,6 +287,8 @@ export async function called(
   sweep(runtime, pending, line);
   const address = call.caller && !call.caller.exempt ? call.caller.counted : undefined;
   let run = pending.get(same);
+  // Whether this request's answer is its own run's, or another identical request's (it joined).
+  const joined = !!run;
   if (!run) {
     const release = hold(runtime, [
       { key: "runtime", most: call.atOnce },
@@ -365,9 +367,10 @@ export async function called(
     throw ended.error;
   }
   const done = ended.done;
-  const text = done.text.length > line.limits.result
-    ? `${done.text.slice(0, line.limits.result)}\n[…cut]`
-    : done.text;
+  const said = done.again || joined ? `${AGAIN}\n\n${done.text}` : done.text;
+  const text = said.length > line.limits.result
+    ? `${said.slice(0, line.limits.result)}\n[…cut]`
+    : said;
   // The handle, once: in the answer that made the conversation.
   return answer(made && done.ran ? `${text}\n\nchat: ${made}` : text, !!done.isError);
 }
@@ -387,6 +390,13 @@ type Run = {
   ended?: true;
   late?: () => void;
 };
+
+/**
+ * What an answer begins with when it's an identical, earlier request's (it ran once): so a model
+ * asking twice on purpose (a second ticket) isn't told it was done twice.
+ */
+const AGAIN = "This same request was made moments ago, and it wasn't done again: this is what " +
+  "it answered then.";
 
 /** What the model is told of a call stopped past the line's `stop`. */
 const STOPPED = "It was stopped before it finished: ask again with the same request to run it " +

@@ -35,8 +35,11 @@
     keeps a receipt (`mcp_receipt`, durable, no events, gone after 15 minutes) by what it asks in
     its conversation (tool and input), whatever the request's id: the same call while it runs waits
     for that run; asked again, under any id, within two minutes of its end it's answered what it
-    said (kept up to 8,000 characters); begun and never done (stopped, an owner restarted), it runs
-    again as the same step, with `retry` and the same `callId`. A read-only tool always runs.
+    said (kept up to 8,000 characters), beginning with a line saying it wasn't done again (so a
+    second, deliberate purchase isn't taken for done); begun and never done (stopped, an owner
+    restarted, or failed by accident and told to try again), it runs again as the same step, with
+    `retry` and the same `callId`. A public refusal is an answer, and is said again. A read-only
+    tool always runs.
   - **Limits** (`limits`): calls at once in the runtime (`mcp.atOnce`, 4: each org's own under the
     orgs host), on the line (4: an executor's connection takes about that many tools that change
     things at once until Oxian's send backpressure is released), from one caller's address (2; a

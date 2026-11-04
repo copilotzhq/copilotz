@@ -576,6 +576,13 @@ export async function setup(
 /** Runtimes a test closed itself. */
 export const closed = new WeakSet<Runtime>();
 
+/** How an answer that's an earlier, identical request's begins. */
+export const AGAIN =
+  /^This same request was made moments ago, and it wasn't done again: [^\n]*\n\n/;
+
+/** An answer's own words, without that line. */
+export const own = (text: string) => text.replace(AGAIN, "");
+
 /** The text an answer says. */
 export const said = (rpc: Rpc) => rpc.body.result?.content?.[0]?.text ?? "";
 

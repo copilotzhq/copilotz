@@ -373,7 +373,7 @@ const declaring = definePlugin({
   resources: {
     whatsapp: {
       lines: {
-        mobifacil: {
+        azul: {
           in: "line-space",
           phoneId: "222333444",
           token: TOKEN,
@@ -395,7 +395,7 @@ const declaring = definePlugin({
     "test.close": defineAction({
       input: { type: "object" },
       run: (ctx) =>
-        ctx.db.collection("whatsapp_number").updateOne({ _id: "mobifacil" }, {
+        ctx.db.collection("whatsapp_number").updateOne({ _id: "azul" }, {
           $unset: { open: "" },
         }),
     }),
@@ -405,7 +405,7 @@ const declaring = definePlugin({
 test("a line the app declares answers customers with no person connecting or opening it", async () => {
   await setup(async (s) => {
     const { runtime, graph, serve } = s;
-    await runtime.call("space.create", { id: "line-space", name: "Mobifácil" }, { actor: ana });
+    await runtime.call("space.create", { id: "line-space", name: "Viação Azul" }, { actor: ana });
     const hook = "http://localhost/webhooks/meta";
     const handshake = await serve(
       new Request(
@@ -457,7 +457,7 @@ test("a line the app declares answers customers with no person connecting or ope
     assertEquals(graph.texts(CARLA), ["heard *Carla: uma passagem para Santos*"]);
     // Its people can't change it: the settings do.
     await assertRejects(
-      () => runtime.call("whatsapp.set", { number: "mobifacil", open: false }, { actor: ana }),
+      () => runtime.call("whatsapp.set", { number: "azul", open: false }, { actor: ana }),
       Error,
       "the app's own",
     );

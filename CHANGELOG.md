@@ -1,5 +1,11 @@
 ## 1.0.0-rc.21 — 2026-11-04
 
+- **Security: a burst of calls no longer drops an executor's connection** (Oxian 0.23.3). About 35
+  concurrent calls on one executor (around 20 holding transactions) filled Oxian's queues, and the
+  connection was lost with every job in flight on it (`executor_lost`): a remote DoS on any app
+  with a public entry point, flagged by a security review. Full queues now hold senders back
+  instead. Long-lived workers also move to a fresh connection before one's streams run out,
+  instead of failing calls with `capacity`; Copilotz treats the move as the same worker (#154).
 - **MCP: models outside the app call its tools** (the new `mcp` interface; widgets come next). An
   app declares lines in `resources.mcp.lines.<name>`, each an MCP server at `POST /mcp/<name>`
   (`/o/<org>/mcp/<name>` under many orgs): the space its chats live in (`in`), the tools it offers

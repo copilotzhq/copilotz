@@ -5,7 +5,9 @@
  *
  * How a conversation moves:
  * - A message addressed to agents records one `turn.requested` per agent, in
- *   the message's own commit. Turns run keyed by thread and agent, so
+ *   the message's own commit; or, sent with `quiet` (a customer writing in
+ *   bursts), once its sender has been quiet that long (`chat.quiet`, by a
+ *   timer each message sets again), answering them all at once. Turns run keyed by thread and agent, so
  *   different agents work in parallel and each agent's turns stay in order.
  * - An agent's final answer goes back to whoever addressed it, as a reply.
  * - An agent that sent messages expecting replies stops, leaving a `wait`
@@ -22,6 +24,15 @@
  *   what it does outside).
  * - A person moves a conversation to another space (`chat.move`), with
  *   everything in it; not while an agent is writing in it.
+ * - A chat can be opened empty (`chat.open`), to share it with a contact
+ *   (someone outside the org, who then writes there with `chat.send` and
+ *   reaches only it); trusted code has an agent say a fixed message in one
+ *   without a turn (`chat.say`: a payment confirmed), and erases one with
+ *   everything in it (`chat.erase`: someone's data, gone).
+ * - After an agent's answer, a medium may show more (additions: a carousel
+ *   of trips after the answer that found them), each once per chat per key,
+ *   recorded in `shown` (`chat.shown`), and told to the model after that
+ *   answer (`[then shown: …]`). A choice tapped comes with its id (`tap`).
  * - Threads record where they came from (`parent`). A fork (a subthread) sees
  *   its parent's conversation up to the message it started at, through every
  *   level, without copying it; a new thread starts from its first message.
@@ -46,17 +57,25 @@
  * - `tools`:  { description, input?, run(input) };
  * - `agentSources`: { action }: `{ names }` in, the definitions of those the asker meets out;
  * - `roster`: { action }: `{ space }` in, `{ agents, default? }` out;
- * - `agentModel`: { action }: `{ agent, space? }` in, a model or null out.
+ * - `agentModel`: { action }: `{ agent, space? }` in, a model or null out;
+ * - `additions`: { order?, agents? }, each with an `addition:<name>` View in
+ *   the medium that shows it, given `{ thread, answer }` (see `Addition`).
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { eraseAction } from "./actions/erase.ts";
 import { forkAction } from "./actions/fork.ts";
 import { moveAction } from "./actions/move.ts";
+import { openAction } from "./actions/open.ts";
+import { quietAction } from "./actions/quiet.ts";
+import { sayAction } from "./actions/say.ts";
 import { sendAction } from "./actions/send.ts";
+import { shownAction } from "./actions/shown.ts";
 import { stopAction } from "./actions/stop.ts";
 import { file } from "./collections/file.ts";
 import { intent } from "./collections/intent.ts";
 import { live } from "./collections/live.ts";
 import { message } from "./collections/message.ts";
+import { shown } from "./collections/shown.ts";
 import { thread } from "./collections/thread.ts";
 import { wait } from "./collections/wait.ts";
 import { turnRequested } from "./events/turn-requested.ts";
@@ -75,7 +94,7 @@ export { lineage } from "./shared/lineage.ts";
 export const chat: Plugin = definePlugin({
   name: "chat",
   requires: ["models"],
-  collections: { thread, message, wait, live, file, intent },
+  collections: { thread, message, wait, live, file, intent, shown },
   views: {
     thread: { llm: prompt },
     participants: { llm: participants },
@@ -101,14 +120,28 @@ export const chat: Plugin = definePlugin({
   },
   actions: {
     "chat.send": sendAction,
+    "chat.open": openAction,
+    "chat.say": sayAction,
+    "chat.quiet": quietAction,
+    "chat.shown": shownAction,
+    "chat.erase": eraseAction,
     "chat.fork": forkAction,
     "chat.stop": stopAction,
     "chat.move": moveAction,
   },
   events: { "turn.requested": turnRequested },
-  // Conversations by title on Usage.
   resources: {
+    // Conversations by title on Usage.
     usageNames: { thread: { tag: "tags.thread", collection: "thread", field: "title" } },
+    // With the access plugin, chats live in spaces, and what's in a chat comes with it when it's
+    // shared on its own (with a contact): its messages, files and what's being written.
+    shared: {
+      thread: {},
+      message: { labels: true, part: "thread" },
+      file: { part: "thread" },
+      live: { part: "thread" },
+      shown: { part: "thread" },
+    },
   },
   processors: {
     "chat.turn": turnProcessor,

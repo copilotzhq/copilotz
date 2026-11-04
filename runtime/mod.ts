@@ -21,8 +21,17 @@ export type {
 } from "./collection.ts";
 export type { Actor, Doc, Edge, Event, Executed, Inspected, Row, Store } from "./store.ts";
 export { type Maintenance, MAINTENANCE_SQL, redacted, type Written } from "./maintain.ts";
-export { personOf } from "./actor.ts";
-export { failure, forbidden, inPerson, invalid, people } from "./errors.ts";
+export { personOf, principalOf } from "./actor.ts";
+export { linksOf, type LinksSettings, signLink, verifyLink } from "./links.ts";
+export {
+  contacts,
+  failure,
+  forbidden,
+  inPerson,
+  invalid,
+  people,
+  peopleOrContacts,
+} from "./errors.ts";
 export type { Accumulator, Expr, Pipeline, Stage } from "./aggregate.ts";
 export {
   type Attributes,
@@ -50,6 +59,6 @@ export {
   TIMERS,
   type When,
 } from "./schedules.ts";
-export type { BlobRef, Blobs } from "./blobs.ts";
+export { type BlobRef, type Blobs, checkBlobId } from "./blobs.ts";
 /** A JSON Schema check, as the runtime runs them: throws `invalid` with where it failed. */
 export { compile as validator } from "./registry.ts";

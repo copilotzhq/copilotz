@@ -176,7 +176,7 @@ each(
     assertEquals(await said(runtime, thread), [
       "ana: A seat, please.",
       "clerk (step) Booking it.: book 1 → booked 1",
-      "clerk (failed): clerk failed: the view failed after the tool ran",
+      "clerk (failed): clerk failed: something went wrong, so it couldn't answer. Try again in a moment.",
     ]);
     assertEquals((await store.find("charge")).length, 1);
     // Its next turn is told the seat was booked.

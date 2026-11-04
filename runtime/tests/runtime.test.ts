@@ -806,3 +806,35 @@ each("queries are named reads on collections, from clients and from plugin code"
   await assertRejects(() => runtime.query("nope.all"), Error, 'Unknown query "nope.all"');
   await runtime.close();
 });
+
+test("a fenced owner's close still closes its store and stops its executors, and says why", async () => {
+  // A Processor's position the first owner hasn't saved yet, when a second owner takes the
+  // store: its close can't save it (fenced), and must still let everything go.
+  const path = tempFile(".sqlite");
+  const notes = definePlugin({
+    name: "notes",
+    collections: { note: defineCollection({ schema: { type: "object" } }) },
+    actions: {
+      "note.add": defineAction({
+        input: { type: "object" },
+        run: (ctx) => ctx.db.collection("note").insertOne({ _id: "n1", text: "a" }),
+      }),
+    },
+    processors: { "notes.seen": { on: "*", run: () => {} } },
+  });
+  const opened = await sqliteStore({ path });
+  let closed = false;
+  const store = { ...opened, close: async () => (closed = true, await opened.close()) };
+  const first = await createRuntime({ store, plugins: [notes] });
+  await first.call("note.add", {});
+  await first.idle();
+  const second = await createRuntime({ store: await sqliteStore({ path }), plugins: [notes] });
+  try {
+    await assertRejects(() => first.close());
+    assert(closed, "the first owner's store is closed");
+    // Its executors are gone: an Action on it never runs.
+    await assertRejects(() => first.call("note.missing", {}));
+  } finally {
+    await second.close();
+  }
+});

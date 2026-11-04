@@ -1,6 +1,7 @@
 /**
  * `whatsapp.hook`: a connected number's webhook (`/hooks/whatsapp/<number>`,
- * the web host's `routes` resource), as Meta calls it.
+ * the web host's `routes` resource), as Meta calls it; or a line the app
+ * declares, at `/hooks/whatsapp/<name>` or the path it routes here.
  *
  * - `GET`, when the webhook is set up: Meta shows the number's verify token
  *   and a challenge, which goes back as it came.
@@ -9,7 +10,8 @@
  *   delivery Meta signed goes on. Each message it carries is recorded as
  *   `whatsapp.received`, by WhatsApp's id for it, so a delivery Meta sends
  *   again changes nothing; what happens next is the Processors' (see
- *   processors/receive.ts). One delivery may carry messages to several of
+ *   processors/receive.ts). So is each failed status of what was sent
+ *   (`whatsapp.undelivered`: see processors/reply.ts). One delivery may carry messages to several of
  *   the app's numbers, as long as they share its Meta app.
  *
  * Anyone may call it (it answers as a visitor); it reads the number's
@@ -20,7 +22,9 @@ import { defineAction } from "../../../../runtime/mod.ts";
 import type { WhatsAppNumber } from "../collections/number.ts";
 import type { WhatsAppSecret } from "../collections/secret.ts";
 import { bytesOf, type HttpAnswer, httpRequest } from "../shared/http.ts";
-import { inboundOf } from "../shared/payload.ts";
+import { inboundOf, undeliveredOf } from "../shared/payload.ts";
+import { connected } from "../shared/number.ts";
+import { linesOf } from "../shared/settings.ts";
 import { same, signed } from "../shared/signature.ts";
 
 /** Where each number's webhook is. */
@@ -34,12 +38,16 @@ export const hookAction = defineAction({
   record: false,
   allow: () => true,
   run: async (ctx, request): Promise<HttpAnswer> => {
-    const id = request.path.startsWith(HOOKS)
-      ? decodeURIComponent(request.path.slice(HOOKS.length)).replace(/\/$/, "")
-      : "";
+    // A line the app declares, at the path it chose; else a number connected here, by its id.
+    const lines = linesOf(ctx);
+    const path = request.path.replace(/\/$/, "");
+    const declared = Object.entries(lines)
+      .find(([name, line]) => (line.path ?? `${HOOKS}${name}`).replace(/\/$/, "") === path)?.[0];
+    const id = declared ??
+      (path.startsWith(HOOKS) ? decodeURIComponent(path.slice(HOOKS.length)) : "");
     const system = ctx.as();
     const secrets = system.db.collection<WhatsAppSecret>("whatsapp_secret");
-    const own = id ? await secrets.findOne({ _id: id }) : null;
+    const own = declared ? lines[declared] : id ? await secrets.findOne({ _id: id }) : null;
     if (!own) return plain(404, "No such number");
 
     if (request.method === "GET") {
@@ -54,7 +62,8 @@ export const hookAction = defineAction({
       return plain(401, "Bad signature");
     }
 
-    // Signed by the Meta app: what it says is WhatsApp's.
+    // Signed by the Meta app: what it says is WhatsApp's. A declared line is kept as the app says.
+    if (declared) await connected(ctx, declared);
     let payload: unknown;
     try {
       payload = JSON.parse(new TextDecoder().decode(bytesOf(request)));
@@ -62,10 +71,11 @@ export const hookAction = defineAction({
       return plain(400, "Not JSON");
     }
     const inbound = inboundOf(payload);
-    if (!inbound.length) return plain(200, "ok");
+    const failed = undeliveredOf(payload);
+    if (!inbound.length && !failed.length) return plain(200, "ok");
     const numbers = system.db.collection<WhatsAppNumber>("whatsapp_number");
     const found = await numbers.find({
-      phoneId: { $in: [...new Set(inbound.map((m) => m.phoneId))] },
+      phoneId: { $in: [...new Set([...inbound, ...failed].map((m) => m.phoneId))] },
     });
     // A number of the same Meta app (the secret that signed it), this one first.
     const ours = new Map<string, string>();
@@ -75,7 +85,8 @@ export const hookAction = defineAction({
       if (theirs && same(theirs.secret, own.secret)) ours.set(n.phoneId, n._id);
     }
     const kept = inbound.filter((m) => ours.has(m.phoneId));
-    if (kept.length) {
+    const lost = failed.filter((m) => ours.has(m.phoneId));
+    if (kept.length || lost.length) {
       // One commit for them all.
       await ctx.transaction((tx) => {
         for (const { phoneId, message, name } of kept) {
@@ -84,6 +95,14 @@ export const hookAction = defineAction({
             "whatsapp.received",
             { number, from: message.from, ...(name ? { name } : {}), message },
             { id: `whatsapp:${number}:${message.id}` },
+          );
+        }
+        for (const { phoneId, wamid, to, errors } of lost) {
+          const number = ours.get(phoneId)!;
+          tx.emit(
+            "whatsapp.undelivered",
+            { number, wamid, to, ...(errors ? { errors } : {}) },
+            { id: `whatsapp:${number}:${wamid}:failed` },
           );
         }
         return Promise.resolve();

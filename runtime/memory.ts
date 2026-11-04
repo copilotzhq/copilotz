@@ -19,6 +19,7 @@ import {
   type Vector,
 } from "./store.ts";
 import { applyUpdate, check, matches, seedOf, sortAndPage } from "./mongo.ts";
+import { checkBlobId } from "./blobs.ts";
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -98,7 +99,10 @@ export function memoryStore(): Store {
           ),
         );
       },
-      blob: (id) => Promise.resolve(layer?.blobs.get(id) ?? blobs.get(id) ?? null),
+      blob: async (id) => {
+        checkBlobId(id);
+        return layer?.blobs.get(id) ?? blobs.get(id) ?? null;
+      },
       events: (after, limit = 1000) =>
         Promise.resolve(log.filter((e) => e.seq > after).slice(0, limit)),
       related: (id, types) =>
@@ -192,9 +196,8 @@ export function memoryStore(): Store {
         layer.edges.set(edgeKey(edge), null);
         return Promise.resolve();
       },
-      putBlob(value) {
-        layer.blobs.set(value.id, structuredClone(value));
-        return Promise.resolve();
+      async putBlob(value) {
+        layer.blobs.set(checkBlobId(value.id), structuredClone(value));
       },
       putVector(value) {
         layer.vectors.set(vectorKey(value), structuredClone(value));

@@ -1,15 +1,17 @@
 /**
  * Private fields: what an actor's queries and Views read comes without
  * them; code acting for them (an Action) still reads them, and the system
- * reads everything. No event ever holds them, on any store.
+ * reads everything. An Action's private fields are never in the log, as
+ * what it's given or what it returns, while retries still find its calls.
  */
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   type Actor,
   createRuntime,
   defineAction,
   defineCollection,
   definePlugin,
+  type Event,
   type Store,
   type ViewContext,
 } from "../mod.ts";
@@ -135,3 +137,203 @@ for (const [name, make] of Object.entries(sql)) {
     }
   });
 }
+
+/** How often the booking plugin's code ran, and what its tool calls got back each delivery. */
+const ran = { setBuyer: 0, delivery: 0, got: [] as unknown[] };
+const buyer = {
+  type: "object",
+  properties: { name: { type: "string" }, cpf: { type: "string" } },
+} as const;
+
+/** Personal data in, and back out: a buyer for a booking, as a tool would set it. */
+const booking = definePlugin({
+  name: "booking",
+  collections: {
+    booking: defineCollection({ schema: { type: "object" }, private: ["buyer"] }),
+  },
+  actions: {
+    "booking.setBuyer": defineAction({
+      input: {
+        type: "object",
+        properties: { booking: { type: "string" }, buyer },
+        required: ["booking", "buyer"],
+      },
+      private: ["buyer"],
+      run: async (ctx, input) => {
+        ran.setBuyer++;
+        await ctx.db.collection("booking").updateOne(
+          { _id: input.booking },
+          { $set: { buyer: input.buyer } },
+          { upsert: true },
+        );
+        return { booking: input.booking, buyer: input.buyer, total: 10 };
+      },
+    }),
+    // A card's number in, nothing private out: nothing is kept apart.
+    "booking.pay": defineAction({
+      input: {
+        type: "object",
+        properties: { booking: { type: "string" }, card: { type: "object" } },
+      },
+      private: ["card.number"],
+      run: () => ({ paid: true }),
+    }),
+    // Never ends on its own: it's stopped, and the owner records it.
+    "booking.hold": defineAction({
+      input: { type: "object", properties: { card: { type: "string" } } },
+      private: ["card"],
+      run: () => new Promise(() => {}),
+    }),
+    "booking.ask": defineAction({
+      input: { type: "object", properties: { changes: { type: "boolean" } } },
+      run: (ctx, input) => ctx.emit("booking.asked", input),
+    }),
+  },
+  events: { "booking.asked": { schema: { type: "object" } } },
+  processors: {
+    // As a step's tool calls run: together, each in a branch of its own. It
+    // fails once after they ran, so it's delivered again.
+    "booking.step": {
+      on: "booking.asked",
+      run: async (ctx, event) => {
+        // `changes`: the retry's model gave another CPF for Ana.
+        const cpf = event.data.changes ? `cpf-${ran.delivery}` : "123.456.789-00";
+        ran.got.push(
+          await Promise.all([
+            ctx.branch("1.0").call("booking.setBuyer", {
+              booking: "b1",
+              buyer: { name: "Ana Souza", cpf },
+            }),
+            ctx.branch("1.1").call("booking.setBuyer", {
+              booking: "b2",
+              buyer: { name: "Bia Lima", cpf: "987.654.321-00" },
+            }),
+          ]),
+        );
+        if (++ran.delivery === 1) throw new Error("the step fails after its tools ran");
+      },
+    },
+  },
+});
+
+const PRIVATE = [
+  "Ana Souza",
+  "Bia Lima",
+  "123.456.789-00",
+  "987.654.321-00",
+  "4111 1111 1111 1111",
+];
+/** Whether any private value is anywhere in these events. */
+const leaks = (events: Event[]) =>
+  PRIVATE.filter((value) => JSON.stringify(events).includes(value));
+
+for (const [name, make] of Object.entries(sql)) {
+  test(`${name}: an Action's private fields stay out of the log, and a retry gets all it returned`, async () => {
+    Object.assign(ran, { setBuyer: 0, delivery: 0, got: [] });
+    const store = await make();
+    const rt = await createRuntime({ store, plugins: [booking] });
+    try {
+      const input = { booking: "b1", buyer: { name: "Ana Souza", cpf: "123.456.789-00" } };
+      const first = await rt.call("booking.setBuyer", input, { id: "c1" });
+      assertEquals(first, { ...input, total: 10 });
+      // The same call again answers from its record, whole, without running.
+      assertEquals(await rt.call("booking.setBuyer", input, { id: "c1" }), first);
+      assertEquals(ran.setBuyer, 1);
+      // Another CPF is another call: its id is taken.
+      await assertRejects(
+        () =>
+          rt.call("booking.setBuyer", { ...input, buyer: { ...input.buyer, cpf: "1" } }, {
+            id: "c1",
+          }),
+        Error,
+        "already used for a different call",
+      );
+      // Nothing private in a result: nothing kept apart.
+      await rt.call("booking.pay", {
+        booking: "b1",
+        card: { number: "4111 1111 1111 1111", brand: "visa" },
+      }, {
+        id: "c2",
+      });
+
+      const events = await store.events(0);
+      assertEquals(leaks(events), []);
+      const of = (id: string, type: string) =>
+        events.find((e) => (e.id === id || e.cause === id) && e.type === type)!.data;
+      assertEquals(of("c1", "action.started").input, { booking: "b1" });
+      assertEquals(of("c1", "action.completed").result, { booking: "b1", total: 10 });
+      assertEquals(of("c1", "action.completed").private, true);
+      assertEquals(of("c2", "action.started").input, { booking: "b1", card: { brand: "visa" } });
+      assertEquals(of("c2", "action.completed").result, { paid: true });
+      assertEquals(of("c2", "action.completed").private, undefined);
+      // What a retry answers with is kept apart, with no event of its own.
+      assertEquals(await store.find("sys.results", {}), [{ _id: "c1", result: first }]);
+    } finally {
+      await rt.close();
+    }
+  });
+
+  test(`${name}: a retried delivery finds the calls its tools made with private input`, async () => {
+    Object.assign(ran, { setBuyer: 0, delivery: 0, got: [] });
+    const store = await make();
+    const rt = await createRuntime({ store, plugins: [booking] });
+    try {
+      await rt.call("booking.ask", {});
+      await rt.idle();
+      assertEquals([ran.delivery, ran.setBuyer], [2, 2]);
+      // The retry got back what each call returned the first time, all of it.
+      assertEquals(ran.got[1], ran.got[0]);
+      assertEquals((ran.got[0] as { buyer: unknown }[])[0].buyer, {
+        name: "Ana Souza",
+        cpf: "123.456.789-00",
+      });
+      const events = await store.events(0);
+      assertEquals(leaks(events), []);
+      const started = events.filter((e) => e.type === "action.started" && e.cause);
+      assertEquals(started.map((e) => e.data.input), [{ booking: "b1" }, { booking: "b2" }]);
+    } finally {
+      await rt.close();
+    }
+  });
+}
+
+test("a retried delivery whose tool now gives other private input makes a new call", async () => {
+  Object.assign(ran, { setBuyer: 0, delivery: 0, got: [] });
+  const store = memoryStore();
+  const rt = await createRuntime({ store, plugins: [booking] });
+  try {
+    await rt.call("booking.ask", { changes: true });
+    await rt.idle();
+    // Ana's call ran again, with her new CPF; Bia's answered from the log.
+    assertEquals([ran.delivery, ran.setBuyer], [2, 3]);
+    const events = await store.events(0);
+    const ana = events.filter((e) =>
+      e.type === "action.started" && (e.data.input as { booking?: string }).booking === "b1"
+    );
+    // The same in the log, but two calls: the ids hash the whole input.
+    assertEquals(ana.map((e) => e.data.input), [{ booking: "b1" }, { booking: "b1" }]);
+    assert(ana[0].id !== ana[1].id && ana[0].data.inputHash !== ana[1].data.inputHash);
+    assertEquals(leaks(events), []);
+    assertEquals(JSON.stringify(events).includes("cpf-"), false);
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a call stopped before it recorded anything is recorded by the owner, without its private fields", async () => {
+  const store = memoryStore();
+  const rt = await createRuntime({ store, plugins: [booking] });
+  try {
+    const call = rt.call("booking.hold", { card: "4111 1111 1111 1111" }, { id: "held" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert(await rt.cancel({ call: "held" }));
+    await assertRejects(() => call);
+    const events = await store.events(0);
+    const started = events.find((e) => e.id === "held")!;
+    assertEquals(started.data.input, {});
+    assertEquals(events.find((e) => e.cause === "held")!.type, "action.failed");
+    assertEquals(leaks(events), []);
+  } finally {
+    await rt.close();
+  }
+});

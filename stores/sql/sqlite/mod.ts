@@ -50,6 +50,7 @@ async function builtin(path: string): Promise<SqliteDatabase> {
 import type { JSONSchema } from "../../../runtime/define.ts";
 import { forbidden, invalid } from "../../../runtime/errors.ts";
 import { applyUpdate, seedOf } from "../../../runtime/mongo.ts";
+import { checkBlobId } from "../../../runtime/blobs.ts";
 import {
   type Blob,
   type Change,
@@ -411,17 +412,15 @@ export async function sqliteStore(options: {
           ...(row.data === null ? {} : { data: JSON.parse(String(row.data)) }),
         })));
       },
-      blob(id) {
-        const row = one(db, "SELECT data, type FROM main.blobs WHERE id = ?", [id]);
-        return Promise.resolve(
-          row
-            ? {
-              id,
-              data: row.data as Uint8Array,
-              ...(row.type === null ? {} : { type: String(row.type) }),
-            }
-            : null,
-        );
+      async blob(id) {
+        const row = one(db, "SELECT data, type FROM main.blobs WHERE id = ?", [checkBlobId(id)]);
+        return row
+          ? {
+            id,
+            data: row.data as Uint8Array,
+            ...(row.type === null ? {} : { type: String(row.type) }),
+          }
+          : null;
       },
       events: (after, limit = 1000) =>
         Promise.resolve(
@@ -550,14 +549,13 @@ export async function sqliteStore(options: {
         ]);
         return Promise.resolve();
       },
-      putBlob(value: Blob) {
+      async putBlob(value: Blob) {
         // Content-addressed: an existing id already holds these bytes.
         run(writer, "INSERT OR IGNORE INTO main.blobs (id, data, type) VALUES (?, ?, ?)", [
-          value.id,
+          checkBlobId(value.id),
           value.data,
           value.type ?? null,
         ]);
-        return Promise.resolve();
       },
       putVector(value) {
         run(

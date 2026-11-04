@@ -1,7 +1,13 @@
 /** Anthropic Messages API, streaming. */
 import { alive, post, sse, usageOf } from "../../shared/provider.ts";
 import type { ModelInfo } from "../../shared/choice.ts";
-import type { Effort, LlmAdapter, LlmMessage, Usage } from "../../shared/types.ts";
+import {
+  answerable,
+  type Effort,
+  type LlmAdapter,
+  type LlmMessage,
+  type Usage,
+} from "../../shared/types.ts";
 
 export const ANTHROPIC = {
   name: "Anthropic",
@@ -59,6 +65,34 @@ const messagesOf = (messages: LlmMessage[]) => {
 };
 
 const EPHEMERAL = { type: "ephemeral" };
+
+/**
+ * A stream's token counts. Anthropic says them in `message_start` and again,
+ * as totals so far, in `message_delta` (its output, and lately the rest);
+ * servers speaking its protocol may say some only there (MiniMax: its input
+ * and cache reads). Each count is the greatest said, so none goes twice.
+ */
+type Counts = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+};
+const COUNTS = [
+  "input_tokens",
+  "output_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+] as const;
+
+/** Usage from its counts: Anthropic's input_tokens leave out the cache's reads and writes. */
+const usageFrom = (c: Counts): Usage => ({
+  input: (c.input_tokens ?? 0) + (c.cache_read_input_tokens ?? 0) +
+    (c.cache_creation_input_tokens ?? 0),
+  output: c.output_tokens ?? 0,
+  cached: c.cache_read_input_tokens,
+  cacheWrite: c.cache_creation_input_tokens,
+});
 
 /** Anthropic requires a limit: the model's, up to this, unless asked for more. */
 const MAX_TOKENS = 32_000;
@@ -121,7 +155,7 @@ export const anthropic: LlmAdapter = {
     // Anthropic caches only up to marked blocks (at most 4): the tools, the
     // system text, the caller's cache points, and the end of the request, so
     // the next call finds this one's prefix.
-    const { turns, points } = messagesOf(messages);
+    const { turns, points } = messagesOf(answerable(messages));
     const last = turns.at(-1)?.content.at(-1);
     for (const block of [...points.slice(-1), last]) if (block) block.cache_control = EPHEMERAL;
     const response = await post(connection, ANTHROPIC, "/messages", {
@@ -148,25 +182,22 @@ export const anthropic: LlmAdapter = {
     // Tool input arrives as JSON in pieces, per content block; so does thinking, with its signature.
     const blocks = new Map<number, { id: string; name: string; json: string }>();
     const thoughts = new Map<number, Block>();
-    let usage: Usage = { input: 0, output: 0 };
+    // What it used, as each event says it so far: the greatest of each count.
+    const counts: Counts = {};
+    const counted = (said: Counts = {}) => {
+      for (const field of COUNTS) {
+        if ((said[field] ?? 0) > (counts[field] ?? 0)) counts[field] = said[field];
+      }
+    };
     // Its thinking comes in pieces long before it writes: alive all the same.
     const beat = alive();
     for await (const { data } of sse(response.body!)) {
       const event = JSON.parse(data);
       if (beat()) yield { type: "thinking" };
       switch (event.type) {
-        case "message_start": {
-          // Anthropic's input_tokens excludes what was read from or written to the cache.
-          const u = event.message?.usage ?? {};
-          usage = {
-            input: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) +
-              (u.cache_creation_input_tokens ?? 0),
-            output: u.output_tokens ?? 0,
-            cached: u.cache_read_input_tokens,
-            cacheWrite: u.cache_creation_input_tokens,
-          };
+        case "message_start":
+          counted(event.message?.usage);
           break;
-        }
         case "content_block_start":
           if (
             event.content_block?.type === "thinking" ||
@@ -211,7 +242,7 @@ export const anthropic: LlmAdapter = {
           break;
         }
         case "message_delta":
-          usage.output = event.usage?.output_tokens ?? usage.output;
+          counted(event.usage);
           break;
         case "message_stop":
           // Its thinking goes back with this answer when tools continue it.
@@ -226,7 +257,7 @@ export const anthropic: LlmAdapter = {
             );
             yield { type: "state", state: { data, ...(tokens ? { tokens } : {}) } };
           }
-          yield { type: "usage", ...usageOf(usage) };
+          yield { type: "usage", ...usageOf(usageFrom(counts)) };
           break;
         case "error":
           throw new Error(`Anthropic: ${event.error?.message ?? JSON.stringify(event.error)}`);

@@ -702,6 +702,79 @@ for (const [name, database] of Object.entries(shared)) {
   });
 }
 
+for (const [name, make] of Object.entries(adapters)) {
+  test(`${name}: an update names no $ field and never __proto__`, async () => {
+    const { store, epoch } = await seeded(make);
+    // As JSON brings them: `__proto__` is an ordinary key there.
+    const bad = [
+      '{"$set": {"bio.$blob": "x", "bio.size": 1, "bio.type": "t"}}',
+      '{"$set": {"__proto__.polluted": "yes"}}',
+      '{"$set": {"__proto__": {"polluted": "yes"}}}',
+      '{"$inc": {"tags.0.$blob": 1}}',
+      '{"$push": {"a.__proto__": 1}}',
+      '{"$unset": {"__proto__": true}}',
+    ];
+    for (const update of bad) {
+      for (const upsert of [false, true]) {
+        const error = await assertRejects(() =>
+          store.transaction(
+            epoch,
+            (tx) => tx.update("things", { _id: "a" }, JSON.parse(update), { upsert }),
+          )
+        );
+        assertEquals((error as { code?: string }).code, "invalid", update);
+      }
+    }
+    // An upsert's seed takes the filter's equal fields.
+    const seed = JSON.parse('{"_id": "new", "__proto__": "yes"}');
+    await assertRejects(() =>
+      store.transaction(
+        epoch,
+        (tx) => tx.update("things", seed, { $set: { n: 1 } }, { upsert: true }),
+      )
+    );
+    assertEquals(({} as Record<string, unknown>).polluted, undefined);
+    assertEquals(await store.find("things", { _id: "a" }), [DOCS[0]]);
+    // `constructor` and `prototype` are fields like any other.
+    await store.transaction(epoch, (tx) =>
+      tx.update("things", { _id: "a" }, {
+        $set: { constructor: "c", "nested.prototype": "p" },
+        $push: { prototype: 1 },
+      }));
+    const [a] = await store.find("things", { _id: "a" });
+    assertEquals([a["constructor" as string], a.nested, a.prototype], [
+      "c",
+      { k: 1, prototype: "p" },
+      [1],
+    ]);
+    assertEquals(({} as Record<string, unknown>).polluted, undefined);
+    await store.close();
+  });
+}
+
+for (const [name, make] of Object.entries(adapters)) {
+  test(`${name}: blobs go by blob ids only`, async () => {
+    const store = await make();
+    const { epoch } = await store.open();
+    const id = `sha256-${"a".repeat(64)}`;
+    const data = new Uint8Array([1, 2, 3]);
+    await store.transaction(epoch, (tx) => tx.putBlob({ id, data, type: "image/png" }));
+    assertEquals(Array.from((await store.blob(id))!.data), [1, 2, 3]);
+    assertEquals(await store.blob(`sha256-${"b".repeat(64)}`), null);
+    const invalid = async (run: () => Promise<unknown>) =>
+      assertEquals(((await assertRejects(run)) as { code?: string }).code, "invalid");
+    for (const bad of ["../../etc/hosts", "sha256-a", id.toUpperCase(), `${id}/x`, "other"]) {
+      await invalid(() => store.blob(bad));
+      await invalid(() => store.transaction(epoch, (tx) => tx.putBlob({ id: bad, data })));
+      const run = store.command?.(epoch, { steps: [], blobs: [{ id: bad, data }] });
+      if (run) await invalid(() => run);
+    }
+    // Nothing was kept under them.
+    assertEquals(await store.blob(id).then((blob) => blob?.type), "image/png");
+    await store.close();
+  });
+}
+
 test("sqlite: each collection reads as a SQL view", async () => {
   const path = temp();
   const store = await sqliteStore({ path });

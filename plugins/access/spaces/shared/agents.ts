@@ -10,7 +10,7 @@
  */
 import type { Context, ReadContext, TransactionScope } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
-import { ROLES, type Verb } from "./reach.ts";
+import { rolesOf } from "./reach.ts";
 import type { Shared } from "./rules.ts";
 
 type Declared = Record<string, { default?: boolean }>;
@@ -100,7 +100,7 @@ export async function unseat(system: Context, id: string, spaces: string[]) {
  * defaults first, then by name.
  */
 export async function rosterIn(ctx: Pick<ReadContext, "db" | "resources">, space: string) {
-  const roles = { ...ROLES, ...(ctx.resources.roles ?? {}) as Record<string, Verb[]> };
+  const roles = rolesOf(ctx);
   const starting = startingAgents(ctx);
   const members = await ctx.db.collection<Member>("member").find({ space });
   return members

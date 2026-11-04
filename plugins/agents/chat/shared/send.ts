@@ -1,5 +1,5 @@
 /** `send_message`: checking a call, building what it writes, and the tool as agents see it. */
-import type { Actor, Context } from "../../../../runtime/mod.ts";
+import { type Context, principalOf } from "../../../../runtime/mod.ts";
 import type { LlmTool } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
@@ -14,15 +14,6 @@ export type Send = {
   /** It goes to another space: trusted code writes it, once its person may. */
   across?: true;
 };
-
-/** Whom work is for: the person found along `for` and `via`, carrying any limit or origin of theirs. */
-export function principalOf(actor: Actor | undefined): Actor | undefined {
-  for (let a = actor, hops = 0; a && hops < 4; hops++) {
-    if (a.kind === "person") return a;
-    a = (a.for ?? a.via) as Actor | undefined;
-  }
-  return undefined;
-}
 
 /**
  * Hands work to an agent of another space, in a new chat there that its members

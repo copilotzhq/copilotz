@@ -11,7 +11,8 @@ the owner turns each call into an op).
   document holds a reference in their place, and the owner moves them out on write and back in on
   read. Optional: without one, the store keeps them itself. They sit in `blobs/` (`files`: a
   directory; `http`: a bucket over HTTP; `gcs`: a Google Cloud Storage bucket, see
-  [Blobs in GCS](#blobs-in-gcs)).
+  [Blobs in GCS](#blobs-in-gcs)). Every one of them, and every store's own blobs, takes only a
+  blob's id (`sha256-` and 64 hex digits, `checkBlobId`): never a path or another object's name.
 
 What the runtime sends out and never reads back (metrics) isn't kept here: that's `exporters/`.
 

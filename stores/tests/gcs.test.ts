@@ -78,6 +78,8 @@ function fake(
 }
 
 const text = new TextEncoder().encode("x".repeat(20_000));
+/** A blob id no blob has: `sha256-` and the digit 64 times. */
+const absent = (digit: string) => `sha256-${digit.repeat(64)}`;
 const blob = async () => ({
   id: await blobId(text),
   data: text,
@@ -122,11 +124,11 @@ test("gcs blobs: putting what's there (412) is a success, and changes nothing", 
 test("gcs blobs: a blob that isn't there is null; other answers fail with their status", async () => {
   const gcs = fake({
     fail: (c) =>
-      c.url.pathname.includes("forbidden") ? new Response("denied", { status: 403 }) : undefined,
+      c.url.pathname.includes(absent("f")) ? new Response("denied", { status: 403 }) : undefined,
   });
   const blobs = gcsBlobs({ bucket: "media", fetch: gcs.fetch });
-  assertEquals(await blobs.get("sha256-none"), null);
-  const error = await assertRejects(() => blobs.get("forbidden"), Error, "HTTP 403 denied");
+  assertEquals(await blobs.get(absent("0")), null);
+  const error = await assertRejects(() => blobs.get(absent("f")), Error, "HTTP 403 denied");
   assertEquals((error as Error & { status: number }).status, 403);
   // 4xx isn't tried again.
   assertEquals(gcs.gcs().length, 2);
@@ -136,7 +138,7 @@ test("gcs blobs: the metadata server's token is kept, and asked for once at a ti
   const gcs = fake();
   const blobs = gcsBlobs({ bucket: "media", fetch: gcs.fetch });
   const one = await blob();
-  await Promise.all([blobs.put(one), blobs.get(one.id), blobs.get("sha256-other")]);
+  await Promise.all([blobs.put(one), blobs.get(one.id), blobs.get(absent("0"))]);
   await blobs.get(one.id);
   assertEquals(gcs.metadata().length, 1);
   assertEquals(gcs.gcs().length, 4);
@@ -145,8 +147,8 @@ test("gcs blobs: the metadata server's token is kept, and asked for once at a ti
 test("gcs blobs: a token within a minute of expiring is renewed", async () => {
   const gcs = fake({ expiresIn: 30 });
   const blobs = gcsBlobs({ bucket: "media", fetch: gcs.fetch });
-  await blobs.get("sha256-a");
-  await blobs.get("sha256-b");
+  await blobs.get(absent("a"));
+  await blobs.get(absent("b"));
   assertEquals(gcs.metadata().length, 2);
   assertEquals(gcs.gcs().map((c) => c.headers.get("authorization")), [
     "Bearer token-1",
@@ -162,8 +164,8 @@ test("gcs blobs: token() replaces the metadata server", async () => {
     fetch: gcs.fetch,
     token: () => `token-own-${++asked}`,
   });
-  await blobs.get("sha256-a");
-  await blobs.get("sha256-b");
+  await blobs.get(absent("a"));
+  await blobs.get(absent("b"));
   assertEquals(gcs.metadata().length, 0);
   assertEquals(gcs.gcs().map((c) => c.headers.get("authorization")), [
     "Bearer token-own-1",
@@ -214,7 +216,7 @@ test("gcs blobs: a try that takes too long is given up, and tried again", async 
   });
   const blobs = gcsBlobs({ bucket: "media", fetch: gcs.fetch, timeout: 50 });
   const started = Date.now();
-  assertEquals(await blobs.get("sha256-a"), null);
+  assertEquals(await blobs.get(absent("a")), null);
   assert(Date.now() - started >= 50);
   assertEquals(gcs.gcs().length, 2);
 });
@@ -248,6 +250,70 @@ test("gcs blobs: a runtime keeps large values in the bucket, and reads them back
     assertEquals(await store.blob(ref.$blob), null);
     const docs = await runtime.query<{ text: string }[]>("note.all");
     assertEquals(docs[0].text, big);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("gcs blobs: an id that isn't a blob's is refused, and nothing is asked of GCS", async () => {
+  const gcs = fake();
+  for (const prefix of [undefined, "blobs"]) {
+    const blobs = gcsBlobs({ bucket: "media", prefix, fetch: gcs.fetch });
+    for (const id of ["secret.txt", "../secret.txt", `${absent("a")}/x`, absent("A"), "sha256-a"]) {
+      const got = await assertRejects(() => blobs.get(id), Error, "Not a blob id");
+      assertEquals((got as { code?: string }).code, "invalid");
+      const put = await assertRejects(
+        () => blobs.put({ id, data: text }),
+        Error,
+        "Not a blob id",
+      );
+      assertEquals((put as { code?: string }).code, "invalid");
+    }
+  }
+  assertEquals(gcs.calls, []);
+});
+
+test("gcs blobs: no reference, written or already stored, reads another object in the bucket", async () => {
+  const gcs = fake();
+  // Something else the bucket holds, beside the blobs at its top.
+  gcs.objects.set("media/exports/customers.csv", {
+    data: new TextEncoder().encode("name,phone"),
+    type: "text/csv",
+  });
+  const planted = { $blob: "exports/customers.csv", size: 10, type: "text/csv" };
+  const store = memoryStore();
+  const { epoch } = await store.open();
+  await store.transaction(epoch, (tx) => tx.insert("note", [{ _id: "planted", text: planted }]));
+  const notes = definePlugin({
+    name: "notes",
+    collections: {
+      note: defineCollection({ schema: { type: "object" }, queries: { all: (n) => n.find({}) } }),
+    },
+    actions: {
+      // Keeps what it's given as it is (an MCP tool's input, a webhook's body).
+      "note.keep": defineAction({
+        input: { type: "object", properties: { json: { type: "string" } }, required: ["json"] },
+        run: async (ctx, { json }) =>
+          (await ctx.db.collection("note").insertOne({ text: JSON.parse(json) })).insertedId,
+      }),
+    },
+  });
+  const runtime = await createRuntime({
+    store,
+    plugins: [notes],
+    blobs: gcsBlobs({ bucket: "media", fetch: gcs.fetch }),
+  });
+  try {
+    const error = await assertRejects(
+      () => runtime.call("note.keep", { json: JSON.stringify(planted) }),
+      Error,
+      '"$blob" is reserved',
+    );
+    assertEquals((error as { code?: string }).code, "invalid");
+    // The one already there is data, as it was written.
+    const docs = await runtime.query<{ _id: string; text: unknown }[]>("note.all");
+    assertEquals(docs, [{ _id: "planted", text: planted }]);
+    assertEquals(gcs.gcs(), []);
   } finally {
     await runtime.close();
   }

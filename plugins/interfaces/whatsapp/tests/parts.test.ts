@@ -7,7 +7,7 @@ import { assert, assertEquals } from "@std/assert";
 import { test } from "../../../../testing/mod.ts";
 import { LIMIT, split, toWhatsApp } from "../shared/text.ts";
 import { same, sign, signed } from "../shared/signature.ts";
-import { inboundOf, mediaOf, wordsOf } from "../shared/payload.ts";
+import { inboundOf, mediaOf, tapOf, type WaMessage, wordsOf } from "../shared/payload.ts";
 import { commandOf, pickSpace } from "../shared/commands.ts";
 
 test("Markdown, as WhatsApp formats it; code as it is", () => {
@@ -172,4 +172,33 @@ test("a number as links and words: WhatsApp's link with a code typed in, a code 
   assert(unreachable("http://127.0.0.1:8803") && unreachable("https://localhost"));
   assert(unreachable("http://example.com") && unreachable("https://192.168.0.2"));
   assert(!unreachable("https://app.example.com"));
+});
+
+test("a tap: a button's, a list row's or a template's, with its id; typed words are no tap", () => {
+  const of = (m: Partial<WaMessage>) => tapOf({ id: "w", from: "1", type: "text", ...m });
+  assertEquals(
+    of({ type: "interactive", interactive: { button_reply: { id: "pay:pix", title: "PIX" } } }),
+    { id: "pay:pix", title: "PIX" },
+  );
+  assertEquals(
+    of({
+      type: "interactive",
+      interactive: { list_reply: { id: "trip:2", title: "12:00", description: "Expresso" } },
+    }),
+    { id: "trip:2", title: "12:00" },
+  );
+  assertEquals(of({ type: "button", button: { text: "Yes", payload: "confirm" } }), {
+    id: "confirm",
+    title: "Yes",
+  });
+  assertEquals(of({ type: "text", text: { body: "PIX" } }), undefined);
+  assertEquals(
+    wordsOf({
+      id: "w",
+      from: "1",
+      type: "interactive",
+      interactive: { list_reply: { id: "x", title: "12:00" } },
+    }),
+    "12:00",
+  );
 });

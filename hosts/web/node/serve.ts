@@ -7,13 +7,20 @@
  * through their Node compatibility.
  *
  * - `serve`: one runtime's web host (`webServer`), its socket to that runtime.
+ * - `serveRoutes`: an app without the web app (on WhatsApp, on the phone):
+ *   its routes alone (`routeHost`), and `/health`.
  * - `listen`: any fetch handler, with the Hypervisor each socket goes to
  *   picked per request: a host with a runtime per org names the one a request
  *   is for (`hosts/orgs`: its `openRuntime`).
+ *
+ * A route may take a socket of its own (`host.upgrade()`, see `routes.ts`):
+ * any path but the runtime's goes to the handler, upgrades too, and Oxian's
+ * adapter takes the socket the handler accepts.
  */
 import type { Hypervisor, HypervisorRequestDecision } from "@oxian/oxian-js";
 import { serve as oxian } from "@oxian/oxian-js/adapters/node";
-import { hostRouted } from "../routes.ts";
+import type { Runtime } from "../../../runtime/mod.ts";
+import { type Front, hostRouted, routeHost } from "../routes.ts";
 import { socket, webServer, type WebServerOptions } from "../server.ts";
 
 /** Where to listen. */
@@ -49,6 +56,18 @@ export type Listener = {
   shutdown(): Promise<void>;
 };
 
+export type RoutesOptions = Address & {
+  runtime: Runtime;
+  /** The app's front (a Cloudflare worker before it), as `webServer` takes it. */
+  front?: Front;
+};
+
+/** A route host listening. It owns its runtime: `close` stops listening, then closes it. */
+export type RouteListener = Listener & {
+  /** Stops listening (its sockets close), then the runtime, passing `drain` on (`Runtime.close`). */
+  close(options?: { drain?: number }): Promise<void>;
+};
+
 /**
  * Serves the web host for a runtime that declares the `socket` transport
  * (`createRuntime({ transports: [socket], admit: tickets.admit })`).
@@ -66,6 +85,29 @@ export async function serve(options: ServeOptions): Promise<Listener> {
     port,
     signal,
   });
+}
+
+/**
+ * Serves an app's routes alone (`routeHost`): its webhooks and sockets, and
+ * `/health`. Its runtime's own socket (`/oxian`, when it declares one: remote
+ * executors) goes to it, as `serve`'s does.
+ */
+export async function serveRoutes(options: RoutesOptions): Promise<RouteListener> {
+  const { runtime, front, ...address } = options;
+  const routed = hostRouted(runtime, front ? { front } : {});
+  const listener = await listen({
+    ...address,
+    fetch: routeHost(runtime, front ? { front } : {}),
+    hypervisor: (request) => routed(request) ? undefined : runtime.hypervisor,
+  });
+  // Closing takes a while (the runtime's drain): asked again, it's the same close.
+  let closed: Promise<void> | undefined;
+  // What it's given goes on to the runtime's close: how long running work may take to finish.
+  const owned: { close(options?: { drain?: number }): Promise<void> } = runtime;
+  return {
+    ...listener,
+    close: (options) => closed ??= listener.shutdown().then(() => owned.close(options)),
+  };
 }
 
 /** Serves a fetch handler, each socket going to the Hypervisor `hypervisor` picks for it. */

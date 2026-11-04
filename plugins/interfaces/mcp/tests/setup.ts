@@ -13,6 +13,9 @@
  * `coded` (a coded failure that isn't public), `driver` (a library's error,
  * with a string code), `slow` (takes a while), `staff` (offered only to
  * people) and `raw` (no View: never offered). Each counts its runs (`runs`).
+ *
+ * And for an owner that stops mid-call: a store that stops at a write
+ * (`stopping`), and waits on what tests watch for (`until`, `within`).
  */
 import {
   createRuntime,
@@ -23,6 +26,7 @@ import {
   type Runtime,
   type Store,
 } from "../../../../runtime/mod.ts";
+import type { Transaction } from "../../../../runtime/store.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, tool } from "../../../agents/chat/mod.ts";
@@ -47,9 +51,10 @@ const ran = (name: string) => runs[name] = (runs[name] ?? 0) + 1;
 /** What `status` says. */
 export const state = { paid: false };
 
-/** What `charge` and `hang` did, by the callId each ran with. */
+/** What `charge` and `hang` did, by the callId each ran with; and what `hang` began. */
 export const charges: string[] = [];
 export const hangs: string[] = [];
+export const begun: string[] = [];
 
 const silent: LlmAdapter = {
   async *generate() {
@@ -252,6 +257,7 @@ export const app = definePlugin({
           "callId and retry",
         input: { type: "object", properties: { ms: { type: "number" } }, required: ["ms"] },
         run: async (input, ctx) => {
+          begun.push(ctx.callId);
           await sleep(ctx.retry ? 0 : input.ms as number);
           hangs.push(ctx.callId);
           return JSON.stringify({ callId: ctx.callId, retry: ctx.retry });
@@ -314,7 +320,17 @@ export const CALLER: McpSettings["caller"] = { header: "cf-connecting-ip", front
 export const reads = definePlugin({
   name: "reads",
   views: Object.fromEntries(
-    ["contact", "thread", "message", "booking", "member", "mcp_receipt", "mcp_rate", "mcp_closed"]
+    [
+      "contact",
+      "thread",
+      "message",
+      "booking",
+      "member",
+      "mcp_receipt",
+      "mcp_rate",
+      "mcp_closed",
+      "mcp_opening",
+    ]
       .map((c) => [
         c,
         {
@@ -356,13 +372,15 @@ export const hands = definePlugin({
         });
       },
     },
-    // Receipts begun `ms` earlier; counters of past windows gone (a minute went by).
+    // Receipts and openings begun `ms` earlier; counters of past windows gone (a minute went by).
     "test.age": {
       input: { type: "object" },
       run: async (ctx, input: { ms?: number; minute?: boolean }) => {
-        const receipts = ctx.db.collection<{ at: number }>("mcp_receipt");
-        for (const r of await receipts.find({})) {
-          await receipts.updateOne({ _id: r._id }, { $set: { at: r.at - (input.ms ?? 0) } });
+        for (const name of ["mcp_receipt", "mcp_opening"]) {
+          const kept = ctx.db.collection<{ at: number }>(name);
+          for (const r of await kept.find({})) {
+            await kept.updateOne({ _id: r._id }, { $set: { at: r.at - (input.ms ?? 0) } });
+          }
         }
         if (input.minute) {
           await ctx.db.collection("mcp_rate").deleteMany({ until: { $lte: Date.now() + 60_000 } });
@@ -446,6 +464,7 @@ export async function setup(
   state.paid = false;
   charges.length = 0;
   hangs.length = 0;
+  begun.length = 0;
   const runtime = await createRuntime({
     store: options.store ?? memoryStore(),
     plugins: [
@@ -575,6 +594,99 @@ export async function setup(
 
 /** Runtimes a test closed itself. */
 export const closed = new WeakSet<Runtime>();
+
+/** A write a stopping store is asked for. */
+export type Write = {
+  op: "insert" | "update" | "replace" | "delete";
+  collection: string;
+  /** What it writes: the document inserted or replaced with, or the update. */
+  doc?: Record<string, unknown>;
+};
+
+/**
+ * A store whose owner stops at the first write `at` matches, as an owner's
+ * process does when it ends mid-call (a deploy, a crash): that write never
+ * commits, nor does anything after it. `reached` settles once the write is
+ * asked for; `stop()` ends the owner. A test stops it in a `finally`, even
+ * when it fails: a write held there holds the store, and whatever comes
+ * next would wait for it for good.
+ */
+export function stopping(
+  store: Store,
+  at: (write: Write) => boolean,
+): { store: Store; reached: Promise<void>; stop(): void } {
+  const gone = () => Object.assign(new Error("The owner stopped."), { code: "fenced" });
+  let stopped = false;
+  let reach!: () => void;
+  const reached = new Promise<void>((resolve) => reach = resolve);
+  const end = Promise.withResolvers<never>();
+  end.promise.catch(() => {});
+  const held = (tx: Transaction): Transaction => {
+    const write = <A extends unknown[], R>(
+      op: Write["op"],
+      run: (collection: string, ...args: A) => Promise<R>,
+      doc: (...args: A) => unknown,
+    ) =>
+    async (collection: string, ...args: A): Promise<R> => {
+      if (stopped) throw gone();
+      if (at({ op, collection, doc: doc(...args) as Write["doc"] })) {
+        reach();
+        await end.promise;
+      }
+      return await run(collection, ...args);
+    };
+    return {
+      ...tx,
+      insert: write("insert", tx.insert, (docs) => docs[0]),
+      update: write("update", tx.update, (_filter, update) => update),
+      replace: write("replace", tx.replace, (_filter, doc) => doc),
+      delete: write("delete", tx.delete, () => undefined),
+    };
+  };
+  return {
+    // Every write through a transaction (none as a single command), each seen here.
+    store: {
+      ...store,
+      command: undefined,
+      transaction: (epoch, work, options) =>
+        store.transaction(epoch, (tx) => {
+          if (stopped) throw gone();
+          return work(held(tx));
+        }, options),
+    },
+    reached,
+    stop: () => {
+      stopped = true;
+      end.reject(gone());
+    },
+  };
+}
+
+/** What `check` answers once it's truthy (looked at every few ms), or a failure after `ms`. */
+export async function until<T>(check: () => T, what: string, ms = 10_000): Promise<NonNullable<T>> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const value = check();
+    if (value) return value as NonNullable<T>;
+    if (Date.now() > deadline) throw new Error(`Never happened: ${what}`);
+    await sleep(5);
+  }
+}
+
+/** `promise`, or a failure after `ms`: a test waits for nothing for good. */
+export async function within<T>(promise: Promise<T>, what: string, ms = 10_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Never happened: ${what}`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** How an answer that's an earlier, identical request's begins. */
 export const AGAIN =

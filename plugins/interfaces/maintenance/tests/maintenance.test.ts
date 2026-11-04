@@ -66,7 +66,7 @@ const notes = definePlugin({
       schema: { type: "object", properties: { text, n: { type: "number" } }, required: ["text"] },
       queries: {
         one: (notes, { id }: { id: string }) => notes.findOne({ _id: id }),
-        // An app's numbers (as Mobizap's `booking.stats`): it checks its own params.
+        // An app's numbers (say, a booking app's `booking.stats`): it checks its own params.
         stats: (notes, { by }: { by?: string }) => {
           if (by !== "text") throw invalid('stats takes `by: "text"`');
           return notes.aggregate([

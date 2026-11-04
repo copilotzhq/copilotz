@@ -33,7 +33,7 @@ test("initialize: the version asked for when taken, else the newest with a hands
     assertEquals(first.body.result, {
       protocolVersion: "2025-06-18",
       capabilities: { tools: {} },
-      serverInfo: { name: "chatgpt", title: "Mobifácil", version: "1.0.0" },
+      serverInfo: { name: "chatgpt", title: "Viação Azul", version: "1.0.0" },
       instructions: "Buy bus tickets.",
     });
     const later = await s.post({
@@ -70,7 +70,7 @@ test("server/discover, modern: versions, tools, who it is, and every result says
     assertEquals(result.cacheScope, "public");
     assertEquals((result._meta as Record<string, unknown>)["io.modelcontextprotocol/serverInfo"], {
       name: "chatgpt",
-      title: "Mobifácil",
+      title: "Viação Azul",
       version: "1.0.0",
     });
     const listed = await s.modern("tools/list");

@@ -307,7 +307,7 @@
     app's `links`, uploaded to Meta and sent by its id). A carousel's pictures must be links: a file
     with nowhere to link it sends the fallback. A message's files go as images (jpeg, png up to 5
     MB) or documents, a short text as the first one's caption.
-- **WhatsApp lines for an app, as it uses them** (for Mobizap):
+- **WhatsApp lines for an app, as it uses them**:
   - **A line the app declares** in its settings (`resources.whatsapp.lines.<name>`: the space,
     Meta's number id, token and app secret, its own verify token, a webhook path it routes to
     `whatsapp.hook`, its agent, gap, rate, quiet window and language): open to anyone, kept as the

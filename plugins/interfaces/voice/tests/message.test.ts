@@ -16,9 +16,9 @@ test("Markdown, as it's said aloud", () => {
   );
   assertEquals(
     spoken(
-      "Compre em [nosso site](https://www.mobifacil.com.br/passagens) ou em https://www.mobifacil.com.br.",
+      "Compre em [nosso site](https://www.example.com/passagens) ou em https://www.example.com.",
     ),
-    "Compre em nosso site ou em mobifacil.com.br.",
+    "Compre em nosso site ou em example.com.",
   );
   assertEquals(spoken("Use `start_booking` > ok"), "Use start_booking > ok");
 });

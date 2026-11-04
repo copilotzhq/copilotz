@@ -68,6 +68,11 @@
     settings say at every use, with no person connecting or opening it; people can't change it
     (`whatsapp.set`, `whatsapp.credentials` and `whatsapp.disconnect` refuse), and the web tab
     leaves it alone. `whatsapp.set` stays for numbers people connect.
+  - **Spaces the app declares** (the spaces plugin's `spaces` resource, by id: `{ name, agents }`):
+    the app's own, owned by no person, made and kept by the system when something needs them
+    (`space.keep`, trusted code; a declared line keeps the space it's `in`). Its agents are editors
+    there, the first answering its new chats; people neither take them out, nor change their role,
+    nor rename the space. Otherwise it's a space like any other.
   - **The reply is the body:** after an answer, an addition's own words (a question its buttons ask)
     are what it says without one; with the answer, the answer is its whole body. A fallback keeps
     its words after the answer.

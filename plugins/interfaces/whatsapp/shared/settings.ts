@@ -12,7 +12,10 @@ import type { Resources } from "../../../../runtime/mod.ts";
  * settings say at every use (no person connects it, nor changes it).
  */
 export type WhatsAppLine = {
-  /** The space its customers' chats live in. */
+  /**
+   * The space its customers' chats live in: one the app declares too (the
+   * spaces plugin's `spaces` resource) is made and kept with the line.
+   */
   in: string;
   /** Meta's id for the number, its access token, and the Meta app's secret (signing its webhook). */
   phoneId: string;

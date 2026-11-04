@@ -36,10 +36,17 @@ export type McpLimits = {
   /**
    * Seconds the route waits for a call's answer: past them, the model is told it's still
    * working, and to ask again (the call goes on); and seconds a call may run in all: past them,
-   * it's stopped.
+   * it's stopped. Tools should honour `ctx.signal`, which aborts when one is stopped: one that
+   * doesn't goes on in the background, and what it does outside then is keyed by its `callId`.
    */
   timeout: number;
   stop: number;
+  /**
+   * Calls going on past the timeout, on the line and started from one address: past them, a
+   * call that reaches the timeout is stopped, so cheap requests can't hold places for slow tools.
+   */
+  lateAtOnce: number;
+  addressLateAtOnce: number;
   /** Calls one conversation may make a minute, and all of the line's conversations together. */
   perMinute: number;
   linePerMinute: number;
@@ -123,26 +130,30 @@ export type McpSettings = {
   caller?: McpCaller;
   /**
    * Calls running at once in this runtime (an org's, under the orgs host),
-   * all its lines together (8): past them, it's busy.
+   * all its lines together (4): past them, it's busy.
    */
   atOnce?: number;
 };
 
 /**
  * What a line takes, unless it says: a request of 64 KiB (a tool's input
- * is small); 8 calls at once, 2 from one address and 2 in one conversation;
- * 20 seconds' wait for an answer, and 2 minutes for a call in all; 30 calls a minute from one
+ * is small); 4 calls at once, 2 from one address and 2 in one conversation
+ * (4: what an executor takes at once today, its connection's queue the
+ * limit); 20 seconds' wait for an answer, and a minute for a call in all,
+ * with 2 going on past the wait on the line, 1 from one address; 30 calls a minute from one
  * conversation, 600 from all; 600 new conversations an hour, 30 from one
  * user; from one address, 60 calls a minute and 20 new conversations an
  * hour; answers of 100,000 characters.
  */
 export const LIMITS: McpLimits = {
   body: 65_536,
-  atOnce: 8,
+  atOnce: 4,
   addressAtOnce: 2,
   chatAtOnce: 2,
   timeout: 20,
-  stop: 120,
+  stop: 60,
+  lateAtOnce: 2,
+  addressLateAtOnce: 1,
   perMinute: 30,
   linePerMinute: 600,
   chatsPerHour: 600,
@@ -153,7 +164,7 @@ export const LIMITS: McpLimits = {
 };
 
 /** Calls at once in a runtime, unless the `mcp` resource says (`atOnce`). */
-export const AT_ONCE = 8;
+export const AT_ONCE = 4;
 
 /** The longest ChatGPT shows a call's status line. */
 const STATUS = 64;

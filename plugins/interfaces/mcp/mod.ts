@@ -32,8 +32,10 @@
  * - **Limits** (a line's `limits`): calls at once (in the runtime, on the
  *   line, from one caller's address, in one conversation: the server is busy
  *   past them), how long the route waits for an answer (20 s: then the model
- *   is told it's still working, and asking again gets what it did, once) and
- *   a call may run (2 minutes: then it's stopped), calls a minute (by conversation, by caller's address, in all), new
+ *   is told it's still working, while few calls are, and asking again under
+ *   any request id gets what it did, from its receipt) and a call may run (a
+ *   minute: then it's stopped; tools should honour `ctx.signal`), calls a
+ *   minute (by conversation, by caller's address, in all), new
  *   conversations an hour (by user, by address, in all), and sizes. Only
  *   calls taken count. The caller's address is believed only as the app's
  *   front says it (`caller`: its header, and its secret, without which a

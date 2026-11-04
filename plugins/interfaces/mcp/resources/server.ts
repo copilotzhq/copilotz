@@ -15,7 +15,7 @@
  *   as its front says it (see shared/caller.ts); a request that came around
  *   the front (without its secret) is refused (403).
  * - **At once.** Tool calls running at once: in the runtime (`mcp.atOnce`,
- *   8), on the line (`limits.atOnce`, 8), from one caller's address
+ *   4), on the line (`limits.atOnce`, 4), from one caller's address
  *   (`addressAtOnce`, 2: a batch's every call counts) and in one
  *   conversation (`chatAtOnce`, 2), each call taking its places until it's
  *   done. Past any, it's busy (503, `Retry-After`, -31000, its own code),
@@ -23,7 +23,8 @@
  *   batch busy for every call is a 503). A batch with more tool calls than
  *   one caller may run at once could never be served: it's refused
  *   (-32600). A call that hasn't answered within the line's `timeout` is
- *   answered "still working" while it goes on (see tools.ts).
+ *   answered "still working" while it goes on, as long as few do (2 on the
+ *   line, 1 from an address); else it's stopped (see tools.ts).
  * - **JSON-RPC 2.0.** One message a request. A notification (or a reply)
  *   answers 202. Bad JSON is -32700, a malformed message -32600, an unknown
  *   method -32601, bad params -32602; what fails inside says -32603 and

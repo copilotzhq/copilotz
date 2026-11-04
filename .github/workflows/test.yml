@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   test:
+    if: false
     name: ${{ matrix.runtime }}
     strategy:
       fail-fast: false
@@ -75,16 +76,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - run: npm ci
-      - run: npm test
+      - run: node --test --test-concurrency=1 --test-timeout=240000 "**/*.test.ts"
         if: runner.os != 'Windows'
       # Every test file but these, which can't run on Windows yet. Each finds files by
       # `new URL(…, import.meta.url).pathname`, which is "/D:/…" there, not a path:

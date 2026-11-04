@@ -23,6 +23,17 @@
   tools. Workers are told they're gone after the drain, so running work can still use them. The orgs
   host's `close({ drain })` passes it on to every org's runtime.
 
+
+- **Private fields for recorded Actions.** `private: ["buyer", "passengers"]` on an Action (dot
+  paths, as a collection's): its calls are recorded without them, in `action.started`'s input and
+  `action.completed`'s result alike, so the personal data a booking's buyer gives (names, CPFs,
+  emails) never lands in the log, while the calls are still recorded, retried and deduplicated.
+  - The call's `inputHash`, and so a nested call's id, still covers the whole input: a retry with
+    the same input answers from the log, and a changed one is a new call (under an outside call id,
+    `id_conflict`).
+  - A result that had private fields is kept whole in `sys.results` (a document by call id, written
+    in the completion's commit, no events), and `action.completed` says `private: true`: a retry
+    answers with all of it, as it would without them.
 - **Fixed: a collection's private fields reached the log on PostgreSQL.** Writes that go as the
   store's single command (most of them) recorded `.created`, `.updated` and `.deleted` with the
   whole document, so `private` fields (a computer's `pending` secret, unsealed account tokens) were

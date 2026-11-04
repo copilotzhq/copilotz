@@ -308,6 +308,15 @@ export type ActionDef = {
    * read-only.
    */
   record?: boolean;
+  /**
+   * Fields its calls are recorded without, as dot paths (as a collection's
+   * `private`), in its input and its result alike: personal data
+   * (`["buyer", "passengers"]`) stays out of the log. A call's id still
+   * hashes the whole input, so a retry with the same input finds the call,
+   * and a changed one is a new call. A result that had any is kept whole
+   * apart (`sys.results`, no events), so a retry answers with all of it.
+   */
+  private?: string[];
   // deno-lint-ignore no-explicit-any
   run(ctx: Context, input: any): unknown;
 };
@@ -490,6 +499,7 @@ export const defineAction = <const S extends JSONSchema, R>(
     description?: string;
     input: S;
     record?: boolean;
+    private?: string[];
     allow?(actor: Actor, input: Infer<S>): boolean;
     run(ctx: Context, input: Infer<S>): R | Promise<R>;
   },

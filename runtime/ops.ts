@@ -139,6 +139,12 @@ export type Outcome = {
   inputHash?: string;
 };
 
+/**
+ * Results whose private fields the log leaves out (see `ActionDef.private`),
+ * whole, by call id: what a retry of the call answers with.
+ */
+export const RESULTS = "sys.results";
+
 export async function outcome(reader: Reader, call: string): Promise<Outcome> {
   const events = await reader.related(call, [
     "action.started",
@@ -150,9 +156,13 @@ export async function outcome(reader: Reader, call: string): Promise<Outcome> {
   const done = events.find((e) => e.type === "action.completed");
   const started = events.find((e) => e.id === call);
   const attempts = started ? 1 + count("action.retried") : 0;
+  // One with private fields is kept whole apart; erased there, the log's is what's left.
+  const result = done?.data.private
+    ? (await reader.findOne(RESULTS, { _id: call }))?.result ?? done.data.result
+    : done?.data.result;
   return {
     completed: Boolean(done),
-    ...(done ? { result: done.data.result } : {}),
+    ...(done ? { result } : {}),
     attempts,
     lost: attempts > count("action.failed") + (done ? 1 : 0),
     ...(started

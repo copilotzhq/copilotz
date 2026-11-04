@@ -119,6 +119,13 @@ const messageSchema = {
         required: ["name", "text"],
       },
     },
+    /**
+     * An agent's answer: how far its turn had read its thread (the `at` of the
+     * newest message there then). What others said there after that, while it
+     * wrote, it reads after the answer; a person's message it had read is
+     * answered by it.
+     */
+    knew: { type: "string" },
     at: { type: "string" },
   },
   required: ["thread", "from", "to", "at"],

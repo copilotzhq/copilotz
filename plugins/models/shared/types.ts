@@ -34,6 +34,18 @@ export type LlmMessage =
   | { role: "assistant"; text?: string; toolCalls?: ToolCall[]; state?: LlmState; cache?: true }
   | { role: "tool"; toolCallId: string; text: string; cache?: true };
 
+/**
+ * A call asks for the model's next message, never for the rest of its last
+ * one: a conversation that ends with the model's own message goes with a
+ * user turn after it. Anthropic's newer models refuse an assistant message
+ * last ("prefill"), Gemini and some servers would carry it on; every adapter
+ * sends this, so every provider reads the same.
+ */
+export const answerable = (messages: LlmMessage[]): LlmMessage[] =>
+  messages.at(-1)?.role === "assistant"
+    ? [...messages, { role: "user", text: "Continue." }]
+    : messages;
+
 export type LlmTool = { name: string; description: string; input: JSONSchema };
 
 /** `usage` names the model that answered (`"provider/model"`): with fallbacks, not always the first. */

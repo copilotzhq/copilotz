@@ -60,7 +60,12 @@ async function start(
   make: () => Store | Promise<Store>,
   cast: Record<
     string,
-    Omit<Agent, "instructions" | "model"> & { script: Script; delayMs?: number }
+    Omit<Agent, "instructions" | "model"> & {
+      script: Script;
+      delayMs?: number;
+      /** What a call waits for before it answers, if anything. */
+      hold?: () => Promise<unknown> | undefined;
+    }
   >,
   settings: ChatSettings = {},
   more: Plugin[] = [],
@@ -76,9 +81,10 @@ async function start(
   const script: LlmAdapter = {
     async *generate({ connection, messages, instructions }) {
       const agent = connection.model;
-      const { script, delayMs = 0 } = cast[agent];
+      const { script, delayMs = 0, hold } = cast[agent];
       const started = performance.now();
       if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await hold?.();
       const turn = calls.filter((c) => c.agent === agent).length;
       const move = script({ messages, last: messages.at(-1)!, turn });
       calls.push({ agent, instructions, messages, started, ended: performance.now() });
@@ -98,7 +104,7 @@ async function start(
     resources: {
       provider: { script: { adapter: "script" } },
       agents: Object.fromEntries(
-        Object.entries(cast).map(([name, { script: _, delayMs: __, ...agent }]) => [
+        Object.entries(cast).map(([name, { script: _, delayMs: __, hold: ___, ...agent }]) => [
           name,
           { instructions: `You are ${name}.`, model: `script/${name}`, ...agent },
         ]),
@@ -415,7 +421,7 @@ each("a question to a person waits until they reply to it", async (make) => {
 });
 
 each("an agent that fails for good still answers, so whoever waits resumes", async (make) => {
-  const { runtime, send, history } = await start(make, {
+  const { runtime, store, send, history } = await start(make, {
     lead: {
       tools: ["send_message"],
       script: ({ turn, last }) =>
@@ -431,7 +437,110 @@ each("an agent that fails for good still answers, so whoever waits resumes", asy
   const messages = await history(thread);
   const failure = messages.find((m) => m.failed)!;
   assertEquals({ from: failure.from, to: failure.to }, { from: "flaky", to: ["lead"] });
-  assertMatch(messages.at(-1)!.text!, /^Noted: flaky: flaky failed: model down/);
+  assertMatch(messages.at(-1)!.text!, /^Noted: flaky: flaky failed: something went wrong/);
+  // What went wrong is the event's, for whoever runs the app.
+  const failed = (await store.events(0)).find((e) => e.type === "processor.failed")!;
+  assertEquals((failed.data.error as { message: string }).message, "model down");
+  await runtime.close();
+});
+
+/** What an agent answers: the messages since its last word. */
+const since = ({ messages }: { messages: LlmMessage[] }) =>
+  `got ${
+    messages.slice(messages.findLastIndex((m) => m.role === "assistant") + 1).map(text).join(" + ")
+  }`;
+
+each(
+  "a person's messages in a row are answered together, and no prompt ends with the agent's own",
+  async (make) => {
+    // Its first call waits until two more messages have come.
+    const begun = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let first = true;
+    const { runtime, calls, history } = await start(make, {
+      assistant: {
+        hold: () => first ? (first = false, begun.resolve(), release.promise) : undefined,
+        script: since,
+      },
+    });
+    const { thread } = await runtime.call<{ thread: string }>("chat.send", {
+      text: "one",
+      from: "ana",
+    });
+    await begun.promise;
+    await runtime.call("chat.send", { thread, text: "two", from: "ana" });
+    await runtime.call("chat.send", { thread, text: "three", from: "ana" });
+    release.resolve();
+    await runtime.idle();
+    // "two" and "three" came while it answered "one": it reads them after that answer, and
+    // answers both in "two"'s turn; "three"'s turn has nothing to add, and asks no model.
+    assertEquals(calls.length, 2);
+    assertEquals(calls[1].messages.map((m) => [m.role, text(m)]), [
+      ["user", "ana: one"],
+      ["assistant", "got ana: one"],
+      ["user", "ana: two"],
+      ["user", "ana: three"],
+    ]);
+    for (const call of calls) assertEquals(call.messages.at(-1)!.role, "user");
+    const replies = (await history(thread)).filter((m) => m.from === "assistant");
+    assertEquals(replies.map((m) => [m.text, m.to, m.failed ?? false]), [
+      ["got ana: one", ["ana"], false],
+      ["got ana: two + ana: three", ["ana"], false],
+    ]);
+    await runtime.close();
+  },
+);
+
+each(
+  "a turn for a message the agent answered already, with a later one, asks no model",
+  async (make) => {
+    const { runtime, calls, send, history } = await start(make, {
+      assistant: { script: since },
+    });
+    const { thread } = await send({ text: "one", from: "ana" });
+    // "two" starts no turn yet; "three"'s answers both.
+    const { message: two } = await send({ thread, text: "two", from: "ana", to: [] });
+    await send({ thread, text: "three", from: "ana" });
+    assertEquals(calls.length, 2);
+    // "two"'s turn comes late, after that answer.
+    await runtime.emit("turn.requested", { thread, agent: "assistant", trigger: two, hops: 0 }, {
+      id: `${two}:assistant`,
+    });
+    await runtime.idle();
+    assertEquals(calls.length, 2);
+    const said = (await history(thread)).map((m) => `${m.from}: ${m.text}`);
+    assertEquals(said, [
+      "ana: one",
+      "assistant: got ana: one",
+      "ana: two",
+      "ana: three",
+      "assistant: got ana: two + ana: three",
+    ]);
+    await runtime.close();
+  },
+);
+
+each("a provider's refusal stays the event's: people read a short line", async (make) => {
+  const refusal = 'Anthropic 400: {"type":"error","error":{"type":"invalid_request_error",' +
+    '"message":"This model does not support assistant message prefill."}}';
+  const { runtime, store, send, history } = await start(make, {
+    booking: {
+      script: () => {
+        throw Object.assign(new Error(refusal), { code: "provider_error", status: 400 });
+      },
+    },
+  });
+  const { thread } = await send({ text: "Book me a table", from: "ana" });
+  const failure = (await history(thread)).find((m) => m.failed)!;
+  assertEquals(
+    { to: failure.to, text: failure.text },
+    {
+      to: ["ana"],
+      text: "booking failed: something went wrong, so it couldn't answer. Try again in a moment.",
+    },
+  );
+  const failed = (await store.events(0)).find((e) => e.type === "processor.failed")!;
+  assertEquals((failed.data.error as { message: string }).message, refusal);
   await runtime.close();
 });
 
@@ -450,8 +559,9 @@ each("a turn takes as many steps as it needs, unless maxSteps says otherwise", a
   const held = await start(make, { busy }, { maxSteps: 3 });
   const { thread: limited } = await held.send({ text: "go" });
   assertEquals(held.calls.length, 3);
-  const failure = (await held.history(limited)).find((m) => m.failed)!;
-  assertMatch(failure.text!, /did not finish within 3 steps/);
+  assert((await held.history(limited)).find((m) => m.failed));
+  const failed = (await held.store.events(0)).find((e) => e.type === "processor.failed")!;
+  assertMatch((failed.data.error as { message: string }).message, /did not finish within 3 steps/);
   await held.runtime.close();
 });
 

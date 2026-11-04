@@ -25,9 +25,10 @@
  *   (chat's `file.content`), with ranges for audio; `?download=1` saves it
  *   (see `files.ts`).
  * - Plugins' own paths, their `routes` resource: a webhook, an OAuth callback,
- *   an API, a download (see `routes.ts`). A request to a host a route takes
- *   (a preview's) is that route's alone, whatever its path: never the page,
- *   the code or the socket.
+ *   an API, a download, a socket of their own (see `routes.ts`). A request to
+ *   a host a route takes (a preview's) is that route's alone, whatever its
+ *   path: never the page, the code or the socket. An app without the web app
+ *   serves them alone (`routeHost`).
  * - `GET /manifest.webmanifest` and `GET /sw.js`: the app, installable: its
  *   manifest (name, colours, icons drawn from the theme's mark) and its
  *   service worker, which keeps the code at hand and offers new versions
@@ -122,6 +123,8 @@ export {
   type HttpRequest,
   httpRequest,
   type Route,
+  routeHost,
+  type RouteSocket,
   type Served,
   VISITOR,
 } from "./routes.ts";

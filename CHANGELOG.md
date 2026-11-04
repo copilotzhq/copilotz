@@ -138,6 +138,30 @@
   never in an error's own words.
 - **Fixed:** `message.questions`, and the terminal's `shell.mine`, `shell.set` and `shell.print`,
   let anyone whose id matched in; they're a person's own now.
+
+- **Private fields for recorded Actions.** `private: ["buyer", "passengers"]` on an Action (dot
+  paths, as a collection's): its calls are recorded without them, in `action.started`'s input and
+  `action.completed`'s result alike, so the personal data a booking's buyer gives (names, CPFs,
+  emails) never lands in the log, while the calls are still recorded, retried and deduplicated.
+  - The call's `inputHash`, and so a nested call's id, still covers the whole input: a retry with
+    the same input answers from the log, and a changed one is a new call (under an outside call id,
+    `id_conflict`).
+  - A result that had private fields is kept whole in `sys.results` (a document by call id, written
+    in the completion's commit, no events), and `action.completed` says `private: true`: a retry
+    answers with all of it, as it would without them.
+
+- **A host without the web app: `serveRoutes`** (`copilotz/web/node`), for an app people use on
+  WhatsApp or on the phone. Given the runtime, it serves the app's routes alone (webhooks),
+  `/health` (unless a route takes it), and 404 for anything else: no page, no code, no sign-in; a
+  route's Action is called as a visitor. Its `close({ drain })` stops listening, letting running
+  requests finish, then closes the runtime with those options. A runtime that declares the `socket`
+  transport still takes its sockets at `/oxian`. `routeHost(runtime)` (`copilotz/web/server`) is the
+  same as a fetch handler. On Node, Deno and Bun (`examples/web-node/routes.ts`).
+- **A route can take a WebSocket** (a voice call's relay): a `serve` route calls `host.upgrade()`,
+  and answers with the response it gives; its `socket` is a browser's `WebSocket` as far as
+  `onmessage`, `send` and `close` go. It can refuse first, before any handshake. `serveRoutes` and
+  the web host's `serve` take it, through Oxian's adapter (route sockets, Oxian 0.23).
+
 - **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
   ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,
   its tools run again, with whatever input the model now chose, and the model never saw the first
@@ -160,6 +184,24 @@
   finish: the next owner delivers it again, with `retry`, and with the above it doesn't repeat its
   tools. Workers are told they're gone after the drain, so running work can still use them. The orgs
   host's `close({ drain })` passes it on to every org's runtime.
+
+- **Fixed: messages in a row ended an agent's prompt with its own answer.** A person writing several
+  messages a few seconds apart starts a turn for each; one that ran after the agent had answered
+  (while it wrote, or with the next turn) was sent a conversation ending with that answer, which
+  Anthropic's newer models refuse ("assistant message prefill", HTTP 400), so it failed. Now an
+  answer keeps how far its turn had read its thread (`knew`, the `at` of the newest message there);
+  the prompt reads what others said after that, while it wrote, after the answer; and the turn of a
+  person's message that an answer to them had already read ends without a model call. Adapters never
+  send a conversation ending with the model's own message: a user turn ("Continue.") follows it, for
+  every provider alike.
+- **Fixed: a failed turn's answer said what its provider said.** "booking failed: Anthropic 400:
+  {…}" was written in the chat, where everyone there read it (and a WhatsApp customer got it). It
+  now says "booking failed: something went wrong, so it couldn't answer. Try again in a moment."
+  What went wrong stays in the `processor.failed` event; a missing key still says who can add one.
+- **Fixed: MiniMax's usage counted no input.** Anthropic's adapter read input and cache counts only
+  from `message_start`; MiniMax (on Anthropic's protocol) says them in `message_delta`, so its calls
+  were recorded with 0 input tokens. It now reads every count from both, the greatest of each (they
+  are totals so far), so Anthropic's, said in both, count once.
 
 - **Fixed: a collection's private fields reached the log on PostgreSQL.** Writes that go as the
   store's single command (most of them) recorded `.created`, `.updated` and `.deleted` with the

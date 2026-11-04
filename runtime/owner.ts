@@ -522,19 +522,16 @@ export async function createOwner(
               emit: { ...op.event, ...(actor ? { actor } : {}), data: await large(op.event.data) },
             };
           case "insert":
-            return {
-              write: { ...op, docs: await large(op.docs) },
-              record: recorded(op.collection),
-            };
+            return { write: { ...op, docs: await large(op.docs) }, ...recording(op.collection) };
           case "update":
             return {
               write: { ...op, update: await large(op.update) },
-              record: recorded(op.collection),
+              ...recording(op.collection),
             };
           case "replace":
-            return { write: { ...op, doc: await large(op.doc) }, record: recorded(op.collection) };
+            return { write: { ...op, doc: await large(op.doc) }, ...recording(op.collection) };
           case "delete":
-            return { write: op, record: recorded(op.collection) };
+            return { write: op, ...recording(op.collection) };
           case "link":
             return { write: { ...op, edge: await large(op.edge) }, record: false };
           default:
@@ -676,14 +673,20 @@ export async function createOwner(
   const recorded = (collection: string) =>
     !collection.startsWith(SYSTEM) && registry.collections[collection]?.events !== false &&
     !registry.collections[collection]?.records && !fleeting.has(collection);
+  // The log keeps no private field: a token or key never lands in an event.
+  const unlogged = (collection: string) => registry.collections[collection]?.private ?? [];
+  /** How a store's command records a write: whether it does, and without which fields. */
+  const recording = (collection: string) => {
+    const hidden = unlogged(collection);
+    return { record: recorded(collection), ...(hidden.length ? { private: hidden } : {}) };
+  };
   const lifecycle = (tx: Transaction, collection: string, changes: Change[], by: By) => {
     if (!recorded(collection)) return;
     const { cause } = by;
     const actor = by.actor ? { actor: by.actor } : {};
-    // The log keeps no private field: a token or key never lands in an event.
-    const kept = registry.collections[collection]?.private ?? [];
+    const hidden = unlogged(collection);
     const open = <D extends Record<string, unknown>>(doc: D): D =>
-      kept.length ? unprivate(doc, kept) as D : doc;
+      hidden.length ? unprivate(doc, hidden) as D : doc;
     for (const { _id, before, after } of changes) {
       if (!before) {
         tx.emit({

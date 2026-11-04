@@ -303,3 +303,39 @@ test("a space put away is read and managed, not written in, until it's brought b
     await rt.idle();
   });
 });
+
+test("a role is only one the app names: not toString, constructor or __proto__", async () => {
+  const store = memoryStore();
+  const plugins = [models, chat, ...access, app];
+  const rt = await createRuntime({ store, plugins });
+  const { space: launch } = await rt.call<{ space: string }>("space.create", {
+    name: "Launch",
+  }, { actor: ana });
+  for (const role of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+    assertEquals(
+      await code(rt.call("member.set", { space: launch, member: eve, role }, { actor: ana })),
+      "invalid",
+      role,
+    );
+  }
+  await rt.close();
+  // A membership already stored with such a role (from before this check) reaches nothing,
+  // and breaks nothing: her reads still answer.
+  await store.transaction((await store.open()).epoch, async (tx) => {
+    await tx.insert("member", [{
+      _id: `${launch}|person:eve`,
+      member: "person:eve",
+      space: launch,
+      role: "toString",
+    }]);
+  });
+  const fresh = await createRuntime({ store, plugins });
+  try {
+    const can = await fresh.call<{ can: boolean }>("space.can", { space: launch, verb: "read" }, {
+      actor: eve,
+    });
+    assertEquals(can.can, false);
+  } finally {
+    await fresh.close();
+  }
+});

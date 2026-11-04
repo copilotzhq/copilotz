@@ -532,11 +532,13 @@ async function widgetCalled(
   if (!contact) return { content: [{ type: "text", text: NOT_YOURS }], isError: true };
   const entry = tool === READ ? undefined : c.line.tools[tool];
   const { _grant: _, ...rest } = input;
-  // A tool only the widgets call runs as any tool does, for the grant's conversation.
+  // A tool only the widgets call runs as any tool does, for the grant's conversation (what it
+  // would read after is the widget's to ask: a tool takes only its own input).
   if (entry && !entry.action) {
+    const { _reads: _after, ...own } = rest;
     const { conversation: _whose, ...result } = await called(c.runtime, c.line, c.scope, {
       tool,
-      input: rest,
+      input: own,
       request,
       said,
       caller: c.caller,

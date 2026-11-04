@@ -118,6 +118,8 @@ export type WebServerOptions = {
    */
   upgrade?(request: Request): Response | Promise<Response>;
   title?: string;
+  /** The page's language (`pt-BR`), for browsers, readers and translators: English unless said. */
+  lang?: string;
   /**
    * The name each cookie an entrance declares goes by here (its own, unless
    * said), each then this host's alone (`__Host-` wherever it's Secure, as an
@@ -335,7 +337,7 @@ const page = (
   signIn: Record<string, Record<string, unknown>>,
 ) =>
   `<!doctype html>
-<html lang="en">
+<html lang="${quoted(options.lang ?? "en")}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">

@@ -5,7 +5,9 @@
  * changed, and is fenced like any commit. Neither leaves anything behind on
  * a connection the store shares, nor runs where SQL could reach another
  * tenant's rows; a write can't change the store's own state. On PostgreSQL
- * servers it runs as a least-privilege role of its own (maintainer.ts).
+ * servers it runs as a least-privilege role of its own (maintainer.ts), or,
+ * told so (`storeRole`), as the store's own, never one that could run server
+ * commands or reach its files.
  */
 import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
 import type { Store } from "../../runtime/store.ts";
@@ -14,7 +16,7 @@ import { sqliteStore } from "../sql/sqlite/mod.ts";
 import { postgresPool, postgresStore } from "../sql/postgres/mod.ts";
 import { env, tempFile, test } from "../../testing/mod.ts";
 import { pooled, schemaName } from "./pooled.ts";
-import { type Maintainer, maintainer } from "./maintainer.ts";
+import { type Login, type Maintainer, maintainer, storeLogin } from "./maintainer.ts";
 import { connect } from "../sql/postgres/maintenance.ts";
 
 const POSTGRES = env("COPILOTZ_TEST_POSTGRES_URL");
@@ -69,6 +71,26 @@ const pairs: Record<string, () => Pair> = {
           async close() {
             await (await postgresStore({ url: POSTGRES, schema })).drop();
             await role.drop();
+          },
+        };
+      },
+      // As the store's own role, told so: an app's own login, not a superuser.
+      "postgres (store role)": (): Pair => {
+        const schema = schemaName();
+        let login: Login;
+        return {
+          dialect: "postgres",
+          async open() {
+            login = (await storeLogin(POSTGRES))!;
+            const maintenance = { storeRole: true } as const;
+            return [
+              await postgresStore({ url: login.url, schema, maintenance }),
+              await postgresStore({ url: login.url, schema, maintenance }),
+            ];
+          },
+          async close() {
+            await (await postgresStore({ url: login.url, schema })).drop();
+            await login.drop();
           },
         };
       },
@@ -226,6 +248,18 @@ test("pglite tenant: SQL refuses a schema other tenants share", async () => {
   );
   assertEquals(code(error), "shared_schema");
   await store.close();
+});
+
+test("postgres: maintenance as a role of its own or as the store's, not both", async () => {
+  const both = {
+    url: "postgres://nobody@127.0.0.1:1/none",
+    storeRole: true,
+  } as unknown as { storeRole: true };
+  // Refused as the store opens, before it connects anywhere.
+  const error = await assertRejects(() =>
+    postgresStore({ url: "postgres://nobody@127.0.0.1:1/none", maintenance: both })
+  );
+  assertMatch((error as Error).message, /role of its own \(url\) or as the store's own role/);
 });
 
 test("memory: no SQL", () => {
@@ -627,11 +661,15 @@ if (POSTGRES && ROLES) {
     await done();
   });
 
-  test("postgres: on a server, raw SQL runs only as a role of its own", async () => {
+  test("postgres: on a server, raw SQL runs only as a role of its own, or the store's told so", async () => {
     const schema = schemaName();
     const store = await postgresStore({ url: POSTGRES, schema });
     const { epoch } = await store.open();
-    assertEquals(code(await assertRejects(() => store.inspect("SELECT 1"))), "unsafe_role");
+    const read = await assertRejects(() => store.inspect("SELECT 1"));
+    assertEquals(code(read), "unsafe_role");
+    // It names both ways.
+    assertMatch((read as Error).message, /maintenance: \{ url \}/);
+    assertMatch((read as Error).message, /maintenance: \{ storeRole: true \}/);
     const write = await assertRejects(() =>
       store.transaction(epoch, (tx) => tx.execute!("SELECT 1"), { maintenance: true })
     );
@@ -849,5 +887,207 @@ if (POSTGRES && ROLES) {
     assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1);
     await store.drop();
     await role.drop();
+  });
+
+  /** A store as its own role, told to run maintenance SQL as it, with a note. */
+  const asStore = async (attributes = "", connections?: number) => {
+    const login = (await storeLogin(POSTGRES, attributes))!;
+    const schema = schemaName();
+    const store = await postgresStore({
+      url: login.url,
+      schema,
+      maintenance: { storeRole: true, ...(connections ? { connections } : {}) },
+    });
+    const { epoch } = await store.open();
+    await store.transaction(epoch, (tx) => tx.insert("note", [{ _id: "a", text: "A" }]));
+    return {
+      store,
+      epoch,
+      schema,
+      login,
+      done: async () => (await store.drop(), await login.drop()),
+    };
+  };
+
+  test("postgres (store role): raw SQL runs as the store's own role, every other guard kept", async () => {
+    const { store, epoch, schema, login, done } = await asStore("", 1);
+    const write = (sql: string, params: unknown[] = []) =>
+      store.transaction(epoch, (tx) => tx.execute!(sql, params), { maintenance: true });
+    try {
+      // As the store's role, which owns its tables (the log too), on a connection of its own.
+      assertEquals(
+        await store.inspect(
+          "SELECT current_user AS who, has_table_privilege('events', 'UPDATE') AS rewrites, " +
+            "application_name AS app FROM pg_stat_activity WHERE pid = pg_backend_pid()",
+        ),
+        [{ who: login.role, rewrites: true, app: "copilotz maintenance" }],
+      );
+      // A read is still read only, and a write still writes, audited in its commit.
+      assertEquals(
+        code(await assertRejects(() => store.inspect("DELETE FROM nodes WHERE id = 'a'"))),
+        "read_only",
+      );
+      const { result, events } = await store.transaction(epoch, async (tx) => {
+        const done = await tx.execute!(
+          "UPDATE nodes SET doc = jsonb_set(doc, '{text}', to_jsonb($1::text)) WHERE id = 'a'",
+          ["fixed"],
+        );
+        tx.emit({ type: "maintenance.sql", data: { changed: done.changed } });
+        return done;
+      }, { maintenance: true });
+      assertEquals(result.changed, 1);
+      assertEquals(events.map((e) => [e.type, e.data]), [["maintenance.sql", { changed: 1 }]]);
+      assertEquals((await store.find("note", {}))[0].text, "fixed");
+      // The statement filter: nothing that ends its transaction or reaches past it.
+      for (
+        const sql of [
+          "COMMIT",
+          "SET work_mem = '64kB'",
+          `ALTER ROLE "${login.role}" SET work_mem = '64kB'`,
+          "DO $$ BEGIN END $$",
+          "LOCK TABLE nodes",
+          "SELECT 1 -- x\r; DELETE FROM nodes",
+        ]
+      ) assertEquals(code(await assertRejects(() => write(sql))), "invalid", sql);
+      // A timeout, and nothing outliving the statement's own connection.
+      const slow = await assertRejects(() =>
+        store.inspect("SELECT pg_sleep(5)", [], { timeout: 100 })
+      );
+      assertEquals(code(slow), "timeout");
+      await store.inspect("SELECT pg_advisory_lock(4242) AS locked");
+      const [locks] = await store.inspect(
+        "SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory'",
+      );
+      assertEquals(locks.n, 0);
+      // The store's own state, and a trigger on its tables, are rolled back.
+      assertEquals(
+        code(
+          await assertRejects(() => write("UPDATE meta SET value = value + 1 WHERE key = 'epoch'")),
+        ),
+        "forbidden",
+      );
+      const trigger = await assertRejects(() =>
+        write(
+          `CREATE TRIGGER noted BEFORE UPDATE ON "${schema}".nodes FOR EACH ROW EXECUTE ` +
+            `FUNCTION suppress_redundant_updates_trigger()`,
+        )
+      );
+      assertEquals(code(trigger), "forbidden");
+      const [triggers] = await store.inspect(
+        "SELECT count(*)::int AS n FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = " +
+          "'nodes'::regclass",
+      );
+      assertEquals(triggers.n, 0);
+      // The fence held: the owner writes on.
+      await store.transaction(epoch, (tx) => tx.insert("note", [{ _id: "b", text: "B" }]));
+      // Rows past a limit are cut, and a second statement at once is busy (connections: 1).
+      assertEquals((await store.inspect("SELECT id FROM nodes", [], { limit: 1 })).length, 1);
+      const held = store.inspect("SELECT pg_sleep(0.5)").catch((error) => error);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assertEquals(code(await assertRejects(() => store.inspect("SELECT 1"))), "busy");
+      await held;
+    } finally {
+      await done();
+    }
+  });
+
+  test("postgres (store role): one that could run server commands or reach its files is refused", async () => {
+    const pool = await postgresPool({ url: POSTGRES, writes: 1, reads: 1 });
+    const run = async (sql: string) => (await pool.writes.query(sql)).rows;
+    const [me] = await run(
+      "SELECT rolsuper AS superuser, current_setting('server_version_num')::int AS version FROM " +
+        "pg_roles WHERE rolname = current_user",
+    ) as { superuser: boolean; version: number }[];
+    const refused = async (store: Sql, what: RegExp) => {
+      const error = await assertRejects(() => store.inspect("SELECT 1"));
+      assertEquals(code(error), "unsafe_role");
+      assertMatch((error as Error).message, what);
+    };
+    try {
+      if (me.superuser) {
+        // The test database's own role, a superuser: its store's role is one.
+        const schema = schemaName();
+        const store = await postgresStore({
+          url: POSTGRES,
+          schema,
+          maintenance: { storeRole: true },
+        });
+        try {
+          const { epoch } = await store.open();
+          await refused(store, /is a superuser/);
+          const write = await assertRejects(() =>
+            store.transaction(epoch, (tx) => tx.execute!("SELECT 1"), { maintenance: true })
+          );
+          assertEquals(code(write), "unsafe_role");
+        } finally {
+          await store.drop();
+        }
+        // A member of a role that may run programs or reach files, however it got there.
+        const { store: as, epoch, login, done } = await asStore();
+        const r = `"${login.role}"`;
+        const between = `cpz_b_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+        try {
+          for (
+            const server of [
+              "pg_execute_server_program",
+              "pg_read_server_files",
+              "pg_write_server_files",
+            ]
+          ) {
+            await run(`GRANT ${server} TO ${r}`);
+            await refused(as, new RegExp(`member of ${server}`));
+            await run(`REVOKE ${server} FROM ${r}`);
+          }
+          await run(`CREATE ROLE ${between} NOLOGIN NOINHERIT`);
+          await run(`GRANT pg_read_server_files TO ${between}; GRANT ${between} TO ${r}`);
+          await refused(as, /member of pg_read_server_files/);
+          // One that could become a superuser (set_config('role', …) in a statement).
+          await run(`REVOKE pg_read_server_files FROM ${between}; ALTER ROLE ${between} SUPERUSER`);
+          await refused(as, new RegExp(`may become superuser ${between}`));
+          await run(`REVOKE ${between} FROM ${r}; DROP ROLE ${between}`);
+          // One let read the server's files by a function.
+          await run(`GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_file(text) TO ${r}`);
+          await refused(as, /may run pg_read_file\(text\)/);
+          await run(`REVOKE EXECUTE ON FUNCTION pg_catalog.pg_read_file(text) FROM ${r}`);
+          assertEquals((await as.inspect("SELECT 1 AS one"))[0].one, 1);
+          // A write that makes it one is rolled back: checked again after, in its transaction.
+          const elsewhere = schemaName();
+          await run(
+            `CREATE SCHEMA ${elsewhere}; CREATE FUNCTION ${elsewhere}.promote() RETURNS void ` +
+              `LANGUAGE sql SECURITY DEFINER AS $f$ GRANT pg_read_server_files TO ${r} $f$; ` +
+              `GRANT USAGE ON SCHEMA ${elsewhere} TO ${r}; GRANT EXECUTE ON FUNCTION ` +
+              `${elsewhere}.promote() TO ${r}`,
+          );
+          try {
+            const write = await assertRejects(() =>
+              as.transaction(epoch, (tx) => tx.execute!(`SELECT ${elsewhere}.promote()`), {
+                maintenance: true,
+              })
+            );
+            assertEquals(code(write), "unsafe_role");
+            const [member] = await run(
+              `SELECT pg_has_role('${login.role}', 'pg_read_server_files', 'MEMBER') AS is`,
+            );
+            assertEquals(member.is, false);
+          } finally {
+            await run(`DROP SCHEMA ${elsewhere} CASCADE`);
+          }
+        } finally {
+          await run(`DROP ROLE IF EXISTS ${between}`).catch(() => {});
+          await done();
+        }
+      }
+      // A role that may make roles, as Cloud SQL's postgres user: before PostgreSQL 16 it could
+      // grant itself any of them; from 16, only roles it administers.
+      const { store, done } = await asStore("CREATEROLE");
+      try {
+        if (me.version < 160000) await refused(store, /CREATEROLE/);
+        else assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1);
+      } finally {
+        await done();
+      }
+    } finally {
+      await pool.close();
+    }
   });
 }

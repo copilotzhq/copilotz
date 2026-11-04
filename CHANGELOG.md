@@ -1,3 +1,45 @@
+## Unreleased
+
+- **Security: a Google sign-in no longer writes the session's secret to the log.** `google.sign-in`
+  was a recorded Action, so the event log kept its input, the Google ID token, and its result,
+  `{ person, session }`, with the new session's secret in plain text. Anyone who could read the log
+  (a database reader, a backup, an export, an exporter) could sign in as that person, staff
+  included. The identity plugin keeps secrets only as hashes, and this Action undid that. It is now
+  unrecorded (`record: false`), like `session.start`. So is `session.end`, whose input is the secret
+  being ended. Found by a security review.
+  - **Computers' secrets are kept out of the log too**, found by checking every Action for the same
+    mistake. These are now unrecorded: `computer.admit`, whose input is a computer's secret (or the
+    code connecting it) on every connect; `pool.admit`, whose input is a pool VM's identity token;
+    `computer.code`, whose result is the code that connects a computer as its person; and
+    `computer.work`, whose input and result are what a person types and sees in their shell, files'
+    contents and the env values they pass. `computer.enrollment`'s result (`code`) and
+    `pool.serve`'s `assign.code` and `assign.secret` (also when forwarded by `remotePool`) are
+    private: still recorded, so a retried wake gets the same code, but the code isn't logged.
+  - **Deployments should end every session made before this fix.** Delete the `credential` documents
+    of `kind: "session"`, so every signed-in person signs in again. Keys are unaffected. A
+    computer's secret can't be rotated yet: where the log may have been read, forget the computer
+    (`computer.forget`) and connect it again with a new code.
+  - **Old events still hold these secrets until they're scrubbed**, from the store and from anything
+    that copied it: the `action.started` and `action.completed` events of `google.sign-in`,
+    `computer.code`, `computer.enrollment` and `computer.work`, and the `action.started` events of
+    `session.end`, `computer.admit`, `pool.admit` and `pool.serve`. Ended sessions, used codes and
+    expired tokens prove nobody, but scrub them anyway.
+
+- **MCP: a conversation whose first call an owner stopped no longer ends for good.** A new
+  conversation's chat is made (`chat.open`) and then shared with its contact (`member.set`), two
+  writes; an owner that stopped between them (a deploy, which doesn't wait for running calls, or a
+  crash) left a chat its contact couldn't reach, which is how a contact its people took out of its
+  chat looks, so every later call said "This conversation with the app is over". A new
+  conversation's opening is now noted with its first call's counts (`mcp_opening`, durable, no
+  events, gone with its receipts after 15 minutes) and dropped once the chat is shared: a chat out
+  of its contact's reach, with its opening noted, goes on as new (asked again within 15 minutes, its
+  contact not erased); without one, it stays over. Erasure's tombstones are read first, as before.
+  This is what failed the MCP restart test on slower machines (macOS CI); the test now waits on what
+  it watches for, not on fixed times, and a new one stops an owner at each of a first call's writes.
+- **Contacts: a start cut short after a contact's record, before sharing it with the contact, is
+  finished when it's started again** (`contact.start`, on WhatsApp, voice and MCP): the contact, and
+  the agent working for it, read the record again. A known contact was returned as it was.
+
 ## 1.0.0-rc.21 — 2026-11-04
 
 - **Security: a burst of calls no longer drops an executor's connection** (Oxian 0.23.3). About 35
@@ -414,6 +456,19 @@
   whole document, so `private` fields (a computer's `pending` secret, unsealed account tokens) were
   in the log there; memory and SQLite left them out. The command now records documents without them
   too. Events already written still hold them.
+- **Maintenance SQL can run as the store's own role, told so:**
+  `postgresStore({ url, schema, maintenance: { storeRole: true } })`, beside a role of its own
+  (`maintenance: { url }`; both at once stop the store from opening, and neither still refuses raw
+  SQL on a server, its message naming both). Anyone holding the maintenance key can then do whatever
+  the store's role can: drop or truncate its tables, delete from the log, read every schema it
+  reaches. Only the allowlist check is skipped; the statement filter, a connection of its own for
+  each statement over the extended protocol, the timeouts, caps and `connections`, fenced writes in
+  the owner with their `maintenance.sql` event, the rollback of what changes `meta` or makes a
+  trigger, and the emptied cache all hold. Still refused, before each statement and after a write: a
+  role that is or may become a superuser, a member of `pg_execute_server_program`,
+  `pg_read_server_files` or `pg_write_server_files`, one with `CREATEROLE` before PostgreSQL 16, or
+  one that may run the server's file functions (`pg_read_file`, `lo_import`, `lo_export`…). Cloud
+  SQL's `postgres` user passes from PostgreSQL 16. An orgs host's orgs still don't get the plugin.
 
 ## 1.0.0-rc.20 — 2026-11-04
 

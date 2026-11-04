@@ -22,7 +22,12 @@ import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { postgresPool, postgresStore } from "../../stores/sql/postgres/mod.ts";
 import { env, tempFile, test } from "../../testing/mod.ts";
-import { type Maintainer, maintainer } from "../../stores/tests/maintainer.ts";
+import {
+  type Login,
+  type Maintainer,
+  maintainer,
+  storeLogin,
+} from "../../stores/tests/maintainer.ts";
 
 const POSTGRES = env("COPILOTZ_TEST_POSTGRES_URL");
 /** Whether the test database's role can make a maintenance role of its own (CREATEROLE). */
@@ -69,6 +74,24 @@ const databases: Record<string, () => Database> = {
           async done() {
             await (await postgresStore({ url: POSTGRES, schema })).drop();
             await (await role)?.drop();
+          },
+        };
+      },
+      // Maintenance SQL as the store's own role, told so (storeRole): an app's own login.
+      "postgres (store role)": (): Database => {
+        const schema = `m_${crypto.randomUUID().slice(0, 8)}`;
+        let login: Promise<Login> | undefined;
+        return {
+          dialect: "postgres",
+          async open() {
+            const { url } = await (login ??= storeLogin(POSTGRES).then((l) => l!));
+            return await postgresStore({ url, schema, maintenance: { storeRole: true } });
+          },
+          async done() {
+            const made = await login;
+            if (!made) return;
+            await (await postgresStore({ url: made.url, schema })).drop();
+            await made.drop();
           },
         };
       },

@@ -13,16 +13,18 @@ export type PoolCall = (action: string, input: Record<string, unknown>) => Promi
 
 /** The forwarding Actions, by name: `pool.take`, `pool.serve`, `pool.stop`, `pool.drop`, `pool.renew`. */
 export function remoteActions(call: PoolCall, org?: string) {
-  const forward = (action: string, record = true) =>
+  const forward = (action: string, record = true, hidden: string[] = []) =>
     defineAction({
       ...(record ? {} : { record: false }),
+      ...(hidden.length ? { private: hidden } : {}),
       input: { type: "object" },
       run: (_ctx, input) =>
         call(action, org !== undefined ? { ...input as Record<string, unknown>, org } : input),
     });
   return {
     [POOL_ACTIONS.take]: forward(POOL_ACTIONS.take),
-    [POOL_ACTIONS.serve]: forward(POOL_ACTIONS.serve),
+    // What connects the computer stays out of the log, as the pool's own `pool.serve`.
+    [POOL_ACTIONS.serve]: forward(POOL_ACTIONS.serve, true, ["assign.code", "assign.secret"]),
     [POOL_ACTIONS.stop]: forward(POOL_ACTIONS.stop),
     [POOL_ACTIONS.drop]: forward(POOL_ACTIONS.drop),
     [POOL_ACTIONS.renew]: forward(POOL_ACTIONS.renew, false),

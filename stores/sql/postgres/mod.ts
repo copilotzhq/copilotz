@@ -61,7 +61,7 @@ import {
 import { type PostgresPool, postgresPool } from "./pool.ts";
 import { dropTenant } from "./tenants.ts";
 import { statement } from "../shared/statement.ts";
-import { allowed, alone, connect, noRole, triggers } from "./maintenance.ts";
+import { allowed, alone, confined, connect, noRole, triggers } from "./maintenance.ts";
 import { connections } from "../shared/capped.ts";
 import { upTo, weight } from "../shared/rows.ts";
 
@@ -178,12 +178,17 @@ export async function postgresStore(options: {
   /** Hears every SQL statement sent, for debugging. */
   trace?: (sql: string) => void;
   /**
-   * Where maintenance SQL connects (`inspect`, a transaction's `execute`;
-   * see maintenance.ts): a role of its own, holding exactly maintenance's
-   * grants on this schema. A new connection for each statement, closed
-   * after, `connections` at most at once (2). On a server, raw SQL needs it.
+   * Who maintenance SQL runs as (`inspect`, a transaction's `execute`; see
+   * maintenance.ts), on a server, where raw SQL needs one or the other:
+   * `url`, a role of its own, holding exactly maintenance's grants on this
+   * schema; or, deliberately, `storeRole: true`, the store's own role (this
+   * store's `url`, or its pool's), so the key may do whatever that role may,
+   * dropping its tables included. Not both. Either way a new connection for
+   * each statement, closed after, `connections` at most at once (2).
    */
-  maintenance?: { url: string; connections?: number };
+  maintenance?:
+    | { url: string; storeRole?: never; connections?: number }
+    | { storeRole: true; url?: never; connections?: number };
 }): Promise<
   Store & {
     /** Exposes each collection as a SQL view of its schema's top-level fields. */
@@ -203,6 +208,13 @@ export async function postgresStore(options: {
   }
 > {
   if (!options.url === !options.pool) throw new Error("postgresStore takes a url or a pool");
+  const storeRole = options.maintenance?.storeRole === true;
+  if (storeRole && options.maintenance?.url !== undefined) {
+    throw new Error(
+      "postgresStore's maintenance runs as a role of its own (url) or as the store's own role " +
+        "(storeRole: true), not both",
+    );
+  }
   const tenant = options.tenant ?? "";
   if (tenant.includes("\u0000")) throw new Error("A tenant can't contain a NUL character");
   const own = !options.pool;
@@ -238,6 +250,12 @@ export async function postgresStore(options: {
    * temporary object last, whatever the statement set (in its transaction).
    */
   const settled = "SELECT pg_catalog.set_config('search_path', 'pg_catalog, pg_temp', true)";
+  /**
+   * The role check on a server, on the connection maintenance SQL runs on:
+   * a role of its own holds exactly maintenance's grants; the store's own
+   * role can't run server commands or reach its files (maintenance.ts).
+   */
+  const checked = (db: Session) => storeRole ? confined(db) : allowed(db, schema);
   let layout: Layout;
   try {
     layout = await prepare(pool, schema);
@@ -784,7 +802,7 @@ export async function postgresStore(options: {
         if (after.state !== before.state) throw stateChanged();
         if (after.triggers) throw triggered();
         // What the role holds is as it was: no large object, setting or grant came of it.
-        if (pool.server) await allowed(counted(tx), schema);
+        if (pool.server) await checked(counted(tx));
         // Events it wrote into the log keep their numbers: this commit's go after them.
         if (last !== undefined) last = Math.max(last, Number(after.seq));
         return { rows, changed: Number(after.n) - Number(before.n) };
@@ -1259,23 +1277,25 @@ export async function postgresStore(options: {
   /**
    * Refuses maintenance SQL where it could reach what isn't this tenant's: a
    * schema other tenants share; on a server, a role that holds anything
-   * beyond maintenance's grants; in PGlite, another schema's tables
-   * (maintenance.ts). `db` is the connection it runs on.
+   * beyond maintenance's grants, or as the store's own role, one that could
+   * run server commands or reach its files; in PGlite, another schema's
+   * tables (maintenance.ts). `db` is the connection it runs on.
    */
   const reachable = async (db: Session) => {
-    if (pool.server) return await allowed(db, schema);
+    if (pool.server) return await checked(db);
     if (await others(counted(committed), schema, tenant)) throw sharedSchema();
     await alone(db, schema);
   };
   /**
    * On a server, a connection of its own for one maintenance statement, as
-   * the maintenance role, closed after, within the cap (maintenance.ts).
+   * the maintenance role (or the store's own), closed after, within the cap
+   * (maintenance.ts).
    */
   const dedicated = async <R>(work: (db: Session) => Promise<R>): Promise<R> => {
     // A schema other tenants share comes first: no role would make SQL there theirs alone.
     if (await others(counted(committed), schema, tenant)) throw sharedSchema();
-    if (!options.maintenance) throw noRole();
-    const url = options.maintenance.url;
+    const url = storeRole ? pool.url : options.maintenance?.url;
+    if (!url) throw noRole();
     return await capped(async () => {
       const db = await connect(url);
       try {

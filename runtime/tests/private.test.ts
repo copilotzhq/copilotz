@@ -289,8 +289,11 @@ for (const [name, make] of Object.entries(sql)) {
       });
       const events = await store.events(0);
       assertEquals(leaks(events), []);
-      const started = events.filter((e) => e.type === "action.started" && e.cause);
-      assertEquals(started.map((e) => e.data.input), [{ booking: "b1" }, { booking: "b2" }]);
+      // Its two calls ran together: they start in the log in either order.
+      const started = events.filter((e) => e.type === "action.started" && e.cause)
+        .map((e) => e.data.input as { booking: string })
+        .sort((a, b) => a.booking.localeCompare(b.booking));
+      assertEquals(started, [{ booking: "b1" }, { booking: "b2" }]);
     } finally {
       await rt.close();
     }

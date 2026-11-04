@@ -121,16 +121,21 @@ function bridgeOf() {
   let next = 0;
   const pending = new Map<number, { resolve(v: unknown): void; reject(e: unknown): void }>();
   const listeners = new Set<(method: string, params: Json) => void>();
+  // The host's origin, once its first answer says it: from then on, only it is written to, and
+  // only it is heard (until then the host is unknown: a sandbox's origin is the host's to choose).
+  let origin = "*";
   const top = globalThis as unknown as { parent?: unknown };
   const inFrame = top.parent !== undefined && top.parent !== globalThis;
   addEventListener("message", (event: MessageEvent) => {
     if (event.source !== globalThis.parent) return;
+    if (origin !== "*" && event.origin !== origin) return;
     const message = event.data as Json;
     if (!isObject(message) || message.jsonrpc !== "2.0") return;
     if (typeof message.id === "number" && !("method" in message)) {
       const waiting = pending.get(message.id);
       if (!waiting) return;
       pending.delete(message.id);
+      if (origin === "*" && event.origin && event.origin !== "null") origin = event.origin;
       if (message.error) waiting.reject(message.error);
       else waiting.resolve(message.result);
       return;
@@ -138,7 +143,7 @@ function bridgeOf() {
     if (typeof message.method !== "string") return;
     // The host asks before it takes the widget down: it's told yes.
     if (message.method === "ui/resource-teardown" && "id" in message) {
-      globalThis.parent.postMessage({ jsonrpc: "2.0", id: message.id, result: {} }, "*");
+      globalThis.parent.postMessage({ jsonrpc: "2.0", id: message.id, result: {} }, origin);
     }
     for (const listen of listeners) {
       listen(message.method, isObject(message.params) ? message.params : {});
@@ -158,10 +163,10 @@ function bridgeOf() {
           resolve: (v) => (clearTimeout(timer), resolve(v)),
           reject: (e) => (clearTimeout(timer), reject(e)),
         });
-        globalThis.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        globalThis.parent.postMessage({ jsonrpc: "2.0", id, method, params }, origin);
       }),
     notify: (method: string, params: Json) => {
-      if (inFrame) globalThis.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+      if (inFrame) globalThis.parent.postMessage({ jsonrpc: "2.0", method, params }, origin);
     },
     listen: (fn: (method: string, params: Json) => void) => listeners.add(fn),
   };
@@ -283,6 +288,11 @@ export async function widget(options: WidgetOptions): Promise<Client | undefined
     return await api.callTool(name, args) as ToolResult;
   };
 
+  // Each reply brings a new grant (one in use never runs out; one that leaked does).
+  const renew = (result: ToolResult) => {
+    const grant = metaOf(result)["copilotz/grant"];
+    if (typeof grant === "string") meta.grant = grant;
+  };
   const answersOf = (result: ToolResult): Known => {
     const reads = metaOf(result)["copilotz/reads"];
     return Array.isArray(reads) ? reads as Known : [];
@@ -293,6 +303,7 @@ export async function widget(options: WidgetOptions): Promise<Client | undefined
     link: {
       read: async (reads: { key: string; read: Remote }[]) => {
         const result = await callTool(meta.read, { reads, _grant: meta.grant });
+        renew(result);
         const answers = new Map(answersOf(result));
         const failed: Answer = {
           error: { message: textOf(result) || "Couldn't read", code: "unavailable" },
@@ -309,8 +320,11 @@ export async function widget(options: WidgetOptions): Promise<Client | undefined
         const result = await callTool(tool, {
           ...(isObject(input) ? input : {}),
           _grant: meta.grant,
+          // Its own id: the line runs a call once by it (a host may number requests again).
+          _call: crypto.randomUUID(),
           _reads: client.watching(),
         });
+        renew(result);
         const answers = answersOf(result);
         if (answers.length) client.update(answers);
         const said = metaOf(result);

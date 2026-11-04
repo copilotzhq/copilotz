@@ -96,28 +96,45 @@ export async function callIdOf(
 
 /**
  * A widget's grant: what a call from the line's widgets carries to show it's theirs, never the
- * model's (its widget-only tools, `appOnly`, refuse a call without one). `g1.<contact>.<hmac>`:
- * the conversation's contact and an HMAC of it, the line and the org, with the app's secret.
- * It goes out only in results' `_meta` (the host's for the widget; a model never reads it), so
- * the model can't make one; whoever holds it reaches what the conversation's contact does, no
- * more (the same as what names the conversation: see mod.ts, "Security notes").
+ * model's (its widget-only tools, `appOnly`, refuse a call without one).
+ * `g2.<contact>.<until>.<hmac>`: the conversation's contact, until when it's good (seconds, base
+ * 36), and an HMAC of both with the line and the org, with the app's secret. It goes out only in
+ * results' `_meta` (the host's for the widget; a model never reads it), so the model can't make
+ * one, and it's good for `GRANT_MS` (6 hours): a widget gets a new one with each reply, so one
+ * in use never runs out, and one that leaked does. On a line where ChatGPT names every
+ * conversation (`handles: false`), the call must name the grant's conversation too.
  */
-export async function grantOf(secret: string, scope: Scope, contact: string): Promise<string> {
-  const said = await mac(secret, ["mcp", "grant", scope.org ?? null, scope.line, contact]);
-  return `g1.${contact}.${said.slice(0, 32)}`;
+export const GRANT_MS = 6 * 3_600_000;
+
+export async function grantOf(
+  secret: string,
+  scope: Scope,
+  contact: string,
+  now = Date.now(),
+): Promise<string> {
+  const until = Math.floor((now + GRANT_MS) / 1000).toString(36);
+  const said = await mac(secret, ["mcp", "grant", scope.org ?? null, scope.line, contact, until]);
+  return `g2.${contact}.${until}.${said.slice(0, 32)}`;
 }
 
-/** The contact a grant is for, when it's one this app made for this line; else undefined. */
+/**
+ * The contact a grant is for, when it's one this app made for this line and it's still good;
+ * else undefined.
+ */
 export async function grantedTo(
   secret: string,
   scope: Scope,
   grant: unknown,
+  now = Date.now(),
 ): Promise<string | undefined> {
   if (typeof grant !== "string" || grant.length > 120) return undefined;
-  const found = /^g1\.(c-[0-9a-f]{24})\.[0-9a-f]{32}$/.exec(grant);
+  const found = /^g2\.(c-[0-9a-f]{24})\.([0-9a-z]{1,10})\.([0-9a-f]{32})$/.exec(grant);
   if (!found) return undefined;
-  const expected = await grantOf(secret, scope, found[1]);
+  const [, contact, until] = found;
+  if (parseInt(until, 36) * 1000 <= now) return undefined;
+  const said = await mac(secret, ["mcp", "grant", scope.org ?? null, scope.line, contact, until]);
+  const expected = `g2.${contact}.${until}.${said.slice(0, 32)}`;
   let differ = expected.length ^ grant.length;
   for (let i = 0; i < expected.length; i++) differ |= expected.charCodeAt(i) ^ grant.charCodeAt(i);
-  return differ === 0 ? found[1] : undefined;
+  return differ === 0 ? contact : undefined;
 }

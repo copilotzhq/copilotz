@@ -193,6 +193,7 @@ const forWidgets = (input: Schema, reads: boolean): Schema => ({
       type: "string",
       description: "The widget's grant: its host passes it, from the tool result that drew it.",
     },
+    _call: { type: "string", description: "This call's own id: a retry of it sends the same." },
     ...(reads
       ? { [READS]: { type: "array", maxItems: 32, description: "Reads to answer after it." } }
       : {}),

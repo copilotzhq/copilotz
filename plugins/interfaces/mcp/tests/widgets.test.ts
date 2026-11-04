@@ -21,6 +21,9 @@ import { LINE, said, setup } from "./setup.ts";
 
 const ORIGIN = "https://app.example";
 
+/** How many times `card.write` ran. */
+let writes = 0;
+
 /** Cards, one per chat: written by a tool (the model's) or an Action (the widget's, by hand). */
 const cards = definePlugin({
   name: "cards",
@@ -68,7 +71,7 @@ const cards = definePlugin({
           { chat: input.chat, text: input.text, secret: "s3cret" },
           { upsert: true },
         );
-        return { written: input.text, code: "for the widget only" };
+        return { written: input.text, code: "for the widget only", n: ++writes };
       },
     }),
   },
@@ -196,7 +199,7 @@ test("a tool drawn by a widget answers what it draws in _meta, its reads already
     }]);
     assertMatch(widget.hints.thread, /^mcp-/);
     assertEquals(widget.viewer.kind, "contact");
-    assertMatch(widget.grant, /^g1\.c-[0-9a-f]{24}\.[0-9a-f]{32}$/);
+    assertMatch(widget.grant, /^g2\.c-[0-9a-f]{24}\.[0-9a-z]+\.[0-9a-f]{32}$/);
     assertEquals(widget.tools, { "card.write": "write_card" });
     assertEquals(widget.read, "copilotz_read");
     // What the View read, answered as the contact, without private fields.
@@ -219,7 +222,7 @@ test("what only widgets call is refused to the model: no grant, a forged one, an
       s.call("write_card", { chat: hints.thread, text: "By hand", ...input }, { session });
 
     for (
-      const attempt of [{}, { _grant: "g1.c-000000000000000000000000.0000" }, {
+      const attempt of [{}, { _grant: "g2.c-000000000000000000000000.zz.0000" }, {
         _grant: grant.replace(/.$/, (c: string) => c === "0" ? "1" : "0"),
       }, { _grant: theirs.grant }]
     ) {
@@ -249,12 +252,12 @@ test("what only widgets call is refused to the model: no grant, a forged one, an
       value: { _id: hints.thread, chat: hints.thread, text: "By hand" },
     }]]);
     assert(!JSON.stringify(res(done).content).includes("for the widget only"));
-    // A refusal meant for anyone says its words.
+    // A refusal's words go to the widget alone; what a model may read says only it didn't go.
     const no = await write({ _grant: grant, text: "no" });
-    assertEquals([said(no), res(no)._meta["copilotz/error"].code], [
-      "Not that card.",
-      "refused",
-    ]);
+    assertEquals(said(no), "It didn't go through in the widget.");
+    assertEquals(res(no)._meta["copilotz/error"], { message: "Not that card.", code: "refused" });
+    // Each reply brings a new grant, good as the first.
+    assertMatch(res(done)._meta["copilotz/grant"], /^g2\./);
   }, { line, plugins: [cards], widgets: widgets() });
 });
 
@@ -311,4 +314,74 @@ test("a template that can't be made: the line goes on without widgets, its tools
     const shown = await s.call("show_card", { text: "Hi" }, { session: "s1" });
     assertEquals([said(shown), res(shown)._meta], ["A card is shown.", undefined]);
   }, { line, plugins: [cards], widgets: failing });
+});
+
+test("a grant is the conversation's alone: named with it on a line without handles, and only for hours", async () => {
+  await setup(async (s) => {
+    const first = await s.call("show_card", { text: "Hello" }, { session: "s1" });
+    const { grant, hints } = res(first)._meta["copilotz/widget"];
+    const write = (o: { session?: string } = {}, extra: Record<string, unknown> = {}) =>
+      s.call("write_card", { chat: hints.thread, text: "By hand", _grant: grant, ...extra }, o);
+    // A grant alone, naming no conversation: refused where ChatGPT names every one.
+    const alone = await write();
+    assertEquals(res(alone).isError, true);
+    assertStringIncludes(said(alone), "only the widget calls it");
+    assertEquals(said(await write({ session: "s1" })), "Done in the widget.");
+    // Past its hours, it's no grant (a widget in use always holds a newer one).
+    const later = Date.now;
+    Date.now = () => later() + 7 * 3_600_000;
+    try {
+      const old = await write({ session: "s1" });
+      assertStringIncludes(said(old), "only the widget calls it");
+    } finally {
+      Date.now = later;
+    }
+  }, { line: { ...line, handles: false }, plugins: [cards], widgets: widgets() });
+});
+
+test("a widget call runs once by its own id, whatever the request's; the template is read a few times a minute", async () => {
+  await setup(async (s) => {
+    const first = await s.call("show_card", { text: "Hello" }, { session: "s1" });
+    const { grant, hints } = res(first)._meta["copilotz/widget"];
+    const write = (text: string, call: string) =>
+      s.call("write_card", { chat: hints.thread, text, _grant: grant, _call: call }, {
+        session: "s1",
+        id: 1,
+      });
+    // The same request id from a host that counts from 1 again: two taps are two calls.
+    await write("one", "tap-aaaaaaaa");
+    await write("two", "tap-bbbbbbbb");
+    const after = res(
+      await s.call("copilotz_read", {
+        reads: [{
+          key: "k",
+          read: { collection: "card", query: "mine", params: { chat: hints.thread } },
+        }],
+        _grant: grant,
+      }, { session: "s1" }),
+    )._meta["copilotz/reads"];
+    assertEquals(after[0][1].value.text, "two");
+    // A retry of the same tap (its id, its input) is answered from the first: it ran once.
+    const once = res(await write("two", "tap-bbbbbbbb"))._meta["copilotz/result"].n;
+    const twice = res(await write("two", "tap-bbbbbbbb"))._meta["copilotz/result"].n;
+    assertEquals(once, twice);
+    assertEquals(res(await write("two", "tap-cccccccc"))._meta["copilotz/result"].n, twice + 1);
+    // The template, past a few reads a minute from one address: busy.
+    const uri = res(await s.legacy("resources/list")).resources[0].uri;
+    let refused = 0;
+    for (let i = 0; i < 35; i++) {
+      if (err(await s.legacy("resources/read", { uri }))?.code === -31000) refused++;
+    }
+    assert(refused >= 5, `refused ${refused}`);
+  }, { line, plugins: [cards], widgets: widgets() });
+});
+
+test("the template keeps the code inside its element: </SCRIPT> in any case, and <!--", async () => {
+  const page = await widgetsOf({
+    code: { entry: "w.js", files: { "w.js": 'a("</SCRIPT><img src=x>"); b("<!-- c");' } },
+    plugins: [cardsWeb],
+  }).page("https://app.example");
+  assert(!/<\/script><img/i.test(page.html));
+  assertStringIncludes(page.html, "<\\/SCRIPT>");
+  assert(!page.html.includes('b("<!--'));
 });

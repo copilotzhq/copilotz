@@ -57,6 +57,7 @@ import { busy, hold, isBusy } from "./running.ts";
 import { called, listed, mirrored, offeredOf, type Said, usable } from "./tools.ts";
 import {
   appCalled,
+  CALL,
   grantedContact,
   NOT_YOURS,
   resourceRead,
@@ -348,6 +349,9 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
       case "resources/list":
       case "resources/templates/list":
       case "resources/read": {
+        // The template is large (an app's whole widget code): a caller reads it a few times a
+        // minute, not in a loop.
+        if (method === "resources/read" && !counted(c, "read", READS_A_MINUTE)) throw busy();
         // Resources are the widgets' template: without widgets, there are none to ask about.
         if (!await withWidgets(c)) return failed(status(METHOD), rpc, METHOD, "Method not found");
         if (method === "resources/list") {
@@ -502,6 +506,25 @@ function headerProblem(
   return undefined;
 }
 
+/** How many times a minute one caller's address reads the template, and asks for the tools. */
+const READS_A_MINUTE = 30;
+
+/** What's asked of a line besides tool calls, by caller's address, this minute (in this process). */
+const asked = new Map<string, { minute: number; count: number }>();
+
+/** Counts one of a caller's asks; false past `most` a minute. Callers the front exempts aren't counted. */
+function counted(c: Context, what: string, most: number): boolean {
+  if (c.caller?.exempt) return true;
+  const minute = Math.floor(Date.now() / 60_000);
+  const key = `${c.line.name}|${what}|${c.caller?.counted ?? "unknown"}`;
+  const seen = asked.get(key);
+  const count = seen?.minute === minute ? seen.count : 0;
+  if (count >= most) return false;
+  asked.set(key, { minute, count: count + 1 });
+  if (asked.size > 10_000) { for (const [k, v] of asked) if (v.minute !== minute) asked.delete(k); }
+  return true;
+}
+
 /** Whether the line's widgets are served here: a template to draw them in. */
 const withWidgets = async (c: Context) => !!await templateOf(c.line, c.widgets, c.origin);
 
@@ -521,6 +544,7 @@ async function widgetCalled(
   const { secret } = c.scope;
   const contact = await grantedContact(
     c.scope,
+    c.line,
     input,
     meta,
     async () =>
@@ -548,22 +572,28 @@ async function widgetCalled(
     return result;
   }
   const address = c.caller && !c.caller.exempt ? c.caller.counted : undefined;
+  const thread = await threadOf(secret, contact);
   const release = hold(c.runtime, [
     { key: "runtime", most: c.atOnce },
     { key: `line:${c.line.name}`, most: c.line.limits.atOnce },
     ...(address
       ? [{ key: `address:${c.line.name}|${address}`, most: c.line.limits.addressAtOnce }]
       : []),
+    { key: `chat:${c.line.name}|${thread}`, most: c.line.limits.chatAtOnce },
   ]);
   if (!release) throw busy();
   try {
-    const thread = await threadOf(secret, contact);
+    // The call's id: its own (`_call`, which a retry of it shares), never the JSON-RPC request's
+    // alone (a host may number its requests from 1 again: two taps would be one call).
+    const own = typeof rest[CALL] === "string" && /^[\w-]{8,64}$/.test(rest[CALL] as string)
+      ? rest[CALL] as string
+      : crypto.randomUUID();
     const [id, user, counted] = await Promise.all([
-      callIdOf(thread, request, tool, rest),
+      callIdOf(thread, own, tool, rest),
       said.subject ? userOf(secret, c.scope, said.subject) : undefined,
       address ? addressKey(secret, address) : undefined,
     ]);
-    return await appCalled(c.runtime, c.line, {
+    return await appCalled(c.runtime, c.line, c.scope, {
       tool,
       input: rest,
       contact,

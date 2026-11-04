@@ -183,12 +183,18 @@ export async function widgetMeta(
   };
 }
 
-/** A widget's own call's reply: `content` says only whether it went; the rest is for the widget. */
+/**
+ * A widget's own call's reply: `content` says only whether it went (a host may show it, or its
+ * model read it); the rest is for the widget, with a new grant (one in use never runs out).
+ */
 const reply = (text: string, meta: Record<string, unknown>, isError = false) => ({
   content: [{ type: "text", text }],
   ...(isError ? { isError: true } : {}),
   _meta: meta,
 });
+
+/** What `content` says of a widget's own call that didn't go: never the refusal's words. */
+const NOT_DONE = "It didn't go through in the widget.";
 
 /** What the model is told of a widget's tool it called itself: refused, and why. */
 export const NOT_YOURS = "This tool is the app's widget's own: only the widget calls it, when " +
@@ -200,6 +206,7 @@ export const NOT_YOURS = "This tool is the app's widget's own: only the widget c
  */
 export async function grantedContact(
   scope: Scope & { secret: string },
+  line: Line,
   input: Record<string, unknown>,
   meta: Record<string, unknown> | undefined,
   named: () => Promise<string | undefined>,
@@ -208,8 +215,14 @@ export async function grantedContact(
   const contact = await grantedTo(scope.secret, scope, grant);
   if (!contact) return undefined;
   const session = await named();
-  return session === undefined || session === contact ? contact : undefined;
+  // Where every conversation names itself (ChatGPT's lines, no handles), so must a widget's call:
+  // a grant alone, copied elsewhere, drives nothing.
+  if (session === undefined) return line.handles ? contact : undefined;
+  return session === contact ? contact : undefined;
 }
+
+/** A widget call's own id (`_call`, which the widget host sends): its retries share it. */
+export const CALL = "_call";
 
 /** Reads a widget asked for, as the contact: queries only, at most `MOST_READS`. */
 async function readsOf(
@@ -238,6 +251,7 @@ async function readsOf(
 export async function appCalled(
   runtime: Pick<Runtime, "call" | "query">,
   line: Line,
+  scope: Scope & { secret: string },
   call: {
     tool: string;
     input: Record<string, unknown>;
@@ -258,11 +272,21 @@ export async function appCalled(
     ...(call.user ? { user: call.user } : {}),
     ...(call.address ? { address: call.address } : {}),
   }, { actor: contactActor(line, call.contact) });
-  if (!admitted.admitted) return reply(admitted.text, {}, true);
+  if (!admitted.admitted) {
+    return reply(
+      admitted.text,
+      { "copilotz/error": { message: admitted.text, code: "refused" } },
+      true,
+    );
+  }
   const actor = contactActor(line, call.contact);
-  const { [GRANT]: _, [READS]: after, ...input } = call.input;
+  const { [GRANT]: _, [READS]: after, [CALL]: _call, ...input } = call.input;
+  const grant = { "copilotz/grant": await grantOf(scope.secret, scope, call.contact) };
   if (call.tool === READ) {
-    return reply("Read.", { "copilotz/reads": await readsOf(runtime, actor, input.reads) });
+    return reply("Read.", {
+      "copilotz/reads": await readsOf(runtime, actor, input.reads),
+      ...grant,
+    });
   }
   const action = line.tools[call.tool].action!;
   try {
@@ -270,13 +294,17 @@ export async function appCalled(
     return reply("Done in the widget.", {
       "copilotz/result": result ?? null,
       ...(after ? { "copilotz/reads": await readsOf(runtime, actor, after) } : {}),
+      ...grant,
     });
   } catch (error) {
     const e = error as { message?: string; code?: string };
     const said = isPublic(error) && e.message ? e.message.slice(0, 1_000) : "Something went wrong.";
-    return reply(said, {
+    // The refusal's words (an upstream's, maybe naming what the person sent) go to the widget
+    // alone; `content` says only that it didn't go.
+    return reply(NOT_DONE, {
       "copilotz/error": { message: said, ...(e.code ? { code: e.code } : {}) },
       ...(after ? { "copilotz/reads": await readsOf(runtime, actor, after) } : {}),
+      ...grant,
     }, true);
   }
 }

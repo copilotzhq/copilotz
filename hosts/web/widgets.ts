@@ -130,7 +130,9 @@ ${
 </head>
 <body>
 <div id="app"></div>
-<script type="module">${script.replaceAll("</script", "<\\/script")}</script>
+<script type="module">${
+          // Nothing in the code may end its element, in any case, or open a comment there.
+          script.replace(/<\/(script)/gi, "<\\/$1").replaceAll("<!--", "<\\!--")}</script>
 </body>
 </html>`;
         return { html, version: (await sha(html)).slice(0, 12) };

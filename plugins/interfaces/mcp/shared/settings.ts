@@ -30,6 +30,8 @@ export type McpTool = {
    * The web View its calls are shown through in a widget (an MCP Apps host draws it: ChatGPT,
    * Claude): a View kind of the app's widget front ends (`widgetsOf`), given the call as its
    * item (`{ _id, name, input, output }`) and hints `{ thread, mode, surface: "widget" }`.
+   * Its output goes to the widget as it is (its caller's own: never the model's), so a tool
+   * drawn by a widget returns nothing its caller mustn't see.
    */
   widget?: string;
   /**

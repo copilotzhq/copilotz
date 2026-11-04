@@ -65,10 +65,11 @@
     MB) or documents, a short text as the first one's caption.
 - **Signed links** (the runtime's `signLink` and `verifyLink`, with the app's `links` resource:
   `{ origin, secret }`, a secret of at least 32 bytes, checked at start): the app's origin, a path,
-  its params and an expiry (an hour unless said), HMAC-signed, so a link for one app or org never
-  opens another. A chat's file is linked or uploaded only for someone who may read it. The web host
-  serves a file at a signed `/files/<id>` link without a session, as the system; expired or altered,
-  a 404.
+  its params and an expiry (an hour unless said), HMAC-signed, with a line break between origin and
+  path, so a link for one app or org never opens another (under `hosts/orgs`, give each org its own
+  origin). The web host checks the secret as it starts serving. A chat's file is linked or uploaded
+  only for someone who may read it. The web host serves a file at a signed `/files/<id>` link
+  without a session, as the system; expired or altered, a 404.
 - **Chat in spaces declares its own `shared` entries** (`thread`, `message` with labels, `file`,
   `live` and `shown`, each a part of its thread). `chat.open` opens an empty chat in a space;
   `chat.say { id, thread, from, text, to? }` has an agent say a fixed message in a chat without a

@@ -1,5 +1,37 @@
 ## Unreleased
 
+- **Phone calls: the `voice` plugin** (in `copilotz/plugins/interfaces`), on Twilio's
+  ConversationRelay. The app declares its lines (`resources.voice.lines.<name>`: `in`, `account`,
+  `token`, `origin`, and optionally `agent`, `language`, `tts`, `voice`, `stt`, `texts`, `gap`,
+  `keys`, `limits`, `org`), each a Twilio number open to anyone who calls; their settings are
+  checked at start.
+  - **Twilio's webhook** is `POST /hooks/voice/<line>` (the `voice.hook` route): checked against
+    `X-Twilio-Signature` with the line's auth token, then taken within the line's `limits`
+    (`atOnce`, 2; `perDay`, 50 in any 24 hours) or rejected as busy (`<Reject reason="busy"/>`:
+    nothing is spent). A call taken gets TwiML that opens the line's socket
+    (`<Connect><ConversationRelay>`, the line's language, greeting and voice) with a ticket good
+    once, for a minute; `POST /hooks/voice/<line>/over` hears the relay end and hangs up.
+  - **The socket** (`GET /hooks/voice/<line>/relay`, a `serve` route): its signature checked, its
+    ticket used, then Twilio's `setup` must name the call the ticket was for. The caller is a
+    contact (`via: "voice"`), by line and number (a hidden number is a new one each call), in a chat
+    of their own in the line's space, answered by the line's agent; calling back within the line's
+    `gap` (12 hours) goes on in the same chat. What they say goes to the agent at once, as theirs;
+    what the agent writes is said as it writes it, word by word (a step's words before its tools,
+    then its answer), through the `voice_call` View, read as the caller. Speaking over it
+    (`interrupt`) cuts what was being said, and the agent is told what was heard (the `voice`
+    context). Keys pressed (with `keys`) come as a tap, `keys:<digits>`. An answer that failed, or
+    took longer than `limits.turn` (25 s, then stopped), says the line's `failed` text, never the
+    error; `idle` (90 s) of silence or a call past `call` (600 s) says `bye` and ends it; the agent
+    ends it too, once its goodbye is said (the `end_call` tool, offered to whoever answers a call
+    while it goes on: no agent lists it). Twilio's `end` says why (`handoffData`).
+  - **The phone is a medium:** messages are said through their `message` View (renderer `voice`: the
+    words without Markdown, a link's words, a web address's site), which an app may replace.
+  - Each call is a small record (`voice_call`, no events: when, how long, why it ended; the caller's
+    number private), and `voice_phone` keeps each caller's contact and chat. Erasing a contact
+    erases its number from both. Agents working for a caller are told it's a phone call (the
+    `contact` context).
+  - It needs a host that takes a route's socket (`host.upgrade()`: `serveRoutes`, or `serve`, from
+    `copilotz/web/node`).
 - **Contacts: people outside the org who talk to its agents** (the new `contacts` plugin, part of
   `access`). A WhatsApp customer is a contact, its own kind of actor (`{ kind: "contact", id }`),
   never a person: every `allow: people` Action and query stays shut to it, and nothing that asks for

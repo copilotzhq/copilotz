@@ -550,8 +550,9 @@ async function answered(
 ): Promise<{ replyTo?: string; key?: string }> {
   const quoted = message.context?.id;
   if (quoted) {
+    // Only what went out in this chat: a quote of another answers nothing here.
     const sent = await ctx.as().db.collection<WhatsAppSent>("whatsapp_sent")
-      .findOne({ wamid: quoted });
+      .findOne({ wamid: quoted, thread });
     if (sent) return { replyTo: sent.message, ...(sent.key ? { key: sent.key } : {}) };
   }
   const asked = await as.db.collection<{ _id: string }>("message").find(

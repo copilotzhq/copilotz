@@ -65,7 +65,10 @@ const messageSchema = {
     /**
      * What it answers by a tap, not typed: the choice tapped (`id`: what it
      * means, as the app gave it; its text is the `title`, what was read), and
-     * the addition it was in (`key`). A choice, not a permission: tools check it.
+     * the addition it was in (`key`). A choice, not a permission: anyone can
+     * send any id, and agents read it as it came (`[tapped: <id>]`), so a
+     * tool acting on one checks it against what was shown there (`shown`, or
+     * the app's own record of what it offered).
      */
     tap: {
       type: "object",

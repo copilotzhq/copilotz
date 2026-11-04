@@ -19,11 +19,16 @@
  *   },
  * }
  * ```
+ *
+ * A tap comes back as the message's `tap` (`{ id, title, key }`): what was
+ * chosen, never what may be done. Agents read its id as it came, so a tool
+ * acting on one (choosing a trip) checks it against what was shown there.
+ *
  * They reach the rest by name: its collections (`whatsapp_number`,
  * `whatsapp_phone`, `whatsapp_thread`), its event (`whatsapp.received`) and
  * its Actions (`whatsapp.connect`, `whatsapp.credentials`,
  * `whatsapp.disconnect`, `whatsapp.webhook`, `whatsapp.link`,
- * `whatsapp.unlink`, `whatsapp.move`, `whatsapp.set`).
+ * `whatsapp.unlink`, `whatsapp.move`, `whatsapp.set`, `whatsapp.block`).
  */
 export { GAP, type WhatsAppNumber } from "./collections/number.ts";
 export type { WhatsAppPhone } from "./collections/phone.ts";

@@ -2,7 +2,7 @@
 import type { JSONSchema } from "../../../../runtime/mod.ts";
 import { alive, post, sse, usageOf } from "../../shared/provider.ts";
 import type { ModelInfo } from "../../shared/choice.ts";
-import type { Effort, LlmAdapter, LlmMessage } from "../../shared/types.ts";
+import { answerable, type Effort, type LlmAdapter, type LlmMessage } from "../../shared/types.ts";
 
 export const GEMINI = {
   name: "Gemini",
@@ -155,7 +155,7 @@ export const gemini: LlmAdapter = {
       GEMINI,
       `/models/${encodeURIComponent(connection.model)}:streamGenerateContent?alt=sse`,
       {
-        contents: contentsOf(messages),
+        contents: contentsOf(answerable(messages)),
         ...(instructions ? { systemInstruction: { parts: [{ text: instructions }] } } : {}),
         ...(tools.length ? { tools: [{ functionDeclarations: tools.map(declaration) }] } : {}),
         ...(Object.keys(generationConfig).length ? { generationConfig } : {}),

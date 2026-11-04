@@ -90,7 +90,13 @@ export const answer = async (
   t: Turn,
   run: string,
   text: string,
-  how: { failed?: boolean; stopped?: boolean; told?: Told[]; state?: LlmState } = {},
+  how: {
+    failed?: boolean;
+    stopped?: boolean;
+    told?: Told[];
+    state?: LlmState;
+    knew?: string;
+  } = {},
   /** The turn's thread, when it has it already. */
   known?: Pick<Thread, "in">,
 ) => {
@@ -120,6 +126,8 @@ export const answer = async (
     ...(how.told?.length ? { told: how.told } : {}),
     // Its model's state (its thinking), for that model's next calls: private, like `told`.
     ...(how.state ? { state: how.state } : {}),
+    // How far its turn had read this thread.
+    ...(how.knew ? { knew: how.knew } : {}),
     at: now(),
   };
   // Handed over from another space: the answer goes back there too, where its sender waits.
@@ -139,6 +147,7 @@ export const answer = async (
       },
       told: undefined,
       state: undefined,
+      knew: undefined,
     }
     : undefined;
   const writer = returned ? ctx.as() : ctx;
@@ -159,7 +168,7 @@ export const answer = async (
     await tx.db.collection("message").insertOne(reply);
     await noted(tx, reply);
     if (returned) {
-      const { told: _, state: __, ...copy } = returned;
+      const { told: _, state: __, knew: ___, ...copy } = returned;
       await tx.db.collection("message").insertOne(copy);
       await noted(tx, copy);
     }

@@ -27,6 +27,17 @@ const sse = (events: unknown[], named = false) =>
     `data: ${typeof e === "string" ? e : JSON.stringify(e)}\n\n`
   ).join("");
 
+/** An Anthropic stream that says its counts in `message_start` and in `message_delta`. */
+const counted = (start: Record<string, number>, delta: Record<string, number>) => () =>
+  new Response(sse([
+    { type: "message_start", message: { usage: start } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hi" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: delta },
+    { type: "message_stop" },
+  ], true));
+
 /** A provider stand-in: records each request and answers by path. */
 async function server() {
   const seen: Seen[] = [];
@@ -113,6 +124,27 @@ async function server() {
         { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 7 } },
         { type: "message_stop" },
       ], true)),
+    // MiniMax, speaking Anthropic's protocol: its input and cache reads only at the end.
+    "/minimax/v1/messages": counted({ input_tokens: 0, output_tokens: 0 }, {
+      input_tokens: 3,
+      cache_read_input_tokens: 8,
+      output_tokens: 7,
+    }),
+    // Anthropic saying its counts at the start, and again as totals at the end.
+    "/totals/v1/messages": counted(
+      {
+        input_tokens: 1,
+        cache_read_input_tokens: 8,
+        cache_creation_input_tokens: 2,
+        output_tokens: 1,
+      },
+      {
+        input_tokens: 1,
+        cache_read_input_tokens: 8,
+        cache_creation_input_tokens: 2,
+        output_tokens: 7,
+      },
+    ),
     "/gemini/v1beta/models/flash:streamGenerateContent": () =>
       new Response(sse([
         { candidates: [{ content: { role: "model", parts: [{ text: "Hel" }] } }] },
@@ -292,7 +324,7 @@ const tools = [{
 async function run(
   adapter: LlmAdapter,
   connection: LlmRequest["connection"],
-  settings: Omit<LlmRequest, "connection" | "messages"> = {},
+  settings: Omit<LlmRequest, "connection" | "messages"> & { messages?: LlmMessage[] } = {},
 ) {
   const chunks: LlmChunk[] = [];
   for await (
@@ -498,6 +530,8 @@ test("openai (Responses): a cache point on the model's own message goes on the i
         }],
       },
       { role: "assistant", content: "Hello." },
+      // What it's asked for is its next message, not the rest of this one.
+      { role: "user", content: "Continue." },
     ]);
   } finally {
     await mock.close();
@@ -709,6 +743,70 @@ test("anthropic: request and streamed answer", async () => {
     const sent = body.tools as { input_schema: unknown; cache_control?: unknown }[];
     assertEquals(sent[0].input_schema, tools[0].input);
     assertEquals(sent.at(-1)!.cache_control, cache);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("anthropic: what it used counts once, said at the start, the end, or both", async () => {
+  const mock = await server();
+  try {
+    const usage = async (path: string) =>
+      answer(await run(anthropic, { model: "m", baseURL: `${mock.url}${path}`, apiKey: "k" }))
+        .usage;
+    assertEquals(await usage("/minimax/v1"), { type: "usage", input: 11, output: 7, cached: 8 });
+    assertEquals(await usage("/totals/v1"), {
+      type: "usage",
+      input: 11,
+      output: 7,
+      cached: 8,
+      cacheWrite: 2,
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("every adapter asks for the model's next message, never the rest of its last", async () => {
+  const mock = await server();
+  try {
+    // An answer came after what it now answers: the conversation ends with its own message.
+    const messages: LlmMessage[] = [
+      { role: "user", text: "hi" },
+      { role: "assistant", text: "Hello." },
+    ];
+    const at = (path: string, model = "m") => ({
+      model,
+      baseURL: `${mock.url}${path}`,
+      apiKey: "k",
+    });
+    await run(anthropic, at("/anthropic/v1", "claude"), { messages });
+    await run(gemini, at("/gemini/v1beta", "flash"), { messages });
+    await run(openaiCompletions, at("/v1"), { messages });
+    await run(openaiResponses, at("/v1"), { messages });
+    const [claude, flash, completions, responses] = mock.seen.map((s) =>
+      s.body as Record<string, unknown[]>
+    );
+    // Anthropic's newer models refuse an assistant message last ("prefill"): a user turn follows.
+    assertEquals(claude.messages.slice(-2), [
+      { role: "assistant", content: [{ type: "text", text: "Hello." }] },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Continue.", cache_control: { type: "ephemeral" } }],
+      },
+    ]);
+    assertEquals(flash.contents.slice(-2), [
+      { role: "model", parts: [{ text: "Hello." }] },
+      { role: "user", parts: [{ text: "Continue." }] },
+    ]);
+    assertEquals(completions.messages.slice(-2), [
+      { role: "assistant", content: "Hello." },
+      { role: "user", content: "Continue." },
+    ]);
+    assertEquals(responses.input.slice(-2), [
+      { role: "assistant", content: "Hello." },
+      { role: "user", content: "Continue." },
+    ]);
   } finally {
     await mock.close();
   }

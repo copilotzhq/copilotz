@@ -335,6 +335,22 @@ test("a role is only one the app names: not toString, constructor or __proto__",
       actor: eve,
     });
     assertEquals(can.can, false);
+    // Inviting with such a role is refused too.
+    for (const role of ["toString", "constructor", "__proto__"]) {
+      assertEquals(
+        await code(fresh.call("invitation.send", { space: launch, email: "x@example.com", role }, {
+          actor: ana,
+        })),
+        "invalid",
+        role,
+      );
+    }
+    // And the stored one doesn't stop the space's manager from changing its members
+    // (keeping a manager reads every member's role).
+    assertEquals(
+      await code(fresh.call("member.remove", { space: launch, member: eve }, { actor: ana })),
+      "done",
+    );
   } finally {
     await fresh.close();
   }

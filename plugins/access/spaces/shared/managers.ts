@@ -5,11 +5,11 @@
  */
 import type { Context } from "../../../../runtime/mod.ts";
 import { forbidden } from "../../../../runtime/mod.ts";
-import { ROLES, type Verb } from "./reach.ts";
+import { rolesOf } from "./reach.ts";
 
 /** Throws if `key` (`person:ana`) is `space`'s last manager and `next` (their role after, if any) doesn't manage. */
 export async function keepsAManager(ctx: Context, space: string, key: string, next?: string) {
-  const roles = { ...ROLES, ...(ctx.resources.roles ?? {}) as Record<string, Verb[]> };
+  const roles = rolesOf(ctx);
   const manages = (role?: string) => !!role && (roles[role] ?? []).includes("manage");
   if (manages(next)) return;
   const members = await ctx.as().db.collection<{ member: string; role: string; on?: string }>(

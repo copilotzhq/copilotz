@@ -59,7 +59,8 @@ async function kept(
   } as const;
   const secret = { token: line.token, secret: line.secret, verify: line.verify };
   // Its space, when the app declares that too (the spaces plugin's `spaces`): made, or kept, first.
-  const space = ((ctx.resources.spaces ?? {}) as Record<string, { name?: string } | null>)[line.in];
+  const spaces = (ctx.resources.spaces ?? {}) as Record<string, { name?: string } | null>;
+  const space = Object.hasOwn(spaces, line.in) ? spaces[line.in] : undefined;
   if (space) {
     const found = await ctx.as().db.collection<{ name?: string; declared?: boolean }>("space")
       .findOne({ _id: line.in });

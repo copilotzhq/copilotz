@@ -15,8 +15,11 @@ import type { Context } from "../../../../runtime/mod.ts";
 export type DeclaredSpace = { name: string; agents?: string[] };
 
 /** The space `id`, as the app declares it, if it does. */
-export const declaredOf = (ctx: Pick<Context, "resources">, id: string) =>
-  ((ctx.resources.spaces ?? {}) as Record<string, DeclaredSpace | null>)[id] ?? undefined;
+export const declaredOf = (ctx: Pick<Context, "resources">, id: string) => {
+  const spaces = (ctx.resources.spaces ?? {}) as Record<string, DeclaredSpace | null>;
+  // Its own keys only: "constructor" or "toString" is no space the app declares.
+  return Object.hasOwn(spaces, id) ? spaces[id] ?? undefined : undefined;
+};
 
 /** Whether `agent` is one of the agents the app declares in space `id`. */
 export const declaredAgent = (ctx: Pick<Context, "resources">, id: string, agent: string) =>

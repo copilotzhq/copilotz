@@ -2,7 +2,9 @@
  * Phones a number's people blocked (`whatsapp.block`), by the number and a
  * hash of the phone (`<number>:<sha256>`): what they send goes nowhere. Kept
  * apart from the phone's own row, so erasing a contact (`contact.forget`)
- * doesn't let them in again, and keeps no phone number. No events.
+ * doesn't let them in again. The phone is kept only as that hash, which is
+ * unkeyed: someone holding the database could find it by trying every phone
+ * number. No events.
  */
 import { defineCollection } from "../../../../runtime/mod.ts";
 

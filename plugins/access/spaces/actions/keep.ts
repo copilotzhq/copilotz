@@ -4,6 +4,10 @@
  * answering its new chats). Nothing changes when it's as declared already;
  * a space the app doesn't declare is left alone. Trusted code calls it when
  * it needs the space (a line the app declares, before its first chat).
+ *
+ * A space with that id that the app didn't make (a person's, made before the
+ * app declared it) is refused, not adopted: its members would get what the
+ * app keeps there. Give the declared space another id, or archive that one.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
@@ -27,6 +31,14 @@ export const keepAction = defineAction({
       system.db.collection<Space & { declared?: boolean }>("space").findOne({ _id: input.id }),
       system.db.collection<Member>("member").find({ space: input.id, on: { $exists: false } }),
     ]);
+    if (space && !space.declared) {
+      throw Object.assign(
+        new Error(
+          `Space "${input.id}" was made by a person, so it can't be the app's: declare another id.`,
+        ),
+        { code: "conflict" },
+      );
+    }
     const seated = (agent: string) =>
       members.some((m) => m.member === `agent:${agent}` && m.role === "editor");
     const answers = space?.agent && agents.includes(space.agent) ? space.agent : agents[0];
@@ -38,7 +50,7 @@ export const keepAction = defineAction({
       await tx.db.collection("space").updateOne({ _id: input.id }, {
         $set: {
           name: declared.name,
-          kind: space?.kind ?? "shared",
+          kind: "shared",
           declared: true,
           ...(answers ? { agent: answers } : {}),
         },

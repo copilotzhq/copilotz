@@ -1,12 +1,13 @@
 /** Delivering a message: the turns it starts and the waits it checks off; and agents' answers. */
 import type { Context, Resources, TransactionScope } from "../../../../runtime/mod.ts";
 import type { LlmState } from "../../../models/contract.ts";
+import { CUT_SHORT, type Intent, NOT_SENT } from "../collections/intent.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import type { Wait } from "../collections/wait.ts";
-import { agentsNamed, NO_ANSWER, now } from "./agents.ts";
+import { agentsNamed, NO_ANSWER, now, SEND } from "./agents.ts";
 import { noted } from "./summary.ts";
-import { DELEGATED, settingsOf, type Told, type Turn } from "./types.ts";
+import { DELEGATED, settingsOf, type Step, type Told, type Turn } from "./types.ts";
 
 /** Whether a message after `hops` agent messages in a row may still start a turn. */
 export const starts = (ctx: { resources: Resources }, hops: number) => {
@@ -80,7 +81,9 @@ export const delivery = async (
 /**
  * An agent's answer to what started its turn, addressed back to its sender.
  * A turn that failed or was stopped answers too, so whoever waits on it
- * resumes; a stopped one starts no new turn, and ends its own wait.
+ * resumes; a stopped one starts no new turn, and ends its own wait. It keeps
+ * the step it was taking, if its calls were written: what each returned, or
+ * that it never did, for people and for its later turns to see.
  */
 export const answer = async (
   ctx: Context,
@@ -92,9 +95,11 @@ export const answer = async (
   known?: Pick<Thread, "in">,
 ) => {
   const messages = ctx.db.collection<Message>("message");
-  const [trigger, thread] = await Promise.all([
+  const [trigger, thread, open] = await Promise.all([
     messages.findOne({ _id: t.trigger }),
     known ?? ctx.db.collection<Thread>("thread").findOne({ _id: t.thread }),
+    // A turn ending this way may have been taking a step: it's kept.
+    how.failed || how.stopped ? ctx.db.collection<Intent>("intent").findOne({ _id: run }) : null,
   ]);
   const back = trigger?.back && trigger.expectReply !== false ? trigger.back : undefined;
   const reply = {
@@ -147,6 +152,10 @@ export const answer = async (
     // What showed live while it was written becomes the reply.
     await tx.db.collection("live").deleteOne({ _id: run }, NO_ANSWER);
     if (how.stopped) await tx.db.collection("wait").deleteOne({ _id: `${run}:wait` }, NO_ANSWER);
+    if (open) {
+      await tx.db.collection("intent").deleteOne({ _id: run }, NO_ANSWER);
+      await tx.db.collection("message").insertOne(stepOf(open, run, thread?.in));
+    }
     await tx.db.collection("message").insertOne(reply);
     await noted(tx, reply);
     if (returned) {
@@ -157,3 +166,25 @@ export const answer = async (
     await deliver(tx);
   });
 };
+
+/**
+ * The step a turn was taking when it ended without committing it: each call
+ * with what it returned, or that it never returned (its messages unsent).
+ */
+const stepOf = (open: Intent, run: string, space?: string) => ({
+  _id: `${run}:${open.step}`,
+  thread: open.thread,
+  ...(space ? { in: space } : {}),
+  from: open.agent,
+  to: [],
+  private: true,
+  ...(open.text ? { text: open.text } : {}),
+  toolCalls: open.calls.map((call, i): Step => ({
+    ...call,
+    output: open.outputs[i] ?? (call.name === SEND ? NOT_SENT : CUT_SHORT),
+  })),
+  ...(open.state ? { state: open.state } : {}),
+  ...(open.told ? { told: open.told } : {}),
+  turn: run,
+  at: open.at,
+});

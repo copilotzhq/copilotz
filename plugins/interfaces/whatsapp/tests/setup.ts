@@ -84,6 +84,42 @@ export const reads = definePlugin({
     ]),
   ),
   actions: {
+    // An agent's message with a file, to whoever wrote to it last in a chat.
+    "test.file": defineAction({
+      input: { type: "object" },
+      run: async (ctx, input: { thread: string; text: string; type: string; data: string }) => {
+        const [last] = await ctx.db.collection<Message>("message").find(
+          { thread: input.thread, from: { $ne: "lead" } },
+          { sort: { at: -1 }, limit: 1 },
+        );
+        const id = crypto.randomUUID();
+        const file = {
+          _id: `${id}:file.0`,
+          name: input.type === "image/png" ? "qr.png" : "ticket.pdf",
+          type: input.type,
+          size: Math.floor(input.data.length * 3 / 4),
+          data: input.data,
+          thread: input.thread,
+          ...(last.in ? { in: last.in } : {}),
+          at: new Date().toISOString(),
+        };
+        await ctx.transaction(async (tx) => {
+          await tx.db.collection("file").insertOne(file);
+          await tx.db.collection("message").insertOne({
+            _id: id,
+            thread: input.thread,
+            ...(last.in ? { in: last.in } : {}),
+            from: "lead",
+            to: [last.from],
+            text: input.text,
+            hops: 1,
+            files: [{ id: file._id, name: file.name, type: file.type, size: file.size }],
+            at: new Date().toISOString(),
+          });
+        });
+        return file._id;
+      },
+    }),
     // "Typing…" shown a while ago, for every chat being answered.
     "test.typed": defineAction({
       input: { type: "object" },
@@ -133,7 +169,17 @@ export async function fakeGraph() {
         status: 401,
       });
     }
-    const body = request.method === "POST" ? await request.json() : undefined;
+    // A file uploaded comes as a form; everything else as JSON.
+    const form = request.headers.get("content-type")?.startsWith("multipart/")
+      ? await request.formData()
+      : undefined;
+    const body = form
+      ? Object.fromEntries(
+        [...form].map(([k, v]) => [k, typeof v === "string" ? v : `<${v.type}, ${v.size} bytes>`]),
+      )
+      : request.method === "POST"
+      ? await request.json()
+      : undefined;
     requests.push({ method: request.method, path: url.pathname, ...(body ? { body } : {}) });
     const [, version, id, more] = url.pathname.split("/");
     if (version === "files") {
@@ -148,6 +194,7 @@ export async function fakeGraph() {
         verified_name: "Example Support",
       });
     }
+    if (more === "media") return Response.json({ id: `media.up.${++sent}` });
     if (more === "messages" && body?.status !== "read") {
       if (failing?.(body)) {
         failing = undefined;

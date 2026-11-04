@@ -17,7 +17,7 @@ import {
 } from "../../../../runtime/mod.ts";
 import { connect } from "../../../../runtime/client.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
-import { identity } from "../../../../plugins/access/mod.ts";
+import { devSignIn, identity } from "../../../../plugins/access/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import { socket } from "../../server.ts";
 import { createTickets } from "../../tickets.ts";
@@ -48,7 +48,7 @@ test("serve: the page and its code, sign-in, and a browser's socket, as its pers
   });
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [identity, probe],
+    plugins: [identity, devSignIn, probe],
     transports: [socket],
     admit: tickets.admit,
   });
@@ -56,7 +56,9 @@ test("serve: the page and its code, sign-in, and a browser's socket, as its pers
     runtime,
     tickets,
     code: await bundle(new URL("./page/page.tsx", import.meta.url)),
-    dev: true,
+  }).catch(async (error) => {
+    await runtime.close();
+    throw error;
   });
   const base = `http://127.0.0.1:${server.port}`;
   try {
@@ -91,8 +93,7 @@ test("serve: the page and its code, sign-in, and a browser's socket, as its pers
       await client.close();
     }
   } finally {
-    await server.shutdown();
-    await runtime.close();
+    await server.close();
   }
 });
 

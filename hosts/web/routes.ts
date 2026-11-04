@@ -3,13 +3,14 @@
  * A path ending in `/` takes everything under it; any other, itself alone.
  *
  * - `{ path, action }`: the request becomes a call to that Action (its input
- *   an `HttpRequest`), as the person its session cookie signs in, or else a
+ *   an `HttpRequest`), as whoever the request is (the app's entrances say:
+ *   the person its session signs in, a web line's visitor), or else a
  *   visitor (`{ kind: "visitor", id: "" }`): the Action's `allow` decides.
  *   It answers with an `HttpAnswer`. Webhooks, OAuth callbacks, an API.
  * - `{ path, serve }`: a function that answers the request itself, here in
  *   the host's process: files as they are (downloads), or an API that must
  *   stream, choose call ids or keep a request's secrets out of the log. It's
- *   given the runtime and who the request's session signs in (`Served`). It
+ *   given the runtime and who the request is (`Served`). It
  *   may take a WebSocket (a voice call's relay): `host.upgrade()` accepts
  *   the request's upgrade, and it answers with the response that gives.
  * - `{ host, serve }` (or `action`): every request to a host, whatever its
@@ -42,9 +43,9 @@ export type Route =
   & ({ action: string } | { serve(request: Request, host: Served): Response | Promise<Response> });
 
 /**
- * What a `serve` route is given: the runtime, who the request's session
- * signs in, and the host the request is for (as the front says, when it's
- * trusted: not always `request.url`'s).
+ * What a `serve` route is given: the runtime, who the request is (by the
+ * app's entrances), and the host the request is for (as the front says,
+ * when it's trusted: not always `request.url`'s).
  */
 export type Served = {
   runtime: Runtime;
@@ -317,8 +318,8 @@ export function hostServer(
 
 /**
  * Answers the requests a plugin's route takes; undefined for any other. `whom`
- * says who the request's session signs in, if anyone. A request to a host a
- * route takes is that route's, whatever its path; any other goes by path.
+ * says who the request is, if anyone. A request to a host a route takes is
+ * that route's, whatever its path; any other goes by path.
  */
 export function routeServer(
   runtime: Runtime,
@@ -349,30 +350,6 @@ export function routeServer(
       url,
       served(runtime, request, whom, hostOf(request, options.front)),
     );
-  };
-}
-
-/** Where a host without the web app says it's up. */
-const HEALTH = "/health";
-
-/**
- * A host for an app without the web app (on WhatsApp, on the phone): its
- * routes alone, by host and then by path, their sockets included; `GET
- * /health`, unless a route takes it; and 404 for anything else. Nobody signs
- * in here: a route's Action is called as a visitor, and its `allow` decides.
- * `serveRoutes` (`copilotz/web/node`) listens with it.
- */
-export function routeHost(
-  runtime: Runtime,
-  options: { front?: Front } = {},
-): (request: Request) => Promise<Response> {
-  const routes = routeServer(runtime, () => Promise.resolve(null), options);
-  return async (request) => {
-    const answering = routes(request);
-    if (answering) return await answering;
-    const healthy = (request.method === "GET" || request.method === "HEAD") &&
-      new URL(request.url).pathname === HEALTH;
-    return healthy ? plain(200, "ok") : plain(404, "Not found");
   };
 }
 

@@ -15,7 +15,7 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import { createRuntime } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
-import { identity } from "../../plugins/access/mod.ts";
+import { devSignIn, identity } from "../../plugins/access/mod.ts";
 import { directory } from "../../plugins/access/directory/mod.ts";
 import { socket } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
@@ -26,7 +26,11 @@ import { plugins } from "./app.ts";
 const { values } = parseArgs({ options: { port: { type: "string", default: "8080" } } });
 
 const host = orgsHost({
-  directory: await createRuntime({ store: memoryStore(), plugins: [identity, directory] }),
+  // The directory signs people in: by name, from this machine only.
+  directory: await createRuntime({
+    store: memoryStore(),
+    plugins: [identity, directory, devSignIn],
+  }),
   open: async (_org, given) =>
     await createRuntime({
       store: memoryStore(),
@@ -38,7 +42,6 @@ const host = orgsHost({
   upgrade: () => new Response("Connect again", { status: 503 }),
   code: await bundle(new URL("./browser.tsx", import.meta.url)),
   theme: themeOf([]),
-  dev: true,
 });
 
 const server = await listen({

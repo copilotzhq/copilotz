@@ -3,15 +3,15 @@
  * session signs in or a visitor, and its answer becomes the response; a
  * `serve` route answers itself; the more specific path wins; the host's own
  * paths can't be taken; failures say only what they should. Without the web
- * app (`routeHost`), routes are all there is, and `/health`.
+ * app (no page's code), routes are all there is, and `/health`.
  */
 import { assertEquals, assertRejects } from "@std/assert";
 import { createRuntime, defineAction, definePlugin, type Plugins } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
-import { identity } from "../../../plugins/access/mod.ts";
+import { devSignIn, identity } from "../../../plugins/access/mod.ts";
 import { test } from "../../../testing/mod.ts";
 import { createTickets } from "../tickets.ts";
-import { httpRequest, routeHost, webServer } from "../server.ts";
+import { httpRequest, webServer } from "../server.ts";
 
 const hooks = definePlugin({
   name: "hooks",
@@ -75,14 +75,16 @@ async function setup(
   plugins: Plugins,
   fn: (serve: (r: Request) => Promise<Response>) => Promise<void>,
 ) {
-  const rt = await createRuntime({ store: memoryStore(), plugins: [identity, ...plugins] });
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [identity, devSignIn, ...plugins],
+  });
   try {
     const serve = webServer({
       runtime: rt,
       tickets: createTickets(),
       code: { entry: "app.js", files: { "app.js": "" } },
       upgrade: () => new Response(null, { status: 299 }),
-      dev: true,
     });
     await fn(serve);
   } finally {
@@ -193,7 +195,7 @@ test("without the web app: the routes, /health unless a route takes it, and 404"
   const rt = await createRuntime({ store: memoryStore(), plugins: [hooks, preview] });
   const own = await createRuntime({ store: memoryStore(), plugins: [health] });
   try {
-    const serve = routeHost(rt);
+    const serve = webServer({ runtime: rt });
     const text = async (url: string, init?: RequestInit) => {
       const answered = await serve(new Request(url, init));
       return [answered.status, await answered.text()];
@@ -209,7 +211,7 @@ test("without the web app: the routes, /health unless a route takes it, and 404"
     // A host a route takes is all its own, /health too.
     assertEquals(await text("http://ab1-preview.example.com/health"), [200, "the preview"]);
     assertEquals(
-      await (await routeHost(own)(new Request("http://localhost/health"))).text(),
+      await (await webServer({ runtime: own })(new Request("http://localhost/health"))).text(),
       "mine",
     );
   } finally {

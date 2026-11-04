@@ -103,7 +103,7 @@ test("a session proves its person until it ends or expires", async () => {
     });
     // Only the system starts sessions: a person can't make one for anyone.
     await assertRejects(() => rt.call("session.start", { person: "bob" }, { actor: ana }));
-    await rt.call("session.end", { session }, { actor: ana });
+    await rt.call("session.end", { secret: session }, { actor: ana });
     assertEquals(await rt.query("credential.actor", { secret: session }), null);
     const old = await rt.call<{ session: string }>("session.start", { person: "ana", ms: -1 });
     assertEquals(await rt.query("credential.actor", { secret: old.session }), null);

@@ -3,7 +3,8 @@
  * space its record lives in. Its memberships go, which ends its access to
  * every chat at once (`member.deleted`), and so does its record
  * (`contact.deleted`: the WhatsApp plugin erases its phone, but not a block
- * on it, kept by a hash). With `chats`, its chats go too, with everything
+ * on it, kept by a hash), and a web visitor's secret with it: its browser's
+ * cookie is no one now. With `chats`, its chats go too, with everything
  * chat and its plugins keep of them (`chat.erase`), each only for someone
  * who manages that chat's space.
  *
@@ -48,6 +49,8 @@ export const forgetAction = defineAction({
     }
     await system.transaction(async (tx) => {
       await tx.db.collection("member").deleteMany({ member: key });
+      // A web visitor's browser is no one from now on: its secret's record goes too.
+      await tx.db.collection("contact_visitor").deleteMany({ contact: contact._id });
       await tx.db.collection("contact").deleteOne({ _id: contact._id });
     });
     return { forgotten: contact._id, chats: input.chats ? chats.length : 0 };

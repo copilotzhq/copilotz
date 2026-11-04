@@ -1,3 +1,45 @@
+## Unreleased
+
+- **One web host, its parts from the app's plugins.** `serve` (and `webServer` beneath it) is the
+  host for every app: routes from `routes` resources, as before; the page and its code from `code`
+  (none: no page, the routes and `/health`); who a browser is from a new `entrances` resource; how
+  people sign in from a new `signIn` resource; browsers connecting with `tickets` (none: no browser
+  connects). `serveRoutes`, `routeHost` and `RouteListener` are gone, and so are the host's `google`
+  and `dev` options; `serve` answers a `Server`, whose `close({ drain })` stops listening and then
+  closes the runtime.
+  - **Entrances:** each is a cookie and the query that says who its secret is (`{ secret }` in, an
+    actor out), asked in `order`; one may let a newcomer in on `POST /connect` (`arrive`), and end
+    what it is on sign-out (`end`). The host keeps every cookie (httpOnly, `Secure` but on this
+    machine over http; `sameSite` lax or strict), clears one that's no one (forged, ended), and
+    never takes a store's failure for no one. Identity declares the session (`session`, read by
+    `credential.actor`, ended by `session.end`, which now takes `{ secret }` and is unrecorded: its
+    secret was in the log). `/connect` answers `{ ticket, actor, name? }` (`person` is gone);
+    `web()` connects as whoever it is (`start(client, actor)`), and `web({ arrive })` is what the
+    page asks coming in.
+  - **Sign-in:** `POST /signin/<name>` for each way a plugin declares: an Action called as the
+    system with the request's JSON, answering `{ person, session }`, `local` ones from this machine
+    only. `googleSignIn` declares `google` (the page shows its button for the first client id); the
+    new `devSignIn` plugin declares `dev` (by name or email, this machine only). The orgs host signs
+    in with whatever its directory declares (`signIn: { at: directory }` for its orgs' pages).
+  - **Visitors** (the contacts plugin's web lines, `resources.web.lines.<name>`: `in`, `agent`,
+    `title`, `days`, `limits`, `org`; and `web.caller`, as MCP's): a page asking to come in by a
+    line (`{ line }`) that isn't anyone becomes a contact (`via: "web"`) in the line's space, with a
+    chat of its own, its browser keeping a 256-bit secret in a `SameSite=Strict` cookie (only its
+    hash is kept, in `contact_visitor`) that's the same contact for `days` (30). New visitors are
+    limited an hour from one caller's address (`ipVisitorsPerHour`, 20; IPv6 by its /64) and on the
+    line (`visitorsPerHour`, 600), each place taken in one conditional write, so arrivals at once
+    can't pass a limit; past one it's a plain 429. `contact.forget` ends a visitor's cookie at once.
+    Checked at start.
+  - **Security:** `/connect`, sign-in and sign-out (and the orgs host's own POSTs) answer only the
+    app's own page: an `Origin` that isn't this host (as the front says it), over https off this
+    machine, or a cross-site `Sec-Fetch-Site`, is a 403, so another site can't make its visitors
+    arrive here or sign anyone in. Bodies there are JSON objects of 16 KiB at most. The caller's
+    address parser (`callerFrom`, `callerProblem`, `CallerSettings`) moved from MCP into the
+    runtime, so MCP and web lines read callers one way.
+  - **Migration:** `serveRoutes({ runtime, … })` is `serve({ runtime, … })` with no `code`.
+    `google: { clientId }` and `dev: true` are the plugins' resources now: add `googleSignIn` (with
+    the `google` resource) and `devSignIn` to the runtime's plugins (the directory's, with orgs).
+
 ## 1.0.0-rc.21 — 2026-11-04
 
 - **Security: a burst of calls no longer drops an executor's connection** (Oxian 0.23.3). About 35

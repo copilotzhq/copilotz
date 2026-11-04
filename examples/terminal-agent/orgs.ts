@@ -23,7 +23,7 @@ import {
   postgresPool,
   postgresStore,
 } from "../../stores/sql/postgres/mod.ts";
-import { googleSignIn, identity } from "../../plugins/access/mod.ts";
+import { devSignIn, googleSignIn, identity } from "../../plugins/access/mod.ts";
 import { directory } from "../../plugins/access/directory/mod.ts";
 import { socket } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
@@ -62,6 +62,8 @@ const dir = await createRuntime({
   plugins: [
     identity,
     directory,
+    // Sign in by name on this machine, and with Google when GOOGLE_CLIENT_ID is set.
+    devSignIn,
     ...google,
     definePlugin({
       name: "directory-settings",
@@ -94,8 +96,6 @@ const host = orgsHost({
   code: await bundle(),
   title: "Copilotz",
   theme: themeOf([]),
-  dev: true,
-  ...(clientId ? { google: { clientId } } : {}),
 });
 
 /** The browser's code, bundled once, split where it imports lazily. */

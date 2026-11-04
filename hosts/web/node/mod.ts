@@ -2,9 +2,10 @@
  * The web host on Node: what an app needs beside `webServer` to serve it
  * there. `bundle` makes the browser's code with esbuild (code splitting, as on
  * Deno), and `serve` listens with Node's HTTP server, taking browsers'
- * sockets through Oxian's Node adapter; `listen` does it for any fetch
- * handler, each socket going to the runtime it's for (a host with one runtime
- * per org). Bun and Deno run it too.
+ * sockets through Oxian's Node adapter (with no `code`, it serves the app's
+ * routes alone); `listen` does it for any fetch handler, each socket going to
+ * the runtime it's for (a host with one runtime per org). Bun and Deno run it
+ * too.
  *
  * ```ts
  * import { createRuntime } from "copilotz";
@@ -23,6 +24,7 @@
  *   port: 8080,
  * });
  * console.log(`${server.url}`);
+ * process.once("SIGTERM", () => server.close({ drain: 8_000 }));
  * ```
  */
 export { bundle, type BundleOptions } from "./bundle.ts";
@@ -30,9 +32,7 @@ export {
   listen,
   type Listener,
   type ListenOptions,
-  type RouteListener,
-  type RoutesOptions,
   serve,
   type ServeOptions,
-  serveRoutes,
+  type Server,
 } from "./serve.ts";

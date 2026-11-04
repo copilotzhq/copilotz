@@ -11,7 +11,7 @@
 import { assert, assertEquals, assertMatch, assertThrows } from "@std/assert";
 import { type Actor, createRuntime, definePlugin, type Runtime } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
-import { access, identity } from "../../../plugins/access/mod.ts";
+import { access, devSignIn, identity } from "../../../plugins/access/mod.ts";
 import { chat } from "../../../plugins/agents/chat/mod.ts";
 import models from "../../../plugins/models/mod.ts";
 import { test } from "../../../testing/mod.ts";
@@ -29,21 +29,24 @@ async function setup(
   options: { dev?: boolean; theme?: Theme; assets?: WebServerOptions["assets"] } = {},
 ) {
   const tickets = createTickets();
-  const rt = await createRuntime({ store: memoryStore(), plugins: [identity] });
-  const serve = webServer({
-    runtime: rt,
-    tickets,
-    code: () => ({
-      entry: "app.js",
-      files: { "app.js": "import('./math-AB12.js')", "math-AB12.js": "export const m = 1;" },
-    }),
-    upgrade: () => new Response("upgraded", { status: 299 }),
-    title: "Test",
-    dev: options.dev ?? true,
-    ...(options.theme ? { theme: options.theme } : {}),
-    ...(options.assets ? { assets: options.assets } : {}),
+  // Signing in by name is a plugin's (dev sign-in), as any way to sign in is.
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [identity, ...(options.dev ?? true ? [devSignIn] : [])],
   });
   try {
+    const serve = webServer({
+      runtime: rt,
+      tickets,
+      code: () => ({
+        entry: "app.js",
+        files: { "app.js": "import('./math-AB12.js')", "math-AB12.js": "export const m = 1;" },
+      }),
+      upgrade: () => new Response("upgraded", { status: 299 }),
+      title: "Test",
+      ...(options.theme ? { theme: options.theme } : {}),
+      ...(options.assets ? { assets: options.assets } : {}),
+    });
     await fn(serve, tickets, rt);
   } finally {
     await rt.close();
@@ -69,7 +72,8 @@ test("a page, its code, and the socket", async () => {
     assertEquals(page.headers.get("content-type"), "text/html; charset=utf-8");
     const html = await page.text();
     assertMatch(html, /<title>Test<\/title>/);
-    assertMatch(html, /"dev":true/);
+    // The ways to sign in the app's plugins declare, for the page's sign-in.
+    assertMatch(html, /"signIn":\{"dev":\{\}\}/);
     assertMatch(html, /<script type="module" src="\/app\/app\.js">/);
     // The entry is asked for again each time; a chunk, named by its content, is kept.
     const entry = await serve(new Request("http://localhost:8790/app/app.js"));
@@ -403,8 +407,8 @@ test("signing in sets a session cookie, traded for a ticket that admits once", a
     assertMatch(cookie, /^session=ses_[^;]+; HttpOnly; SameSite=Lax; Path=\/; Max-Age=\d+$/);
 
     const connect = await serve(post("http://localhost:8790/connect", undefined, sent(signed)));
-    const { ticket, person } = await connect.json();
-    assertEquals(person, "ana");
+    const { ticket, actor, name } = await connect.json();
+    assertEquals([actor, name], [{ kind: "person", id: "ana" }, "ana"]);
     assertEquals(tickets.admit(ticket), { kind: "person", id: "ana" } satisfies Actor);
     assertEquals(tickets.admit(ticket), undefined);
   });
@@ -463,13 +467,15 @@ test("a file someone sent: theirs to fetch, in parts, inline or saved; nobody el
       agents: { lead: { instructions: "Hi.", model: "fake/echo", default: true } },
     },
   });
-  const rt = await createRuntime({ store: memoryStore(), plugins: [models, chat, ...access, app] });
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [models, chat, ...access, devSignIn, app],
+  });
   const serve = webServer({
     runtime: rt,
     tickets,
     code: { entry: "app.js", files: { "app.js": "" } },
     upgrade: () => new Response(null, { status: 400 }),
-    dev: true,
   });
   const signIn = async (name: string) =>
     sent(await serve(post("http://localhost:8790/signin/dev", { name })));

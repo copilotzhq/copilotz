@@ -1,34 +1,45 @@
 /**
- * The web host's server half: what a browser loads, how a person signs in,
- * and how a signed-in browser connects. It reaches the runtime by name only:
- * the identity plugin's `credential.actor` query and `session.start`/`end`
- * Actions, and Google sign-in's `google.sign-in`.
+ * The web host's server half: one host for every app, whose parts are what
+ * the app's plugins declare. It reaches the runtime by name only: the
+ * resources below, and the queries and Actions they name.
+ *
+ * | Part | Comes from | Without it |
+ * | --- | --- | --- |
+ * | Routes: webhooks, APIs, sockets of their own | the `routes` resource | — |
+ * | The page and its code | `code` (the app's front ends, its shell among them, bundled) | no page: the routes, and `/health` |
+ * | Who a browser is | the `entrances` resource (identity's session; contacts' web lines) | nobody |
+ * | Browsers connecting | `tickets`, for whoever an entrance says | no browser connects |
+ * | Signing in | the `signIn` resource (Google sign-in, dev sign-in) | none |
  *
  * - `GET /app/<file>`: the browser's code (the web host, its shell, the front
  *   ends), as bundled with code splitting: the entry, which the page loads
  *   and browsers ask again for, and the chunks its dynamic imports load
  *   (math, a terminal) when first needed, each named by its content, so
  *   browsers keep them for a year.
- * - `POST /signin/google` `{ idToken }`, or `POST /signin/dev` `{ name }` (loopback
- *   only, when `dev`): a session, set as an httpOnly cookie. By name, an
- *   email is a person too, with that email (to receive invitations).
- * - `POST /connect`: the cookie's person, traded for a one-time ticket.
- * - `POST /signout`: ends the session.
+ * - `POST /connect`: who the request is (see entrances.ts), traded for a
+ *   one-time ticket: `{ ticket, actor, name? }`. Its cookies say, the first
+ *   entrance's that's someone; with none, an entrance may let them in now
+ *   (a visitor of a web line, from what the page asks: `{ line }`), setting
+ *   its cookie. From the app's own page only (`Origin`); 401 for nobody, 429
+ *   past a limit.
+ * - `POST /signin/<name>` (a way the app's plugins declare; `local` ones
+ *   from this machine only): a session, set as an httpOnly cookie.
+ *   `POST /signout`: ends it, and clears every entrance's cookie.
  * - The socket (`/oxian`): Oxian's worker protocol, which the app hands over. The
  *   runtime takes browsers there once it declares it: `transports: [socket]`.
  * - `GET /assets/…`: the app's own files (`assets`: a brand's fonts and their
  *   stylesheet, images), by exact path, with their types and caching; anything
  *   else there is a 404 (see `assets.ts`). Under `/assets/copilotz/`, the host's
- *   own, with no configuration: the default theme's fonts, its PNG icon, and
- *   the page's SVG icon, drawn from the theme's mark (`theme/files/`).
- * - `GET /files/<id>`: a file someone sent, as the signed-in person reaches it
- *   (chat's `file.content`), with ranges for audio; `?download=1` saves it
- *   (see `files.ts`).
+ *   own, with the page and no configuration: the default theme's fonts, its PNG
+ *   icon, and the page's SVG icon, drawn from the theme's mark (`theme/files/`).
+ * - `GET /files/<id>`: a file someone sent, as whoever the request is reaches
+ *   it (chat's `file.content`), or by a link signed for it, with ranges for
+ *   audio; `?download=1` saves it (see `files.ts`).
  * - Plugins' own paths, their `routes` resource: a webhook, an OAuth callback,
- *   an API, a download, a socket of their own (see `routes.ts`). A request to
- *   a host a route takes (a preview's) is that route's alone, whatever its
- *   path: never the page, the code or the socket. An app without the web app
- *   serves them alone (`routeHost`).
+ *   an API, a download, a socket of their own (see `routes.ts`), called as
+ *   whoever the request is, else a visitor. A request to a host a route takes
+ *   (a preview's) is that route's alone, whatever its path: never the page,
+ *   the code or the socket.
  * - `GET /manifest.webmanifest` and `GET /sw.js`: the app, installable: its
  *   manifest (name, colours, icons drawn from the theme's mark) and its
  *   service worker, which keeps the code at hand and offers new versions
@@ -39,46 +50,72 @@
  *   head also has the theme's icon (the mark, and its PNG), the browser's
  *   colour around the page (`theme-color`: each scheme's `background`), and
  *   its fonts, fetched at once but not waited for: the colours paint first,
- *   and the host applies the fonts' stylesheet as it starts.
+ *   and the host applies the fonts' stylesheet as it starts. Without a page,
+ *   `GET /health` says it's up (unless a route takes it), and anything else
+ *   is a 404.
  *
  * It answers `Request`s with `Response`s and nothing else (no files, no
  * sockets of its own), so it runs on Deno, Node, Bun or a worker alike.
  */
-import type { Actor, Runtime } from "../../runtime/mod.ts";
+import type { Runtime } from "../../runtime/mod.ts";
 import { type Asset, assetServer } from "./assets.ts";
+import {
+  arriving,
+  cookieOf,
+  cookieSafe,
+  fromPage,
+  jsonOf,
+  loopback,
+  recognise,
+  refusal,
+  setCookie,
+  signInPage,
+  signInsOf,
+  whomOf,
+} from "./entrances.ts";
 import { fileServer } from "./files.ts";
 import { MANIFEST, manifestOf, precacheOf, versionOf, WORKER, workerOf } from "./pwa.ts";
 import { BASE } from "./style.ts";
 import { fontsOf, fromGoogle, plainColour, preloadsOf, themeCss } from "./theme/css.ts";
 import type { Theme } from "./theme/default.ts";
 import { HOST_ASSETS, hostFiles } from "./theme/files/mod.ts";
-import { type Front, routeServer } from "./routes.ts";
+import { type Front, hostOf, routeServer } from "./routes.ts";
 import { ownPath } from "./theme/own-path.ts";
 import { pictureOf } from "./theme/picture.ts";
 import type { Tickets } from "./tickets.ts";
 
 export type WebServerOptions = {
   runtime: Runtime;
-  tickets: Tickets;
-  /** The browser's code, bundled (or a function that bundles it, once). */
-  code: Code | (() => Code | Promise<Code>);
-  /** Oxian's WebSocket upgrade, for `/oxian` (its Deno adapter's `handler(runtime.hypervisor)`). */
-  upgrade(request: Request): Response | Promise<Response>;
+  /**
+   * What browsers connect with: one-time tickets, for whoever the app's
+   * entrances say a request is (the runtime admits them: `admit:
+   * tickets.admit`). Without it, no browser connects here.
+   */
+  tickets?: Tickets;
+  /**
+   * The browser's code, bundled (or a function that bundles it, once): the
+   * app's front ends, its shell among them. Without it, there's no page: the
+   * app's routes, and `/health`.
+   */
+  code?: Code | (() => Code | Promise<Code>);
+  /**
+   * Oxian's WebSocket upgrade, for `/oxian` (its Deno adapter's
+   * `handler(runtime.hypervisor)`). Without it, no socket here.
+   */
+  upgrade?(request: Request): Response | Promise<Response>;
   title?: string;
-  /** Google sign-in: your OAuth client's id (the google resource's, again for the page). */
-  google?: { clientId: string };
-  /** Sign in by name, from this machine only: for trying things out. */
-  dev?: boolean;
   /**
-   * The session cookie's name ("session" by default): one per org, when a
-   * host serves many (`hosts/orgs`).
+   * The name each cookie an entrance declares goes by here (its own, unless
+   * said): a host serving many orgs keeps each org's apart (`hosts/orgs`).
    */
-  cookie?: string;
+  cookie?: (name: string) => string;
   /**
-   * Whether people sign in and out here (true by default). A host serving
-   * many orgs signs people in once, at its directory, and says false.
+   * Where people sign in, when not here: a host serving many orgs signs
+   * them in once, at its directory, and serves that itself. Its orgs' pages
+   * show the directory's ways to sign in (`at`), and nothing here signs in
+   * or out.
    */
-  signIn?: boolean;
+  signIn?: { at: Runtime };
   /**
    * Where this app is under its host, when it isn't the root: a host serving
    * many orgs serves each also under `/o/<org>` (`hosts/orgs`), for what
@@ -108,13 +145,23 @@ export type WebServerOptions = {
   /**
    * The app's front (a Cloudflare worker before it): a request carrying its
    * secret (`x-copilotz-front`) is for the host it forwards
-   * (`x-forwarded-host`), which routes by host go by. Without it, or
-   * without the secret, forwarded headers are ignored.
+   * (`x-forwarded-host`), which routes by host and the page's origin go by.
+   * Without it, or without the secret, forwarded headers are ignored.
    */
   front?: Front;
 };
 
 export type { Asset };
+export {
+  type Arrived,
+  cookieOf,
+  type Door,
+  type Entrance,
+  setCookie,
+  type SignIn,
+  type Whom,
+  whomOf,
+} from "./entrances.ts";
 export {
   type Front,
   hostMatches,
@@ -123,7 +170,6 @@ export {
   type HttpRequest,
   httpRequest,
   type Route,
-  routeHost,
   type RouteSocket,
   type Served,
   VISITOR,
@@ -139,34 +185,24 @@ export type Code = { entry: string; files: Record<string, string | Uint8Array> }
 /** Where the code is served. */
 const CODE = "/app/";
 
-const COOKIE = "session";
+/** How long a session a sign-in starts is kept in its cookie: 30 days. */
+const SESSION = 30 * 86_400;
+
+/** Where a host without a page says it's up. */
+const HEALTH = "/health";
 
 /** Where browsers connect: the runtime's transport for them, which `upgrade` serves. */
 export const socket = { type: "websocket", config: { path: "/oxian" } } as const;
 
-const json = (value: unknown, init: ResponseInit = {}) =>
-  new Response(JSON.stringify(value), {
-    ...init,
-    headers: { "content-type": "application/json", ...init.headers },
-  });
+const json = (value: unknown, init: ResponseInit & { cookies?: string[] } = {}) => {
+  const headers = new Headers({ "content-type": "application/json" });
+  for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
+  for (const cookie of init.cookies ?? []) headers.append("set-cookie", cookie);
+  return new Response(JSON.stringify(value), { status: init.status ?? 200, headers });
+};
 
-/** A cookie a request carries, by name. */
-export const cookieOf = (request: Request, name: string = COOKIE): string | undefined =>
-  request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${name}=`))
-    ?.slice(name.length + 1);
-
-const loopback = (url: URL): boolean => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-
-/** A session, as an httpOnly cookie: Secure unless this is the machine itself, over http. */
-export const setCookie = (
-  url: URL,
-  value: string,
-  maxAge: number,
-  name: string = COOKIE,
-): string =>
-  `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${
-    url.protocol === "https:" || !loopback(url) ? "; Secure" : ""
-  }`;
+const plain = (status: number, text: string) =>
+  new Response(text, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 
 /** The page's icons: the mark (as the host draws it, or the image it is) and the theme's PNG. */
 const icons = (theme: Theme) => {
@@ -249,18 +285,21 @@ const installable = (options: WebServerOptions) => {
  * (`interactive-widget`, where browsers take it). Zoom stays: nothing caps
  * the scale, so people can still pinch to read.
  */
-const page = (options: WebServerOptions, entry: string) =>
+const page = (
+  options: WebServerOptions,
+  entry: string,
+  signIn: Record<string, Record<string, unknown>>,
+) =>
   `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-${look(options.theme)}${installable(options)}<title>${options.title ?? "Copilotz"}</title>
+${look(options.theme)}${installable(options)}<title>${quoted(options.title ?? "Copilotz")}</title>
 <script id="copilotz-config" type="application/json">${
     // Escaped, so nothing in it can end the script.
     JSON.stringify({
-      google: options.google ?? null,
-      dev: options.dev ?? false,
+      signIn,
       ...(options.base ? { base: options.base } : {}),
       ...(options.socket ? { socket: options.socket } : {}),
     })
@@ -273,20 +312,20 @@ ${look(options.theme)}${installable(options)}<title>${options.title ?? "Copilotz
 </html>`;
 
 export function webServer(options: WebServerOptions): (request: Request) => Promise<Response> {
-  const { runtime, tickets } = options;
-  const name = options.cookie ?? COOKIE;
-  const signIn = options.signIn ?? true;
+  const { runtime, tickets, front } = options;
+  const here = !options.signIn;
   const taken = Object.keys(options.assets ?? {}).find((path) => path.startsWith(HOST_ASSETS));
   if (taken) {
     throw new Error(
       `webServer: can't serve "${taken}": ${HOST_ASSETS} is the web host's own; use another path`,
     );
   }
-  const assets = assetServer({ ...hostFiles(options.theme), ...options.assets });
+  const paged = options.code !== undefined;
+  const assets = assetServer({ ...(paged ? hostFiles(options.theme) : {}), ...options.assets });
   let bundled: Promise<Code> | undefined;
   /** The code, bundled once; its files' names are plain, so they go in the page as they are. */
   const code = () =>
-    bundled ??= Promise.resolve(typeof options.code === "function" ? options.code() : options.code)
+    bundled ??= Promise.resolve(typeof options.code === "function" ? options.code() : options.code!)
       .then((made) => {
         const bad = [made.entry, ...Object.keys(made.files)].find((name) =>
           !/^[\w.-]+\.js$/.test(name)
@@ -297,13 +336,17 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
         return made;
       });
 
-  /** Who the session cookie says is signed in, if anyone. */
-  const whom = async (request: Request): Promise<Actor | null> => {
-    const secret = cookieOf(request, name);
-    return secret ? await runtime.query<Actor | null>("credential.actor", { secret }) : null;
-  };
+  // Who a request is, by the app's entrances (checked now: a bad declaration stops the start).
+  const whom = whomOf(runtime, options.cookie);
+  const signIns = here ? signInsOf(runtime, whom.entrances) : new Map();
+  /** Whether browsers connect here: someone to be, and tickets to connect with. */
+  const connecting = !!tickets && whom.entrances.length > 0;
+  /** What the page shows of the ways to sign in: here, or where the host signs people in. */
+  let shown: Record<string, Record<string, unknown>> | undefined;
+  const signInShown = () => shown ??= signInPage(options.signIn?.at ?? runtime);
+
   const files = fileServer(runtime, whom);
-  const routes = routeServer(runtime, whom, options.front ? { front: options.front } : {});
+  const routes = routeServer(runtime, whom, front ? { front } : {});
 
   /** The service worker, for this version of the code: its version is the code's own. */
   let worker: Promise<string> | undefined;
@@ -319,19 +362,100 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
       })
     );
 
-  const signedIn = (url: URL, session: string, person: string) =>
-    json({ person }, {
-      headers: { "set-cookie": setCookie(url, session, 30 * 86_400, name) },
+  const notFound = () =>
+    paged ? json({ error: "Not found" }, { status: 404 }) : plain(404, "Not found");
+  const elsewhere = () => json({ error: "Not from this app's page" }, { status: 403 });
+
+  /** `POST /connect`: who the request is, or someone let in now, traded for a ticket. */
+  const connect = async (request: Request): Promise<Response> => {
+    if (!fromPage(request, front)) return elsewhere();
+    if (!connecting) return json({ error: "Not signed in" }, { status: 401 });
+    const asked = await jsonOf(request);
+    if (!asked) return json({ error: "Send a JSON object, of 16 KiB at most" }, { status: 400 });
+    let came: Awaited<ReturnType<typeof arriving>>;
+    try {
+      came = await arriving(runtime, whom, request, {
+        runtime,
+        asked,
+        host: hostOf(request, front),
+      });
+    } catch (error) {
+      const { status, error: said } = refusal(error, "Couldn't connect");
+      return json({ error: said }, {
+        status,
+        ...(status === 429 ? { headers: { "retry-after": "60" } } : {}),
+      });
+    }
+    const { actor, cookies } = came;
+    if (!actor) return json({ error: "Not signed in" }, { status: 401, cookies });
+    // What the page shows them as: a person's name as they signed in, else their email.
+    const profile = actor.kind === "person"
+      ? await runtime.query<{ name?: string; email?: string } | null>("person.profile", {
+        person: actor.id,
+      }).catch(() => null)
+      : null;
+    const name = profile?.name ?? profile?.email;
+    return json({
+      ticket: tickets!.issue(actor),
+      actor: { kind: actor.kind, id: actor.id },
+      ...(name ? { name } : {}),
+    }, { cookies });
+  };
+
+  /** `POST /signin/<name>`: a way the app declares, its session kept in its entrance's cookie. */
+  const signIn = async (request: Request, url: URL, name: string): Promise<Response> => {
+    const method = signIns.get(name);
+    if (!method || (method.local && !loopback(url))) return notFound();
+    if (!fromPage(request, front)) return elsewhere();
+    const asked = await jsonOf(request);
+    if (!asked) return json({ error: "Send a JSON object, of 16 KiB at most" }, { status: 400 });
+    const { person, session } = await runtime.call<{ person?: unknown; session?: unknown }>(
+      method.action,
+      asked,
+    );
+    if (typeof person !== "string" || !person || !cookieSafe(session)) {
+      throw new Error(`signIn.${name}: ${method.action} answered no person, or no session`);
+    }
+    const entrance = whom.entrances.find((e) => e.name === method.entrance)!;
+    return json({ person }, {
+      cookies: [
+        setCookie(url, session, SESSION, whom.named(entrance, url), entrance.sameSite),
+      ],
     });
+  };
+
+  /** `POST /signout`: what each entrance's cookie is ends, and every cookie goes. */
+  const signOut = async (request: Request, url: URL): Promise<Response> => {
+    if (!fromPage(request, front)) return elsewhere();
+    const cookies: string[] = [];
+    for (const entrance of whom.entrances) {
+      const name = whom.named(entrance, url);
+      const secret = cookieOf(request, name);
+      if (secret === undefined) continue;
+      const actor = entrance.end
+        ? await recognise(runtime, entrance, secret).catch(() => null)
+        : null;
+      if (actor) await runtime.call(entrance.end!, { secret }, { actor }).catch(() => {});
+      cookies.push(setCookie(url, "", 0, name, entrance.sameSite));
+    }
+    return json({}, { cookies });
+  };
 
   return async (request) => {
     // Routes first: a host a route takes is all its own (the host's paths are never routes').
-    const asset = routes(request) ?? assets(request) ?? files(request);
-    if (asset) return await asset;
+    const routed = routes(request);
+    if (routed) return await routed;
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;
+    if (
+      !paged && (request.method === "GET" || request.method === "HEAD") && url.pathname === HEALTH
+    ) {
+      return plain(200, "ok");
+    }
+    const served = assets(request) ?? files(request);
+    if (served) return await served;
     try {
-      if (request.method === "GET" && url.pathname.startsWith(CODE)) {
+      if (paged && request.method === "GET" && url.pathname.startsWith(CODE)) {
         const { entry, files } = await code();
         const name = url.pathname.slice(CODE.length);
         if (!Object.hasOwn(files, name)) return json({ error: "Not found" }, { status: 404 });
@@ -342,81 +466,39 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
           },
         });
       }
-      switch (route) {
-        case `GET ${MANIFEST}`:
-          return new Response(JSON.stringify(manifestOf(options.theme, options.title)), {
-            headers: {
-              "content-type": "application/manifest+json; charset=utf-8",
-              "cache-control": "no-cache",
-            },
-          });
-        case `GET ${WORKER}`:
-          return new Response(await serviceWorker(), {
-            headers: {
-              "content-type": "text/javascript; charset=utf-8",
-              "cache-control": "no-cache",
-              "service-worker-allowed": "/",
-            },
-          });
-        case "POST /connect": {
-          const actor = await whom(request);
-          if (!actor) return json({ error: "Not signed in" }, { status: 401 });
-          // What the page shows them as: their name as they signed in, else their email.
-          const profile = actor.kind === "person"
-            ? await runtime.query<{ name?: string; email?: string } | null>("person.profile", {
-              person: actor.id,
-            }).catch(() => null)
-            : null;
-          const name = profile?.name ?? profile?.email;
-          return json({
-            ticket: tickets.issue(actor),
-            person: actor.id,
-            ...(name ? { name } : {}),
-          });
-        }
-        case "POST /signin/google": {
-          if (!options.google || !signIn) break;
-          const { idToken } = await request.json() as { idToken: string };
-          const { session, person } = await runtime.call<{ session: string; person: string }>(
-            "google.sign-in",
-            { idToken },
-          );
-          return signedIn(url, session, person);
-        }
-        case "POST /signin/dev": {
-          if (!options.dev || !signIn || !loopback(url)) break;
-          const { name } = await request.json() as { name: string };
-          const person = String(name ?? "").trim().toLowerCase();
-          const email = /^[a-z0-9._+-]{1,64}@[a-z0-9.-]{1,64}$/.test(person);
-          if (!email && !/^[a-z0-9._-]{1,40}$/.test(person)) {
-            return json({ error: "A name (letters, digits, . _ -) or an email" }, { status: 400 });
-          }
-          if (email) await runtime.call("person.set", { person, email: person });
-          const { session } = await runtime.call<{ session: string }>("session.start", { person });
-          return signedIn(url, session, person);
-        }
-        case "POST /signout": {
-          if (!signIn) break;
-          const secret = cookieOf(request, name);
-          if (secret) {
-            const actor = await runtime.query<{ kind: string; id: string } | null>(
-              "credential.actor",
-              { secret },
-            );
-            if (actor) {
-              await runtime.call("session.end", { session: secret }, { actor }).catch(() => {});
-            }
-          }
-          return json({}, { headers: { "set-cookie": setCookie(url, "", 0, name) } });
-        }
+      if (paged && route === `GET ${MANIFEST}`) {
+        return new Response(JSON.stringify(manifestOf(options.theme, options.title)), {
+          headers: {
+            "content-type": "application/manifest+json; charset=utf-8",
+            "cache-control": "no-cache",
+          },
+        });
       }
-      if (url.pathname === socket.config.path) return await options.upgrade(request);
-      if (request.method === "GET" && !url.pathname.startsWith("/signin")) {
-        return new Response(page(options, (await code()).entry), {
+      if (paged && route === `GET ${WORKER}`) {
+        return new Response(await serviceWorker(), {
+          headers: {
+            "content-type": "text/javascript; charset=utf-8",
+            "cache-control": "no-cache",
+            "service-worker-allowed": "/",
+          },
+        });
+      }
+      if (route === "POST /connect" && (paged || connecting)) return await connect(request);
+      if (here && connecting && request.method === "POST") {
+        if (url.pathname.startsWith("/signin/")) {
+          return await signIn(request, url, url.pathname.slice("/signin/".length));
+        }
+        if (url.pathname === "/signout") return await signOut(request, url);
+      }
+      if (url.pathname === socket.config.path) {
+        return options.upgrade ? await options.upgrade(request) : notFound();
+      }
+      if (paged && request.method === "GET" && !url.pathname.startsWith("/signin")) {
+        return new Response(page(options, (await code()).entry, signInShown()), {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
-      return json({ error: "Not found" }, { status: 404 });
+      return notFound();
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : String(error) }, {
         status: 400,

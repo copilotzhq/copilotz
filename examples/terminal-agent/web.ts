@@ -18,7 +18,7 @@ import { handler } from "@oxian/oxian-js/adapters/deno";
 import { createRuntime, definePlugin, type Plugins } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
-import { googleSignIn } from "../../plugins/access/mod.ts";
+import { devSignIn, googleSignIn } from "../../plugins/access/mod.ts";
 import { createTickets } from "../../hosts/web/tickets.ts";
 import { type Asset, type Code, socket, webServer } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
@@ -71,6 +71,8 @@ const runtime = await createRuntime({
   store: sqlite ? await sqliteStore({ path: sqlite }) : memoryStore(),
   plugins: [
     ...plugins,
+    // Sign in by name on this machine, and with Google when GOOGLE_CLIENT_ID is set.
+    devSignIn,
     ...(clientId
       ? [googleSignIn, definePlugin({ name: "google", resources: { google: { clientId } } })]
       : []),
@@ -127,7 +129,5 @@ Deno.serve(
     title: brand.title,
     theme: themeOf(brand.theme),
     assets,
-    dev: true,
-    ...(clientId ? { google: { clientId } } : {}),
   }),
 );

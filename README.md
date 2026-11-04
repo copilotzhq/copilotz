@@ -117,10 +117,10 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                    |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                    |
 | `copilotz/web`                         | the web host in the browser (`web`), and its toolkit (`Button`, `Markdown`…)                                 |
-| `copilotz/web/server`                  | its server half: `webServer`, `socket`; `routeHost` (the app's routes alone)                                 |
+| `copilotz/web/server`                  | its server half: `webServer`, `socket`; the `Entrance`, `SignIn` and `Route` shapes plugins declare          |
 | `copilotz/web/tickets`                 | `createTickets`: sessions traded for one-time tickets                                                        |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                              |
-| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve`, `serveRoutes`, `listen` (HTTP, sockets)                |
+| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve` (the one host), `listen` (HTTP, sockets)                |
 | `copilotz/orgs`                        | `orgsHost`: many orgs behind one address, each a runtime of its own                                          |
 | `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                              |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                     |
@@ -132,15 +132,28 @@ JavaScript with its types beside it, so an app's bundler takes the front ends as
 
 ## Serve it on the web
 
-The web host runs the app's front ends in the browser, as the person signed in: their reads go to
-the owner under the access rules, and every change is pushed to them as it commits. The server half
-answers `Request`s with `Response`s and nothing else, so it runs on any runtime; the page's code is
-the app's own (its front ends), bundled. On Node:
+One host serves every app: `serve` (on Node, Bun and Deno; `webServer` beneath it is a fetch handler
+for any runtime). What it does comes from the app's plugins, so the same call serves a signed-in
+workspace, a public site where visitors chat with an agent, or a WhatsApp app with no page at all:
+
+| Part                                         | Comes from                                                                               | Without it                         |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------- |
+| Routes: webhooks, APIs, sockets of their own | the `routes` resource                                                                    | —                                  |
+| The page and its code                        | `code`: the app's front ends, its shell among them, bundled                              | no page: the routes, and `/health` |
+| Who a browser is                             | the `entrances` resource: identity's session (a person), contacts' web lines (a visitor) | nobody                             |
+| Browsers connecting                          | `tickets`, for whoever an entrance says a request is                                     | no browser connects                |
+| Signing in (`POST /signin/<name>`)           | the `signIn` resource: `googleSignIn` (`google`), `devSignIn` (`dev`, this machine only) | none                               |
+
+The host keeps every cookie: httpOnly, so the page's code never sees a session's secret, `Secure`
+anywhere but this machine over http. A page connects by trading its cookie for a one-time ticket
+(`POST /connect`, which answers only the app's own page: its `Origin`), then talks to the owner over
+Oxian as an untrusted worker bound to that actor, under the access rules. On Node:
 
 ```ts
 // server.ts
 import { createRuntime } from "copilotz";
 import { memoryStore } from "copilotz/stores/memory";
+import { devSignIn } from "copilotz/plugins/access";
 import { socket } from "copilotz/web/server";
 import { createTickets } from "copilotz/web/tickets";
 import { themeOf } from "copilotz/web/theme";
@@ -150,7 +163,7 @@ import { plugins } from "./app.ts"; // models, chat, access, … and the app's o
 const tickets = createTickets();
 const runtime = await createRuntime({
   store: memoryStore(),
-  plugins,
+  plugins: [...plugins, devSignIn], // sign in by name, from this machine only
   transports: [socket], // browsers connect to the owner here
   admit: tickets.admit,
 });
@@ -160,9 +173,10 @@ const server = await serve({
   code: await bundle(new URL("./browser.tsx", import.meta.url)),
   theme: themeOf([]), // Copilotz's look; a brand passes its theme plugins
   port: 8080,
-  dev: true, // sign in by name, from this machine only
 });
 console.log(`${server.url}`);
+// A deploy's SIGTERM: stop listening, give running turns a while, close the runtime.
+process.once("SIGTERM", () => server.close({ drain: 8_000 }));
 ```
 
 ```tsx
@@ -185,37 +199,66 @@ await web({
 sockets through Oxian's Node adapter; Bun and Deno run it too. On Deno,
 `Deno.serve(webServer({ …, upgrade: handler(runtime.hypervisor) }))` with Oxian's Deno adapter, and
 `deno bundle` for the code (`examples/terminal-agent/web.ts`). The whole example is in
-`examples/web-node/` (`node examples/web-node/server.ts`).
+`examples/web-node/` (`node examples/web-node/server.ts`). Google sign-in is `googleSignIn` with the
+`google` resource's `clientId`: the page shows its button.
 
 Many orgs behind one address (`copilotz/orgs`, see [design/tenancy.md](design/tenancy.md)): a
-directory signs people in and knows their orgs, and each org is a runtime of its own, opened when
-first used. Node takes a socket before any handler runs, so `listen` serves the orgs host and hands
-each socket to the runtime of the org its request is for:
+directory signs people in (its plugins declare how, as above) and knows their orgs, and each org is
+a runtime of its own, opened when first used. Node takes a socket before any handler runs, so
+`listen` serves the orgs host and hands each socket to the runtime of the org its request is for:
 `listen({ fetch: host.serve, hypervisor: (request) => host.openRuntime(request)?.hypervisor })`
 (`examples/web-node/orgs.ts`).
 
+### Visitors
+
+A public site where anyone chats with the app's agent, signed in or not: the contacts plugin's web
+lines (`resources.web.lines.<name>`). A page that asks to come in by one
+(`web({ arrive: { line } })`) and isn't anyone yet becomes a visitor: a contact in the line's space
+with a chat of its own, answered by the line's agent, its browser keeping a secret in an httpOnly,
+`SameSite=Strict` cookie (only its hash is kept) that is the same contact for the line's `days`
+(30). Someone signed in comes in as themselves. A visitor reaches what any contact does: their chat,
+what's said and filed there, and nothing else. New visitors are limited an hour from one caller's
+address (`ipVisitorsPerHour`, 20) and on the line (`visitorsPerHour`, 600), refused plainly past
+either (429); the caller's address is believed only as the app's front says it (`caller`, as MCP's
+lines take it). Erasing the contact (`contact.forget`) ends its cookie at once.
+
+```ts
+resources: {
+  agents: { guide: { instructions: "Answer questions about the timetable.", model: "main" } },
+  spaces: { visitors: { name: "Website", agents: ["guide"] } },
+  web: {
+    caller: { header: "cf-connecting-ip", front: env.FRONT_SECRET },
+    lines: { site: { in: "visitors", agent: "guide" } },
+  },
+}
+```
+
+```tsx
+// The app's own shell for visitors (a chat window), and chat's front end.
+await web({ root, plugins: [siteShell, chatWeb], arrive: { line: "site" } });
+```
+
 ### Without the web app
 
-An app people use on WhatsApp or on the phone needs no page: `serveRoutes` serves its plugins'
-routes alone (`routes` resources: Meta's webhook, Twilio's), `GET /health` for whatever watches it,
-and 404 for anything else. Nobody signs in there: a route's Action is called as a visitor, and its
-`allow` decides (a webhook checks the request's signature, then acts for the person it's from with
-`ctx.as`). Deno and Bun run it too.
+An app people use on WhatsApp or on the phone needs no page: `serve` without `code` (or `tickets`)
+serves its plugins' routes alone (`routes` resources: Meta's webhook, Twilio's), `GET /health` for
+whatever watches it, and 404 for anything else, whatever else its plugins declare. Nobody signs in
+there: a route's Action is called as a visitor, and its `allow` decides (a webhook checks the
+request's signature, then acts for the person it's from with `ctx.as`). Deno and Bun run it too.
 
 ```ts
 import { createRuntime } from "copilotz";
-import { serveRoutes } from "copilotz/web/node";
+import { serve } from "copilotz/web/node";
 
 const runtime = await createRuntime({ store, plugins });
-const server = await serveRoutes({ runtime, hostname: "0.0.0.0", port: 8080 });
-// A deploy's SIGTERM: stop listening, give running turns a while, close the runtime.
+const server = await serve({ runtime, hostname: "0.0.0.0", port: 8080 });
 process.once("SIGTERM", () => server.close({ drain: 8_000 }));
 ```
 
 A `serve` route may take a WebSocket of its own (a voice call's relay): `host.upgrade()` accepts the
 request's upgrade, and the route answers with the response it gives. It can refuse first (`403`,
 before any handshake). The socket is a browser's `WebSocket` as far as `onmessage`, `send` and
-`close` go; the listener (`serveRoutes`, or the web host's `serve`) takes it.
+`close` go; the listener (`serve`) takes it.
 
 ```ts
 routes: {
@@ -232,8 +275,8 @@ routes: {
 ```
 
 A runtime that declares the `socket` transport (remote executors) still takes its sockets at
-`/oxian`. `routeHost(runtime)` (`copilotz/web/server`) is the same as a fetch handler, for another
-listener; a route's socket needs Oxian's (`copilotz/web/node`'s). The example is
+`/oxian`. `webServer({ runtime })` (`copilotz/web/server`) is the same as a fetch handler, for
+another listener; a route's socket needs Oxian's (`copilotz/web/node`'s). The example is
 `examples/web-node/routes.ts`.
 
 ## Installing a computer
@@ -451,8 +494,11 @@ name, never by importing its code.
   shut to it unless it says otherwise (`peopleOrContacts`, as `chat.send` does). Its chat lives in
   the line's space and is shared with it on its own: it reaches that chat, what's said and filed
   there, and nothing else; the space's people reach it as any chat there, and the agent working for
-  the contact reaches exactly that chat. Agents are told whom they're talking with.
-- **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client).
+  the contact reaches exactly that chat. Agents are told whom they're talking with. Its web lines
+  (`web.lines`) let a browser that isn't anyone in as one, a visitor (see "Visitors").
+- **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client); the
+  web host's page shows its button.
+- **`devSignIn`**: sign-in by name or email, from this machine only, for trying an app out.
 - **`accounts`**: outside accounts a person connects once, for their agents to use: first their
   ChatGPT plan, as a model provider, instead of the app's API key. Tokens are a private field only
   the plugin's Actions read, renewed before they run out.
@@ -547,7 +593,7 @@ filled by the front ends through resources).
   speaking over it cuts it there (the agent is told what was heard), a failed or slow answer says a
   short line in the line's language, and silence, a call too long or too many prompts, or the
   agent's `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that
-  takes a route's socket (`serveRoutes`).
+  takes a route's socket (`serve`).
 - **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A line the app
   declares (`mcp.lines.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
   each is shown, who calls, its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP,
@@ -1062,15 +1108,15 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   (`hosts/terminal`: `terminal({ runtime, me })`) draws it with Ink: a reply being written grows in
   place, as its own part.
 - **The web** (see [design/views.md](design/views.md), "The web") runs Views in the browser. The
-  page signs in (an httpOnly session cookie), trades the cookie for a one-time ticket (`/connect`),
-  and connects to the owner over Oxian as an untrusted worker bound to that person
-  (`web({ plugins,
-  root })` in the browser, `webServer({ runtime, tickets, code, upgrade })`
-  beside the runtime, which declares the `socket` transport). A browser reads a collection directly
-  only when a rule speaks for it; anything else, through queries that let its person. Writes are
-  Actions. Plugins answer their own HTTP through the `routes` resource (a webhook, an OAuth
-  callback, an API, a download, a socket of their own), and files people sent are served at
-  `/files/<id>` to whoever may read them, with ranges.
+  page's cookie (a person's session, a web line's visitor: the `entrances` plugins declare) trades
+  for a one-time ticket (`/connect`), and it connects to the owner over Oxian as an untrusted worker
+  bound to that actor (`web({ plugins, root })` in the browser,
+  `webServer({ runtime, tickets, code,
+  upgrade })` beside the runtime, which declares the `socket`
+  transport). A browser reads a collection directly only when a rule speaks for it; anything else,
+  through queries that let its person. Writes are Actions. Plugins answer their own HTTP through the
+  `routes` resource (a webhook, an OAuth callback, an API, a download, a socket of their own), and
+  files people sent are served at `/files/<id>` to whoever may read them, with ranges.
 - **The design system** (`design/views.md`, "The design system"): the web host owns a token
   vocabulary (shadcn's names) and its defaults, which are Copilotz's look (navy, the logo's cyan and
   blue, Manrope and Space Grotesk, its logo and icon), and an app rebrands with a `theme` resource

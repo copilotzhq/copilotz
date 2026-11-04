@@ -7,8 +7,9 @@
  * the switcher changes. Everything an org serves (its page, code, socket,
  * files, plugins' routes) is its own web host's (`hosts/web`), as one app.
  *
- * - `POST /signin/google` `{ idToken }`, `POST /signin/dev` `{ name }` (this
- *   machine only, when `dev`): signs in at the directory, makes the person's
+ * - `POST /signin/<name>`: a way to sign in the directory's plugins declare
+ *   (its `signIn` resource: Google's `{ idToken }`; dev sign-in's `{ name }`,
+ *   this machine only): signs in at the directory, makes the person's
  *   personal org the first time, and enters the org they were in last.
  * - `GET /orgs`: who's signed in, the org they're in, the orgs they belong
  *   to, the invitations waiting for them, and whether they're staff.
@@ -43,7 +44,10 @@
  *
  * Behind a front (a Cloudflare worker), `front: { secret }`: a request
  * carrying the secret (`x-copilotz-front`) is for the host it forwards
- * (`x-forwarded-host`); any other's forwarded headers are ignored.
+ * (`x-forwarded-host`); any other's forwarded headers are ignored. What it
+ * answers itself to a POST (signing in and out, orgs, invitations, the
+ * console) comes from the app's own page only (`Origin`), as an org's
+ * `/connect` does.
  *
  * The app says how to open an org: its store (at the org's placement, as
  * its tenant), its plugins with the host's `here` (the org's name, and how
@@ -52,14 +56,17 @@
 import type { Actor, Plugins, Runtime, Transport } from "../../runtime/mod.ts";
 import { definePlugin } from "../../runtime/mod.ts";
 import { createTickets, type Tickets } from "../web/tickets.ts";
+import { type Code, socket, webServer, type WebServerOptions } from "../web/server.ts";
 import {
-  type Code,
   cookieOf,
+  entrancesOf,
+  fromPage,
+  jsonOf,
+  loopback,
   setCookie,
-  socket,
-  webServer,
-  type WebServerOptions,
-} from "../web/server.ts";
+  signInsOf,
+  whomOf,
+} from "../web/entrances.ts";
 import { hostMatches, hostOf, hostServer, vouched } from "../web/routes.ts";
 
 /** An org as the host opens it. */
@@ -71,15 +78,19 @@ export type OrgInfo = {
 };
 
 export type OrgsHostOptions =
-  & Pick<WebServerOptions, "title" | "theme" | "google" | "dev" | "assets" | "front">
+  & Pick<WebServerOptions, "title" | "theme" | "assets" | "front">
   & {
     /**
-     * The app's own hosts (`compass.copilotz.com`; patterns as routes' are,
+     * The app's own hosts (`app.example.com`; patterns as routes' are,
      * `*.run.app`): a request to any other is for a host an org claimed.
      * Unset, every host is the app's, and claims route nothing.
      */
     hosts?: string[];
-    /** The directory's runtime: identity, a sign-in method, and the directory plugin. */
+    /**
+     * The directory's runtime: identity, the ways to sign in (Google's, dev
+     * sign-in's: what its page shows, and `POST /signin/<name>` takes), and
+     * the directory plugin.
+     */
     directory: Runtime;
     /**
      * Opens an org: the app's runtime for it, with these plugins too, this
@@ -142,6 +153,11 @@ const baseOf = (org: string) => `/o/${encodeURIComponent(org)}`;
  * a socket). Its runtime takes sockets there and at `/oxian` (`given.transports`).
  */
 const socketOf = (org: string) => `${baseOf(org)}${socket.config.path}`;
+/** The paths the orgs host answers itself, not an org's. */
+const ours = (path: string) =>
+  path.startsWith("/signin/") || path === "/signout" || path === "/orgs" ||
+  path.startsWith("/orgs/") || path.startsWith("/console/");
+
 /** The org a path addresses (`/o/<org>/…`), and the path within it. */
 const addressed = (path: string) => {
   const found = /^\/o\/([^/]+)(\/.*)?$/.exec(path);
@@ -154,7 +170,12 @@ const json = (value: unknown, init: ResponseInit & { cookies?: string[] } = {}) 
   return new Response(JSON.stringify(value), { status: init.status ?? 200, headers });
 };
 
-const loopback = (url: URL) => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+/**
+ * The name each cookie an org's entrances declare goes by here: its session
+ * `s_<org>`, any other `<name>_<org>`, so one org's never reads another's.
+ */
+const cookiesOf = (org: string) => (name: string) =>
+  name === "session" ? sessionOf(org) : `${name}_${org}`;
 
 /** A request with these cookies set too, as the org's web host will read them. */
 const withCookies = (request: Request, cookies: Record<string, string>) => {
@@ -180,6 +201,8 @@ export type OrgsHost = {
 
 export function orgsHost(options: OrgsHostOptions): OrgsHost {
   const { directory } = options;
+  // The ways to sign in the directory declares, checked now: a bad declaration stops the start.
+  const signIns = signInsOf(directory, entrancesOf(directory));
   const idleMs = options.idleMs ?? 30 * 60_000;
   const cells = new Map<string, Promise<Cell>>();
   /** The cells open now, for what must find one at once (a socket upgrade on Node). */
@@ -274,23 +297,17 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
           upgrade: (request) => options.upgrade(runtime, request),
           ...(options.title ? { title: options.title } : {}),
           ...(options.theme ? { theme: options.theme } : {}),
-          ...(options.google ? { google: options.google } : {}),
-          ...(options.dev ? { dev: options.dev } : {}),
           ...(options.assets ? { assets: options.assets } : {}),
           ...(options.front ? { front: options.front } : {}),
-          cookie: sessionOf(org.id),
-          signIn: false,
+          cookie: cookiesOf(org.id),
+          // People sign in at the directory; an org's page shows its ways to.
+          signIn: { at: directory },
           base: baseOf(org.id),
           socket: socketOf(org.id),
         });
         const hosted = hostServer(
           runtime,
-          async (request) => {
-            const secret = cookieOf(request, sessionOf(org.id));
-            return secret
-              ? await runtime.query<Actor | null>("credential.actor", { secret })
-              : null;
-          },
+          whomOf(runtime, cookiesOf(org.id)),
           options.front ? { front: options.front } : {},
         );
         const made = { org, runtime, tickets, serve, hosted, last: Date.now() };
@@ -429,19 +446,21 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     });
   };
 
-  /** The lobby: the page before anyone's signed in (it shows sign-in). */
+  /**
+   * The lobby: the page before anyone's signed in (it shows the directory's
+   * ways to sign in). Nobody connects there (no tickets), and no cookie is
+   * anyone to the directory's routes there.
+   */
   const lobby = webServer({
     runtime: directory,
-    tickets: createTickets(),
     code: options.code,
     upgrade: () => new Response("Sign in first", { status: 401 }),
     ...(options.title ? { title: options.title } : {}),
     ...(options.theme ? { theme: options.theme } : {}),
-    ...(options.google ? { google: options.google } : {}),
-    ...(options.dev ? { dev: options.dev } : {}),
     ...(options.assets ? { assets: options.assets } : {}),
-    cookie: "none",
-    signIn: false,
+    ...(options.front ? { front: options.front } : {}),
+    cookie: () => "none",
+    signIn: { at: directory },
   });
 
   /** Tells the directory how an org is (its people, spaces, when it was last used). */
@@ -578,6 +597,26 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
       const host = hostOf(request, options.front);
       if (!own(host)) return await claimed(request, host);
       const at = addressed(url.pathname);
+      // What it answers itself to a POST is the app's own page's to ask (an org's, its host's).
+      if (
+        request.method === "POST" && !at && ours(url.pathname) && !fromPage(request, options.front)
+      ) {
+        return json({ error: "Not from this app's page" }, { status: 403 });
+      }
+      if (request.method === "POST" && url.pathname.startsWith("/signin/")) {
+        const method = signIns.get(url.pathname.slice("/signin/".length));
+        if (method && (!method.local || loopback(url))) {
+          const asked = await jsonOf(request);
+          if (!asked) {
+            return json({ error: "Send a JSON object, of 16 KiB at most" }, { status: 400 });
+          }
+          const { person, session } = await directory.call<{ person: string; session: string }>(
+            method.action,
+            asked,
+          );
+          return await signIn(request, url, person, session);
+        }
+      }
       if (at) {
         const org = await orgInfo(at.org);
         if (!org) return json({ error: "No such org" }, { status: 404 });
@@ -591,33 +630,6 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
         return await cell.serve(new Request(inner, request));
       }
       switch (route) {
-        case "POST /signin/google": {
-          if (!options.google) break;
-          const { idToken } = await request.json() as { idToken: string };
-          const { person, session } = await directory.call<{ person: string; session: string }>(
-            "google.sign-in",
-            { idToken },
-          );
-          return await signIn(request, url, person, session);
-        }
-        case "POST /signin/dev": {
-          if (!options.dev || !loopback(url)) break;
-          const { name } = await request.json() as { name: string };
-          const person = String(name ?? "").trim().toLowerCase();
-          const email = /^[a-z0-9._+-]{1,64}@[a-z0-9.-]{1,64}$/.test(person);
-          if (!email && !/^[a-z0-9._-]{1,40}$/.test(person)) {
-            return json({ error: "A name (letters, digits, . _ -) or an email" }, { status: 400 });
-          }
-          await directory.call("person.set", {
-            person,
-            ...(email ? { email: person } : {}),
-            name: email ? person.split("@")[0] : person,
-          });
-          const { session } = await directory.call<{ session: string }>("session.start", {
-            person,
-          });
-          return await signIn(request, url, person, session);
-        }
         case "GET /orgs": {
           const who = await signedIn(request);
           if (!who) return json({ error: "Not signed in" }, { status: 401 });
@@ -677,7 +689,7 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
           const secret = cookieOf(request, DIRECTORY);
           const who = await signedIn(request);
           if (secret && who) {
-            await directory.call("session.end", { session: secret }, {
+            await directory.call("session.end", { secret }, {
               actor: { kind: "person", id: who.person },
             }).catch(() => {});
           }

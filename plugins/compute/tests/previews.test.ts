@@ -19,7 +19,7 @@ import {
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
 import { chat, type ToolContext } from "../../agents/chat/mod.ts";
-import { access, identity } from "../../access/mod.ts";
+import { access, devSignIn, identity } from "../../access/mod.ts";
 import { directory } from "../../access/directory/mod.ts";
 import { join } from "../../access/tests/join.ts";
 import { orgsHost } from "../../../hosts/orgs/mod.ts";
@@ -562,7 +562,10 @@ test("a sleeping computer is woken for its preview, and kept awake; where many o
 
 test("where many orgs are served: the preview's host is the org's, and the grant is under its address", async () => {
   const topic = `previews-orgs.${crypto.randomUUID()}`;
-  const dir = await createRuntime({ store: memoryStore(), plugins: [identity, directory] });
+  const dir = await createRuntime({
+    store: memoryStore(),
+    plugins: [identity, directory, devSignIn],
+  });
   const host = orgsHost({
     directory: dir,
     hosts: ["localhost"],
@@ -589,7 +592,6 @@ test("where many orgs are served: the preview's host is the org's, and the grant
       }),
     upgrade: () => new Response(null, { status: 299 }),
     code: { entry: "app.js", files: { "app.js": "" } },
-    dev: true,
   });
   const { workloads } = serving();
   let computer: ReturnType<typeof fakeComputer> | undefined;

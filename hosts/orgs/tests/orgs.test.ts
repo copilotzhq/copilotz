@@ -9,7 +9,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { type Actor, createRuntime, definePlugin, type Runtime } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
-import { access, identity } from "../../../plugins/access/mod.ts";
+import { access, devSignIn, identity } from "../../../plugins/access/mod.ts";
 import { directory } from "../../../plugins/access/directory/mod.ts";
 import { test } from "../../../testing/mod.ts";
 import { orgsHost } from "../mod.ts";
@@ -47,6 +47,7 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     plugins: [
       identity,
       directory,
+      devSignIn,
       definePlugin({ name: "d", resources: { directory: { staff: ["sam@example.com"] } } }),
     ],
   });
@@ -63,7 +64,6 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     },
     upgrade: () => new Response(null, { status: 299 }),
     code: { entry: "app.js", files: { "app.js": "" } },
-    dev: true,
   });
   try {
     const ana = browser(host.serve);
@@ -80,7 +80,7 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     assertEquals(orgs.orgs.map((o: { name: string }) => o.name).sort(), ["Acme", "ana"]);
     // In Acme, her browser connects as her; she's its owner.
     const connected = await (await ana.send("POST", "/connect")).json();
-    assertEquals(connected.person, "ana@example.com");
+    assertEquals(connected.actor, { kind: "person", id: "ana@example.com" });
     // What her page shows her as: her name as she signed in, not her id.
     assertEquals(connected.name, "ana");
     const acmeRt = (await host.runtime(acme.id)) as Runtime;
@@ -128,7 +128,7 @@ test("orgs: sign in, make and enter orgs, invite, staff, remove, suspend", async
     await sam.send("POST", "/signin/dev", { name: "sam@example.com" });
     assertEquals((await sam.send("POST", "/orgs/enter", { org: acme.id })).status, 200);
     const samIn = await (await sam.send("POST", "/connect")).json();
-    assertEquals(samIn.person, "sam@example.com");
+    assertEquals(samIn.actor, { kind: "person", id: "sam@example.com" });
     const consoleOrgs = await (await sam.send("GET", "/console/orgs")).json();
     assert(consoleOrgs.orgs.some((o: { id: string }) => o.id === acme.id));
     assertEquals((await ana.send("GET", "/console/orgs")).status, 403);
@@ -203,6 +203,7 @@ test("orgs: staff move an org's rows, export them, and delete the org", async ()
     plugins: [
       identity,
       directory,
+      devSignIn,
       definePlugin({ name: "d", resources: { directory: { staff: ["sam@example.com"] } } }),
     ],
   });
@@ -220,7 +221,6 @@ test("orgs: staff move an org's rows, export them, and delete the org", async ()
     },
     upgrade: () => new Response(null, { status: 299 }),
     code: { entry: "app.js", files: { "app.js": "" } },
-    dev: true,
     operations: {
       move: (org, to) => Promise.resolve(void done.push(`move ${org.id} ${to.schema}`)),
       export: (org) => new Response(`-- ${org.id}\n`).body as ReadableStream<Uint8Array>,
@@ -277,6 +277,7 @@ test("orgs: a page in an org no longer yours lands you in one that is", async ()
     plugins: [
       identity,
       directory,
+      devSignIn,
       definePlugin({ name: "d", resources: { directory: { staff: ["sam@example.com"] } } }),
     ],
   });
@@ -290,7 +291,6 @@ test("orgs: a page in an org no longer yours lands you in one that is", async ()
       }),
     upgrade: () => new Response(null, { status: 299 }),
     code: { entry: "app.js", files: { "app.js": "" } },
-    dev: true,
   });
   try {
     const ana = browser(host.serve);
@@ -342,7 +342,10 @@ test("orgs: a page in an org no longer yours lands you in one that is", async ()
 });
 
 test("orgs: an org's address reaches it without a session; inviting an outsider to a space invites them to the org", async () => {
-  const dir = await createRuntime({ store: memoryStore(), plugins: [identity, directory] });
+  const dir = await createRuntime({
+    store: memoryStore(),
+    plugins: [identity, directory, devSignIn],
+  });
   const host = orgsHost({
     directory: dir,
     open: async (_org, given) =>
@@ -367,7 +370,6 @@ test("orgs: an org's address reaches it without a session; inviting an outsider 
       }),
     upgrade: () => new Response(null, { status: 299 }),
     code: { entry: "app.js", files: { "app.js": "" } },
-    dev: true,
   });
   try {
     const ana = browser(host.serve);

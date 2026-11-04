@@ -33,10 +33,9 @@
  *   content (a result's `_meta` is the host's, never the model's), so
  *   that's where it must be. On a line without handles, it's refused.
  */
-import type { Actor, Runtime } from "../../../../runtime/mod.ts";
+import type { Actor, Caller, Runtime } from "../../../../runtime/mod.ts";
 import type { Tool } from "../../../agents/chat/contract.ts";
 import type { Called } from "../actions/call.ts";
-import type { Caller } from "../shared/caller.ts";
 import {
   addressKey,
   callIdOf,

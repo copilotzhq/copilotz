@@ -16,36 +16,75 @@
  *   and see them by name ("People here: Ana": a `names` source, `contact:`).
  * - **Erasing one** (`contact.forget`, by its space's managers) ends its
  *   access at once and deletes its record, and with `chats` its chats.
+ * - **Web lines** (`resources.web.lines.<name>`, declared in the app's
+ *   settings): a front door for browsers that aren't anyone. A page that
+ *   comes in by one (`web({ arrive: { line } })`, `POST /connect` `{ line }`)
+ *   is a new visitor: a contact in the line's space with a chat of its own,
+ *   answered by the line's agent, its browser keeping a secret in an
+ *   httpOnly cookie (the web host's `visitor` entrance) that is the same
+ *   contact while it lasts (`days`, 30). Only the secret's hash is kept.
+ *   New visitors an hour are limited from the caller's address (as the app's
+ *   front says it: `web.caller`, as MCP's) and on the line, and past either
+ *   it's refused plainly (429). A visitor reaches what any contact does:
+ *   their chat, and what's shared with them. Erasing the contact ends its
+ *   cookie with it.
  *
  * ```ts
  * plugins: [models, chat, ...access]   // access brings contacts
+ * resources: {
+ *   spaces: { visitors: { name: "Website", agents: ["guide"] } },
+ *   web: {
+ *     caller: { header: "cf-connecting-ip", front: env.FRONT_SECRET },
+ *     lines: { site: { in: "visitors", agent: "guide" } },
+ *   },
+ * }
  * ```
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { arriveAction } from "./actions/arrive.ts";
 import { chatAction } from "./actions/chat.ts";
 import { forgetAction } from "./actions/forget.ts";
 import { startAction } from "./actions/start.ts";
 import { CONTACT, contact } from "./collections/contact.ts";
+import { rate } from "./collections/rate.ts";
+import { visitor } from "./collections/visitor.ts";
+import { visitorEntrance } from "./resources/entrance.ts";
+import { settingsProblem } from "./shared/web.ts";
 import { contactView } from "./views/contact.ts";
+
+/** What only the system reads or writes: visitors' secrets (hashed), and their counters. */
+const SYSTEM_ONLY = ["contact_visitor", "contact_rate"];
 
 export * from "./contract.ts";
 
 export const contacts: Plugin = definePlugin({
   name: "contacts",
   requires: ["spaces"],
-  collections: { contact },
+  collections: { contact, contact_visitor: visitor, contact_rate: rate },
   actions: {
     "contact.start": startAction,
     "contact.chat": chatAction,
     "contact.forget": forgetAction,
+    "contact.arrive": arriveAction,
   },
   views: { "context:contact": { llm: contactView } },
+  // Visitors' secrets and counters are nobody's to read but the system's, a contact's least.
+  guard: (_actor, { collection }) =>
+    SYSTEM_ONLY.includes(collection) ? { _id: { $in: [] } } : undefined,
+  // At start: the web lines the app declares, and how it knows who's calling.
+  check: (merged) => {
+    const problem = settingsProblem(merged.resources);
+    if (problem) throw new Error(problem);
+  },
   resources: {
+    web: {},
     // A contact's record lives in its line's space; only trusted code changes it. A contact is a
     // member (of its chats, and of its own record): reading it labels nothing, as for an agent.
     shared: { contact: { write: "manage", member: "contact" } },
     names: { contact: { collection: "contact", prefix: CONTACT } },
     context: { contact: { place: "system" } },
+    // A browser that's a visitor of a web line, asked after people's sessions.
+    entrances: { visitor: visitorEntrance },
   },
 });
 

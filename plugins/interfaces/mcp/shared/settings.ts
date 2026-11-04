@@ -7,9 +7,8 @@
  * gives a line with every default filled in, as the plugin uses it;
  * `problemOf` says what's wrong with one, at start.
  */
-import type { Resources } from "../../../../runtime/mod.ts";
+import { callerProblem, type CallerSettings, type Resources } from "../../../../runtime/mod.ts";
 import { agentsOf, SEND, type Tool, type ToolAnnotations } from "../../../agents/chat/contract.ts";
-import { LISTS, rangeOk } from "./caller.ts";
 
 /** How one of the app's tools is offered on a line: what only MCP needs. */
 export type McpTool = {
@@ -96,34 +95,11 @@ export type McpLine = {
 };
 
 /**
- * Where a caller's address is, when the app's front says it: the header
- * the front sets (`cf-connecting-ip`; `x-forwarded-for`, a list), and why
- * it's believed. A header anyone may send is believed only from the front:
- *
- * - `front`: the front's secret, which it sends in `x-copilotz-front` (the
- *   web host's own front header). A request without it came around the
- *   front, straight to the app: it's refused.
- * - `hops`: for a list the app's own proxies append to (`x-forwarded-for`:
- *   Cloud Run's appends the address it saw), the entry that many from the
- *   end. A list header needs it: its first entries are the caller's to say.
- *
- * Callers in `exempt` (CIDR ranges: a shared proxy such as OpenAI's, every
- * ChatGPT user's calls behind a few addresses) aren't limited by address;
- * the line's own limits still hold. An address that can't be read is
- * counted with every other such call, as one caller. Without `caller`, no
- * limit goes by address.
- *
- * **To verify on each deployment** (a wrong setting lets callers choose
- * their address):
- * - with a Cloudflare worker as the front (`front`): that it sets
- *   `cf-connecting-ip` to the address Cloudflare saw, overwriting any the
- *   caller sent, and that it sends its secret only to the app;
- * - with `x-forwarded-for` (`hops`): how many proxies the app runs behind
- *   that each append to it (Cloud Run's front end: 1; a load balancer
- *   before it: 2). Too few hops counts a caller's own entry; too many, a
- *   proxy's address, every caller's.
+ * Where a caller's address is, when the app's front says it, and why it's
+ * believed: the runtime's `CallerSettings` (see runtime/caller.ts, and what
+ * to verify on each deployment there). Without it, no limit goes by address.
  */
-export type McpCaller = { header: string; front?: string; hops?: number; exempt?: string[] };
+export type McpCaller = CallerSettings;
 
 export type McpSettings = {
   lines?: Record<string, McpLine>;
@@ -288,29 +264,7 @@ export function settingsProblem(resources: Resources): string | undefined {
   if (atOnce !== undefined && !(Number.isInteger(atOnce) && atOnce > 0)) {
     return "atOnce is a whole number over 0";
   }
-  if (!caller) return undefined;
-  if (typeof caller.header !== "string" || !/^[a-z0-9-]{1,64}$/i.test(caller.header)) {
-    return "caller.header is a header's name (cf-connecting-ip, x-forwarded-for)";
-  }
-  if (caller.front === undefined && caller.hops === undefined) {
-    return "caller says why its header is believed: the front's secret (front), or hops";
-  }
-  if (
-    caller.front !== undefined && (typeof caller.front !== "string" || caller.front.length < 16)
-  ) {
-    return "caller.front is the front's secret (16 characters at least)";
-  }
-  if (caller.hops !== undefined && !(Number.isInteger(caller.hops) && caller.hops > 0)) {
-    return "caller.hops is a whole number over 0";
-  }
-  const header = caller.header.toLowerCase();
-  if (header === "forwarded") return "caller.header: Forwarded isn't read (use x-forwarded-for)";
-  if (LISTS.includes(header) && caller.hops === undefined) {
-    return `caller.header ${header} is a list whose first entries the caller writes: say its hops`;
-  }
-  const bad = (caller.exempt ?? []).find((range) => !rangeOk(range));
-  if (bad !== undefined) return `caller.exempt: "${bad}" isn't a CIDR range (192.0.2.0/24)`;
-  return undefined;
+  return callerProblem(caller);
 }
 
 /** Whether `text` is an origin as browsers send it: a scheme and a host, nothing more. */

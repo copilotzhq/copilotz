@@ -6,9 +6,10 @@
  * plugins' routes included, as on any runtime). Bun and Deno run it too,
  * through their Node compatibility.
  *
- * - `serve`: one runtime's web host (`webServer`), its socket to that runtime.
- * - `serveRoutes`: an app without the web app (on WhatsApp, on the phone):
- *   its routes alone (`routeHost`), and `/health`.
+ * - `serve`: one runtime's web host (`webServer`), its socket to that
+ *   runtime: whatever the app's plugins make of it. With the page's code, the
+ *   web app; without, its routes alone (on WhatsApp, on the phone) and
+ *   `/health`.
  * - `listen`: any fetch handler, with the Hypervisor each socket goes to
  *   picked per request: a host with a runtime per org names the one a request
  *   is for (`hosts/orgs`: its `openRuntime`).
@@ -19,8 +20,7 @@
  */
 import type { Hypervisor, HypervisorRequestDecision } from "@oxian/oxian-js";
 import { serve as oxian } from "@oxian/oxian-js/adapters/node";
-import type { Runtime } from "../../../runtime/mod.ts";
-import { type Front, hostRouted, routeHost } from "../routes.ts";
+import { hostRouted } from "../routes.ts";
 import { socket, webServer, type WebServerOptions } from "../server.ts";
 
 /** Where to listen. */
@@ -56,49 +56,35 @@ export type Listener = {
   shutdown(): Promise<void>;
 };
 
-export type RoutesOptions = Address & {
-  runtime: Runtime;
-  /** The app's front (a Cloudflare worker before it), as `webServer` takes it. */
-  front?: Front;
-};
-
-/** A route host listening. It owns its runtime: `close` stops listening, then closes it. */
-export type RouteListener = Listener & {
-  /** Stops listening (its sockets close), then the runtime, passing `drain` on (`Runtime.close`). */
+/** The web host listening: `shutdown` stops listening; `close` does, then closes its runtime. */
+export type Server = Listener & {
+  /**
+   * Stops listening (its sockets close), then the runtime, passing `drain`
+   * on (`Runtime.close`): a deploy's SIGTERM gives running turns a while.
+   * Asked again, it's the same close.
+   */
   close(options?: { drain?: number }): Promise<void>;
 };
 
 /**
- * Serves the web host for a runtime that declares the `socket` transport
- * (`createRuntime({ transports: [socket], admit: tickets.admit })`).
+ * Serves the web host for a runtime: its routes, and what the app's plugins
+ * and these options make of it (the page with `code`, browsers with
+ * `tickets` and a runtime that declares the `socket` transport:
+ * `createRuntime({ transports: [socket], admit: tickets.admit })`). The
+ * runtime's socket (`/oxian`: browsers, remote executors) goes to it.
  */
-export async function serve(options: ServeOptions): Promise<Listener> {
+export async function serve(options: ServeOptions): Promise<Server> {
   const { hostname, port, signal, ...web } = options;
-  const hypervisor: Hypervisor = web.runtime.hypervisor;
-  const routed = hostRouted(web.runtime, web.front ? { front: web.front } : {});
-  return await listen({
+  const { runtime } = web;
+  const routed = hostRouted(runtime, web.front ? { front: web.front } : {});
+  const listener = await listen({
     // Every request for the socket goes to the Hypervisor, so `webServer` never upgrades one;
     // a host a route takes (a preview's) has no socket of the app's, though.
     fetch: webServer({ ...web, upgrade: () => new Response(null, { status: 426 }) }),
-    hypervisor: (request) => routed(request) ? undefined : hypervisor,
+    hypervisor: (request) => routed(request) ? undefined : runtime.hypervisor,
     hostname,
     port,
     signal,
-  });
-}
-
-/**
- * Serves an app's routes alone (`routeHost`): its webhooks and sockets, and
- * `/health`. Its runtime's own socket (`/oxian`, when it declares one: remote
- * executors) goes to it, as `serve`'s does.
- */
-export async function serveRoutes(options: RoutesOptions): Promise<RouteListener> {
-  const { runtime, front, ...address } = options;
-  const routed = hostRouted(runtime, front ? { front } : {});
-  const listener = await listen({
-    ...address,
-    fetch: routeHost(runtime, front ? { front } : {}),
-    hypervisor: (request) => routed(request) ? undefined : runtime.hypervisor,
   });
   // Closing takes a while (the runtime's drain): asked again, it's the same close.
   let closed: Promise<void> | undefined;

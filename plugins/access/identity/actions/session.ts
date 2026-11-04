@@ -38,16 +38,18 @@ export const startSession = defineAction({
 
 export const endSession = defineAction({
   description: "Ends the session whose secret is shown",
+  // Unrecorded: its input is the secret.
+  record: false,
   input: {
     type: "object",
-    properties: { session: { type: "string" } },
-    required: ["session"],
+    properties: { secret: { type: "string" } },
+    required: ["secret"],
     additionalProperties: false,
   },
   allow: people,
   run: async (ctx, input) => {
     const ended = await ctx.as().db.collection("credential").deleteOne({
-      _id: await hash(input.session),
+      _id: await hash(input.secret),
       person: ctx.actor!.id,
       kind: "session",
     });

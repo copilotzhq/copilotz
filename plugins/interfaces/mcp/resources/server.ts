@@ -12,7 +12,7 @@
  *   MCP. No cookie is read: whoever calls is nobody but their
  *   conversation's contact.
  * - **Who calls.** With the app's `caller` settings, the caller's address,
- *   as its front says it (see shared/caller.ts); a request that came around
+ *   as its front says it (the runtime's `callerFrom`); a request that came around
  *   the front (without its secret) is refused (403).
  * - **At once.** Tool calls running at once: in the runtime (`mcp.atOnce`,
  *   4), on the line (`limits.atOnce`, 4), from one caller's address
@@ -45,8 +45,7 @@
  * versioning, tools), https://modelcontextprotocol.io/specification/2025-11-25,
  * https://developers.openai.com/apps-sdk/reference (ChatGPT's `_meta`).
  */
-import { linksOf, type Runtime } from "../../../../runtime/mod.ts";
-import { type Caller, callerFrom } from "../shared/caller.ts";
+import { type Caller, callerFrom, linksOf, type Runtime } from "../../../../runtime/mod.ts";
 import { atOnceOf, callerOf, type Line, lineOf, PATH } from "../shared/settings.ts";
 import { isBusy } from "./running.ts";
 import { called, listed, mirrored, offeredOf, type Said, usable } from "./tools.ts";

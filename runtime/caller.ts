@@ -1,7 +1,8 @@
 /**
- * Who's calling, as far as the network says (see `McpCaller` in
- * settings.ts): the caller's address, from the header the app's front sets,
- * believed only through the front.
+ * Who's calling, as far as the network says: the caller's address, from the
+ * header the app's front sets, believed only through the front. What a
+ * plugin that limits callers by address reads them with (MCP's lines, the
+ * contacts' web lines), each from its own settings (`CallerSettings`).
  *
  * - **With `front`** (the front's secret): a request without it came around
  *   the front, straight to the app: it's refused (`refused`).
@@ -16,15 +17,44 @@
  * - **Exempt ranges** (a shared proxy's: OpenAI's) apply only to an address
  *   read this way, never to one the caller claims.
  *
- * Nothing here is kept: limits count an HMAC of what's counted.
+ * Nothing here is kept: what limits count is the plugin's to keep.
  */
-import type { McpCaller } from "./settings.ts";
+
+/**
+ * Where a caller's address is, when the app's front says it: the header
+ * the front sets (`cf-connecting-ip`; `x-forwarded-for`, a list), and why
+ * it's believed. A header anyone may send is believed only from the front:
+ *
+ * - `front`: the front's secret, which it sends in `x-copilotz-front` (the
+ *   web host's own front header). A request without it came around the
+ *   front, straight to the app: it's refused.
+ * - `hops`: for a list the app's own proxies append to (`x-forwarded-for`:
+ *   Cloud Run's appends the address it saw), the entry that many from the
+ *   end. A list header needs it: its first entries are the caller's to say.
+ *
+ * Callers in `exempt` (CIDR ranges: a shared proxy such as OpenAI's, every
+ * ChatGPT user's calls behind a few addresses) aren't limited by address;
+ * the plugin's other limits still hold. An address that can't be read is
+ * counted with every other such call, as one caller. Without settings, no
+ * limit goes by address.
+ *
+ * **To verify on each deployment** (a wrong setting lets callers choose
+ * their address):
+ * - with a Cloudflare worker as the front (`front`): that it sets
+ *   `cf-connecting-ip` to the address Cloudflare saw, overwriting any the
+ *   caller sent, and that it sends its secret only to the app;
+ * - with `x-forwarded-for` (`hops`): how many proxies the app runs behind
+ *   that each append to it (Cloud Run's front end: 1; a load balancer
+ *   before it: 2). Too few hops counts a caller's own entry; too many, a
+ *   proxy's address, every caller's.
+ */
+export type CallerSettings = { header: string; front?: string; hops?: number; exempt?: string[] };
 
 /** The header the web host's front carries its secret in. */
 const FRONT = "x-copilotz-front";
 
 /** Headers that hold a list of addresses, each proxy appending its own: they need `hops`. */
-export const LISTS = ["x-forwarded-for"];
+const LISTS = ["x-forwarded-for"];
 
 /** Who calls: refused (around the front), or what to count them by and whether they're exempt. */
 export type Caller = "refused" | { counted: string; exempt: boolean };
@@ -42,7 +72,10 @@ const same = (a: string, b: string) => {
 };
 
 /** Who calls, by the app's `caller` settings; undefined without them (nothing goes by address). */
-export function callerFrom(request: Request, caller: McpCaller | undefined): Caller | undefined {
+export function callerFrom(
+  request: Request,
+  caller: CallerSettings | undefined,
+): Caller | undefined {
   if (!caller) return undefined;
   if (caller.front !== undefined) {
     const said = request.headers.get(FRONT);
@@ -109,7 +142,7 @@ function rangeOf(text: string) {
 }
 
 /** Whether `text` is a CIDR range. */
-export const rangeOk = (text: string): boolean => !!rangeOf(text);
+const rangeOk = (text: string): boolean => !!rangeOf(text);
 
 /** Whether an address is in any of the ranges. */
 function inRanges(at: Bits, ranges: string[] = []): boolean {
@@ -119,4 +152,31 @@ function inRanges(at: Bits, ranges: string[] = []): boolean {
     const shift = BigInt(at.size - range.length);
     return (at.bits >> shift) === (range.bits >> shift);
   });
+}
+
+/** What's wrong with how a plugin reads who's calling, if anything (checked when the app starts). */
+export function callerProblem(caller: CallerSettings | undefined): string | undefined {
+  if (!caller) return undefined;
+  if (typeof caller.header !== "string" || !/^[a-z0-9-]{1,64}$/i.test(caller.header)) {
+    return "caller.header is a header's name (cf-connecting-ip, x-forwarded-for)";
+  }
+  if (caller.front === undefined && caller.hops === undefined) {
+    return "caller says why its header is believed: the front's secret (front), or hops";
+  }
+  if (
+    caller.front !== undefined && (typeof caller.front !== "string" || caller.front.length < 16)
+  ) {
+    return "caller.front is the front's secret (16 characters at least)";
+  }
+  if (caller.hops !== undefined && !(Number.isInteger(caller.hops) && caller.hops > 0)) {
+    return "caller.hops is a whole number over 0";
+  }
+  const header = caller.header.toLowerCase();
+  if (header === "forwarded") return "caller.header: Forwarded isn't read (use x-forwarded-for)";
+  if (LISTS.includes(header) && caller.hops === undefined) {
+    return `caller.header ${header} is a list whose first entries the caller writes: say its hops`;
+  }
+  const bad = (caller.exempt ?? []).find((range) => !rangeOk(range));
+  if (bad !== undefined) return `caller.exempt: "${bad}" isn't a CIDR range (192.0.2.0/24)`;
+  return undefined;
 }

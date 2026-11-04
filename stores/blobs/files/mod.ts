@@ -1,14 +1,16 @@
 /**
  * Blobs as files in a directory, sharded by the first two hex digits of the
- * hash. Uses `node:fs`, which Node, Deno and Bun all provide.
+ * hash. Uses `node:fs`, which Node, Deno and Bun all provide. An id is only
+ * ever a blob's (`sha256-` and hex), so a path never leaves the directory.
  */
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import type { Blobs } from "../../../runtime/mod.ts";
+import { checkBlobId } from "../../../runtime/blobs.ts";
 
 const missing = (error: unknown) => (error as { code?: string }).code === "ENOENT";
 
 export function fileBlobs(options: { dir: string }): Blobs {
-  const path = (id: string) => `${options.dir}/${id.slice(7, 9)}/${id}`;
+  const path = (id: string) => `${options.dir}/${id.slice(7, 9)}/${checkBlobId(id)}`;
   return {
     async put({ id, data }) {
       const file = path(id);

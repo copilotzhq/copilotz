@@ -10,6 +10,7 @@ import { isRead, type Op, type Outcome, RESULTS, type TimerOp } from "./ops.ts";
 import type { Scheduled, ScheduleOptions } from "./schedules.ts";
 import { compile, events, fingerprint, invalid, json, merge, unprivate } from "./registry.ts";
 import { renderer } from "./views.ts";
+import { refuseBlobKeys } from "./blobs.ts";
 import { querying as queryingOver, reading as readingOver } from "./reads.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import type { Actor, Doc, Edge, Event } from "./store.ts";
@@ -308,6 +309,8 @@ export function createExecutor(
     if (!action) throw invalid(`Unknown action "${name}"`);
     const normalized = json(input);
     inputs[name]?.(normalized);
+    // An Action's input may hold no `$blob` key (see blobs.ts), as the owner checks outside calls'.
+    refuseBlobKeys(normalized);
     if (action.record === false) {
       return await action.run(
         context(job, parent, undefined, given?.scheduled, parent, actor),
@@ -397,11 +400,15 @@ export function createExecutor(
 
     job.frame("action", { type: "started", id, action: name, attempt });
     let result: R;
+    let recorded: unknown;
     try {
       result = await action.run(
         context(reach, id, undefined, given?.scheduled, id, actor),
         normalized,
       ) as R;
+      // What it answers goes on record: one the owner would refuse fails the call, on record.
+      recorded = json(result) ?? null;
+      refuseBlobKeys(recorded);
     } catch (error) {
       await finish("action.failed", { action: name, error: failure(error), ms: elapsed(), attempt })
         .catch(() => {});
@@ -409,7 +416,7 @@ export function createExecutor(
     }
     // A result with private fields is logged without them, and kept whole apart
     // in the same commit, so a retry answers with all of it.
-    const whole = json(result) ?? null;
+    const whole = recorded;
     const logged = unprivate(whole, hidden);
     const apart = logged !== whole && JSON.stringify(logged) !== JSON.stringify(whole);
     await finish(

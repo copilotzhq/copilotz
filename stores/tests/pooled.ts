@@ -46,7 +46,7 @@ export async function pooled(url: string, tenant = "t"): Promise<PostgresStore> 
       await tx.link({ from: id, type: "owns", to: "c" });
       await tx.putVector({ collection: "item", doc: id, field: "embedding", embedding: [1, 0, 0] });
     }
-    await tx.putBlob({ id: "sha256-neighbor", data: new Uint8Array([1, 2, 3]) });
+    await tx.putBlob({ id: `sha256-${"e".repeat(64)}`, data: new Uint8Array([1, 2, 3]) });
     for (const type of ["a", "b", "kept", "never", "quoted", "things.created"]) {
       tx.emit({ type, data: { neighbor: true }, cause: "e1" });
     }

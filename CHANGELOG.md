@@ -50,9 +50,11 @@
     keeps each part by id, with its addition's `key` and `thread`).
   - **Taps:** a button's, a list row's, a carousel card's or a template's reply comes as its title
     with `tap: { id, title, key }` (`chat.send` takes `tap`; messages keep it), answering the
-    message it was on; agents read `Carla: PIX [tapped: pay:pix]`. Typing the title is just text.
-    A tap is a choice, not a permission: anyone can send any id, so a tool acting on one checks it
+    message it was on; agents read `Carla: PIX [tapped: pay:pix]`. Typing the title is just text. A
+    tap is a choice, not a permission: anyone can send any id, so a tool acting on one checks it
     against what was shown there. A quote or a tap answers only what went out in its own chat.
+  - What a message and its additions show is read as whom they go to, never with the reach of
+    whoever's work the answer was.
   - **"Typing…" while agents work:** each step an agent takes in a WhatsApp chat shows it again once
     WhatsApp may have hidden it (after 20 s, for up to five minutes); nothing says "please wait".
     Media other than public https links (a chat's files, signed links) comes next.

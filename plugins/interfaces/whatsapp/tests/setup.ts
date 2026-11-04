@@ -96,10 +96,16 @@ export const reads = definePlugin({
     // An agent's message in a chat, as trusted code writes one (with what it drew on, maybe).
     "test.said": defineAction({
       input: { type: "object" },
-      run: async (ctx, input: { thread: string; to: string; text: string; sources?: string[] }) => {
+      run: async (
+        ctx,
+        input: { thread: string; to: string; text: string; sources?: string[]; answer?: boolean },
+      ) => {
         const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: input.thread });
+        const turn = crypto.randomUUID();
         await ctx.db.collection("message").insertOne({
-          _id: crypto.randomUUID(),
+          // An answer, as a turn writes one, when it says so.
+          _id: input.answer ? `${turn}:reply` : turn,
+          ...(input.answer ? { turn } : {}),
           thread: input.thread,
           ...(thread?.in ? { in: thread.in } : {}),
           from: "lead",

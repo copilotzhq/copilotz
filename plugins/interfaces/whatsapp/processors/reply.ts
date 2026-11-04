@@ -21,7 +21,7 @@
  * addition shown, in chat's `shown` (`chat.shown`). It reads the
  * conversation's number as the system: its token is what sends.
  */
-import type { Context, ProcessorDef, Viewer } from "../../../../runtime/mod.ts";
+import type { Actor, Context, ProcessorDef, Viewer } from "../../../../runtime/mod.ts";
 import {
   type Addition,
   type AdditionEntry,
@@ -66,8 +66,9 @@ export const replyProcessor: ProcessorDef = {
     const on = await connected(ctx, chat.number);
     if (!on) return;
     const viewer: Viewer = { kind: chat.person ? "person" : "contact", name: to };
-    const own = (await ctx.render("whatsapp", "message", said, { viewer }) ?? []) as WaPart[];
-    const additions = isAnswer(said) ? await additionsAfter(ctx, said, viewer) : [];
+    const own = (await ctx.as(reader).render("whatsapp", "message", said, { viewer }) ??
+      []) as WaPart[];
+    const additions = isAnswer(said) ? await additionsAfter(ctx, said, viewer, reader) : [];
     const done = new Set(
       (await system.collection<WhatsAppSent>("whatsapp_sent").find({ message: said._id }))
         .map((s) => s._id),
@@ -104,13 +105,15 @@ export const replyProcessor: ProcessorDef = {
 
 /**
  * The additions that go after an answer, in order: each entry's View, here,
- * for the answer's agent; those already shown in this chat (by key) left out.
- * A View that fails is logged and left out.
+ * for the answer's agent, read as whom it goes to (`reader`: what they may
+ * see, never what whoever's work it was reaches); those already shown in
+ * this chat (by key) left out. A View that fails is logged and left out.
  */
 async function additionsAfter(
   ctx: Context,
   said: Message,
   viewer: Viewer,
+  reader: Actor,
 ): Promise<Addition<WaPart>[]> {
   const entries = Object.entries((ctx.resources.additions ?? {}) as Record<string, AdditionEntry>)
     .filter(([, entry]) => entry && (!entry.agents || entry.agents.includes(said.from)))
@@ -126,9 +129,10 @@ async function additionsAfter(
   for (const [name] of entries) {
     let made: unknown;
     try {
-      made = await ctx.render("whatsapp", `addition:${name}`, { thread, answer: said }, {
-        viewer,
-      });
+      made = await ctx.as(reader).render("whatsapp", `addition:${name}`, {
+        thread,
+        answer: said,
+      }, { viewer });
     } catch (error) {
       console.error(`whatsapp: addition "${name}" failed:`, (error as Error).message);
       continue;

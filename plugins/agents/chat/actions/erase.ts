@@ -1,11 +1,12 @@
 /**
  * `chat.erase`: a chat, gone with everything chat keeps of it (its messages,
- * files, waits, what's being written and the steps in flight, and the
+ * files, waits, what's being written, the steps in flight, and the
  * subthreads hanging from it), for erasing someone's personal data (LGPD,
  * GDPR). Other plugins erase what they keep of it on `thread.deleted` (the
- * history plugin, its summaries). The event log keeps what happened until
- * retention removes it. Trusted code only: it calls this once it decided
- * whose data goes (`contact.forget`).
+ * history plugin, its summaries). Ledgers (records: what was `shown` after
+ * its answers, what went out to WhatsApp) can't be changed, and the event
+ * log keeps what happened: both stay until retention removes them. Trusted
+ * code only: it calls this once it decided whose data goes (`contact.forget`).
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Message } from "../collections/message.ts";

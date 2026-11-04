@@ -79,6 +79,10 @@ export const newHandle = (): string =>
 const sha256 = async (value: unknown) =>
   hex(await crypto.subtle.digest("SHA-256", encoder.encode(JSON.stringify(value))));
 
+/** What a call asks in its conversation, whatever its request's id: the same call sent again. */
+export const sameCallOf = async (thread: string, tool: string, input: unknown): Promise<string> =>
+  `mcp:${thread}:${(await sha256([tool, input])).slice(0, 16)}`;
+
 /** A call's id: its conversation's chat, a hash of the request's id, and one of what it asks. */
 export async function callIdOf(
   thread: string,

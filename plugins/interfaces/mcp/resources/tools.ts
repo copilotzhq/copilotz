@@ -17,10 +17,16 @@
  *   sign-in (`securitySchemes`, also in `_meta` for clients that read only
  *   that).
  * - **`tools/call`** (`called`): which conversation the call is (see
- *   shared/keys.ts), its place among the conversation's calls at once, then
- *   `mcp.call` as that conversation's contact (with whom the user and the
- *   address are, as HMACs, for their limits), with the call's id: the owner
- *   joins a request sent again while the first runs, whoever sends it. A call that names no conversation gets a handle, said once, at the
+ *   shared/keys.ts). The same call (tool and input) already running in it,
+ *   sent again from anywhere under any request id, waits for that run.
+ *   Else it takes its places (the runtime's, the line's, the address's, the
+ *   conversation's), held until it's done, and runs `mcp.call` as the
+ *   conversation's contact (with who the user and the address are, as
+ *   HMACs, for their limits: in its input, which no log keeps). The route
+ *   waits the line's `timeout` (20 s) for its answer; past it, the model is
+ *   told it's still working, and to ask again: the call goes on, and asked
+ *   again it answers what it did (a tool that changes things does it once).
+ *   One still running past `stop` (120 s) is stopped. A call that names no conversation gets a handle, said once, at the
  *   end of its answer (`chat: <handle>`): a model reads only an answer's
  *   content (a result's `_meta` is the host's, never the model's), so
  *   that's where it must be. On a line without handles, it's refused.
@@ -36,12 +42,13 @@ import {
   HANDLE,
   type Key,
   newHandle,
+  sameCallOf,
   type Scope,
   userOf,
 } from "../shared/keys.ts";
 import { hintsOf, type Line } from "../shared/settings.ts";
 import type { Offering } from "../views/offered.ts";
-import { busy } from "./running.ts";
+import { busy, hold } from "./running.ts";
 
 type Resources = Record<string, Record<string, unknown>>;
 
@@ -219,7 +226,7 @@ export type Said = { session?: string; subject?: string };
  * JSON-RPC request's id.
  */
 export async function called(
-  runtime: Pick<Runtime, "call" | "describe">,
+  runtime: Pick<Runtime, "call" | "cancel" | "describe">,
   line: Line,
   scope: Scope & { secret: string },
   call: {
@@ -229,8 +236,8 @@ export async function called(
     said: Said;
     /** Who calls, as the app's front says (undefined without its `caller` settings). */
     caller?: Exclude<Caller, "refused">;
-    /** Takes the conversation's place among its calls at once. */
-    holdChat(thread: string): (() => void) | undefined;
+    /** Calls the runtime runs at once. */
+    atOnce: number;
   },
 ) {
   const { secret } = scope;
@@ -264,41 +271,120 @@ export async function called(
     by = "new";
   }
   const { contact, thread } = await conversationOf(secret, scope, key);
-  const id = await callIdOf(thread, call.request, call.tool, input);
+  const [id, same] = await Promise.all([
+    callIdOf(thread, call.request, call.tool, input),
+    sameCallOf(thread, call.tool, input),
+  ]);
   const user = call.said.subject ? await userOf(secret, scope, call.said.subject) : undefined;
   const address = call.caller && !call.caller.exempt
     ? await addressKey(secret, call.caller.counted)
     : undefined;
-  const release = call.holdChat(thread);
-  if (!release) throw busy();
-  let done: Called;
-  try {
-    // Who the user and the address are ride on the actor, not the input: a request sent again
-    // from elsewhere is the same call, and joins it.
-    done = await runtime.call<Called>(
+  // The same call already running in this conversation (sent again, from anywhere, under any
+  // request id), or one that was answered "still working" and has ended since: its answer, not
+  // a second run.
+  const tool = toolsOf(runtime.describe().resources)[call.tool];
+  const changes = hintsOf(line, call.tool, tool).readOnly !== true;
+  const pending = runningOf(runtime);
+  const owed = pending.get(same);
+  if (owed?.until !== undefined && Date.now() >= owed.until) pending.delete(same);
+  let entry = pending.get(same);
+  if (!entry) {
+    const release = hold(runtime, [
+      { key: "runtime", most: call.atOnce },
+      { key: `line:${line.name}`, most: line.limits.atOnce },
+      ...(call.caller && !call.caller.exempt
+        ? [{ key: `address:${line.name}|${call.caller.counted}`, most: line.limits.addressAtOnce }]
+        : []),
+      { key: `chat:${line.name}|${thread}`, most: line.limits.chatAtOnce },
+    ]);
+    if (!release) throw busy();
+    // Who the user and the address are go in the input: an unrecorded Action's input is never
+    // in the log, and a request sent again from elsewhere joins the run here, not the owner's.
+    const started = runtime.call<Called>(
       "mcp.call",
-      { line: line.name, tool: call.tool, input, call: id, by },
       {
-        actor: {
-          kind: "contact",
-          id: contact,
-          mcp: line.name,
-          client: line.client,
-          ...(user ? { user } : {}),
-          ...(address ? { address } : {}),
-        },
-        id,
+        line: line.name,
+        tool: call.tool,
+        input,
+        call: id,
+        by,
+        ...(user ? { user } : {}),
+        ...(address ? { address } : {}),
       },
+      { actor: { kind: "contact", id: contact, mcp: line.name, client: line.client }, id },
     );
-  } finally {
-    release();
+    // A call still running past `stop` is stopped: one that changes things runs again as itself
+    // when it's asked again (its receipt isn't done).
+    const stop = setTimeout(
+      () => void runtime.cancel({ call: id }).catch(() => {}),
+      line.limits.stop * 1000,
+    );
+    const mine: Run = {
+      settled: started.then((done) => ({ done }), (error) => ({ error })),
+    };
+    entry = mine;
+    pending.set(same, mine);
+    void mine.settled.then((outcome) => {
+      clearTimeout(stop);
+      release();
+      if (pending.get(same) !== mine) return;
+      // Owed: told "still working", a call that changes things answers what it did to the same
+      // call asked again, for a while. Anything else is done with.
+      if (mine.late && changes && !("error" in outcome)) mine.until = Date.now() + OWED_MS;
+      else pending.delete(same);
+    });
   }
+  const run = entry;
+  // Waited for `timeout`; then it goes on, and the model is told to ask again.
+  let waiting: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((resolve) => {
+    waiting = setTimeout(() => resolve("late"), line.limits.timeout * 1000);
+  });
+  const outcome = await Promise.race([run.settled, late]).finally(() => clearTimeout(waiting));
+  if (outcome === "late") {
+    run.late = true;
+    return answer(STILL, true);
+  }
+  if ("error" in outcome) {
+    // Stopped past `stop`: asked again, it runs again as itself.
+    if ((outcome.error as { code?: string }).code === "cancelled") return answer(STOPPED, true);
+    throw outcome.error;
+  }
+  const done = outcome.done;
   const text = done.text.length > line.limits.result
     ? `${done.text.slice(0, line.limits.result)}\n[…cut]`
     : done.text;
   // The handle, once: in the answer that made the conversation.
   return answer(made && done.ran ? `${text}\n\nchat: ${made}` : text, !!done.isError);
 }
+
+/** How a call that's still running ends, for whoever waits on it. */
+type Settled = { done: Called } | { error: unknown };
+
+/**
+ * A call running, or owed: how it ends; whether someone was told it's still working; and, once
+ * it's ended, until when the same call asked again gets its answer.
+ */
+type Run = { settled: Promise<Settled>; late?: true; until?: number };
+
+/** How long a call told "still working" owes its answer to the same call asked again. */
+const OWED_MS = 120_000;
+
+/** What the model is told of a call stopped past the line's `stop`. */
+const STOPPED = "It was stopped before it finished: ask again with the same request to run it " +
+  "again.";
+
+/** What the model is told of a call still running past the line's `timeout`. */
+const STILL = "Still working on it: the outcome isn't known yet. Ask again with the same request " +
+  "(the same tool and input) to get it.";
+
+/** Calls running now (and owed), by runtime, by conversation and what they ask (`sameCallOf`). */
+const runs = new WeakMap<object, Map<string, Run>>();
+const runningOf = (runtime: object) => {
+  const found = runs.get(runtime) ?? new Map<string, Run>();
+  runs.set(runtime, found);
+  return found;
+};
 
 const answer = (text: string, isError: boolean) => ({
   content: [{ type: "text", text }],

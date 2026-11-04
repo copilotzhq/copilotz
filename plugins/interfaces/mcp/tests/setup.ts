@@ -46,6 +46,10 @@ const ran = (name: string) => runs[name] = (runs[name] ?? 0) + 1;
 /** What `status` says. */
 export const state = { paid: false };
 
+/** What `charge` and `hang` did, by the callId each ran with. */
+export const charges: string[] = [];
+export const hangs: string[] = [];
+
 const silent: LlmAdapter = {
   async *generate() {
     yield { type: "text" as const, text: "ok" };
@@ -57,6 +61,8 @@ type Booking = { _id: string; thread: string; in: string; trip: string };
 
 /** Every tool but `raw` reads as its output to a model (a View the app chose). */
 const SHOWN = [
+  "charge",
+  "hang",
   "pick",
   "peek",
   "status",
@@ -232,6 +238,24 @@ export const app = definePlugin({
           return "Done, slowly.";
         },
       }),
+      charge: tool({
+        description: "Charges, slowly, ignoring its signal (a partner's API)",
+        run: async (_input, ctx) => {
+          await sleep(120);
+          charges.push(ctx.callId);
+          return `Charged once, with key ${ctx.callId}`;
+        },
+      }),
+      hang: tool({
+        description: "The first time, takes as long as it's told, ignoring its signal; says its " +
+          "callId and retry",
+        input: { type: "object", properties: { ms: { type: "number" } }, required: ["ms"] },
+        run: async (input, ctx) => {
+          await sleep(ctx.retry ? 0 : input.ms as number);
+          hangs.push(ctx.callId);
+          return JSON.stringify({ callId: ctx.callId, retry: ctx.retry });
+        },
+      }),
       staff: tool({
         description: "Staff only: every booking in the space",
         offer: (_agent, _thread, ctx) => principalOf(ctx.actor)?.kind !== "contact",
@@ -272,6 +296,8 @@ export const LINE: McpLine = {
     coded: {},
     driver: {},
     slow: {},
+    charge: {},
+    hang: {},
     staff: {},
     raw: {},
   },
@@ -415,6 +441,8 @@ export async function setup(
 ) {
   for (const key of Object.keys(runs)) delete runs[key];
   state.paid = false;
+  charges.length = 0;
+  hangs.length = 0;
   const runtime = await createRuntime({
     store: memoryStore(),
     plugins: [

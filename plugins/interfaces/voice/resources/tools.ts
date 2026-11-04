@@ -11,6 +11,8 @@ export const endCall = tool({
   description: "Ends the phone call once the caller has what they need and you've said goodbye. " +
     "What you answer now is said first; then the call ends.",
   input: { type: "object", properties: {}, additionalProperties: false },
+  // It tells the model nothing: the words with it are the goodbye, said as they're written.
+  aside: true,
   // Where a call is going on, for whoever answers it.
   offer: (_agent, thread, ctx) =>
     !!ctx.db.collection<VoiceCall>("voice_call").findOne({ thread: thread._id, state: "live" })

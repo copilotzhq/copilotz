@@ -83,6 +83,11 @@ const page = definePlugin({
       test: (_: unknown, ctx: ViewContext) =>
         ctx.db.collection("live").aggregate([{ $group: { _id: null, n: { $count: {} } } }]).value,
     },
+    // Any read, as asked.
+    any: {
+      test: (asked: { c: string; f: Record<string, unknown> }, ctx: ViewContext) =>
+        ctx.db.collection(asked.c).find(asked.f).value,
+    },
   },
 });
 
@@ -263,6 +268,78 @@ test("an erased visitor's connections end, and it comes back as no one", async (
       assertEquals(runtime.stats().browsers, 0);
     } finally {
       await client.close().catch(() => {});
+    }
+  });
+});
+
+test("a visitor reads spaces and memberships naming its own: its memberships by its key, nothing else", async () => {
+  await setup(async (server, runtime) => {
+    const { ticket, actor } = await arrive(server);
+    const client = browser(server, ticket);
+    try {
+      await client.ready;
+      const { thread } = await client.call<{ thread: string }>("chat.send", { text: "hi" });
+      await runtime.idle();
+      const read = (c: string, f: Record<string, unknown>) =>
+        client.observe("test", "any", { c, f }).ready.then(failed);
+      // Its own memberships, by its key: where its chats are.
+      const mine = (await read("member", { member: `contact:${actor.id}` })) as unknown as {
+        value: { space: string }[];
+      };
+      assert(mine.value.some((m) => m.space === `thread:${thread}`));
+      // Anything else isn't watched (before: watched, and run again on every membership written).
+      for (
+        const [c, f] of [
+          ["member", {}],
+          ["member", { _id: { $ne: "x" } }],
+          ["member", { space: `thread:${thread}` }],
+          ["member", { member: { $in: [`contact:${actor.id}`] } }],
+          ["space", {}],
+          ["request", {}],
+          ["invitation", {}],
+        ] as const
+      ) {
+        await assertRejects(() => read(c, f), Error, "forbidden", `${c} ${JSON.stringify(f)}`);
+      }
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+test("a visitor's read names so much at most: 32 of its own, 2 KB said", async () => {
+  await setup(async (server, runtime) => {
+    const { ticket } = await arrive(server);
+    const client = browser(server, ticket);
+    try {
+      await client.ready;
+      const { thread } = await client.call<{ thread: string }>("chat.send", { text: "hi" });
+      await runtime.idle();
+      const read = (f: Record<string, unknown>) =>
+        client.observe("test", "any", { c: "live", f }).ready.then(failed);
+      await read({ thread: { $in: Array(32).fill(thread) } });
+      // Before: each watched, every change in the runtime matched against 20,000 names.
+      await assertRejects(
+        () => read({ thread: { $in: Array(33).fill(thread) } }),
+        Error,
+        "32 at most",
+      );
+      await assertRejects(
+        () => read({ thread: { $in: Array(20_000).fill(thread) } }),
+        Error,
+        "2048 bytes",
+      );
+      await assertRejects(
+        () =>
+          read({
+            $or: Array.from({ length: 20_000 }, (_, j) => ({ at: { $lt: `0-${j}` } })),
+            thread,
+          }),
+        Error,
+        "2048 bytes",
+      );
+    } finally {
+      await client.close();
     }
   });
 });

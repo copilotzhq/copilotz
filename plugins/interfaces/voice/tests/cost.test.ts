@@ -73,7 +73,7 @@ test("a call takes so many prompts: past them, a goodbye and the end", async () 
   }, { line: { limits: { turns: 2 } } });
 });
 
-test("an answer says so many characters at most: cut at a word, and stopped", async () => {
+test("an answer says so many characters at most: cut at a word", async () => {
   await setup(async (s) => {
     const call = await s.call();
     say(call, "long, please");
@@ -81,8 +81,6 @@ test("an answer says so many characters at most: cut at a word, and stopped", as
     const [said] = call.said();
     const whole = "Temos muitas viagens hoje, de manhã e à tarde. ".repeat(4);
     assert(said.length <= 60 && whole.startsWith(said) && said.endsWith(" "), `"${said}"`);
-    const [c] = await s.docs<VoiceCall>("voice_call");
-    await until(async () => (await s.messages(c.thread!)).some((m) => m.stopped), 5_000, "stop");
     await sleep(200);
     assertEquals(call.said().length, 1);
     // The call goes on.

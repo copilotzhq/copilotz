@@ -7,7 +7,13 @@
  * Another org's line isn't this one's, and the lobby lets no visitor in.
  */
 import { assert, assertEquals, assertMatch } from "@std/assert";
-import { type Actor, createRuntime, definePlugin, type Runtime } from "../../../runtime/mod.ts";
+import {
+  type Actor,
+  type BrowserLimits,
+  createRuntime,
+  definePlugin,
+  type Runtime,
+} from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../../plugins/models/mod.ts";
 import { chat } from "../../../plugins/agents/chat/mod.ts";
@@ -39,7 +45,10 @@ test("an org's web line: its page at the org's address, and visitors let in ther
     store: memoryStore(),
     plugins: [identity, directory, devSignIn],
   });
-  const runtimes = new Map<string, { runtime: Runtime; admit: (t: string) => Actor | undefined }>();
+  const runtimes = new Map<
+    string,
+    { runtime: Runtime; admit: (t: string) => Actor | undefined; browsers: BrowserLimits }
+  >();
   const host = orgsHost({
     directory: dir,
     open: async (org, given) => {
@@ -67,8 +76,9 @@ test("an org's web line: its page at the org's address, and visitors let in ther
         ],
         admit: given.admit,
         transports: given.transports,
+        browsers: given.browsers,
       });
-      runtimes.set(org.id, { runtime, admit: given.admit });
+      runtimes.set(org.id, { runtime, admit: given.admit, browsers: given.browsers });
       return runtime;
     },
     upgrade: () => new Response(null, { status: 299 }),
@@ -91,6 +101,10 @@ test("an org's web line: its page at the org's address, and visitors let in ther
     };
     const ana = await orgOf("ana");
     const bob = await orgOf("bob");
+    // Every org's contacts' connections are counted together: one listener holds them all.
+    await host.serve(asked(`/o/${bob}/`)).then((r) => r.body?.cancel());
+    const pools = [ana, bob].map((org) => runtimes.get(org)?.browsers.pool);
+    assert(pools[0] && pools[0] === pools[1]);
 
     // The org's page, at its address: it says where the app is, so the page connects there.
     const page = await (await host.serve(asked(`/o/${ana}/`))).text();

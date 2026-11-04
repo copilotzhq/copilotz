@@ -83,6 +83,12 @@ export type Context = {
    * Ends an actor's browsers, when who they were ends (signed out, erased):
    * each connection closes, and comes back only with a new ticket. How many
    * it ended.
+   *
+   * Like `cancel`, it checks nothing of who asks: plugins are trusted code,
+   * and it's theirs to call only once who the actor was has ended (a sign-out,
+   * an erasure the rules allowed). It reaches only this runtime's browsers:
+   * with the orgs host, each org's runtime has its own owner, so one org's
+   * code never ends another org's browsers.
    */
   disconnect(actor: Actor): Promise<number>;
   /** Renders `item` through the View registered for its kind and the renderer (see Views). */

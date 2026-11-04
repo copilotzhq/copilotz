@@ -13,12 +13,39 @@
  * A change made beside the collections (maintenance SQL) can't be followed:
  * the owner then forgets everything (`clear`).
  */
-import { compareBy, get, matches } from "./mongo.ts";
+import { compareBy, get, matches, namedBy, valuesAt } from "./mongo.ts";
 import { canonical } from "./registry.ts";
 import type { Change, Doc, Filter, FindOptions } from "./store.ts";
 
-type Find = { collection: string; filter: Filter; options: FindOptions; docs: Doc[] };
-type Count = { collection: string; filter: Filter; count: number };
+/** What a query names (`namedBy`): only a change to a document with one of those concerns it. */
+type Named = { field: string; values: Set<string> } | undefined;
+type Find = {
+  collection: string;
+  filter: Filter;
+  options: FindOptions;
+  docs: Doc[];
+  named: Named;
+};
+type Count = { collection: string; filter: Filter; count: number; named: Named };
+
+const nameOf = (filter: Filter): Named => {
+  const by = namedBy(filter);
+  return by && { field: by.field, values: new Set(by.values) };
+};
+
+/**
+ * The changes that could concern a query: to a document that has what it
+ * names, before or after (one it matched, or matches now, has it). Every
+ * other leaves its result as it is, so it isn't matched against them.
+ */
+const concerning = (named: Named, changes: Change[]) =>
+  named
+    ? changes.filter(({ before, after }) =>
+      [before, after].some((doc) =>
+        doc && valuesAt(doc, named.field).some((v) => named.values.has(v))
+      )
+    )
+    : changes;
 
 export type Cache = ReturnType<typeof createCache>;
 
@@ -122,7 +149,13 @@ export function createCache(
         remember(collection, null, id);
       }
       if (!options.skip && supported(filter)) {
-        touch(finds, key, { collection, filter, options, docs: [...docs] }, maxQueries);
+        touch(finds, key, {
+          collection,
+          filter,
+          options,
+          docs: [...docs],
+          named: nameOf(filter),
+        }, maxQueries);
       }
       return docs;
     },
@@ -141,7 +174,7 @@ export function createCache(
       const before = generation(collection);
       const count = await load();
       if (generation(collection) === before && supported(filter)) {
-        touch(counts, key, { collection, filter, count }, maxQueries);
+        touch(counts, key, { collection, filter, count, named: nameOf(filter) }, maxQueries);
       }
       return count;
     },
@@ -174,11 +207,12 @@ export function createCache(
       }
       for (const change of changes) remember(collection, change.after, change._id);
       for (const [key, query] of finds) {
-        if (query.collection === collection && !update(query, changes)) finds.delete(key);
+        if (query.collection !== collection) continue;
+        if (!update(query, concerning(query.named, changes))) finds.delete(key);
       }
       for (const query of counts.values()) {
         if (query.collection !== collection) continue;
-        for (const { before, after } of changes) {
+        for (const { before, after } of concerning(query.named, changes)) {
           query.count += Number(Boolean(after && matches(after, query.filter))) -
             Number(Boolean(before && matches(before, query.filter)));
         }

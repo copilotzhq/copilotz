@@ -476,7 +476,8 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
   /**
    * `POST /signout`: what each entrance's cookie is ends, the browsers
    * connected as them go (`runtime.disconnect`: one comes back only with a
-   * cookie that's still someone), and every cookie goes, those under a name
+   * cookie that's still someone), so do tickets handed out to them not yet
+   * used (`tickets.end`), and every cookie goes, those under a name
    * from before it was the host's alone too (`retireAll`).
    */
   const signOut = async (request: Request): Promise<Response> => {
@@ -491,7 +492,10 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
       if (actor && entrance.end) {
         await runtime.call(entrance.end, { secret }, { actor }).catch(() => {});
       }
-      if (actor) runtime.disconnect(actor);
+      if (actor) {
+        runtime.disconnect(actor);
+        options.tickets?.end?.(actor);
+      }
       cookies.push(setCookie(site, "", 0, name, entrance.sameSite));
     }
     cookies.push(...await retireAll(runtime, whom, request));

@@ -63,8 +63,8 @@
  * its tenant), its plugins with the host's `here` (the org's name, and how
  * it reaches the directory), and `admit` for its browsers.
  */
-import type { Actor, Plugins, Runtime, Transport } from "../../runtime/mod.ts";
-import { definePlugin } from "../../runtime/mod.ts";
+import type { Actor, BrowserLimits, Plugins, Runtime, Transport } from "../../runtime/mod.ts";
+import { contactsPool, definePlugin } from "../../runtime/mod.ts";
 import { createTickets, type Tickets } from "../web/tickets.ts";
 import { carry } from "../web/address.ts";
 import { type Code, socket, webServer, type WebServerOptions } from "../web/server.ts";
@@ -110,8 +110,9 @@ export type OrgsHostOptions =
     directory: Runtime;
     /**
      * Opens an org: the app's runtime for it, with these plugins too, this
-     * `admit`, and these `transports` (its socket, at `/oxian` and at its
-     * address, `/o/<org>/oxian`).
+     * `admit`, these `transports` (its socket, at `/oxian` and at its
+     * address, `/o/<org>/oxian`), and these `browsers` limits (contacts'
+     * connections counted with every org's: they share one listener).
      */
     open(
       org: OrgInfo,
@@ -119,6 +120,7 @@ export type OrgsHostOptions =
         plugins: Plugins;
         admit: (ticket: string) => Actor | undefined;
         transports: Transport[];
+        browsers: BrowserLimits;
       },
     ): Promise<Runtime>;
     /** The socket upgrade for an org's runtime (its transport for browsers). */
@@ -234,6 +236,8 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
   const signIns = signInsOf(directory, entrancesOf(directory));
   const idleMs = options.idleMs ?? 30 * 60_000;
   const cells = new Map<string, Promise<Cell>>();
+  /** Every org's contacts' connections, counted together: they share the listener with people. */
+  const pool = contactsPool();
   /** The cells open now, for what must find one at once (a socket upgrade on Node). */
   const live = new Map<string, Cell>();
 
@@ -327,6 +331,7 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
           plugins: [here(org)],
           admit: tickets.admit,
           transports: [socket, { type: "websocket", config: { path: socketOf(org.id) } }],
+          browsers: { pool },
         });
         const serve = webServer({
           runtime,
@@ -481,6 +486,7 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
         if (!actor) return;
         await runtime.call("session.end", { secret }, { actor }).catch(() => {});
         runtime.disconnect(actor);
+        cell.tickets.end?.(actor);
       }).map((ended) => ended.catch(() => {})),
     );
     return held.map(({ name }) => setCookie(site, "", 0, name));
@@ -809,6 +815,7 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
           if (who) {
             for (const cell of live.values()) {
               cell.runtime.disconnect({ kind: "person", id: who.person });
+              cell.tickets.end?.({ kind: "person", id: who.person });
             }
           }
           return json({}, { cookies });

@@ -205,6 +205,46 @@ export function check(filter: Filter): void {
   }
 }
 
+/**
+ * The strings a condition equals (a string, `$eq`, `$in` of strings): a
+ * document it matches has one of them in that field, or in an array there.
+ */
+const equalTo = (condition: unknown): string[] | undefined => {
+  if (typeof condition === "string") return [condition];
+  if (!condition || typeof condition !== "object" || Array.isArray(condition)) return undefined;
+  if (Object.keys(condition).length !== 1) return undefined;
+  const { $eq, $in } = condition as { $eq?: unknown; $in?: unknown };
+  if (typeof $eq === "string") return [$eq];
+  return Array.isArray($in) && $in.every((v) => typeof v === "string") ? $in : undefined;
+};
+
+/** The most values a filter is known by (`namedBy`): a longer `$in` names nothing. */
+const NAMED_MOST = 256;
+
+/**
+ * What a filter names, if anything: a field of its own (top-level) it
+ * matches by equality to some strings (a chat's `thread`, an `_id`), the
+ * fewest. A document it matches has one of them there (`valuesAt`), so a
+ * change to any other can't concern it.
+ */
+export function namedBy(filter: Filter): { field: string; values: string[] } | undefined {
+  let best: { field: string; values: string[] } | undefined;
+  for (const [field, condition] of Object.entries(filter)) {
+    if (field.startsWith("$") || field.includes(".")) continue;
+    const values = equalTo(condition);
+    if (!values || values.length > NAMED_MOST) continue;
+    if (!best || values.length < best.values.length) best = { field, values };
+  }
+  return best;
+}
+
+/** The strings a document has in a field of its own: its value, or those of an array there. */
+export function valuesAt(doc: unknown, field: string): string[] {
+  const value = (doc as Record<string, unknown>)[field];
+  if (typeof value === "string") return [value];
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
 export function matches(doc: unknown, filter: Filter = {}): boolean {
   return Object.entries(filter).every(([key, condition]) => {
     if (key === "$and") return (condition as Filter[]).every((f) => matches(doc, f));

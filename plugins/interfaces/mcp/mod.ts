@@ -19,8 +19,10 @@
  *   that names none is given a handle (`chat`, which the line's tools then
  *   take), said once at the end of its first answer (`chat: <handle>`), or,
  *   with `handles: false`, is refused. Ids come from these through an HMAC
- *   with the app's secret (the `links` resource's): nothing maps them, and a
- *   stranger can't work out another's. Erased (`contact.forget`,
+ *   with the MCP key of the app's secret (the `links` resource's, `keyOf`):
+ *   nothing maps them, and a stranger can't work out another's. With the
+ *   secret before it (`links.previous`), a conversation made under that one
+ *   goes on as itself (`mcp.conversation` says which). Erased (`contact.forget`,
  *   `chat.erase`), a conversation is over for good (see processors/).
  * - **A call** (see actions/call.ts) runs the tool through chat's runner,
  *   as the conversation's contact, and is written in the chat as a step,
@@ -80,6 +82,7 @@
  */
 import { definePlugin, linksOf, type Plugin } from "../../../runtime/mod.ts";
 import { callAction } from "./actions/call.ts";
+import { conversationAction } from "./actions/conversation.ts";
 import { pruneAction } from "./actions/prune.ts";
 import { closed } from "./collections/closed.ts";
 import { opening } from "./collections/opening.ts";
@@ -101,7 +104,11 @@ export const mcp: Plugin = definePlugin({
     mcp_closed: closed,
     mcp_opening: opening,
   },
-  actions: { "mcp.call": callAction, "mcp.prune": pruneAction },
+  actions: {
+    "mcp.call": callAction,
+    "mcp.conversation": conversationAction,
+    "mcp.prune": pruneAction,
+  },
   processors: { "mcp.forgotten": forgottenProcessor, "mcp.erased": erasedProcessor },
   // What's past goes: counters, receipts, openings.
   schedules: { "mcp.prune": { every: "10m", call: "mcp.prune", input: {} } },

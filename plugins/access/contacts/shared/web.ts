@@ -140,6 +140,9 @@ const MOST_FILES: Required<WebFiles> = { count: 10, bytes: 10_000_000 };
 /** How long a visitor stays the same one, unless the line says: 30 days. */
 export const DAYS = 30;
 
+/** The longest a line may keep a visitor the same one, as long as browsers keep a cookie. */
+export const MOST_DAYS = 400;
+
 /** A line as the plugin uses it: its settings, its name, and every default filled in. */
 export type Line = Omit<WebLine, "limits" | "days" | "files"> & {
   name: string;
@@ -210,9 +213,10 @@ export function problemOf(name: string, line: WebLine, resources: Resources): st
     return "its title is some text";
   }
   if (
-    line.days !== undefined && !(typeof line.days === "number" && line.days > 0 && line.days <= 400)
+    line.days !== undefined &&
+    !(typeof line.days === "number" && line.days > 0 && line.days <= MOST_DAYS)
   ) {
-    return "its days are a number over 0, 400 at most (as long as browsers keep a cookie)";
+    return `its days are a number over 0, ${MOST_DAYS} at most (as long as browsers keep a cookie)`;
   }
   for (const [key, value] of Object.entries(line.limits ?? {})) {
     if (!(key in LIMITS)) return `limits.${key} isn't a limit`;

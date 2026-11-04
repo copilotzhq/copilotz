@@ -17,7 +17,7 @@
  * and the live text it replaces never show both, or neither). One that takes
  * too long (`WAVE_MS`) doesn't hold the others back.
  */
-import { matches } from "./mongo.ts";
+import { matches, namedBy, valuesAt } from "./mongo.ts";
 import { invalid } from "./registry.ts";
 import type { ReadContext, ViewContext, Viewer, Views } from "./define.ts";
 import type { Op } from "./ops.ts";
@@ -184,6 +184,41 @@ export function createObservers(env: {
 }): Observers {
   /** Parts by the collections they read. */
   const readers = new Map<string, Set<Part>>();
+  /** Of those, parts with a read of the collection that names nothing (`namedBy`). */
+  const wide = new Map<string, Set<Part>>();
+  /** Parts with a read that names values of a field: by collection, field and value. */
+  const named = new Map<string, Map<string, Map<string, Set<Part>>>>();
+  /** Files (or takes out) a part under what one of its reads names, or with the wide ones. */
+  const file = (p: Part, dep: Dep, add: boolean) => {
+    const by = dep.filter && namedBy(dep.filter);
+    if (!by) {
+      if (add) {
+        if (!wide.has(dep.collection)) wide.set(dep.collection, new Set());
+        wide.get(dep.collection)!.add(p);
+      } else {
+        wide.get(dep.collection)?.delete(p);
+        if (wide.get(dep.collection)?.size === 0) wide.delete(dep.collection);
+      }
+      return;
+    }
+    if (add && !named.has(dep.collection)) named.set(dep.collection, new Map());
+    const fields = named.get(dep.collection);
+    if (!fields) return;
+    if (add && !fields.has(by.field)) fields.set(by.field, new Map());
+    const values = fields.get(by.field);
+    if (!values) return;
+    for (const value of by.values) {
+      if (add) {
+        if (!values.has(value)) values.set(value, new Set());
+        values.get(value)!.add(p);
+      } else {
+        values.get(value)?.delete(p);
+        if (values.get(value)?.size === 0) values.delete(value);
+      }
+    }
+    if (!values.size) fields.delete(by.field);
+    if (!fields.size) named.delete(dep.collection);
+  };
   // Runs in flight, for `idle`.
   let running = 0;
   let settled = Promise.withResolvers<void>();
@@ -376,11 +411,15 @@ export function createObservers(env: {
 
   const depend = (p: Part, deps: Dep[]) => {
     const before = p.deps;
-    for (const { collection } of before) readers.get(collection)?.delete(p);
+    for (const dep of before) {
+      readers.get(dep.collection)?.delete(p);
+      file(p, dep, false);
+    }
     p.deps = deps;
-    for (const { collection } of deps) {
-      if (!readers.has(collection)) readers.set(collection, new Set());
-      readers.get(collection)!.add(p);
+    for (const dep of deps) {
+      if (!readers.has(dep.collection)) readers.set(dep.collection, new Set());
+      readers.get(dep.collection)!.add(p);
+      file(p, dep, true);
     }
     // What nothing reads now.
     for (const { collection } of before) {
@@ -502,9 +541,27 @@ export function createObservers(env: {
     changed(seen) {
       const due = new Set<Part>();
       for (const [collection, changes] of seen) {
-        for (const p of readers.get(collection) ?? []) {
+        // Only parts a change could concern are matched against it: those whose reads name
+        // nothing, and those naming what a changed document has (before or after).
+        const looked = new Set<Part>();
+        const look = (p: Part) => {
+          if (looked.has(p)) return;
+          looked.add(p);
           if (p.deps.some((dep) => dep.collection === collection && touches(dep, changes))) {
             due.add(p);
+          }
+        };
+        for (const p of wide.get(collection) ?? []) look(p);
+        const fields = named.get(collection);
+        if (!fields) continue;
+        for (const { before, after } of changes) {
+          for (const doc of [before, after]) {
+            if (!doc) continue;
+            for (const [field, values] of fields) {
+              for (const value of valuesAt(doc, field)) {
+                for (const p of values.get(value) ?? []) look(p);
+              }
+            }
           }
         }
       }

@@ -39,7 +39,7 @@ import type { Called } from "../actions/call.ts";
 import {
   addressKey,
   callIdOf,
-  conversationOf,
+  conversationsOf,
   HANDLE,
   type Key,
   newHandle,
@@ -222,6 +222,22 @@ export function mirrored(line: Line, name: string, resources: Resources) {
 export type Said = { session?: string; subject?: string };
 
 /**
+ * The conversation a key names: its contact and chat under the app's own
+ * secret, or under the one before it (`links.previous`) when that's the one
+ * there (made before the secret changed): the owner says which.
+ */
+async function conversationHere(
+  runtime: Pick<Runtime, "call">,
+  scope: Scope & { secrets: string[] },
+  key: Key,
+): Promise<{ contact: string; thread: string }> {
+  const each = await conversationsOf(scope.secrets, scope, key);
+  if (each.length === 1) return each[0];
+  const at = await runtime.call<number>("mcp.conversation", { conversations: each });
+  return each[at] ?? each[0];
+}
+
+/**
  * Runs a call (`tools/call`) on the line, for its conversation, and answers
  * as MCP does: the text, and `isError` when it didn't work. `request` is the
  * JSON-RPC request's id.
@@ -229,7 +245,8 @@ export type Said = { session?: string; subject?: string };
 export async function called(
   runtime: Pick<Runtime, "call" | "cancel" | "describe">,
   line: Line,
-  scope: Scope & { secret: string },
+  /** The line's scope, and the app's secrets (`secretsOf`: its own first). */
+  scope: Scope & { secrets: string[] },
   call: {
     tool: string;
     input: Record<string, unknown>;
@@ -241,7 +258,7 @@ export async function called(
     atOnce: number;
   },
 ) {
-  const { secret } = scope;
+  const [secret] = scope.secrets;
   const input = { ...call.input };
   const given = input.chat;
   if (line.handles) delete input.chat;
@@ -271,7 +288,7 @@ export async function called(
     key = { handle: made };
     by = "new";
   }
-  const { contact, thread } = await conversationOf(secret, scope, key);
+  const { contact, thread } = await conversationHere(runtime, scope, key);
   const [id, same] = await Promise.all([
     callIdOf(thread, call.request, call.tool, input),
     sameCallOf(thread, call.tool, input),
@@ -307,6 +324,7 @@ export async function called(
         tool: call.tool,
         input,
         call: id,
+        thread,
         by,
         ...(user ? { user } : {}),
         ...(counted ? { address: counted } : {}),

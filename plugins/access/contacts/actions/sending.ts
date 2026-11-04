@@ -18,8 +18,10 @@
  *   line's: messages at once can't pass a limit, and one its own limits
  *   refuse takes nothing of its networks' or the line's.
  * - **Its line's budget:** what its visitors' turns were charged today
- *   (`contact.spent`, as the usage plugin prices them); past it, it waits
- *   for tomorrow.
+ *   (`contact.spent`, as the usage plugin prices them), and what's held for
+ *   messages let in not yet charged: each holds an estimate as it goes in
+ *   (see shared/budget.ts). Past it, it waits for tomorrow; with no room
+ *   beside what's held, a moment.
  * - **What it may carry:** files only when the line takes them (`files`),
  *   as many and as large as it says, each saying what it is in a media type
  *   of 127 characters at most; audio goes untranscribed unless the line
@@ -39,6 +41,7 @@ import { defineAction, failure, scaleOf } from "../../../../runtime/mod.ts";
 import { MEDIA_TYPE, MEDIA_TYPE_LENGTH } from "../../../agents/chat/contract.ts";
 import type { Rate } from "../collections/rate.ts";
 import type { Visitor } from "../collections/visitor.ts";
+import { type Day, hold } from "../shared/budget.ts";
 import { chatOf } from "../shared/secret.ts";
 import { keyringOf, lineOf } from "../shared/web.ts";
 
@@ -163,9 +166,10 @@ export const sendingAction = defineAction({
     // one refused by its own limits takes nothing from its networks' or the line's.
     const found = new Map(
       (await rates.find({ _id: { $in: [...counters.map((c) => c._id), spent] } }))
-        .map((c) => [c._id, c]),
+        .map((c) => [c._id, c as Rate & Day]),
     );
-    if (line.budget !== undefined && (found.get(spent)?.spent ?? 0) >= line.budget) {
+    const today = found.get(spent);
+    if (line.budget !== undefined && (today?.closed || (today?.spent ?? 0) >= line.budget)) {
       throw failure("too_many", SAID.spent, { public: true });
     }
     const full = counters.find((c) => (found.get(c._id)?.count ?? 0) >= c.most);
@@ -182,6 +186,15 @@ export const sendingAction = defineAction({
         if ((error as { code?: string }).code !== "duplicate_key") throw error;
         throw failure("too_many", c.say, { public: true });
       }
+    }
+    // Its turn's cost, estimated, held against the line's budget until it's charged.
+    if (line.budget !== undefined) {
+      await hold(
+        system.db.collection<Rate & Day>("contact_rate"),
+        { name: line.name, budget: line.budget },
+        contact,
+        now,
+      );
     }
 
     const transcribe = line.transcribe ? {} : { transcribe: false as const };

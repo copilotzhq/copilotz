@@ -1,7 +1,8 @@
 /**
  * `contact.prune`: what's past goes. The web lines' counters whose window is
  * over, visitors' records past their time (an erased one's too, only then:
- * until its cookie's time is past, its record is what says it's no one),
+ * until no cookie made before its erasure could be good, whatever its
+ * line's days are now, its record is what says it's no one),
  * and a contact made for a first message that never went in: its record
  * says it hasn't spoken, ten minutes on, and its chat holds nothing it said.
  * That one goes with its chat and its access, as an erasure does. The

@@ -37,6 +37,7 @@ const host = orgsHost({
       executors: 2,
       transports: given.transports,
       admit: given.admit,
+      browsers: given.browsers,
     }),
   upgrade: () => new Response("Connect again", { status: 503 }),
   code: await bundle(new URL("./browser.tsx", import.meta.url)),

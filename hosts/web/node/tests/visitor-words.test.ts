@@ -82,15 +82,19 @@ const app = definePlugin({
       // The app's default: it works in every space people make too.
       guide: { instructions: "x", model: "script/main", tools: ["stock"], default: true },
       chatty: { instructions: "x", model: "script/chatty" },
+      // Its only tool is called beside an answer (hanging up): it only answers too.
+      polite: { instructions: "x", model: "script/chatty", tools: ["bye"] },
     },
     tools: {
       stock: tool({ description: "s", run: async () => (await pause(200), "INTERNAL 3 rooms") }),
+      bye: tool({ description: "b", aside: true, run: () => "ok" }),
     },
-    spaces: { visitors: { name: "Website", agents: ["guide", "chatty"] } },
+    spaces: { visitors: { name: "Website", agents: ["guide", "chatty", "polite"] } },
     web: {
       lines: {
         site: { in: "visitors", agent: "guide" },
         talk: { in: "visitors", agent: "chatty" },
+        bye: { in: "visitors", agent: "polite" },
       },
     },
     links: { origin: "http://127.0.0.1", secret: "the-app-secret-for-tests-0123456789" },
@@ -236,6 +240,22 @@ test("an agent with no tools only answers: a visitor sees its words as they're w
       const texts = shown.flat().map((d) => d.text);
       console.log(`what the visitor saw being written: ${JSON.stringify(texts)}`);
       assert(texts.some((t) => t.startsWith("Hello there")), "its words, as they came");
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+test("an agent whose only tools go beside an answer (aside) only answers too: its words as written", async () => {
+  await setup(async (server, runtime) => {
+    const client = await visitor(server, "bye");
+    try {
+      const { thread } = await client.call<{ thread: string }>("chat.send", { text: "hi" });
+      const shown = await watched(
+        () => client.observe<LiveDoc[]>("test", "live", thread),
+        answered(runtime, thread),
+      );
+      assert(shown.flat().some((d) => d.text.startsWith("Hello there")), "its words, as they came");
     } finally {
       await client.close();
     }

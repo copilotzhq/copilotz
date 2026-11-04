@@ -92,6 +92,21 @@ const binder = () => {
 
 const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
 
+/**
+ * A document (a jsonb expression) without the private fields at these dot
+ * paths, as the log keeps it. As in JavaScript, a path through an array
+ * reaches nothing (`#-` would take its keys for indexes).
+ */
+const unlogged = (doc: string, fields: string[], bind: Bind) => {
+  const path = (keys: string[]) =>
+    `ARRAY[${keys.map((k) => `${bind(k)}::text`).join(", ")}]::text[]`;
+  return fields.reduce((at, field) => {
+    const keys = field.split(".");
+    return `(${at} #- CASE WHEN jsonb_typeof(${doc} #> ${path(keys.slice(0, -1))}) = 'object' ` +
+      `THEN ${path(keys)} ELSE '{}'::text[] END)`;
+  }, doc);
+};
+
 /** A short hash, the same for the same text: names and fingerprints for what a store makes. */
 const hash = (text: string) => {
   let h = 2166136261;
@@ -898,7 +913,7 @@ export async function postgresStore(options: {
       const sources: string[] = [];
       const seeds: (Doc | undefined)[] = [];
       const inserted: [string, Doc][] = [];
-      for (const [n, { write: op, record, i }] of writes.entries()) {
+      for (const [n, { write: op, record, private: hidden = [], i }] of writes.entries()) {
         let changes = "";
         let seed: Doc | undefined;
         switch (op.op) {
@@ -1008,13 +1023,14 @@ export async function postgresStore(options: {
           `jsonb_object_keys(${of}) AS k(k) WHERE ${condition})`;
         const changed = keys("after", "before -> k IS DISTINCT FROM after -> k");
         const removed = keys("before", "NOT after ? k");
+        const [after, before] = [unlogged("after", hidden, bind), unlogged("before", hidden, bind)];
         sources.push(
           `SELECT ${i} AS grp, row_number() OVER (ORDER BY ord) AS ord, ` +
             `gen_random_uuid()::text AS id, ${bind(op.collection)}::text || CASE WHEN before ` +
             `IS NULL THEN '.created' WHEN after IS NULL THEN '.deleted' ELSE '.updated' END ` +
-            `AS type, CASE WHEN before IS NULL THEN jsonb_build_object('_id', id, 'doc', after) ` +
-            `WHEN after IS NULL THEN jsonb_build_object('_id', id, 'doc', before) ELSE ` +
-            `jsonb_build_object('_id', id, 'doc', after, 'changed', ${changed}, 'removed', ` +
+            `AS type, CASE WHEN before IS NULL THEN jsonb_build_object('_id', id, 'doc', ${after}) ` +
+            `WHEN after IS NULL THEN jsonb_build_object('_id', id, 'doc', ${before}) ELSE ` +
+            `jsonb_build_object('_id', id, 'doc', ${after}, 'changed', ${changed}, 'removed', ` +
             `${removed}) END AS data, ${bind(c.cause ?? null)}::text AS cause, ` +
             `${bind(c.actor ? JSON.stringify(c.actor) : null)}::jsonb AS actor FROM changes${n}`,
         );

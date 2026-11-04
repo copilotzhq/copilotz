@@ -1,3 +1,40 @@
+## 1.0.0-rc.20 — 2026-11-04
+
+- **A model thinking past two minutes isn't a dropped call.** A call counted as dropped once its
+  adapter yielded nothing for `silence` (2 minutes), and was retried or handed to the next model. A
+  reasoning model yields nothing while it thinks, though its provider's stream goes on (GPT-6 Luna
+  at xhigh on a hard problem: 108 s before its first word), so its thinking was thrown away past two
+  minutes while the page showed the agent thinking. Adapters now say a stream is alive (`thinking`
+  chunks, at most about once a second, for every provider); `generate` passes them on without
+  counting them as written, so a model that thinks and then truly stalls still hands over.
+  `complete` no longer reads a chunk it doesn't know as usage.
+- **`terminal`: a running command is seen again by its `commandId` alone.** rc.19 said so, but sent
+  the computer no input with it, and every look at a slow command answered "stdin is required". A
+  `commandId` beside a blank `command` is a look too; beside a real one, the refusal says how to
+  look, type into it or stop it.
+- **An agent's OK shows once its own turn is over.** With agents answering in parallel, the
+  computer's approval cards waited for every agent's turn to end, so one that asked and finished
+  waited on a card that didn't show. Chat's `conversation` Views get `busy` (the agents whose turns
+  run, each held 600 ms after its last step) beside `working`.
+- **People show by name on the web.** The browser loads only front ends, and the `names` resource
+  was declared only by the spaces plugin: everyone signed in with a sign-in id (`google:…`) showed
+  as "someone", in Members, a chat's people and messages, memories, computers and routines. The
+  spaces front end declares it too.
+- **People's pictures beside their names**, in a space's Members, a chat's "In this chat" and a
+  person's messages: a `profile.pictures` query (`{ ids }`), and `picturesIn` for Views.
+- **`openai-compatible` sends a model's thinking back.** `reasoning_content` (DeepSeek, Moonshot,
+  Qwen, vLLM) is kept as the answer's state and goes back with it, as Anthropic's, Gemini's and
+  OpenAI's already did; DeepSeek asks for it once tools are given.
+- **OpenAPI tools** (`openapi({ name, spec })`, in `copilotz/plugins/agents`): an API's operations
+  as recorded Actions (`<name>.<operationId>`, not called again when a turn is retried) and agent
+  tools (`<name>_<operationId>`); settings per deployment in `resources.openapi.<name>` (base URL,
+  headers, query, timeouts, size limits, file fields).
+- **History by age:** an agent's `history: { maxAge }` (ms) leaves older messages out of its prompt
+  (they stay in the chat), counted back from the newest message it sees, its start on a grid of a
+  tenth of `maxAge` so the prompt cache holds between steps.
+- **Blobs in Google Cloud Storage:** `gcsBlobs({ bucket, prefix? })` (`copilotz/blobs/gcs`), signed
+  in as the process's service account on Cloud Run or Compute Engine.
+
 ## 1.0.0-rc.19 — 2026-11-03
 
 - **`terminal` takes the command in `command`.** It took it in `stdin`, while `start_job` takes

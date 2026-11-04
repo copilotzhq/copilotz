@@ -20,9 +20,11 @@
  * 4. **A tool that changes things** keeps a receipt, by what it asks in the
  *    conversation (its tool and input, whatever the request's id), written
  *    before it runs (see collections/receipt.ts): asked again within two
- *    minutes of its answer, it's answered what it said; begun and never
- *    done (stopped, an owner restarted), it runs again as the same step. A
- *    read-only tool keeps none: it always runs.
+ *    minutes of its answer, it's answered what it said, saying it wasn't
+ *    done again; begun and never done (stopped, an owner restarted, failed
+ *    by accident: "try again"), it runs again as the same step. A public
+ *    refusal is an answer, and is said again. A read-only tool keeps none:
+ *    it always runs.
  * 5. **A new conversation** is made, as the system: its contact
  *    (`contact.start`, `via: "mcp"`) and its chat in the line's space,
  *    shared with it on its own (`contact.chat`).
@@ -57,8 +59,11 @@ import { sameCallOf, threadOf } from "../shared/keys.ts";
 import { hintsOf, type Line, lineOf } from "../shared/settings.ts";
 import type { Offering } from "../views/offered.ts";
 
-/** What a call answers: the text the model reads, whether it's an error, and whether it ran. */
-export type Called = { text: string; isError?: true; ran: boolean };
+/**
+ * What a call answers: the text the model reads, whether it's an error, whether it ran, and
+ * whether it's what an earlier, identical call answered (`again`), not done twice.
+ */
+export type Called = { text: string; isError?: true; ran: boolean; again?: true };
 
 /** What the model is told when a call can't go on. */
 const SAID = {
@@ -179,7 +184,7 @@ export const callAction = defineAction({
         await tx.db.collection("mcp_receipt").replaceOne({ _id: same }, { step, at: now }, UPSERT);
       }
     });
-    if (answered) return { ...await again(ctx, line, answered), ran: true };
+    if (answered) return { ...await again(ctx, line, answered), ran: true, again: true };
     if (fresh) await opened(ctx, line, contact, thread);
 
     const ran = await runTool(ctx, input.tool, input.input, {
@@ -208,7 +213,9 @@ export const callAction = defineAction({
         toolCalls: [call],
         at: new Date(cut?.at ?? now).toISOString(),
       }, UPSERT);
-      if (!readOnly) {
+      // Done, unless it failed by accident (not a refusal it meant: those are its answer): then
+      // the receipt stays begun, and the retry the model was told to make runs it again, as itself.
+      if (!readOnly && (ran.error === undefined || isPublic(ran.error))) {
         await tx.db.collection("mcp_receipt").replaceOne({ _id: same }, {
           step,
           at: Date.now(),

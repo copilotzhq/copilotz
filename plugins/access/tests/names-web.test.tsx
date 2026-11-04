@@ -7,7 +7,9 @@ import { assert, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ViewContext } from "../../../runtime/mod.ts";
+import { merge } from "../../../runtime/registry.ts";
 import type { Member, Reached } from "../spaces/contract.ts";
+import { spacesWeb } from "../spaces/web.tsx";
 import { membersView } from "../spaces/views/web/members.tsx";
 import { SpaceHeader } from "../spaces/views/web/header.tsx";
 import { test } from "../../../testing/mod.ts";
@@ -15,7 +17,10 @@ import { test } from "../../../testing/mod.ts";
 const ANA = "google:113900649446232449762";
 const BOB = "github:7";
 
-/** A View's context over fixed reads: queries by `<collection>.<query>`, finds by collection. */
+/**
+ * A View's context over fixed reads: queries by `<collection>.<query>`, finds
+ * by collection; its resources what a browser has, the front end's alone.
+ */
 const ctxOf = (reads: Record<string, unknown>): ViewContext<ReactNode> => ({
   db: {
     collection: (name: string) => ({
@@ -23,7 +28,7 @@ const ctxOf = (reads: Record<string, unknown>): ViewContext<ReactNode> => ({
       find: () => ({ status: "ready", value: (reads[name] ?? []) as never }),
     }),
   } as unknown as ViewContext<ReactNode>["db"],
-  resources: { names: { collection: "profile" } },
+  resources: merge([spacesWeb], { elsewhere: true }).resources,
   renderer: "web",
   kind: "test",
   viewer: { name: ANA },

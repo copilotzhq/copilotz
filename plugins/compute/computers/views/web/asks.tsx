@@ -9,10 +9,11 @@
  * is asked every time: only once, or not. A write shows what it will write
  * first (its `preview`: a new file's first lines, or an edit's change). What
  * it shows scrolls in a few lines of its own, however long (a command can
- * wrap into dozens), so the answers always show under it. The
- * cards wait for the agent's turn to be over (`working` false), so they
- * come once it has said why, gently; answered, one goes: `approval.pending`
- * is live. The agent shows as it's named (chat's `agentsShown`).
+ * wrap into dozens), so the answers always show under it. An agent's
+ * cards wait for its turn to be over (it's not among the `busy`), so they
+ * come once it has said why, gently, however long other agents work on;
+ * answered, one goes: `approval.pending` is live. The agent shows as it's
+ * named (chat's `agentsShown`).
  */
 import { type ReactNode, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -45,9 +46,10 @@ const ICONS: Record<string, IconName> = {
 export const asksView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
   const thread = typeof ctx.hints.thread === "string" ? ctx.hints.thread : undefined;
   const pending = ctx.db.collection("approval").query<Approval[]>("pending", {}).value ?? [];
-  const here = pending.filter((a) => a.thread === thread);
-  // While the agent is still writing, its explanation comes first.
-  if (!thread || !here.length || ctx.hints.working === true) return null;
+  // While an agent is still writing, its explanation comes first; another's work doesn't hold it.
+  const busy = Array.isArray(ctx.hints.busy) ? ctx.hints.busy as string[] : [];
+  const here = pending.filter((a) => a.thread === thread && !busy.includes(a.agent));
+  if (!thread || !here.length) return null;
   const agents = agentsShown(ctx, here.map((a) => a.agent));
   if (!agents) return null;
   return (

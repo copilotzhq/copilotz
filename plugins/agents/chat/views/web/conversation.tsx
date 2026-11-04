@@ -167,7 +167,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
       {over.length
         ? (
           <div className="chat-asks">
-            <Over entries={over} thread={t._id} space={thread.in} live={working.length > 0} />
+            <Over entries={over} thread={t._id} space={thread.in} live={working} />
           </div>
         )
         : null}

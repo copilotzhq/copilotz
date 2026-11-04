@@ -3,9 +3,10 @@
  * stores serve (S3, GCS, R2, MinIO), directly or through a signing proxy.
  * `headers` adds what a request needs (an Authorization, say), per request.
  * Content-addressed: an id that exists is the same content, so putting it
- * again is harmless.
+ * again is harmless. An id is only ever a blob's (`sha256-` and hex).
  */
 import type { Blobs } from "../../../runtime/mod.ts";
+import { checkBlobId } from "../../../runtime/blobs.ts";
 
 export function httpBlobs(options: {
   /** The bucket's base URL: blobs are `<url>/<id>`. */
@@ -15,7 +16,8 @@ export function httpBlobs(options: {
   fetch?: typeof fetch;
 }): Blobs {
   const go = options.fetch ?? fetch;
-  const at = (id: string) => `${options.url.replace(/\/$/, "")}/${encodeURIComponent(id)}`;
+  const at = (id: string) =>
+    `${options.url.replace(/\/$/, "")}/${encodeURIComponent(checkBlobId(id))}`;
   return {
     async put({ id, data, type }) {
       const response = await go(at(id), {

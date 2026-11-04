@@ -159,10 +159,15 @@ each(
 
 each("an erased chat's summaries go with it", async (make) => {
   const { runtime, say, thread } = await start(make);
-  for (let n = 0; n < 6; n++) await say(long(n));
-  assert((await runtime.query<Summary[]>("summary.of", { thread: thread() })).length > 0);
-  await runtime.call("chat.erase", { thread: thread() });
-  await runtime.idle();
-  assertEquals(await runtime.query<Summary[]>("summary.of", { thread: thread() }), []);
-  assertEquals(await runtime.query("message.history", { thread: thread() }), []);
+  // Closed even when it fails: an open runtime keeps Node's test file from ever exiting.
+  try {
+    for (let n = 0; n < 6; n++) await say(long(n));
+    assert((await runtime.query<Summary[]>("summary.of", { thread: thread() })).length > 0);
+    await runtime.call("chat.erase", { thread: thread() });
+    await runtime.idle();
+    assertEquals(await runtime.query<Summary[]>("summary.of", { thread: thread() }), []);
+    assertEquals(await runtime.query("message.history", { thread: thread() }), []);
+  } finally {
+    await runtime.close();
+  }
 });

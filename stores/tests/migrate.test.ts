@@ -15,6 +15,9 @@ const databases: Record<string, string> = {
   ...(POSTGRES ? { postgres: POSTGRES } : {}),
 };
 
+/** A blob's id, as the old layout keeps one. */
+const BLOB = `sha256-${"b".repeat(64)}`;
+
 /**
  * The old layout, as the store made it, with rows in it. `older` is the one
  * before that: events without their actor, vectors keyed by id alone.
@@ -40,7 +43,7 @@ const old = (s: string, older = false) => [
   `CREATE INDEX edges_to ON ${s}.edges ("to", type)`,
   `INSERT INTO ${s}.edges VALUES ('x', 'owns', 'y', '{"since": 1}')`,
   `CREATE TABLE ${s}.blobs (id text PRIMARY KEY, data bytea NOT NULL, type text)`,
-  `INSERT INTO ${s}.blobs VALUES ('sha256-b', '\\x010203', 'image/png')`,
+  `INSERT INTO ${s}.blobs VALUES ('${BLOB}', '\\x010203', 'image/png')`,
   ...(older ? [`CREATE TABLE ${s}.vectors (id text PRIMARY KEY, embedding jsonb NOT NULL)`] : [
     `CREATE TABLE ${s}.vectors (collection text NOT NULL, node text NOT NULL, field text NOT ` +
     `NULL, embedding vector NOT NULL, PRIMARY KEY (collection, node, field))`,
@@ -116,7 +119,7 @@ for (const [name, url] of Object.entries(databases)) {
         to: "y",
         data: { since: 1 },
       }]);
-      assertEquals(Array.from((await store.blob("sha256-b"))!.data), [1, 2, 3]);
+      assertEquals(Array.from((await store.blob(BLOB))!.data), [1, 2, 3]);
       assertEquals(
         (await store.nearest("things", "e", [1, 0])).map((d) => d._id),
         older ? [] : ["x"],
@@ -128,8 +131,9 @@ for (const [name, url] of Object.entries(databases)) {
       });
       assertEquals(events.map((e) => e.seq), [6]);
       assertEquals((await store.find("things")).map((d) => d._id), ["x", "y", "z"]);
-      const inspected = await store.inspect("SELECT _id, n FROM things");
-      assertEquals(inspected, [{ _id: "x", n: "1" }, { _id: "y", n: "2" }, { _id: "z", n: "3" }]);
+      // The collection's view shows them (the tenant "", a session that names none).
+      const viewed = (await pool.reads.query(`SELECT _id, n FROM "${schema}".things`)).rows;
+      assertEquals(viewed, [{ _id: "x", n: "1" }, { _id: "y", n: "2" }, { _id: "z", n: "3" }]);
 
       // Exactly a fresh schema's tables, keys, indexes and views.
       const fresh = schemaName();

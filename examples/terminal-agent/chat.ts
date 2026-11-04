@@ -28,7 +28,6 @@ import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
 import { serve } from "@oxian/oxian-js/adapters/deno";
 import { createMetrics, createRuntime, definePlugin, type Event } from "../../runtime/mod.ts";
 import { otlp, text } from "../../exporters/mod.ts";
-import { DatabaseSync } from "node:sqlite";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../stores/sql/postgres/mod.ts";
@@ -150,30 +149,17 @@ const debugging: Commands = {
     description: "A read-only SQL query on the store",
     usage: "<query>",
     async run(query, term) {
-      if (postgres) {
-        // A read-only transaction on the store's reading connection.
-        try {
-          const rows = await (backing as Awaited<ReturnType<typeof postgresStore>>).inspect(query);
-          await term.print(rows.length ? table(rows) : dim("(no rows)"));
-        } catch (error) {
-          await term.print(red(`✗ ${error instanceof Error ? error.message : error}`));
-        }
-        return;
-      }
-      if (!sqlite) {
+      if (!backing.inspect) {
         return await term.print(
           dim("/sql needs a SQL store: deno task chat --sqlite (or --postgres=URL)"),
         );
       }
-      // A separate read-only connection: it sees what has committed, like any SQLite client.
-      const client = new DatabaseSync(sqlite, { readOnly: true });
+      // One read-only statement, on what has committed.
       try {
-        const rows = client.prepare(query).all();
+        const rows = await backing.inspect(query, [], { limit: 200 });
         await term.print(rows.length ? table(rows) : dim("(no rows)"));
       } catch (error) {
         await term.print(red(`✗ ${error instanceof Error ? error.message : error}`));
-      } finally {
-        client.close();
       }
     },
   },

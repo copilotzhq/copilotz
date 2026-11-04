@@ -30,6 +30,10 @@ const bytes = (text: string) => new TextEncoder().encode(text);
 const text = (data: Uint8Array) => new TextDecoder().decode(data);
 const code = (error: unknown) => (error as { code?: string }).code;
 const TABLES = ["meta", "events", "nodes", "edges", "vectors", "blobs"];
+/** Blob ids: the same one in every tenant, one only tenant b has, one of every byte. */
+const SAME = `sha256-${"a".repeat(64)}`;
+const B_ONLY = `sha256-${"b".repeat(64)}`;
+const BYTES = `sha256-${"c".repeat(64)}`;
 
 /** One tenant's data, the same for every tenant but for `who`: the same ids everywhere. */
 async function fill(store: PgStore, who: string) {
@@ -42,7 +46,7 @@ async function fill(store: PgStore, who: string) {
       n: 3,
     }]);
     await tx.link({ from: "x", type: "owns", to: "y", data: { who } });
-    await tx.putBlob({ id: "sha256-same", data: bytes(who), type: "text/plain" });
+    await tx.putBlob({ id: SAME, data: bytes(who), type: "text/plain" });
     await tx.putVector({
       collection: "things",
       doc: "x",
@@ -108,7 +112,7 @@ for (const [name, url] of Object.entries(databases)) {
         to: "y",
         data: { who },
       }]);
-      assertEquals(text((await store.blob("sha256-same"))!.data), who);
+      assertEquals(text((await store.blob(SAME))!.data), who);
       assertEquals((await store.events(0)).map((e) => [e.seq, e.id === "e1", e.data.who]), [
         [1, true, who],
         [2, false, who],
@@ -147,7 +151,7 @@ for (const [name, url] of Object.entries(databases)) {
         // b's own e1 is already in its log: skipped, as a retry is.
         { emit: { id: "e1", type: "made", data: { who: "b again" } } },
       ],
-      blobs: [{ id: "sha256-b", data: bytes("b only") }],
+      blobs: [{ id: B_ONLY, data: bytes("b only") }],
     })!;
     assertEquals(events.map((e) => [e.seq, e.type]), [
       [3, "things.updated"],
@@ -178,7 +182,7 @@ for (const [name, url] of Object.entries(databases)) {
     assertEquals(await a.edges({}), [{ from: "x", type: "owns", to: "y", data: { who: "a" } }]);
     assertEquals((await a.nearest("things", "e", [1, 0])).map((d) => d._id), ["x"]);
     assertEquals(await b.nearest("things", "e", [1, 0]), []);
-    assertEquals(await a.blob("sha256-b"), null);
+    assertEquals(await a.blob(B_ONLY), null);
     assertEquals((await a.events(0)).map((e) => e.seq), [1, 2]);
     assertEquals(await a.positions(), { p: 5 });
     assertEquals(await b.positions(), { p: 7 });
@@ -285,8 +289,8 @@ for (const [name, url] of Object.entries(databases)) {
         assertEquals(await moved.find("things"), await org.find("things"));
         assertEquals(await moved.events(0), await org.events(0));
         assertEquals(await moved.positions(), { p: 1, q: 3 });
-        assertEquals(text((await moved.blob("sha256-same"))!.data), "org");
-        assertEquals((await moved.blob("sha256-same"))!.type, "text/plain");
+        assertEquals(text((await moved.blob(SAME))!.data), "org");
+        assertEquals((await moved.blob(SAME))!.type, "text/plain");
         assertEquals(await moved.edges({}), await org.edges({}));
         assertEquals((await moved.nearest("things", "e", [0, 1])).map((d) => d._score), [1]);
         // It carries on: its next event follows the copied ones, a new document sorts last.
@@ -353,7 +357,7 @@ for (const [name, url] of Object.entries(databases)) {
     const awkward = `tab\there, line\nbreak, back\\slash \\N, it's "quoted" $q$ é 😀\r end`;
     await org.transaction(epoch, async (tx) => {
       await tx.insert("things", [{ _id: `odd\t${awkward}`, text: awkward, nothing: null }]);
-      await tx.putBlob({ id: "sha256-bytes", data: Uint8Array.from({ length: 256 }, (_, i) => i) });
+      await tx.putBlob({ id: BYTES, data: Uint8Array.from({ length: 256 }, (_, i) => i) });
       tx.emit({ id: `e-${awkward}`, type: "odd", data: { awkward }, cause: awkward });
     });
     const script = await new Response(exportTenant({ pool, schema, tenant: "org" })).text();
@@ -385,7 +389,7 @@ for (const [name, url] of Object.entries(databases)) {
       assertEquals(await restored.events(0), await org.events(0));
       assertEquals(await restored.positions(), await org.positions());
       assertEquals(
-        Array.from((await restored.blob("sha256-bytes"))!.data),
+        Array.from((await restored.blob(BYTES))!.data),
         Array.from({ length: 256 }, (_, i) => i),
       );
       assertEquals((await restored.open()).epoch, epoch + 1);

@@ -11,7 +11,8 @@ the owner turns each call into an op).
   document holds a reference in their place, and the owner moves them out on write and back in on
   read. Optional: without one, the store keeps them itself. They sit in `blobs/` (`files`: a
   directory; `http`: a bucket over HTTP; `gcs`: a Google Cloud Storage bucket, see
-  [Blobs in GCS](#blobs-in-gcs)).
+  [Blobs in GCS](#blobs-in-gcs)). Every one of them, and every store's own blobs, takes only a
+  blob's id (`sha256-` and 64 hex digits, `checkBlobId`): never a path or another object's name.
 
 What the runtime sends out and never reads back (metrics) isn't kept here: that's `exporters/`.
 
@@ -27,7 +28,17 @@ dialect. Both keep five tables (`events`, `nodes` with documents as JSON, `edges
 `blobs`) plus `meta` for the fencing epoch, and show every collection as a SQL view
 (`SELECT * FROM message`). Read them with any client while the runtime runs
 (`sqlite3 -box
-.data/copilotz.sqlite`, `psql`), or with `/sql <query>` in the chat.
+.data/copilotz.sqlite`, `psql`), or with `/sql <query>` in the chat. Maintenance SQL
+runs one statement as it is, where it can reach nothing but this store's data: `inspect` reads (read
+only, always rolled back, up to a limit, its bytes and a timeout), and a maintenance transaction's
+`execute` writes (alone among the store's writes, fenced, refused if it changes `meta` or makes a
+trigger). On a PostgreSQL server only as a role of its own
+(`postgresStore({ maintenance: { url }
+})`), checked against an allowlist before each statement, on
+a connection of its own over the extended protocol, closed after; PGlite discards what it left on
+its one session; a SQLite read runs in a process of its own on a read-only connection, killed at its
+timeout, and a SQLite write is refused if it leaves a temporary object (the store names its tables
+in `main`). See the README's Maintenance.
 
 ## Tenants
 
@@ -58,7 +69,8 @@ only tenant (`""`), in the same tables.
 - **Views:** one per collection for the schema, showing the tenant a session names
   (`SET copilotz.tenant = 'org_1'`; else `""`, a schema's only tenant). Not a view per tenant: that
   grows the catalog with sign-ups, with DDL on every open. They're for reading: SQL can reach the
-  tables beside them, so `inspect` (`/sql` in the chat) runs only in a schema of its own.
+  tables beside them, so `inspect` and `execute` (`/sql` in the chat, the maintenance endpoints) run
+  only in a schema of its own, where their role reaches no other schema.
 - **The layout before tenants** (no `tenant` column) migrates in place when a store opens it, in one
   transaction under a lock: its rows become the tenant `""`, keys are rebuilt to lead with it, and
   nothing is renumbered.

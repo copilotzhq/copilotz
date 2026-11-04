@@ -52,6 +52,85 @@
     the number isn't proof of who they are (the `contact` context).
   - It needs a host that takes a route's socket (`host.upgrade()`: `serveRoutes`, or `serve`, from
     `copilotz/web/node`).
+
+- **Maintenance endpoints** (the new `maintenance` plugin, in `copilotz/plugins/interfaces`): HTTP
+  under `/maintenance/` for an app's operators when they can't reach its database. A key (`key`, or
+  several in `keys` to rotate one; 32 random characters at least, a weak one stops the app),
+  compared in constant time; without one, every request is unauthorized. Requests act as the
+  maintenance actor (`{ kind: "maintenance", by }`), whose Actions run as the system on the record,
+  and each writes a line (`log`) before it runs. An orgs host's orgs don't get it.
+  - `POST /maintenance/sql`: one read-only statement, with `params`, at most `limit` rows and
+    `bytes`, cut off after `timeout`.
+  - `POST /maintenance/collections/<collection>/<op>`: insertOne… deleteMany, find… aggregate,
+    through the owner's write path: schema-checked, recorded, cached, heard by Processors.
+  - `POST /maintenance/queries/<collection>.<name>`: a collection's named query, the body its
+    params, read as the system.
+  - `POST /maintenance/sql/write`: one statement that writes, run by the owner alone among its
+    writes, fenced by its epoch, with a `maintenance.sql` audit event in the same commit; then the
+    owner empties its read cache, runs observed Views again and re-reads its timers. A statement
+    that changes `meta` (the epoch, Processors' positions) is rolled back. An `Idempotency-Key`
+    makes it safe to send again.
+  - `GET /maintenance/blobs/<id>`: a blob's bytes, as a download.
+- **SQL on the store port, for maintenance only:**
+  `Store.inspect?(sql, params?, { limit, timeout })` (now SQLite's too), a transaction's
+  `execute?(sql, params?)` and `transaction(…, { maintenance })`. Both run exactly one statement: a
+  second, or one that ends the transaction or changes the connection (`COMMIT`, `SET`…), is refused
+  (PostgreSQL ran every statement of an unparameterized `inspect` before; PostgreSQL's line comments
+  end at a CR too). `runtime.maintenance` is the owner's way to them; plugin code has none. The
+  cache gains `clear()`, observers `stale()`.
+  - **PostgreSQL servers:** raw SQL runs only as a role of its own
+    (`postgresStore({ maintenance: { url, connections } })`), which must hold exactly maintenance's
+    grants: no attribute but LOGIN, membership in no role (but Cloud SQL's IAM marker, itself held
+    to the same), no settings of its own, nothing owned (a large object neither), nothing granted
+    outside the store's schema, `CREATE` nowhere, no large object, table or column of another's to
+    read, nothing on the store's tables beyond what it needs, no `SECURITY DEFINER` function to run,
+    no `dblink` or `postgres_fdw`, no trigger on the store's tables: checked before each statement
+    and again after a write, in its transaction, reading only `pg_catalog`'s names. `ALTER ROLE`,
+    `DO` and `LOCK` don't run; a password literal is kept as `PASSWORD '***'`. Each statement on a
+    connection of its own, over the extended protocol, closed after; at most 2 at once, else `busy`.
+    A read stops fetching before a row would pass its bytes. PGlite runs it as its one session, and
+    discards what it left there.
+  - **SQLite:** the store names its tables in `main`, so a temporary object can't stand in for them
+    (a write that leaves one, or a trigger, is rolled back); a read runs in a process of its own
+    (`deno`, `node` or `bun` itself, never a compiled app; an empty environment; on Deno and Node,
+    read access to the database's files alone), killed at its timeout. Else, on the reading
+    connection, a pragma only from those that only read, said once and on each answer
+    (`inline: true`).
+
+- **Security: a forged blob reference is refused, never loaded.** Large strings are kept as blobs
+  and documents hold `{ $blob, size, type }` in their place; the owner loaded any object with a
+  string `$blob` on every read. So an Action that stores what it's given (a tool's input, a
+  webhook's body) could plant one: an id no blob has made every read of that document fail (a chat
+  that can't be read or erased, Processors giving up on its events); another document's hash pulled
+  that content in; and a path or a name read a file (`fileBlobs`) or any object in the bucket
+  (`gcsBlobs` without a prefix).
+  - What plugin code writes (documents, updates, upserts' filters, edges, events, records, timers'
+    inputs, Action results) and what an Action is called with may hold no `$blob` key: `invalid`.
+    The owner checks it as it walks what it offloads, so it costs no extra pass.
+  - No part of an update's field path may start with `$` (as MongoDB refuses) or be `__proto__`
+    (`invalid`): `{ $set: { "bio.$blob": … } }` made a reference out of plain strings, and on Node
+    and Bun `{ $set: { "__proto__.x": … } }` set `x` on every object's prototype (Deno has no
+    `__proto__`). `constructor` and `prototype` are fields like any other: paths read and make a
+    document's own fields only, so a filter on `constructor` no longer finds `Object` in every
+    document.
+  - A path ends at a blob reference as it does at a string, so a large string is treated like a
+    small one (`$set: { "text.note": 1 }` replaced the reference's insides, losing the text), and at
+    any other object with a `$blob` key, so no update turns a planted one into a reference.
+  - An aggregate's `$group` can't name a field `$…` either: `_id: { $blob: …, size, type }` built a
+    reference from strings, which a browser's own read then loaded.
+  - The API's event stream sends a call's result whole; one over 16 KiB went as its reference.
+    Published events (`runtime.subscribe`) have `full()`: the event with its large values.
+  - Only an exact reference loads a blob: the keys `$blob`, `size` and `type`, a `sha256-<64 hex>`
+    id, a numeric size and a string type. Any other object is data.
+  - Every blob store (memory, SQLite, PostgreSQL, `fileBlobs`, `httpBlobs`, `gcsBlobs`) takes only a
+    blob's id (`checkBlobId`, exported for your own `Blobs`).
+  - Fixed on the way: a timer's input over 16 KiB reached its Action as a reference; it comes whole.
+    An occurrence of one that a deploy to this version cuts short fails once when it resumes
+    (`id_conflict`: it started with the reference as its input); the timer's next ones run.
+  - A store may already hold planted references: an exact one still loads (its blob gone, reads
+    fail), and any other, carried on, is now refused. #155 has read-only queries (PostgreSQL,
+    SQLite) that find them; clean every one, `sys.timers` first.
+
 - **Contacts: people outside the org who talk to its agents** (the new `contacts` plugin, part of
   `access`). A WhatsApp customer is a contact, its own kind of actor (`{ kind: "contact", id }`),
   never a person: every `allow: people` Action and query stays shut to it, and nothing that asks for
@@ -190,6 +269,30 @@
   never in an error's own words.
 - **Fixed:** `message.questions`, and the terminal's `shell.mine`, `shell.set` and `shell.print`,
   let anyone whose id matched in; they're a person's own now.
+
+- **Private fields for recorded Actions.** `private: ["buyer", "passengers"]` on an Action (dot
+  paths, as a collection's): its calls are recorded without them, in `action.started`'s input and
+  `action.completed`'s result alike, so the personal data a booking's buyer gives (names, CPFs,
+  emails) never lands in the log, while the calls are still recorded, retried and deduplicated.
+  - The call's `inputHash`, and so a nested call's id, still covers the whole input: a retry with
+    the same input answers from the log, and a changed one is a new call (under an outside call id,
+    `id_conflict`).
+  - A result that had private fields is kept whole in `sys.results` (a document by call id, written
+    in the completion's commit, no events), and `action.completed` says `private: true`: a retry
+    answers with all of it, as it would without them.
+
+- **A host without the web app: `serveRoutes`** (`copilotz/web/node`), for an app people use on
+  WhatsApp or on the phone. Given the runtime, it serves the app's routes alone (webhooks),
+  `/health` (unless a route takes it), and 404 for anything else: no page, no code, no sign-in; a
+  route's Action is called as a visitor. Its `close({ drain })` stops listening, letting running
+  requests finish, then closes the runtime with those options. A runtime that declares the `socket`
+  transport still takes its sockets at `/oxian`. `routeHost(runtime)` (`copilotz/web/server`) is the
+  same as a fetch handler. On Node, Deno and Bun (`examples/web-node/routes.ts`).
+- **A route can take a WebSocket** (a voice call's relay): a `serve` route calls `host.upgrade()`,
+  and answers with the response it gives; its `socket` is a browser's `WebSocket` as far as
+  `onmessage`, `send` and `close` go. It can refuse first, before any handshake. `serveRoutes` and
+  the web host's `serve` take it, through Oxian's adapter (route sockets, Oxian 0.23).
+
 - **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
   ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,
   its tools run again, with whatever input the model now chose, and the model never saw the first
@@ -212,6 +315,24 @@
   finish: the next owner delivers it again, with `retry`, and with the above it doesn't repeat its
   tools. Workers are told they're gone after the drain, so running work can still use them. The orgs
   host's `close({ drain })` passes it on to every org's runtime.
+
+- **Fixed: messages in a row ended an agent's prompt with its own answer.** A person writing several
+  messages a few seconds apart starts a turn for each; one that ran after the agent had answered
+  (while it wrote, or with the next turn) was sent a conversation ending with that answer, which
+  Anthropic's newer models refuse ("assistant message prefill", HTTP 400), so it failed. Now an
+  answer keeps how far its turn had read its thread (`knew`, the `at` of the newest message there);
+  the prompt reads what others said after that, while it wrote, after the answer; and the turn of a
+  person's message that an answer to them had already read ends without a model call. Adapters never
+  send a conversation ending with the model's own message: a user turn ("Continue.") follows it, for
+  every provider alike.
+- **Fixed: a failed turn's answer said what its provider said.** "booking failed: Anthropic 400:
+  {…}" was written in the chat, where everyone there read it (and a WhatsApp customer got it). It
+  now says "booking failed: something went wrong, so it couldn't answer. Try again in a moment."
+  What went wrong stays in the `processor.failed` event; a missing key still says who can add one.
+- **Fixed: MiniMax's usage counted no input.** Anthropic's adapter read input and cache counts only
+  from `message_start`; MiniMax (on Anthropic's protocol) says them in `message_delta`, so its calls
+  were recorded with 0 input tokens. It now reads every count from both, the greatest of each (they
+  are totals so far), so Anthropic's, said in both, count once.
 
 - **Fixed: a collection's private fields reached the log on PostgreSQL.** Writes that go as the
   store's single command (most of them) recorded `.created`, `.updated` and `.deleted` with the

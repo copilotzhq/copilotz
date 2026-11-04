@@ -6,10 +6,11 @@
 import { createWorker, type WorkerOptions } from "@oxian/oxian-js";
 import { collection, type Query, type Run } from "./collection.ts";
 import type { Context, Plugins, ReadContext, TransactionScope } from "./define.ts";
-import { isRead, type Op, type Outcome, type TimerOp } from "./ops.ts";
+import { isRead, type Op, type Outcome, RESULTS, type TimerOp } from "./ops.ts";
 import type { Scheduled, ScheduleOptions } from "./schedules.ts";
-import { compile, events, fingerprint, invalid, json, merge } from "./registry.ts";
+import { compile, events, fingerprint, invalid, json, merge, unprivate } from "./registry.ts";
 import { renderer } from "./views.ts";
+import { refuseBlobKeys } from "./blobs.ts";
 import { querying as queryingOver, reading as readingOver } from "./reads.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import type { Actor, Doc, Edge, Event } from "./store.ts";
@@ -308,6 +309,8 @@ export function createExecutor(
     if (!action) throw invalid(`Unknown action "${name}"`);
     const normalized = json(input);
     inputs[name]?.(normalized);
+    // An Action's input may hold no `$blob` key (see blobs.ts), as the owner checks outside calls'.
+    refuseBlobKeys(normalized);
     if (action.record === false) {
       return await action.run(
         context(job, parent, undefined, given?.scheduled, parent, actor),
@@ -318,8 +321,10 @@ export function createExecutor(
     // A nested call's id comes from its cause, its place among the calls made
     // under it (taken before any await, so parallel calls number stably) and
     // what it does: a retry finds it again, and changed code makes a new call.
+    // It hashes the whole input, private fields too, though the log never holds them.
     const position = !given && numbering ? job.next(numbering) : 0;
     const inputHash = await fingerprint(name, normalized);
+    const hidden = action.private ?? [];
     let { id, attempt, after } = given ?? {
       id: numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID(),
       attempt: 1,
@@ -341,7 +346,7 @@ export function createExecutor(
         type: "action.started",
         data: {
           action: name,
-          input: normalized ?? null,
+          input: unprivate(normalized ?? null, hidden),
           inputHash,
           startedAt: new Date().toISOString(),
           attempt,
@@ -386,31 +391,46 @@ export function createExecutor(
       },
     };
     const elapsed = () => Math.round((performance.now() - begun) * 100) / 100;
-    const finish = (type: string, data: Record<string, unknown>) =>
+    const finish = (type: string, data: Record<string, unknown>, more: Op[] = []) =>
       reach.send({
-        ops: [{ op: "emit", event: { type, data, cause: id } }],
+        ops: [{ op: "emit", event: { type, data, cause: id } }, ...more],
         cause: id,
         ...(actor ? { actor } : {}),
       });
 
     job.frame("action", { type: "started", id, action: name, attempt });
     let result: R;
+    let recorded: unknown;
     try {
       result = await action.run(
         context(reach, id, undefined, given?.scheduled, id, actor),
         normalized,
       ) as R;
+      // What it answers goes on record: one the owner would refuse fails the call, on record.
+      recorded = json(result) ?? null;
+      refuseBlobKeys(recorded);
     } catch (error) {
       await finish("action.failed", { action: name, error: failure(error), ms: elapsed(), attempt })
         .catch(() => {});
       throw error;
     }
-    await finish("action.completed", {
-      action: name,
-      result: json(result) ?? null,
-      ms: elapsed(),
-      attempt,
-    });
+    // A result with private fields is logged without them, and kept whole apart
+    // in the same commit, so a retry answers with all of it.
+    const whole = recorded;
+    const logged = unprivate(whole, hidden);
+    const apart = logged !== whole && JSON.stringify(logged) !== JSON.stringify(whole);
+    await finish(
+      "action.completed",
+      { action: name, result: logged, ms: elapsed(), attempt, ...(apart ? { private: true } : {}) },
+      apart
+        ? [{
+          op: "insert",
+          collection: RESULTS,
+          docs: [{ _id: id, result: whole }],
+          ifAbsent: true,
+        }]
+        : [],
+    );
     return result;
   };
 

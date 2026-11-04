@@ -6,7 +6,7 @@
  * back on its answer (its state), as DeepSeek requires once tools are given.
  */
 import { alive, post, sse, usageOf } from "../../shared/provider.ts";
-import type { LlmAdapter, LlmMessage } from "../../shared/types.ts";
+import { answerable, type LlmAdapter, type LlmMessage } from "../../shared/types.ts";
 
 export const OPENAI = {
   name: "OpenAI",
@@ -72,7 +72,7 @@ export const openaiCompletions: LlmAdapter = {
     const own = (connection.baseURL ?? OPENAI.baseURL).startsWith(OPENAI.baseURL);
     const response = await post(connection, OPENAI, "/chat/completions", {
       model: connection.model,
-      messages: messagesOf(instructions, messages),
+      messages: messagesOf(instructions, answerable(messages)),
       ...(tools.length
         ? {
           tools: tools.map((tool) => ({

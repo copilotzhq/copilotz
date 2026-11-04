@@ -4,6 +4,7 @@
  * Processors. Plugin code runs in executors, which reach the store only by
  * sending ops to the owner over Oxian.
  */
+import { workerPresence } from "./presence.ts";
 import { plan } from "./aggregate.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import { type Clock, type Scheduled, systemClock, TIMERS } from "./schedules.ts";
@@ -19,8 +20,9 @@ import type {
   ViewDef,
   WorkerJob,
 } from "./define.ts";
-import { type Blobs, hydrate, offload } from "./blobs.ts";
+import { type Blobs, hydrate, offload, refuseBlobKeys } from "./blobs.ts";
 import { createCache } from "./cache.ts";
+import { createMaintenance, type Maintenance } from "./maintain.ts";
 import { createObservers, type Observation, type ObserveOptions } from "./observe.ts";
 import { reading, startup } from "./reads.ts";
 import { BROWSER, createBrowsers, READ_VIEW, readView, SESSION, WIRE } from "./browsers.ts";
@@ -36,7 +38,7 @@ import {
   type StoreOp,
   type WriteOp,
 } from "./ops.ts";
-import { check, matches } from "./mongo.ts";
+import { check, checkPath, matches } from "./mongo.ts";
 import {
   canonical,
   checked,
@@ -46,6 +48,7 @@ import {
   invalid,
   json,
   merge,
+  unprivate,
 } from "./registry.ts";
 import type {
   Actor,
@@ -75,7 +78,13 @@ import {
 export type Transport = HypervisorOptions["transports"][number];
 
 export type Feed =
-  | { kind: "event"; event: Event }
+  | {
+    kind: "event";
+    /** As the log holds it: a large value is a blob reference. */
+    event: Event;
+    /** The event with its large values in place of their references, read when asked. */
+    full(): Promise<Event>;
+  }
   | { kind: "frame"; channel: string; data: unknown };
 
 export type Stats = {
@@ -168,6 +177,11 @@ export type Owner = {
    */
   wake(): Promise<void>;
   stats(): Stats;
+  /**
+   * SQL beside the collections, for trusted host code only (the maintenance
+   * plugin's routes): plugin code never gets it. See runtime/maintain.ts.
+   */
+  maintenance: Maintenance;
   /** The Oxian Hypervisor executors connect to; serve it to accept remote executors. */
   hypervisor: Hypervisor;
   /**
@@ -300,6 +314,19 @@ export async function createOwner(
   const memory = fleeting.size ? memoryStore() : undefined;
   const inMemory = (op: Op): boolean => "collection" in op && fleeting.has(op.collection);
   const known = (op: Op) => {
+    // What plugin code writes holds no `$blob` key (see blobs.ts). Offloading looks as it walks
+    // what's stored; an upsert's filter (it seeds the new document) and in-memory writes (never
+    // offloaded) are looked at here. So are an update's field paths: `{ $set: { "a.$blob": … } }`
+    // would make one, as would a path through `__proto__` reach every object's prototype.
+    if ((op.op === "update" || op.op === "replace") && op.options?.upsert) {
+      refuseBlobKeys(op.filter);
+    }
+    if (op.op === "update" && Object.keys(op.update).some((key) => key.startsWith("$"))) {
+      for (const fields of Object.values(op.update)) {
+        for (const path of Object.keys(fields ?? {})) checkPath(path);
+      }
+    }
+    if (inMemory(op) && !isRead(op)) refuseBlobKeys(op);
     if (!("collection" in op) || op.collection.startsWith(SYSTEM)) return;
     if (!validators[op.collection]) throw invalid(`Unknown collection "${op.collection}"`);
     // A pipeline the stores can't run fails here, before any store sees it.
@@ -341,7 +368,9 @@ export async function createOwner(
     schedules: registry.schedules,
     actions: registry.actions,
     write: (ops) => writeEach(ops),
-    call: (action, input, id, scheduled, actor) => begin(action, input, id, true, scheduled, actor),
+    // A timer keeps its input as stored, large values as blob references: the Action gets it whole.
+    call: async (action, input, id, scheduled, actor) =>
+      await begin(action, await hydrate(input, blobsOf(store)), id, true, scheduled, actor),
     track: (work) => track(work),
     signal: draining.signal,
     metrics,
@@ -448,7 +477,7 @@ export async function createOwner(
     for (const [name, seq] of saving) if (unsaved.get(name) === seq) unsaved.delete(name);
     for (const event of events) {
       measure.events.add(1, { type: event.type });
-      publish({ kind: "event", event });
+      publish({ kind: "event", event, full: () => whole(event) });
       route(event, true);
     }
     if (seen.length) observers.changed(seen);
@@ -472,6 +501,11 @@ export async function createOwner(
   type By = {
     cause?: string;
     actor?: Actor;
+    /**
+     * The writes are plugin code's or a caller's, not the owner's own: what they store may
+     * hold no `$blob` key, as only the owner makes references (offloading refuses one).
+     */
+    foreign?: true;
     keep?: Map<string, Filter>;
     /** Hears what each read returned (for labels). */
     saw?: (op: ReadOp, value: unknown) => void;
@@ -513,7 +547,7 @@ export async function createOwner(
       }
       const blobs: Blob[] = [];
       const put = (blob: Blob) => (blobs.push(blob), Promise.resolve());
-      const large = <T>(value: T) => offload(value, put, options.blobThreshold);
+      const large = <T>(value: T) => offload(value, put, options.blobThreshold, by.foreign);
       // The same values perform() offloads: documents, updates, edge data, event data.
       const steps: Command["steps"] = await Promise.all(ops.map(async (op) => {
         switch (op.op) {
@@ -571,6 +605,11 @@ export async function createOwner(
   // Large values: in the configured blob store, or in the store's own blobs.
   const blobsOf = (reader: Reader) => (id: string) =>
     options.blobs ? options.blobs.get(id) : reader.blob(id);
+  /** A committed event with its large values in place. */
+  const whole = async (event: Event): Promise<Event> => ({
+    ...event,
+    data: await hydrate(event.data, blobsOf(store)),
+  });
   // Reads of committed state go through the cache; reads in a transaction see its own writes.
   const cache = options.cache === false ? undefined : createCache({
     ...options.cache,
@@ -629,7 +668,7 @@ export async function createOwner(
         op: "emit",
         event: { type, data: json(data), ...(options.id ? { id: options.id } : {}) },
       }],
-      options.actor ? { actor: options.actor } : {},
+      { ...(options.actor ? { actor: options.actor } : {}), foreign: true },
     );
   };
   const observers = createObservers({
@@ -658,7 +697,7 @@ export async function createOwner(
           const _id = typeof doc._id === "string" ? doc._id : crypto.randomUUID();
           const op: StoreOp = { op: "insert", collection, docs: [{ ...doc, _id }] };
           known(op);
-          void writeEach([op]).catch(() => {});
+          void writeEach([op], { foreign: true }).catch(() => {});
           return _id;
         },
         metrics,
@@ -685,8 +724,7 @@ export async function createOwner(
     const { cause } = by;
     const actor = by.actor ? { actor: by.actor } : {};
     const hidden = unlogged(collection);
-    const open = <D extends Record<string, unknown>>(doc: D): D =>
-      hidden.length ? unprivate(doc, hidden) as D : doc;
+    const open = <D extends Record<string, unknown>>(doc: D): D => unprivate(doc, hidden);
     for (const { _id, before, after } of changes) {
       if (!before) {
         tx.emit({
@@ -740,6 +778,7 @@ export async function createOwner(
           value,
           (blob) => options.blobs ? options.blobs.put(blob) : tx.putBlob(blob),
           options.blobThreshold,
+          by.foreign,
         ),
       changed: (collection, changes) => {
         // What an actor's write leaves must stay within what they reach.
@@ -967,6 +1006,7 @@ export async function createOwner(
                 ...(request.actor ? { actor: request.actor } : {}),
                 ...(request.keep?.size ? { keep: request.keep } : {}),
                 ...(request.saw ? { saw: request.saw } : {}),
+                foreign: true,
               },
               seen,
               later,
@@ -1044,6 +1084,7 @@ export async function createOwner(
         ...(request.actor ? { actor: request.actor } : {}),
         ...(keep.size ? { keep } : {}),
         saw,
+        foreign: true,
       });
     }
     let transaction = held.get(request.tx);
@@ -1056,9 +1097,8 @@ export async function createOwner(
   };
 
   // Workers of plugins' kinds (computers…): admitted by their kind's Action, then found by id.
-  const connected = new Map<string, string>();
+  const connected = workerPresence();
   const resumed = new Map<string, { kind: string; id: string; until: number }>();
-  const workerKey = (kind: string, id: string) => `${kind}\u0000${id}`;
   /** Who a worker of a plugin's kind is, from `<kind>:<secret>`; undefined: not one. */
   const workerOf = async (credential: { kind: string; capability: unknown }) => {
     const capability = String(credential.capability);
@@ -1234,7 +1274,8 @@ export async function createOwner(
       }
       if (definition.providerId.startsWith("worker:")) {
         const { kind, id } = definition.providerConfig as { kind: string; id: string };
-        connected.set(workerKey(kind, id), fence.identity.workerId);
+        // Moved to a fresh connection (Oxian's handoff), it never left: nothing to tell.
+        if (!connected.arrived(kind, id, fence.identity.workerId, fence.connectionId)) return;
         return tell(registry.workers[kind]?.ready, id);
       }
       ready.add(fence.connectionId);
@@ -1244,9 +1285,8 @@ export async function createOwner(
       browsers.gone(fence.identity.workerId, fence.connectionId);
       if (definition.providerId.startsWith("worker:")) {
         const { kind, id } = definition.providerConfig as { kind: string; id: string };
-        // A worker that came back on another connection is still there.
-        if (connected.get(workerKey(kind, id)) !== fence.identity.workerId) return;
-        connected.delete(workerKey(kind, id));
+        // Gone only if this was the connection it's on: back, or moved, on another, it's there.
+        if (!connected.left(kind, id, fence.identity.workerId, fence.connectionId)) return;
         return tell(registry.workers[kind]?.gone, id);
       }
       ready.delete(fence.connectionId);
@@ -1285,7 +1325,7 @@ export async function createOwner(
       if (!def || !def.workloads.includes(workload)) {
         return refused(`No ${kind} work "${workload}"`, "invalid");
       }
-      const workerId = connected.get(workerKey(kind, String(id)));
+      const workerId = connected.workerOf(kind, String(id));
       if (!workerId) return refused(`${kind} ${id} isn't connected`, "offline");
       const handle = await hypervisor.dispatch({
         workload,
@@ -1458,10 +1498,13 @@ export async function createOwner(
           emit({
             id,
             type: "action.started",
-            // An unrecorded Action's input stays out of the log, whatever became of it.
+            // An unrecorded Action's input stays out of the log, whatever became of it,
+            // and so do an Action's private fields.
             data: {
               action,
-              input: registry.actions[action]?.record === false ? null : input ?? null,
+              input: registry.actions[action]?.record === false
+                ? null
+                : unprivate(input ?? null, registry.actions[action]?.private ?? []),
               inputHash,
               startedAt,
               attempt,
@@ -1547,7 +1590,7 @@ export async function createOwner(
   const attempts = async (name: string, event: Event, recovered: boolean, stop: AbortSignal) => {
     for (let attempt = 1;; attempt++) {
       try {
-        const full = { ...event, data: await hydrate(event.data, blobsOf(store)) };
+        const full = await whole(event);
         await run({
           kind: "process",
           processor: name,
@@ -1656,13 +1699,26 @@ export async function createOwner(
   await timers.recover();
 
   const api: Owner = {
+    maintenance: createMaintenance({
+      store,
+      epoch,
+      blobs: options.blobs,
+      blobThreshold: options.blobThreshold,
+      // SQL changed what nothing follows: forget what came from documents, then tell.
+      wrote: (events) => {
+        cache?.clear();
+        committed([], events);
+        observers.stale();
+        void timers.wake();
+      },
+    }),
     workers: {
       async dispatch(kind, id, workload, body, options = {}) {
         const def = registry.workers[kind];
         if (!def || !def.workloads.includes(workload)) {
           throw invalid(`No ${kind} work "${workload}"`);
         }
-        const workerId = connected.get(workerKey(kind, String(id)));
+        const workerId = connected.workerOf(kind, String(id));
         if (!workerId) {
           throw Object.assign(new Error(`${kind} ${id} isn't connected`), { code: "offline" });
         }
@@ -1691,8 +1747,15 @@ export async function createOwner(
       if (actor && actor.kind !== "system" && !def.allow?.(actor, input)) {
         return Promise.reject(forbidden(`${actor.kind} ${actor.id} may not call "${action}".`));
       }
+      const given = json(input);
+      // What an Action is given goes on record as it is: it may hold no `$blob` key.
+      try {
+        refuseBlobKeys(given);
+      } catch (error) {
+        return Promise.reject(error);
+      }
       const id = options.id ?? crypto.randomUUID();
-      return begin(action, json(input), id, options.id !== undefined, undefined, actor) as never;
+      return begin(action, given, id, options.id !== undefined, undefined, actor) as never;
     },
     async render(medium, kind, item, options = {}) {
       return await run({
@@ -1781,10 +1844,7 @@ export async function createOwner(
         clearTimeout(timer);
       }
       // Workers still connected go with it: their kinds hear so while it still runs.
-      for (const key of connected.keys()) {
-        const [kind, id] = key.split("\u0000");
-        tell(registry.workers[kind]?.gone, id);
-      }
+      for (const [kind, id] of connected.all()) tell(registry.workers[kind]?.gone, id);
       connected.clear();
       await Promise.all(telling);
       closing.abort();
@@ -1793,26 +1853,19 @@ export async function createOwner(
       // shutdown's drain doesn't wait them out.
       browsers.closeAll();
       await hypervisor.shutdown();
-      if (unsaved.size) await commit(async () => {});
-      await store.close();
+      // Processors' last positions are saved if they can be (a fenced owner can't): the store
+      // closes either way, and a failure still reaches the caller.
+      try {
+        if (unsaved.size) await commit(async () => {});
+      } finally {
+        await store.close();
+      }
     },
   };
   return api;
 }
 
 /** The scalar type a schema gives a dot path (through properties and additionalProperties), if one. */
-/** A copy of `doc` without the private fields at these (dotted) paths. */
-function unprivate(doc: Record<string, unknown>, fields: string[]): Record<string, unknown> {
-  const copy = structuredClone(doc);
-  for (const path of fields) {
-    const keys = path.split(".");
-    let at: Record<string, unknown> | undefined = copy;
-    for (const key of keys.slice(0, -1)) at = at?.[key] as Record<string, unknown> | undefined;
-    if (at && typeof at === "object") delete at[keys.at(-1)!];
-  }
-  return copy;
-}
-
 function scalarOf(schema: unknown, path: string): ScalarType | undefined {
   let node = schema as Record<string, unknown> | undefined;
   for (const key of path.split(".")) {

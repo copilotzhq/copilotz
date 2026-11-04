@@ -4,7 +4,7 @@
  * calls: between tool steps it carries on from it instead of thinking again.
  */
 import { alive, post, sse, usageOf } from "../../shared/provider.ts";
-import type { LlmAdapter, LlmFile, LlmMessage } from "../../shared/types.ts";
+import { answerable, type LlmAdapter, type LlmFile, type LlmMessage } from "../../shared/types.ts";
 import { OPENAI } from "./openai-compatible.ts";
 
 /** A file as the Responses API takes it: an image, or a PDF. */
@@ -133,9 +133,10 @@ export const openaiResponses: LlmAdapter = {
     },
   ) {
     const where = `${connection.baseURL ?? OPENAI.baseURL} ${connection.model}`;
+    const asked = answerable(messages);
     // Breakpoints, and its reasoning back (from a model that reasons), unless this server refused
     // them once: then it's asked again without, from then on.
-    let points = pointless.has(where) ? new Set<number>() : pointsOf(messages);
+    let points = pointless.has(where) ? new Set<number>() : pointsOf(asked);
     let include = info?.reasoning !== false && !unreasoned.has(where);
     const body = (input: Record<string, unknown>[]) => ({
       model: connection.model,
@@ -168,7 +169,7 @@ export const openaiResponses: LlmAdapter = {
           connection,
           OPENAI,
           "/responses",
-          body(inputOf(messages, points)),
+          body(inputOf(asked, points)),
           signal,
         );
         break;

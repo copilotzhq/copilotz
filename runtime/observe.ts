@@ -61,6 +61,8 @@ export type Observers = {
   ): Observation<R>;
   /** What a commit changed, by collection: the parts that read it run again. */
   changed(seen: [string, Change[]][]): void;
+  /** Anything may have changed (maintenance SQL): every part that read something runs again. */
+  stale(): void;
   /** Resolves when no part is running: every observed View shows the latest data. */
   idle(): Promise<void>;
 };
@@ -191,6 +193,17 @@ export function createObservers(env: {
     void refresh(p).finally(() => {
       if (--running === 0) settled.resolve();
     });
+  };
+  /** Runs these parts again; several tell their new output together, once the last has it. */
+  const again = (due: Set<Part>) => {
+    if (due.size > 1) {
+      const wave: Wave = { waiting: new Map(), done: new Set() };
+      for (const p of due) {
+        wave.waiting.set(p, p.generation);
+        (p.waves ??= new Set()).add(wave);
+      }
+    }
+    for (const p of due) start(p);
   };
 
   const part = (
@@ -495,16 +508,9 @@ export function createObservers(env: {
           }
         }
       }
-      // They tell their new output together, once the last has it.
-      if (due.size > 1) {
-        const wave: Wave = { waiting: new Map(), done: new Set() };
-        for (const p of due) {
-          wave.waiting.set(p, p.generation);
-          (p.waves ??= new Set()).add(wave);
-        }
-      }
-      for (const p of due) start(p);
+      again(due);
     },
+    stale: () => again(new Set([...readers.values()].flatMap((parts) => [...parts]))),
     idle: () => settled.promise,
   };
 }

@@ -38,6 +38,22 @@ export const canonical = (value: unknown): string =>
         : v,
   );
 
+/**
+ * A copy of `value` without the private fields at these (dotted) paths: a
+ * collection's (see `CollectionDef.private`) or an Action's (`ActionDef.private`).
+ */
+export function unprivate<T>(value: T, fields: string[]): T {
+  if (!fields.length || !value || typeof value !== "object") return value;
+  const copy = structuredClone(value) as Record<string, unknown>;
+  for (const path of fields) {
+    const keys = path.split(".");
+    let at: Record<string, unknown> | undefined = copy;
+    for (const key of keys.slice(0, -1)) at = at?.[key] as Record<string, unknown> | undefined;
+    if (at && typeof at === "object") delete at[keys.at(-1)!];
+  }
+  return copy as T;
+}
+
 /** A short hash identifying an action call by what it does: its action and input. */
 export async function fingerprint(action: string, input: unknown): Promise<string> {
   const data = new TextEncoder().encode(canonical([action, input ?? null]));

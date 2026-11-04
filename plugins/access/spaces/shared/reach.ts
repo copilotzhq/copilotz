@@ -50,10 +50,13 @@ const ALL: Verb[] = ["read", "write", "manage"];
 /** How an actor appears as a member: `person:ana`. */
 export const memberKey = (actor: { kind: string; id: string }) => `${actor.kind}:${actor.id}`;
 
-export const rolesOf = (ctx: Pick<ReadContext, "resources">): Record<string, Verb[]> => ({
-  ...ROLES,
-  ...(ctx.resources.roles ?? {}) as Record<string, Verb[]>,
-});
+export const rolesOf = (ctx: Pick<ReadContext, "resources">): Record<string, Verb[]> =>
+  // No prototype: a role is one the app names, so "toString" or "__proto__" is no role at all.
+  Object.assign(
+    Object.create(null) as Record<string, Verb[]>,
+    ROLES,
+    (ctx.resources.roles ?? {}) as Record<string, Verb[]>,
+  );
 
 /**
  * Spaces reached from `key`, through the spaces it's in, each with the verbs

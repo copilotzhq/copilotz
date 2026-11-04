@@ -8,11 +8,11 @@ browser.
 
 An app is plugins: agents that answer with tools and talk to each other and to people, conversations
 in shared spaces, memory, skills and routines, a usage ledger, people's computers, sign-in and
-connected accounts, a developer API, WhatsApp. Each is a plain object built from the same few
-primitives (collections, Actions, Processors, Views, resources and adapters), and the runtime knows
-nothing else. Everything durable is an event, a document, an edge, a vector or a blob, written by
-one owner to one store (memory, SQLite or PostgreSQL), so every change is on the record and every
-screen follows it live: in a terminal, in a browser, or in an agent's prompt.
+connected accounts, a developer API, WhatsApp, phone calls. Each is a plain object built from the
+same few primitives (collections, Actions, Processors, Views, resources and adapters), and the
+runtime knows nothing else. Everything durable is an event, a document, an edge, a vector or a blob,
+written by one owner to one store (memory, SQLite or PostgreSQL), so every change is on the record
+and every screen follows it live: in a terminal, in a browser, or in an agent's prompt.
 
 ## Install
 
@@ -113,14 +113,14 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/compute/web`         | `computersWeb`                                                                                               |
 | `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                          |
 | `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                |
-| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `mcp`                                             |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `maintenance`                     |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                    |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                    |
 | `copilotz/web`                         | the web host in the browser (`web`), and its toolkit (`Button`, `Markdown`…)                                 |
-| `copilotz/web/server`                  | its server half: `webServer`, `socket`                                                                       |
+| `copilotz/web/server`                  | its server half: `webServer`, `socket`; `routeHost` (the app's routes alone)                                 |
 | `copilotz/web/tickets`                 | `createTickets`: sessions traded for one-time tickets                                                        |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                              |
-| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve`, `listen` (HTTP, sockets)                               |
+| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve`, `serveRoutes`, `listen` (HTTP, sockets)                |
 | `copilotz/orgs`                        | `orgsHost`: many orgs behind one address, each a runtime of its own                                          |
 | `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                              |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                     |
@@ -193,6 +193,48 @@ first used. Node takes a socket before any handler runs, so `listen` serves the 
 each socket to the runtime of the org its request is for:
 `listen({ fetch: host.serve, hypervisor: (request) => host.openRuntime(request)?.hypervisor })`
 (`examples/web-node/orgs.ts`).
+
+### Without the web app
+
+An app people use on WhatsApp or on the phone needs no page: `serveRoutes` serves its plugins'
+routes alone (`routes` resources: Meta's webhook, Twilio's), `GET /health` for whatever watches it,
+and 404 for anything else. Nobody signs in there: a route's Action is called as a visitor, and its
+`allow` decides (a webhook checks the request's signature, then acts for the person it's from with
+`ctx.as`). Deno and Bun run it too.
+
+```ts
+import { createRuntime } from "copilotz";
+import { serveRoutes } from "copilotz/web/node";
+
+const runtime = await createRuntime({ store, plugins });
+const server = await serveRoutes({ runtime, hostname: "0.0.0.0", port: 8080 });
+// A deploy's SIGTERM: stop listening, give running turns a while, close the runtime.
+process.once("SIGTERM", () => server.close({ drain: 8_000 }));
+```
+
+A `serve` route may take a WebSocket of its own (a voice call's relay): `host.upgrade()` accepts the
+request's upgrade, and the route answers with the response it gives. It can refuse first (`403`,
+before any handshake). The socket is a browser's `WebSocket` as far as `onmessage`, `send` and
+`close` go; the listener (`serveRoutes`, or the web host's `serve`) takes it.
+
+```ts
+routes: {
+  relay: {
+    path: "/voice/relay",
+    serve: (request, host) => {
+      if (!signed(request)) return new Response("Forbidden", { status: 403 });
+      const { socket, response } = host.upgrade();
+      socket.onmessage = async (event) => socket.send(await answer(host.runtime, event.data));
+      return response;
+    },
+  },
+},
+```
+
+A runtime that declares the `socket` transport (remote executors) still takes its sockets at
+`/oxian`. `routeHost(runtime)` (`copilotz/web/server`) is the same as a fetch handler, for another
+listener; a route's socket needs Oxian's (`copilotz/web/node`'s). The example is
+`examples/web-node/routes.ts`.
 
 ## Installing a computer
 
@@ -494,6 +536,18 @@ filled by the front ends through resources).
   customer line: a stranger who writes is a contact, in a chat of their own in the number's space,
   answered by its agent, and a chat quiet for the number's `gap` (12 hours) is over: their next
   message starts a new one.
+- **`voice`**: people call the app's phone number and talk to its agents, through Twilio's
+  ConversationRelay (Twilio hears them and speaks; the app gets and sends text). The app declares
+  its lines (`voice.lines`: the space, Twilio's account and auth token, the app's public address,
+  the agent, language, voice, greeting and limits); Twilio's webhook is checked against its
+  signature, a call is taken within its caller's limits and the line's (calls at once, a day: else
+  busy, nothing spent) and opens the line's socket with a one-time ticket. A caller is a contact in
+  a chat of their own, the same one when they call back only if Twilio verified their number; what
+  the agent writes for them is said as it writes it (a medium for Views: renderer `voice`), a caller
+  speaking over it cuts it there (the agent is told what was heard), a failed or slow answer says a
+  short line in the line's language, and silence, a call too long or too many prompts, or the
+  agent's `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that
+  takes a route's socket (`serveRoutes`).
 - **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A line the app
   declares (`mcp.lines.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
   each is shown, who calls, its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP,
@@ -504,6 +558,9 @@ filled by the front ends through resources).
   the app's agents read of it (only public errors say their words); a request sent again to a tool
   that changes things is answered from the first, and the line's limits (calls at once, a minute,
   new conversations an hour, by conversation, user, caller's address and in all) refuse the rest.
+- **`maintenance`**: HTTP for an app's operators when they can't reach its database, with one key:
+  read SQL, the collections' operations through the owner, raw SQL writes inside it, blobs by id
+  (see [Maintenance](#maintenance)).
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.
@@ -580,6 +637,161 @@ org's rows copy elsewhere unchanged (`copyTenant`). Blobs (strings over 16 KiB, 
 live in the store by default, or as files (`fileBlobs`), in a bucket (`httpBlobs`), or in Google
 Cloud Storage (`gcsBlobs`).
 
+## Maintenance
+
+When an app's operators can't reach its database (a client's network that keeps their database user
+out), the `maintenance` plugin (`copilotz/plugins/interfaces`) answers for it over HTTP, under
+`/maintenance/`, with a key the app gives it:
+`resources: { maintenance: { key: process.env.MAINTENANCE_KEY } }`. It's the one place an app runs
+SQL of its own: plugin code never does.
+
+```sh
+curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
+  -d '{"sql": "SELECT _id, text FROM message WHERE thread = $1", "params": ["t1"]}'
+```
+
+| Endpoint                                          | What it does                                                                                           |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /maintenance/`                               | What's here: whether the store runs SQL, the collections, the limits                                   |
+| `POST /maintenance/sql`                           | `{ sql, params?, limit?, timeout? }`: one read-only statement: `{ rows, count, truncated, ms }`        |
+| `POST /maintenance/sql/write`                     | `{ sql, params?, limit?, timeout? }`: one that writes, in the owner: `{ changed, rows, event }`        |
+| `POST /maintenance/collections/<collection>/<op>` | `insertOne` `{ doc }`… `deleteMany` `{ filter }`, and `find`, `findOne`, `countDocuments`, `aggregate` |
+| `POST /maintenance/queries/<collection>.<name>`   | A collection's named query (`booking.stats`), the body its params: `{ result, ms }`                    |
+| `GET /maintenance/blobs/<sha256-…>`               | A blob's bytes and type, as a download                                                                 |
+
+- **Keys:** `key`, or several in `keys` while one rotates (add the new, move clients, drop the old).
+  Each is at least 32 random characters: a short one, or one plainly not random, stops the app from
+  starting. Every request shows one (`Authorization: Bearer <key>`), compared in constant time;
+  without a key configured, every request is unauthorized, the same answer as a wrong key.
+- **Who:** a request acts as the maintenance actor
+  (`{ kind: "maintenance", id: "maintenance", by }`, `by` from `X-Maintenance-By`, as said). Its
+  Actions let only it call them, and run as the system on the record (`ctx.as()`): no rule keeps it
+  from a document, and every event says `via` it. Writes take an `Idempotency-Key`: sent again, one
+  answers what it did the first time.
+- **On record twice:** before it runs, each request writes a line (`log`, by default JSON on
+  standard output, which Cloud Run keeps): who, what (a statement's SHA-256, its params' count; an
+  operation, a query, a blob), which key, when. A SQL write also records a `maintenance.sql` event
+  in the same commit. The line is the record the key's holder can't rewrite.
+- **Limits:** `limit` rows (1,000), `timeout` ms (30 s) and `bytes` of rows in an answer (8 MB; past
+  it the rows are cut, and `truncated` says so). A request may ask for less. A pipeline stops at the
+  limit too.
+- **Operations go through the owner's write path:** checked against the collection's schema,
+  recorded as its events, cached and heard by Processors like any write. Prefer them. Named queries
+  run as the system does them (`runtime.query` with no actor), and check their own params.
+- **Read SQL** is one statement (a `;` outside its strings and comments ends it; PostgreSQL's line
+  comments end at a CR too, and maintenance reads strings with `standard_conforming_strings` on) in
+  a read-only transaction, always rolled back, stopped at its limit and cut off at its timeout.
+- **Raw SQL writes run inside the owner** (`runtime.maintenance.write`, see `runtime/maintain.ts`),
+  for what operations can't do: alone among its writes (those running end first, the next wait for
+  it), in a transaction fenced by its epoch, so an owner that lost the store can't run one, with its
+  `maintenance.sql` event in the same commit (the statement, its params, the rows it changed in any
+  table, who). It bypasses schemas and per-document events, so the owner then forgets what it
+  derived from documents: its cache empties, observed Views run again, and the clock reads the
+  timers again. A statement that ends or nests its transaction (`COMMIT`, `SAVEPOINT`…) or changes
+  its connection (`SET`, `PREPARE`, `LISTEN`, SQLite's `ATTACH`, `PRAGMA`…) doesn't run, and in
+  PostgreSQL neither does one that reaches past the statement: `ALTER ROLE` (a role may set its own
+  password and settings, which outlive the key), `DO` (a block runs statements nothing reads first)
+  and `LOCK` (it would hold the store's tables against the app's own writes). A write still holds
+  the row locks it takes (the rows an `UPDATE` changes) until it commits: app writes to those rows
+  wait, at most its `timeout`, and with at most 2 maintenance statements at once. One that changes
+  the store's own state (`meta`: the fencing epoch, Processors' positions), or what the role holds
+  (a large object, a setting), or, in SQLite, leaves a temporary object, is rolled back. The record
+  keeps a password literal as `PASSWORD '***'`.
+- **Nothing outlives its statement:** on a PostgreSQL server each statement runs on a connection of
+  its own, closed after, so what it sets on its session (a setting, a session lock, a prepared
+  statement) goes with it; and it goes over the extended protocol, where the server refuses a second
+  statement whatever the check said. PGlite has one session: it forgets what maintenance left there
+  (`DISCARD ALL`). A SQLite read runs apart, in a process of this runtime of its own on a read-only
+  connection, killed at its timeout: a statement that never ends doesn't hold the app, a core or the
+  WAL. The process is `deno`, `node` or `bun` itself (never a compiled app, which would be the app
+  again), with an empty environment, and on Deno and Node allowed to read the database's files and
+  nothing else; on Deno it's started only with permission to run already granted, so nothing ever
+  asks mid-request. Where none can start (a database opened another way, `:memory:`, a compiled app,
+  no permission), reads run on the store's reading connection, one at a time, with no timeout, a
+  pragma only from those that only read: the store says so once, with why, and each such answer says
+  `inline: true`. SQLite writes name the store's tables in `main`, so nothing temporary stands in
+  for them. Each store runs at most 2 maintenance statements at once
+  (`maintenance: { connections }`): another answers busy (503).
+- **Where:** SQL needs a SQL store. On a PostgreSQL server only as a role of its own (below), never
+  in a schema other tenants share; PGlite, in the app's process, runs it as its one session where it
+  reaches no other schema. An orgs host's orgs don't get the plugin at all (one key would reach
+  every org). Operations, named queries and blobs work everywhere, the memory store too, and need no
+  role.
+
+### A role of its own
+
+On a PostgreSQL server, raw SQL runs only as a role of its own, named by the store:
+`postgresStore({ url, schema, maintenance: { url: process.env.MAINTENANCE_DATABASE_URL } })`.
+Without one it's refused. The store's role owns the tables, may stop the app's connections and is
+whatever the deployment made it (a superuser, even): nothing that runs at a key's word should be it.
+
+Before each statement, on the connection that runs it, and again after a write in its transaction,
+maintenance checks that the role holds exactly what the SQL below grants, and refuses it otherwise
+(rolling a write back), saying what's more: an attribute beyond `LOGIN` (superuser, `CREATEROLE`…);
+membership in any role at all, predefined (`pg_*`) or not, and whatever its `INHERIT` or `SET`
+options (a member could `SET ROLE` to it); settings of its own (`ALTER ROLE … SET`); anything it
+owns, a large object too (what it makes for its own session, a temporary table, goes with its
+connection); anything granted to it outside the store's schema and database; `CREATE` on any schema
+(`public` too) or on the database; any privilege on a table or a column of another schema; on the
+store's own tables, anything beyond the grants below (no `TRIGGER`, `TRUNCATE` or `REFERENCES`; on
+`events` only `INSERT`); a large object it may read (`lo_compat_privileges`, or one granted to
+`PUBLIC`); a `SECURITY DEFINER` function it may run (one runs as its owner); `dblink` or
+`postgres_fdw` in the database; and a trigger on the store's tables, which the store never makes.
+The checks name every catalog they read as `pg_catalog`'s, after setting the search path back to it,
+so nothing a statement made stands in for them.
+
+Prefer a role with no password at all, signed in by the platform: Cloud SQL's IAM database
+authentication, or a client certificate. A password is a second key, valid for as long as nobody
+changes it. On Cloud SQL, with a service account of its own for maintenance:
+
+```sh
+gcloud sql users create maintenance@PROJECT.iam --instance=INSTANCE --type=cloud_iam_service_account
+gcloud projects add-iam-policy-binding PROJECT \
+  --member=serviceAccount:maintenance@PROJECT.iam.gserviceaccount.com \
+  --role=roles/cloudsql.instanceUser   # and roles/cloudsql.client, to connect
+# The app reaches it through the Cloud SQL Auth Proxy, which signs it in (no password):
+#   cloud-sql-proxy --auto-iam-authn --impersonate-service-account=maintenance@PROJECT.iam.gserviceaccount.com \
+#     --port 5433 PROJECT:REGION:INSTANCE
+# MAINTENANCE_DATABASE_URL=postgres://maintenance%40PROJECT.iam@127.0.0.1:5433/DATABASE
+```
+
+Cloud SQL makes such a role a member of its own marker role (`cloudsqliamserviceaccount`, or
+`cloudsqliamuser` for a person): that one membership is allowed, without ADMIN OPTION. Every IAM
+user is a member of the marker too, so the marker may hold nothing at all: grant it nothing, not
+even the grants below (maintenance refuses a marker that holds anything). Then the grants below,
+naming `"maintenance@PROJECT.iam"`.
+
+Elsewhere, as the store's role (the schema's owner), with the schema made (the app has started
+once), and as a role that may create roles for the first line:
+
+```sql
+-- LOGIN and nothing else; never grant it a role. (On Cloud SQL with IAM, gcloud makes it.)
+CREATE ROLE copilotz_maintenance LOGIN PASSWORD '…' NOINHERIT;
+GRANT USAGE ON SCHEMA copilotz TO copilotz_maintenance;
+-- Reading everything there, the collections' views too, now and later.
+GRANT SELECT ON ALL TABLES IN SCHEMA copilotz TO copilotz_maintenance;
+ALTER DEFAULT PRIVILEGES IN SCHEMA copilotz GRANT SELECT ON TABLES TO copilotz_maintenance;
+-- Changing documents, edges, vectors and blobs.
+GRANT INSERT, UPDATE, DELETE ON copilotz.nodes, copilotz.edges, copilotz.vectors, copilotz.blobs
+  TO copilotz_maintenance;
+-- Appending to the log (its own audit events), never changing it.
+GRANT INSERT ON copilotz.events TO copilotz_maintenance;
+-- Holding the fence while it writes (FOR SHARE needs it); a statement that changes meta is rolled back.
+GRANT UPDATE (value) ON copilotz.meta TO copilotz_maintenance;
+-- PostgreSQL 14 and earlier let everyone create in public.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+Replace `copilotz` with the store's schema. `PUBLIC` keeps `CONNECT` on the database, `TEMPORARY`,
+and `USAGE` on `public`; those are allowed. A `SECURITY DEFINER` function can be run by everyone
+(`PUBLIC`) unless revoked: find them, and revoke it from each (or maintenance refuses, naming them):
+
+```sql
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.prosecdef
+  AND p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace);
+REVOKE EXECUTE ON FUNCTION some_schema.some_function(…) FROM PUBLIC;
+```
+
 ## The example app
 
 `examples/terminal-agent` is an app on all of it: an assistant and a researcher, notes in spaces,
@@ -617,7 +829,7 @@ connects a computer to it; `/approve once|thread|always|no` answers what agents 
 
 Inside the chat: `/new`, `/threads`, `/open <n>`, `/history`, `/memories`, `/usage [all]`,
 `/metrics [name]` (with `OTEL_EXPORTER_OTLP_ENDPOINT` set, metrics also go to that collector),
-`/prompt [agent]`, `/fork`, `/retry`, `/events [n]`, `/stats`, `/sql <query>` (SQLite only),
+`/prompt [agent]`, `/fork`, `/retry`, `/events [n]`, `/stats`, `/sql <query>` (a SQL store),
 `/quit`. Every turn prints its time, its database round trips, the jobs sent to executors and the
 calls they made back to the owner.
 
@@ -659,6 +871,14 @@ The log records what happened, with no bookkeeping tables beside it:
     completion is the only extra commit.
   - `started` records the call's own `startedAt`; `completed` and `failed` record its duration in
     `ms`. An event's `at` is its commit time. An action opts out with `record: false`.
+  - **Private fields** (`private: ["buyer", "passengers"]` on an Action, dot paths as a
+    collection's): its calls are recorded without them, in `started`'s input and `completed`'s
+    result alike, so personal data a call is given stays out of the log while the call is still
+    recorded and retried. Its `inputHash` (and a nested call's id) still covers the whole input: a
+    retry with the same input finds the call, and a changed one is a new call. That hash is in the
+    log: whoever knows the rest of an input could check a guess of a field easy to guess alone (a
+    CPF) against it. A result that had any is kept whole in `sys.results`, with the completion
+    (`private: true` there), so a retry answers with all of it.
 - **Retries.** The log is the receipt store; no other table holds them.
   - `runtime.call(action, input, { id })` makes a call retryable. If that id already completed, the
     call returns its recorded result without running; if it's still running, the call joins it;
@@ -690,7 +910,12 @@ The log records what happened, with no bookkeeping tables beside it:
   any event back to the request that started it.
 - **Blobs.** Strings over 16 KiB (configurable) are stored once, named by the hash of their content
   (`sha256-…`). Documents and events hold `{ $blob, size, type }` in their place. The owner moves
-  values out on write and back in on read, so plugin code never sees a reference.
+  values out on write and back in on read, so plugin code never sees a reference. Only the owner
+  makes them: a `$blob` key anywhere in what plugin code writes, or in what an Action is called
+  with, is refused (`invalid`), and so is any part of an update's field path that starts with `$` or
+  is `__proto__` (an aggregate's `$group` names no `$…` field either). A path ends at a reference as
+  at a string. On read, only an exact reference (those three keys, a `sha256-<64 hex>` id) loads a
+  blob; any other object is data. Blob stores take no other id.
 
 ## Schedules
 
@@ -746,6 +971,8 @@ changed, a limited result lost a member, or an existing document newly matched a
   differs between stores); reads inside a transaction, which see the transaction's own writes.
 - **Freshness:** a read that raced a commit to its collection doesn't fill the cache, and a
   transaction's changes reach the cache only once committed, before its events go out.
+- **Maintenance SQL** (see [Maintenance](#maintenance)) changes what the cache can't follow: the
+  owner empties it after one commits, and a read in flight across that fills nothing.
 
 `runtime/tests/cache.test.ts` checks every cached query against a direct store read after each of
 900 random writes, on every store. `createRuntime({ cache: false })` turns the cache off; `stats()`
@@ -842,8 +1069,8 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   beside the runtime, which declares the `socket` transport). A browser reads a collection directly
   only when a rule speaks for it; anything else, through queries that let its person. Writes are
   Actions. Plugins answer their own HTTP through the `routes` resource (a webhook, an OAuth
-  callback, an API, a download), and files people sent are served at `/files/<id>` to whoever may
-  read them, with ranges.
+  callback, an API, a download, a socket of their own), and files people sent are served at
+  `/files/<id>` to whoever may read them, with ranges.
 - **The design system** (`design/views.md`, "The design system"): the web host owns a token
   vocabulary (shadcn's names) and its defaults, which are Copilotz's look (navy, the logo's cyan and
   blue, Manrope and Space Grotesk, its logo and icon), and an app rebrands with a `theme` resource
@@ -889,7 +1116,7 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   - Remote executors prove the deployment key, compared in constant time.
   - **Private fields** (`private: ["token"]` on a collection): what an actor's queries and Views
     read comes without them; Actions and Processors acting for them still read them. No event holds
-    them, on any store.
+    them, on any store, and none holds an Action's (`private: ["buyer"]`) either.
 - **Processors:** per-key ordering, a durable cursor, at-least-once delivery, made idempotent by
   deterministic ids. A `where` MongoDB filter on event data keeps unwanted events from being
   dispatched at all.
@@ -921,7 +1148,7 @@ plugins/        the features, by theme
                 directory of orgs
   compute/      computers: desks per space, agents' tools, approvals; program/, the computer program
   interfaces/   terminal (where each person is, the shell View), web (the web shell), the developer
-                API, WhatsApp and MCP; features'
+                API, WhatsApp, voice (phone calls), MCP and maintenance; features'
                 own front ends live with them (chat/terminal.ts, chat/web.tsx…), gathered by theme
 hosts/          the media the app is used through: terminal (the Ink host and its toolkit); web
                 (the React host in the browser: theme/, the tokens and their defaults, Copilotz's

@@ -7,8 +7,12 @@
 import { principalOf, type ViewContext } from "../../../../runtime/mod.ts";
 import type { Contact } from "../collections/contact.ts";
 
-/** Where each medium's contacts write from, as an agent is told it. */
-const FROM: Record<string, string> = { whatsapp: "on WhatsApp" };
+/** How each medium's contacts talk, as an agent is told it. */
+const FROM: Record<string, string> = {
+  whatsapp: "writing on WhatsApp",
+  voice: "on a phone call: they hear what you write, read aloud. The number they call from " +
+    "isn't proof of who they are",
+};
 
 export const contactView = (_thread: unknown, ctx: ViewContext<string>) => {
   const principal = principalOf(ctx.actor);
@@ -16,7 +20,7 @@ export const contactView = (_thread: unknown, ctx: ViewContext<string>) => {
   const found = ctx.db.collection<Contact>("contact").findOne({ _id: principal.id }).value;
   if (!found) return undefined;
   const who = found.name ? `${found.name}, a customer` : "a customer (their name isn't known)";
-  const from = FROM[found.via] ?? `through ${found.via}`;
-  return `You're talking with ${who}, writing ${from}. They see only this conversation; ` +
+  const from = FROM[found.via] ?? `writing through ${found.via}`;
+  return `You're talking with ${who}, ${from}. They see only this conversation; ` +
     `the people of the business running this line can read it too.`;
 };

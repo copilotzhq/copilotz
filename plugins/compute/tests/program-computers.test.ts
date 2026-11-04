@@ -117,6 +117,7 @@ test("the program connects to the plugin; agents work on it once their person sa
     assert(existsSync(made), `${made} isn't there: ${JSON.stringify(ran)}`);
     assertEquals(await readFile(made, "utf8"), "hi\n");
     // A command still running when it answers: seen again by its id alone, until it's done.
+    // Each look says what it wrote since the last one.
     const slow = process.platform === "win32"
       ? 'Start-Sleep -Seconds 2; "slept"'
       : "sleep 2 && echo slept";
@@ -126,10 +127,12 @@ test("the program connects to the plugin; agents work on it once their person sa
       stdout: string;
     };
     assertEquals(seen.state, "running", JSON.stringify(seen));
+    let wrote = seen.stdout;
     for (let i = 0; seen.state === "running" && i < 20; i++) {
       seen = await tool("terminal", { commandId: seen.commandId }) as typeof seen;
+      wrote += seen.stdout ?? "";
     }
-    assertEquals([seen.state, seen.stdout.trim()], ["idle", "slept"], JSON.stringify(seen));
+    assertEquals([seen.state, wrote.trim()], ["idle", "slept"], JSON.stringify(seen));
 
     // Writes, always: then they just happen.
     await tool("write_file", { path: "notes/a.md", content: "# A" });

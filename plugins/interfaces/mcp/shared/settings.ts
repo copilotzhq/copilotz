@@ -33,8 +33,13 @@ export type McpLimits = {
   atOnce: number;
   addressAtOnce: number;
   chatAtOnce: number;
-  /** Seconds a tool may run: past them, it's stopped, and the model is told so. */
+  /**
+   * Seconds the route waits for a call's answer: past them, the model is told it's still
+   * working, and to ask again (the call goes on); and seconds a call may run in all: past them,
+   * it's stopped.
+   */
   timeout: number;
+  stop: number;
   /** Calls one conversation may make a minute, and all of the line's conversations together. */
   perMinute: number;
   linePerMinute: number;
@@ -126,7 +131,7 @@ export type McpSettings = {
 /**
  * What a line takes, unless it says: a request of 64 KiB (a tool's input
  * is small); 8 calls at once, 2 from one address and 2 in one conversation;
- * tools running 20 seconds at most; 30 calls a minute from one
+ * 20 seconds' wait for an answer, and 2 minutes for a call in all; 30 calls a minute from one
  * conversation, 600 from all; 600 new conversations an hour, 30 from one
  * user; from one address, 60 calls a minute and 20 new conversations an
  * hour; answers of 100,000 characters.
@@ -137,6 +142,7 @@ export const LIMITS: McpLimits = {
   addressAtOnce: 2,
   chatAtOnce: 2,
   timeout: 20,
+  stop: 120,
   perMinute: 30,
   linePerMinute: 600,
   chatsPerHour: 600,

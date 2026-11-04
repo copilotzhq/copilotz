@@ -10,7 +10,7 @@ import { assert, assertEquals, assertMatch, assertNotEquals, assertRejects } fro
 import { test } from "../../../../testing/mod.ts";
 import type { Message, Step } from "../../../agents/chat/mod.ts";
 import { callIdOf, conversationOf } from "../shared/keys.ts";
-import { handleIn, runs, said, SECRET, setup, state } from "./setup.ts";
+import { charges, handleIn, hangs, runs, said, SECRET, setup, state } from "./setup.ts";
 
 const SCOPE = { line: "chatgpt" };
 const chatOf = (session: string, subject?: string) =>
@@ -491,14 +491,18 @@ test("at once by caller: 2 calls from one address, and 2 in one conversation; a 
       [0, 1, 2].map((i) => s.call("slow", {}, { session: `a${i}`, headers: from("203.0.113.20") })),
     );
     assertEquals(one.map((r) => r.status).sort(), [200, 200, 503]);
-    // One conversation, from three addresses: the same.
+    // One conversation, from three addresses, three different calls: the same.
     const chat = await Promise.all(
       [0, 1, 2].map((i) =>
-        s.call("slow", {}, { session: "c", id: `c${i}`, headers: from(`203.0.113.${30 + i}`) })
+        s.call("hang", { ms: 150 + i }, {
+          session: "c",
+          id: `c${i}`,
+          headers: from(`203.0.113.${30 + i}`),
+        })
       ),
     );
     assertEquals(chat.map((r) => r.status).sort(), [200, 200, 503]);
-    // A batch of three calls from one address is three: busy, each of its requests told.
+    // A batch of three calls from one address could never run at once: refused, not busy.
     const batch = await s.post(
       [0, 1, 2].map((i) => ({
         jsonrpc: "2.0",
@@ -508,21 +512,75 @@ test("at once by caller: 2 calls from one address, and 2 in one conversation; a 
       })),
       { headers: { "mcp-protocol-version": "", ...from("203.0.113.40") } },
     );
-    assertEquals(batch.status, 503);
-    const told = batch.body as unknown as { id: number; error: { code: number } }[];
-    assertEquals(told.map((t) => [t.id, t.error.code]), [[0, -31000], [1, -31000], [2, -31000]]);
+    assertEquals([batch.status, batch.headers.get("retry-after")], [400, null]);
+    assertEquals(batch.body.error?.code, -32600);
+    assertMatch(batch.body.error?.message ?? "", /at most 2 tool calls \(addressAtOnce\)/);
   });
 });
 
-test("a tool that runs past the line's timeout is stopped: the model is told, the step says so", async () => {
+test("past the line's timeout, the model is told it's still working; asked again, it answers", async () => {
   await setup(async (s) => {
-    const late = await s.call("slow", {}, { session: "c" });
+    const late = await s.call("slow", {}, { session: "c", id: 1 });
     assertEquals(late.body.result?.isError, true);
-    assertMatch(said(late), /took longer than 0.05 seconds, and was stopped/);
+    assertMatch(said(late), /^Still working on it/);
+    // It goes on: asked again (any request id), it waits for the same run, then answers from it.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assertEquals(said(await s.call("slow", {}, { session: "c", id: 1 })), "Done, slowly.");
+    assertEquals(runs.slow, 1);
     const { thread } = await chatOf("c");
     const [step] = await s.steps(thread);
-    assertMatch((step.toolCalls as Step[])[0].output, /^Error: It took longer/);
+    assertEquals((step.toolCalls as Step[])[0].output, "Done, slowly.");
   }, { line: { limits: { timeout: 0.05 } } });
+});
+
+test("a tool that ignores its signal, past the timeout: one effect, however often it's asked again", async () => {
+  await setup(async (s) => {
+    const asks = [];
+    // The first, then the model asking again under the same id and under new ones, while it runs.
+    for (const id of [1, 1, 2, 3]) {
+      asks.push(await s.call("charge", {}, { session: "pay", id }));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    // Each is told it's still working, or, once it's done, what it did.
+    assertMatch(said(asks[0]), /^Still working on it/);
+    assert(asks.every((a) => /^(Still working on it|Charged once)/.test(said(a))));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const answered = said(await s.call("charge", {}, { session: "pay", id: 1 }));
+    assertMatch(answered, /^Charged once, with key mcp:/);
+    assertEquals(charges.length, 1);
+  }, { line: { limits: { timeout: 0.03 } } });
+});
+
+test("a call still running past stop is stopped; asked again, it runs again as itself (retry)", async () => {
+  await setup(async (s) => {
+    const ask = () => s.call("hang", { ms: 300 }, { session: "h", id: 1 });
+    assertMatch(said(await ask()), /^Still working on it/);
+    // Stopped at 0.1 s; asked again after, it runs again as the same call, told it's a retry.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const rerun = JSON.parse(said(await ask()));
+    assertEquals(rerun.retry, true);
+    assertMatch(rerun.callId, /^mcp:mcp-[0-9a-f]{32}:[0-9a-f]{16}:[0-9a-f]{16}@/);
+    // The first, ignoring its signal, ended too: with the same callId, the key to do it once.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assertEquals(hangs, [rerun.callId, rerun.callId]);
+  }, { line: { limits: { timeout: 0.03, stop: 0.1 } } });
+});
+
+test("who the user is and where they call from are in no event", async () => {
+  await setup(async (s) => {
+    const seen: unknown[] = [];
+    const stop = s.runtime.subscribe((item) => {
+      if (item.kind === "event") seen.push(item.event);
+    });
+    await s.call("pick", { trip: "T1" }, { session: "conv-A", subject: "ana" });
+    await s.call("pick", { trip: "T2" }, { session: "conv-B", subject: "ana" });
+    await s.runtime.idle();
+    stop();
+    assert(seen.length > 10);
+    const logged = JSON.stringify(seen);
+    assert(!logged.includes('"user"') && !logged.includes('"address"'), "an event names them");
+    assert(!/"u-[0-9a-f]{24}"|"a-[0-9a-f]{24}"/.test(logged), "an event holds their HMACs");
+  });
 });
 
 test("a runtime's calls at once are its own: one org's busy line leaves another's free", async () => {

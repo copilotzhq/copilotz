@@ -17,9 +17,13 @@
  * - **At once.** Tool calls running at once: in the runtime (`mcp.atOnce`,
  *   8), on the line (`limits.atOnce`, 8), from one caller's address
  *   (`addressAtOnce`, 2: a batch's every call counts) and in one
- *   conversation (`chatAtOnce`, 2). Past any, the server is busy (503,
- *   `Retry-After`, -31000, its own code), before anything runs; a busy
- *   batch is answered an error for each of its requests.
+ *   conversation (`chatAtOnce`, 2), each call taking its places until it's
+ *   done. Past any, it's busy (503, `Retry-After`, -31000, its own code),
+ *   before anything runs; in a batch, that call's answer says so (and a
+ *   batch busy for every call is a 503). A batch with more tool calls than
+ *   one caller may run at once could never be served: it's refused
+ *   (-32600). A call that hasn't answered within the line's `timeout` is
+ *   answered "still working" while it goes on (see tools.ts).
  * - **JSON-RPC 2.0.** One message a request. A notification (or a reply)
  *   answers 202. Bad JSON is -32700, a malformed message -32600, an unknown
  *   method -32601, bad params -32602; what fails inside says -32603 and
@@ -43,11 +47,11 @@
 import { linksOf, type Runtime } from "../../../../runtime/mod.ts";
 import { type Caller, callerFrom } from "../shared/caller.ts";
 import { atOnceOf, callerOf, type Line, lineOf, PATH } from "../shared/settings.ts";
-import { hold, isBusy } from "./running.ts";
+import { isBusy } from "./running.ts";
 import { called, listed, mirrored, offeredOf, type Said, usable } from "./tools.ts";
 
 /** What the web host hands the route: the runtime. */
-export type McpHost = { runtime: Pick<Runtime, "call" | "describe" | "observe"> };
+export type McpHost = { runtime: Pick<Runtime, "call" | "cancel" | "describe" | "observe"> };
 
 /** The version without a handshake, and the ones with one, newest first. */
 const MODERN = "2026-07-28";
@@ -156,11 +160,8 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
     request,
     caller,
     scope: { line: line.name, ...(org ? { org } : {}), secret },
-    // A conversation's own place, taken once the route knows which it is.
-    holdChat: (thread) =>
-      hold(runtime, [{ key: `chat:${line.name}|${thread}`, most: line.limits.chatAtOnce }]),
+    atOnce: atOnceOf({ resources }),
   };
-  const messages = Array.isArray(parsed) ? parsed : [parsed];
   if (Array.isArray(parsed)) {
     // Batches were MCP's only in 2025-03-26.
     const version = request.headers.get("mcp-protocol-version") ?? UNSAID;
@@ -170,50 +171,29 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
         fault(undefined, REQUEST, `One message a request (from 2025-03-26, ${BATCH} at most)`),
       );
     }
-  }
-  // A request that calls tools takes its places first: one in the runtime and on the line (a
-  // batch's calls go one by one), and one for each of its calls from the caller's address.
-  const calls = messages.filter((m) => isObject(m) && m.method === "tools/call").length;
-  const release = calls
-    ? hold(runtime, [
-      { key: "runtime", most: atOnceOf({ resources }) },
-      { key: `line:${line.name}`, most: line.limits.atOnce },
-      ...(caller && !caller.exempt
-        ? [{
-          key: `address:${line.name}|${caller.counted}`,
-          most: line.limits.addressAtOnce,
-          adds: calls,
-        }]
-        : []),
-    ])
-    : () => {};
-  if (!release) {
-    if (!Array.isArray(parsed)) {
-      const id = isObject(parsed) ? idOf(parsed.id) : undefined;
-      return respond(503, fault(id, BUSY, BUSY_TEXT), AGAIN);
-    }
-    // A batch: each of its requests is told.
-    const told = parsed.flatMap((m) =>
-      isObject(m) && "id" in m && idOf(m.id) !== undefined
-        ? [fault(idOf(m.id), BUSY, BUSY_TEXT)]
-        : []
-    );
-    return respond(503, told, AGAIN);
-  }
-  try {
-    if (!Array.isArray(parsed)) {
-      const { status, body, again } = await answered(context, parsed, false);
-      return respond(status, body, again ? AGAIN : {});
+    // More tool calls than one caller may run at once could never be served: not a busy moment.
+    const calls = parsed.filter((m) => isObject(m) && m.method === "tools/call").length;
+    const most = line.limits.addressAtOnce;
+    if (caller && !caller.exempt && calls > most) {
+      return respond(
+        400,
+        fault(undefined, REQUEST, `A batch takes at most ${most} tool calls (addressAtOnce)`),
+      );
     }
     const bodies = [];
     for (const message of parsed) {
       const { body } = await answered(context, message, true);
       if (body) bodies.push(body);
     }
-    return bodies.length ? respond(200, bodies) : respond(202);
-  } finally {
-    release();
+    // Every call in it busy: the batch is (and may be sent again).
+    const busyAll = bodies.length > 0 &&
+      bodies.every((b) => (b.error as { code?: number } | undefined)?.code === BUSY);
+    return bodies.length
+      ? respond(busyAll ? 503 : 200, bodies, busyAll ? AGAIN : {})
+      : respond(202);
   }
+  const { status, body, again } = await answered(context, parsed, false);
+  return respond(status, body, again ? AGAIN : {});
 }
 
 /** A request's id, when it's one JSON-RPC takes. */
@@ -228,7 +208,8 @@ type Context = {
   /** Who calls, as the front says (undefined without the app's `caller` settings). */
   caller?: Exclude<Caller, "refused">;
   scope: { line: string; org?: string; secret: string };
-  holdChat(thread: string): (() => void) | undefined;
+  /** Calls the runtime runs at once. */
+  atOnce: number;
 };
 
 /** A request's body as text, or undefined past `limit` bytes. */
@@ -357,7 +338,7 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
             request: rpc,
             said: conversation,
             caller: c.caller,
-            holdChat: c.holdChat,
+            atOnce: c.atOnce,
           }),
         );
       }

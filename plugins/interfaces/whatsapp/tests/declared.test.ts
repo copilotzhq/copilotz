@@ -125,3 +125,46 @@ test("an app with only a declared line answers strangers, in a space of its own 
     await graph.close();
   }
 });
+
+test("a declared space is the app's: nobody makes it first, and one a person made isn't adopted", async () => {
+  const graph = await fakeGraph();
+  const store = memoryStore();
+  const plugin = (spaces: Record<string, unknown>) =>
+    definePlugin({
+      name: "line-app",
+      resources: {
+        provider: { e: { adapter: "e" } },
+        agents: { booking: { instructions: "Sell tickets.", model: "e/booking" } },
+        spaces,
+      },
+      adapters: { llm: { e: echo } },
+    });
+  const start = (spaces: Record<string, unknown>) =>
+    createRuntime({ store, plugins: [models, chat, ...access, whatsapp, plugin(spaces)] });
+  const ops = { kind: "person", id: "ops", staff: true };
+  let runtime = await start({ line: { name: "Mobifácil", agents: ["booking"] } });
+  try {
+    // Before the line's first message, a person can't make its space and manage it.
+    await assertRejects(
+      () => runtime.call("space.create", { id: "line", name: "mine" }, { actor: ops }),
+      Error,
+      "the app's own",
+    );
+    // A space a person made before a release declares its id: refused, never adopted.
+    await runtime.call("space.create", { id: "later", name: "mine" }, { actor: ops });
+    await runtime.close();
+    runtime = await start({ later: { name: "Mobifácil", agents: ["booking"] } });
+    await assertRejects(
+      () => runtime.call("space.keep", { id: "later" }),
+      Error,
+      "made by a person",
+    );
+    const later = await store.findOne("space", { _id: "later" });
+    assertEquals([later?.name, later?.declared], ["mine", undefined]);
+    // Own names only: "constructor" is no space the app declares.
+    assertEquals(await runtime.call("space.keep", { id: "constructor" }), { space: null });
+  } finally {
+    await runtime.close();
+    await graph.close();
+  }
+});

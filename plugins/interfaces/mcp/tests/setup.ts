@@ -57,7 +57,7 @@ const silent: LlmAdapter = {
   },
 };
 
-/** A booking: one per chat, part of it (the app's own, as Mobizap's is). */
+/** A booking: one per chat, part of it (the app's own, as a real booking app's would be). */
 type Booking = { _id: string; thread: string; in: string; trip: string };
 
 /** Every tool but `raw` reads as its output to a model (a View the app chose). */
@@ -283,7 +283,7 @@ export const app = definePlugin({
 export const LINE: McpLine = {
   in: "line",
   client: "ChatGPT",
-  title: "Mobifácil",
+  title: "Viação Azul",
   instructions: "Buy bus tickets.",
   tools: {
     search: { invoking: "Searching…", invoked: "Found trips." },

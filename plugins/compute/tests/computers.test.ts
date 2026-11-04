@@ -60,16 +60,18 @@ async function setup(
   fn: (
     rt: Awaited<ReturnType<typeof createRuntime>>,
     topic: string,
+    store: ReturnType<typeof memoryStore>,
   ) => Promise<void>,
 ) {
   const topic = `computers-test.${crypto.randomUUID()}`;
+  const store = memoryStore();
   const rt = await createRuntime({
-    store: memoryStore(),
+    store,
     plugins: [models, chat, ...access, computers, app],
     transports: [{ type: "in-process", config: { topic } }],
   });
   try {
-    await fn(rt, topic);
+    await fn(rt, topic, store);
   } finally {
     await rt.close();
   }
@@ -81,7 +83,7 @@ async function until(check: () => Promise<boolean>, what: string) {
 }
 
 test("a person connects their computer with a code; it's told its secret, and comes back with it", async () => {
-  await setup(async (rt, topic) => {
+  await setup(async (rt, topic, store) => {
     const { code } = await rt.call<{ code: string }>("computer.code", {}, { actor: ana });
     assertEquals(code.length, 9);
     const computer = fakeComputer(topic, `code:${code}`);
@@ -110,6 +112,11 @@ test("a person connects their computer with a code; it's told its secret, and co
     await reused.worker.ready.catch(() => refused = true);
     assert(refused, "a code works once");
     await reused.worker.stop().catch(() => {});
+    // Neither the code nor the computer's secret is in the log.
+    await rt.idle();
+    const logged = JSON.stringify(await store.events(0, 10_000));
+    const told = computer.credential().slice(connected._id.length + 1);
+    assertEquals([logged.includes(code), logged.includes(told)], [false, false]);
   });
 });
 
@@ -142,7 +149,7 @@ test("a computer that lost its secret before keeping it comes back with its code
 });
 
 test("an agent works on its space's computer, in the space's folder, once its person says yes", async () => {
-  await setup(async (rt, topic) => {
+  await setup(async (rt, topic, store) => {
     const { space } = await rt.call<{ space: string }>("space.personal", {}, { actor: ana });
     const { thread } = await rt.call<{ thread: string }>("chat.send", {
       text: "hello",
@@ -281,6 +288,16 @@ test("an agent works on its space's computer, in the space's folder, once its pe
     });
     const listed = computer.asked.find((a) => a.work === WORK.filesList)!;
     assertEquals(listed.input.scope, { space: space, folder: "personal", who: "person:ana" });
+    // What she types and is shown there (a secret, often) stays out of the log.
+    const typed = `export TOKEN=tok_${crypto.randomUUID()}`;
+    const shown = await rt.call<{ stdout: string }>("computer.work", {
+      desk: desk._id,
+      work: "terminal",
+      input: { stdin: typed },
+    }, { actor: ana });
+    assertEquals(shown.stdout, `ran ${typed}`);
+    await rt.idle();
+    assert(!JSON.stringify(await store.events(0, 10_000)).includes(typed), "not in the log");
     // Bob can't use it: it isn't in a space of his.
     const refused = await rt.call("computer.work", {
       desk: desk._id,

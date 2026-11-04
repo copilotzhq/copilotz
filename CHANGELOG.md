@@ -1,3 +1,30 @@
+## Unreleased
+
+- **Security: a Google sign-in no longer writes the session's secret to the log.** `google.sign-in`
+  was a recorded Action, so the event log kept its input, the Google ID token, and its result,
+  `{ person, session }`, with the new session's secret in plain text. Anyone who could read the log
+  (a database reader, a backup, an export, an exporter) could sign in as that person, staff
+  included. The identity plugin keeps secrets only as hashes, and this Action undid that. It is now
+  unrecorded (`record: false`), like `session.start`. So is `session.end`, whose input is the secret
+  being ended. Found by a security review.
+  - **Computers' secrets are kept out of the log too**, found by checking every Action for the same
+    mistake. These are now unrecorded: `computer.admit`, whose input is a computer's secret (or the
+    code connecting it) on every connect; `pool.admit`, whose input is a pool VM's identity token;
+    `computer.code`, whose result is the code that connects a computer as its person; and
+    `computer.work`, whose input and result are what a person types and sees in their shell, files'
+    contents and the env values they pass. `computer.enrollment`'s result (`code`) and
+    `pool.serve`'s `assign.code` and `assign.secret` (also when forwarded by `remotePool`) are
+    private: still recorded, so a retried wake gets the same code, but the code isn't logged.
+  - **Deployments should end every session made before this fix.** Delete the `credential` documents
+    of `kind: "session"`, so every signed-in person signs in again. Keys are unaffected. A
+    computer's secret can't be rotated yet: where the log may have been read, forget the computer
+    (`computer.forget`) and connect it again with a new code.
+  - **Old events still hold these secrets until they're scrubbed**, from the store and from anything
+    that copied it: the `action.started` and `action.completed` events of `google.sign-in`,
+    `computer.code`, `computer.enrollment` and `computer.work`, and the `action.started` events of
+    `session.end`, `computer.admit`, `pool.admit` and `pool.serve`. Ended sessions, used codes and
+    expired tokens prove nobody, but scrub them anyway.
+
 ## 1.0.0-rc.21 — 2026-11-04
 
 - **Security: a burst of calls no longer drops an executor's connection** (Oxian 0.23.3). About 35

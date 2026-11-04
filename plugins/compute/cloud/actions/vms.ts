@@ -135,6 +135,8 @@ export const takeAction = defineAction({
 });
 
 export const serveAction = defineAction({
+  // What connects the computer stays out of the log.
+  private: ["assign.code", "assign.secret"],
   input: {
     type: "object",
     properties: { vm: { type: "string" }, assign: { type: "object" }, org: { type: "string" } },

@@ -15,6 +15,8 @@ import { code, hash } from "../shared/secret.ts";
 import { settingsOf } from "../shared/settings.ts";
 
 export const enrollmentAction = defineAction({
+  // Recorded, so a retried wake gets the same code; the code itself stays out of the log.
+  private: ["code"],
   input: {
     type: "object",
     properties: { computer: { type: "string" } },

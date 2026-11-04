@@ -21,6 +21,7 @@ import type {
 } from "./define.ts";
 import { type Blobs, hydrate, offload } from "./blobs.ts";
 import { createCache } from "./cache.ts";
+import { createMaintenance, type Maintenance } from "./maintain.ts";
 import { createObservers, type Observation, type ObserveOptions } from "./observe.ts";
 import { reading, startup } from "./reads.ts";
 import { BROWSER, createBrowsers, READ_VIEW, readView, SESSION, WIRE } from "./browsers.ts";
@@ -169,6 +170,11 @@ export type Owner = {
    */
   wake(): Promise<void>;
   stats(): Stats;
+  /**
+   * SQL beside the collections, for trusted host code only (the maintenance
+   * plugin's routes): plugin code never gets it. See runtime/maintain.ts.
+   */
+  maintenance: Maintenance;
   /** The Oxian Hypervisor executors connect to; serve it to accept remote executors. */
   hypervisor: Hypervisor;
   /**
@@ -1659,6 +1665,19 @@ export async function createOwner(
   await timers.recover();
 
   const api: Owner = {
+    maintenance: createMaintenance({
+      store,
+      epoch,
+      blobs: options.blobs,
+      blobThreshold: options.blobThreshold,
+      // SQL changed what nothing follows: forget what came from documents, then tell.
+      wrote: (events) => {
+        cache?.clear();
+        committed([], events);
+        observers.stale();
+        void timers.wake();
+      },
+    }),
     workers: {
       async dispatch(kind, id, workload, body, options = {}) {
         const def = registry.workers[kind];

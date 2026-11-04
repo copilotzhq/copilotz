@@ -22,6 +22,7 @@
  * PGlite has a single connection, so its reads wait for an open transaction.
  */
 import type { JSONSchema } from "../../../runtime/define.ts";
+import { invalid } from "../../../runtime/errors.ts";
 import { applyUpdate, seedOf } from "../../../runtime/mongo.ts";
 import { canonical } from "../../../runtime/registry.ts";
 import {
@@ -57,6 +58,7 @@ import {
 } from "./layout.ts";
 import { type PostgresPool, postgresPool } from "./pool.ts";
 import { dropTenant } from "./tenants.ts";
+import { statement } from "../shared/statement.ts";
 
 export { type PostgresPool, postgresPool } from "./pool.ts";
 export { copyTenant, dropTenant, exportTenant, type Location } from "./tenants.ts";
@@ -91,6 +93,32 @@ const binder = () => {
 };
 
 const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
+
+/** Statements a cursor can hold, so a read stops at its limit. */
+const CURSORS = new Set(["SELECT", "WITH", "VALUES", "TABLE"]);
+
+const sharedSchema = () =>
+  Object.assign(
+    new Error("This store shares its schema with other tenants: SQL could reach theirs."),
+    { code: "shared_schema" },
+  );
+
+/**
+ * A database's refusal of maintenance SQL, said so: `read_only` (a write in
+ * a read), `timeout` (it ran too long), else `sql`, with its SQLSTATE.
+ */
+const refused = (error: unknown) => {
+  const state = (error as { code?: unknown })?.code;
+  if (typeof state !== "string" || !/^[0-9A-Z]{5}$/.test(state)) return error;
+  const code = state === "25006" ? "read_only" : state === "57014" ? "timeout" : "sql";
+  return Object.assign(new Error(error instanceof Error ? error.message : String(error)), {
+    code,
+    state,
+  });
+};
+
+/** A reading that stops at the rows it fetched: nothing it did is kept. */
+const READ = Symbol("read");
 
 /**
  * A document (a jsonb expression) without the private fields at these dot
@@ -135,8 +163,15 @@ export async function postgresStore(options: {
     /** Exposes each collection as a SQL view of its schema's top-level fields. */
     describe(collections: Record<string, JSONSchema>): Promise<void>;
     index(collections: Record<string, IndexSpec[]>): Promise<void>;
-    /** Runs a read-only query, for inspection tools; in a schema of its own only. */
-    inspect(sql: string): Promise<Row[]>;
+    /**
+     * Runs one read-only statement, for inspection and maintenance tools; in
+     * a schema of its own only.
+     */
+    inspect(
+      sql: string,
+      params?: unknown[],
+      options?: { limit?: number; timeout?: number },
+    ): Promise<Row[]>;
     /** Deletes everything this store holds, then closes: a tenant gone for good. */
     drop(): Promise<void>;
   }
@@ -153,6 +188,17 @@ export async function postgresStore(options: {
   const T = constant(tenant);
   const writer = pool.writes;
   const committed = pool.reads;
+  /**
+   * Maintenance SQL's settings, for its transaction only: the views show this
+   * tenant, unqualified names are the schema's, and a statement runs at most
+   * `timeout` ms.
+   */
+  const scoped = (timeout?: number) =>
+    `set_config('copilotz.tenant', ${T}, true), set_config('search_path', ` +
+    `${constant(`${ident(schema)}, public`)}, true)` +
+    (timeout !== undefined && Number.isFinite(timeout) && timeout > 0
+      ? `, set_config('statement_timeout', ${constant(String(Math.ceil(timeout)))}, true)`
+      : "");
   let layout: Layout;
   try {
     layout = await prepare(pool, schema);
@@ -391,6 +437,7 @@ export async function postgresStore(options: {
     tx: Session,
     emitted: Omit<Event, "seq" | "at">[],
     held: Held,
+    alone: boolean,
   ): Transaction & { flush(): Promise<void> } => {
     /** The ids that went in. With `ifAbsent`, existing ones are left as they are. */
     const insert = async (collection: string, docs: Doc[], ifAbsent = false) => {
@@ -650,6 +697,34 @@ export async function postgresStore(options: {
       },
       emit(value) {
         emitted.push({ ...value, id: value.id ?? crypto.randomUUID() });
+      },
+      /**
+       * Maintenance SQL, as it is (runtime/maintain.ts). Alone, so no other
+       * write holds numbers for events it might add to the log; the rows it
+       * changed are what this transaction's table statistics moved by.
+       */
+      async execute(sql, params = [], options = {}) {
+        if (!alone) throw invalid("SQL runs only in a transaction that runs alone.");
+        const { text } = statement(sql, "postgres", "write");
+        await flush();
+        if (await others(counted(tx), schema, tenant)) throw sharedSchema();
+        const moved = `(SELECT coalesce(sum(n_tup_ins + n_tup_upd + n_tup_del), 0) FROM ` +
+          `pg_stat_xact_user_tables WHERE schemaname = ${constant(schema)})::bigint`;
+        const [before] = await run(tx, `SELECT ${scoped(options.timeout)}, ${moved} AS n`);
+        let rows: Row[];
+        try {
+          rows = await run(tx, text, params);
+        } catch (error) {
+          throw refused(error);
+        }
+        const [after] = await run(
+          tx,
+          `SELECT ${moved} AS n, (SELECT coalesce(max(seq), 0) FROM ${t("events")} WHERE ` +
+            `tenant = ${T}) AS seq`,
+        );
+        // Events it wrote into the log keep their numbers: this commit's go after them.
+        if (last !== undefined) last = Math.max(last, Number(after.seq));
+        return { rows, changed: Number(after.n) - Number(before.n) };
       },
     };
   };
@@ -1139,7 +1214,7 @@ export async function postgresStore(options: {
       );
     },
     transaction: (owner, work, options = {}) =>
-      gate(false, async () => {
+      gate(options.alone ?? false, async () => {
         const positions = options.positions ?? {};
         // The database transaction opens with the command's first statement. A
         // command that only records events (an action's completion, say) needs
@@ -1176,7 +1251,7 @@ export async function postgresStore(options: {
         // What the last statement inserts, to name a duplicate _id if it fails.
         let inserting: [string, Doc][] = [];
         try {
-          const scope = transaction(lazy, emitted, held);
+          const scope = transaction(lazy, emitted, held, options.alone ?? false);
           const result = await work(scope);
           const events = unique(emitted);
           const writes = events.length || Object.keys(positions).length ||
@@ -1322,22 +1397,31 @@ export async function postgresStore(options: {
       }
       known.set(key, signature);
     },
-    async inspect(sql) {
+    async inspect(sql, params = [], options = {}) {
+      const { text, keyword } = statement(sql, "postgres", "read");
       // Any SQL can reach the tables, and so other tenants' rows: only in a schema of its own.
-      if (await others(counted(committed), schema, tenant)) {
-        throw Object.assign(
-          new Error("This store shares its schema with other tenants: it can't be inspected."),
-          { code: "shared_schema" },
-        );
+      if (await others(counted(committed), schema, tenant)) throw sharedSchema();
+      const { limit } = options;
+      let rows: Row[] = [];
+      try {
+        await committed.transaction(async (tx: Session) => {
+          await tx.query(`SELECT ${scoped(options.timeout)}`);
+          if (limit !== undefined && CURSORS.has(keyword)) {
+            // A cursor fetches only what's asked for, however many rows the query has.
+            await tx.query(`DECLARE copilotz_inspect NO SCROLL CURSOR FOR ${text}`, params);
+            const count = Math.max(0, Math.floor(limit));
+            rows = (await tx.query(`FETCH FORWARD ${count} FROM copilotz_inspect`)).rows;
+          } else {
+            rows = (await tx.query(text, params)).rows;
+            if (limit !== undefined) rows = rows.slice(0, limit);
+          }
+          // Rolled back: whatever it set (a setting, for the session) goes with it.
+          throw READ;
+        }, { readOnly: true });
+      } catch (error) {
+        if (error !== READ) throw refused(error);
       }
-      return await committed.transaction(async (tx: Session) => {
-        // The views show this tenant, and unqualified names are the schema's.
-        await tx.query(
-          `SELECT set_config('copilotz.tenant', ${T}, true), set_config('search_path', ` +
-            `${constant(`${ident(schema)}, public`)}, true)`,
-        );
-        return (await tx.query(sql)).rows;
-      }, { readOnly: true });
+      return rows;
     },
     roundTrips: () => statements,
     close,

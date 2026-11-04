@@ -42,7 +42,13 @@ export function withLatency(store: Store, ms: number): Store {
       : {}),
     describe: store.describe?.bind(store),
     index: store.index?.bind(store),
-    ...("inspect" in store ? { inspect: (store as { inspect: unknown }).inspect } : {}),
+    ...(store.inspect
+      ? {
+        inspect: async (...args: Parameters<NonNullable<Store["inspect"]>>) => (
+          await trip(), store.inspect!(...args)
+        ),
+      }
+      : {}),
     roundTrips: () => trips,
     close: () => store.close(),
   };

@@ -27,7 +27,10 @@ dialect. Both keep five tables (`events`, `nodes` with documents as JSON, `edges
 `blobs`) plus `meta` for the fencing epoch, and show every collection as a SQL view
 (`SELECT * FROM message`). Read them with any client while the runtime runs
 (`sqlite3 -box
-.data/copilotz.sqlite`, `psql`), or with `/sql <query>` in the chat.
+.data/copilotz.sqlite`, `psql`), or with `/sql <query>` in the chat. Maintenance SQL
+runs one statement on them as it is: `inspect` reads (read only, up to a limit), and a transaction's
+`execute` writes, only in a transaction that runs `alone` (the maintenance plugin's, through the
+owner: see the README's Maintenance).
 
 ## Tenants
 
@@ -58,7 +61,8 @@ only tenant (`""`), in the same tables.
 - **Views:** one per collection for the schema, showing the tenant a session names
   (`SET copilotz.tenant = 'org_1'`; else `""`, a schema's only tenant). Not a view per tenant: that
   grows the catalog with sign-ups, with DDL on every open. They're for reading: SQL can reach the
-  tables beside them, so `inspect` (`/sql` in the chat) runs only in a schema of its own.
+  tables beside them, so `inspect` and `execute` (`/sql` in the chat, the maintenance endpoints) run
+  only in a schema of its own.
 - **The layout before tenants** (no `tenant` column) migrates in place when a store opens it, in one
   transaction under a lock: its rows become the tenant `""`, keys are rebuilt to lead with it, and
   nothing is renumbered.

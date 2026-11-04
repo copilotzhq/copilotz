@@ -114,6 +114,7 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                          |
 | `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                |
 | `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`                                           |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `maintenance`                                     |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                    |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                    |
 | `copilotz/web`                         | the web host in the browser (`web`), and its toolkit (`Button`, `Markdown`…)                                 |
@@ -546,6 +547,10 @@ filled by the front ends through resources).
   `voice`), a caller speaking over it cuts it there (the agent is told what was heard), a failed or
   slow answer says a short line in the line's language, and silence, a call too long or the agent's
   `end_call` ends it. Its socket needs a host that takes a route's socket (`serveRoutes`).
+  messages, and what agents say to them goes back, a long answer in several messages.
+- **`maintenance`**: HTTP for an app's operators when they can't reach its database, with one key:
+  read SQL, the collections' operations through the owner, raw SQL writes inside it, blobs by id
+  (see [Maintenance](#maintenance)).
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.
@@ -622,6 +627,52 @@ org's rows copy elsewhere unchanged (`copyTenant`). Blobs (strings over 16 KiB, 
 live in the store by default, or as files (`fileBlobs`), in a bucket (`httpBlobs`), or in Google
 Cloud Storage (`gcsBlobs`).
 
+## Maintenance
+
+When an app's operators can't reach its database (a client's network that keeps their database user
+out), the `maintenance` plugin (`copilotz/plugins/interfaces`) answers for it over HTTP, under
+`/maintenance/`, with one key the app gives it:
+`resources: { maintenance: { key: process.env.MAINTENANCE_KEY } }` (at least 32 random characters;
+`limit` and `timeout` cap what one request reads, 1,000 rows and 30 s by default). It's the one
+place an app runs SQL of its own: plugin code never does.
+
+```sh
+curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
+  -d '{"sql": "SELECT _id, text FROM message WHERE thread = $1", "params": ["t1"]}'
+```
+
+| Endpoint                                          | What it does                                                                                           |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /maintenance/`                               | What's here: whether the store runs SQL, the collections, the limits                                   |
+| `POST /maintenance/sql`                           | `{ sql, params?, limit?, timeout? }`: one read-only statement: `{ rows, count, truncated, ms }`        |
+| `POST /maintenance/sql/write`                     | `{ sql, params?, limit?, timeout? }`: one that writes, in the owner: `{ changed, rows, event }`        |
+| `POST /maintenance/collections/<collection>/<op>` | `insertOne` `{ doc }`… `deleteMany` `{ filter }`, and `find`, `findOne`, `countDocuments`, `aggregate` |
+| `POST /maintenance/queries/<collection>.<name>`   | A collection's named query (`booking.stats`), the body its params: `{ result, ms }`                    |
+| `GET /maintenance/blobs/<sha256-…>`               | A blob's bytes and type, as a download                                                                 |
+
+- **Who:** every request shows the key (`Authorization: Bearer <key>`), compared in constant time,
+  and acts as the maintenance actor (`{ kind: "maintenance", id: "maintenance", by }`, `by` from
+  `X-Maintenance-By`, as said). Its Actions let only it call them, and run as the system on the
+  record (`ctx.as()`): no rule keeps it from a document, and every event says `via` it. Writes take
+  an `Idempotency-Key`: sent again, one answers what it did the first time.
+- **Read SQL** is one statement (a `;` outside its strings and comments ends it) in a read-only
+  transaction (SQLite: `query_only`, on the reading connection), stopped at its limit (a cursor in
+  PostgreSQL) and cut off after its timeout (on a PostgreSQL server).
+- **Operations go through the owner's write path:** checked against the collection's schema,
+  recorded as its events, cached and heard by Processors like any write. Prefer them. Named queries
+  run as the system does them (`runtime.query` with no actor), and check their own params.
+- **Raw SQL writes run inside the owner** (`runtime.maintenance.write`, see `runtime/maintain.ts`),
+  for what operations can't do: alone among its writes (those running end first, the next wait for
+  it), in a transaction fenced by its epoch, so an owner that lost the store can't run one, and with
+  one `maintenance.sql` event in the same commit (the statement, its params, the rows it changed,
+  who). Nothing that would end that transaction or outlive it on the connection runs (`COMMIT`,
+  `SET`, a SQLite `PRAGMA`…). It bypasses schemas and per-document events, so the owner then forgets
+  what it derived from documents: its cache empties, observed Views run again, and the clock reads
+  the timers again. Processors' positions and the fencing epoch (`meta`) are read only at start:
+  leave them be.
+- **Where:** SQL needs a SQL store, and a PostgreSQL store in a schema other tenants share refuses
+  it (SQL could reach their rows); operations and blobs work everywhere, the memory store too.
+
 ## The example app
 
 `examples/terminal-agent` is an app on all of it: an assistant and a researcher, notes in spaces,
@@ -659,7 +710,7 @@ connects a computer to it; `/approve once|thread|always|no` answers what agents 
 
 Inside the chat: `/new`, `/threads`, `/open <n>`, `/history`, `/memories`, `/usage [all]`,
 `/metrics [name]` (with `OTEL_EXPORTER_OTLP_ENDPOINT` set, metrics also go to that collector),
-`/prompt [agent]`, `/fork`, `/retry`, `/events [n]`, `/stats`, `/sql <query>` (SQLite only),
+`/prompt [agent]`, `/fork`, `/retry`, `/events [n]`, `/stats`, `/sql <query>` (a SQL store),
 `/quit`. Every turn prints its time, its database round trips, the jobs sent to executors and the
 calls they made back to the owner.
 
@@ -796,6 +847,8 @@ changed, a limited result lost a member, or an existing document newly matched a
   differs between stores); reads inside a transaction, which see the transaction's own writes.
 - **Freshness:** a read that raced a commit to its collection doesn't fill the cache, and a
   transaction's changes reach the cache only once committed, before its events go out.
+- **Maintenance SQL** (see [Maintenance](#maintenance)) changes what the cache can't follow: the
+  owner empties it after one commits, and a read in flight across that fills nothing.
 
 `runtime/tests/cache.test.ts` checks every cached query against a direct store read after each of
 900 random writes, on every store. `createRuntime({ cache: false })` turns the cache off; `stats()`

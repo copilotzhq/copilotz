@@ -10,7 +10,9 @@
  *
  * The owner writes through one connection and reads committed state through a
  * second one. WAL mode lets any SQLite client read the file while it runs, and
- * each collection is also a SQL view (`SELECT * FROM message`).
+ * each collection is also a SQL view (`SELECT * FROM message`). Maintenance
+ * SQL (`inspect`, a transaction's `execute`) runs one statement on them, as
+ * it is; SQLite has no statement timeout, so `timeout` is not kept here.
  */
 type SQLInputValue = null | number | bigint | string | Uint8Array;
 
@@ -28,6 +30,8 @@ export type SqliteStatement = {
   all(...params: SQLInputValue[]): unknown[];
   get(...params: SQLInputValue[]): unknown;
   run(...params: SQLInputValue[]): { changes: number | bigint; lastInsertRowid: number | bigint };
+  /** Rows one at a time (both have it), so a read can stop at its limit. */
+  iterate?(...params: SQLInputValue[]): IterableIterator<unknown>;
 };
 
 // Not literal, so no checker or bundler tries to resolve the one this runtime lacks.
@@ -61,6 +65,7 @@ import {
 import { type Bind, page, type Scalars, where } from "../shared/filter.ts";
 import { scalar, sqlite, sqliteAggregates } from "./dialect.ts";
 import { grouped } from "../shared/aggregate.ts";
+import { statement as checked } from "../shared/statement.ts";
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value ANY) STRICT;
@@ -118,6 +123,54 @@ const binder = () => {
 
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 
+/** A JSON value as SQLite binds it: booleans as 1 and 0, objects and arrays as JSON text. */
+const bindable = (value: unknown): SQLInputValue =>
+  value === undefined || value === null
+    ? null
+    : typeof value === "boolean"
+    ? Number(value)
+    : typeof value === "object" && !(value instanceof Uint8Array)
+    ? JSON.stringify(value)
+    : value as SQLInputValue;
+
+/** SQLite's refusal of maintenance SQL, said so: `read_only` (a write in a read), else `sql`. */
+const refused = (error: unknown) => {
+  const { errcode, errno, errstr } = error as { errcode?: number; errno?: number; errstr?: string };
+  const number = errcode ?? errno;
+  if (typeof number !== "number") return error;
+  const message = error instanceof Error ? error.message : String(errstr ?? error);
+  // SQLITE_READONLY is 8, with extended codes in its upper bits.
+  return Object.assign(new Error(message), {
+    code: (number & 0xff) === 8 ? "read_only" : "sql",
+    state: number,
+  });
+};
+
+/**
+ * Rows of a statement, at most `limit` when given. A query (`SELECT`,
+ * `VALUES`: never a write, in SQLite) stops there; anything else runs whole,
+ * as `all` does, since stepping a write that `query_only` refuses ends
+ * quietly instead of failing.
+ */
+const rowsOf = (
+  prepared: SqliteStatement,
+  keyword: string,
+  params: SQLInputValue[],
+  limit?: number,
+) => {
+  if (limit === undefined || !prepared.iterate || !["SELECT", "VALUES"].includes(keyword)) {
+    const rows = prepared.all(...params) as Row[];
+    return limit === undefined ? rows : rows.slice(0, limit);
+  }
+  const rows: Row[] = [];
+  if (limit <= 0) return rows;
+  for (const row of prepared.iterate(...params)) {
+    rows.push(row as Row);
+    if (rows.length >= limit) break;
+  }
+  return rows;
+};
+
 export async function sqliteStore(options: {
   path: string;
   /** Each connection's page cache (64 MiB) and memory-mapped reads (256 MiB). */
@@ -130,6 +183,8 @@ export async function sqliteStore(options: {
     /** Exposes each collection as a SQL view of its schema's top-level fields. */
     describe(collections: Record<string, JSONSchema>): void;
     index(collections: Record<string, IndexSpec[]>): void;
+    /** Runs one read-only statement on the reading connection, for inspection and maintenance. */
+    inspect(sql: string, params?: unknown[], options?: { limit?: number }): Promise<Row[]>;
   }
 > {
   const connect = async () => {
@@ -454,6 +509,20 @@ export async function sqliteStore(options: {
       emit(value) {
         emitted.push({ ...value, id: value.id ?? crypto.randomUUID() });
       },
+      // Maintenance SQL, as it is: the writer runs one transaction at a time, so it's alone.
+      async execute(sql, params = []) {
+        const { text } = checked(sql, "sqlite", "write");
+        const before = changes();
+        try {
+          // Not among the prepared statements kept: each is its own.
+          const rows = await Promise.resolve(
+            writer.prepare(text).all(...params.map(bindable)) as Row[],
+          );
+          return { rows, changed: changes() - before };
+        } catch (error) {
+          throw refused(error);
+        }
+      },
     };
   };
 
@@ -563,6 +632,21 @@ export async function sqliteStore(options: {
       const had = new Set(existing.map(({ name }) => name));
       if ([...wanted].some((name) => !had.has(name))) {
         analyze();
+      }
+    },
+    async inspect(sql, params = [], options = {}) {
+      const { text, keyword } = checked(sql, "sqlite", "read");
+      // The reading connection, refusing writes while it runs (it's synchronous: nothing else
+      // runs on it meanwhile).
+      committed.exec("PRAGMA query_only = 1");
+      try {
+        return await Promise.resolve(
+          rowsOf(committed.prepare(text), keyword, params.map(bindable), options.limit),
+        );
+      } catch (error) {
+        throw refused(error);
+      } finally {
+        committed.exec("PRAGMA query_only = 0");
       }
     },
     describe(collections) {

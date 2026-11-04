@@ -1,11 +1,12 @@
 /**
  * What other front ends show over where you type (chat's `conversation`
- * resource): their Views, each with hints `{ thread, in, working }`.
- * `working` is true while an agent's turn runs in the conversation (or its
- * subthreads), held 600 ms after the last step ends, so what waits for the
- * turn to be over (an agent asking for your OK) shows once, when it is,
- * rather than flickering between its steps. Nothing shows until a View has
- * something to say.
+ * resource): their Views, each with hints `{ thread, in, working, busy }`.
+ * `busy` is the agents whose turns run in the conversation (or its
+ * subthreads), each held 600 ms after its last step ends, and `working`
+ * whether there are any; so what waits for an agent's turn to be over (its
+ * asking for your OK) shows once, when it is, rather than flickering between
+ * its steps, and isn't kept waiting by another agent still working. Nothing
+ * shows until a View has something to say.
  */
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { LazyView } from "../../../../../hosts/web/mod.ts";
@@ -17,20 +18,20 @@ export function Over(
     entries: ConversationView[];
     thread: string;
     space?: string;
-    /** Whether an agent's turn step is live here now. */
-    live: boolean;
+    /** The agents with a turn step live here now. */
+    live: string[];
   },
 ): ReactNode {
   const [hold] = useState(() => held(undefined, live));
-  useEffect(() => hold.set(live), [live]);
+  useEffect(() => hold.set(live), [live.join("\n")]);
   useEffect(() => () => hold.stop(), []);
-  const working = useSyncExternalStore(hold.subscribe, hold.get);
+  const busy = useSyncExternalStore(hold.subscribe, hold.get);
   return entries.map((entry) => (
     <LazyView
       key={entry.view}
       kind={entry.view}
       item={{}}
-      hints={{ thread, ...(space ? { in: space } : {}), working }}
+      hints={{ thread, ...(space ? { in: space } : {}), working: busy.length > 0, busy }}
       fallback={null}
     />
   ));

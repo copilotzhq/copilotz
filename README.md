@@ -22,7 +22,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.19"`),
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.20"`),
 and the imports below are the same everywhere. Some pieces need a package of their own, installed
 beside it: `esbuild` to bundle the web host on Node, `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types.
@@ -98,8 +98,9 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                               |
 | `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                         |
 | `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                              |
+| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account    |
 | `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                             |
-| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `tool`               |
+| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`    |
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`              |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                  |
 | `copilotz/plugins/access`              | `access` (`spaces`, `identity`), `accounts`, `directory`, `googleSignIn`                                     |
@@ -204,7 +205,7 @@ and an app serves it from there by default:
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.19" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.20" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 
@@ -303,11 +304,15 @@ name, never by importing its code.
 **`agents/`**: conversations and the agents in them.
 
 - **`chat`**: threads, messages, and agents
-  (`{ instructions, model, effort?, maxTokens?, temperature?, tools? }`) that answer with tools,
-  calling models through `llm`. A reasoning model's thinking (its provider state) is kept on the
-  agent's tool steps and goes back to that model while its turn goes on.
+  (`{ instructions, model, effort?, maxTokens?, temperature?, tools?, history? }`) that answer with
+  tools, calling models through `llm`. A reasoning model's thinking (its provider state) is kept on
+  the agent's tool steps and goes back to that model while its turn goes on.
   - **Several agents** take turns in parallel. With `send_message` an agent messages another agent
     or a person, and waits for the replies before it continues.
+  - **History by age:** an agent with `history: { maxAge: 4 * 3_600_000 }` (ms) is sent only the
+    last four hours of a conversation, back from its newest message (summaries too, with `history`);
+    what's older stays in the chat. The start moves in steps of a tenth of `maxAge`, so prompts keep
+    hitting the provider's cache ([design](design/views.md#history-as-views)).
   - **A tool call runs once:** before a step's tools run, the step's calls are written (an
     `intent`), and what each returns as soon as it does. A retried turn (it failed after its tools
     ran, its executor died, the runtime restarted) goes on with those calls instead of asking its
@@ -367,6 +372,18 @@ name, never by importing its code.
   choose another, and either can pick a model for one agent, the tier's list kept behind it. Kept by
   name, so retuning a tier moves everyone on it; while an org hasn't chosen, its plan's tier
   applies. Each tier shows what a typical reply comes to at the org's prices.
+- **`openapi`**: an HTTP API's operations, from its OpenAPI 3 spec, as Actions and tools:
+  `openapi({ name: "trips", spec })` is a plugin with, for each operation, a recorded Action
+  (`trips.getTrip`: a turn tried again gets the call it already made back, not a second one) and a
+  tool calling it (`trips_getTrip`), which agents get by listing it in their `tools`. A tool's input
+  is one object: the path, query, header and cookie parameters beside the JSON body's properties
+  (refs followed; 3.0's `nullable` converted; read-only properties left out; two inputs of one name
+  fail). Its settings are a resource (`resources.openapi.trips`: `baseUrl`, `headers` static or a
+  hook per call, `query`, `timeout`, `maxBytes`), so a deployment says where and as whom. A failed
+  call says `HTTP <status>: <what the API said>` and carries its status. Files in a response (an
+  image as base64 or a data URL, in the fields `files` names, or a response that is one) become
+  files of the conversation, and the agent gets a reference instead (`maxFileBytes`, `fileTypes`). A
+  tool of your own is `{ ...trips.tools.getTrip, run }`.
 
 **`access/`**: who can see and do what (see [design/access.md](design/access.md)).
 
@@ -524,7 +541,8 @@ one conformance suite (`stores/tests/`). [`stores/README.md`](stores/README.md) 
 and lists exactly which parts of the MongoDB collection API they support, and how. A PostgreSQL
 store holds one tenant (an org): many share a schema, each kept apart by the store itself, and an
 org's rows copy elsewhere unchanged (`copyTenant`). Blobs (strings over 16 KiB, files people send)
-live in the store by default, or as files (`fileBlobs`) or in a bucket (`httpBlobs`).
+live in the store by default, or as files (`fileBlobs`), in a bucket (`httpBlobs`), or in Google
+Cloud Storage (`gcsBlobs`).
 
 ## The example app
 
@@ -855,7 +873,7 @@ runtime/        the engine and its ports (Store, Blobs, Exporter, Transport, Clo
                 executor, ops, wire, collection, mongo, the in-memory store; tests/
 stores/         where the runtime keeps things: the Store port's implementations (memory, sql/
                 sqlite and postgres with a shared translation, the latency wrapper) and Blobs'
-                (blobs/files, blobs/http); tests/ (conformance)
+                (blobs/files, blobs/http, blobs/gcs); tests/ (conformance)
 exporters/      where measurements go: the Exporter port's implementations (OTLP, Prometheus)
 plugins/        the features, by theme
   models/       one plugin: llm, embeddings, transcription; shared/ (providers, model choice,

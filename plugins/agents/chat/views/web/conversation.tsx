@@ -33,7 +33,7 @@ import { STYLE } from "./style.ts";
 import { Transcript } from "./transcript.tsx";
 import { waitingOn } from "./waiting.ts";
 import { byAgent, names } from "./who.ts";
-import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
+import { nameOf, namesIn, picturesIn } from "../../../../access/spaces/contract.ts";
 import { DELEGATED } from "../../shared/types.ts";
 
 /** Messages this close after the one before, from the same author, go under its name. */
@@ -107,6 +107,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
   // People by name (agents are by theirs): every message shows them so.
   const humans = [...new Set(everyone)].filter((id) => !agents.has(id));
   const known = namesIn(ctx, humans);
+  const faces = picturesIn(ctx, humans);
   const shown = {
     ...Object.fromEntries(humans.map((id) => [id, { name: nameOf(id, known) }])),
     ...who,
@@ -116,6 +117,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
       name: shown[name]?.name ?? name,
       agent: agents.has(name),
       ...(who[name]?.icon ? { icon: who[name].icon } : {}),
+      ...(faces[name] ? { picture: faces[name] } : {}),
     }))
     .sort((a, b) => Number(a.agent) - Number(b.agent));
   // What a message says: its words, or a voice message's transcript.
@@ -167,7 +169,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
       {over.length
         ? (
           <div className="chat-asks">
-            <Over entries={over} thread={t._id} space={thread.in} live={working.length > 0} />
+            <Over entries={over} thread={t._id} space={thread.in} live={working} />
           </div>
         )
         : null}

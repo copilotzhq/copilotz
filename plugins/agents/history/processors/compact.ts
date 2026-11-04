@@ -7,7 +7,7 @@
 import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
 import type { Completion, LlmMessage } from "../../../models/contract.ts";
 import type { Message } from "../../chat/contract.ts";
-import type { Outline } from "../collections/outline.ts";
+import type { Line, Outline } from "../collections/outline.ts";
 import type { Summary } from "../collections/summary.ts";
 import { type HistorySettings, settingsOf } from "../shared/settings.ts";
 import { cut, lineOf, node, size } from "../shared/lines.ts";
@@ -189,7 +189,7 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
   const tailIds = [...(state.tailIds ?? state.tail.map(() => "")), m._id];
   const tailSteps = [...(state.tailSteps ?? state.tail.map(() => false)), step];
   let tailTokens = tail.reduce((a, b) => a + b, 0);
-  const lines = [...state.lines] as [number, number, number][];
+  const lines = [...state.lines] as Line[];
   let bytes = state.bytes;
   let boundary = state.boundary;
   // The newest shared messages stay whole (with a file a few answers might need), and so does
@@ -212,7 +212,8 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
       }
       const line = await get(0, boundary);
       if (line) {
-        lines.push([0, boundary, line.bytes]);
+        // When its message was written: an agent's window by age leaves out older lines.
+        lines.push([0, boundary, line.bytes, left]);
         bytes += line.bytes + 1;
       }
       boundary++;
@@ -241,9 +242,13 @@ async function compact(ctx: Context, m: Message, config: HistorySettings) {
       }
       if (best < 0) break;
       const [level, a, left] = lines[best];
-      const right = lines[best + 1][2];
+      const [, , right, until] = lines[best + 1];
       const parent = (await get(level + 1, a / 2))!;
-      lines.splice(best, 2, [level + 1, a / 2, parent.bytes]);
+      // As new as its newer half.
+      const merged: Line = until
+        ? [level + 1, a / 2, parent.bytes, until]
+        : [level + 1, a / 2, parent.bytes];
+      lines.splice(best, 2, merged);
       bytes += parent.bytes - left - right - 1;
     }
   }

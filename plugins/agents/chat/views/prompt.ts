@@ -10,6 +10,7 @@ import type { LlmMessage, LlmTool } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { peopleIn, SEND, type Team } from "../shared/agents.ts";
+import { ageStart } from "../shared/lineage.ts";
 import { sendTool } from "../shared/send.ts";
 import { trusted } from "./context.ts";
 import type { ContextEntry, Prompt, Told, Tool } from "../shared/types.ts";
@@ -27,14 +28,18 @@ export function prompt(thread: Thread, ctx: ViewContext): Prompt {
     "visible",
     { thread: thread._id, agent: name, ...(typeof since === "string" ? { since } : {}) },
   );
-  const history = seen?.value ?? [];
+  const all = seen?.value ?? [];
   // Who works where the thread is, what each is, and who in the conversation is an agent.
   const team = ctx.db.collection("thread").query<Team>("agents", {
     ...(thread.in ? { in: thread.in } : {}),
-    names: [name, ...history.flatMap((m) => [m.from, ...m.to])],
+    names: [name, ...all.flatMap((m) => [m.from, ...m.to])],
   }).value;
   const agents = team?.agents ?? {};
   const agent = agents[name];
+  // Its window by age: from where `ageStart` says, back from the newest message it sees.
+  const maxAge = agent?.history?.maxAge;
+  const from = maxAge && maxAge > 0 && all.length ? ageStart(all.at(-1)!.at, maxAge) : undefined;
+  const history = from ? all.filter((m) => m.at >= from) : all;
   const contexts = Object.entries((ctx.resources.context ?? {}) as Record<string, ContextEntry>)
     .filter(([, entry]) => !entry.agents || entry.agents.includes(name));
   const rendered = (place: ContextEntry["place"], instructions = false) =>
@@ -80,7 +85,8 @@ export function prompt(thread: Thread, ctx: ViewContext): Prompt {
       ...(contexts.some(([, entry]) => !trusted(entry)) ? [DATA] : []),
       ...rendered("system").map((c) => c.text),
     ].filter(Boolean),
-    history: (ctx.show("history", { thread, messages: history }) ?? []) as LlmMessage[],
+    // What's older than `from` is gone from `history`; the View leaves out its summaries too.
+    history: (ctx.show("history", { thread, messages: history, from }) ?? []) as LlmMessage[],
     turn: rendered("turn").filter((c) => last.get(c.name) !== c.text),
   };
 }

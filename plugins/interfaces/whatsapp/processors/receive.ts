@@ -11,7 +11,10 @@
  *   a chat of their own in the number's space, to its agent. A chat quiet
  *   for the number's `gap` (12 hours) is over: their next message starts a
  *   new one. What they write always goes to the agent (commands are linked
- *   people's), except a code that links their phone.
+ *   people's), except a code that links their phone. More than the number's
+ *   `rate` a minute (20) goes unanswered; a phone its people blocked, or took
+ *   out of its chat (until the gap passes), is let go without a word; what
+ *   they're told is in the number's `language`.
  * - **Someone linked**, still in the number's space: their message is
  *   marked read (with "typing…") and becomes `chat.send`, as them, in
  *   their WhatsApp conversation, in the space they chose (their Personal
@@ -68,6 +71,8 @@ export const receiveProcessor: ProcessorDef = {
     const phone = await ctx.as().db.collection<WhatsAppPhone>("whatsapp_phone")
       .findOne({ _id: `${on.number._id}:${received.from}` });
     if (phone?.person) return await linked(ctx, on, received, phone, event);
+    // Blocked by the number's people: what it sends goes nowhere, and nothing is said.
+    if (phone?.blocked) return;
     const code = await tried(ctx, on, received, phone);
     if (code === "linked") return;
     if (on.number.open) return await customer(ctx, on, received, phone, event);
@@ -188,9 +193,12 @@ async function customer(
 ) {
   const { from, name, message } = received;
   const system = ctx.as();
+  // Too many at once: let go, unanswered (each answer costs a model's turn and Meta's message).
+  if (await flooding(ctx, on, `${on.number._id}:${from}`, event)) return;
   const contact = await contactOf(ctx, on, received, phone, event);
   await markRead(on.graph, message.id, true).catch(() => {});
-  const brings = await broughtBy(ctx, on, from, message);
+  const lines = CUSTOMERS[on.number.language ?? "en"];
+  const brings = await broughtBy(ctx, on, from, message, lines);
   if (!brings) return;
 
   const as = ctx.as({ kind: "contact", id: contact });
@@ -206,19 +214,49 @@ async function customer(
   try {
     await sending(ongoing ? current!._id : await fresh());
   } catch (error) {
-    let last = error;
     const code = (error as { code?: string }).code;
-    // Their chat is out of their reach now (its people took them out of it): a new one, once.
-    if (ongoing && (code === "duplicate_key" || code === "forbidden")) {
-      try {
-        return void await sending(await fresh());
-      } catch (again) {
-        last = again;
-      }
-    }
-    if (!await told(ctx, on, from, last)) throw last;
+    // Taken out of their chat by its people: heard again only once it's been quiet for the gap.
+    if (ongoing && (code === "duplicate_key" || code === "forbidden")) return;
+    if (!await told(ctx, on, from, error, lines)) throw error;
   }
 }
+
+/** Messages a customer may send a minute, unless the number says otherwise. */
+const RATE = 20;
+
+/**
+ * Whether a customer's phone sent more than its number allows in a minute
+ * (`rate`), counting this message: counted in memory, by the minute.
+ */
+async function flooding(ctx: Context, on: Connected, phone: string, event: Event) {
+  const counts = ctx.as().db.collection<{ minute: number; count: number }>("whatsapp_rate");
+  const minute = Math.floor(Date.parse(event.at) / 60_000);
+  const had = await counts.findOne({ _id: phone });
+  const count = had?.minute === minute ? had.count + 1 : 1;
+  await counts.replaceOne({ _id: phone }, { minute, count }, { upsert: true });
+  return count > (on.number.rate ?? RATE);
+}
+
+/**
+ * What customers are told when their message can't go on, in the number's
+ * language: in their terms, never an error's own words.
+ */
+type Lines = { large: string; kind: string; voice: string; failed: string };
+const CUSTOMERS: Record<"en" | "pt", Lines> = {
+  en: {
+    large: "That file is too large. Send a smaller one, or a link to it.",
+    kind: "I can't read that kind of message yet: send text, a photo, a document or a voice note.",
+    voice: "I couldn't make out that voice note. Could you say it again, or write it?",
+    failed: "Sorry, I couldn't take that message. Please try again in a moment.",
+  },
+  pt: {
+    large: "Esse arquivo é grande demais. Envie um menor, ou um link para ele.",
+    kind:
+      "Ainda não consigo ler esse tipo de mensagem: envie texto, uma foto, um documento ou um áudio.",
+    voice: "Não consegui entender esse áudio. Pode repetir, ou escrever?",
+    failed: "Desculpe, não consegui receber essa mensagem. Tente de novo em instantes.",
+  },
+};
 
 /**
  * The contact a customer's phone is: made from their first message (its id
@@ -305,7 +343,13 @@ async function chatFor(
  * Meta). Undefined when there's nothing to pass on, once the phone was told
  * why (a file too large, a kind of message agents can't read).
  */
-async function broughtBy(ctx: Context, on: Connected, from: string, message: WaMessage) {
+async function broughtBy(
+  ctx: Context,
+  on: Connected,
+  from: string,
+  message: WaMessage,
+  lines?: Lines,
+) {
   const words = wordsOf(message).trim();
   const media = mediaOf(message);
   const files: { name: string; type: string; data: string }[] = [];
@@ -315,7 +359,12 @@ async function broughtBy(ctx: Context, on: Connected, from: string, message: WaM
       files.push({ name: media.name, type: got.type || media.type, data: got.data });
     } catch (error) {
       if ((error as { code?: string }).code !== "too_large") throw error;
-      await say(ctx, on, from, `${(error as Error).message} Send a smaller one, or a link to it.`);
+      await say(
+        ctx,
+        on,
+        from,
+        lines?.large ?? `${(error as Error).message} Send a smaller one, or a link to it.`,
+      );
       return undefined;
     }
   }
@@ -324,25 +373,30 @@ async function broughtBy(ctx: Context, on: Connected, from: string, message: WaM
       ctx,
       on,
       from,
-      "I can't pass that kind of message on yet: send text, a photo, a document or a voice note.",
+      lines?.kind ??
+        "I can't pass that kind of message on yet: send text, a photo, a document or a voice note.",
     );
     return undefined;
   }
   return { ...(words ? { text: words } : {}), ...(files.length ? { files } : {}) };
 }
 
-/** Tells the phone why its message couldn't be sent, when that's for them to know: whether it did. */
-async function told(ctx: Context, on: Connected, from: string, error: unknown) {
+/**
+ * Tells the phone why its message couldn't be sent, when that's for them to
+ * know: whether it did. A customer is told in its number's `lines`, never in
+ * an error's own words.
+ */
+async function told(ctx: Context, on: Connected, from: string, error: unknown, lines?: Lines) {
   const failed = error as { code?: string; message?: string };
   if (failed.code === "transcription_failed") {
     await say(
       ctx,
       on,
       from,
-      "I couldn't make out that voice note. Could you say it again, or write it?",
+      lines?.voice ?? "I couldn't make out that voice note. Could you say it again, or write it?",
     );
   } else if (failed.code === "not_here" || failed.code === "invalid") {
-    await say(ctx, on, from, failed.message ?? "That couldn't be sent.");
+    await say(ctx, on, from, lines?.failed ?? failed.message ?? "That couldn't be sent.");
   } else return false;
   return true;
 }
@@ -496,8 +550,9 @@ async function answered(
 ): Promise<{ replyTo?: string; key?: string }> {
   const quoted = message.context?.id;
   if (quoted) {
+    // Only what went out in this chat: a quote of another answers nothing here.
     const sent = await ctx.as().db.collection<WhatsAppSent>("whatsapp_sent")
-      .findOne({ wamid: quoted });
+      .findOne({ wamid: quoted, thread });
     if (sent) return { replyTo: sent.message, ...(sent.key ? { key: sent.key } : {}) };
   }
   const asked = await as.db.collection<{ _id: string }>("message").find(

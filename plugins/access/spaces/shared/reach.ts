@@ -181,6 +181,20 @@ async function housed(reach: Reach, ctx: ReadContext): Promise<Reach> {
   return reach;
 }
 
+/**
+ * The space a document shared on its own lives in, by its key (`thread:t1`):
+ * its shared collection's field says. Undefined for anything else.
+ */
+export async function homeOf(key: string, ctx: ReadContext): Promise<string | undefined> {
+  const at = key.indexOf(":");
+  const [on, id] = [key.slice(0, at), key.slice(at + 1)];
+  const shared = (ctx.resources.shared ?? {}) as Record<string, { field?: string }>;
+  if (at < 1 || !shared[on]) return undefined;
+  const doc = await ctx.db.collection(on).findOne({ _id: id });
+  const home = doc?.[shared[on].field ?? "in"];
+  return typeof home === "string" ? home : undefined;
+}
+
 /** The spaces (or documents) reached where `verb` is allowed. */
 export const where = (reach: Reach, verb: Verb, on?: string) =>
   [...reach].filter(([, r]) => r.can.has(verb) && (on === undefined ? !r.on : r.on === on))

@@ -51,6 +51,8 @@
   - **Taps:** a button's, a list row's, a carousel card's or a template's reply comes as its title
     with `tap: { id, title, key }` (`chat.send` takes `tap`; messages keep it), answering the
     message it was on; agents read `Carla: PIX [tapped: pay:pix]`. Typing the title is just text.
+    A tap is a choice, not a permission: anyone can send any id, so a tool acting on one checks it
+    against what was shown there. A quote or a tap answers only what went out in its own chat.
   - **"Typing…" while agents work:** each step an agent takes in a WhatsApp chat shows it again once
     WhatsApp may have hidden it (after 20 s, for up to five minutes); nothing says "please wait".
   - **Media:** a part's picture or file is a public https link (as given), one of the app's routes
@@ -66,8 +68,38 @@
   `live` and `shown`, each a part of its thread). `chat.open` opens an empty chat in a space;
   `chat.say { id, thread, from, text, to? }` has an agent say a fixed message in a chat without a
   turn (trusted code only; the same `id` is said once), sent out like any of its answers.
+- **What a contact's chat shows stays theirs to see** (from a security review):
+  - A document others are parts of (a chat) labels as itself, and so do its parts: a write into a
+    chat shared with someone outside its space (a contact) that drew on anything else, even the same
+    space, carries that space as its source (staff read it; the contact doesn't), or an agent
+    writing it is refused (`needs_share`). WhatsApp sends only what its addressee may read.
+  - Agents are told who else is in a chat from outside the org (the `where` context), from a chat's
+    members on its own, which its space's people now read by asking for that chat.
+  - A part of a shared document, and a document shared on its own, are reached only where it lives:
+    nothing written as one lands in another space. `may`, `must` and `present` never take a document
+    shared on its own for a space (`may(ctx, verb, id, on)` asks about the document).
+  - A contact's message goes to whom its chat is with (or the agent that wrote what it replies to):
+    never to agents it names. Anyone's `replyTo` is kept only for a message of the same chat that
+    they read.
+  - A tool whose `offer` is a function decides for agents that name it too; `request_access` refuses
+    for a contact; computers aren't woken (or billed) for work that's no person's; memory declares
+    its own `shared` entry; the identity guard keeps people's records to people.
+  - `chat.say`'s message is `<thread>:say:<id>`, said only by an agent answering in that chat.
+- **Erasure:** `contact.forget { contact, chats? }` (managers of its space) ends a contact's access
+  at once, deletes its record (`contact.deleted`: WhatsApp erases its phone) and, with `chats`, its
+  chats with everything in them (chat's new `chat.erase`, trusted code only).
+- **An open line, kept in hand:** `whatsapp.block { thread, blocked }` (managers) blocks the phone
+  behind a chat: what it sends goes nowhere, unanswered. A customer sending more than the number's
+  `rate` a minute (20) goes unanswered. One taken out of their chat is heard again once it's been
+  quiet for the gap. Customers are told what can't go on in the number's `language` (`en`, `pt`),
+  never in an error's own words.
 - **Fixed:** `message.questions`, and the terminal's `shell.mine`, `shell.set` and `shell.print`,
   let anyone whose id matched in; they're a person's own now.
+- **Fixed: a collection's private fields reached the log on PostgreSQL.** Writes that go as the
+  store's single command (most of them) recorded `.created`, `.updated` and `.deleted` with the
+  whole document, so `private` fields (a computer's `pending` secret, unsealed account tokens) were
+  in the log there; memory and SQLite left them out. The command now records documents without them
+  too. Events already written still hold them.
 
 ## 1.0.0-rc.20 — 2026-11-04
 

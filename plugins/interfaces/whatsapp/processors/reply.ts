@@ -15,9 +15,11 @@
  * carousel it won't take) goes as its addition's fallback instead; with
  * none, the addition isn't shown, and that's logged.
  *
- * Each part sent is recorded (`whatsapp_sent`), so a retried delivery sends
- * only what's left; each addition shown, in chat's `shown` (`chat.shown`). It
- * reads the conversation's number as the system: its token is what sends.
+ * Only what they may read goes: a message drawing on what they can't see
+ * (its `sources`) stays in the app. Each part sent is recorded
+ * (`whatsapp_sent`), so a retried delivery sends only what's left; each
+ * addition shown, in chat's `shown` (`chat.shown`). It reads the
+ * conversation's number as the system: its token is what sends.
  */
 import type { Context, ProcessorDef, Viewer } from "../../../../runtime/mod.ts";
 import {
@@ -56,6 +58,11 @@ export const replyProcessor: ProcessorDef = {
     // Whom it's with: a person by id, a contact as messages name them.
     const to = chat?.person ?? (chat?.contact ? `${CONTACT}${chat.contact}` : undefined);
     if (!chat || !to || !said.to?.includes(to)) return;
+    // Only what they may read: an answer drawing on what they can't see (its sources) stays here.
+    const reader = chat.person
+      ? { kind: "person", id: chat.person }
+      : { kind: "contact", id: chat.contact! };
+    if (!await ctx.as(reader).db.collection("message").findOne({ _id: said._id })) return;
     const on = await connected(ctx, chat.number);
     if (!on) return;
     const viewer: Viewer = { kind: chat.person ? "person" : "contact", name: to };

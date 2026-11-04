@@ -6,13 +6,21 @@
  * works this out.
  */
 import { type Context, forbidden, personOf } from "../../../../runtime/mod.ts";
-import { reachOf, type Verb } from "./reach.ts";
+import { docKey, reachOf, type Verb } from "./reach.ts";
 
-export async function may(ctx: Context, verb: Verb, space: string): Promise<boolean> {
+export async function may(
+  ctx: Context,
+  verb: Verb,
+  space: string,
+  /** A document of this collection, its id `space`, shared on its own: asked about as itself. */
+  on?: string,
+): Promise<boolean> {
   const { actor } = ctx;
   if (!actor || actor.kind === "system") return true;
   // Read as the system: what's read to decide labels nothing the caller then writes.
-  return (await reachOf(actor, ctx.as())).get(space)?.can.has(verb) ?? false;
+  const held = (await reachOf(actor, ctx.as())).get(on ? docKey(on, space) : space);
+  // A document shared on its own is never a space: only asked about as that document.
+  return !!held && !!held.on === !!on && held.can.has(verb);
 }
 
 /**
@@ -24,7 +32,8 @@ export async function present(ctx: Context, space: string): Promise<boolean> {
   const { actor } = ctx;
   if (!actor || actor.kind === "system") return true;
   const reach = await reachOf(actor, ctx.as());
-  return reach.has(space) || [...reach.values()].some((held) => held.home === space);
+  return (!!reach.get(space) && !reach.get(space)!.on) ||
+    [...reach.values()].some((held) => held.on && held.home === space);
 }
 
 /** Throws `forbidden`, with `message`, unless the caller may. */

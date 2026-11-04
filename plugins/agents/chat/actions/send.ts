@@ -3,7 +3,10 @@
  * shared with them: the rules keep them to it). It goes to `to` when given,
  * else to the agents `@mentioned` in it, else to the sender of the message
  * it replies to, else to the thread's agents (a new thread's: those it
- * names, or who answers new chats in its space). Only agents answering in
+ * names, or who answers new chats in its space). A contact's goes to the
+ * sender of what it replies to, else the thread's agents: never whom it
+ * names. It replies only to a message of the same conversation that its
+ * sender reads. Only agents answering in
  * its space answer there: naming one that doesn't fails (`not_here`). Audio
  * sent with it is transcribed first (what agents read): if that fails,
  * nothing is sent and the call fails with `transcription_failed`;
@@ -120,14 +123,18 @@ export const sendAction = defineAction({
     const threads = ctx.db.collection<Thread>("thread");
     const threadId = input.thread ?? crypto.randomUUID();
     const existing = input.thread ? await threads.findOne({ _id: threadId }) : null;
-    const replied = input.replyTo
+    // What it answers: a message the sender reads, in this conversation (else it answers nothing).
+    const found = input.replyTo
       ? await ctx.db.collection<Message>("message").findOne({ _id: input.replyTo })
       : null;
+    const replied = found?.thread === threadId ? found : null;
     const where = existing ? existing.in : input.in;
     const roster = await rosterOf(ctx, where);
     const members = existing ? existing.agents ?? [] : roster.default;
-    const mentioned = mentions(said);
-    const asked = input.to ??
+    // A contact talks with whom its chat is with: what it says names nobody else.
+    const contact = ctx.actor?.kind === "contact";
+    const mentioned = contact ? [] : mentions(said);
+    const asked = (contact ? undefined : input.to) ??
       (mentioned.length ? mentioned : replied ? [replied.from] : members);
     // Agents answer only where they work: one named that doesn't is refused; one gone, left out.
     const agents = await agentsNamed(ctx, asked);
@@ -200,7 +207,7 @@ export const sendAction = defineAction({
       to: [...to],
       text: said,
       hops: 0,
-      ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      ...(replied ? { replyTo: replied._id } : {}),
       ...(input.via ? { via: input.via } : {}),
       ...(input.tap ? { tap: input.tap } : {}),
       at: now(),

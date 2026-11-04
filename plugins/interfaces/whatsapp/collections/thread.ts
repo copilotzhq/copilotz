@@ -20,6 +20,6 @@ const threadSchema = {
   required: ["number", "phone", "at"],
 } as const;
 
-export const chat = defineCollection({ schema: threadSchema });
+export const chat = defineCollection({ schema: threadSchema, indexes: [["contact"]] });
 
 export type WhatsAppThread = Infer<typeof threadSchema> & { _id: string };

@@ -20,7 +20,8 @@
  * - A chat can be opened empty (`chat.open`), to share it with a contact
  *   (someone outside the org, who then writes there with `chat.send` and
  *   reaches only it); trusted code has an agent say a fixed message in one
- *   without a turn (`chat.say`: a payment confirmed).
+ *   without a turn (`chat.say`: a payment confirmed), and erases one with
+ *   everything in it (`chat.erase`: someone's data, gone).
  * - After an agent's answer, a medium may show more (additions: a carousel
  *   of trips after the answer that found them), each once per chat per key,
  *   recorded in `shown` (`chat.shown`), and told to the model after that
@@ -54,6 +55,7 @@
  *   the medium that shows it, given `{ thread, answer }` (see `Addition`).
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { eraseAction } from "./actions/erase.ts";
 import { forkAction } from "./actions/fork.ts";
 import { moveAction } from "./actions/move.ts";
 import { openAction } from "./actions/open.ts";
@@ -112,6 +114,7 @@ export const chat: Plugin = definePlugin({
     "chat.open": openAction,
     "chat.say": sayAction,
     "chat.shown": shownAction,
+    "chat.erase": eraseAction,
     "chat.fork": forkAction,
     "chat.stop": stopAction,
     "chat.move": moveAction,

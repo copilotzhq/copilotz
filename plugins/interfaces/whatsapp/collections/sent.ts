@@ -26,7 +26,7 @@ const sentSchema = {
 export const sent = defineCollection({
   schema: sentSchema,
   records: true,
-  indexes: [["message"], ["wamid"]],
+  indexes: [["message"], ["wamid", "thread"]],
 });
 
 export type WhatsAppSent = Infer<typeof sentSchema> & { _id: string };

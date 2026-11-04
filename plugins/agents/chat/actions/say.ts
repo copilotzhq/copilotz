@@ -4,14 +4,15 @@
  * payment confirmed). It goes to `to` (people by id, contacts as
  * `contact:<id>`), else to whoever last wrote there who isn't an agent, and
  * out through the chat's medium (WhatsApp) like any of its answers. It's
- * said to people, never to agents, so it starts no turn. Its `id` comes from
- * what caused it (a payment's): saying it again sends nothing. Only trusted
- * code calls it.
+ * said to people, never to agents, so it starts no turn, by an agent that
+ * answers there. Its `id` comes from what caused it (a payment's): saying it
+ * again in that chat sends nothing (the message is `<thread>:say:<id>`). Only
+ * trusted code calls it.
  */
 import { defineAction, failure, invalid } from "../../../../runtime/mod.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
-import { agentsNamed, now } from "../shared/agents.ts";
+import { agentsNamed, now, rosterOf } from "../shared/agents.ts";
 import { noted } from "../shared/summary.ts";
 
 export const sayAction = defineAction({
@@ -32,9 +33,16 @@ export const sayAction = defineAction({
   },
   run: async (ctx, input) => {
     const messages = ctx.db.collection<Message>("message");
-    if (await messages.findOne({ _id: input.id })) return { message: input.id };
+    // Its id is the chat's own: a cause says it once in each chat, and never anywhere else.
+    const id = `${input.thread}:say:${input.id}`;
+    if (await messages.findOne({ _id: id })) return { message: id };
     const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: input.thread });
     if (!thread) throw failure("not_found", `No chat "${input.thread}".`);
+    // Said by an agent that answers there.
+    const roster = await rosterOf(ctx, thread.in);
+    if (!roster.here.includes(input.from) && !thread.agents?.includes(input.from)) {
+      throw failure("not_here", `${input.from} doesn't answer in this chat.`);
+    }
     // Whoever last wrote there who isn't an agent, unless it says whom.
     const latest = input.to ? [] : await messages.find(
       { thread: thread._id, private: { $ne: true } },
@@ -51,7 +59,7 @@ export const sayAction = defineAction({
       throw invalid("An agent says this to people: to ask another agent, send it a message.");
     }
     const said = {
-      _id: input.id,
+      _id: id,
       thread: thread._id,
       ...(thread.in ? { in: thread.in } : {}),
       from: input.from,

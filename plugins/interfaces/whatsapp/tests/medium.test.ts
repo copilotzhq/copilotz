@@ -112,10 +112,8 @@ const open = (s: Setup) =>
 const write = (s: Setup, body: string, more: Record<string, unknown> = {}) =>
   s.deliver([{ text: { body }, ...more }], { from: CARLA, name: "Carla" });
 /** What the customer's chat has, as the app's people read it. */
-const chatOf = async (s: Setup) => {
-  const [chat] = await threadsOf(s.runtime, s.launch);
-  return chat;
-};
+const chatOf = async (s: Setup) =>
+  (await threadsOf(s.runtime, s.launch)).find((t) => t.title === "Carla")!;
 const run = (fn: (s: Setup) => Promise<void>) => setup(fn, { plugins: [booking], llm: sales });
 
 test("an answer and its buttons go as one message, the answer as the body; once per chat", async () => {
@@ -176,6 +174,17 @@ test("a tap comes back with its id and addition, answering the message it was on
       answer._id,
     ]);
     assertEquals(s.graph.texts(CARLA).at(-1), "heard Carla: PIX [tapped: pay:pix]");
+    // A tap quoting what went to someone else's chat answers nothing here.
+    await s.deliver([{
+      type: "interactive",
+      interactive: { type: "button_reply", button_reply: pix },
+      context: { id: wamid },
+    }], { from: "14155550123", name: "Dani" });
+    const theirs = (await threadsOf(s.runtime, s.launch)).find((t) => t.title === "Dani")!;
+    const [stray] = (await s.runtime.query<Message[]>("message.history", { thread: theirs._id }, {
+      actor: ana,
+    })).filter((m) => m.tap);
+    assertEquals([stray.tap, stray.replyTo], [{ id: "pay:pix", title: "PIX" }, undefined]);
     // Typing a button's title is just text.
     await write(s, "PIX");
     const typed = (await s.runtime.query<Message[]>("message.history", { thread: chat._id }, {

@@ -32,6 +32,10 @@ const numberSchema = {
     agent: { type: "string" },
     /** Hours of quiet after which a customer's next message starts a new chat (`GAP`). */
     gap: { type: "number" },
+    /** Messages a customer may send a minute (20): more go unanswered. */
+    rate: { type: "integer" },
+    /** What customers are told in, when their message can't go on: `en`, `pt`. */
+    language: { type: "string", enum: ["en", "pt"] },
     at: { type: "string" },
   },
   required: ["in", "phoneId", "phone", "at"],

@@ -49,7 +49,9 @@ export type Tool<I = Record<string, unknown>> = {
   run(input: I, ctx: ToolContext): unknown;
   /**
    * Offered to every agent (`true`), to these, or where this says so (say,
-   * once a thread is summarized), without being listed in their `tools`.
+   * once a thread is summarized), without being listed in their `tools`. A
+   * function decides for agents that list it too: where it says no (working
+   * for a contact, say), it isn't offered.
    */
   offer?: Offer;
 };

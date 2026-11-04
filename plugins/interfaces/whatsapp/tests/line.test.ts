@@ -203,7 +203,7 @@ test("Meta delivering a customer's message again changes nothing: one contact, o
   });
 });
 
-test("a customer taken out of their chat starts a new one; an agent's fixed message reaches them", async () => {
+test("a customer taken out of their chat is heard again only after the gap; a fixed message reaches them", async () => {
   await setup(async (s) => {
     const { runtime, graph, deliver, launch } = s;
     await open(s);
@@ -222,12 +222,102 @@ test("a customer taken out of their chat starts a new one; an agent's fixed mess
     await runtime.call("member.remove", { space: chat._id, on: "thread", member: carla }, {
       actor: ana,
     });
+    // Taken out: what they send now opens nothing, and nothing answers.
+    const before = graph.requests.length;
     await deliver([{ text: { body: "are you there?" } }], { from: CARLA });
+    assertEquals((await threadsOf(runtime, launch)).length, 1);
+    assertEquals(graph.texts(CARLA).at(-1), "Payment confirmed!");
+    assert(graph.requests.length - before <= 1, "at most the read mark");
+    // Once their chat has been quiet for the gap, a new one; the same contact.
+    await runtime.call("test.age", { thread: chat._id, hours: 13 });
+    await deliver([{ text: { body: "hello again" } }], { from: CARLA });
     const chats = await threadsOf(runtime, launch);
     assertEquals(chats.length, 2);
-    assertEquals(graph.texts(CARLA).at(-1), "heard *Someone: are you there?*");
-    // The same contact, in the new one.
+    assertEquals(graph.texts(CARLA).at(-1), "heard *Someone: hello again*");
     const fresh = chats.find((t) => t._id !== chat._id)!;
     assertEquals((await contactIn(s, fresh._id)).id, carla.id);
+  });
+});
+
+test("a phone its people block goes unheard; too many at once go unanswered; customers are told in their language", async () => {
+  await setup(async (s) => {
+    const { runtime, graph, deliver, launch } = s;
+    await open(s, { rate: 2, language: "pt" });
+    await deliver([{ text: { body: "oi" } }], { from: CARLA });
+    const [chat] = await threadsOf(runtime, launch);
+    // Too many in a minute: the third goes unanswered.
+    await deliver([{ text: { body: "um" } }, { text: { body: "dois" } }], { from: CARLA });
+    assertEquals(graph.texts(CARLA).length, 2);
+    // A kind of message agents can't read: told so, in Portuguese, in a line of its own.
+    await deliver([{ type: "reaction", reaction: { emoji: "👍" } }], { from: STRANGER });
+    assertEquals(graph.texts(STRANGER), [
+      "Ainda não consigo ler esse tipo de mensagem: envie texto, uma foto, um documento ou um áudio.",
+    ]);
+    // Blocked by Ana, who manages the space: nothing they send goes anywhere, nor is answered.
+    await assertRejects(() =>
+      runtime.call("whatsapp.block", { thread: chat._id, blocked: true }, {
+        actor: { kind: "person", id: "bob" },
+      })
+    );
+    await runtime.call("whatsapp.block", { thread: chat._id, blocked: true }, { actor: ana });
+    const before = graph.requests.length;
+    await runtime.call("test.age", { thread: chat._id, hours: 1 });
+    await deliver([{ text: { body: "olá?" } }], { from: CARLA });
+    assertEquals(graph.requests.length, before);
+    // Let in again (and allowed more a minute): answered.
+    await runtime.call("whatsapp.block", { thread: chat._id, blocked: false }, { actor: ana });
+    await open(s, { rate: 50 });
+    await deliver([{ text: { body: "voltei" } }], { from: CARLA });
+    assertEquals(graph.texts(CARLA).at(-1), "heard *Someone: voltei*");
+  });
+});
+
+test("only what a customer may read goes to their phone: what draws on the space stays there", async () => {
+  await setup(async (s) => {
+    const { runtime, graph, deliver, launch } = s;
+    await open(s);
+    await deliver([{ text: { body: "hi" } }], { from: CARLA });
+    const [chat] = await threadsOf(runtime, launch);
+    const carla = await contactIn(s, chat._id);
+    await runtime.call("test.said", {
+      thread: chat._id,
+      to: `contact:${carla.id}`,
+      text: "our margin is 12%",
+      sources: [launch],
+    });
+    await runtime.call("test.said", {
+      thread: chat._id,
+      to: `contact:${carla.id}`,
+      text: "Your bus leaves at 10:30.",
+    });
+    await runtime.idle();
+    assertEquals(graph.texts(CARLA).slice(1), ["Your bus leaves at 10:30."]);
+  });
+});
+
+test("a contact erased: its access, its chats and its phone go; writing again, it's someone new", async () => {
+  await setup(async (s) => {
+    const { runtime, deliver, launch, read } = s;
+    await open(s);
+    await deliver([{ text: { body: "hi" } }], { from: CARLA, name: "Carla" });
+    const [chat] = await threadsOf(runtime, launch);
+    const carla = await contactIn(s, chat._id);
+    await assertRejects(() =>
+      runtime.call("contact.forget", { contact: carla.id, chats: true }, {
+        actor: { kind: "person", id: "bob" },
+      })
+    );
+    assertEquals(
+      await runtime.call("contact.forget", { contact: carla.id, chats: true }, { actor: ana }),
+      { forgotten: carla.id, chats: 1 },
+    );
+    await runtime.idle();
+    assertEquals(await threadsOf(runtime, launch), []);
+    assertEquals(await read("thread", carla), []);
+    assertEquals(await read("contact", ana), []);
+    assertEquals(await read("whatsapp_phone", { kind: "system", id: "" }), []);
+    await deliver([{ text: { body: "hello" } }], { from: CARLA, name: "Carla" });
+    const [again] = await threadsOf(runtime, launch);
+    assert((await contactIn(s, again._id)).id !== carla.id);
   });
 });

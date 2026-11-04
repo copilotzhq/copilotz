@@ -26,9 +26,12 @@
  *    shared with it on its own (`contact.chat`).
  * 6. **The tool runs** through chat's runner, as the contact: its input
  *    checked, its `ctx.agent` the client (`ChatGPT`), its `ctx.thread` the
- *    chat, its `ctx.callId` the call's id (the same for the same request,
- *    however often it runs: the key for what it does outside), its
- *    `ctx.trigger` the step.
+ *    chat, its `ctx.callId` and `ctx.trigger` the step (the same however
+ *    often a call cut short runs again: the key for what it does outside; a
+ *    new call, the same request asked again later, has a new one). It runs
+ *    the line's `timeout` at most (20 s): then it's stopped (its
+ *    `ctx.signal` aborts, and its job ends, so what it does next fails), and
+ *    the model is told it took too long; the step says so.
  * 7. **The step** is written, as an agent's step is: a private message from
  *    the client in the chat (where the chat is now), with the call, what it
  *    was given (only input that fit the tool's schema; else a short note of
@@ -46,7 +49,7 @@
  */
 import { type Context, defineAction, failure, isPublic, linksOf } from "../../../../runtime/mod.ts";
 import type { Step, Thread, Tool } from "../../../agents/chat/contract.ts";
-import { runTool } from "../../../agents/chat/contract.ts";
+import { runTool, type ToolRun } from "../../../agents/chat/contract.ts";
 import { RERUN_MS, RESEND_MS } from "../collections/receipt.ts";
 import { threadOf } from "../shared/keys.ts";
 import { hintsOf, type Line, lineOf } from "../shared/settings.ts";
@@ -90,16 +93,15 @@ export const callAction = defineAction({
       call: { type: "string", maxLength: 120 },
       /** What named its conversation: a session, a handle the app gave, or a handle just made. */
       by: { enum: ["session", "handle", "new"] },
-      /** Who started it, when the client says (an HMAC of `openai/subject`): for their limit. */
-      user: { type: "string", maxLength: 40 },
-      /** Where it comes from, when the app's front says (an HMAC of the address): for its limits. */
-      address: { type: "string", maxLength: 40 },
     },
     required: ["line", "tool", "input", "call", "by"],
     additionalProperties: false,
   },
   record: false,
   // Only a contact the MCP route made for this line: no other actor names a conversation here.
+  // The route says on it who the user is (an HMAC of `openai/subject`) and where it calls from
+  // (an HMAC of its address), for their limits: not in the input, so a request sent again from
+  // elsewhere joins the first.
   allow: (actor, input) => actor.kind === "contact" && actor.mcp === input.line,
   run: async (ctx, input): Promise<Called> => {
     const line = lineOf(ctx, input.line);
@@ -113,7 +115,14 @@ export const callAction = defineAction({
     const readOnly = hintsOf(line, input.tool, tool).readOnly === true;
     const thread = await threadOf(links.secret, contact);
     const now = Date.now();
-    const { calls, chats } = countersOf(line, thread, input, now);
+    const said = (key: string) =>
+      typeof ctx.actor?.[key] === "string" ? ctx.actor[key] as string : undefined;
+    const { calls, chats } = countersOf(
+      line,
+      thread,
+      { user: said("user"), address: said("address") },
+      now,
+    );
     const system = ctx.as();
     // What it needs to know first, read together: its chat (as the system, and as its contact,
     // who still reaches it or not), whether it's over, the counts, a receipt.
@@ -164,19 +173,24 @@ export const callAction = defineAction({
     if (answered) return { ...await again(ctx, line, answered), ran: true };
     if (fresh) await opened(ctx, line, contact, thread);
 
-    const ran = await runTool(ctx, input.tool, input.input, {
-      agent: line.client,
-      thread,
-      trigger: step,
-      callId: input.call,
-      retry: !!cut,
-    });
+    const ran = await within(
+      line.limits.timeout * 1000,
+      ctx,
+      (bounded) =>
+        runTool(bounded, input.tool, input.input, {
+          agent: line.client,
+          thread,
+          trigger: step,
+          callId: step,
+          retry: !!cut,
+        }),
+    );
     // Only input that fit the tool's schema is kept as its input: anything else, as text.
     const given = ran.unchecked
       ? { unchecked: JSON.stringify(input.input).slice(0, 1_000) }
       : input.input;
     const call: Step = { id: input.call, name: input.tool, input: given, output: ran.output };
-    const said = ran.error === undefined ? undefined : toldOf(ran.error);
+    const told = ran.error === undefined ? undefined : toldOf(ran.error);
     await system.transaction(async (tx) => {
       // A try cut short after its step was written writes it again, the same; in the chat's space.
       await tx.db.collection("message").replaceOne({ _id: step }, {
@@ -191,7 +205,7 @@ export const callAction = defineAction({
       if (!readOnly) {
         await tx.db.collection("mcp_receipt").replaceOne(
           { _id: input.call },
-          { step, at: Date.now(), done: true, ...(said ? { said } : {}) },
+          { step, at: Date.now(), done: true, ...(told ? { said: told } : {}) },
           UPSERT,
         );
       }
@@ -207,10 +221,43 @@ export const callAction = defineAction({
         }
       }
     });
-    if (said) return { text: said, isError: true, ran: true };
+    if (told) return { text: told, isError: true, ran: true };
     return { text: await shown(ctx, line, call), ran: true };
   },
 });
+
+/**
+ * Runs `work` with a context whose `signal` also aborts after `ms`; past
+ * them, it's let go (the job ends when `mcp.call` returns, so what the tool
+ * does next fails) and answered as a public failure the model reads.
+ */
+async function within(
+  ms: number,
+  ctx: Context,
+  work: (bounded: Context) => Promise<ToolRun>,
+): Promise<ToolRun> {
+  const stop = new AbortController();
+  const signal = AbortSignal.any([ctx.signal, stop.signal]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<ToolRun>((resolve) => {
+    timer = setTimeout(() => {
+      stop.abort();
+      const error = failure(
+        "timeout",
+        `It took longer than ${ms / 1000} seconds, and was stopped.`,
+        {
+          public: true,
+        },
+      );
+      resolve({ output: `Error: ${error.message}`, error });
+    }, ms);
+  });
+  try {
+    return await Promise.race([work({ ...ctx, signal }), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** The counters a call goes by, each its window's: calls this minute, new conversations this hour. */
 function countersOf(

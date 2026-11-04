@@ -11,9 +11,15 @@
  *   browser's page) is refused unless the line names it: no browser calls
  *   MCP. No cookie is read: whoever calls is nobody but their
  *   conversation's contact.
- * - **At once.** Tool calls running at once, on the line (`limits.atOnce`,
- *   8) and in this process (`mcp.atOnce`, 8): past either, the server is
- *   busy (503, `Retry-After`, -31000, its own code), before anything runs.
+ * - **Who calls.** With the app's `caller` settings, the caller's address,
+ *   as its front says it (see shared/caller.ts); a request that came around
+ *   the front (without its secret) is refused (403).
+ * - **At once.** Tool calls running at once: in the runtime (`mcp.atOnce`,
+ *   8), on the line (`limits.atOnce`, 8), from one caller's address
+ *   (`addressAtOnce`, 2: a batch's every call counts) and in one
+ *   conversation (`chatAtOnce`, 2). Past any, the server is busy (503,
+ *   `Retry-After`, -31000, its own code), before anything runs; a busy
+ *   batch is answered an error for each of its requests.
  * - **JSON-RPC 2.0.** One message a request. A notification (or a reply)
  *   answers 202. Bad JSON is -32700, a malformed message -32600, an unknown
  *   method -32601, bad params -32602; what fails inside says -32603 and
@@ -35,7 +41,9 @@
  * https://developers.openai.com/apps-sdk/reference (ChatGPT's `_meta`).
  */
 import { linksOf, type Runtime } from "../../../../runtime/mod.ts";
-import { atOnceOf, type Line, lineOf, PATH } from "../shared/settings.ts";
+import { type Caller, callerFrom } from "../shared/caller.ts";
+import { atOnceOf, callerOf, type Line, lineOf, PATH } from "../shared/settings.ts";
+import { hold, isBusy } from "./running.ts";
 import { called, listed, mirrored, offeredOf, type Said, usable } from "./tools.ts";
 
 /** What the web host hands the route: the runtime. */
@@ -68,8 +76,14 @@ const TTL_MS = 300_000;
 type Id = string | number;
 type Message = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown };
 type Params = Record<string, unknown> & { _meta?: Record<string, unknown> };
-/** An answer to one message: none (a notification), or a JSON-RPC response, with its HTTP status. */
-type Answered = { status: number; body?: Record<string, unknown> };
+/**
+ * An answer to one message: none (a notification), or a JSON-RPC response,
+ * with its HTTP status (and, busy, when to try again).
+ */
+type Answered = { status: number; body?: Record<string, unknown>; again?: true };
+
+const BUSY_TEXT = "Busy: too many calls at once. Try again in a moment.";
+const AGAIN = { "retry-after": "1" };
 
 const headers = { "content-type": "application/json", "cache-control": "no-store" };
 
@@ -78,27 +92,6 @@ const respond = (status: number, body?: unknown, more: Record<string, string> = 
     status,
     headers: { ...(body === undefined ? { "cache-control": "no-store" } : headers), ...more },
   });
-
-/** Tool calls running in this process, every line's; and each line's, by runtime. */
-let running = 0;
-const runningOn = new WeakMap<object, Map<string, number>>();
-
-/** A place for a call to run, on its line and in this process: its release; none when busy. */
-function place(runtime: object, line: Line, most: number): (() => void) | undefined {
-  const lines = runningOn.get(runtime) ?? new Map<string, number>();
-  runningOn.set(runtime, lines);
-  const here = lines.get(line.name) ?? 0;
-  if (running >= most || here >= line.limits.atOnce) return undefined;
-  running++;
-  lines.set(line.name, here + 1);
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    running--;
-    lines.set(line.name, (lines.get(line.name) ?? 1) - 1);
-  };
-}
 
 const fault = (id: Id | undefined, code: number, message: string, data?: unknown) => ({
   jsonrpc: "2.0",
@@ -136,6 +129,11 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
   if (origin !== null && !(line.origins ?? []).includes(origin)) {
     return respond(403, fault(undefined, REQUEST, "Not from this origin"));
   }
+  // Around the app's front, straight to it: refused, when the front vouches for callers.
+  const caller = callerFrom(request, callerOf({ resources }));
+  if (caller === "refused") {
+    return respond(403, fault(undefined, REQUEST, "Not through the app's front"));
+  }
   if (!/^application\/json\b/i.test(request.headers.get("content-type") ?? "")) {
     return respond(415, fault(undefined, REQUEST, "Send JSON (application/json)"));
   }
@@ -150,12 +148,17 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
   const secret = linksOf(resources)?.secret;
   if (!secret) return respond(500, fault(undefined, INTERNAL, "Internal error"));
   const org = (resources.org as { id?: string } | undefined)?.id;
+  const { runtime } = host;
   const context: Context = {
-    runtime: host.runtime,
+    runtime,
     line,
     resources,
     request,
+    caller,
     scope: { line: line.name, ...(org ? { org } : {}), secret },
+    // A conversation's own place, taken once the route knows which it is.
+    holdChat: (thread) =>
+      hold(runtime, [{ key: `chat:${line.name}|${thread}`, most: line.limits.chatAtOnce }]),
   };
   const messages = Array.isArray(parsed) ? parsed : [parsed];
   if (Array.isArray(parsed)) {
@@ -168,19 +171,39 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
       );
     }
   }
-  // A request that calls tools takes a place first: one, a batch's calls going one by one.
-  const calls = messages.some((m) => isObject(m) && m.method === "tools/call");
-  const release = calls ? place(host.runtime, line, atOnceOf({ resources })) : () => {};
+  // A request that calls tools takes its places first: one in the runtime and on the line (a
+  // batch's calls go one by one), and one for each of its calls from the caller's address.
+  const calls = messages.filter((m) => isObject(m) && m.method === "tools/call").length;
+  const release = calls
+    ? hold(runtime, [
+      { key: "runtime", most: atOnceOf({ resources }) },
+      { key: `line:${line.name}`, most: line.limits.atOnce },
+      ...(caller && !caller.exempt
+        ? [{
+          key: `address:${line.name}|${caller.counted}`,
+          most: line.limits.addressAtOnce,
+          adds: calls,
+        }]
+        : []),
+    ])
+    : () => {};
   if (!release) {
-    const id = !Array.isArray(parsed) && isObject(parsed) ? idOf(parsed.id) : undefined;
-    return respond(503, fault(id, BUSY, "Busy: too many calls at once. Try again in a moment."), {
-      "retry-after": "1",
-    });
+    if (!Array.isArray(parsed)) {
+      const id = isObject(parsed) ? idOf(parsed.id) : undefined;
+      return respond(503, fault(id, BUSY, BUSY_TEXT), AGAIN);
+    }
+    // A batch: each of its requests is told.
+    const told = parsed.flatMap((m) =>
+      isObject(m) && "id" in m && idOf(m.id) !== undefined
+        ? [fault(idOf(m.id), BUSY, BUSY_TEXT)]
+        : []
+    );
+    return respond(503, told, AGAIN);
   }
   try {
     if (!Array.isArray(parsed)) {
-      const { status, body } = await answered(context, parsed, false);
-      return respond(status, body);
+      const { status, body, again } = await answered(context, parsed, false);
+      return respond(status, body, again ? AGAIN : {});
     }
     const bodies = [];
     for (const message of parsed) {
@@ -202,7 +225,10 @@ type Context = {
   line: Line;
   resources: Record<string, Record<string, unknown>>;
   request: Request;
+  /** Who calls, as the front says (undefined without the app's `caller` settings). */
+  caller?: Exclude<Caller, "refused">;
   scope: { line: string; org?: string; secret: string };
+  holdChat(thread: string): (() => void) | undefined;
 };
 
 /** A request's body as text, or undefined past `limit` bytes. */
@@ -330,7 +356,8 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
             input,
             request: rpc,
             said: conversation,
-            http: c.request,
+            caller: c.caller,
+            holdChat: c.holdChat,
           }),
         );
       }
@@ -338,6 +365,9 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
         return failed(status(METHOD), rpc, METHOD, "Method not found");
     }
   } catch (error) {
+    if (isBusy(error)) {
+      return { ...failed(batched ? 200 : 503, rpc, BUSY, BUSY_TEXT), again: true };
+    }
     console.error(`mcp.${c.line.name}: ${method}:`, error instanceof Error ? error.message : error);
     return failed(batched ? 200 : 500, rpc, INTERNAL, "Internal error");
   }

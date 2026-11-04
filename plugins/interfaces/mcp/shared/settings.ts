@@ -9,7 +9,7 @@
  */
 import type { Resources } from "../../../../runtime/mod.ts";
 import { agentsOf, SEND, type Tool, type ToolAnnotations } from "../../../agents/chat/contract.ts";
-import { rangeOk } from "./caller.ts";
+import { LISTS, rangeOk } from "./caller.ts";
 
 /** How one of the app's tools is offered on a line: what only MCP needs. */
 export type McpTool = {
@@ -26,8 +26,15 @@ export type McpTool = {
 export type McpLimits = {
   /** Bytes a request's body may be. */
   body: number;
-  /** Calls running at once on the line: past them, the server is busy. */
+  /**
+   * Calls running at once on the line, and from one caller's address, and in
+   * one conversation: past any, the server is busy.
+   */
   atOnce: number;
+  addressAtOnce: number;
+  chatAtOnce: number;
+  /** Seconds a tool may run: past them, it's stopped, and the model is told so. */
+  timeout: number;
   /** Calls one conversation may make a minute, and all of the line's conversations together. */
   perMinute: number;
   linePerMinute: number;
@@ -82,34 +89,54 @@ export type McpLine = {
  * it's believed. A header anyone may send is believed only from the front:
  *
  * - `front`: the front's secret, which it sends in `x-copilotz-front` (the
- *   web host's own front header): a request without it says no address.
- * - `hops`: for a list the app's own proxies append to (Cloud Run's appends
- *   the address it saw), the entry that many from the end (1, the last).
+ *   web host's own front header). A request without it came around the
+ *   front, straight to the app: it's refused.
+ * - `hops`: for a list the app's own proxies append to (`x-forwarded-for`:
+ *   Cloud Run's appends the address it saw), the entry that many from the
+ *   end. A list header needs it: its first entries are the caller's to say.
  *
  * Callers in `exempt` (CIDR ranges: a shared proxy such as OpenAI's, every
  * ChatGPT user's calls behind a few addresses) aren't limited by address;
- * the line's own limits still hold. Without `caller`, no limit goes by
- * address.
+ * the line's own limits still hold. An address that can't be read is
+ * counted with every other such call, as one caller. Without `caller`, no
+ * limit goes by address.
+ *
+ * **To verify on each deployment** (a wrong setting lets callers choose
+ * their address):
+ * - with a Cloudflare worker as the front (`front`): that it sets
+ *   `cf-connecting-ip` to the address Cloudflare saw, overwriting any the
+ *   caller sent, and that it sends its secret only to the app;
+ * - with `x-forwarded-for` (`hops`): how many proxies the app runs behind
+ *   that each append to it (Cloud Run's front end: 1; a load balancer
+ *   before it: 2). Too few hops counts a caller's own entry; too many, a
+ *   proxy's address, every caller's.
  */
 export type McpCaller = { header: string; front?: string; hops?: number; exempt?: string[] };
 
 export type McpSettings = {
   lines?: Record<string, McpLine>;
   caller?: McpCaller;
-  /** Calls running at once in this process, all lines together (8): past them, it's busy. */
+  /**
+   * Calls running at once in this runtime (an org's, under the orgs host),
+   * all its lines together (8): past them, it's busy.
+   */
   atOnce?: number;
 };
 
 /**
  * What a line takes, unless it says: a request of 64 KiB (a tool's input
- * is small); 8 calls at once; 30 calls a minute from one conversation, 600
- * from all; 600 new conversations an hour, 30 from one user; from one
- * address, 60 calls a minute and 20 new conversations an hour; answers of
- * 100,000 characters.
+ * is small); 8 calls at once, 2 from one address and 2 in one conversation;
+ * tools running 20 seconds at most; 30 calls a minute from one
+ * conversation, 600 from all; 600 new conversations an hour, 30 from one
+ * user; from one address, 60 calls a minute and 20 new conversations an
+ * hour; answers of 100,000 characters.
  */
 export const LIMITS: McpLimits = {
   body: 65_536,
   atOnce: 8,
+  addressAtOnce: 2,
+  chatAtOnce: 2,
+  timeout: 20,
   perMinute: 30,
   linePerMinute: 600,
   chatsPerHour: 600,
@@ -119,7 +146,7 @@ export const LIMITS: McpLimits = {
   result: 100_000,
 };
 
-/** Calls at once in a process, unless the `mcp` resource says (`atOnce`). */
+/** Calls at once in a runtime, unless the `mcp` resource says (`atOnce`). */
 export const AT_ONCE = 8;
 
 /** The longest ChatGPT shows a call's status line. */
@@ -258,6 +285,11 @@ export function settingsProblem(resources: Resources): string | undefined {
   }
   if (caller.hops !== undefined && !(Number.isInteger(caller.hops) && caller.hops > 0)) {
     return "caller.hops is a whole number over 0";
+  }
+  const header = caller.header.toLowerCase();
+  if (header === "forwarded") return "caller.header: Forwarded isn't read (use x-forwarded-for)";
+  if (LISTS.includes(header) && caller.hops === undefined) {
+    return `caller.header ${header} is a list whose first entries the caller writes: say its hops`;
   }
   const bad = (caller.exempt ?? []).find((range) => !rangeOk(range));
   if (bad !== undefined) return `caller.exempt: "${bad}" isn't a CIDR range (192.0.2.0/24)`;

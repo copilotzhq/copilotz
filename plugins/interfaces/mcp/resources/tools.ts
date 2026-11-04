@@ -5,7 +5,10 @@
  *   what a model outside reads of a tool is the app's choice, never its
  *   output as it is, so a tool without one isn't offered (and the route
  *   says so once, in the log). One whose `offer` says no to a contact isn't
- *   listed (see views/offered.ts), and isn't run.
+ *   listed (see views/offered.ts), and isn't run. Listing asks offers for a
+ *   stand-in contact in no chat yet, the same for everyone (kept a minute):
+ *   an offer that depends on the chat is listed unless it says no to the
+ *   stand-in, and asked again, for the real chat, when it's called.
  * - **`tools/list`** (`listed`): each, in order: its name, title and
  *   description, its input's schema (with an optional `chat`, the handle,
  *   when the line gives handles), its hints as MCP names them
@@ -14,9 +17,10 @@
  *   sign-in (`securitySchemes`, also in `_meta` for clients that read only
  *   that).
  * - **`tools/call`** (`called`): which conversation the call is (see
- *   shared/keys.ts), then `mcp.call` as that conversation's contact, with
- *   the call's id: the owner joins a request sent again while the first
- *   runs. A call that names no conversation gets a handle, said once, at the
+ *   shared/keys.ts), its place among the conversation's calls at once, then
+ *   `mcp.call` as that conversation's contact (with whom the user and the
+ *   address are, as HMACs, for their limits), with the call's id: the owner
+ *   joins a request sent again while the first runs, whoever sends it. A call that names no conversation gets a handle, said once, at the
  *   end of its answer (`chat: <handle>`): a model reads only an answer's
  *   content (a result's `_meta` is the host's, never the model's), so
  *   that's where it must be. On a line without handles, it's refused.
@@ -24,7 +28,7 @@
 import type { Actor, Runtime } from "../../../../runtime/mod.ts";
 import type { Tool } from "../../../agents/chat/contract.ts";
 import type { Called } from "../actions/call.ts";
-import { addressOf, inRanges } from "../shared/caller.ts";
+import type { Caller } from "../shared/caller.ts";
 import {
   addressKey,
   callIdOf,
@@ -35,8 +39,9 @@ import {
   type Scope,
   userOf,
 } from "../shared/keys.ts";
-import { callerOf, hintsOf, type Line } from "../shared/settings.ts";
+import { hintsOf, type Line } from "../shared/settings.ts";
 import type { Offering } from "../views/offered.ts";
+import { busy } from "./running.ts";
 
 type Resources = Record<string, Record<string, unknown>>;
 
@@ -76,13 +81,38 @@ export function usable(
  * stand-in contact, in no chat yet): only tools whose `offer` is a function
  * are asked; nothing is read when none is.
  */
-export async function offeredOf(
+export function offeredOf(
   runtime: Pick<Runtime, "describe" | "observe">,
   line: Line,
   names: string[],
 ): Promise<string[]> {
   const tools = toolsOf(runtime.describe().resources);
-  if (!names.some((name) => typeof tools[name]?.offer === "function")) return names;
+  if (!names.some((name) => typeof tools[name]?.offer === "function")) {
+    return Promise.resolve(names);
+  }
+  // The same for every listing: asked once a minute, however many list at once.
+  const lines = listings.get(runtime) ??
+    new Map<string, { at: number; names: Promise<string[]> }>();
+  listings.set(runtime, lines);
+  const key = `${line.name}|${names.join(",")}`;
+  const kept = lines.get(key);
+  if (kept && Date.now() - kept.at < LISTED_MS) return kept.names;
+  const asked = standIn(runtime, line, names);
+  lines.set(key, { at: Date.now(), names: asked });
+  asked.catch(() => lines.delete(key));
+  return asked;
+}
+
+/** How long what's offered to a stand-in contact is kept. */
+const LISTED_MS = 60_000;
+const listings = new WeakMap<object, Map<string, { at: number; names: Promise<string[]> }>>();
+
+/** What a stand-in contact, in no chat yet, is offered of `names`. */
+async function standIn(
+  runtime: Pick<Runtime, "observe">,
+  line: Line,
+  names: string[],
+): Promise<string[]> {
   const actor: Actor = {
     kind: "contact",
     id: "c-mcp-listing",
@@ -91,7 +121,7 @@ export async function offeredOf(
   };
   const item: Offering = {
     tools: names,
-    thread: { _id: "", in: line.in, at: "" },
+    thread: { _id: "", in: line.in, agents: [], at: "" },
     agent: line.client,
   };
   const seen = runtime.observe<string[]>("mcp", "mcp:offered", item, {
@@ -197,7 +227,10 @@ export async function called(
     input: Record<string, unknown>;
     request: string | number;
     said: Said;
-    http: Request;
+    /** Who calls, as the app's front says (undefined without its `caller` settings). */
+    caller?: Exclude<Caller, "refused">;
+    /** Takes the conversation's place among its calls at once. */
+    holdChat(thread: string): (() => void) | undefined;
   },
 ) {
   const { secret } = scope;
@@ -233,22 +266,33 @@ export async function called(
   const { contact, thread } = await conversationOf(secret, scope, key);
   const id = await callIdOf(thread, call.request, call.tool, input);
   const user = call.said.subject ? await userOf(secret, scope, call.said.subject) : undefined;
-  const caller = callerOf({ resources: runtime.describe().resources });
-  const at = addressOf(call.http, caller);
-  const address = at && !inRanges(at, caller?.exempt) ? await addressKey(secret, at) : undefined;
-  const done = await runtime.call<Called>(
-    "mcp.call",
-    {
-      line: line.name,
-      tool: call.tool,
-      input,
-      call: id,
-      by,
-      ...(user ? { user } : {}),
-      ...(address ? { address } : {}),
-    },
-    { actor: { kind: "contact", id: contact, mcp: line.name, client: line.client }, id },
-  );
+  const address = call.caller && !call.caller.exempt
+    ? await addressKey(secret, call.caller.counted)
+    : undefined;
+  const release = call.holdChat(thread);
+  if (!release) throw busy();
+  let done: Called;
+  try {
+    // Who the user and the address are ride on the actor, not the input: a request sent again
+    // from elsewhere is the same call, and joins it.
+    done = await runtime.call<Called>(
+      "mcp.call",
+      { line: line.name, tool: call.tool, input, call: id, by },
+      {
+        actor: {
+          kind: "contact",
+          id: contact,
+          mcp: line.name,
+          client: line.client,
+          ...(user ? { user } : {}),
+          ...(address ? { address } : {}),
+        },
+        id,
+      },
+    );
+  } finally {
+    release();
+  }
   const text = done.text.length > line.limits.result
     ? `${done.text.slice(0, line.limits.result)}\n[…cut]`
     : done.text;

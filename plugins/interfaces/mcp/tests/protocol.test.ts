@@ -327,6 +327,28 @@ test("tools/list: a line's own hints over the tool's; no handle when the line gi
   });
 });
 
+test("an offer that throws: that tool isn't offered, the others are", async () => {
+  const shaky = definePlugin({
+    name: "shaky",
+    views: { "tool:shaky": { llm: (call: { output: string }) => call.output } },
+    resources: {
+      tools: {
+        shaky: {
+          description: "Offered where the chat has a title",
+          offer: (_agent: string, thread: { title?: string }) => thread.title!.length > 0,
+          run: () => "ok",
+        },
+      },
+    },
+  });
+  await setup(async (s) => {
+    const listed = (await s.legacy("tools/list")).body.result as { tools: { name: string }[] };
+    assertEquals(listed.tools.map((t) => t.name), OFFERED);
+    const called = await s.call("shaky", {}, { session: "s" });
+    assertEquals(said(called), "That tool isn't offered here.");
+  }, { line: { tools: { ...LINE.tools, shaky: {} } }, plugins: [shaky] });
+});
+
 test("a tool without its View, or whose offer says no, is neither listed nor run", async () => {
   await setup(async (s) => {
     for (const name of ["raw", "staff"]) {
@@ -408,6 +430,17 @@ test("at start: a line's mistakes stop the app", async () => {
     "CIDR",
   );
   await assertRejects(() => settled({ atOnce: 0 }), Error, "atOnce");
+  // A list header's first entries are the caller's to write: it needs its hops.
+  await assertRejects(
+    () => settled({ caller: { header: "x-forwarded-for", front: "a-front-secret-long-enough" } }),
+    Error,
+    "hops",
+  );
+  await assertRejects(
+    () => settled({ caller: { header: "forwarded", hops: 1 } }),
+    Error,
+    "Forwarded",
+  );
   const chatty = definePlugin({
     name: "chatty",
     resources: {

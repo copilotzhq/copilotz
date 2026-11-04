@@ -29,19 +29,24 @@
     runs the tool through chat's runner, writes a private step from the line's `client` in the chat
     (in its space as it is now; only input that fit the tool's schema, else a note of what was
     sent), and answers with the tool's View, read as the contact, never its output as it is. Only a
-    public error (below) says its message. `ctx.callId` is the call's id
-    (`mcp:<thread>:<hash of the request id>:<hash of tool and input>`), the same however often it
-    runs. A tool that changes things keeps a receipt (`mcp_receipt`, durable, no events, gone after
-    15 minutes): the same request while it runs joins it, within two minutes of its answer is
-    answered from it, and cut short runs again as the same step with `retry`. A read-only tool
-    always runs.
-  - **Limits** (`limits`): calls at once on the line (8; past it, or the process's `atOnce`, 503
-    busy, -31000), a request's body (64 KiB), calls a minute by conversation (30), by caller's
-    address (60) and on the line (600), new conversations an hour by user (30, ChatGPT's
-    `openai/subject`), by address (20) and on the line (600), and an answer's length (100,000
-    characters). Only calls taken count, and a new conversation once it's made. The address is
-    believed only as the app's front says it (`caller`: its header, with the front's secret or the
-    proxies' `hops`); ranges in `caller.exempt` (OpenAI's) aren't limited by address.
+    public error (below) says its message. `ctx.callId` is the step's id (the call's,
+    `mcp:<thread>:<hash of the request id>:<hash of tool and input>`, and when it began), the same
+    however often a call cut short runs again; a new call has a new one. A tool that changes things
+    keeps a receipt (`mcp_receipt`, durable, no events, gone after 15 minutes): the same request
+    while it runs joins it, within two minutes of its answer is answered from it, and cut short runs
+    again as the same step with `retry`. A read-only tool always runs.
+  - **Limits** (`limits`): calls at once in the runtime (`mcp.atOnce`, 8: each org's own under the
+    orgs host), on the line (8), from one caller's address (2; a batch's every call counts) and in
+    one conversation (2), past any of which it's 503 busy, -31000 (a batch, an error for each of its
+    requests); how long a tool runs (`timeout`, 20 s: then it's stopped, and the model is told so);
+    a request's body (64 KiB), calls a minute by conversation (30), by caller's address (60) and on
+    the line (600), new conversations an hour by user (30, ChatGPT's `openai/subject`), by address
+    (20) and on the line (600), and an answer's length (100,000 characters). Only calls taken count,
+    and a new conversation once it's made. The address is believed only as the app's front says it
+    (`caller`: its header, with the front's secret, a request without which is refused, or the
+    proxies' `hops`, which a list header such as `x-forwarded-for` needs); IPv6 is counted by its
+    /64, IPv4 written as IPv6 as IPv4, and an address that can't be read with every other such call,
+    as one. Ranges in `caller.exempt` (OpenAI's) aren't limited by address.
 - **A failure can be public** (`failure(code, message, { public: true })`, `isPublic`): its message
   is for any caller, even a model outside the app over MCP, which no other error's words reach. It
   stays public from job to job. A code alone isn't public: libraries' errors have codes too.

@@ -29,12 +29,15 @@
  *   (`failure(code, message, { public: true })`). A request sent again to a
  *   tool that changes things is answered from the first; a read-only tool
  *   always runs.
- * - **Limits** (a line's `limits`): calls at once (on the line, and in the
- *   process: the server is busy past them), calls a minute (by
- *   conversation, by caller's address, in all), new conversations an hour
- *   (by user, by address, in all), and sizes. Only calls taken count. The
- *   caller's address is believed only as the app's front says it (`caller`:
- *   its header, and its secret or the proxies' hops).
+ * - **Limits** (a line's `limits`): calls at once (in the runtime, on the
+ *   line, from one caller's address, in one conversation: the server is busy
+ *   past them), how long a tool runs (20 s: then it's stopped), calls a
+ *   minute (by conversation, by caller's address, in all), new
+ *   conversations an hour (by user, by address, in all), and sizes. Only
+ *   calls taken count. The caller's address is believed only as the app's
+ *   front says it (`caller`: its header, and its secret, without which a
+ *   request is refused, or the proxies' hops); one that can't be read counts
+ *   with every other such call, as one caller.
  * - **The protocol** (see resources/server.ts): MCP's Streamable HTTP,
  *   JSON-RPC 2.0, with no session; 2026-07-28 and the versions with a
  *   handshake (2025-11-25, 2025-06-18, 2025-03-26). Tools are all it serves.

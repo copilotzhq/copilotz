@@ -42,7 +42,7 @@ test("a call: a contact in a chat of its own, the tool run as it, a step, the ag
   });
 });
 
-test("the tool runs as the contact: its client, its chat; its callId the call's, its trigger the step", async () => {
+test("the tool runs as the contact: its client, its chat; its callId and trigger the step", async () => {
   await setup(async (s) => {
     const who = JSON.parse(said(await s.call("whoami", {}, { session: "conv-1" })));
     const { contact, thread } = await chatOf("conv-1");
@@ -55,7 +55,8 @@ test("the tool runs as the contact: its client, its chat; its callId the call's,
     ]);
     const [step] = await s.steps(thread);
     const [call] = step.toolCalls as Step[];
-    assertEquals([who.trigger, who.callId, who.retry], [step._id, call.id, false]);
+    assertEquals([who.trigger, who.callId, who.retry], [step._id, step._id, false]);
+    assert(step._id.startsWith(`${call.id}@`));
   });
 });
 
@@ -63,7 +64,7 @@ test("a request's id is hashed into the call's: what a client sends never reache
   await setup(async (s) => {
     const evil = "../../v1/orders/123?refund=1\r\nX-Evil: 1";
     const who = JSON.parse(said(await s.call("whoami", {}, { session: "c", id: evil })));
-    assertMatch(who.callId, /^mcp:mcp-[0-9a-f]{32}:[0-9a-f]{16}:[0-9a-f]{16}$/);
+    assertMatch(who.callId, /^mcp:mcp-[0-9a-f]{32}:[0-9a-f]{16}:[0-9a-f]{16}@[0-9a-z]+$/);
     assert(!who.trigger.includes("..") && !who.trigger.includes("\r"));
   });
 });
@@ -232,12 +233,16 @@ test("a tool that changes things: sent again, answered from the first; asked aga
     await s.call("boom", {}, { session: "c", id: 8 });
     const boomAgain = await s.call("boom", {}, { session: "c", id: 8 });
     assertEquals([boomAgain.body.result?.isError, runs.boom], [true, 1]);
-    // Two minutes after its answer, the same request is asked again for a reason: it runs.
+    // Two minutes after its answer, the same request is asked again for a reason: it runs, as a
+    // new call, with a callId of its own (what it does outside isn't taken for the first's).
+    const before = JSON.parse(said(await s.call("whoami", {}, { session: "c", id: 9 })));
     await s.runtime.call("test.age", { ms: 121_000 });
     await s.call("pick", { trip: "T1" }, { session: "c", id: 7 });
     assertEquals(runs.pick, 3);
+    const after = JSON.parse(said(await s.call("whoami", {}, { session: "c", id: 9 })));
+    assertNotEquals(after.callId, before.callId);
     const names = (await s.steps(thread)).map((m) => (m.toolCalls as Step[])[0].name);
-    assertEquals(names, ["pick", "pick", "boom", "pick"]);
+    assertEquals(names, ["pick", "pick", "boom", "whoami", "pick", "whoami"]);
   });
 });
 
@@ -262,7 +267,7 @@ test("a call cut short runs again as itself: the same step, the same callId, wit
     await s.call("search", { to: "Rio" }, { session: "c" });
     await s.runtime.call("test.cut", { call, step: `${call}@cut` });
     const who = JSON.parse(said(await s.call("whoami", {}, { session: "c", id: 5 })));
-    assertEquals([who.callId, who.trigger, who.retry], [call, `${call}@cut`, true]);
+    assertEquals([who.callId, who.trigger, who.retry], [`${call}@cut`, `${call}@cut`, true]);
     const steps = await s.steps(thread);
     assertEquals(steps.at(-1)!._id, `${call}@cut`);
   });
@@ -373,7 +378,7 @@ test("limits: new conversations an hour, on the line and by user, counted once m
   }, { line: { limits: { chatsPerHour: 1 } } });
 });
 
-test("limits by address: as the app's front says it, only with its secret; exempt ranges aren't", async () => {
+test("limits by address: as the app's front says it, only through it; exempt ranges aren't", async () => {
   await setup(async (s) => {
     const from = (ip: string, front = "the-front-secret-for-tests") => ({
       headers: { "cf-connecting-ip": ip, "x-copilotz-front": front },
@@ -391,12 +396,18 @@ test("limits by address: as the app's front says it, only with its secret; exemp
       ),
       "2 trips",
     );
-    // Without the front's secret, the header is anyone's: not believed, no address limit.
-    const forged = await s.call("search", { to: "A" }, {
-      session: "a3",
-      ...from("203.0.113.9", "wrong"),
-    });
-    assertEquals(said(forged).slice(0, 7), "2 trips");
+    // Without the front's secret, it came around the front, straight to the app: refused.
+    for (const front of ["wrong", ""]) {
+      const around = await s.call("search", { to: "A" }, {
+        session: "around",
+        ...from("203.0.113.11", front),
+      });
+      assertEquals([around.status, around.body.error?.message], [
+        403,
+        "Not through the app's front",
+      ]);
+    }
+    assertEquals((await s.docs<{ _id: string }>("contact")).length, 3);
     // A shared proxy's range (OpenAI's, for ChatGPT's users): not limited by address.
     for (let i = 0; i < 4; i++) {
       const proxied = await s.call("search", { to: "A" }, {
@@ -414,6 +425,151 @@ test("limits by address: as the app's front says it, only with its secret; exemp
         exempt: ["192.0.2.0/24"],
       },
     },
+  });
+});
+
+test("limits by address: behind proxies (hops), the entry they appended; any other caller's claim isn't", async () => {
+  await setup(async (s) => {
+    const via = (list: string) => ({
+      headers: { "x-forwarded-for": list, "cf-connecting-ip": "" },
+    });
+    // The caller writes the first entries; the last is the proxy's: 2 calls a minute from there.
+    for (let i = 0; i < 2; i++) {
+      await s.call("search", { to: "A" }, { session: `x${i}`, ...via(`10.9.9.${i}, 203.0.113.7`) });
+    }
+    const third = await s.call("search", { to: "A" }, {
+      session: "x2",
+      ...via("10.9.9.2, 203.0.113.7"),
+    });
+    assertMatch(said(third), /Too many calls from here/);
+    // Claiming a range that's exempt, in an entry the caller wrote, exempts nothing.
+    const claimed = await s.call("search", { to: "A" }, {
+      session: "x3",
+      ...via("192.0.2.1, 203.0.113.7"),
+    });
+    assertMatch(said(claimed), /Too many calls from here/);
+    // An address that can't be read (none, garbled): counted together, never unlimited.
+    for (const list of ["", "not-an-address", "1.2.3.999"]) {
+      await s.call("search", { to: "A" }, { session: `u-${list}`, ...via(list) });
+    }
+    assertEquals((await s.docs("thread")).length, 4);
+  }, {
+    line: { limits: { ipPerMinute: 2 } },
+    settings: { caller: { header: "x-forwarded-for", hops: 1, exempt: ["192.0.2.0/24"] } },
+  });
+});
+
+test("limits by address: IPv6 by its /64; IPv4 written as IPv6 is the same IPv4 caller", async () => {
+  await setup(async (s) => {
+    const from = (ip: string) => ({ headers: { "cf-connecting-ip": ip } });
+    for (const ip of ["2001:db8:1:2::1", "2001:db8:1:2:ffff::9"]) {
+      await s.call("search", { to: "A" }, { session: ip, ...from(ip) });
+    }
+    assertMatch(
+      said(await s.call("search", { to: "A" }, { session: "v6", ...from("2001:db8:1:2::3") })),
+      /from here/,
+    );
+    assertEquals(
+      said(await s.call("search", { to: "A" }, { session: "v6b", ...from("2001:db8:1:3::1") }))
+        .slice(0, 7),
+      "2 trips",
+    );
+    await s.call("search", { to: "A" }, { session: "m1", ...from("203.0.113.99") });
+    await s.call("search", { to: "A" }, { session: "m2", ...from("::ffff:203.0.113.99") });
+    assertMatch(
+      said(await s.call("search", { to: "A" }, { session: "m3", ...from("::ffff:cb00:7163") })),
+      /from here/,
+    );
+  }, { line: { limits: { ipPerMinute: 2, ipChatsPerHour: 50 } } });
+});
+
+test("at once by caller: 2 calls from one address, and 2 in one conversation; a batch counts each", async () => {
+  await setup(async (s) => {
+    const from = (ip: string) => ({ "cf-connecting-ip": ip });
+    // One address: two run, the third is busy; another address is served meanwhile.
+    const one = await Promise.all(
+      [0, 1, 2].map((i) => s.call("slow", {}, { session: `a${i}`, headers: from("203.0.113.20") })),
+    );
+    assertEquals(one.map((r) => r.status).sort(), [200, 200, 503]);
+    // One conversation, from three addresses: the same.
+    const chat = await Promise.all(
+      [0, 1, 2].map((i) =>
+        s.call("slow", {}, { session: "c", id: `c${i}`, headers: from(`203.0.113.${30 + i}`) })
+      ),
+    );
+    assertEquals(chat.map((r) => r.status).sort(), [200, 200, 503]);
+    // A batch of three calls from one address is three: busy, each of its requests told.
+    const batch = await s.post(
+      [0, 1, 2].map((i) => ({
+        jsonrpc: "2.0",
+        id: i,
+        method: "tools/call",
+        params: { name: "search", arguments: { to: "X" }, _meta: { "openai/session": `b${i}` } },
+      })),
+      { headers: { "mcp-protocol-version": "", ...from("203.0.113.40") } },
+    );
+    assertEquals(batch.status, 503);
+    const told = batch.body as unknown as { id: number; error: { code: number } }[];
+    assertEquals(told.map((t) => [t.id, t.error.code]), [[0, -31000], [1, -31000], [2, -31000]]);
+  });
+});
+
+test("a tool that runs past the line's timeout is stopped: the model is told, the step says so", async () => {
+  await setup(async (s) => {
+    const late = await s.call("slow", {}, { session: "c" });
+    assertEquals(late.body.result?.isError, true);
+    assertMatch(said(late), /took longer than 0.05 seconds, and was stopped/);
+    const { thread } = await chatOf("c");
+    const [step] = await s.steps(thread);
+    assertMatch((step.toolCalls as Step[])[0].output, /^Error: It took longer/);
+  }, { line: { limits: { timeout: 0.05 } } });
+});
+
+test("a runtime's calls at once are its own: one org's busy line leaves another's free", async () => {
+  await setup(async (a) => {
+    await setup(async (b) => {
+      const held = a.call("slow", {}, { session: "a1" });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assertEquals(
+        (await a.call("slow", {}, {
+          session: "a2",
+          headers: { "cf-connecting-ip": "203.0.113.2" },
+        })).status,
+        503,
+      );
+      assertEquals(
+        said(await b.call("search", { to: "Rio" }, { session: "b1" })).slice(0, 7),
+        "2 trips",
+      );
+      await held;
+    }, { settings: { atOnce: 1 } });
+  }, { settings: { atOnce: 1 } });
+});
+
+test("the same request while it runs, from another address, joins it", async () => {
+  await setup(async (s) => {
+    const [a, b] = await Promise.all([
+      s.call("slow", {}, {
+        session: "j",
+        id: "same",
+        headers: { "cf-connecting-ip": "203.0.113.1" },
+      }),
+      (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return await s.call("slow", {}, {
+          session: "j",
+          id: "same",
+          headers: { "cf-connecting-ip": "203.0.113.2" },
+        });
+      })(),
+    ]);
+    assertEquals([a.status, said(a), b.status, said(b)], [
+      200,
+      "Done, slowly.",
+      200,
+      "Done, slowly.",
+    ]);
+    assertEquals(runs.slow, 1);
   });
 });
 

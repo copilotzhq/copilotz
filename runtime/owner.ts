@@ -4,6 +4,7 @@
  * Processors. Plugin code runs in executors, which reach the store only by
  * sending ops to the owner over Oxian.
  */
+import { workerPresence } from "./presence.ts";
 import { plan } from "./aggregate.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import { type Clock, type Scheduled, systemClock, TIMERS } from "./schedules.ts";
@@ -1056,9 +1057,8 @@ export async function createOwner(
   };
 
   // Workers of plugins' kinds (computers…): admitted by their kind's Action, then found by id.
-  const connected = new Map<string, string>();
+  const connected = workerPresence();
   const resumed = new Map<string, { kind: string; id: string; until: number }>();
-  const workerKey = (kind: string, id: string) => `${kind}\u0000${id}`;
   /** Who a worker of a plugin's kind is, from `<kind>:<secret>`; undefined: not one. */
   const workerOf = async (credential: { kind: string; capability: unknown }) => {
     const capability = String(credential.capability);
@@ -1234,7 +1234,8 @@ export async function createOwner(
       }
       if (definition.providerId.startsWith("worker:")) {
         const { kind, id } = definition.providerConfig as { kind: string; id: string };
-        connected.set(workerKey(kind, id), fence.identity.workerId);
+        // Moved to a fresh connection (Oxian's handoff), it never left: nothing to tell.
+        if (!connected.arrived(kind, id, fence.identity.workerId, fence.connectionId)) return;
         return tell(registry.workers[kind]?.ready, id);
       }
       ready.add(fence.connectionId);
@@ -1244,9 +1245,8 @@ export async function createOwner(
       browsers.gone(fence.identity.workerId, fence.connectionId);
       if (definition.providerId.startsWith("worker:")) {
         const { kind, id } = definition.providerConfig as { kind: string; id: string };
-        // A worker that came back on another connection is still there.
-        if (connected.get(workerKey(kind, id)) !== fence.identity.workerId) return;
-        connected.delete(workerKey(kind, id));
+        // Gone only if this was the connection it's on: back, or moved, on another, it's there.
+        if (!connected.left(kind, id, fence.identity.workerId, fence.connectionId)) return;
         return tell(registry.workers[kind]?.gone, id);
       }
       ready.delete(fence.connectionId);
@@ -1285,7 +1285,7 @@ export async function createOwner(
       if (!def || !def.workloads.includes(workload)) {
         return refused(`No ${kind} work "${workload}"`, "invalid");
       }
-      const workerId = connected.get(workerKey(kind, String(id)));
+      const workerId = connected.workerOf(kind, String(id));
       if (!workerId) return refused(`${kind} ${id} isn't connected`, "offline");
       const handle = await hypervisor.dispatch({
         workload,
@@ -1665,7 +1665,7 @@ export async function createOwner(
         if (!def || !def.workloads.includes(workload)) {
           throw invalid(`No ${kind} work "${workload}"`);
         }
-        const workerId = connected.get(workerKey(kind, String(id)));
+        const workerId = connected.workerOf(kind, String(id));
         if (!workerId) {
           throw Object.assign(new Error(`${kind} ${id} isn't connected`), { code: "offline" });
         }
@@ -1784,10 +1784,7 @@ export async function createOwner(
         clearTimeout(timer);
       }
       // Workers still connected go with it: their kinds hear so while it still runs.
-      for (const key of connected.keys()) {
-        const [kind, id] = key.split("\u0000");
-        tell(registry.workers[kind]?.gone, id);
-      }
+      for (const [kind, id] of connected.all()) tell(registry.workers[kind]?.gone, id);
       connected.clear();
       await Promise.all(telling);
       closing.abort();

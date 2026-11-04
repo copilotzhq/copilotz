@@ -27,7 +27,14 @@ import { answer, delivery } from "../shared/delivery.ts";
 import { liveWriter } from "../shared/live.ts";
 import { prepare, principalOf, type Send } from "../shared/send.ts";
 import { noted, startedWith } from "../shared/summary.ts";
-import { type Agent, type Prompt, settingsOf, type Step, type Tool } from "../shared/types.ts";
+import {
+  type Agent,
+  type Prompt,
+  settingsOf,
+  type Step,
+  type Tool,
+  type Turn,
+} from "../shared/types.ts";
 
 /** Runs a turn: started by `turn.requested`, or resumed when its wait is over. */
 /**
@@ -109,6 +116,12 @@ const turn = async (ctx: Context, event: Event) => {
   const viewer = { kind: "agent", name: t.agent };
   const current = await ctx.db.collection<Thread>("thread").findOne({ _id: t.thread }) ??
     { _id: t.thread, at: "" };
+  // A person's messages in a row are answered together, by the turn that read
+  // them: a later one's own turn, with nothing of it written yet, has nothing to add.
+  if (
+    event.type === "turn.requested" && t.hops === 0 && step === 0 && !open &&
+    current.latest !== t.trigger && await answered(ctx, t)
+  ) return;
   const composed = await ctx.render("llm", "thread", current, { viewer }) as Prompt;
   const instructions = composed.system.join("\n\n");
   // The conversation up to here repeats in the next calls: a cache point, before what's new each turn.
@@ -183,9 +196,11 @@ const turn = async (ctx: Context, event: Event) => {
     if (!calls.length) {
       await live.settle();
       // Its answer keeps what it was told, and its state: what it thought goes back with it.
+      // And how far it had read the thread: what came after, it reads after this answer.
       return await answer(ctx, t, run, text, {
         ...(step === first ? { told } : {}),
         ...(state ? { state } : {}),
+        ...(current.at ? { knew: current.at } : {}),
       }, current);
     }
 
@@ -327,6 +342,23 @@ const turn = async (ctx: Context, event: Event) => {
   }
   throw new Error(`Agent "${t.agent}" did not finish within ${maxSteps} steps`);
 };
+
+/**
+ * Whether the person's message that started a turn is answered already: its
+ * agent's latest answer here had read it (`knew`), and went to them.
+ */
+async function answered(ctx: Context, t: Turn): Promise<boolean> {
+  const messages = ctx.db.collection<Message>("message");
+  const [trigger, [latest]] = await Promise.all([
+    messages.findOne({ _id: t.trigger }),
+    messages.find(
+      { thread: t.thread, from: t.agent, knew: { $exists: true } },
+      { sort: { at: -1 }, limit: 1 },
+    ),
+  ]);
+  return !!trigger && !!latest?.knew && latest.knew >= trigger.at &&
+    latest.to.includes(trigger.from);
+}
 
 /** What a written step's model said, said again: what it wrote, its state and its calls. */
 async function* replay(intent: Intent): AsyncIterable<LlmChunk> {

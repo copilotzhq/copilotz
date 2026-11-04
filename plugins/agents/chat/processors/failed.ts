@@ -41,7 +41,16 @@ const failed = async (ctx: Context, event: Event) => {
       failed: true,
     });
   }
-  await answer(ctx, t, run, `${t.agent} failed: ${error.message ?? "unknown error"}`, {
-    failed: true,
-  });
+  await answer(ctx, t, run, `${t.agent} failed: ${toldOf(error)}`, { failed: true });
 };
+
+/** What anyone in the chat reads of a failure, a customer too. */
+const FAILED = "something went wrong, so it couldn't answer. Try again in a moment.";
+
+/**
+ * What went wrong, as people are told it: a missing key says who can add one;
+ * anything else (a provider's refusal and its body, a network error) is for
+ * whoever runs the app, and stays in the `processor.failed` event.
+ */
+const toldOf = (error: { message?: string; code?: string }) =>
+  error.code === "key_missing" && error.message ? error.message : FAILED;

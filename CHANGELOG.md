@@ -3,34 +3,51 @@
 - **MCP: models outside the app call its tools** (the new `mcp` interface; widgets come next). An
   app declares lines in `resources.mcp.lines.<name>`, each an MCP server at `POST /mcp/<name>`
   (`/o/<org>/mcp/<name>` under many orgs): the space its chats live in (`in`), the tools it offers
-  (`tools`, by name, or all of an `agent`'s but `send_message`), how each is shown (`title`,
+  (`tools`, by name: only these, never an agent's; each needs its `tool:<name>` View, else it isn't
+  offered, and one whose `offer` says no to a contact isn't either), how each is shown (`title`,
   `annotations`, ChatGPT's `invoking`/`invoked` lines, 64 characters), who calls (`client`, the
-  steps' sender), `title`, `version`, `instructions`, `handles`, `origins`, `org` and `limits`.
-  Checked at start; it needs the `links` resource's secret.
+  steps' sender), `title`, `version`, `instructions`, `handles`, `origins`, `org` and `limits`; and
+  plugin-wide, how it knows a caller's address (`caller`) and calls at once in the process
+  (`atOnce`, 8). Checked at start; it needs the `links` resource's secret.
   - **The protocol:** Streamable HTTP and JSON-RPC 2.0, written in the plugin, answered as JSON,
     with no session (GET and DELETE are 405; no `Mcp-Session-Id`). MCP 2026-07-28 (per-request
     `_meta`, `server/discover`, the `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and
     `Mcp-Param-*` headers checked against the body: -32020) and 2025-11-25, 2025-06-18 and
-    2025-03-26 (`initialize`; batches only for 2025-03-26). Unknown versions are -32022 with the
-    supported ones. Every tool says `noauth`, and all four of MCP's hints.
+    2025-03-26 (`initialize`; batches only for 2025-03-26, 10 messages at most, one after another).
+    Unknown versions are -32022 with the supported ones. Every tool says `noauth`, and all four of
+    MCP's hints. A request with an `Origin` the line doesn't name is 403; input nested past 64
+    levels, or holding a `$blob`, is -32602.
   - **Conversations:** ChatGPT's `_meta["openai/session"]` (with `openai/subject`) names one; a
     client that names none gets a `chat` handle (128 random bits, an optional input on every tool,
-    the answer's last line), or with `handles: false` a chat per call. Each is a contact
-    (`via: "mcp"`) in a chat of its own in the line's space, its ids HMACs of the key with the
-    `links` secret: no table, and nothing stored that leads from one conversation to another. A
-    handle the app never gave is refused; a chat whose contact its people took out stays closed.
+    said once, at the end of the first answer), or with `handles: false` is refused. Each is a
+    contact (`via: "mcp"`) in a chat of its own in the line's space, its ids HMACs of the key with
+    the `links` secret: no table. A handle the app never gave is refused; a chat whose contact its
+    people took out, or that was erased (`contact.forget`, `chat.erase`: a tombstone, `mcp_closed`,
+    no personal data), is over for good.
   - **A call** is `mcp.call`, called by the route as the conversation's contact (an actor only the
     route makes: `{ kind: "contact", id, mcp, client }`, which the Action's `allow` asks for). It
-    runs the tool through chat's runner, writes a private step from the line's `client` in the chat,
-    and answers with the tool's `tool:<name>` View, read as the contact. A coded error says its
-    message; a bare throw only that it failed (the step keeps the error). The same request (its id,
-    tool and input) while it runs joins it, and within two minutes of its answer is answered from
-    it; the same id asking something else is a new call.
-  - **Limits** (`limits`): a request's body (64 KiB), calls a minute by conversation (30) and on the
-    line (600), new conversations an hour on the line (600) and by user (30, ChatGPT's
-    `openai/subject`), and an answer's length (100,000 characters). Counted in memory.
+    runs the tool through chat's runner, writes a private step from the line's `client` in the chat
+    (in its space as it is now; only input that fit the tool's schema, else a note of what was
+    sent), and answers with the tool's View, read as the contact, never its output as it is. Only a
+    public error (below) says its message. `ctx.callId` is the call's id
+    (`mcp:<thread>:<hash of the request id>:<hash of tool and input>`), the same however often it
+    runs. A tool that changes things keeps a receipt (`mcp_receipt`, durable, no events, gone after
+    15 minutes): the same request while it runs joins it, within two minutes of its answer is
+    answered from it, and cut short runs again as the same step with `retry`. A read-only tool
+    always runs.
+  - **Limits** (`limits`): calls at once on the line (8; past it, or the process's `atOnce`, 503
+    busy, -31000), a request's body (64 KiB), calls a minute by conversation (30), by caller's
+    address (60) and on the line (600), new conversations an hour by user (30, ChatGPT's
+    `openai/subject`), by address (20) and on the line (600), and an answer's length (100,000
+    characters). Only calls taken count, and a new conversation once it's made. The address is
+    believed only as the app's front says it (`caller`: its header, with the front's secret or the
+    proxies' `hops`); ranges in `caller.exempt` (OpenAI's) aren't limited by address.
+- **A failure can be public** (`failure(code, message, { public: true })`, `isPublic`): its message
+  is for any caller, even a model outside the app over MCP, which no other error's words reach. It
+  stays public from job to job. A code alone isn't public: libraries' errors have codes too.
 - **Chat's tool runner is in its contract** (`runTool`, `toolText`): a tool's input checked, run,
-  and its result read as agents read it, as a turn does; the turn uses them. `Tool` gains `title`
+  and its result read as agents read it, as a turn does; the turn uses them. Input that doesn't fit
+  a tool's schema is a public failure, and the runner says so (`unchecked`). `Tool` gains `title`
   and `annotations` (`readOnly`, `destructive`, `idempotent`, `openWorld`).
 - **Contacts: people outside the org who talk to its agents** (the new `contacts` plugin, part of
   `access`). A WhatsApp customer is a contact, its own kind of actor (`{ kind: "contact", id }`),

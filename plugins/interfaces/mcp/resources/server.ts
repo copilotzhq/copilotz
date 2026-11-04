@@ -7,14 +7,20 @@
  *
  * - **HTTP.** A POST, `application/json`, within the line's `body` limit,
  *   answered with JSON (never a stream). GET and DELETE answer 405: there's
- *   no stream to open and no session to end. A browser's `Origin` must be
- *   one the line names, when it names any. No cookie is read: whoever calls
- *   is nobody but their conversation's contact.
+ *   no stream to open and no session to end. A request with an `Origin` (a
+ *   browser's page) is refused unless the line names it: no browser calls
+ *   MCP. No cookie is read: whoever calls is nobody but their
+ *   conversation's contact.
+ * - **At once.** Tool calls running at once, on the line (`limits.atOnce`,
+ *   8) and in this process (`mcp.atOnce`, 8): past either, the server is
+ *   busy (503, `Retry-After`, -31000, its own code), before anything runs.
  * - **JSON-RPC 2.0.** One message a request. A notification (or a reply)
  *   answers 202. Bad JSON is -32700, a malformed message -32600, an unknown
  *   method -32601, bad params -32602; what fails inside says -32603 and
  *   nothing more (it's logged here). A batch (a list of messages) is taken
- *   only from a 2025-03-26 client: later versions have none.
+ *   only from a 2025-03-26 client (later versions have none; that one's
+ *   servers must take them): at most 10 messages, answered one after
+ *   another, as one call at once.
  * - **Versions.** 2026-07-28 (modern: no handshake; each request says its
  *   version and capabilities in `_meta`, and repeats its method and name in
  *   headers, which must match: else 400, -32020) and 2025-11-25, 2025-06-18
@@ -29,11 +35,11 @@
  * https://developers.openai.com/apps-sdk/reference (ChatGPT's `_meta`).
  */
 import { linksOf, type Runtime } from "../../../../runtime/mod.ts";
-import { type Line, lineOf, originOk, PATH } from "../shared/settings.ts";
-import { called, listed, mirrored, type Said } from "./tools.ts";
+import { atOnceOf, type Line, lineOf, PATH } from "../shared/settings.ts";
+import { called, listed, mirrored, offeredOf, type Said, usable } from "./tools.ts";
 
 /** What the web host hands the route: the runtime. */
-export type McpHost = { runtime: Pick<Runtime, "call" | "describe"> };
+export type McpHost = { runtime: Pick<Runtime, "call" | "describe" | "observe"> };
 
 /** The version without a handshake, and the ones with one, newest first. */
 const MODERN = "2026-07-28";
@@ -50,6 +56,11 @@ const PARAMS = -32602;
 const INTERNAL = -32603;
 const MISMATCH = -32020;
 const UNSUPPORTED = -32022;
+/** This server's own: too many calls at once (outside JSON-RPC's reserved range, as MCP asks). */
+const BUSY = -31000;
+
+/** The most messages a batch takes. */
+const BATCH = 10;
 
 /** How long a client may keep what `tools/list` and `server/discover` say (tools change on deploys). */
 const TTL_MS = 300_000;
@@ -62,11 +73,32 @@ type Answered = { status: number; body?: Record<string, unknown> };
 
 const headers = { "content-type": "application/json", "cache-control": "no-store" };
 
-const respond = (status: number, body?: unknown) =>
+const respond = (status: number, body?: unknown, more: Record<string, string> = {}) =>
   new Response(body === undefined ? null : JSON.stringify(body), {
     status,
-    headers: body === undefined ? { "cache-control": "no-store" } : headers,
+    headers: { ...(body === undefined ? { "cache-control": "no-store" } : headers), ...more },
   });
+
+/** Tool calls running in this process, every line's; and each line's, by runtime. */
+let running = 0;
+const runningOn = new WeakMap<object, Map<string, number>>();
+
+/** A place for a call to run, on its line and in this process: its release; none when busy. */
+function place(runtime: object, line: Line, most: number): (() => void) | undefined {
+  const lines = runningOn.get(runtime) ?? new Map<string, number>();
+  runningOn.set(runtime, lines);
+  const here = lines.get(line.name) ?? 0;
+  if (running >= most || here >= line.limits.atOnce) return undefined;
+  running++;
+  lines.set(line.name, here + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    running--;
+    lines.set(line.name, (lines.get(line.name) ?? 1) - 1);
+  };
+}
 
 const fault = (id: Id | undefined, code: number, message: string, data?: unknown) => ({
   jsonrpc: "2.0",
@@ -99,9 +131,9 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
       headers: { allow: "POST", "cache-control": "no-store" },
     });
   }
-  // A browser's page: from an origin the line names, when it names any (it takes no cookie).
+  // A browser's page: only from an origin the line names (none, unless it says).
   const origin = request.headers.get("origin");
-  if (origin !== null && !(line.origins ? line.origins.includes(origin) : originOk(origin))) {
+  if (origin !== null && !(line.origins ?? []).includes(origin)) {
     return respond(403, fault(undefined, REQUEST, "Not from this origin"));
   }
   if (!/^application\/json\b/i.test(request.headers.get("content-type") ?? "")) {
@@ -125,22 +157,45 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
     request,
     scope: { line: line.name, ...(org ? { org } : {}), secret },
   };
+  const messages = Array.isArray(parsed) ? parsed : [parsed];
   if (Array.isArray(parsed)) {
     // Batches were MCP's only in 2025-03-26.
     const version = request.headers.get("mcp-protocol-version") ?? UNSAID;
-    if (version !== UNSAID || !parsed.length) {
+    if (version !== UNSAID || !parsed.length || parsed.length > BATCH) {
       return respond(
         400,
-        fault(undefined, REQUEST, "One message a request: batches end in 2025-03-26"),
+        fault(undefined, REQUEST, `One message a request (from 2025-03-26, ${BATCH} at most)`),
       );
     }
-    const answers = await Promise.all(parsed.map((m) => answered(context, m, true)));
-    const bodies = answers.flatMap((a) => a.body ? [a.body] : []);
-    return bodies.length ? respond(200, bodies) : respond(202);
   }
-  const { status, body } = await answered(context, parsed, false);
-  return respond(status, body);
+  // A request that calls tools takes a place first: one, a batch's calls going one by one.
+  const calls = messages.some((m) => isObject(m) && m.method === "tools/call");
+  const release = calls ? place(host.runtime, line, atOnceOf({ resources })) : () => {};
+  if (!release) {
+    const id = !Array.isArray(parsed) && isObject(parsed) ? idOf(parsed.id) : undefined;
+    return respond(503, fault(id, BUSY, "Busy: too many calls at once. Try again in a moment."), {
+      "retry-after": "1",
+    });
+  }
+  try {
+    if (!Array.isArray(parsed)) {
+      const { status, body } = await answered(context, parsed, false);
+      return respond(status, body);
+    }
+    const bodies = [];
+    for (const message of parsed) {
+      const { body } = await answered(context, message, true);
+      if (body) bodies.push(body);
+    }
+    return bodies.length ? respond(200, bodies) : respond(202);
+  } finally {
+    release();
+  }
 }
+
+/** A request's id, when it's one JSON-RPC takes. */
+const idOf = (id: unknown): Id | undefined =>
+  (typeof id === "string" && id.length <= 200) || Number.isSafeInteger(id) ? id as Id : undefined;
 
 type Context = {
   runtime: McpHost["runtime"];
@@ -202,9 +257,7 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
   const version = message.method === "initialize"
     ? undefined
     : headed ?? (typeof said === "string" ? said : UNSAID);
-  const asked = typeof message.id === "string" || typeof message.id === "number"
-    ? message.id
-    : undefined;
+  const asked = idOf(message.id);
   if (version !== undefined && !VERSIONS.includes(version)) {
     return failed(400, asked, UNSUPPORTED, "Unsupported protocol version", {
       supported: VERSIONS,
@@ -224,11 +277,10 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
   }
   const method = message.method;
   if (!("id" in message)) return { status: 202 }; // A notification: nothing to answer.
-  const id = message.id;
-  if (!(typeof id === "string" && id.length <= 200) && !Number.isSafeInteger(id)) {
+  const rpc = idOf(message.id);
+  if (rpc === undefined) {
     return failed(400, undefined, REQUEST, "A request's id is a string or an integer");
   }
-  const rpc = id as Id;
   if (!isObject(params)) return failed(400, rpc, PARAMS, "params is an object");
   if (modern) {
     const wrong = headerProblem(c, method, params, said);
@@ -248,18 +300,26 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
         return ok(discovered(c.line));
       case "ping":
         return ok({});
-      case "tools/list":
+      case "tools/list": {
         if (params.cursor !== undefined) {
           return failed(status(PARAMS), rpc, PARAMS, "No such cursor");
         }
-        return ok({ tools: listed(c.line, c.resources), ttlMs: TTL_MS, cacheScope: "public" });
+        const names = await offeredOf(c.runtime, c.line, usable(c.runtime, c.line));
+        return ok({
+          tools: listed(c.line, c.resources, names),
+          ttlMs: TTL_MS,
+          cacheScope: "public",
+        });
+      }
       case "tools/call": {
         const tool = params.name;
         const input = params.arguments ?? {};
-        if (typeof tool !== "string" || !Object.hasOwn(c.line.tools, tool)) {
+        if (typeof tool !== "string" || !usable(c.runtime, c.line).includes(tool)) {
           return failed(status(PARAMS), rpc, PARAMS, `Unknown tool: ${String(tool).slice(0, 128)}`);
         }
         if (!isObject(input)) return failed(status(PARAMS), rpc, PARAMS, "arguments is an object");
+        const odd = oddIn(input);
+        if (odd) return failed(status(PARAMS), rpc, PARAMS, odd);
         const conversation = saidOf(meta);
         if (!conversation) {
           return failed(status(PARAMS), rpc, PARAMS, "openai/session and openai/subject are text");
@@ -270,6 +330,7 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
             input,
             request: rpc,
             said: conversation,
+            http: c.request,
           }),
         );
       }
@@ -280,6 +341,30 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
     console.error(`mcp.${c.line.name}: ${method}:`, error instanceof Error ? error.message : error);
     return failed(batched ? 200 : 500, rpc, INTERNAL, "Internal error");
   }
+}
+
+/** How deep a tool's input may nest: tools take a few levels; past this, it's no tool's. */
+const DEPTH = 64;
+
+/**
+ * What's wrong with a call's input before anything reads it, if anything:
+ * nested past `DEPTH` (what reads it recursively would run out of stack),
+ * or holding what the store reads as a blob reference (an object with a
+ * `$blob`: only the app writes those, never a caller). Walked without
+ * recursion.
+ */
+function oddIn(value: unknown): string | undefined {
+  const left: [unknown, number][] = [[value, 0]];
+  while (left.length) {
+    const [at, depth] = left.pop()!;
+    if (!at || typeof at !== "object") continue;
+    if (depth > DEPTH) return `arguments nest more than ${DEPTH} levels deep`;
+    if (!Array.isArray(at) && Object.hasOwn(at, "$blob")) {
+      return "arguments hold a blob reference ($blob)";
+    }
+    for (const item of Object.values(at)) left.push([item, depth + 1]);
+  }
+  return undefined;
 }
 
 /** ChatGPT's fields naming the conversation, when they're text of a sane size; null when not. */

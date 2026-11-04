@@ -5,7 +5,10 @@
  *
  * - `runTool`: its input checked against its schema, then run; what it
  *   returns as text (JSON unless it's text already); a throw, or input that
- *   doesn't fit, as `Error: <why>`, with the error itself beside it.
+ *   doesn't fit, as `Error: <why>`, with the error itself beside it (and
+ *   `unchecked` when the input didn't fit: it isn't the tool's input). What
+ *   input doesn't fit says is about the caller's own input: public (see the
+ *   runtime's `failure`).
  * - `toolText`: what a call's result reads as to a model: its tool's
  *   `tool:<name>` View (`llm`), else the result's own text.
  */
@@ -13,8 +16,11 @@ import type { Context, Viewer } from "../../../../runtime/mod.ts";
 import { check } from "./agents.ts";
 import type { Step, Tool, ToolContext } from "./types.ts";
 
-/** What a call ran into: its output as the agent's step keeps it, and what was thrown, if anything. */
-export type ToolRun = { output: string; error?: unknown };
+/**
+ * What a call ran into: its output as the agent's step keeps it, what was
+ * thrown, if anything, and whether its input didn't fit the tool's schema.
+ */
+export type ToolRun = { output: string; error?: unknown; unchecked?: true };
 
 /** Where a call runs: who calls it, in which thread, for what message, and the call's own id. */
 export type ToolAt = Omit<ToolContext, keyof Context> & { retry: boolean };
@@ -28,13 +34,20 @@ export async function runTool(
 ): Promise<ToolRun> {
   const tools = (ctx.resources.tools ?? {}) as Record<string, Tool>;
   const tool = Object.hasOwn(tools, name) ? tools[name] : undefined;
+  const failed = (error: unknown) =>
+    `Error: ${error instanceof Error ? error.message : String(error)}`;
   try {
     if (!tool) throw new Error(`Unknown tool "${name}"`);
     check(name, tool)(input);
+  } catch (error) {
+    const told = Object.assign(error as Error, { public: true as const });
+    return { output: failed(told), error: told, unchecked: true };
+  }
+  try {
     const result = await tool.run(input as Record<string, unknown>, { ...ctx, ...at });
     return { output: typeof result === "string" ? result : JSON.stringify(result) };
   } catch (error) {
-    return { output: `Error: ${error instanceof Error ? error.message : String(error)}`, error };
+    return { output: failed(error), error };
   }
 }
 

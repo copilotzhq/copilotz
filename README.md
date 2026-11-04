@@ -495,14 +495,15 @@ filled by the front ends through resources).
   answered by its agent, and a chat quiet for the number's `gap` (12 hours) is over: their next
   message starts a new one.
 - **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A line the app
-  declares (`mcp.lines.<name>`: its space, its tools or an agent's, how each is shown, who calls,
-  its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP, JSON-RPC 2.0, no session, MCP
-  2026-07-28 and the versions with a handshake. Each conversation (ChatGPT's `openai/session`, or a
-  `chat` handle the app gives a client that names none) is a contact in a chat of its own in the
-  line's space, its ids an HMAC with the `links` secret. A call runs the tool through chat's runner
-  as that contact, is written there as a step, and answers what the app's agents read of it; a
-  request sent again is answered from the first, and the line's limits (calls a minute, new
-  conversations an hour) refuse the rest.
+  declares (`mcp.lines.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
+  each is shown, who calls, its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP,
+  JSON-RPC 2.0, no session, MCP 2026-07-28 and the versions with a handshake. Each conversation
+  (ChatGPT's `openai/session`, or a `chat` handle the app gives a client that names none) is a
+  contact in a chat of its own in the line's space, its ids an HMAC with the `links` secret. A call
+  runs the tool through chat's runner as that contact, is written there as a step, and answers what
+  the app's agents read of it (only public errors say their words); a request sent again to a tool
+  that changes things is answered from the first, and the line's limits (calls at once, a minute,
+  new conversations an hour, by conversation, user, caller's address and in all) refuse the rest.
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.

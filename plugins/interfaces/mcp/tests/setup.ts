@@ -1,15 +1,18 @@
 /**
  * What the MCP tests share: an app with one line (`chatgpt`, in the app's
- * own space, offering the booking agent's tools) and a way to call it as a
- * client does: JSON-RPC over HTTP to the web host, legacy (with a protocol
- * version header) or modern (2026-07-28's `_meta` and headers).
+ * own space) and a way to call it as a client does: JSON-RPC over HTTP to
+ * the web host, legacy (with a protocol version header) or modern
+ * (2026-07-28's `_meta` and headers), from an address its front vouches for.
  *
- * The tools: `search` (read-only, with a `tool:search` View, as agents read
- * it), `pick` (writes the chat's booking, as the contact), `peek` (reads any
- * chat's booking), `whoami` (says who it runs as, and where), `boom` (an
- * error that's not for the caller), `refuse` and `later` (ones that are: the
- * runtime's code, and the app's own), `inside` (the runtime's own code, about
- * its insides), `slow` (takes a while). Each counts its runs (`runs`).
+ * The tools, each with its `tool:<name>` View (what a model reads of it):
+ * `search` (read-only; its View leaves a secret out), `pick` (writes the
+ * chat's booking, as the contact), `peek` (reads any chat's booking),
+ * `status` (read-only: says what `paid` is now), `whoami` (says who it runs
+ * as, and its call's ids), `boom` (a bare throw, with secrets in it),
+ * `refuse` and `later` (public refusals: the runtime's code, the app's own),
+ * `coded` (a coded failure that isn't public), `driver` (a library's error,
+ * with a string code), `slow` (takes a while), `staff` (offered only to
+ * people) and `raw` (no View: never offered). Each counts its runs (`runs`).
  */
 import {
   createRuntime,
@@ -26,16 +29,22 @@ import { access } from "../../../access/mod.ts";
 import { createTickets } from "../../../../hosts/web/tickets.ts";
 import { webServer } from "../../../../hosts/web/server.ts";
 import { mcp } from "../mod.ts";
-import type { McpLine } from "../shared/settings.ts";
+import type { McpLine, McpSettings } from "../shared/settings.ts";
 
 export const SECRET = "a-secret-for-signing-links-in-tests-0123456789";
 export const MODERN = "2026-07-28";
+/** The app's front's secret, and the address it says calls come from, unless a test says. */
+export const FRONT = "the-front-secret-for-tests";
+export const ADDRESS = "203.0.113.7";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** How many times each tool ran. */
 export const runs: Record<string, number> = {};
 const ran = (name: string) => runs[name] = (runs[name] ?? 0) + 1;
+
+/** What `status` says. */
+export const state = { paid: false };
 
 const silent: LlmAdapter = {
   async *generate() {
@@ -45,6 +54,21 @@ const silent: LlmAdapter = {
 
 /** A booking: one per chat, part of it (the app's own, as Mobizap's is). */
 type Booking = { _id: string; thread: string; in: string; trip: string };
+
+/** Every tool but `raw` reads as its output to a model (a View the app chose). */
+const SHOWN = [
+  "pick",
+  "peek",
+  "status",
+  "whoami",
+  "boom",
+  "refuse",
+  "later",
+  "coded",
+  "driver",
+  "slow",
+  "staff",
+];
 
 export const app = definePlugin({
   name: "app",
@@ -69,6 +93,9 @@ export const app = definePlugin({
         return `${trips.length} trips: ${trips.join(", ")}`;
       },
     },
+    ...Object.fromEntries(
+      SHOWN.map((name) => [`tool:${name}`, { llm: (call: { output: string }) => call.output }]),
+    ),
   },
   resources: {
     links: { origin: "https://app.example", secret: SECRET },
@@ -77,10 +104,7 @@ export const app = definePlugin({
       booking: {
         instructions: "Sell trips.",
         model: "e/booking",
-        tools: [
-          ...["search", "pick", "peek", "whoami", "boom", "refuse", "later", "inside", "slow"],
-          "send_message",
-        ],
+        tools: ["search", "pick", "send_message"],
       },
     },
     tools: {
@@ -134,6 +158,14 @@ export const app = definePlugin({
           return found ? `Booked: ${found.trip}` : "No booking.";
         },
       }),
+      status: tool({
+        description: "Says whether it's paid",
+        annotations: { readOnly: true },
+        run: () => {
+          ran("status");
+          return state.paid ? "Paid." : "Not paid yet.";
+        },
+      }),
       whoami: tool({
         description: "Says who runs it",
         run: (_input, ctx) => {
@@ -163,21 +195,32 @@ export const app = definePlugin({
         description: "Refuses what was asked",
         run: () => {
           ran("refuse");
-          throw failure("invalid", "That date is in the past.");
+          throw failure("invalid", "That date is in the past.", { public: true });
         },
       }),
       later: tool({
         description: "Refuses, with the app's own code",
         run: () => {
           ran("later");
-          throw failure("not_now", "Search trips first: possible now: search_trips.");
+          throw failure("not_now", "Search trips first: possible now: search_trips.", {
+            public: true,
+          });
         },
       }),
-      inside: tool({
-        description: "Fails with one of the runtime's own codes",
+      coded: tool({
+        description: "Fails with a code that isn't for callers",
         run: () => {
-          ran("inside");
-          throw failure("duplicate_key", "Duplicate key in booking: b-secret-id");
+          ran("coded");
+          throw failure("conflict", "Booking b-secret-id is held by session s-secret");
+        },
+      }),
+      driver: tool({
+        description: "Fails as a library does: a string code, internals in its words",
+        run: () => {
+          ran("driver");
+          throw Object.assign(new Error("connect ECONNREFUSED (user=app password=hunter2)"), {
+            code: "ECONNREFUSED",
+          });
         },
       }),
       slow: tool({
@@ -189,8 +232,23 @@ export const app = definePlugin({
           return "Done, slowly.";
         },
       }),
+      staff: tool({
+        description: "Staff only: every booking in the space",
+        offer: (_agent, _thread, ctx) => principalOf(ctx.actor)?.kind !== "contact",
+        run: () => {
+          ran("staff");
+          return "EVERY BOOKING";
+        },
+      }),
+      raw: tool({
+        description: "Has no View: what it returns would go out as it is",
+        run: () => {
+          ran("raw");
+          return "internal: password=hunter2";
+        },
+      }),
     },
-    spaces: { line: { name: "ChatGPT", agents: ["booking"] } },
+    spaces: { line: { name: "ChatGPT", agents: ["booking"] }, review: { name: "Review" } },
     shared: { booking: { part: "thread" } },
   },
   adapters: { llm: { e: silent } },
@@ -199,7 +257,6 @@ export const app = definePlugin({
 /** The line every test calls, unless it says otherwise. */
 export const LINE: McpLine = {
   in: "line",
-  agent: "booking",
   client: "ChatGPT",
   title: "Mobifácil",
   instructions: "Buy bus tickets.",
@@ -207,32 +264,43 @@ export const LINE: McpLine = {
     search: { invoking: "Searching…", invoked: "Found trips." },
     pick: { title: "Pick a trip" },
     peek: {},
+    status: {},
     whoami: {},
     boom: {},
     refuse: {},
     later: {},
-    inside: {},
+    coded: {},
+    driver: {},
     slow: {},
+    staff: {},
+    raw: {},
   },
 };
+
+/** The tools the line offers a contact: all but `staff` (people only) and `raw` (no View). */
+export const OFFERED = Object.keys(LINE.tools).filter((name) => name !== "staff" && name !== "raw");
+
+/** How the app knows who calls: its front says, with its secret. */
+export const CALLER: McpSettings["caller"] = { header: "cf-connecting-ip", front: FRONT };
 
 /** Reads every document of the collections the tests look at, as the system. */
 export const reads = definePlugin({
   name: "reads",
   views: Object.fromEntries(
-    ["contact", "thread", "message", "booking", "member", "mcp_call"].map((c) => [
-      c,
-      {
-        test: (item: { thread?: string }, ctx) =>
-          ctx.db.collection(c).find(item.thread ? { thread: item.thread } : {}, {
-            sort: { at: 1 },
-          }).value ?? [],
-      },
-    ]),
+    ["contact", "thread", "message", "booking", "member", "mcp_receipt", "mcp_rate", "mcp_closed"]
+      .map((c) => [
+        c,
+        {
+          test: (item: { thread?: string }, ctx) =>
+            ctx.db.collection(c).find(item.thread ? { thread: item.thread } : {}, {
+              sort: { at: 1 },
+            }).value ?? [],
+        },
+      ]),
   ),
 });
 
-/** Test hands: a contact taken out of its chat, a receipt aged. */
+/** Test hands: a contact taken out of its chat, a conversation erased, a chat moved, time passing. */
 export const hands = definePlugin({
   name: "hands",
   actions: {
@@ -243,14 +311,46 @@ export const hands = definePlugin({
           _id: `thread:${input.thread}|contact:${input.contact}`,
         }),
     },
+    // What `contact.forget` with its chats does, without asking who manages the space.
+    "test.forget": {
+      input: { type: "object" },
+      run: async (ctx, input: { thread: string; contact: string; chats?: boolean }) => {
+        if (input.chats !== false) await ctx.call("chat.erase", { thread: input.thread });
+        await ctx.db.collection("member").deleteMany({ member: `contact:${input.contact}` });
+        await ctx.db.collection("contact").deleteOne({ _id: input.contact });
+      },
+    },
+    "test.move": {
+      input: { type: "object" },
+      run: async (ctx, input: { thread: string; to: string }) => {
+        await ctx.call("space.keep", { id: input.to });
+        await ctx.db.collection("thread").updateOne({ _id: input.thread }, {
+          $set: { in: input.to },
+        });
+      },
+    },
+    // Receipts begun `ms` earlier; counters of past windows gone (a minute went by).
     "test.age": {
       input: { type: "object" },
-      run: async (ctx, input: { ms: number }) => {
-        const calls = ctx.db.collection<{ at: number }>("mcp_call");
-        for (const c of await calls.find({})) {
-          await calls.updateOne({ _id: c._id }, { $set: { at: c.at - input.ms } });
+      run: async (ctx, input: { ms?: number; minute?: boolean }) => {
+        const receipts = ctx.db.collection<{ at: number }>("mcp_receipt");
+        for (const r of await receipts.find({})) {
+          await receipts.updateOne({ _id: r._id }, { $set: { at: r.at - (input.ms ?? 0) } });
+        }
+        if (input.minute) {
+          await ctx.db.collection("mcp_rate").deleteMany({ until: { $lte: Date.now() + 60_000 } });
         }
       },
+    },
+    // A call cut short: its receipt, as written before its tool ran, and never done.
+    "test.cut": {
+      input: { type: "object" },
+      run: (ctx, input: { call: string; step: string }) =>
+        ctx.db.collection("mcp_receipt").replaceOne(
+          { _id: input.call },
+          { step: input.step, at: Date.now() },
+          { upsert: true },
+        ),
     },
   },
 });
@@ -276,7 +376,7 @@ export type Setup = {
   legacy(
     method: string,
     params?: Record<string, unknown>,
-    options?: { id?: unknown; line?: string },
+    options?: { id?: unknown; line?: string; headers?: Record<string, string> },
   ): Promise<Rpc>;
   /** A modern request: 2026-07-28's `_meta` and headers. */
   modern(
@@ -288,7 +388,13 @@ export type Setup = {
   call(
     tool: string,
     input?: Record<string, unknown>,
-    options?: { session?: string; subject?: string; id?: unknown; line?: string },
+    options?: {
+      session?: string;
+      subject?: string;
+      id?: unknown;
+      line?: string;
+      headers?: Record<string, string>;
+    },
   ): Promise<Rpc>;
   /** What's in a collection, as the system reads it (`thread` narrows it). */
   docs<T = Record<string, unknown>>(collection: string, thread?: string): Promise<T[]>;
@@ -300,9 +406,15 @@ let ids = 0;
 
 export async function setup(
   fn: (s: Setup) => Promise<void>,
-  options: { line?: Partial<McpLine>; lines?: Record<string, McpLine>; plugins?: Plugin[] } = {},
+  options: {
+    line?: Partial<McpLine>;
+    lines?: Record<string, McpLine>;
+    settings?: Omit<McpSettings, "lines">;
+    plugins?: Plugin[];
+  } = {},
 ) {
   for (const key of Object.keys(runs)) delete runs[key];
+  state.paid = false;
   const runtime = await createRuntime({
     store: memoryStore(),
     plugins: [
@@ -315,7 +427,13 @@ export async function setup(
       app,
       definePlugin({
         name: "lines",
-        resources: { mcp: { lines: options.lines ?? { chatgpt: { ...LINE, ...options.line } } } },
+        resources: {
+          mcp: {
+            caller: CALLER,
+            ...options.settings,
+            lines: options.lines ?? { chatgpt: { ...LINE, ...options.line } },
+          },
+        },
       }),
       ...options.plugins ?? [],
     ],
@@ -330,11 +448,16 @@ export async function setup(
     const response = await serve(
       new Request(`http://localhost/mcp/${o.line ?? "chatgpt"}`, {
         method: o.method ?? "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-          ...o.headers,
-        },
+        // As the app's front sends it: who calls, and its secret. A header said empty isn't sent.
+        headers: Object.fromEntries(
+          Object.entries({
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            "cf-connecting-ip": ADDRESS,
+            "x-copilotz-front": FRONT,
+            ...o.headers,
+          }).filter(([, value]) => value !== ""),
+        ),
         ...(o.method && o.method !== "POST"
           ? {}
           : { body: typeof body === "string" ? body : JSON.stringify(body) }),
@@ -355,7 +478,10 @@ export async function setup(
     legacy: (method, params, o = {}) =>
       post(
         { jsonrpc: "2.0", id: "id" in o ? o.id : ++ids, method, ...(params ? { params } : {}) },
-        { headers: { "mcp-protocol-version": "2025-11-25" }, ...(o.line ? { line: o.line } : {}) },
+        {
+          headers: { "mcp-protocol-version": "2025-11-25", ...o.headers },
+          ...(o.line ? { line: o.line } : {}),
+        },
       ),
     modern: (method, params = {}, o = {}) =>
       post(
@@ -394,7 +520,11 @@ export async function setup(
             },
           }
           : {}),
-      }, { ...(o.id !== undefined ? { id: o.id } : {}), ...(o.line ? { line: o.line } : {}) }),
+      }, {
+        ...(o.id !== undefined ? { id: o.id } : {}),
+        ...(o.line ? { line: o.line } : {}),
+        ...(o.headers ? { headers: o.headers } : {}),
+      }),
     docs: async <T>(collection: string, thread?: string) => {
       const seen = runtime.observe<T[]>("test", collection, thread ? { thread } : {});
       const output = await seen.ready;

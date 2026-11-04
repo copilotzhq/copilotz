@@ -25,9 +25,11 @@ export { linksOf, type LinksSettings, signLink, verifyLink } from "./links.ts";
 export {
   contacts,
   failure,
+  type FailureOptions,
   forbidden,
   inPerson,
   invalid,
+  isPublic,
   people,
   peopleOrContacts,
 } from "./errors.ts";

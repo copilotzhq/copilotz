@@ -13,7 +13,7 @@ import { access } from "../../../access/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import { mcp } from "../mod.ts";
 import type { McpLine } from "../shared/settings.ts";
-import { app, LINE, MODERN, setup } from "./setup.ts";
+import { app, LINE, MODERN, OFFERED, runs, said, type Setup, setup } from "./setup.ts";
 
 test("initialize: the version asked for when taken, else the newest with a handshake; no session", async () => {
   await setup(async (s) => {
@@ -100,27 +100,22 @@ test("HTTP: POST only (405 for GET and DELETE), JSON only, within the body limit
   }, { line: { limits: { body: 65_536 } } });
 });
 
-test("Origin: a browser's page only from the origins the line names; a malformed one never", async () => {
+test("Origin: a browser's page only from an origin the line names; none, unless it says", async () => {
+  const ping = (s: Setup, origin: string) =>
+    s.post({ jsonrpc: "2.0", id: 1, method: "ping" }, {
+      headers: { "mcp-protocol-version": "2025-11-25", origin },
+    });
   await setup(async (s) => {
-    const own = await s.post({ jsonrpc: "2.0", id: 1, method: "ping" }, {
-      headers: { "mcp-protocol-version": "2025-11-25", origin: "https://chatgpt.com" },
-    });
-    assertEquals(own.status, 200);
-    const other = await s.post({ jsonrpc: "2.0", id: 1, method: "ping" }, {
-      headers: { "mcp-protocol-version": "2025-11-25", origin: "https://evil.example" },
-    });
-    assertEquals(other.status, 403);
-    assertEquals(other.body.id, undefined);
+    assertEquals((await ping(s, "https://chatgpt.com")).status, 200);
+    const other = await ping(s, "https://evil.example");
+    assertEquals([other.status, other.body.id], [403, undefined]);
   }, { line: { origins: ["https://chatgpt.com"] } });
   await setup(async (s) => {
-    const garbled = await s.post({ jsonrpc: "2.0", id: 1, method: "ping" }, {
-      headers: { "mcp-protocol-version": "2025-11-25", origin: "null" },
-    });
-    assertEquals(garbled.status, 403);
-    const any = await s.post({ jsonrpc: "2.0", id: 1, method: "ping" }, {
-      headers: { "mcp-protocol-version": "2025-11-25", origin: "https://somewhere.example" },
-    });
-    assertEquals(any.status, 200);
+    for (const origin of ["https://somewhere.example", "null", "https://chatgpt.com"]) {
+      assertEquals((await ping(s, origin)).status, 403);
+    }
+    // No Origin, as servers (ChatGPT's) call: taken.
+    assertEquals((await s.legacy("ping")).status, 200);
   });
 });
 
@@ -219,6 +214,7 @@ test("a tool's mirrored input (x-mcp-header) must be in its header, as sent", as
         },
       },
     },
+    views: { "tool:zone": { llm: (call: { output: string }) => call.output } },
   });
   await setup(async (s) => {
     const missing = await s.modern("tools/call", { name: "zone", arguments: { zone: "sp" } });
@@ -232,18 +228,38 @@ test("a tool's mirrored input (x-mcp-header) must be in its header, as sent", as
   }, { line: { tools: { zone: {} } }, plugins: [region] });
 });
 
-test("batches: only from a 2025-03-26 client (no version header); later ones send one message", async () => {
+test("batches: only from a 2025-03-26 client, 10 messages at most, answered one by one", async () => {
   await setup(async (s) => {
     const batch = await s.post([
       { jsonrpc: "2.0", id: 1, method: "ping" },
       { jsonrpc: "2.0", method: "notifications/initialized" },
       { jsonrpc: "2.0", id: 2, method: "tools/list" },
-    ]);
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "slow", arguments: {}, _meta: { "openai/session": "b1" } },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "slow", arguments: {}, _meta: { "openai/session": "b2" } },
+      },
+    ], { headers: { "mcp-protocol-version": "" } });
     assertEquals(batch.status, 200);
     const answers = batch.body as unknown as { id: number }[];
-    assertEquals(answers.map((a) => a.id), [1, 2]);
-    const notes = await s.post([{ jsonrpc: "2.0", method: "notifications/initialized" }]);
+    assertEquals(answers.map((a) => a.id), [1, 2, 3, 4]);
+    assertEquals(runs.slow, 2);
+    const notes = await s.post([{ jsonrpc: "2.0", method: "notifications/initialized" }], {
+      headers: { "mcp-protocol-version": "" },
+    });
     assertEquals(notes.status, 202);
+    const long = await s.post(
+      Array.from({ length: 11 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" })),
+      { headers: { "mcp-protocol-version": "" } },
+    );
+    assertEquals([long.status, long.body.error?.code], [400, -32600]);
     const refused = await s.post([{ jsonrpc: "2.0", id: 1, method: "ping" }], {
       headers: { "mcp-protocol-version": "2025-11-25" },
     });
@@ -256,17 +272,8 @@ test("tools/list: the line's tools in order, titled, with every hint, status lin
     const { tools } = (await s.legacy("tools/list")).body.result as {
       tools: Record<string, unknown>[];
     };
-    assertEquals(tools.map((t) => t.name), [
-      "search",
-      "pick",
-      "peek",
-      "whoami",
-      "boom",
-      "refuse",
-      "later",
-      "inside",
-      "slow",
-    ]);
+    // Not `staff` (its offer says no to contacts), nor `raw` (no View).
+    assertEquals(tools.map((t) => t.name), OFFERED);
     const [search, pick] = tools;
     assertEquals(search.title, "Search trips");
     assertEquals(search.description, "Finds trips to a city");
@@ -290,7 +297,7 @@ test("tools/list: the line's tools in order, titled, with every hint, status lin
       idempotentHint: false,
       openWorldHint: true,
     });
-    assertEquals(tools.at(-1)!.annotations, {
+    assertEquals(tools.find((t) => t.name === "slow")!.annotations, {
       readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
@@ -320,21 +327,21 @@ test("tools/list: a line's own hints over the tool's; no handle when the line gi
   });
 });
 
-test("an agent's tools, when the line lists none: all but send_message", async () => {
+test("a tool without its View, or whose offer says no, is neither listed nor run", async () => {
   await setup(async (s) => {
-    const { tools } = (await s.legacy("tools/list")).body.result as { tools: { name: string }[] };
-    assertEquals(tools.map((t) => t.name), [
-      "search",
-      "pick",
-      "peek",
-      "whoami",
-      "boom",
-      "refuse",
-      "later",
-      "inside",
-      "slow",
+    for (const name of ["raw", "staff"]) {
+      const listed = (await s.legacy("tools/list")).body.result as { tools: { name: string }[] };
+      assert(!listed.tools.some((t) => t.name === name));
+    }
+    const raw = await s.call("raw", {}, { session: "s" });
+    assertEquals(raw.body.error?.code, -32602);
+    const staff = await s.call("staff", {}, { session: "s" });
+    assertEquals([staff.body.result?.isError, said(staff)], [
+      true,
+      "That tool isn't offered here.",
     ]);
-  }, { line: { tools: undefined } });
+    assertEquals([runs.raw, runs.staff], [undefined, undefined]);
+  });
 });
 
 test("at start: a line's mistakes stop the app", async () => {
@@ -366,7 +373,10 @@ test("at start: a line's mistakes stop the app", async () => {
     "64",
   );
   await assertRejects(() => start({ in: "" }), Error, "needs its in");
-  await assertRejects(() => start({ agent: "ghost" }), Error, "ghost");
+  // A line lists its tools: never an agent's, never none.
+  await assertRejects(() => start({ agent: "booking" } as never), Error, "never an agent's");
+  await assertRejects(() => start({ tools: undefined } as never), Error, "needs its tools");
+  await assertRejects(() => start({ tools: {} }), Error, "offers no tool");
   await assertRejects(() => start({ client: "booking" }), Error, "agent's name");
   await assertRejects(() => start({ limits: { perMinute: 0 } }), Error, "perMinute");
   await assertRejects(() => start({ origins: ["chatgpt.com"] }), Error, "origin");
@@ -375,6 +385,29 @@ test("at start: a line's mistakes stop the app", async () => {
     Error,
     "isn't an annotation",
   );
+  // How it knows who calls: a header it says why it believes.
+  const settled = (settings: Record<string, unknown>) =>
+    createRuntime({
+      store: memoryStore(),
+      plugins: [
+        models,
+        chat,
+        ...access,
+        mcp,
+        app,
+        definePlugin({
+          name: "lines",
+          resources: { mcp: { ...settings, lines: { chatgpt: LINE } } },
+        }),
+      ],
+    }).then((runtime) => runtime.close());
+  await assertRejects(() => settled({ caller: { header: "cf-connecting-ip" } }), Error, "believed");
+  await assertRejects(
+    () => settled({ caller: { header: "x-forwarded-for", hops: 1, exempt: ["10.0.0.0"] } }),
+    Error,
+    "CIDR",
+  );
+  await assertRejects(() => settled({ atOnce: 0 }), Error, "atOnce");
   const chatty = definePlugin({
     name: "chatty",
     resources: {

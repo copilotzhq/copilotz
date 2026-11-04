@@ -8,7 +8,13 @@
  * `/health`.
  */
 import { assertEquals, assertRejects } from "@std/assert";
-import { createRuntime, defineAction, definePlugin, type Plugins } from "../../../runtime/mod.ts";
+import {
+  createRuntime,
+  defineAction,
+  definePlugin,
+  failure,
+  type Plugins,
+} from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { devSignIn, identity } from "../../../plugins/access/mod.ts";
 import { test } from "../../../testing/mod.ts";
@@ -57,6 +63,18 @@ const hooks = definePlugin({
         throw new Error("secret internals");
       },
     }),
+    // A refusal: coded, its words for anyone only when it says so.
+    "hooks.refuse": defineAction({
+      input: httpRequest,
+      allow: () => true,
+      run: (_ctx, input) => {
+        throw failure(
+          "forbidden",
+          input.query.open ? "Sign the request first." : "key sk-live-123 is for org-ACME only",
+          { public: !!input.query.open },
+        );
+      },
+    }),
   },
   resources: {
     routes: {
@@ -65,6 +83,7 @@ const hooks = definePlugin({
       back: { path: "/hooks/back", action: "hooks.back", methods: ["GET"] },
       people: { path: "/me", action: "hooks.people" },
       broken: { path: "/broken", action: "hooks.broken" },
+      refuse: { path: "/refuse", action: "hooks.refuse" },
       download: {
         path: "/download/",
         serve: (request: Request) => new Response(`file ${new URL(request.url).pathname}`),
@@ -168,6 +187,11 @@ test("a failure says its code's status, and nothing of its internals", async () 
   await setup([hooks], async (serve) => {
     const broken = await serve(new Request("http://localhost/broken"));
     assertEquals([broken.status, await broken.text()], [500, "Something went wrong"]);
+    // A refusal answers its code's status, and its own words only when they're for anyone.
+    const refused = await serve(new Request("http://localhost/refuse"));
+    assertEquals([refused.status, await refused.text()], [403, "Forbidden"]);
+    const told = await serve(new Request("http://localhost/refuse?open=1"));
+    assertEquals([told.status, await told.text()], [403, "Sign the request first."]);
   });
 });
 

@@ -86,10 +86,12 @@
     visitors arrive here or sign anyone in. Bodies there are JSON objects of 16 KiB at most; route
     bodies are refused (413) as soon as `content-length` is over 10 MB, and read no further than
     that while streaming. What either host answers in JSON is `cache-control: no-store`, and what
-    goes wrong says only its public words, with its code's status (500s are logged). The caller's
-    address parser (`callerFrom`, `callerProblem`, `CallerSettings`, and `countedOf` for a socket's)
-    moved from MCP into the runtime, so MCP and web lines read callers one way. `mcp.call` refuses a
-    contact without an MCP line (a web visitor), naming a line or not.
+    goes wrong says only its public words, with its code's status (500s are logged). So does a
+    route's Action that refuses (`forbidden`, `invalid`, `not_found`, `unauthorized`: its status,
+    and its words only when public). The caller's address parser (`callerFrom`, `callerProblem`,
+    `CallerSettings`, and `countedOf` for a socket's) moved from MCP into the runtime, so MCP and
+    web lines read callers one way. `mcp.call` refuses a contact without an MCP line (a web
+    visitor), naming a line or not.
   - **Limits on browsers:** 30 tickets per actor a minute (`createTickets({ perMinute })`; past them
     `/connect` is a 429 with `retry-after`, and `issue` throws `too_many`), 16 sockets per actor,
     512 watched reads per connection (past them, `too_many`; those watched keep going), 16 resume

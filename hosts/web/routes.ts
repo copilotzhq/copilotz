@@ -159,6 +159,14 @@ const STATUS: Record<string, number> = {
   unauthorized: 401,
 };
 
+/** What a refusal says when its own words aren't for anyone (`public`), by its code. */
+const SAID: Record<string, string> = {
+  forbidden: "Forbidden",
+  invalid: "Not a request this takes",
+  not_found: "Not found",
+  unauthorized: "Unauthorized",
+};
+
 const plain = (status: number, text: string) =>
   new Response(text, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 
@@ -295,9 +303,13 @@ async function answered(
   try {
     return answer(await runtime.call(route.action, asked, { actor }));
   } catch (error) {
-    const code = (error as { code?: string }).code;
+    // A refusal answers its code's status, and its words only when they're for anyone.
+    const { code, public: open } = (error ?? {}) as { code?: string; public?: boolean };
     if (code && STATUS[code]) {
-      return plain(STATUS[code], error instanceof Error ? error.message : String(error));
+      return plain(
+        STATUS[code],
+        open === true && error instanceof Error ? error.message : SAID[code],
+      );
     }
     console.error(`routes.${name}:`, error instanceof Error ? error.message : error);
     return plain(500, "Something went wrong");

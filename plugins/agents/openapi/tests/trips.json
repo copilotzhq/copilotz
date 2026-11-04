@@ -1,0 +1,218 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Trips", "version": "1.0.0" },
+  "servers": [
+    { "url": "https://{region}.trips.test/v1", "variables": { "region": { "default": "eu" } } }
+  ],
+  "paths": {
+    "/trips": {
+      "get": {
+        "operationId": "listTrips",
+        "summary": "List trips",
+        "description": "Trips, newest first.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["planned", "done"], "default": "planned" }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Only trips with all of these tags.",
+            "schema": { "type": "array", "items": { "type": "string" } }
+          },
+          {
+            "name": "ids",
+            "in": "query",
+            "explode": false,
+            "schema": { "type": "array", "items": { "type": "string" } }
+          },
+          {
+            "name": "near",
+            "in": "query",
+            "style": "deepObject",
+            "schema": {
+              "type": "object",
+              "properties": { "lat": { "type": "number" }, "lng": { "type": "number" } }
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "exclusiveMinimum": true,
+              "maximum": 100,
+              "example": 20
+            }
+          },
+          {
+            "name": "X-Request-Id",
+            "in": "header",
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          { "name": "Authorization", "in": "header", "schema": { "type": "string" } },
+          { "name": "session", "in": "cookie", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The trips.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Trip" } }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTrip",
+        "summary": "Plan a trip",
+        "parameters": [
+          { "name": "Idempotency-Key", "in": "header", "schema": { "type": "string" } }
+        ],
+        "requestBody": { "$ref": "#/components/requestBodies/NewTrip" },
+        "responses": {
+          "201": {
+            "description": "The trip.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Trip" } }
+            }
+          }
+        }
+      }
+    },
+    "/trips/{tripId}": {
+      "parameters": [{ "$ref": "#/components/parameters/TripId" }],
+      "get": {
+        "operationId": "getTrip",
+        "summary": "Get a trip",
+        "description": "Get a trip, with its legs.",
+        "responses": {
+          "200": {
+            "description": "The trip.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Trip" } }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "cancelTrip",
+        "summary": "Cancel a trip",
+        "responses": { "204": { "description": "Cancelled." } }
+      }
+    },
+    "/trips/{tripId}/tags": {
+      "parameters": [{ "$ref": "#/components/parameters/TripId" }],
+      "put": {
+        "operationId": "set-tags",
+        "summary": "Replace a trip's tags",
+        "requestBody": {
+          "required": true,
+          "description": "The tags.",
+          "content": {
+            "application/json": { "schema": { "type": "array", "items": { "type": "string" } } }
+          }
+        },
+        "responses": { "200": { "description": "Its tags." } }
+      }
+    },
+    "/trips/{tripId}/map": {
+      "parameters": [{ "$ref": "#/components/parameters/TripId" }],
+      "get": {
+        "operationId": "getMap",
+        "summary": "A trip's route on a map",
+        "responses": {
+          "200": {
+            "description": "The map.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "caption": { "type": "string" },
+                    "image": { "type": "string", "description": "A PNG, as a data URL." }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trips/{tripId}/photo": {
+      "parameters": [{ "$ref": "#/components/parameters/TripId" }],
+      "get": {
+        "summary": "A trip's cover photo",
+        "responses": {
+          "200": { "description": "The photo.", "content": { "image/png": {} } }
+        }
+      }
+    },
+    "/receipts": {
+      "post": {
+        "operationId": "uploadReceipt",
+        "summary": "Upload a receipt",
+        "requestBody": {
+          "required": true,
+          "content": { "multipart/form-data": { "schema": { "type": "object" } } }
+        },
+        "responses": { "201": { "description": "Kept." } }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "TripId": {
+        "name": "tripId",
+        "in": "path",
+        "required": true,
+        "description": "The trip's id.",
+        "schema": { "type": "string" }
+      }
+    },
+    "requestBodies": {
+      "NewTrip": {
+        "required": true,
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Trip" } }
+        }
+      }
+    },
+    "schemas": {
+      "Trip": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "readOnly": true },
+          "name": { "type": "string", "description": "What it's called." },
+          "notes": { "type": "string", "nullable": true },
+          "budget": { "type": "number", "format": "double", "x-currency": "EUR" },
+          "kind": { "type": "string", "enum": ["work", "leisure"], "nullable": true },
+          "destination": { "$ref": "#/components/schemas/Place" },
+          "legs": { "type": "array", "items": { "$ref": "#/components/schemas/Leg" } }
+        }
+      },
+      "Leg": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "$ref": "#/components/schemas/Place" },
+          "to": { "$ref": "#/components/schemas/Place" },
+          "created": { "type": "string", "format": "date-time", "readOnly": true }
+        }
+      },
+      "Place": {
+        "type": "object",
+        "description": "Somewhere, inside somewhere bigger.",
+        "properties": {
+          "name": { "type": "string" },
+          "within": { "$ref": "#/components/schemas/Place" }
+        }
+      }
+    }
+  }
+}

@@ -99,7 +99,7 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                         |
 | `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                              |
 | `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                             |
-| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `tool`               |
+| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`    |
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`              |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                  |
 | `copilotz/plugins/access`              | `access` (`spaces`, `identity`), `accounts`, `directory`, `googleSignIn`                                     |
@@ -359,6 +359,18 @@ name, never by importing its code.
   choose another, and either can pick a model for one agent, the tier's list kept behind it. Kept by
   name, so retuning a tier moves everyone on it; while an org hasn't chosen, its plan's tier
   applies. Each tier shows what a typical reply comes to at the org's prices.
+- **`openapi`**: an HTTP API's operations, from its OpenAPI 3 spec, as Actions and tools:
+  `openapi({ name: "trips", spec })` is a plugin with, for each operation, a recorded Action
+  (`trips.getTrip`: a turn tried again gets the call it already made back, not a second one) and a
+  tool calling it (`trips_getTrip`), which agents get by listing it in their `tools`. A tool's input
+  is one object: the path, query, header and cookie parameters beside the JSON body's properties
+  (refs followed; 3.0's `nullable` converted; read-only properties left out; two inputs of one name
+  fail). Its settings are a resource (`resources.openapi.trips`: `baseUrl`, `headers` static or a
+  hook per call, `query`, `timeout`, `maxBytes`), so a deployment says where and as whom. A failed
+  call says `HTTP <status>: <what the API said>` and carries its status. Files in a response (an
+  image as base64 or a data URL, in the fields `files` names, or a response that is one) become
+  files of the conversation, and the agent gets a reference instead (`maxFileBytes`, `fileTypes`). A
+  tool of your own is `{ ...trips.tools.getTrip, run }`.
 
 **`access/`**: who can see and do what (see [design/access.md](design/access.md)).
 

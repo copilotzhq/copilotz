@@ -49,7 +49,7 @@ export { tool } from "./shared/types.ts";
 export { runTool, type ToolAt, type ToolRun, toolText } from "./shared/tools.ts";
 export { type Origin, originKey, originOf } from "./shared/origin.ts";
 export type { AgentModel, AgentSource, Roster, RosterSource, Team } from "./shared/agents.ts";
-export { CONTACT_TEXT, type ContactSend } from "./actions/send.ts";
+export { CONTACT_TEXT, type ContactSend, MEDIA_TYPE, MEDIA_TYPE_LENGTH } from "./actions/send.ts";
 /**
  * The app's agents (`agentsOf`), who of them answer new conversations
  * (`defaults`), an agent's model (`modelOf`), which names are agents and

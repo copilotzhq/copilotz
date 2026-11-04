@@ -693,8 +693,12 @@ test("a session cookie another host under the domain set isn't anyone, on https"
       id: "g1",
     });
     assertEquals(await connect(`session=${session}`), 401);
+    // What it held under the plain name was ended there, and cleared: it's no one anywhere now.
+    assertEquals(await rt.query("credential.actor", { secret: session }), null);
     // The host's own cookie, which only it can set, is who it says.
-    assertEquals(await connect(`__Host-session=${session}`), { kind: "person", id: "mallory" });
+    const own =
+      (await rt.call<{ session: string }>("session.start", { person: "mallory" })).session;
+    assertEquals(await connect(`__Host-session=${own}`), { kind: "person", id: "mallory" });
   } finally {
     await rt.close();
   }

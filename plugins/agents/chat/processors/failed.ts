@@ -14,7 +14,8 @@ export const failedProcessor: ProcessorDef = {
 
 /**
  * Writes an answer for a turn that failed for good, so whoever waits on it
- * resumes. A stopped turn (`chat.stop`) answers with what it had written.
+ * resumes. A stopped turn (`chat.stop`) answers with what it had written,
+ * when that was surely an answer (its turn offered no tools).
  */
 const failed = async (ctx: Context, event: Event) => {
   const { event: run, type, data, error } = event.data as {
@@ -31,8 +32,12 @@ const failed = async (ctx: Context, event: Event) => {
       ctx.db.collection<Live>("live").findOne({ _id: run }),
       ctx.db.collection<Intent>("intent").findOne({ _id: run }),
     ]);
-    // Text of a step it was taking stays that step's (the answer keeps it).
-    const text = written?.text && !taking ? `${written.text} (stopped)` : "(stopped)";
+    // Text of a step it was taking stays that step's (the answer keeps it); so do words not yet
+    // known to be an answer (its turn offers tools: they may have been a step's), which everyone in
+    // the chat, a contact too, would read.
+    const text = written?.text && written.open && !taking
+      ? `${written.text} (stopped)`
+      : "(stopped)";
     return await answer(ctx, t, run, text, { stopped: true });
   }
   // The org's limit isn't the agent failing: it says what happened, and who can change it.

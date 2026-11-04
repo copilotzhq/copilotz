@@ -253,6 +253,7 @@ export function createTimers(options: {
   return {
     lower(op, actor) {
       if (op.op === "cancel") throw invalid("A cancel goes on its own.");
+      if (op.op === "disconnect") throw invalid("A disconnect goes on its own.");
       if (op.op !== "schedule" && op.op !== "unschedule") return op;
       if (op.timer in schedules) {
         throw invalid(`Timer "${op.timer}" is declared by a plugin: change it in configuration`);

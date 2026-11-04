@@ -12,12 +12,22 @@ import {
   type CallerSettings,
   linksOf,
   type Resources,
+  secretsOf,
 } from "../../../../runtime/mod.ts";
 import type { Keyring } from "./secret.ts";
 
-/** What a line takes before it says no: see `LIMITS`. */
+/**
+ * What a line takes before it says no: see `LIMITS`. Those by address hold
+ * for each network a visitor came from (`networksOf`): its address (IPv4) or
+ * /64 (IPv6) as they say, and wider ones, as many callers' worth as each
+ * counts (`SCALE`: an IPv4 /24 eight; an IPv6 /56 four, a /48 eight).
+ */
 export type WebLimits = {
-  /** New visitors from one caller's address an hour: browsers let in, each its cookie. */
+  /**
+   * New visitors from one address an hour: browsers let in, each its cookie;
+   * and as many who speak for the first time, an hour (so visitors let in
+   * over days can't all start at once).
+   */
   ipVisitorsPerHour: number;
   /** New visitors who speak an hour, on the line: contacts made, at their first message. */
   visitorsPerHour: number;
@@ -29,6 +39,12 @@ export type WebLimits = {
   ipPerDay: number;
   /** Messages a minute on the line, all its visitors together. */
   linePerMinute: number;
+  /**
+   * Of those, what visitors who hadn't spoken before this minute may send:
+   * the rest of `linePerMinute` is kept for those who had, so a burst of
+   * newcomers never stops a conversation going on.
+   */
+  newcomersPerMinute: number;
 };
 
 /** Files a visitor may send with a message, when the line takes any: how many, and how large. */
@@ -63,6 +79,21 @@ export type WebLine = {
    * model's call, paid): not unless said. Without it, audio goes as it is.
    */
   transcribe?: boolean;
+  /**
+   * What its visitors' model use may be charged a day (UTC), in the usage
+   * ledger's prices (the app's currency): what the turns working for them
+   * cost, as the usage plugin rates it. Past it, its visitors' messages
+   * wait for the next day. None: no budget. Needs the usage plugin.
+   */
+  budget?: number;
+  /**
+   * An Action of the app's that a newcomer must pass to be let in (a
+   * CAPTCHA's check: Turnstile's, hCaptcha's): asked as the system with
+   * `{ line, answer }`, where `answer` is what the page sent coming in
+   * (`web({ arrive: { line, challenge } })`'s `challenge`), it answers true
+   * to let them in. One back with its cookie isn't asked again.
+   */
+  challenge?: string;
   /** With the orgs host, the org it's for (its id): no other org has it. */
   org?: string;
 };
@@ -81,10 +112,13 @@ export type WebSettings = {
 /**
  * What a line takes, unless it says. From one address: 20 new visitors an
  * hour (a household, an office behind one address), and 30 messages a
- * minute, 1,000 a day. From one visitor: 10 messages a minute, 200 a day. On
- * the line: 600 new visitors who speak an hour, and 300 messages a minute.
- * Only visitors let in count as new: one coming back with their cookie is
- * no new one; and only those who speak are contacts, counted on the line.
+ * minute, 1,000 a day; its wider networks as many times that as they count
+ * (an IPv6 /48: 160 new visitors an hour, 240 messages a minute). From one
+ * visitor: 10 messages a minute, 200 a day. On the line: 600 new visitors
+ * who speak an hour, and 300 messages a minute, of which newcomers (those
+ * who hadn't spoken before the minute) send 200 at most. Only visitors let
+ * in count as new: one coming back with their cookie is no new one; and only
+ * those who speak are contacts, counted on the line.
  */
 export const LIMITS: WebLimits = {
   ipVisitorsPerHour: 20,
@@ -94,6 +128,7 @@ export const LIMITS: WebLimits = {
   ipPerMinute: 30,
   ipPerDay: 1_000,
   linePerMinute: 300,
+  newcomersPerMinute: 200,
 };
 
 /** What a line taking files takes, unless it says: one a message, of 5 MB. */
@@ -150,15 +185,16 @@ export function lineOf(ctx: { resources: Resources }, name: string): Line | unde
 }
 
 /**
- * What visitors' secrets are signed with here: the app's secret, and the
- * org. Undefined without the app's secret (an app with no web lines): no
- * secret is anyone then.
+ * What visitors' secrets are signed with here: the app's secret (and the
+ * one before it, `links.previous`, while it's given), and the org. Undefined
+ * without the app's secret (an app with no web lines): no secret is anyone
+ * then.
  */
 export function keyringOf(ctx: { resources: Resources }): Keyring | undefined {
   const links = linksOf(ctx.resources);
   if (!links) return undefined;
   const org = orgOf(ctx);
-  return { key: links.secret, ...(org ? { org } : {}) };
+  return { secrets: secretsOf(links), ...(org ? { org } : {}) };
 }
 
 /** What's wrong with a line's settings, if anything (checked when the app starts). */
@@ -197,16 +233,37 @@ export function problemOf(name: string, line: WebLine, resources: Resources): st
   if (line.transcribe !== undefined && typeof line.transcribe !== "boolean") {
     return "its transcribe is true or false";
   }
+  if (
+    line.budget !== undefined &&
+    !(typeof line.budget === "number" && Number.isFinite(line.budget) && line.budget > 0)
+  ) {
+    return "its budget is a number over 0 (what its visitors' model use may cost a day)";
+  }
+  if (line.challenge !== undefined && (typeof line.challenge !== "string" || !line.challenge)) {
+    return "its challenge is an Action's name";
+  }
   return undefined;
 }
 
-/** What's wrong with the web lines' settings, if anything (checked when the app starts). */
-export function settingsProblem(resources: Resources): string | undefined {
+/**
+ * What's wrong with the web lines' settings, if anything (checked when the
+ * app starts), given the app's Actions: a line's challenge is one, and a
+ * budget needs the usage plugin's prices (`usage.quote`).
+ */
+export function settingsProblem(
+  resources: Resources,
+  actions: Readonly<Record<string, unknown>> = {},
+): string | undefined {
   const caller = callerProblem(settingsOf({ resources }).caller);
   if (caller) return `web.${caller}`;
   const lines = Object.entries(linesOf({ resources }));
   for (const [name, line] of lines) {
-    const problem = problemOf(name, line, resources);
+    const problem = problemOf(name, line, resources) ??
+      (line.challenge && !Object.hasOwn(actions, line.challenge)
+        ? `its challenge "${line.challenge}" isn't one of the app's Actions`
+        : line.budget && !Object.hasOwn(actions, "usage.quote")
+        ? "its budget needs the usage plugin, which prices what visitors' turns use"
+        : undefined);
     if (problem) return `web.lines.${name} ${problem}`;
   }
   // Visitors' secrets are signed with the app's secret: nothing is kept when a page comes in.

@@ -25,9 +25,12 @@
  *   may have in a minute (`createTickets`).
  * - `POST /signin/<name>` (a way the app's plugins declare; `local` ones
  *   from this machine, to this machine only: `fromHere`, by the socket's
- *   address and the host): a session, set as an httpOnly cookie.
- *   `POST /signout`: ends it, and clears every entrance's cookie. What the
- *   host answers in JSON (these, `/connect`) is never cached (`no-store`).
+ *   address and the host, with no proxy's headers): a session, set as an
+ *   httpOnly cookie. `POST /signout`: ends it, ends the browsers connected
+ *   as whoever it was, and clears every entrance's cookie. A cookie still
+ *   held under its name from before it was the host's alone (`session`, now
+ *   `__Host-session`) is ended and cleared on `/connect` and sign-out. What
+ *   the host answers in JSON (these, `/connect`) is never cached (`no-store`).
  * - The socket (`/oxian`): Oxian's worker protocol, which the app hands over. The
  *   runtime takes browsers there once it declares it: `transports: [socket]`.
  * - `GET /assets/…`: the app's own files (`assets`: a brand's fonts and their
@@ -77,6 +80,7 @@ import {
   jsonOf,
   recognise,
   refusal,
+  retireAll,
   setCookie,
   signInPage,
   signInsOf,
@@ -419,7 +423,9 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
     } catch (error) {
       return refused(error, "Couldn't connect");
     }
-    const { actor, cookies } = came;
+    // What it held under a cookie's name from before it was the host's alone ends, and goes.
+    const cookies = [...came.cookies, ...await retireAll(runtime, whom, request)];
+    const { actor } = came;
     if (!actor) return json({ error: "Not signed in" }, { status: 401, cookies });
     let ticket: string;
     try {
@@ -467,7 +473,12 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
     });
   };
 
-  /** `POST /signout`: what each entrance's cookie is ends, and every cookie goes. */
+  /**
+   * `POST /signout`: what each entrance's cookie is ends, the browsers
+   * connected as them go (`runtime.disconnect`: one comes back only with a
+   * cookie that's still someone), and every cookie goes, those under a name
+   * from before it was the host's alone too (`retireAll`).
+   */
   const signOut = async (request: Request): Promise<Response> => {
     if (!fromPage(request, front)) return elsewhere();
     const site = whom.site(request);
@@ -476,12 +487,14 @@ export function webServer(options: WebServerOptions): (request: Request) => Prom
       const name = whom.named(entrance, site);
       const secret = cookieOf(request, name);
       if (secret === undefined) continue;
-      const actor = entrance.end
-        ? await recognise(runtime, entrance, secret).catch(() => null)
-        : null;
-      if (actor) await runtime.call(entrance.end!, { secret }, { actor }).catch(() => {});
+      const actor = await recognise(runtime, entrance, secret).catch(() => null);
+      if (actor && entrance.end) {
+        await runtime.call(entrance.end, { secret }, { actor }).catch(() => {});
+      }
+      if (actor) runtime.disconnect(actor);
       cookies.push(setCookie(site, "", 0, name, entrance.sameSite));
     }
+    cookies.push(...await retireAll(runtime, whom, request));
     return json({}, { cookies });
   };
 

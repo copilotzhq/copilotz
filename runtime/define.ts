@@ -79,6 +79,12 @@ export type Context = {
    * was running.
    */
   cancel(target: { call: string } | { processor: string; key: string }): Promise<boolean>;
+  /**
+   * Ends an actor's browsers, when who they were ends (signed out, erased):
+   * each connection closes, and comes back only with a new ticket. How many
+   * it ended.
+   */
+  disconnect(actor: Actor): Promise<number>;
   /** Renders `item` through the View registered for its kind and the renderer (see Views). */
   render: Render;
   /**
@@ -143,6 +149,8 @@ export type ReadContext = {
 export type Merged = {
   resources: Resources;
   adapters: Adapters;
+  /** Every plugin's Actions, by name: whether one a declaration names is there. */
+  actions: Readonly<Record<string, ActionDef>>;
   /** Calls an unrecorded Action, as a read does (another plugin's check: `models.check`). */
   call<R = unknown>(action: string, input?: unknown): Promise<R>;
 };
@@ -462,6 +470,11 @@ export type Labels = {
  * to what the actor reaches). `undefined`: the collection has no rule, so code
  * acting for the actor reads and writes it unchecked. Runs in the owner, on
  * every operation an actor's work makes, with read access to everything.
+ *
+ * Asked about a browser's own read (`direct`) before it's watched, a rule may
+ * refuse it (throwing, `forbidden`) when it won't watch it as asked: a
+ * contact's that doesn't name what of its own it reads would run again on
+ * every change to the collection.
  */
 export type Guard = (
   actor: Actor,
@@ -470,6 +483,8 @@ export type Guard = (
     /** Reads, or writes (inserts, updates, replaces and deletes). */
     access: "read" | "write";
     filter?: Filter;
+    /** A browser's own read, asked before it's watched. */
+    direct?: true;
   },
   ctx: ReadContext,
 ) => Filter | true | undefined | Promise<Filter | true | undefined>;

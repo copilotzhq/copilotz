@@ -21,7 +21,10 @@
  *   enters it. `POST /orgs/enter` `{ org }`: goes into another.
  * - `POST /orgs/invites/answer` `{ invite, accept }`: joins (and enters) or
  *   declines.
- * - `POST /signout`: out of the directory and every org.
+ * - `POST /signout`: out of the directory and every org it holds a session
+ *   for (each ends), and every browser connected as them goes. A cookie
+ *   still held under its name from before it was the host's alone (`dir`,
+ *   `org`, `s_<org>`) is ended and cleared then, and on connecting.
  * - `/o/<org>/…`: that org, by its address, for what reaches it without a
  *   browser's session: its API (a key), its webhooks (signed), its
  *   computers' downloads. The org's own handlers say who may.
@@ -72,7 +75,9 @@ import {
   fromPage,
   hostCookie,
   jsonOf,
+  legacyName,
   refusal,
+  retire,
   setCookie,
   signInsOf,
   siteOf,
@@ -154,6 +159,8 @@ const RESOLVE = "/__copilotz/hosts/resolve";
 
 const DIRECTORY = "dir";
 const CURRENT = "org";
+/** How the directory's session cookie says who it is, and ends (identity's session). */
+const SESSION = { query: "credential.actor", end: "session.end" };
 const MONTH = 30 * 86_400;
 const sessionOf = (org: string) => `s_${org}`;
 /** Where an org is reached by its address: `/o/<org>`. */
@@ -189,6 +196,15 @@ const json = (value: unknown, init: ResponseInit & { cookies?: string[] } = {}) 
  */
 const cookiesOf = (org: string) => (name: string) =>
   name === "session" ? sessionOf(org) : `${name}_${org}`;
+
+/** An answer with these cookies set too, never kept. */
+const withSetCookies = (answered: Response, cookies: string[]) => {
+  if (!cookies.length) return answered;
+  const headers = new Headers(answered.headers);
+  headers.set("cache-control", "no-store");
+  for (const cookie of cookies) headers.append("set-cookie", cookie);
+  return new Response(answered.body, { status: answered.status, headers });
+};
 
 /** A request with these cookies set too, as the org's web host will read them. */
 const withCookies = (request: Request, cookies: Record<string, string>) => {
@@ -423,6 +439,53 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
     };
   };
 
+  /**
+   * Retires the host's own cookies a request holds under their names from
+   * before they were the host's alone (`dir`, `org`; see `retire`): the
+   * directory's session ends, and both go. The clearing `Set-Cookie`s.
+   */
+  const retired = async (request: Request) => {
+    const site = siteFor(request);
+    const cleared = await Promise.all([
+      retire(directory, request, site, hostCookie(site, DIRECTORY), SESSION),
+      retire(directory, request, site, hostCookie(site, CURRENT)),
+    ]);
+    return cleared.filter((cookie): cookie is string => cookie !== undefined);
+  };
+
+  /**
+   * Signs out of every org a request holds a session for (`s_<org>`, by its
+   * name here or from before it was the host's alone): each session ends in
+   * its org, when that org is open here (signing out never opens one: any
+   * request may name orgs in its cookies), and the browsers connected as
+   * whoever it was go. Every one's cookie goes. The clearing `Set-Cookie`s.
+   */
+  const signedOutOfOrgs = async (request: Request) => {
+    const site = siteFor(request);
+    const names = [hostCookie(site, sessionOf(""))];
+    const legacy = legacyName(names[0]);
+    if (legacy) names.push(legacy);
+    const held = (request.headers.get("cookie") ?? "").split(/;\s*/).flatMap((c) => {
+      const at = c.indexOf("=");
+      const [name, secret] = [c.slice(0, at), c.slice(at + 1)];
+      const prefix = at > 0 ? names.find((n) => name.startsWith(n)) : undefined;
+      return prefix ? [{ name, secret, org: name.slice(prefix.length) }] : [];
+    });
+    await Promise.all(
+      held.map(async ({ org, secret }) => {
+        const cell = org ? live.get(org) : undefined;
+        if (!cell) return;
+        const { runtime } = cell;
+        const actor = await runtime.query<Actor | null>("credential.actor", { secret })
+          .catch(() => null);
+        if (!actor) return;
+        await runtime.call("session.end", { secret }, { actor }).catch(() => {});
+        runtime.disconnect(actor);
+      }).map((ended) => ended.catch(() => {})),
+    );
+    return held.map(({ name }) => setCookie(site, "", 0, name));
+  };
+
   /** Whether the session a request holds in an org is staff's. */
   const heldAsStaff = async (request: Request, org: string) => {
     const secret = ownCookie(request, sessionOf(org));
@@ -655,7 +718,10 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
         if (at.path === socket.config.path) return await options.upgrade(cell.runtime, request);
         const inner = new URL(url);
         inner.pathname = at.path;
-        return await cell.serve(carry(new Request(inner, request), request));
+        const answered = await cell.serve(carry(new Request(inner, request), request));
+        return request.method === "POST" && at.path === "/connect"
+          ? withSetCookies(answered, await retired(request))
+          : answered;
       }
       switch (route) {
         case "GET /orgs": {
@@ -732,12 +798,18 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
             }).catch(() => {});
           }
           const site = siteFor(request);
-          const cookies = [keep(site, DIRECTORY, "", 0), keep(site, CURRENT, "", 0)];
-          // Every org's session it holds goes too.
-          const sessions = hostCookie(site, sessionOf(""));
-          for (const c of (request.headers.get("cookie") ?? "").split(/;\s*/)) {
-            const name = c.split("=")[0];
-            if (name.startsWith(sessions)) cookies.push(setCookie(site, "", 0, name));
+          const cookies = [
+            keep(site, DIRECTORY, "", 0),
+            keep(site, CURRENT, "", 0),
+            // Every org's session it holds ends and goes too, and what's held from before.
+            ...await signedOutOfOrgs(request),
+            ...await retired(request),
+          ];
+          // Their browsers in every org open now go: one comes back only with a cookie that's someone.
+          if (who) {
+            for (const cell of live.values()) {
+              cell.runtime.disconnect({ kind: "person", id: who.person });
+            }
           }
           return json({}, { cookies });
         }
@@ -826,6 +898,9 @@ export function orgsHost(options: OrgsHostOptions): OrgsHost {
       }
       cell.last = Date.now();
       const answered = await cell.serve(forwarded);
+      if (request.method === "POST" && url.pathname === "/connect") {
+        cookies.push(...await retired(request));
+      }
       if (!cookies.length) return answered;
       // Its session's cookies go with it: never kept.
       const headers = new Headers(answered.headers);

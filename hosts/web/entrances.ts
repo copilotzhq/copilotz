@@ -66,11 +66,13 @@ export type Entrance = {
    */
   sameSite?: "lax" | "strict";
   /**
-   * Its cookie is this host's alone: named `__Host-<cookie>` wherever it's
-   * Secure, so no other host under the same domain (a preview's, a sibling
-   * app's) can set one in its place, to make a browser someone it chose.
-   * Over http to this machine or one on its network, where nothing's
-   * Secure, it's its plain name.
+   * Whether its cookie is this host's alone (unless `false`): named
+   * `__Host-<cookie>` wherever it's Secure, so no other host under the same
+   * domain (a preview's, a sibling app's) can set one in its place, to make
+   * a browser someone it chose. Over http to this machine or one on its
+   * network, where nothing's Secure, it's its plain name. `false` keeps the
+   * plain name everywhere, for a cookie something else under the domain
+   * reads too.
    */
   hostOnly?: boolean;
 };
@@ -144,15 +146,34 @@ export function nearby(hostname: string): boolean {
 }
 
 /**
+ * Headers a proxy adds to say whom it forwards for, or that it did:
+ * `forwarded`, `via`, any `x-forwarded-*`, the client-address headers
+ * fronts set (`x-real-ip`, `x-client-ip`, `x-cluster-client-ip`,
+ * `cf-connecting-ip`, `true-client-ip`, `fastly-client-ip`), Cloudflare's
+ * `cf-ray`, and the web host's own front's (`x-copilotz-front`).
+ */
+const FORWARDING =
+  /^(?:forwarded|via|x-forwarded-.+|x-real-ip|x-client-ip|x-cluster-client-ip|cf-connecting-ip|cf-ray|true-client-ip|fastly-client-ip|x-copilotz-front)$/;
+
+/** Whether a request says a proxy forwarded it (see `FORWARDING`). */
+export const forwarded = (request: Request): boolean =>
+  [...request.headers.keys()].some((name) => FORWARDING.test(name.toLowerCase()));
+
+/**
  * Whether a request is this machine's, to this machine: the socket it came
  * on is loopback (its client address, see address.ts), and so is the host
- * it's for, as its URL says and as the front does. No header makes it so
+ * it's for, as its URL says and as the front does, and nothing says a proxy
+ * forwarded it (`forwarded`): one on this machine reaches the app over
+ * loopback, and may rewrite `Host` to the app's own. No header makes it so
  * (`Host: localhost` from elsewhere isn't), nor does a page another site
  * served whose name now points here; a request whose address nobody set is
- * from nowhere known, never here.
+ * from nowhere known, never here. A proxy that says nothing of whom it
+ * forwards for (nginx's `proxy_pass` as it comes) can't be told from this
+ * machine: dev sign-in refuses to start in an app with a public origin.
  */
 export function fromHere(request: Request, front?: Front): boolean {
   if (!loopbackAddress(clientAddress(request))) return false;
+  if (forwarded(request)) return false;
   if (!loopback(new URL(request.url))) return false;
   try {
     return loopback(new URL(`http://${hostOf(request, front)}`));
@@ -349,9 +370,59 @@ export type Whom = {
 };
 
 /**
+ * The plain name a cookie of the host's alone went by before it was one
+ * (`session`, for `__Host-session`): a browser signed in before still holds
+ * it. Undefined where the two are the same (plain http here, nothing Secure).
+ */
+export const legacyName = (name: string): string | undefined =>
+  name.startsWith("__Host-") ? name.slice("__Host-".length) : undefined;
+
+/**
+ * Retires what a request holds under a cookie's legacy name (`legacyName`
+ * of `current`): a secret still someone to `query` is ended first (`end`,
+ * called as them with `{ secret }`, as signing out does), so a host reading
+ * the plain name again (an older version, rolled back) finds no one there;
+ * then the cookie is cleared. Without `query`, it's only cleared (it held
+ * no secret). The `Set-Cookie` that clears it; none when there's nothing.
+ */
+export async function retire(
+  runtime: Pick<Runtime, "call" | "query">,
+  request: Request,
+  site: URL,
+  current: string,
+  entrance: { query?: string; end?: string; sameSite?: "lax" | "strict" } = {},
+): Promise<string | undefined> {
+  const old = legacyName(current);
+  const secret = old ? cookieOf(request, old) : undefined;
+  if (!old || secret === undefined) return undefined;
+  if (entrance.query && entrance.end && SECRET.test(secret)) {
+    const actor = await runtime.query<unknown>(entrance.query, { secret }).catch(() => null);
+    if (actorish(actor)) {
+      await runtime.call(entrance.end, { secret }, { actor }).catch(() => {});
+    }
+  }
+  return setCookie(site, "", 0, old, entrance.sameSite);
+}
+
+/** Retires every entrance's legacy cookie a request holds (`retire`): the clearing `Set-Cookie`s. */
+export async function retireAll(
+  runtime: Pick<Runtime, "call" | "query">,
+  whom: Whom,
+  request: Request,
+): Promise<string[]> {
+  const site = whom.site(request);
+  const cleared = await Promise.all(
+    whom.entrances.map((entrance) =>
+      retire(runtime, request, site, whom.named(entrance, site), entrance)
+    ),
+  );
+  return cleared.filter((cookie): cookie is string => cookie !== undefined);
+}
+
+/**
  * Who requests are, by a runtime's entrances. `cookie` names a declared
  * cookie here (a host serving many orgs keeps each org's apart), and makes
- * every cookie the host's alone (`hostCookie`), as `hostOnly` makes one.
+ * every cookie the host's alone (`hostCookie`), `hostOnly: false` too.
  * `front` is the app's (see `siteOf`).
  */
 export function whomOf(
@@ -362,7 +433,7 @@ export function whomOf(
   const entrances = entrancesOf(runtime);
   const site = (request: Request) => siteOf(request, front);
   const named = (entrance: Entrance, at: URL) =>
-    entrance.hostOnly || cookie
+    entrance.hostOnly !== false || cookie
       ? hostCookie(at, cookie ? cookie(entrance.cookie) : entrance.cookie)
       : entrance.cookie;
   const whom = async (request: Request): Promise<Actor | null> => {

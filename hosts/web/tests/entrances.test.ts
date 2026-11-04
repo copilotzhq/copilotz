@@ -258,10 +258,15 @@ test("a visitor: let in by a line its page names, nothing made until it speaks, 
     // Its secret: signed, in an httpOnly cookie only the app's own pages send, for its 30 days.
     assertMatch(
       first.set!,
-      /^visitor=vis_site\.[\w-]{22}\.[0-9a-z]+\.[0-9a-f]{16}\.[0-9a-f]{32}; HttpOnly; SameSite=Strict; Path=\/; Max-Age=2592000$/,
+      /^visitor=vis_site\.[\w-]{22}\.[0-9a-z]+\.32-[0-9a-f]{16}~24-[0-9a-f]{16}\.[0-9a-f]{32}; HttpOnly; SameSite=Strict; Path=\/; Max-Age=2592000$/,
     );
+    // The visitor the server issued: its line, and its networks' tags (an IPv4 address, its /24),
+    // what its messages are counted by; never the address.
     const actor = tickets.admit(first.said.ticket!)!;
-    assertEquals(actor, { kind: "contact", id: visitor.id, web: "site" });
+    const { from: _, ...who } = actor;
+    assertEquals(who, { kind: "contact", id: visitor.id, web: "site" });
+    assertEquals((actor.from as string[]).map((tag) => tag.split("-")[0]), ["32", "24"]);
+    assert(!JSON.stringify(actor).includes("203.0.113"));
     // Coming in made nothing, however many come: no contact, chat, membership, nor record.
     for (let i = 0; i < 5; i++) await connect(serve, { body: { line: "site" } });
     assertEquals(await kept(runtime), { contacts: 0, threads: 0, members: 0, visitors: 0 });
@@ -340,7 +345,8 @@ test("a forged cookie is no one: never the visitor it imitates, and cleared; an 
     })();
     for (
       const forged of [
-        `vis_shop.${"A".repeat(22)}.mw2dkm7v.${"0".repeat(16)}.${"0".repeat(32)}`,
+        `vis_shop.${"A".repeat(22)}.mw2dkm7v.32-${"0".repeat(16)}.${"0".repeat(32)}`,
+        `vis_shop.${"A".repeat(22)}.mw2dkm7v.-.${"0".repeat(32)}`,
         flipped,
         `vis_site.${rest}`,
         elsewhere,
@@ -396,10 +402,10 @@ test("limits on coming in: by address, that address alone, never the whole line;
       body: { line: "site" },
     });
     assertEquals(a1back.said.actor, a1.said.actor);
-    // Everyone else comes in still: the line takes newcomers from as many addresses as come.
+    // Everyone else comes in still: the line takes newcomers from as many networks as come.
     for (let n = 0; n < 30; n++) {
-      assertEquals((await arrive(`198.51.100.${n}`)).status, 200, `198.51.100.${n}`);
-      assertEquals((await arrive(`2001:db8:77:${n.toString(16)}::1`)).status, 200);
+      assertEquals((await arrive(`198.51.${n}.7`)).status, 200, `198.51.${n}.7`);
+      assertEquals((await arrive(`2001:db8:${(0x100 + n).toString(16)}::1`)).status, 200);
     }
     // An IPv6 caller is counted by its /64: one network, one allowance (2, on this line).
     for (const [from, status] of [["2001:db8:1::1", 200], ["2001:db8:1::2", 200]] as const) {
@@ -407,7 +413,24 @@ test("limits on coming in: by address, that address alone, never the whole line;
     }
     const sameNet = await arrive("2001:db8:1::ffff", "burst");
     assertEquals([sameNet.status, sameNet.said.error], [429, FROM_HERE]);
-    assertEquals((await arrive("2001:db8:2::1", "burst")).status, 200);
+    assertEquals((await arrive("2001:db8:1:1::1", "burst")).status, 200);
+    // Its neighbours count too: a /56 takes four /64s' worth (8), a /48 eight (16), an IPv4 /24
+    // eight addresses' (16). Past one, the next from anywhere in it is refused; elsewhere, not.
+    const fill = async (froms: string[]) => {
+      const statuses = [];
+      for (const from of froms) statuses.push((await arrive(from, "burst")).status);
+      return statuses.filter((s) => s === 200).length;
+    };
+    const ones = (n: number, at: (i: number) => string) =>
+      Array.from({ length: n }, (_, i) => at(i));
+    assertEquals(await fill(ones(12, (i) => `2001:db8:2:${i.toString(16)}::1`)), 8);
+    assertEquals(
+      await fill(ones(24, (i) => `2001:db8:3:${(i * 0x100).toString(16)}::1`)),
+      16,
+    );
+    assertEquals(await fill(ones(24, (i) => `203.0.112.${i + 1}`)), 16);
+    assertEquals((await arrive("2001:db8:4::1", "burst")).status, 200);
+    assertEquals((await arrive("203.0.111.1", "burst")).status, 200);
 
     // Around the front (without its secret, whatever address it claims): refused.
     const around = await arrive(false, "shop");
@@ -561,12 +584,22 @@ test("connecting, signing in and out come from the app's own page only", async (
       await answer.body?.cancel();
     };
     for (const path of ["/connect", "/signin/dev", "/signout"]) {
+      // Dev sign-in is this machine's alone, never through the front: from here, its page is all.
       const body = path === "/connect" ? { line: "site" } : { name: "ana" };
-      await refused(path, { origin: "https://evil.example", body }, "another site");
-      await refused(path, { origin: "null", body }, "an opaque origin");
-      await refused(path, { origin: "http://localhost:9999", body }, "another port");
-      await refused(path, { headers: { "sec-fetch-site": "cross-site" }, body }, "fetch metadata");
-      await refused(path, { headers: { "sec-fetch-site": "same-site" }, body }, "a sibling");
+      const here = path === "/signin/dev" ? { from: false as const } : {};
+      await refused(path, { origin: "https://evil.example", body, ...here }, "another site");
+      await refused(path, { origin: "null", body, ...here }, "an opaque origin");
+      await refused(path, { origin: "http://localhost:9999", body, ...here }, "another port");
+      await refused(
+        path,
+        { headers: { "sec-fetch-site": "cross-site" }, body, ...here },
+        "fetch metadata",
+      );
+      await refused(
+        path,
+        { headers: { "sec-fetch-site": "same-site" }, body, ...here },
+        "a sibling",
+      );
     }
     // Plain http is this machine's alone: elsewhere, a page is https.
     await refused("/connect", {
@@ -607,7 +640,8 @@ test("connecting, signing in and out come from the app's own page only", async (
 
 test("a signed-in person comes in as themselves, even where the page asks to arrive", async () => {
   await setup(async ({ serve, runtime }) => {
-    const signed = await serve(request("/signin/dev", { body: { name: "ana" } }));
+    // Signed in by name from this machine (never through the front: that's not this machine).
+    const signed = await serve(request("/signin/dev", { body: { name: "ana" }, from: false }));
     const session = sent(signed)!;
     assertMatch(signed.headers.get("set-cookie")!, /^session=ses_[^;]+; HttpOnly; SameSite=Lax;/);
     const visitor = await connect(serve, { body: { line: "site" } });

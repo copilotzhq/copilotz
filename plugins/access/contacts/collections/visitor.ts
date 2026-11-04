@@ -1,7 +1,7 @@
 /**
  * Visitors who spoke: the web lines' visitors that sent a message, each a
  * contact now. One record each, by its contact: the line it came by, its
- * chat, the tag of the address it first came from (an HMAC: never the
+ * chat, the tags of the networks it first came from (HMACs: never the
  * address), until when, and whether it's been erased (`ended`: its cookie is
  * no one from then, though it says who it was). Only the system reads or
  * writes them: the web host asks who a cookie's secret is (`actor`), and
@@ -24,8 +24,8 @@ const visitorSchema = {
     line: { type: "string" },
     /** Its chat. */
     thread: { type: "string" },
-    /** The tag of the address it first came from: what its messages are counted by. */
-    tag: { type: "string" },
+    /** The tags of the networks it first came from: what its messages are counted by. */
+    tags: { type: "array", items: { type: "string" } },
     /** Whether its first message went in: until then, a contact made for it may go. */
     spoke: { type: "boolean" },
     /** Erased (`contact.forget`): its cookie is no one. */
@@ -33,7 +33,7 @@ const visitorSchema = {
     expires: { type: "string" },
     at: { type: "string" },
   },
-  required: ["line", "thread", "tag", "spoke", "expires", "at"],
+  required: ["line", "thread", "tags", "spoke", "expires", "at"],
 } as const;
 
 export const visitor = defineCollection({
@@ -43,7 +43,8 @@ export const visitor = defineCollection({
     /**
      * Who a visitor's secret is: the contact it is, once it's spoken, while
      * the secret lasts, its line is still the app's, and the contact is still
-     * there (erased, it's no one at once). A browser that hasn't spoken is no
+     * there (erased, it's no one at once), with its line (`web`) and its
+     * networks' tags (`from`), what its messages and connections count by. A browser that hasn't spoken is no
      * one here: the web host lets it back in as who it was (`contact.arrive`,
      * given its secret). The system's alone: the web host asks, once per
      * connection.
@@ -57,7 +58,7 @@ export const visitor = defineCollection({
       const found = await visitors.findOne({ _id: contact }) as Visitor | null;
       if (!found || found.ended || found.line !== line.name) return null;
       const there = await ctx.db.collection("contact").findOne({ _id: contact });
-      return there ? { kind: "contact", id: contact, web: line.name } : null;
+      return there ? { kind: "contact", id: contact, web: line.name, from: found.tags } : null;
     },
   },
 });

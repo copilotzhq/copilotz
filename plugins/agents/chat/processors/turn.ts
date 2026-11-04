@@ -147,8 +147,9 @@ const turn = async (ctx: Context, event: Event) => {
         return new Set(peopleIn(seen, named));
       });
 
-  // What it writes shows as it comes: the turn's live document.
-  const live = liveWriter(ctx, t, run, current.in);
+  // What it writes shows as it comes: the turn's live document. Offered no tools, every step is
+  // an answer: a contact may read its words as they come too.
+  const live = liveWriter(ctx, t, run, current.in, offered.length === 0);
   // Asked once a run: a change reaches its next reply, never a step halfway.
   const model = await modelFor(ctx, t.agent, agent, current.in);
 

@@ -103,6 +103,51 @@ export function countedOf(address: string): string | undefined {
   return at ? countOf(at) : undefined;
 }
 
+/** One network a caller is counted in: its name, its prefix's length, and how many callers it counts as. */
+export type Network = { network: string; bits: number; scale: number };
+
+/**
+ * How many callers' worth each network counts as, by its prefix's length:
+ * an IPv4 address and an IPv6 /64 are one caller; an IPv4 /24 eight (a
+ * mobile carrier's addresses are many people's); an IPv6 /56 four (one
+ * home's), a /48 eight (one site's, which a tunnel broker hands out free:
+ * more than a home, but well under what a line takes from everyone). One
+ * that can't be read (`unvouched`, 0) is one.
+ */
+export const SCALE: Readonly<Record<number, number>> = { 32: 1, 24: 8, 64: 1, 56: 4, 48: 8, 0: 1 };
+
+/**
+ * The networks a caller counted as `counted` (`callerFrom`, `countedOf`) is
+ * in, narrowest first, so a limit by address holds for its neighbours too:
+ * an IPv4 address, then its /24; an IPv6 /64, then its /56 and its /48. Calls
+ * whose address can't be read are one network of their own.
+ */
+export function networksOf(counted: string): Network[] {
+  const [family, hex] = counted.split(":");
+  const bits = /^[0-9a-f]{1,16}$/.test(hex ?? "") ? BigInt(`0x${hex}`) : undefined;
+  if (family === "4" && bits !== undefined) {
+    return [
+      { network: counted, bits: 32, scale: SCALE[32] },
+      { network: `4/24:${(bits >> 8n).toString(16)}`, bits: 24, scale: SCALE[24] },
+    ];
+  }
+  if (family === "6" && bits !== undefined) {
+    return [
+      { network: counted, bits: 64, scale: SCALE[64] },
+      { network: `6/56:${(bits >> 8n).toString(16)}`, bits: 56, scale: SCALE[56] },
+      { network: `6/48:${(bits >> 16n).toString(16)}`, bits: 48, scale: SCALE[48] },
+    ];
+  }
+  return [{ network: counted, bits: 0, scale: SCALE[0] }];
+}
+
+/**
+ * How many callers a network's tag counts as: a tag is `<bits>-<…>` (the
+ * contacts' web lines tag each network a visitor came from that way, an
+ * HMAC after the dash: never the address). One, for anything else.
+ */
+export const scaleOf = (tag: string): number => SCALE[Number(tag.split("-")[0])] ?? 1;
+
 type Bits = { bits: bigint; size: 32 | 128 };
 
 /** An IPv4 address's 32 bits, from "a.b.c.d". */
@@ -163,6 +208,29 @@ function inRanges(at: Bits, ranges: string[] = []): boolean {
     const shift = BigInt(at.size - range.length);
     return (at.bits >> shift) === (range.bits >> shift);
   });
+}
+
+/** This machine's and private networks' ranges: a proxy's or a load balancer's, not a caller's. */
+const PRIVATE = [
+  "127.0.0.0/8",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "169.254.0.0/16",
+  "100.64.0.0/10",
+  "::1/128",
+  "fc00::/7",
+  "fe80::/10",
+];
+
+/**
+ * Whether an address (a socket's peer) is this machine's or a private
+ * network's: loopback, RFC 1918, link-local, shared (100.64/10), unique
+ * local. A caller seen there is most likely a proxy before the app.
+ */
+export function privateAddress(text: string): boolean {
+  const at = addressOf(text.replace(/^\[|\]$/g, "").replace(/%.*$/, ""));
+  return !!at && inRanges(at, PRIVATE);
 }
 
 /** What's wrong with how a plugin reads who's calling, if anything (checked when the app starts). */

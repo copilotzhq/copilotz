@@ -4,7 +4,9 @@
  * before its first token). Before the commit that writes what the step
  * became, it stops (`settle`), and that commit removes the document (`done`).
  * When the model's call breaks and is tried again (`retry`), it says when,
- * and keeps what it showed until the new attempt writes something.
+ * and keeps what it showed until the new attempt writes something. A turn
+ * that offers no tools only answers: its documents say so (`open`), and a
+ * contact reads their words as they come (see collections/live.ts).
  */
 import type { Context, TransactionScope } from "../../../../runtime/mod.ts";
 import type { Live, LiveCall } from "../collections/live.ts";
@@ -30,7 +32,13 @@ export type LiveWriter = {
   done(tx: TransactionScope): Promise<unknown>;
 };
 
-export function liveWriter(ctx: Context, t: Turn, run: string, space?: string): LiveWriter {
+export function liveWriter(
+  ctx: Context,
+  t: Turn,
+  run: string,
+  space?: string,
+  open = false,
+): LiveWriter {
   const live = ctx.db.collection<Omit<Live, "_id">>("live");
   let doc: Omit<Live, "_id"> = fresh();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -44,6 +52,7 @@ export function liveWriter(ctx: Context, t: Turn, run: string, space?: string): 
       turn: run,
       text: "",
       calls: [],
+      ...(open ? { open: true as const } : {}),
       ...(space ? { in: space } : {}),
       at: now(),
     };

@@ -16,11 +16,14 @@
  * tapped (a button), not typed. With `quiet`, agents answer once the sender
  * has been quiet that long (a burst of short messages, answered together).
  *
- * A contact's message says at most `CONTACT_TEXT` characters, and is let in
- * by the app's `contactSend` hooks first (the contacts plugin's: a web line's
- * limits, the files it takes, its visitor's own chat, made with its first
- * message, where it goes when it names none). A hook refuses it, or says
- * where it goes and that its audio goes untranscribed (`transcribe: false`).
+ * A contact's message says at most `CONTACT_TEXT` characters, says nothing
+ * of what sent it (`via`: never "a routine"), never titles its chat nor
+ * lets an agent rename it (`title`, `renamable`: what its people see), and
+ * is let in by the app's `contactSend` hooks first (the contacts plugin's: a
+ * web line's limits, the files it takes, its visitor's own chat, made with
+ * its first message, where it goes when it names none). A hook refuses it,
+ * or says where it goes and that its audio goes untranscribed (`transcribe:
+ * false`).
  * People's messages go as ever.
  */
 import {
@@ -42,6 +45,17 @@ const names = { type: "array", items: { type: "string" } } as const;
 
 /** The most a contact's message says: WhatsApp's own most, 4,096 characters. */
 export const CONTACT_TEXT = 4_096;
+
+/** The longest media type a file may say it is (RFC 6838's longest type or subtype name). */
+export const MEDIA_TYPE_LENGTH = 127;
+
+/**
+ * What a file's media type looks like: `type/subtype`, then parameters
+ * (`audio/ogg; codecs=opus`, as WhatsApp sends voice notes), on one line:
+ * an agent is told it (`[file a.bin: <type>, …]`).
+ */
+export const MEDIA_TYPE =
+  /^[A-Za-z0-9][\w!#$&^.+-]*\/[A-Za-z0-9][\w!#$&^.+-]*(?: *; *[\w!#$&^.+-]+=(?:[\w!#$&^.+-]+|"[ !#-\[\]-~]*"))* *$/;
 
 /**
  * A `contactSend` resource: the Action that lets a contact's message in,
@@ -105,7 +119,8 @@ export const sendAction = defineAction({
           type: "object",
           properties: {
             name: { type: "string", minLength: 1 },
-            type: { type: "string" },
+            // A media type, as the model is told it: `type/subtype`, with parameters at most.
+            type: { type: "string", maxLength: MEDIA_TYPE_LENGTH, pattern: MEDIA_TYPE.source },
             data: { type: "string", maxLength: 14_000_000 },
             /** A recording's length (ms) and its loudness over time, for its player. */
             voice: {
@@ -282,7 +297,7 @@ export const sendAction = defineAction({
       text: said,
       hops: 0,
       ...(replied ? { replyTo: replied._id } : {}),
-      ...(input.via ? { via: input.via } : {}),
+      ...(input.via && !contact ? { via: input.via } : {}),
       ...(input.tap ? { tap: input.tap } : {}),
       at: now(),
     };
@@ -296,8 +311,8 @@ export const sendAction = defineAction({
           _id: threadId,
           agents: joined,
           ...(where ? { in: where } : {}),
-          ...(input.title ? { title: input.title } : {}),
-          ...(input.renamable ? { renamable: true } : {}),
+          ...(input.title && !contact ? { title: input.title } : {}),
+          ...(input.renamable && !contact ? { renamable: true } : {}),
           ...startedWith(sent),
           at: sent.at,
         });

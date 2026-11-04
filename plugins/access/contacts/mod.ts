@@ -26,14 +26,18 @@
  *   the line's space, with a chat of its own answered by the line's agent
  *   (`contact.sending`, chat's `contactSend` hook). New visitors an hour are
  *   limited by the caller's address (as the app's front says it:
- *   `web.caller`, as MCP's; else as the socket's), and a visitor's messages
- *   a minute and a day, its address's, and the line's; past any, it's
- *   refused plainly (429), only that caller. Files only when the line takes
- *   them, transcribed only when it says. A visitor reaches what any contact
- *   does: their chat, never its agents' private steps, and what's shared
- *   with them. Erasing the contact ends its cookie with it; what's past is
- *   collected every ten minutes (`contact.prune`), a contact never heard
- *   from too.
+ *   `web.caller`, as MCP's; else as the socket's) and its wider networks
+ *   (an IPv4 /24, an IPv6 /56 and /48), and a visitor's messages a minute
+ *   and a day, its networks', and the line's (some of it kept for those who
+ *   spoke before); past any, it's refused plainly (429), only that caller. A
+ *   line may have a budget (what its visitors' turns cost a day, as the
+ *   usage ledger prices them: `contact.spent`, through `modelUse`) and a
+ *   challenge (an Action of the app's a newcomer passes first). Files only
+ *   when the line takes them, transcribed only when it says. A visitor
+ *   reaches what any contact does: their chat, never its agents' private
+ *   steps, and what's shared with them. Erasing the contact ends its cookie
+ *   and its connections with it; what's past is collected every ten minutes
+ *   (`contact.prune`), a contact never heard from too.
  *
  * ```ts
  * plugins: [models, chat, ...access]   // access brings contacts
@@ -53,15 +57,17 @@ import { chatAction } from "./actions/chat.ts";
 import { forgetAction } from "./actions/forget.ts";
 import { pruneAction } from "./actions/prune.ts";
 import { sendingAction } from "./actions/sending.ts";
+import { spentAction } from "./actions/spent.ts";
 import { startAction } from "./actions/start.ts";
 import { CONTACT, contact } from "./collections/contact.ts";
 import { rate } from "./collections/rate.ts";
 import { visitor } from "./collections/visitor.ts";
 import { visitorEntrance } from "./resources/entrance.ts";
+import { visitorsSpend } from "./resources/spend.ts";
 import { settingsProblem } from "./shared/web.ts";
 import { contactView } from "./views/contact.ts";
 
-/** What only the system reads or writes: visitors' secrets (hashed), and their counters. */
+/** What only the system reads or writes: visitors' records, and the web lines' counters. */
 const SYSTEM_ONLY = ["contact_visitor", "contact_rate"];
 
 export * from "./contract.ts";
@@ -77,6 +83,7 @@ export const contacts: Plugin = definePlugin({
     "contact.arrive": arriveAction,
     "contact.sending": sendingAction,
     "contact.prune": pruneAction,
+    "contact.spent": spentAction,
   },
   schedules: { "contact.prune": { every: "10m", call: "contact.prune", input: {} } },
   views: { "context:contact": { llm: contactView } },
@@ -85,7 +92,7 @@ export const contacts: Plugin = definePlugin({
     SYSTEM_ONLY.includes(collection) ? { _id: { $in: [] } } : undefined,
   // At start: the web lines the app declares, and how it knows who's calling.
   check: (merged) => {
-    const problem = settingsProblem(merged.resources);
+    const problem = settingsProblem(merged.resources, merged.actions);
     if (problem) throw new Error(problem);
   },
   resources: {
@@ -99,6 +106,8 @@ export const contacts: Plugin = definePlugin({
     entrances: { visitor: visitorEntrance },
     // What a contact sends goes in through here first: a web visitor's limits, and its own chat.
     contactSend: { contacts: { action: "contact.sending" } },
+    // What a web line's visitors' turns cost, for its budget.
+    modelUse: { webLines: visitorsSpend },
   },
 });
 

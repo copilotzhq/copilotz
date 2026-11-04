@@ -67,7 +67,7 @@ export function connect(options: {
   id?: string;
 }): Client {
   const registry = merge(options.plugins, { elsewhere: true });
-  const attempt = { attemptId: crypto.randomUUID(), epoch: Date.now() };
+  const id = options.id ?? `browser-${crypto.randomUUID()}`;
 
   /** What the owner said each watched read came to. */
   const known = new Map<string, Answer>();
@@ -84,41 +84,63 @@ export function connect(options: {
   let sessions = 0;
   let batch: { key: string; read: Remote; done: PromiseWithResolvers<Answer> }[] = [];
 
-  const worker = createWorker({
-    id: options.id ?? `browser-${crypto.randomUUID()}`,
-    transport: options.transport,
-    activate: ({ workerId }: { workerId: string }) => ({ identity: { workerId, ...attempt } }),
-    register: async () => ({
-      credential: { kind: "registration" as const, capability: await options.ticket() },
-      expiresAtMs: Date.now() + 60_000,
-    }),
-    capacity: 1,
-    hostCalls: { maxConcurrent: 64 },
-    workloads: {
-      // What the owner tells: each line, the new results of the reads one commit
-      // changed. A new connection after the first watches nothing yet: what's
-      // shown is asked for again.
-      [SESSION]: async ({ input }) => {
-        const session = ++sessions;
-        if (session > 1) void rewatch();
-        // A line: what one commit changed, shown at once.
-        for await (const line of lines<Push[]>(input)) {
-          // A newer connection has asked for everything again: this one's news is older.
-          if (session !== sessions) break;
-          const changed: string[] = [];
-          for (const { key, ...now } of line) {
-            if (racing.has(key)) racing.set(key, now as Answer);
-            if (!known.has(key)) continue;
-            known.set(key, now as Answer);
-            changed.push(WATCHED + key);
+  /** One enrolment: a worker that comes in with a new ticket, and keeps its connection after. */
+  const enrol = () => {
+    const attempt = { attemptId: crypto.randomUUID(), epoch: Date.now() };
+    return createWorker({
+      id,
+      transport: options.transport,
+      activate: ({ workerId }: { workerId: string }) => ({ identity: { workerId, ...attempt } }),
+      register: async () => ({
+        credential: { kind: "registration" as const, capability: await options.ticket() },
+        expiresAtMs: Date.now() + 60_000,
+      }),
+      capacity: 1,
+      hostCalls: { maxConcurrent: 64 },
+      workloads: {
+        // What the owner tells: each line, the new results of the reads one commit
+        // changed. A new connection after the first watches nothing yet: what's
+        // shown is asked for again.
+        [SESSION]: async ({ input }) => {
+          const session = ++sessions;
+          if (session > 1) void rewatch();
+          // A line: what one commit changed, shown at once.
+          for await (const line of lines<Push[]>(input)) {
+            // A newer connection has asked for everything again: this one's news is older.
+            if (session !== sessions) break;
+            const changed: string[] = [];
+            for (const { key, ...now } of line) {
+              if (racing.has(key)) racing.set(key, now as Answer);
+              if (!known.has(key)) continue;
+              known.set(key, now as Answer);
+              changed.push(WATCHED + key);
+            }
+            if (changed.length) observers.changed(changed.map((c) => [c, [{}]]) as never);
           }
-          if (changed.length) observers.changed(changed.map((c) => [c, [{}]]) as never);
-        }
+        },
       },
-    },
-  });
-
+    });
+  };
   let closed = false;
+  let worker = enrol();
+  /**
+   * Once in, its way back refused (who it was ended: signed out, erased, and
+   * its resume credential with it; or an owner that never knew it), it comes
+   * in again with a new ticket, which only a browser that's still someone gets
+   * (a page's `ticket` reloads it otherwise). One never let in stays out.
+   */
+  const follow = (current: typeof worker) => {
+    current.closed.catch(() => {});
+    void current.ready.then(() =>
+      current.closed.then((result) => {
+        if (closed || current !== worker || result.reason !== "reenrollment_required") return;
+        worker = enrol();
+        follow(worker);
+      })
+    ).catch(() => {});
+  };
+  follow(worker);
+
   /** Asks the owner, as the person. While the connection is coming back, it waits and asks then. */
   const ask = async <R>(workload: string, body: unknown): Promise<R> => {
     let call: Awaited<ReturnType<typeof worker.callHost>>;

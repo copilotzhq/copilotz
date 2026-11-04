@@ -142,7 +142,9 @@ export const chat: Plugin = definePlugin({
     // With the access plugin, chats live in spaces, and what's in a chat comes with it when it's
     // shared on its own (with a contact): its messages, files and what's being written. A contact
     // reads what's said there, never its agents' private steps (their tools' calls, with what each
-    // returned), a tool's files, nor what's being written while it calls a tool: the agent's alone.
+    // returned), a tool's files, nor what's being written that may become one: of a turn that
+    // offers tools, only that the agent is at work (no words, no call, no broken call's reason, a
+    // provider's own); of one that offers none (`open`: every step an answer), its words as they come.
     shared: {
       thread: {},
       message: {
@@ -151,7 +153,14 @@ export const chat: Plugin = definePlugin({
         contact: { private: { $ne: true }, toolCalls: { $exists: false } },
       },
       file: { part: "thread", contact: { private: { $ne: true } } },
-      live: { part: "thread", contact: { "calls.0": { $exists: false } } },
+      live: {
+        part: "thread",
+        contact: {
+          "calls.0": { $exists: false },
+          retry: { $exists: false },
+          $or: [{ open: true }, { text: "" }],
+        },
+      },
       shown: { part: "thread" },
     },
   },

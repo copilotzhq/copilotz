@@ -1,11 +1,11 @@
 /**
  * `contact.prune`: what's past goes. The web lines' counters whose window is
- * over (and what a visitor's first message would be counted from, after a
- * day), visitors' records past their time (an erased one's too), and a
- * contact made for a first message that never went in: its record says it
- * hasn't spoken, ten minutes on, and its chat holds nothing it said. That
- * one goes with its chat and its access, as an erasure does. The plugin's
- * schedule calls it every ten minutes; nobody outside may.
+ * over, visitors' records past their time (an erased one's too, only then:
+ * until its cookie's time is past, its record is what says it's no one),
+ * and a contact made for a first message that never went in: its record
+ * says it hasn't spoken, ten minutes on, and its chat holds nothing it said.
+ * That one goes with its chat and its access, as an erasure does. The
+ * plugin's schedule calls it every ten minutes; nobody outside may.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Visitor } from "../collections/visitor.ts";
@@ -28,7 +28,7 @@ export const pruneAction = defineAction({
     const visitors = system.db.collection<Visitor>("contact_visitor");
     await visitors.deleteMany({ expires: { $lte: new Date(now).toISOString() } });
     const quiet = await visitors.find(
-      { spoke: false, at: { $lte: new Date(now - QUIET).toISOString() } },
+      { spoke: false, ended: { $ne: true }, at: { $lte: new Date(now - QUIET).toISOString() } },
       { limit: BATCH },
     );
     let gone = 0;

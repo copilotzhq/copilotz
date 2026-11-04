@@ -12,7 +12,7 @@
  * socket that sent it, and the host goes on. Deno and Bun run it too,
  * through their Node compatibility.
  */
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   type Actor,
   createRuntime,
@@ -108,9 +108,12 @@ const app = definePlugin({
 const page = definePlugin({
   name: "page",
   views: {
+    // Its chats: where it's a member, by its own key (a contact reads nothing it doesn't name).
     chats: {
-      test: (_: unknown, ctx: ViewContext) =>
-        (ctx.db.collection<{ _id: string }>("thread").find({}).value ?? []).map((t) => t._id),
+      test: (who: Actor, ctx: ViewContext) =>
+        (ctx.db.collection<{ space: string; on?: string }>("member")
+          .find({ member: `${who.kind}:${who.id}` }).value ?? [])
+          .filter((m) => m.on === "thread").map((m) => m.space.slice("thread:".length)),
     },
     messages: {
       test: (filter: Record<string, unknown>, ctx: ViewContext) =>
@@ -244,14 +247,14 @@ test("a visitor on the socket: nothing made until it speaks, then its own chat, 
       const asDani = browser(server, dani.ticket);
       clients.push(asCarla, asDani);
       await Promise.all([asCarla.ready, asDani.ready]);
-      assertEquals(await seen<string[]>(asCarla, "chats"), []);
+      assertEquals(await seen<string[]>(asCarla, "chats", carla.actor), []);
 
       // Her first message, naming no chat: her own, made with it, answered by the guide.
       const { thread: carlas } = await asCarla.call<{ thread: string }>("chat.send", {
         text: "a trip to the coast",
       });
       await runtime.idle();
-      assertEquals(await seen<string[]>(asCarla, "chats"), [carlas]);
+      assertEquals(await seen<string[]>(asCarla, "chats", carla.actor), [carlas]);
       await until(
         async () => (await seen<string[]>(asCarla, "said", carlas)).length >= 2,
         "the guide answers her",
@@ -269,7 +272,8 @@ test("a visitor on the socket: nothing made until it speaks, then its own chat, 
       // Dani speaks too: her own chat, which Carla reads nothing of, nor writes in.
       const { thread: danis } = await asDani.call<{ thread: string }>("chat.send", { text: "hi" });
       assert(danis !== carlas);
-      assertEquals(await seen<string[]>(asCarla, "said", danis), []);
+      // A read of Dani's chat isn't watched for Carla at all: it isn't hers to name.
+      await assertRejects(() => seen<string[]>(asCarla, "said", danis), Error, "forbidden");
       assert(
         ["forbidden", "duplicate_key"].includes(
           await code(asCarla.call("chat.send", { thread: danis, text: "hi" })),
@@ -343,7 +347,13 @@ test("a visitor reads what's said, never its agent's private steps, nor a tool c
       assert(hers.every((m) => !m.private && m.toolCalls === undefined));
       assert(!JSON.stringify(hers).includes("41.20"));
       assertEquals(await seen(client, "messages", { thread, private: true }), []);
-      assertEquals(await seen(client, "messages", { toolCalls: { $exists: true } }), []);
+      assertEquals(await seen(client, "messages", { thread, toolCalls: { $exists: true } }), []);
+      // Asked across chats, naming none of hers, it isn't watched at all.
+      await assertRejects(
+        () => seen(client, "messages", { toolCalls: { $exists: true } }),
+        Error,
+        "forbidden",
+      );
     } finally {
       holding?.resolve();
       await client.close();
@@ -379,7 +389,7 @@ test("a visitor's messages: a few a minute, at once too, as large as a contact's
         "You're sending messages too fast: wait a minute, then try again.",
       );
       await runtime.idle();
-      const [thread] = await seen<string[]>(client, "chats");
+      const [thread] = await seen<string[]>(client, "chats", carla.actor);
       assertEquals(
         (await seen<string[]>(client, "said", thread)).filter((t) => t.startsWith("hello")).length,
         4,
@@ -458,7 +468,7 @@ test("a ticket admits once: the same one again is refused", async () => {
     const first = browser(server, carla.ticket);
     try {
       await first.ready;
-      assertEquals(await seen<string[]>(first, "chats"), []);
+      assertEquals(await seen<string[]>(first, "chats", carla.actor), []);
     } finally {
       await first.close();
     }
@@ -497,7 +507,7 @@ test("a ticket admits once: the same one again is refused", async () => {
     try {
       await back.ready;
       const { thread } = await back.call<{ thread: string }>("chat.send", { text: "hi" });
-      assertEquals(await seen<string[]>(back, "chats"), [thread]);
+      assertEquals(await seen<string[]>(back, "chats", actor), [thread]);
     } finally {
       await back.close();
     }
@@ -530,7 +540,7 @@ test("a frame larger than the protocol takes closes its socket; the host goes on
     const client = browser(server, carla.ticket);
     try {
       await client.ready;
-      assertEquals(await seen<string[]>(client, "chats"), []);
+      assertEquals(await seen<string[]>(client, "chats", carla.actor), []);
     } finally {
       await client.close();
     }

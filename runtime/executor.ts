@@ -225,6 +225,8 @@ export function createExecutor(
       },
       unschedule: async (timer) => Number(await run({ op: "unschedule", timer })) > 0,
       cancel: async (target) => Boolean(await run({ op: "cancel", ...target } as Op)),
+      disconnect: async (actor) =>
+        Number(await run({ op: "disconnect", actor: { kind: actor.kind, id: actor.id } })),
       render: renderer(registry.views, () => reading(run, job.record, actor)),
       record: job.record,
       metrics,
@@ -373,9 +375,9 @@ export function createExecutor(
       async send(request) {
         const tx = "tx" in request ? request.tx : undefined;
         const end = "end" in request ? request.end : undefined;
-        // A cancel stops other work: it writes nothing of this call's.
+        // A cancel stops other work, a disconnect ends browsers: neither writes this call's.
         const writes = tx !== undefined ||
-          request.ops.some((op) => !isRead(op) && op.op !== "cancel");
+          request.ops.some((op) => !isRead(op) && op.op !== "cancel" && op.op !== "disconnect");
         const carry = pending && writes && (tx === undefined || !carrying.has(tx));
         if (carry && tx !== undefined) carrying.add(tx);
         try {

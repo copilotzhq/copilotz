@@ -226,7 +226,12 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
  * the first that throws stops the runtime from starting.
  */
 export async function checked(registry: Registry, call: Merged["call"]): Promise<void> {
-  const merged: Merged = { resources: registry.resources, adapters: registry.adapters, call };
+  const merged: Merged = {
+    resources: registry.resources,
+    adapters: registry.adapters,
+    actions: registry.actions,
+    call,
+  };
   for (const { name, check } of registry.checks) {
     try {
       await check(merged);
@@ -275,6 +280,7 @@ export async function readCall<R>(
     schedule: refuse,
     unschedule: refuse,
     cancel: refuse,
+    disconnect: refuse,
     stream: refuse,
     graph: { ...reads.graph, link: refuse, unlink: refuse },
   } as unknown as Context;

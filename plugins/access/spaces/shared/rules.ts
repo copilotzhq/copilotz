@@ -9,10 +9,11 @@
  * read where they work too. A
  * query that names a space, or a document it reaches, needs nothing more:
  * it goes to the store as it is. Spaces and memberships are readable where reached and
- * changed only by those who manage them; invitations are their managers',
- * and read by whom they're to (by the email they signed in with).
+ * changed only by those who manage them (and one's own memberships read by
+ * its own key: where a contact's chats are); invitations are their
+ * managers', and read by whom they're to (by the email they signed in with).
  */
-import type { Actor, Filter, Guard } from "../../../../runtime/mod.ts";
+import { type Actor, failure, type Filter, type Guard } from "../../../../runtime/mod.ts";
 import { membersOf } from "./agents.ts";
 import { homeOf, memberKey, type Reach, reachOf, type Verb, where } from "./reach.ts";
 
@@ -50,7 +51,20 @@ const held = (reach: Reach, verb: Verb, on: string): [string, string][] =>
       : []
   );
 
-export const rules: Guard = async (actor, { collection, access, filter }, ctx) => {
+/** The ids a filter's condition names by equality (a string, `$eq`, `$in` of strings); else none. */
+const idsIn = (condition: unknown): string[] | undefined => {
+  if (typeof condition === "string") return [condition];
+  if (!condition || typeof condition !== "object") return undefined;
+  const { $eq, $in, ...rest } = condition as { $eq?: unknown; $in?: unknown };
+  if (Object.keys(rest).length) return undefined;
+  if (typeof $eq === "string" && $in === undefined) return [$eq];
+  if (Array.isArray($in) && $eq === undefined && $in.every((id) => typeof id === "string")) {
+    return $in as string[];
+  }
+  return undefined;
+};
+
+export const rules: Guard = async (actor, { collection, access, filter, direct }, ctx) => {
   const shared = (ctx.resources.shared ?? {}) as Shared;
   const own = ["space", "member", "request", "invitation"];
   if (!Object.hasOwn(shared, collection) && !own.includes(collection)) return undefined;
@@ -72,6 +86,10 @@ export const rules: Guard = async (actor, { collection, access, filter }, ctx) =
     const by = access === "read" && actor.for ? await reachOf(actor.for as Actor, ctx) : reach;
     const spaces = where(by, access === "read" ? "read" : "manage");
     if (collection === "space") return { _id: { $in: spaces } };
+    // Where one is a member, asked by its own key: a contact finds its chats so.
+    if (access === "read" && filter?.member === memberKey(actor)) {
+      return { member: memberKey(actor) };
+    }
     // Who a document of a space is shared with on its own (a contact, in a chat), asked by its key.
     const named = filter?.space;
     if (access === "read" && typeof named === "string" && !spaces.includes(named)) {
@@ -97,6 +115,20 @@ export const rules: Guard = async (actor, { collection, access, filter }, ctx) =
   // each only where it lives, so nothing written as one of them lands in another space.
   const docs = held(reach, verb, collection);
   const wholes = part ? held(reach, verb, part) : [];
+  // A contact's own read from its browser names what of its own it reads: documents it holds, or
+  // its chats' parts. Anything wider would run again on every change to the collection.
+  if (direct && actor.kind === "contact") {
+    const mine = (ids: string[] | undefined, of: [string, string][]) =>
+      !!ids?.length && ids.every((id) => of.some(([held]) => held === id));
+    if (!mine(idsIn(filter?._id), docs) && !(part && mine(idsIn(filter?.[part]), wholes))) {
+      throw failure(
+        "forbidden",
+        `A contact reads "${collection}" naming what of its own it reads: ` +
+          (part ? `a ${part} of its own (${part})` : "a document of its own (_id)"),
+        { public: true },
+      );
+    }
+  }
   const whole = part ? filter?.[part] : undefined;
   const asked = wholes.find(([id]) => id === whole);
   if (asked) return and({ [field]: asked[1] });

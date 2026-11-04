@@ -171,6 +171,13 @@ export type Owner = {
    * False when nothing was running.
    */
   cancel(target: { call: string } | { processor: string; key: string }): Promise<boolean>;
+  /**
+   * Ends an actor's browsers, when who they were ends (signed out, erased):
+   * their resume credentials go and each connection closes; one comes back
+   * only with a new ticket, which only a cookie that's still someone gets.
+   * How many connections it ended.
+   */
+  disconnect(actor: Actor): number;
   /** Resolves when no Processor delivery or timer occurrence is pending, and observed Views caught up. */
   idle(): Promise<void>;
   /**
@@ -834,12 +841,22 @@ export async function createOwner(
     }
     return rules.length > 1 ? { $and: rules } : rules[0];
   };
-  /** Whether any rule speaks for a collection's reads by this actor: a browser reads nothing else directly. */
-  const ruled = async (actor: Actor, collection: string) => {
+  /**
+   * Whether any rule speaks for a collection's reads by this actor: a browser
+   * reads nothing else directly. Asked as its own read (`direct`), with its
+   * filter: a rule may refuse one it won't watch (thrown).
+   */
+  const ruled = async (actor: Actor, collection: string, filter?: Filter) => {
+    let found = false;
     for (const guard of registry.guards as Guard[]) {
-      if (await guard(actor, { collection, access: "read" }, ruleReads) !== undefined) return true;
+      const said = await guard(
+        actor,
+        { collection, access: "read", ...(filter ? { filter } : {}), direct: true },
+        ruleReads,
+      );
+      if (said !== undefined) found = true;
     }
-    return false;
+    return found;
   };
   /** Whether an actor may run a query from outside: one that lets them, as Actions do. */
   const askable = (
@@ -876,7 +893,18 @@ export async function createOwner(
         }
         case "aggregate": {
           const found = await rule(actor, "read", op.collection, undefined, reads);
-          return found ? { ...op, pipeline: [{ $match: found }, ...op.pipeline] } : op;
+          if (!found) return op;
+          // One `$match`, first: a pipeline's own joins the rule's.
+          const [first, ...rest] = op.pipeline;
+          const own = first && Object.keys(first).length === 1 && "$match" in first
+            ? (first as { $match: Filter }).$match
+            : undefined;
+          return {
+            ...op,
+            pipeline: own
+              ? [{ $match: both(own, found) }, ...rest]
+              : [{ $match: found }, ...op.pipeline],
+          };
         }
         case "nearest": {
           const found = await rule(actor, "read", op.collection, op.options.filter, reads);
@@ -1067,6 +1095,12 @@ export async function createOwner(
     if (first?.op === "cancel") {
       if ("tx" in request || request.ops.length !== 1) throw invalid("A cancel goes on its own.");
       return cancel(first);
+    }
+    if (first?.op === "disconnect") {
+      if ("tx" in request || request.ops.length !== 1) {
+        throw invalid("A disconnect goes on its own.");
+      }
+      return disconnect(first.actor);
     }
     const lowered = request.ops.map((op) => timers.lower(op, request.actor));
     lowered.forEach(known);
@@ -1339,6 +1373,11 @@ export async function createOwner(
       return { metadata: {}, body: handle.output };
     };
 
+  /** Ends an actor's browsers: see `Owner.disconnect`. */
+  const disconnect = (actor: Actor) =>
+    browsers.end(actor, (workerId) => {
+      void hypervisor.drain(workerId, "ended").catch(() => {});
+    });
   const browsers = createBrowsers({
     observers,
     ruled,
@@ -1812,6 +1851,7 @@ export async function createOwner(
       return () => listeners.delete(listener);
     },
     cancel: (target) => Promise.resolve(cancel(target)),
+    disconnect: (actor) => disconnect(actor),
     // Nothing pending, and every observed View showing what that left.
     async idle() {
       do {

@@ -17,6 +17,7 @@ import {
   callerFrom,
   countedOf,
   failure,
+  privateAddress,
   type Resources,
   type Runtime,
 } from "../../../../runtime/mod.ts";
@@ -33,6 +34,25 @@ type Door = {
 };
 
 type Arrived = { actor: { kind: string; id: string }; secret: string; days: number };
+
+/** The runtimes already told their visitors all come from a private address. */
+const told = new WeakSet<object>();
+
+/**
+ * Says, once a runtime, when visitors are counted by a socket's private
+ * address (a proxy's or a load balancer's before the app, not theirs): every
+ * visitor is then one caller, and the limits by address are the whole line's.
+ */
+function tellPrivate(runtime: object, address: string) {
+  if (told.has(runtime) || !privateAddress(address)) return;
+  told.add(runtime);
+  console.warn(
+    `web.lines: visitors come from ${address}, a private address: a proxy or a load ` +
+      "balancer's before the app, not theirs. Every visitor is then counted as one caller, " +
+      "so the limits by address hold for everyone together. Say how the app's front names " +
+      "callers (web.caller), unless this is a machine of your own.",
+  );
+}
 
 /** What a visitor is counted by: refused, or an address (none: exempt from limits by address). */
 function countedBy(request: Request, door: Door, resources: Resources): { address?: string } {
@@ -54,6 +74,7 @@ function countedBy(request: Request, door: Door, resources: Resources): { addres
         "(copilotz/web/node's serve or listen; with one of your own, setClientAddress)",
     );
   }
+  tellPrivate(door.runtime, door.address!);
   return { address };
 }
 
@@ -68,10 +89,12 @@ async function arrive(request: Request, door: Door) {
   const resources: Resources = door.runtime.describe().resources;
   if (!lineOf({ resources }, line)) return null;
   const { address } = countedBy(request, door, resources);
+  const answer = door.asked.challenge;
   const { actor, secret, days } = await door.runtime.call<Arrived>("contact.arrive", {
     line,
     ...(address ? { address } : {}),
     ...(door.secret ? { secret: door.secret } : {}),
+    ...(typeof answer === "string" && answer ? { challenge: answer.slice(0, 4096) } : {}),
   });
   return { actor, secret, days };
 }

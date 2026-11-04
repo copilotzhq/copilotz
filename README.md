@@ -150,7 +150,9 @@ The host keeps every cookie: httpOnly, so the page's code never sees a session's
 preview's) can set one. A page connects by trading its cookie for a one-time ticket (`/connect`,
 which answers only the app's own page: its `Origin`), then talks to the owner over Oxian as an
 untrusted worker bound to that actor, under the access rules. Signing in by name (`devSignIn`) is
-for this machine only: the socket's address and the host must both be this machine's. On Node:
+for this machine only: the socket's address and the host must both be this machine's, with no header
+a proxy adds, and an app whose `links` origin is public doesn't start with it. Signing out ends the
+browsers connected as whoever it was. On Node:
 
 ```ts
 // server.ts
@@ -229,26 +231,38 @@ in makes and keeps nothing: the visitor's first message (`chat.send`, naming no 
 contact in the line's space, with a chat of its own, answered by the line's agent. Someone signed in
 comes in as themselves. A visitor reaches what any contact does: their chat, what's said and filed
 there (`/files/<id>` too), never the agent's private steps (its tools' calls, with what each
-returned), and nothing else.
+returned, nor a step's words before it's known to be an answer), and nothing else. Its page reads
+what it names of its own (its chat's messages by `thread`; its chats by its memberships, `member`
+`{ member: "contact:<id>" }`): a read that names none is refused, never watched.
 
-Its limits, each refused plainly (429) and only for that caller:
+Its limits, each refused plainly (429) and only for that caller. Those by address hold for each
+network the address is in, as many callers' worth as it counts: an IPv4 address and its /24 (8); an
+IPv6 /64, its /56 (4) and its /48 (8), so one routed /48 is one site, not 65,536 callers:
 
-| Limit                     | Default  | Counted                                             |
-| ------------------------- | -------- | --------------------------------------------------- |
-| `ipVisitorsPerHour`       | 20       | new visitors from one address (IPv6 by its /64)     |
-| `perMinute`, `perDay`     | 10, 200  | one visitor's messages                              |
-| `ipPerMinute`, `ipPerDay` | 30, 1000 | messages from the visitors one address brought      |
-| `linePerMinute`           | 300      | the line's messages, all its visitors               |
-| `visitorsPerHour`         | 600      | new visitors who speak (contacts made), on the line |
+| Limit                     | Default  | Counted                                                               |
+| ------------------------- | -------- | --------------------------------------------------------------------- |
+| `ipVisitorsPerHour`       | 20       | new visitors from one address, and as many first messages             |
+| `perMinute`, `perDay`     | 10, 200  | one visitor's messages                                                |
+| `ipPerMinute`, `ipPerDay` | 30, 1000 | messages from the visitors one address brought                        |
+| `linePerMinute`           | 300      | the line's messages, all its visitors                                 |
+| `newcomersPerMinute`      | 200      | of those, newcomers' (not spoken before the minute): the rest is kept |
+| `visitorsPerHour`         | 600      | new visitors who speak (contacts made), on the line                   |
 
 The caller's address is the one the app's front says (`caller`, as MCP's lines take it), else the
 one its socket came from (`serve` and `listen` know it; a listener of your own says it with
-`setClientAddress`); with neither, nobody's let in. A message says 4,096 characters at most; files
-only on a line that takes them (`files: { count, bytes }`, 1 of 5 MB unless said), and audio is
-transcribed (a model's call) only with `transcribe: true`. Erasing the contact (`contact.forget`)
-ends its cookie at once, and so does removing its line; what's past (counters, records, a contact
-whose first message never went in) is collected every ten minutes. With the orgs host, a line names
-its org (`org`), and its page is the org's, at `/o/<org>/`.
+`setClientAddress`); with neither, nobody's let in, and when every visitor comes from one private
+address (a proxy's) the host says so. A line may also have a `budget`: what its visitors' turns may
+be charged a day, in the usage ledger's prices (with the usage plugin); past it, they wait for
+tomorrow. And a `challenge`: an Action of the app's that checks what the page answered coming in (a
+CAPTCHA's token: `web({ arrive: { line: "site", challenge: token } })`), asked before a newcomer's
+let in. A message says 4,096 characters at most; files only on a line that takes them
+(`files: { count, bytes }`, 1 of 5 MB unless said), and audio is transcribed (a model's call) only
+with `transcribe: true`. A visitor holds two connections, 32 reads on each, and is told a failure's
+words only when they're for anyone. Erasing the contact (`contact.forget`) ends its cookie and its
+connections at once, and so does removing its line; what's past (counters, records, a contact whose
+first message never went in) is collected every ten minutes. To change the app's secret, give the
+old one as `links.previous` for a while: visitors and links it signed are still good. With the orgs
+host, a line names its org (`org`), and its page is the org's, at `/o/<org>/`.
 
 ```ts
 resources: {
@@ -264,7 +278,7 @@ resources: {
 
 ```tsx
 // The app's own shell for visitors (a chat window): it sends with `chat.send`, naming no chat at
-// first, and reads its chat's messages.
+// first, and reads its chat's messages (by `thread`).
 await web({ root, plugins: [siteShell, chatWeb], arrive: { line: "site" } });
 ```
 

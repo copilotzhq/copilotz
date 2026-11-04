@@ -5,7 +5,8 @@
  * (`contact.deleted`: the WhatsApp plugin erases its phone, but not a block
  * on it, kept by a hash), and a web visitor's secret with it: its browser's
  * cookie is no one now (its record says so, ended, until the cookie's time
- * is past). With `chats`, its chats go too, with everything
+ * is past), and its browsers' connections end (`ctx.disconnect`). With
+ * `chats`, its chats go too, with everything
  * chat and its plugins keep of them (`chat.erase`), each only for someone
  * who manages that chat's space.
  *
@@ -51,12 +52,15 @@ export const forgetAction = defineAction({
     await system.transaction(async (tx) => {
       await tx.db.collection("member").deleteMany({ member: key });
       // A web visitor's browser is no one from now on: its record says so, until its cookie's
-      // time is past (it keeps no personal data: its line, its chat's id, an address's HMAC).
+      // time is past (it keeps no personal data: its line, its chat's id, its networks' HMACs).
+      // Heard or not, it's never taken for a first message that didn't go in (contact.prune).
       await tx.db.collection("contact_visitor").updateOne({ _id: contact._id }, {
-        $set: { ended: true },
+        $set: { ended: true, spoke: true },
       });
       await tx.db.collection("contact").deleteOne({ _id: contact._id });
     });
+    // What it has open ends too: its browsers' connections, and their way back without a cookie.
+    await system.disconnect({ kind: "contact", id: contact._id });
     return { forgotten: contact._id, chats: input.chats ? chats.length : 0 };
   },
 });

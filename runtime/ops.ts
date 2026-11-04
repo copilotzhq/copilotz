@@ -90,7 +90,10 @@ export type CancelOp =
   | { op: "cancel"; call: string }
   | { op: "cancel"; processor: string; key: string };
 
-export type Op = StoreOp | TimerOp | CancelOp;
+/** Ends an actor's browsers (see `Owner.disconnect`). */
+export type DisconnectOp = { op: "disconnect"; actor: { kind: string; id: string } };
+
+export type Op = StoreOp | TimerOp | CancelOp | DisconnectOp;
 
 const READS = new Set<Op["op"]>([
   "find",

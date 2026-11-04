@@ -29,8 +29,41 @@ const edgeKey = (e: { from: string; type: string; to: string }) =>
 const duplicateKey = (collection: string, id: string) =>
   Object.assign(new Error(`Duplicate _id "${id}" in "${collection}"`), { code: "duplicate_key" });
 
+/** A condition made of operators (`{ $in: … }`), as opposed to a value to equal. */
+const operators = (condition: unknown): condition is Record<string, unknown> =>
+  condition !== null && typeof condition === "object" && !Array.isArray(condition);
+
+/**
+ * The ids a filter keeps its documents to, when it does: an `_id` equal to
+ * a string (or `$eq` one), or `$in` a list of strings, at its top or in one
+ * of its top-level `$and` clauses. Undefined when it doesn't: every document
+ * is looked at. Either way, what's found must still match the whole filter.
+ */
+function pinned(filter: Filter): string[] | undefined {
+  const condition = (filter as Record<string, unknown>)._id;
+  if (typeof condition === "string") return [condition];
+  if (operators(condition)) {
+    if (typeof condition.$eq === "string") return [condition.$eq];
+    const list = condition.$in;
+    if (Array.isArray(list) && list.every((id) => typeof id === "string")) return list;
+  }
+  const clauses = (filter as Record<string, unknown>).$and;
+  for (const clause of Array.isArray(clauses) ? clauses as Filter[] : []) {
+    const ids = pinned(clause);
+    if (ids) return ids;
+  }
+  return undefined;
+}
+
 export function memoryStore(): Store {
   const collections = new Map<string, Map<string, Doc>>();
+  /**
+   * Where each committed document stands in its collection's order (its
+   * Map's): numbered when its id comes in, forgotten when it goes. Documents
+   * found by id are put back in that order.
+   */
+  const places = new Map<string, Map<string, number>>();
+  let placed = 0;
   const edges = new Map<string, Edge>();
   const blobs = new Map<string, Blob>();
   // By collection, document and field.
@@ -52,21 +85,58 @@ export function memoryStore(): Store {
   };
 
   const reader = (layer?: Layer): Reader => {
-    const docsOf = (collection: string): Doc[] => {
-      const merged = new Map(collections.get(collection) ?? []);
-      for (const [id, doc] of layer?.docs.get(collection) ?? []) {
-        if (doc) merged.set(id, doc);
-        else merged.delete(id);
+    /**
+     * A collection's documents as the layer leaves them, in order: the
+     * committed ones (one the layer changed, in its place; one it deleted,
+     * gone), then those only the layer has, as it made them. Nothing copied.
+     */
+    function* docsOf(collection: string): Generator<Doc> {
+      const committed = collections.get(collection);
+      const staged = layer?.docs.get(collection);
+      for (const [id, doc] of committed ?? []) {
+        if (!staged?.has(id)) yield doc;
+        else if (staged.get(id)) yield staged.get(id)!;
       }
-      return [...merged.values()];
+      for (const [id, doc] of staged ?? []) if (doc && !committed?.has(id)) yield doc;
+    }
+    /** The documents there of these ids, each looked up (the layer first), in the collection's order. */
+    const byIds = (collection: string, ids: string[]): Doc[] => {
+      const committed = collections.get(collection);
+      const staged = layer?.docs.get(collection);
+      const found = [...new Set(ids)].flatMap((id) => {
+        const doc = staged?.has(id) ? staged.get(id) : committed?.get(id);
+        return doc ? [{ id, doc }] : [];
+      });
+      if (found.length < 2) return found.map((f) => f.doc);
+      // Committed ones where they stand; those only the layer has after them, in its order.
+      const order = places.get(collection);
+      const late = new Map([...staged?.keys() ?? []].map((id, i) => [id, i]));
+      const placeOf = (id: string) => order?.get(id) ?? placed + 1 + late.get(id)!;
+      return found.sort((a, b) => placeOf(a.id) - placeOf(b.id)).map((f) => f.doc);
     };
-    const find = async (collection: string, filter: Filter = {}, options: FindOptions = {}) => {
+    /**
+     * What a filter matches, sorted and paged (the stored documents, not
+     * copies): by id when it keeps to some, else looking at every one;
+     * without a sort, it stops once the page is full.
+     */
+    const matching = (collection: string, filter: Filter = {}, options: FindOptions = {}) => {
       check(filter);
-      return await Promise.resolve(
-        sortAndPage(docsOf(collection).filter((doc) => matches(doc, filter)), options)
-          .map((doc) => structuredClone(doc)),
-      );
+      const ids = pinned(filter);
+      const enough = !options.sort && options.limit !== undefined
+        ? (options.skip ?? 0) + options.limit
+        : Infinity;
+      const found: Doc[] = [];
+      for (const doc of ids ? byIds(collection, ids) : docsOf(collection)) {
+        if (found.length >= enough) break;
+        if (matches(doc, filter)) found.push(doc);
+      }
+      return sortAndPage(found, options);
     };
+    // Async, as every store's: a filter it can't run rejects, never throws.
+    const find = async (collection: string, filter: Filter = {}, options: FindOptions = {}) =>
+      await Promise.resolve(
+        matching(collection, filter, options).map((doc) => structuredClone(doc)),
+      );
     const vectorOf = (key: string) =>
       layer?.vectors.has(key) ? layer.vectors.get(key) ?? undefined : vectors.get(key);
     return {
@@ -83,7 +153,8 @@ export function memoryStore(): Store {
       },
       findOne: async (collection, filter, options) =>
         (await find(collection, filter, { ...options, limit: 1 }))[0] ?? null,
-      count: async (collection, filter) => (await find(collection, filter)).length,
+      count: async (collection, filter) =>
+        await Promise.resolve(matching(collection, filter).length),
       // The reference itself, over what the filter finds.
       aggregate: async (collection, plan) => aggregate(await find(collection, plan.match), plan),
       edges: (query) => {
@@ -239,9 +310,22 @@ export function memoryStore(): Store {
         const result = await work(transaction(layer));
         if (owner !== epoch) throw fenced();
         for (const [collection, docs] of layer.docs) {
-          if (!collections.has(collection)) collections.set(collection, new Map());
+          if (!collections.has(collection)) {
+            collections.set(collection, new Map());
+            places.set(collection, new Map());
+          }
           const target = collections.get(collection)!;
-          for (const [id, doc] of docs) doc ? target.set(id, doc) : target.delete(id);
+          const order = places.get(collection)!;
+          for (const [id, doc] of docs) {
+            if (!doc) {
+              target.delete(id);
+              order.delete(id);
+              continue;
+            }
+            // A new id goes last, as a Map puts it; one already there keeps its place.
+            if (!target.has(id)) order.set(id, ++placed);
+            target.set(id, doc);
+          }
         }
         for (const [key, edge] of layer.edges) edge ? edges.set(key, edge) : edges.delete(key);
         for (const [id, value] of layer.blobs) blobs.set(id, value);

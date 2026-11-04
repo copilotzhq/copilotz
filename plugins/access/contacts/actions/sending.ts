@@ -5,16 +5,25 @@
  * a phone's) go as ever: their lines keep their own limits. A web line's
  * visitor (`actor.web`, its line):
  *
- * - **Its line's limits:** its messages a minute and a day, its address's
- *   (the tag of the one it first came from: every visitor that came from it),
- *   the line's a minute; and for its first message, the line's new visitors
- *   who speak, an hour. Past any, it's refused (`too_many`, saying which, to
- *   anyone). Each place is taken in one write that counts only while there's
- *   room, the visitor's own first: messages at once can't pass a limit, and
- *   one its own limits refuse takes nothing of its address's or the line's.
+ * - **Its line's limits:** its messages a minute and a day; those from each
+ *   network it first came from (the tags of its address's networks, as the
+ *   server issued it: `actor.from`, then its record's), as many times the
+ *   address's limits as the network counts; the line's a minute, of which
+ *   newcomers (visitors who hadn't spoken before the minute) take only
+ *   their share (`newcomersPerMinute`); and for its first message, new
+ *   visitors who speak, on the line and from each of its networks, an hour.
+ *   Past any, it's refused (`too_many`, saying which, to anyone). Each place
+ *   is taken in one write that counts only while there's room, the
+ *   visitor's own first, then its networks' narrowest first, then the
+ *   line's: messages at once can't pass a limit, and one its own limits
+ *   refuse takes nothing of its networks' or the line's.
+ * - **Its line's budget:** what its visitors' turns were charged today
+ *   (`contact.spent`, as the usage plugin prices them); past it, it waits
+ *   for tomorrow.
  * - **What it may carry:** files only when the line takes them (`files`),
- *   as many and as large as it says; audio goes untranscribed unless the
- *   line says (`transcribe`). Else it's refused (`invalid`, said to anyone).
+ *   as many and as large as it says, each saying what it is in a media type
+ *   of 127 characters at most; audio goes untranscribed unless the line
+ *   says (`transcribe`). Else it's refused (`invalid`, said to anyone).
  * - **Its first message** makes it someone, as the system: its contact
  *   (`contact.start`, `via: "web"`), its chat in the line's space, answered
  *   by the line's agent (`contact.chat`), its record (`contact_visitor`,
@@ -26,9 +35,10 @@
  * it names none) and, when the line doesn't transcribe, `transcribe: false`.
  * Unrecorded: what it makes is on the record as each of those Actions is.
  */
-import { defineAction, failure } from "../../../../runtime/mod.ts";
+import { defineAction, failure, scaleOf } from "../../../../runtime/mod.ts";
+import { MEDIA_TYPE, MEDIA_TYPE_LENGTH } from "../../../agents/chat/contract.ts";
+import type { Rate } from "../collections/rate.ts";
 import type { Visitor } from "../collections/visitor.ts";
-import { EXEMPT } from "./arrive.ts";
 import { chatOf } from "../shared/secret.ts";
 import { keyringOf, lineOf } from "../shared/web.ts";
 
@@ -42,6 +52,7 @@ const SAID = {
   day: "That's all the messages this chat takes today: come back tomorrow.",
   address: "Too many messages from here: wait a little, then try again.",
   busy: "This chat is busy right now: try again in a few minutes.",
+  spent: "This chat has done all it can for today: come back tomorrow.",
   closed: "This chat is closed.",
   again: "This chat needs a fresh start: reload the page.",
   files: "This chat takes no files.",
@@ -50,10 +61,9 @@ const SAID = {
     `Each file may be ${
       bytes >= 1_000_000 ? `${bytes / 1_000_000} MB` : `${Math.ceil(bytes / 1_000)} KB`
     } at most.`,
+  named: "Each file's name is 255 characters at most.",
+  typed: "Each file says what it is in a media type (image/png), 127 characters at most.",
 } as const;
-
-/** Writes whose answer isn't needed. */
-const UNANSWERED = { writeConcern: { w: 0 } } as const;
 
 type Counter = { _id: string; most: number; until: number; say: string };
 
@@ -71,7 +81,7 @@ export const sendingAction = defineAction({
           type: "object",
           properties: {
             name: { type: "string" },
-            type: { type: "string" },
+            type: { type: "string", maxLength: MEDIA_TYPE_LENGTH },
             size: { type: "integer" },
           },
           required: ["size"],
@@ -95,24 +105,30 @@ export const sendingAction = defineAction({
       if (files.length > line.files.count) {
         throw failure("invalid", SAID.many(line.files.count), { public: true });
       }
-      if (files.some((f) => f.size > line.files!.bytes || (f.name ?? "").length > 255)) {
+      if (files.some((f) => f.size > line.files!.bytes)) {
         throw failure("invalid", SAID.large(line.files.bytes), { public: true });
+      }
+      if (files.some((f) => (f.name ?? "").length > 255)) {
+        throw failure("invalid", SAID.named, { public: true });
+      }
+      const typed = (type?: string) =>
+        type === undefined || (type.length <= MEDIA_TYPE_LENGTH && MEDIA_TYPE.test(type));
+      if (files.some((f) => !typed(f.type))) {
+        throw failure("invalid", SAID.typed, { public: true });
       }
     }
     const contact = actor.id;
     const system = ctx.as();
-    const rates = system.db.collection<{ until: number; count?: number; tag?: string }>(
-      "contact_rate",
-    );
+    const rates = system.db.collection<Rate>("contact_rate");
     const visitors = system.db.collection<Visitor>("contact_visitor");
-    const [known, from] = await Promise.all([
-      visitors.findOne({ _id: contact }),
-      rates.findOne({ _id: `from|${contact}` }),
-    ]);
+    const known = await visitors.findOne({ _id: contact });
     if (known?.ended) throw failure("forbidden", SAID.closed, { public: true });
-    // Where its messages are counted from: the address it first came from, kept with it.
-    const tag = known?.tag ?? from?.tag;
-    if (!tag) throw failure("expired", SAID.again, { public: true });
+    // What its messages are counted by: the networks it first came from, as the server issued it.
+    const issued = Array.isArray(actor.from) && actor.from.every((t) => typeof t === "string")
+      ? actor.from as string[]
+      : undefined;
+    const tags = known?.tags ?? issued;
+    if (!tags) throw failure("expired", SAID.again, { public: true });
 
     const now = Date.now();
     const minute = Math.floor(now / MINUTE) * MINUTE;
@@ -125,26 +141,34 @@ export const sendingAction = defineAction({
       say,
     });
     const { limits } = line;
+    // A newcomer: one that hadn't spoken before this minute; the rest of the line's is kept.
+    const newcomer = !known || Date.parse(known.at) >= minute;
     const counters: Counter[] = [
       at(`c|${contact}`, minute, MINUTE, limits.perMinute, SAID.fast),
       at(`cday|${contact}`, day, DAY, limits.perDay, SAID.day),
-      ...(tag !== EXEMPT
-        ? [
-          at(`a|${tag}`, minute, MINUTE, limits.ipPerMinute, SAID.address),
-          at(`aday|${tag}`, day, DAY, limits.ipPerDay, SAID.address),
-        ]
-        : []),
+      ...tags.flatMap((tag) => [
+        at(`a|${tag}`, minute, MINUTE, limits.ipPerMinute * scaleOf(tag), SAID.address),
+        at(`aday|${tag}`, day, DAY, limits.ipPerDay * scaleOf(tag), SAID.address),
+        ...(known
+          ? []
+          : [at(`anew|${tag}`, hour, HOUR, limits.ipVisitorsPerHour * scaleOf(tag), SAID.busy)]),
+      ]),
+      ...(newcomer ? [at("newcomers", minute, MINUTE, limits.newcomersPerMinute, SAID.busy)] : []),
       at("line", minute, MINUTE, limits.linePerMinute, SAID.busy),
       ...(known ? [] : [at("new", hour, HOUR, limits.visitorsPerHour, SAID.busy)]),
     ];
+    const spent = `${line.name}|spent@${day}`;
     // A full one refuses it at once, nothing taken. Else each place is taken in one write that
     // counts only while there's room, narrowest first: messages at once can't pass a limit, and
-    // one refused by its own limits takes nothing from its address's or the line's.
-    const counts = new Map(
-      (await rates.find({ _id: { $in: counters.map((c) => c._id) } }))
-        .map((c) => [c._id, c.count ?? 0]),
+    // one refused by its own limits takes nothing from its networks' or the line's.
+    const found = new Map(
+      (await rates.find({ _id: { $in: [...counters.map((c) => c._id), spent] } }))
+        .map((c) => [c._id, c]),
     );
-    const full = counters.find((c) => (counts.get(c._id) ?? 0) >= c.most);
+    if (line.budget !== undefined && (found.get(spent)?.spent ?? 0) >= line.budget) {
+      throw failure("too_many", SAID.spent, { public: true });
+    }
+    const full = counters.find((c) => (found.get(c._id)?.count ?? 0) >= c.most);
     if (full) throw failure("too_many", full.say, { public: true });
     for (const c of counters) {
       try {
@@ -176,21 +200,24 @@ export const sendingAction = defineAction({
         title: (line.title ?? line.name).slice(0, 120),
       });
     };
-    // Two first messages at once both make them: the one that finds the other's made goes on.
-    await open().catch(async (error) => {
-      if ((error as { code?: string }).code !== "duplicate_key") throw error;
-      await open();
-    });
+    // First messages at once all make them: one that finds another's made, as it writes, goes on.
+    for (let tries = 1;; tries++) {
+      try {
+        await open();
+        break;
+      } catch (error) {
+        if ((error as { code?: string }).code !== "duplicate_key" || tries === 5) throw error;
+      }
+    }
     await visitors.replaceOne({ _id: contact }, {
       _id: contact,
       line: line.name,
       thread,
-      tag,
+      tags,
       spoke: false,
       expires: new Date(now + line.days * DAY).toISOString(),
       at: new Date(now).toISOString(),
     }, { upsert: true });
-    await rates.deleteOne({ _id: `from|${contact}` }, UNANSWERED);
     return { thread: input.thread ?? thread, ...transcribe };
   },
 });

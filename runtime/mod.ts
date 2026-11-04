@@ -22,13 +22,18 @@ export type {
 export type { Actor, Doc, Edge, Event, Executed, Inspected, Row, Store } from "./store.ts";
 export { type Maintenance, MAINTENANCE_SQL, redacted, type Written } from "./maintain.ts";
 export { personOf, principalOf } from "./actor.ts";
-export { linksOf, type LinksSettings, signLink, verifyLink } from "./links.ts";
+export { keyOf, linksOf, type LinksSettings, secretsOf, signLink, verifyLink } from "./links.ts";
 export {
   type Caller,
   callerFrom,
   callerProblem,
   type CallerSettings,
   countedOf,
+  type Network,
+  networksOf,
+  privateAddress,
+  SCALE,
+  scaleOf,
   UNVOUCHED,
 } from "./caller.ts";
 export {

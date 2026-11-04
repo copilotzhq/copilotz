@@ -21,9 +21,13 @@
   - **Sign-in:** `POST /signin/<name>` for each way a plugin declares: an unrecorded Action (the
     host refuses to start with a recorded one), called as the system with the request's JSON,
     answering `{ person, session }`; `local` ones from this machine only: the socket's address (as
-    the listener saw it, `clientAddress`) and the host must both be loopback, and a request whose
-    address nobody set is refused. `googleSignIn` declares `google` (the page shows its button for
-    the first client id); the new `devSignIn` plugin declares `dev` (by name or email, this machine
+    the listener saw it, `clientAddress`) and the host must both be loopback, a request whose
+    address nobody set is refused, and so is one carrying any header a proxy adds (`forwarded`,
+    `via`, `x-forwarded-*`, `x-real-ip`, `cf-connecting-ip`…: a proxy on this machine that rewrites
+    `Host` made every request this machine's). `devSignIn` refuses to start in an app whose `links`
+    origin is public (a proxy that adds no header, as nginx's `proxy_pass` as it comes, can't be
+    told from this machine). `googleSignIn` declares `google` (the page shows its button for the
+    first client id); the new `devSignIn` plugin declares `dev` (by name or email, this machine
     only). The orgs host signs in with whatever its directory declares (`signIn: { at: directory }`
     for its orgs' pages). `describe()` marks unrecorded Actions (`record: false`).
   - **Visitors** (the contacts plugin's web lines, `resources.web.lines.<name>`: `in`, `agent`,
@@ -31,28 +35,51 @@
     `links` secret, which visitors' cookies are signed with): a page asking to come in by a line
     (`{ line }`) that isn't anyone becomes a visitor, its browser keeping a signed secret in a
     `SameSite=Strict` cookie (`__Host-visitor` wherever it's Secure) that's the same visitor for
-    `days` (30). Coming in makes and keeps nothing. Its first message (`chat.send`, naming no chat)
-    makes its contact (`via: "web"`), its own chat in the line's space and its record
-    (`contact_visitor`), through chat's new `contactSend` hook (`contact.sending`). Limits, each a
-    plain 429 for that caller alone: new visitors an hour from one address (`ipVisitorsPerHour`, 20;
-    IPv6 by its /64), counted by the address the app's front says, else the socket's (with neither,
-    nobody's let in, said loudly); a visitor's messages a minute and a day (`perMinute` 10, `perDay`
-    200), its address's (`ipPerMinute` 30, `ipPerDay` 1,000), the line's a minute (`linePerMinute`
-    300), and new visitors who speak an hour (`visitorsPerHour`, 600), each place taken in one
-    conditional write, so messages at once can't pass a limit. Files only on a line that takes them
-    (`files: { count, bytes }`, 1 of 5 MB unless said); audio transcribed only with
-    `transcribe: true`. `contact.forget` ends a visitor's cookie at once, and so does removing its
-    line. Every ten minutes (`contact.prune`) what's past goes: counters, records past their time, a
-    contact made for a first message that never went in. A visitor fetches its own chat's files
-    (`file.content` is open to contacts, under the rules). Checked at start.
+    `days` (30). Coming in makes and keeps nothing, in memory either: the visitor the server issues
+    carries its line (`web`) and its networks' tags (`from`: HMACs, never the address), which its
+    messages are counted by. Its first message (`chat.send`, naming no chat) makes its contact
+    (`via: "web"`), its own chat in the line's space and its record (`contact_visitor`), through
+    chat's new `contactSend` hook (`contact.sending`). Limits, each a plain 429 for that caller
+    alone, by address held for each network it's in (`networksOf`: an IPv4 address and its /24, an
+    IPv6 /64, its /56 and its /48, each as many callers' worth as it counts, `SCALE`: 8, 4 and 8):
+    new visitors an hour from one address (`ipVisitorsPerHour`, 20), and as many first messages,
+    counted by the address the app's front says, else the socket's (with neither, nobody's let in,
+    said loudly; all from one private address, said once); a visitor's messages a minute and a day
+    (`perMinute` 10, `perDay` 200), its address's (`ipPerMinute` 30, `ipPerDay` 1,000), the line's a
+    minute (`linePerMinute` 300, of which newcomers, who hadn't spoken before the minute, send
+    `newcomersPerMinute` 200: the rest is kept for conversations going on), and new visitors who
+    speak an hour (`visitorsPerHour`, 600), each place taken in one conditional write, so messages
+    at once can't pass a limit. A line's `budget`: what its visitors' turns may be charged a day
+    (UTC), as the usage ledger prices them (`usage.quote`, through `modelUse`); past it, its
+    visitors' messages wait for tomorrow. A line's `challenge`: an Action of the app's a newcomer
+    passes first (a CAPTCHA's check, given what the page sent,
+    `web({ arrive: { line, challenge }
+    })`). Files only on a line that takes them
+    (`files: { count, bytes }`, 1 of 5 MB unless said), each with a media type; audio transcribed
+    only with `transcribe: true`. `contact.forget` ends a visitor's cookie and its browsers'
+    connections at once (its record stays, ended, until its cookie's time is past), and so does
+    removing its line. Every ten minutes (`contact.prune`) what's past goes: counters, records past
+    their time, a contact made for a first message that never went in. A visitor fetches its own
+    chat's files (`file.content` is open to contacts, under the rules), and finds its chats by its
+    own memberships (`member` by its key, `contact:<id>`). Checked at start (a challenge that's no
+    Action, a budget without the usage plugin).
   - **What a contact reads:** never an agent's private steps (each tool's input and output), a tool
-    call being written, nor a tool's files. The access rules' `shared` resource takes `contact`, a
-    filter a contact acting itself (never the agent working for it) reads and writes through: chat's
-    messages without `private` or `toolCalls`, `live` without a tool call, files without a tool's
-    (`private`, as OpenAPI's are now). The voice relay reads its call as the line's agent working
-    for the caller, so a step's words before its tools are still said, and only what both may read.
-    A contact's message says 4,096 characters at most (`CONTACT_TEXT`). WhatsApp, voice and MCP
-    contacts never held a browser connection: they read only through the app's own code.
+    call being written, a step's words before it's known to be an answer, why a model's call broke
+    (the provider's words), nor a tool's files. The access rules' `shared` resource takes `contact`,
+    a filter a contact acting itself (never the agent working for it) reads and writes through:
+    chat's messages without `private` or `toolCalls`; `live` without a tool call or a `retry`, and
+    with words only of a turn that offers no tools (`open: true`, every step an answer; of one that
+    does, a contact sees only that the agent is at work); files without a tool's (`private`, as
+    OpenAPI's are now). A turn stopped mid-step keeps its words only when they were surely an
+    answer. A contact's own reads from its browser name what of its own they read (its chat:
+    `thread`, or `_id`), else they're refused and never watched; it reads no `aggregate` or
+    `nearest` directly. The voice relay reads its call as the line's agent working for the caller,
+    so a step's words before its tools are still said, and only what both may read. A contact's
+    message says 4,096 characters at most (`CONTACT_TEXT`), never what sent it (`via`), and never
+    titles its chat or lets an agent rename it (`title`, `renamable`); a file's media type is one
+    (`MEDIA_TYPE`, 127 characters at most, `MEDIA_TYPE_LENGTH`), which the agent is told. WhatsApp,
+    voice and MCP contacts never held a browser connection: they read only through the app's own
+    code.
   - **Security:** `/connect`, sign-in and sign-out (and the orgs host's own POSTs) answer only the
     app's own page: an `Origin` that isn't this host (as the front says it), over https off this
     machine and its LAN, or a cross-site `Sec-Fetch-Site`, is a 403, so another site can't make its
@@ -66,15 +93,29 @@
   - **Limits on browsers:** 30 tickets per actor a minute (`createTickets({ perMinute })`; past them
     `/connect` is a 429 with `retry-after`, and `issue` throws `too_many`), 16 sockets per actor,
     512 watched reads per connection (past them, `too_many`; those watched keep going), 16 resume
-    credentials per actor (the oldest dropped). Tickets and resumes expire on a timer
-    (`runtime/expiring.ts`), never by looking through them all on each one issued.
-  - **Cookie names, and a one-time sign-out:** identity's session is `__Host-session` wherever it's
-    Secure, and the orgs host's own cookies (`dir`, `org`, `s_<org>`) and every org's entrances' are
-    `__Host-` too, so no other host under the domain (a preview's page) can set one to make a
-    browser someone it chose. The names change: every browser signed in before is signed out once,
-    on upgrade. Stripping `Domain` from a preview's Set-Cookie (as previews do) doesn't stop that by
-    itself: a preview's page script can still set `document.cookie` with `Domain=<parent>`; the
-    `__Host-` names are what stop it.
+    credentials per actor (the oldest dropped). A contact far less: 2 sockets, 32 watched reads on
+    each; and contacts together 16 sockets from a network (as many times as it counts: by the tags
+    of `actor.from`, `scaleOf`), 1,000 on a web line, 2,000 in all (`BrowserLimits` `contact`,
+    `network`, `line`, `contacts`); people never count against those. A contact's browser is told a
+    failure's words only when they're for anyone (`public`), as MCP's callers are: never a
+    provider's (a transcription's raw error said a key's prefix). Tickets and resumes expire on a
+    timer (`runtime/expiring.ts`), never by looking through them all on each one issued.
+  - **Cookie names, and a one-time sign-out:** every entrance's cookie is the host's alone unless it
+    says `hostOnly: false`: identity's session is `__Host-session` wherever it's Secure, and the
+    orgs host's own cookies (`dir`, `org`, `s_<org>`) and every org's entrances' are `__Host-` too,
+    so no other host under the domain (a preview's page) can set one to make a browser someone it
+    chose. The names change: every browser signed in before is signed out once, on upgrade, and what
+    it held under the old plain name is ended where it lives and cleared (on `/connect` and on
+    sign-out), so a version rolled back that reads the plain names finds no one there. Stripping
+    `Domain` from a preview's Set-Cookie (as previews do) doesn't stop that by itself: a preview's
+    page script can still set `document.cookie` with `Domain=<parent>`; the `__Host-` names are what
+    stop it.
+  - **Signing out, and erasing a contact, end their browsers** (`runtime.disconnect(actor)`, and
+    `ctx.disconnect` from an Action): their resume credentials go and each connection closes. A
+    browser comes back only with a new ticket: the client now asks for one when its way back is
+    refused (it used to stop, until its page reloaded), which only a cookie that's still someone
+    gets; another device of the same person comes straight back. With the orgs host, sign-out ends
+    every open org's session the browser holds.
   - **Migration:** `serveRoutes({ runtime, … })` is `serve({ runtime, … })` with no `code`.
     `google: { clientId }` and `dev: true` are the plugins' resources now: add `googleSignIn` (with
     the `google` resource) and `devSignIn` to the runtime's plugins (the directory's, with orgs). A
@@ -85,7 +126,30 @@
     need the `links` resource. `whomOf(runtime, { cookie?, front? })` (was
     `whomOf(runtime,
     cookie?)`), and `setCookie` takes the request's site
-    (`siteOf(request, front)`).
+    (`siteOf(request, front)`). An entrance whose cookie something else under the domain reads says
+    `hostOnly: false`. A visitor's page finds its chat through its memberships (`member`
+    `{ member: "contact:<id>" }`), not by reading every `thread`. An app that ran this branch
+    before: visitors' cookies (their secret's format and key changed) and links signed before
+    upgrading don't open; visitors are newcomers once.
+- **The runtime, for the web host's limits** (from the second security review of the one host):
+  - **The in-memory store reaches a document by its id at once.** A filter that keeps to ids (`_id`
+    a string, `$eq` one, `$in` strings, also in a top-level `$and`) looks them up, rather than
+    copying and scanning the whole collection on every read and write; other reads scan without a
+    copy, and stop at a `limit` without a `sort`. The `durable: false` collections (`live`, the web
+    lines' counters, billing's `room`) share that store and its one transaction queue, so their cost
+    no longer grows with what they hold. Results come in the same order.
+  - **Links are signed with a key of their own** (`keyOf(secret, use)`, HKDF-SHA256 of the `links`
+    secret; web visitors' cookies use another), never the secret itself, and the `links` resource
+    takes the one before it (`previous`), while what it signed should still open: a link until it
+    expires, a visitor's cookie (the same contact) while it lasts. **Breaking:** links signed before
+    upgrading (an hour's) no longer open. MCP's ids from the secret are unchanged.
+  - **A rule hears a browser's own reads** (`Guard`'s `direct`, asked with the read's filter before
+    it's watched) and may refuse one it won't watch, throwing. Plugins' `check` sees every Action
+    (`merged.actions`). An actor reads its own memberships by its key.
+  - **An aggregate with its own `$match` works under a rule:** the rule's filter joins it in one
+    `$match`; before, every such read failed `invalid`.
+  - **Who calls, by network:** `networksOf(counted)` (an address's wider networks, each with its
+    prefix and `scale`), `SCALE`, `scaleOf(tag)`, `privateAddress(address)`.
 - **MCP: a conversation whose first call an owner stopped no longer ends for good.** A new
   conversation's chat is made (`chat.open`) and then shared with its contact (`member.set`), two
   writes; an owner that stopped between them (a deploy, which doesn't wait for running calls, or a

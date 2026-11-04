@@ -91,29 +91,34 @@ test("a title cut short for a step's name, and what home greets someone as", () 
   assertEquals(greeted(""), "");
 });
 
-test("agents working, held between a turn's steps: on at once, off once it's stayed off", async () => {
+test("agents working, each held between its turn's steps: on at once, off once it's stayed off", async () => {
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const working = held(120);
-  const seen: boolean[] = [];
+  const seen: string[][] = [];
   const off = working.subscribe(() => seen.push(working.get()));
-  assertEquals(working.get(), false);
-  working.set(true);
-  assertEquals(working.get(), true);
+  assertEquals(working.get(), []);
+  working.set(["east"]);
+  assertEquals(working.get(), ["east"]);
   // A step ends; the next comes within the hold: still on, nothing said.
-  working.set(false);
+  working.set([]);
   await sleep(40);
-  working.set(true);
+  working.set(["east"]);
   await sleep(150);
-  assertEquals(working.get(), true);
-  // The last step ends: off once the hold has passed.
-  working.set(false);
+  assertEquals(working.get(), ["east"]);
+  // South starts while East works; then East's last step ends: East goes off on its own.
+  working.set(["east", "south"]);
+  assertEquals(working.get(), ["east", "south"]);
+  working.set(["south"]);
   await sleep(60);
-  assertEquals(working.get(), true);
+  assertEquals(working.get(), ["east", "south"]);
   await sleep(100);
-  assertEquals(working.get(), false);
-  assertEquals(seen, [true, false]);
+  assertEquals(working.get(), ["south"]);
+  working.set([]);
+  await sleep(160);
+  assertEquals(working.get(), []);
+  assertEquals(seen, [["east"], ["east", "south"], ["south"], []]);
   // Starting on, as a conversation opened mid-turn does.
-  assertEquals(held(120, true).get(), true);
+  assertEquals(held(120, ["east"]).get(), ["east"]);
   working.stop();
   off();
 });

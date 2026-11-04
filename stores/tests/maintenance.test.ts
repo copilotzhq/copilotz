@@ -779,6 +779,46 @@ if (POSTGRES && ROLES) {
     await done();
   });
 
+  test("postgres: a Cloud SQL IAM marker may hold nothing, its membership no ADMIN OPTION", async () => {
+    const { store, schema, role, done } = await owned();
+    const r = `"${role.role}"`;
+    // A marker this cluster lacks (made here, so ours to grant), else one we administer.
+    const [pick] = await role.run(
+      `SELECT m AS marker, NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = m) AS made FROM ` +
+        `unnest(ARRAY['cloudsqliamserviceaccount', 'cloudsqliamuser', 'cloudsqliamgroup']) m ` +
+        `WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = m) OR ` +
+        `pg_has_role(current_user, m, 'MEMBER WITH ADMIN OPTION') ORDER BY 2 DESC LIMIT 1`,
+    ) as { marker: string; made: boolean }[];
+    assert(pick, "every Cloud SQL marker exists here, and none is ours to grant");
+    const { marker, made } = pick;
+    if (made) await role.run(`CREATE ROLE ${marker} NOLOGIN`);
+    const refused = async (what: RegExp) =>
+      assertMatch(((await assertRejects(() => store.inspect("SELECT 1"))) as Error).message, what);
+    try {
+      // As Cloud SQL makes an IAM user: a member of a marker holding nothing.
+      await role.run(`GRANT ${marker} TO ${r}`);
+      assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1);
+      // The grants given to the marker instead: every IAM user's then. Refused.
+      await role.run(
+        `GRANT USAGE ON SCHEMA "${schema}" TO ${marker}; GRANT SELECT ON ALL TABLES IN SCHEMA ` +
+          `"${schema}" TO ${marker}`,
+      );
+      await refused(new RegExp(`\\(as ${marker}\\) is granted something`));
+      await role.run(
+        `REVOKE SELECT ON ALL TABLES IN SCHEMA "${schema}" FROM ${marker}; REVOKE USAGE ON ` +
+          `SCHEMA "${schema}" FROM ${marker}`,
+      );
+      assertEquals((await store.inspect("SELECT 1 AS one"))[0].one, 1);
+      // A membership the role could hand to anyone: refused.
+      await role.run(`REVOKE ${marker} FROM ${r}; GRANT ${marker} TO ${r} WITH ADMIN OPTION`);
+      await refused(/ADMIN OPTION/);
+    } finally {
+      await role.run(`REVOKE ${marker} FROM ${r}`).catch(() => {});
+      if (made) await role.run(`DROP ROLE ${marker}`).catch(() => {});
+    }
+    await done();
+  });
+
   test("postgres: a read stops fetching at its bytes, and a third at once is busy", async () => {
     const role = (await maintainer(POSTGRES))!;
     const schema = schemaName();

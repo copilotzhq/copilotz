@@ -601,9 +601,11 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
   its connection (`SET`, `PREPARE`, `LISTEN`, SQLite's `ATTACH`, `PRAGMA`…) doesn't run, and in
   PostgreSQL neither does one that reaches past the statement: `ALTER ROLE` (a role may set its own
   password and settings, which outlive the key), `DO` (a block runs statements nothing reads first)
-  and `LOCK` (it would hold the store's tables against the app's own writes). One that changes the
-  store's own state (`meta`: the fencing epoch, Processors' positions), or what the role holds (a
-  large object, a setting), or, in SQLite, leaves a temporary object, is rolled back. The record
+  and `LOCK` (it would hold the store's tables against the app's own writes). A write still holds
+  the row locks it takes (the rows an `UPDATE` changes) until it commits: app writes to those rows
+  wait, at most its `timeout`, and with at most 2 maintenance statements at once. One that changes
+  the store's own state (`meta`: the fencing epoch, Processors' positions), or what the role holds
+  (a large object, a setting), or, in SQLite, leaves a temporary object, is rolled back. The record
   keeps a password literal as `PASSWORD '***'`.
 - **Nothing outlives its statement:** on a PostgreSQL server each statement runs on a connection of
   its own, closed after, so what it sets on its session (a setting, a session lock, a prepared
@@ -664,8 +666,10 @@ gcloud projects add-iam-policy-binding PROJECT \
 ```
 
 Cloud SQL makes such a role a member of its own marker role (`cloudsqliamserviceaccount`, or
-`cloudsqliamuser` for a person): that one membership is allowed, and the marker is held to the same
-checks (it may hold nothing). Then the grants below, naming `"maintenance@PROJECT.iam"`.
+`cloudsqliamuser` for a person): that one membership is allowed, without ADMIN OPTION. Every IAM
+user is a member of the marker too, so the marker may hold nothing at all: grant it nothing, not
+even the grants below (maintenance refuses a marker that holds anything). Then the grants below,
+naming `"maintenance@PROJECT.iam"`.
 
 Elsewhere, as the store's role (the schema's owner), with the schema made (the app has started
 once), and as a role that may create roles for the first line:

@@ -210,8 +210,9 @@ export function statement(
   if (!keyword) throw invalid("There's no statement to run.");
   if (depth) throw invalid("The statement leaves a parenthesis open.");
   if (postgres) {
-    const said = OUTLIVING[keyword] ?? OUTLIVING[words.join(" ")];
-    if (said) throw invalid(`${words.join(" ")} can't run here: ${said}`);
+    const what = OUTLIVING[keyword] ? keyword : words.join(" ");
+    const said = OUTLIVING[what];
+    if (said) throw invalid(`${what} can't run here: ${said}`);
   }
   if (TRANSACTIONS.has(keyword)) {
     throw invalid(

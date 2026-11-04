@@ -88,17 +88,20 @@ export const noRole = () =>
 
 /**
  * Cloud SQL's markers of an IAM database user (a role made by `gcloud sql
- * users create … --type=cloud_iam_*`): such a role is a member of one. The
- * marker is held to the same allowlist, so membership gives nothing.
+ * users create … --type=cloud_iam_*`): such a role is a member of one. Every
+ * IAM user is, so a marker is held to an empty allowlist (it may hold
+ * nothing at all, not even on the store's schema), and the membership may
+ * not carry ADMIN OPTION (the role could hand the marker to anyone).
  */
 const MARKERS = ["cloudsqliamuser", "cloudsqliamserviceaccount", "cloudsqliamgroup"];
 
 /**
  * What role `$2` holds beyond the allowlist above, for schema `$1`, one line
  * for each, none when it holds exactly that; `$3` are the roles it may be a
- * member of (Cloud SQL's markers). Every catalog name is `pg_catalog`'s:
- * after a statement, in its transaction, a temporary table could stand in
- * for one.
+ * member of (Cloud SQL's markers). With no schema (`''`), the allowlist is
+ * empty: anything at all granted to it is beyond it. Every catalog name is
+ * `pg_catalog`'s: after a statement, in its transaction, a temporary table
+ * could stand in for one.
  */
 const BEYOND = `
 WITH me AS (
@@ -163,7 +166,7 @@ SELECT DISTINCT problem FROM (
         OR (d.classid = 'pg_catalog.pg_default_acl'::pg_catalog.regclass AND d.objid IN
           (SELECT oid FROM pg_catalog.pg_default_acl WHERE defaclnamespace IN (SELECT oid FROM own)))
         OR (d.classid = 'pg_catalog.pg_database'::pg_catalog.regclass
-          AND d.objid IN (SELECT oid FROM here)))
+          AND d.objid IN (SELECT oid FROM here) AND EXISTS (SELECT 1 FROM own)))
   UNION ALL SELECT 'owns large object ' || m.oid::pg_catalog.text
     FROM pg_catalog.pg_largeobject_metadata m, me WHERE m.lomowner = me.oid
   UNION ALL SELECT 'may read large object ' || m.oid::pg_catalog.text
@@ -229,17 +232,26 @@ SELECT DISTINCT problem FROM (
  * the allowlist.
  */
 export async function allowed(db: Session, schema: string): Promise<void> {
-  const [{ role, markers }] = (await db.query(
-    `SELECT session_user::pg_catalog.text AS role, (SELECT ` +
-      `pg_catalog.array_agg(r.rolname::pg_catalog.text) FROM pg_catalog.pg_auth_members m JOIN ` +
-      `pg_catalog.pg_roles r ON r.oid = m.roleid WHERE m.member = (SELECT oid FROM ` +
-      `pg_catalog.pg_roles WHERE rolname = session_user) AND ` +
-      `r.rolname::pg_catalog.text = ANY ($1::pg_catalog.text[])) AS markers`,
+  const [{ role, markers, admin }] = (await db.query(
+    `WITH mine AS (SELECT r.rolname::pg_catalog.text AS marker, m.admin_option FROM ` +
+      `pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid WHERE ` +
+      `m.member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = session_user) AND ` +
+      `r.rolname::pg_catalog.text = ANY ($1::pg_catalog.text[])) SELECT ` +
+      `session_user::pg_catalog.text AS role, (SELECT pg_catalog.array_agg(marker) FROM mine) ` +
+      `AS markers, (SELECT pg_catalog.array_agg(marker) FROM mine WHERE admin_option) AS admin`,
     [MARKERS],
-  )).rows as { role: string; markers: string[] | null }[];
-  const problems: string[] = [];
-  for (const [who, member] of [[role, MARKERS], ...(markers ?? []).map((m) => [m, []])] as const) {
-    const found = (await db.query(BEYOND, [schema, who, member])).rows;
+  )).rows as { role: string; markers: string[] | null; admin: string[] | null }[];
+  const problems = (admin ?? []).map((marker) =>
+    `may grant ${marker} to others (ADMIN OPTION), and so every IAM user's reach`
+  );
+  // The role holds the allowlist; a marker, every IAM user's, holds nothing at all.
+  for (
+    const [who, scope, member] of [
+      [role, schema, MARKERS],
+      ...(markers ?? []).map((marker) => [marker, "", []]),
+    ] as const
+  ) {
+    const found = (await db.query(BEYOND, [scope, who, member])).rows;
     problems.push(...found.map((row) => (who === role ? "" : `(as ${who}) `) + row.problem));
   }
   if (!problems.length) return;

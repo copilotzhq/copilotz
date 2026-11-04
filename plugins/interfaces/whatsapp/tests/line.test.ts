@@ -6,16 +6,28 @@
  * says how to link.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import type { Actor } from "../../../../runtime/mod.ts";
+import { type Actor, defineAction, definePlugin } from "../../../../runtime/mod.ts";
 import type { Message, Thread } from "../../../agents/chat/mod.ts";
 import { test } from "../../../../testing/mod.ts";
-import { ana, ANA_PHONE, link, said, type Setup, setup, STRANGER, threadsOf } from "./setup.ts";
+import {
+  ana,
+  ANA_PHONE,
+  link,
+  said,
+  type Setup,
+  setup,
+  STRANGER,
+  threadsOf,
+  TOKEN,
+} from "./setup.ts";
 
 const CARLA = "5511911112222";
 
-/** Opens the number to anyone, as Ana (who manages Launch). */
+/** Opens the number to anyone, as Ana (who manages Launch): answered at once, unless said. */
 const open = (s: Setup, more: Record<string, unknown> = {}) =>
-  s.runtime.call("whatsapp.set", { number: s.number, open: true, ...more }, { actor: ana });
+  s.runtime.call("whatsapp.set", { number: s.number, open: true, quiet: 0, ...more }, {
+    actor: ana,
+  });
 
 /** The contact a chat's customer is, from who wrote there. */
 async function contactIn(s: Setup, thread: string): Promise<Actor> {
@@ -320,4 +332,105 @@ test("a contact erased: its access, its chats and its phone go; writing again, i
     const [again] = await threadsOf(runtime, launch);
     assert((await contactIn(s, again._id)).id !== carla.id);
   });
+});
+
+/** A line the app declares in its settings, at a webhook path it routes itself. */
+const declaring = definePlugin({
+  name: "declaring",
+  resources: {
+    whatsapp: {
+      lines: {
+        mobifacil: {
+          in: "line-space",
+          phoneId: "222333444",
+          token: TOKEN,
+          secret: "the-line-apps-own-secret-0123",
+          verify: "the-line-verify-token",
+          path: "/webhooks/meta",
+          agent: "lead",
+          language: "pt",
+          quiet: 0,
+        },
+      },
+    },
+    routes: {
+      meta: { path: "/webhooks/meta", action: "whatsapp.hook", methods: ["GET", "POST"] },
+    },
+  },
+  actions: {
+    // Someone changed its document behind the settings' back.
+    "test.close": defineAction({
+      input: { type: "object" },
+      run: (ctx) =>
+        ctx.db.collection("whatsapp_number").updateOne({ _id: "mobifacil" }, {
+          $unset: { open: "" },
+        }),
+    }),
+  },
+});
+
+test("a line the app declares answers customers with no person connecting or opening it", async () => {
+  await setup(async (s) => {
+    const { runtime, graph, serve } = s;
+    await runtime.call("space.create", { id: "line-space", name: "Mobifácil" }, { actor: ana });
+    const hook = "http://localhost/webhooks/meta";
+    const handshake = await serve(
+      new Request(
+        `${hook}?hub.mode=subscribe&hub.verify_token=the-line-verify-token&hub.challenge=7`,
+      ),
+    );
+    assertEquals([handshake.status, await handshake.text()], [200, "7"]);
+    const write = async (body: string) => {
+      const payload = JSON.stringify({
+        object: "whatsapp_business_account",
+        entry: [{
+          changes: [{
+            value: {
+              metadata: { phone_number_id: "222333444" },
+              contacts: [{ wa_id: CARLA, profile: { name: "Carla" } }],
+              messages: [{
+                id: `wamid.${crypto.randomUUID()}`,
+                from: CARLA,
+                type: "text",
+                text: { body },
+              }],
+            },
+          }],
+        }],
+      });
+      const { sign } = await import("../shared/signature.ts");
+      const answered = await serve(
+        new Request(hook, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-hub-signature-256": await sign(
+              "the-line-apps-own-secret-0123",
+              new TextEncoder().encode(payload),
+            ),
+          },
+          body: payload,
+        }),
+      );
+      await runtime.idle();
+      return answered.status;
+    };
+    assertEquals(await write("uma passagem para Santos"), 200);
+    const [chat] = await threadsOf(runtime, "line-space");
+    assertEquals(await said(runtime, chat._id), [
+      [(await said(runtime, chat._id))[0][0], "uma passagem para Santos"],
+      ["lead", "heard **Carla: uma passagem para Santos**"],
+    ]);
+    assertEquals(graph.texts(CARLA), ["heard *Carla: uma passagem para Santos*"]);
+    // Its people can't change it: the settings do.
+    await assertRejects(
+      () => runtime.call("whatsapp.set", { number: "mobifacil", open: false }, { actor: ana }),
+      Error,
+      "the app's own",
+    );
+    // Changed behind the settings' back, it's kept as they say again.
+    await runtime.call("test.close", {});
+    await write("e a volta?");
+    assertEquals(graph.texts(CARLA).at(-1), "heard *Carla: e a volta?*");
+  }, { plugins: [declaring] });
 });

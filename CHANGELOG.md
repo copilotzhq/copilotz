@@ -61,6 +61,24 @@
     app's `links`, uploaded to Meta and sent by its id). A carousel's pictures must be links: a file
     with nowhere to link it sends the fallback. A message's files go as images (jpeg, png up to 5
     MB) or documents, a short text as the first one's caption.
+- **WhatsApp lines for an app, as it uses them** (for Mobizap):
+  - **A line the app declares** in its settings (`resources.whatsapp.lines.<name>`: the space,
+    Meta's number id, token and app secret, its own verify token, a webhook path it routes to
+    `whatsapp.hook`, its agent, gap, rate, quiet window and language): open to anyone, kept as the
+    settings say at every use, with no person connecting or opening it; people can't change it
+    (`whatsapp.set`, `whatsapp.credentials` and `whatsapp.disconnect` refuse), and the web tab
+    leaves it alone. `whatsapp.set` stays for numbers people connect.
+  - **The reply is the body:** after an answer, an addition's own words (a question its buttons ask)
+    are what it says without one; with the answer, the answer is its whole body. A fallback keeps
+    its words after the answer.
+  - **What Meta took but couldn't deliver** (a failed status on the webhook, such as a picture it
+    couldn't fetch: `whatsapp.undelivered`) sends that addition's fallback, once, with the answer's
+    text when it went in the same message.
+  - **A burst gets one answer:** a customer's messages wait for the line's quiet window (`quiet`, 4
+    s by default, up to 30) before the agent answers, all of them in one turn and one reply
+    (`chat.send`'s new `quiet`: a durable timer each message sets again, `chat.quiet`, so a restart
+    in the window still answers once).
+  - **A failed turn** tells a customer only that, in their line's language, never its error.
 - **Signed links** (the runtime's `signLink` and `verifyLink`, with the app's `links` resource:
   `{ origin, secret }`, a secret of at least 32 bytes, checked at start): the app's origin, a path,
   its params and an expiry (an hour unless said), HMAC-signed, so a link for one app or org never

@@ -74,7 +74,7 @@ const cards = definePlugin({
 });
 
 const open = (s: Setup) =>
-  s.runtime.call("whatsapp.set", { number: s.number, open: true }, { actor: ana });
+  s.runtime.call("whatsapp.set", { number: s.number, open: true, quiet: 0 }, { actor: ana });
 const write = (s: Setup, body: string) =>
   s.deliver([{ text: { body } }], { from: CARLA, name: "Carla" });
 /** The customer's chat, and an agent's message there with a file. */

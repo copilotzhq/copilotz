@@ -202,11 +202,18 @@ export const wordsIn = (part: WaPart): string =>
   part.type === "image" || part.type === "document" ? part.caption ?? "" : part.text;
 
 /**
- * Text before a part, joined to it as one message when the part can say it
- * (its body or caption has room): undefined when it can't.
+ * Text before a part (an answer), as one message with it when the part can
+ * say it (its body or caption has room): undefined when it can't. The answer
+ * is the body: a part's own words are what it says without one (a question
+ * the answer asks already), unless they're kept (`keep`: a text, or a
+ * fallback, where they're what's shown).
  */
-export function joined(before: string, part: WaPart): WaPart | undefined {
-  const own = wordsIn(part);
+export function joined(
+  before: string,
+  part: WaPart,
+  keep = part.type === "text",
+): WaPart | undefined {
+  const own = keep ? wordsIn(part) : "";
   const words = own ? `${before}\n\n${own}` : before;
   if (words.length > BODY[part.type]) return undefined;
   return part.type === "image" || part.type === "document"

@@ -52,7 +52,8 @@ import { mediaOf, tapOf, type WaMessage, wordsOf } from "../shared/payload.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { may } from "../../../access/spaces/contract.ts";
 import { CONTACT } from "../../../access/contacts/contract.ts";
-import { GAP } from "../collections/number.ts";
+import { GAP, QUIET } from "../collections/number.ts";
+import { CUSTOMERS, type Lines } from "../shared/customers.ts";
 
 type Received = { number: string; from: string; name?: string; message: WaMessage };
 
@@ -202,14 +203,19 @@ async function customer(
   if (!brings) return;
 
   const as = ctx.as({ kind: "contact", id: contact });
+  // Answered once they've been quiet a moment: a burst of short messages gets one answer.
+  const quiet = Math.round((on.number.quiet ?? QUIET) * 1000);
   const sending = (thread: string) =>
-    written(ctx, on, as, `${CONTACT}${contact}`, thread, message, brings);
-  const quiet = (on.number.gap ?? GAP) * HOUR;
+    written(ctx, on, as, `${CONTACT}${contact}`, thread, message, {
+      ...brings,
+      ...(quiet ? { quiet } : {}),
+    });
+  const gap = (on.number.gap ?? GAP) * HOUR;
   const current = phone?.thread
     ? await system.db.collection<{ _id: string; at: string }>("thread")
       .findOne({ _id: phone.thread })
     : null;
-  const ongoing = current && Date.parse(event.at) - Date.parse(current.at) < quiet;
+  const ongoing = current && Date.parse(event.at) - Date.parse(current.at) < gap;
   const fresh = () => chatFor(ctx, on, { from, name, contact }, event);
   try {
     await sending(ongoing ? current!._id : await fresh());
@@ -236,27 +242,6 @@ async function flooding(ctx: Context, on: Connected, phone: string, event: Event
   await counts.replaceOne({ _id: phone }, { minute, count }, { upsert: true });
   return count > (on.number.rate ?? RATE);
 }
-
-/**
- * What customers are told when their message can't go on, in the number's
- * language: in their terms, never an error's own words.
- */
-type Lines = { large: string; kind: string; voice: string; failed: string };
-const CUSTOMERS: Record<"en" | "pt", Lines> = {
-  en: {
-    large: "That file is too large. Send a smaller one, or a link to it.",
-    kind: "I can't read that kind of message yet: send text, a photo, a document or a voice note.",
-    voice: "I couldn't make out that voice note. Could you say it again, or write it?",
-    failed: "Sorry, I couldn't take that message. Please try again in a moment.",
-  },
-  pt: {
-    large: "Esse arquivo é grande demais. Envie um menor, ou um link para ele.",
-    kind:
-      "Ainda não consigo ler esse tipo de mensagem: envie texto, uma foto, um documento ou um áudio.",
-    voice: "Não consegui entender esse áudio. Pode repetir, ou escrever?",
-    failed: "Desculpe, não consegui receber essa mensagem. Tente de novo em instantes.",
-  },
-};
 
 /**
  * The contact a customer's phone is: made from their first message (its id

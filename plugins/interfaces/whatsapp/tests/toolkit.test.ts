@@ -124,8 +124,11 @@ test("clip cuts a title on purpose; text joins the part after it when there's ro
   assertEquals(clip("Expresso do Sul, 10:30", 20), "Expresso do Sul, 10…");
   assertEquals(clip("Short", 20), "Short");
   const pay = buttons("Pay how?", [choice("pix", "PIX")]);
-  assertEquals((joined("Found it.", pay) as { text: string }).text, "Found it.\n\nPay how?");
-  assertEquals(joined(x(1020), pay), undefined);
+  // The answer is the body; the part's own words only without one, or kept (a fallback's).
+  assertEquals((joined("Found it.", pay) as { text: string }).text, "Found it.");
+  assertEquals((joined("Found it.", pay, true) as { text: string }).text, "Found it.\n\nPay how?");
+  assertEquals(joined(x(1025), pay), undefined);
+  assertEquals(joined(x(1020), pay, true), undefined);
   const qr = image({ link: "https://example.com/qr.png" });
   assertEquals((joined("Scan this:", qr) as { caption: string }).caption, "Scan this:");
   assertEquals((joined("a", text("b")) as WaPart & { text: string }).text, "a\n\nb");

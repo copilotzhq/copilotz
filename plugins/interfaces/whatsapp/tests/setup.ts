@@ -5,6 +5,7 @@
  */
 import {
   type Actor,
+  type Clock,
   createRuntime,
   defineAction,
   definePlugin,
@@ -285,11 +286,13 @@ export type Setup = {
   read<T>(collection: string, actor: Actor): Promise<T[]>;
   /** Lets Bob into Launch, as an editor. */
   bobJoins(): Promise<void>;
+  /** Closes the runtime and starts it again on the same store (and clock): a deploy. */
+  restart(): Promise<void>;
 };
 
 export async function setup(
   fn: (s: Setup) => Promise<void>,
-  options: { plugins?: Plugin[]; llm?: LlmAdapter } = {},
+  options: { plugins?: Plugin[]; llm?: LlmAdapter; clock?: Clock } = {},
 ) {
   const graph = await fakeGraph();
   const app = definePlugin({
@@ -306,10 +309,22 @@ export async function setup(
     },
     adapters: { llm: { e: options.llm ?? echo } },
   });
-  const runtime = await createRuntime({
-    store: memoryStore(),
-    plugins: [models, chat, ...access, whatsapp, reads, app, ...options.plugins ?? []],
-  });
+  const store = memoryStore();
+  const start = () =>
+    createRuntime({
+      store,
+      plugins: [models, chat, ...access, whatsapp, reads, app, ...options.plugins ?? []],
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
+  let runtime = await start();
+  const serving = () =>
+    webServer({
+      runtime,
+      tickets: createTickets(),
+      code: { entry: "app.js", files: { "app.js": "" } },
+      upgrade: () => new Response(null, { status: 299 }),
+    });
+  let serve = serving();
   try {
     const { space: personal } = await runtime.call<{ space: string }>("space.personal", {}, {
       actor: ana,
@@ -322,17 +337,18 @@ export async function setup(
       { in: launch, phoneId: PHONE_ID, token: TOKEN, secret: SECRET, url: "https://app.test" },
       { actor: ana },
     );
-    const serve = webServer({
-      runtime,
-      tickets: createTickets(),
-      code: { entry: "app.js", files: { "app.js": "" } },
-      upgrade: () => new Response(null, { status: 299 }),
-    });
     let n = 0;
     await fn({
-      runtime,
+      get runtime() {
+        return runtime;
+      },
       graph,
-      serve,
+      serve: (request) => serve(request),
+      restart: async () => {
+        await runtime.close();
+        runtime = await start();
+        serve = serving();
+      },
       launch,
       personal,
       number,

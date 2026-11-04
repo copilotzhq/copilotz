@@ -2,7 +2,8 @@
  * What a webhook delivery says, as WhatsApp's Cloud API sends it: for each
  * business number (by its phone number id), the messages people sent it,
  * with who sent each (their WhatsApp id, the phone number they write from)
- * and the name their profile shows. Statuses of what was sent are left out.
+ * and the name their profile shows; and what was sent that failed to arrive
+ * (its `failed` statuses). Other statuses of what was sent are left out.
  *
  * ```json
  * { "object": "whatsapp_business_account", "entry": [{ "changes": [{ "field": "messages",
@@ -67,6 +68,32 @@ export function inboundOf(payload: unknown): Inbound[] {
             phoneId,
             message: m as WaMessage,
             ...(names.get(m.from) ? { name: names.get(m.from) } : {}),
+          }]
+          : []
+      );
+    })
+  );
+}
+
+/** A message the number sent that Meta couldn't deliver: its id, whom to, and why. */
+export type Undelivered = { phoneId: string; wamid: string; to: string; errors?: unknown[] };
+
+/** The failed statuses a delivery carries (what was sent and didn't arrive), each with its number. */
+export function undeliveredOf(payload: unknown): Undelivered[] {
+  if (!isObject(payload) || !Array.isArray(payload.entry)) return [];
+  return payload.entry.flatMap((entry) =>
+    (isObject(entry) && Array.isArray(entry.changes) ? entry.changes : []).flatMap((change) => {
+      const value = isObject(change) && isObject(change.value) ? change.value : undefined;
+      const phoneId = isObject(value?.metadata) ? value.metadata.phone_number_id : undefined;
+      if (typeof phoneId !== "string" || !Array.isArray(value?.statuses)) return [];
+      return value.statuses.flatMap((st): Undelivered[] =>
+        isObject(st) && st.status === "failed" && typeof st.id === "string" &&
+          typeof st.recipient_id === "string"
+          ? [{
+            phoneId,
+            wamid: st.id,
+            to: st.recipient_id,
+            ...(Array.isArray(st.errors) ? { errors: st.errors } : {}),
           }]
           : []
       );

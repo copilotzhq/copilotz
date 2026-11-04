@@ -12,7 +12,8 @@ import type { LlmAdapter, LlmMessage } from "../../../models/mod.ts";
 import { type Addition, type Message, tool } from "../../../agents/chat/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import { buttons, carousel, text, type WaPart } from "../contract.ts";
-import { ana, said, type Setup, setup, threadsOf } from "./setup.ts";
+import { ana, PHONE_ID, said, SECRET, type Setup, setup, threadsOf } from "./setup.ts";
+import { sign } from "../shared/signature.ts";
 
 const CARLA = "5511911112222";
 
@@ -108,7 +109,7 @@ const booking = definePlugin({
 });
 
 const open = (s: Setup) =>
-  s.runtime.call("whatsapp.set", { number: s.number, open: true }, { actor: ana });
+  s.runtime.call("whatsapp.set", { number: s.number, open: true, quiet: 0 }, { actor: ana });
 const write = (s: Setup, body: string, more: Record<string, unknown> = {}) =>
   s.deliver([{ text: { body }, ...more }], { from: CARLA, name: "Carla" });
 /** What the customer's chat has, as the app's people read it. */
@@ -124,7 +125,8 @@ test("an answer and its buttons go as one message, the answer as the body; once 
     assertEquals(s.graph.sent(CARLA).length, 1);
     const interactive = sent.interactive as Record<string, any>;
     assertEquals(interactive.type, "button");
-    assertEquals(interactive.body.text, "heard Carla: I'd like to pay\n\nPay how?");
+    // The answer is the whole body: the buttons' own question isn't asked again.
+    assertEquals(interactive.body.text, "heard Carla: I'd like to pay");
     assertEquals(interactive.action.buttons.map((b: any) => b.reply.id), ["pay:pix", "pay:card"]);
     // Shown once: the next answer about paying goes as text alone, and the model knows.
     await write(s, "can I pay later?");
@@ -146,7 +148,7 @@ test("a seat map over its buttons, with the answer: one message", async () => {
       type: "image",
       image: { link: "https://cards.example/seats.png" },
     });
-    assertEquals(interactive.body.text, "heard Carla: which seat is free?\n\nWindow or aisle?");
+    assertEquals(interactive.body.text, "heard Carla: which seat is free?");
   });
 });
 
@@ -210,13 +212,59 @@ test("a carousel Meta refuses sends its fallback instead, with the answer, and s
   });
 });
 
+/** Meta's statuses of what was sent, delivered to the webhook as it does, signed. */
+async function statuses(s: Setup, items: Record<string, unknown>[]) {
+  const body = JSON.stringify({
+    object: "whatsapp_business_account",
+    entry: [{
+      changes: [{
+        field: "messages",
+        value: { metadata: { phone_number_id: PHONE_ID }, statuses: items },
+      }],
+    }],
+  });
+  await s.serve(
+    new Request(`http://localhost/hooks/whatsapp/${s.number}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": await sign(SECRET, new TextEncoder().encode(body)),
+      },
+      body,
+    }),
+  );
+  await s.runtime.idle();
+}
+
+test("a carousel Meta took but couldn't deliver (a picture it failed to fetch) sends its fallback, once", async () => {
+  await run(async (s) => {
+    await open(s);
+    await write(s, "any trips to Santos?");
+    const [carousel] = s.graph.sent(CARLA);
+    assertEquals((carousel.interactive as { type: string }).type, "carousel");
+    const wamid = `wamid.out.${s.graph.requests.filter((r) => r.body?.to === CARLA).length}`;
+    const failed = {
+      id: wamid,
+      status: "failed",
+      recipient_id: CARLA,
+      errors: [{ code: 131053, title: "Media upload error" }],
+    };
+    await statuses(s, [{ id: "wamid.other", status: "delivered", recipient_id: CARLA }, failed]);
+    // The answer went inside the carousel: it goes again, with the list.
+    assertEquals(s.graph.texts(CARLA), ["heard Carla: any trips to Santos?\n\n1. 10:30\n2. 12:00"]);
+    // Meta saying it again, or a status of the fallback itself: nothing more.
+    await statuses(s, [failed]);
+    assertEquals(s.graph.texts(CARLA).length, 1);
+  });
+});
+
 test("additions go in order, the answer in the first; none after a failed turn", async () => {
   await run(async (s) => {
     await open(s);
     await write(s, "trips, then pay");
     const sent = s.graph.sent(CARLA).map((b) => b.interactive as Record<string, any>);
     assertEquals(sent.map((i) => i.type), ["carousel", "button"]);
-    assertEquals(sent[0].body.text, "heard Carla: trips, then pay\n\nSome trips to Santos");
+    assertEquals(sent[0].body.text, "heard Carla: trips, then pay");
     assertEquals(
       sent[0].action.cards.map((
         c: any,
@@ -229,7 +277,11 @@ test("additions go in order, the answer in the first; none after a failed turn",
     await write(s, "please fail, then pay");
     const after = s.graph.sent(CARLA).slice(before);
     assertEquals(after.map((b) => b.type), ["text"]);
-    assert((after[0].text as { body: string }).body.includes("failed"));
+    // Told only that, in their terms: never the error.
+    assertEquals(
+      (after[0].text as { body: string }).body,
+      "Sorry, something went wrong on my side. Please send that again in a moment.",
+    );
   });
 });
 

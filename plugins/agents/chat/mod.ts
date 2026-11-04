@@ -5,7 +5,9 @@
  *
  * How a conversation moves:
  * - A message addressed to agents records one `turn.requested` per agent, in
- *   the message's own commit. Turns run keyed by thread and agent, so
+ *   the message's own commit; or, sent with `quiet` (a customer writing in
+ *   bursts), once its sender has been quiet that long (`chat.quiet`, by a
+ *   timer each message sets again), answering them all at once. Turns run keyed by thread and agent, so
  *   different agents work in parallel and each agent's turns stay in order.
  * - An agent's final answer goes back to whoever addressed it, as a reply.
  * - An agent that sent messages expecting replies stops, leaving a `wait`
@@ -59,6 +61,7 @@ import { eraseAction } from "./actions/erase.ts";
 import { forkAction } from "./actions/fork.ts";
 import { moveAction } from "./actions/move.ts";
 import { openAction } from "./actions/open.ts";
+import { quietAction } from "./actions/quiet.ts";
 import { sayAction } from "./actions/say.ts";
 import { sendAction } from "./actions/send.ts";
 import { shownAction } from "./actions/shown.ts";
@@ -113,6 +116,7 @@ export const chat: Plugin = definePlugin({
     "chat.send": sendAction,
     "chat.open": openAction,
     "chat.say": sayAction,
+    "chat.quiet": quietAction,
     "chat.shown": shownAction,
     "chat.erase": eraseAction,
     "chat.fork": forkAction,

@@ -13,7 +13,8 @@
  * `transcribe: false` sends it as it is. `via` says what sent it for the
  * person (a routine); a new thread takes `title` and `renamable` in the same
  * commit, so its first turn already has them. `tap` says it was a choice
- * tapped (a button), not typed.
+ * tapped (a button), not typed. With `quiet`, agents answer once the sender
+ * has been quiet that long (a burst of short messages, answered together).
  */
 import { type Actor, defineAction, peopleOrContacts } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
@@ -108,6 +109,11 @@ export const sendAction = defineAction({
       },
       /** A new thread an agent may name, as what it found. */
       renamable: { type: "boolean" },
+      /**
+       * Ms the sender may write on before agents answer (a customer writing in
+       * bursts): they answer once it's been quiet that long, everything at once.
+       */
+      quiet: { type: "integer", minimum: 0, maximum: 30_000 },
     },
     additionalProperties: false,
   },
@@ -212,7 +218,7 @@ export const sendAction = defineAction({
       ...(input.tap ? { tap: input.tap } : {}),
       at: now(),
     };
-    const deliver = await delivery(ctx, sent);
+    const deliver = await delivery(ctx, sent, sent.thread, true, input.quiet ?? 0);
     await ctx.transaction(async (tx) => {
       // The chat's summary moves with the write that touches it anyway.
       if (existing) {

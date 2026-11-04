@@ -11,7 +11,10 @@
  *   Anyone else who writes is told how, once a day, and nothing more,
  *   unless the number is open to anyone.
  * - **A customer line:** those who manage the space open the number to
- *   anyone (`whatsapp.set`). A stranger who writes is then a contact
+ *   anyone (`whatsapp.set`), or the app declares one in its settings
+ *   (`resources.whatsapp.lines`: the space, Meta's ids, token and secret,
+ *   its verify token, its webhook's path, its agent and gap), kept as they
+ *   say with no person, and changed only there. A stranger who writes is then a contact
  *   (someone outside the org), in a chat of their own in the number's
  *   space, answered by its agent: they reach that chat and nothing else; the
  *   space's members read it. A chat quiet for the number's `gap` (12 hours)
@@ -35,7 +38,8 @@
  *   (chat's `additions` resource, an `addition:<name>` View here): each goes
  *   once per chat per key, the answer's text in the first one's body when
  *   there's room (one message, not two: Meta charges each), and its fallback
- *   when Meta refuses it. A tap comes back as its title, with its id.
+ *   when Meta refuses it, or later says it couldn't deliver it (a picture
+ *   it failed to fetch). A tap comes back as its title, with its id.
  *   Pictures and files go as links (public ones; signed ones to the app's
  *   routes and files, with its `links` resource), or uploaded to Meta.
  * - **The webhook** (`/hooks/whatsapp/<number>`, the web host's `routes`
@@ -62,12 +66,14 @@ import { sent } from "./collections/sent.ts";
 import { chat } from "./collections/thread.ts";
 import { typing } from "./collections/typing.ts";
 import { received } from "./events/received.ts";
+import { undelivered } from "./events/undelivered.ts";
 import { forgetProcessor } from "./processors/forget.ts";
 import { receiveProcessor } from "./processors/receive.ts";
-import { replyProcessor } from "./processors/reply.ts";
+import { replyProcessor, undeliveredProcessor } from "./processors/reply.ts";
 import { typingProcessor } from "./processors/typing.ts";
 import { messageView } from "./views/message.ts";
 import { rules } from "./shared/rules.ts";
+import { linesOf } from "./shared/settings.ts";
 
 export * from "./contract.ts";
 
@@ -84,7 +90,7 @@ export const whatsapp: Plugin = definePlugin({
     whatsapp_typing: typing,
     whatsapp_rate: rate,
   },
-  events: { "whatsapp.received": received },
+  events: { "whatsapp.received": received, "whatsapp.undelivered": undelivered },
   actions: {
     "whatsapp.connect": connectAction,
     "whatsapp.credentials": credentialsAction,
@@ -100,14 +106,27 @@ export const whatsapp: Plugin = definePlugin({
   processors: {
     "whatsapp.receive": receiveProcessor,
     "whatsapp.reply": replyProcessor,
+    "whatsapp.undelivered": undeliveredProcessor,
     "whatsapp.typing": typingProcessor,
     "whatsapp.forget": forgetProcessor,
   },
   // WhatsApp as a medium: what a message is there (a feature's additions bring their own).
   views: { message: { whatsapp: messageView } },
   guard: rules,
-  // Where links to what it sends go, if the app says: a secret too short is refused at start.
-  check: (merged) => void linksOf(merged.resources),
+  // At start: links to what it sends (a secret too short is refused), and the app's own lines.
+  check: (merged) => {
+    linksOf(merged.resources);
+    for (const [name, line] of Object.entries(linesOf(merged))) {
+      for (const field of ["in", "phoneId", "token", "secret", "verify"] as const) {
+        if (typeof line?.[field] !== "string" || !line[field]) {
+          throw new Error(`whatsapp.lines.${name} needs its ${field}`);
+        }
+      }
+      if (line.path !== undefined && !line.path.startsWith("/")) {
+        throw new Error(`whatsapp.lines.${name}: its path starts with "/"`);
+      }
+    }
+  },
   resources: {
     whatsapp: {},
     routes: { whatsapp: { path: HOOKS, action: "whatsapp.hook", methods: ["GET", "POST"] } },

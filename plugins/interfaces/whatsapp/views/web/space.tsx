@@ -5,7 +5,8 @@
  * open to customers (see line.tsx); then your phone (linking it, or,
  * linked, where your messages go). Those who manage the space connect a
  * number (by hand, with what Meta's dashboard gives), see its webhook
- * again, replace its token, open it to customers and disconnect it. With
+ * again, replace its token, open it to customers and disconnect it (but the
+ * app's own lines, which its settings keep). With
  * none, it says what it's for, and who can connect one. In a side panel
  * (`hints.mode: "panel"`), the same, compact.
  */
@@ -161,7 +162,7 @@ function WhatsApp(
                   </span>
                 </p>
               </div>
-              {manage
+              {manage && !number.declared
                 ? (
                   <Menu
                     label={`${number.phone}: settings`}
@@ -220,7 +221,7 @@ function WhatsApp(
                   <CustomerLine
                     number={number}
                     where={space.name}
-                    manage={manage && !compact}
+                    manage={manage && !compact && !number.declared}
                     here={team.here}
                     agents={team.agents}
                     fallback={team.default[0]}

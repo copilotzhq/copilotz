@@ -34,8 +34,15 @@ const numberSchema = {
     gap: { type: "number" },
     /** Messages a customer may send a minute (20): more go unanswered. */
     rate: { type: "integer" },
+    /**
+     * Seconds a customer may write on before the agent answers (`QUIET`, up
+     * to 30; 0: at once): a burst of short messages gets one answer.
+     */
+    quiet: { type: "number" },
     /** What customers are told in, when their message can't go on: `en`, `pt`. */
     language: { type: "string", enum: ["en", "pt"] },
+    /** The app's own line (its settings' `lines`): kept as they say, changed only there. */
+    declared: { type: "boolean" },
     at: { type: "string" },
   },
   required: ["in", "phoneId", "phone", "at"],
@@ -49,6 +56,13 @@ const numberSchema = {
  * business answer freely.
  */
 export const GAP = 12;
+
+/**
+ * Seconds a customer's chat waits, quiet, before its agent answers: people
+ * send two or three short messages a few seconds apart, and each answer
+ * costs a turn and a message.
+ */
+export const QUIET = 4;
 
 export const number = defineCollection({ schema: numberSchema, indexes: [["phoneId"]] });
 

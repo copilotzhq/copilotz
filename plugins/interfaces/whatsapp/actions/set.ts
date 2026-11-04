@@ -5,7 +5,9 @@
  * answers there (`agent`: one that answers in the space; null, who answers
  * new chats there) and how long a chat stays quiet before a customer's next
  * message starts a new one (`gap`, in hours: 12 unless set), how many
- * messages a customer may send a minute (`rate`: 20), and the language
+ * messages a customer may send a minute (`rate`: 20), how long they may
+ * write on before the agent answers them all at once (`quiet`, seconds: 4),
+ * and the language
  * customers are told things in (`language`: `en`, `pt`). Closed again,
  * strangers are told how to link their phone; its chats stay where they are.
  * A Personal space's number isn't opened: it's its person's alone.
@@ -28,6 +30,8 @@ export const setAction = defineAction({
       gap: { type: "number", minimum: 1, maximum: 720 },
       /** Messages a customer may send a minute. */
       rate: { type: "integer", minimum: 1, maximum: 600 },
+      /** Seconds a customer may write on before the agent answers. */
+      quiet: { type: "number", minimum: 0, maximum: 30 },
       language: { type: "string", enum: ["en", "pt"] },
     },
     required: ["number"],
@@ -39,6 +43,9 @@ export const setAction = defineAction({
     const found = await numbers.findOne({ _id: input.number });
     if (!found) throw failure("not_found", "No such number here.");
     await mustManage(ctx, found.in, "change its number");
+    if (found.declared) {
+      throw failure("invalid", "This number is the app's own: its settings say how it works.");
+    }
     if (input.open) {
       const space = await ctx.db.collection<{ kind?: string }>("space").findOne({ _id: found.in });
       if (space?.kind === PERSONAL) {
@@ -63,6 +70,7 @@ export const setAction = defineAction({
       ...(agent ? { agent } : {}),
       ...(input.gap !== undefined ? { gap: input.gap } : {}),
       ...(input.rate !== undefined ? { rate: input.rate } : {}),
+      ...(input.quiet !== undefined ? { quiet: input.quiet } : {}),
       ...(input.language ? { language: input.language } : {}),
     };
     const unset = {

@@ -482,9 +482,10 @@ filled by the front ends through resources).
   the same message when there's room, a fallback when Meta refuses one; taps come back with their
   ids. Pictures and files go as public links, signed links to the app's routes or files (the `links`
   resource, `{ origin, secret }`; the runtime's `signLink`, `verifyLink`), or uploads. Opened to
-  anyone (`whatsapp.set`), a number is a customer line: a stranger who writes is a contact, in a
-  chat of their own in the number's space, answered by its agent, and a chat quiet for the number's
-  `gap` (12 hours) is over: their next message starts a new one.
+  anyone (`whatsapp.set`, or declared in the app's settings: `whatsapp.lines`), a number is a
+  customer line: a stranger who writes is a contact, in a chat of their own in the number's space,
+  answered by its agent, and a chat quiet for the number's `gap` (12 hours) is over: their next
+  message starts a new one.
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.

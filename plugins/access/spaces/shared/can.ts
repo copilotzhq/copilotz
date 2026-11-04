@@ -6,6 +6,7 @@
  * works this out.
  */
 import { type Context, forbidden, personOf } from "../../../../runtime/mod.ts";
+import type { Member } from "../collections/member.ts";
 import { docKey, reachOf, type Verb } from "./reach.ts";
 
 export async function may(
@@ -55,4 +56,17 @@ export async function mustOwnOr(
   message: string,
 ): Promise<void> {
   if (owner !== personOf(ctx.actor)) await must(ctx, verb, space, message);
+}
+
+/**
+ * Who a document is shared with on its own (a chat's contacts:
+ * `contact:c1`), read as the system: none for one that isn't.
+ */
+export async function sharedWith(
+  ctx: Pick<Context, "as">,
+  on: string,
+  id: string,
+): Promise<string[]> {
+  const found = await ctx.as().db.collection<Member>("member").find({ space: docKey(on, id) });
+  return found.map((m) => m.member);
 }

@@ -2,9 +2,16 @@
  * `contact.forget`: a contact erased (LGPD, GDPR), by those who manage the
  * space its record lives in. Its memberships go, which ends its access to
  * every chat at once (`member.deleted`), and so does its record
- * (`contact.deleted`: the WhatsApp plugin erases its phone). With `chats`,
- * its chats go too, with everything in them (`chat.erase`). Events keep
- * ids, never what it said or its phone.
+ * (`contact.deleted`: the WhatsApp plugin erases its phone, but not a block
+ * on it, kept by a hash). With `chats`, its chats go too, with everything
+ * chat and its plugins keep of them (`chat.erase`), each only for someone
+ * who manages that chat's space.
+ *
+ * What's not erased here: the event log, which keeps what happened (what
+ * WhatsApp delivered, with the phone and what it said; each change, with
+ * its document) until retention removes it; and what's elsewhere, such as
+ * memories learned in staff's own chats, or chats a hand-over opened in
+ * other spaces.
  */
 import { defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
 import { type Member, must } from "../../spaces/contract.ts";
@@ -29,7 +36,15 @@ export const forgetAction = defineAction({
     const chats = memberships.filter((m) => m.on === "thread")
       .map((m) => m.space.slice("thread:".length));
     if (input.chats) {
-      for (const thread of chats) await system.call("chat.erase", { thread });
+      // Each chat's own space decides: it may have moved since the contact came.
+      const threads = await system.db.collection<{ _id: string; in?: string }>("thread")
+        .find({ _id: { $in: chats } });
+      for (const thread of threads) {
+        if (thread.in) {
+          await must(ctx, "manage", thread.in, "Only those who manage its chats erase them.");
+        }
+      }
+      for (const thread of threads) await system.call("chat.erase", { thread: thread._id });
     }
     await system.transaction(async (tx) => {
       await tx.db.collection("member").deleteMany({ member: key });

@@ -1,5 +1,28 @@
 ## Unreleased
 
+- **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
+  ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,
+  its tools run again, with whatever input the model now chose, and the model never saw the first
+  run. Now a step's calls are written before any of them runs (chat's new `intent` collection, one
+  document per running turn, no events), and what each returns as soon as it does. A retried turn
+  goes on with those calls without asking its model: a call that returned answers from its record,
+  and one cut short (its executor lost, the runtime closed) runs again as itself.
+  - Tools get `ctx.callId`, the same however many times the call runs (`<turn>:<step>:<n>`): the
+    idempotency key for what they do outside. `ctx.retry` is now true only for a call that may have
+    run before. The recorded Actions a tool calls answer from the log when it runs again.
+  - A turn that ends without its step (failed for good, or stopped mid-tool) keeps the step, with
+    what each call returned, or that it never did ("Interrupted before it returned: it may or may
+    not have taken effect…"); a stopped answer no longer repeats that step's text.
+  - A tool step costs one more commit (its calls, before they run) and one per tool call (what it
+    returned). A step that only sends messages costs nothing more: they commit with it.
+- **Closing drops no turn.** `runtime.close()` returned from a delivery it cut short as if it were
+  done, then saved its Processor's cursor past it, so a turn running at a deploy never answered. Now
+  closing starts no more deliveries or timer occurrences, gives the running ones `drain` ms to
+  finish (`close({ drain })`, 5 s by default), and keeps each cursor before an event it didn't
+  finish: the next owner delivers it again, with `retry`, and with the above it doesn't repeat its
+  tools. Workers are told they're gone after the drain, so running work can still use them. The orgs
+  host's `close({ drain })` passes it on to every org's runtime.
+
 - **Fixed: a collection's private fields reached the log on PostgreSQL.** Writes that go as the
   store's single command (most of them) recorded `.created`, `.updated` and `.deleted` with the
   whole document, so `private` fields (a computer's `pending` secret, unsealed account tokens) were

@@ -15,7 +15,8 @@
   - Every blob store (memory, SQLite, PostgreSQL, `fileBlobs`, `httpBlobs`, `gcsBlobs`) takes only a
     blob's id (`checkBlobId`, exported for your own `Blobs`).
   - Fixed on the way: a timer's input over 16 KiB reached its Action as a reference; it comes whole.
-  - A store may hold references planted before: see the release notes for a query that finds them.
+  - A store may already hold planted references: an exact one whose blob is gone still fails reads.
+    #155 has a read-only query (PostgreSQL, SQLite) that finds them, and what to do with each.
 
 - **A tool call runs once, even when its turn is tried again.** A step that failed after its tools
   ran (a tool's `llm` View throwing, a commit failing) was run again whole: its model asked again,

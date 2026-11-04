@@ -19,7 +19,7 @@
  * A contact's message says at most `CONTACT_TEXT` characters, says nothing
  * of what sent it (`via`: never "a routine"), never titles its chat nor
  * lets an agent rename it (`title`, `renamable`: what its people see), and
- * is let in by the app's `contactSend` hooks first (the contacts plugin's: a
+ * is let in by the app's `contactSend` hooks first (the web lines': a
  * web line's limits, the files it takes, its visitor's own chat, made with
  * its first message, where it goes when it names none). A hook refuses it,
  * or says where it goes and that its audio goes untranscribed (`transcribe:

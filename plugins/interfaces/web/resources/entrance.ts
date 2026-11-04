@@ -1,5 +1,5 @@
 /**
- * The contacts' entrance to the web host (its `entrances` resource): a
+ * The web lines' entrance to the web host (its `entrances` resource): a
  * browser is the visitor its cookie's secret is (`contact_visitor.actor`),
  * asked after people's sessions. A browser that isn't anyone, asking to come
  * in by one of the app's web lines (`POST /connect` `{ line }`: the page's
@@ -21,7 +21,7 @@ import {
   type Resources,
   type Runtime,
 } from "../../../../runtime/mod.ts";
-import { lineOf, settingsOf } from "../shared/web.ts";
+import { lineOf, settingsOf } from "../shared/lines.ts";
 
 /** What the web host hands an entrance letting someone in (its `Door`). */
 type Door = {

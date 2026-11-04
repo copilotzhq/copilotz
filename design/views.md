@@ -190,10 +190,10 @@ Agreed 2026-10-28.
   to its person. It signs in once (Google → a session in an httpOnly cookie), trades the cookie for
   a one-time ticket over HTTP, and presents the ticket when it connects; the host's `admit` turns it
   into the person. Every read, call and emit it makes is that person's. Who a cookie is comes from
-  the app's plugins (the `entrances` resource: identity's session; a contacts web line's visitor,
-  let in when its page asks, a contact once it speaks), and how people sign in too (`signIn`:
-  Google's, dev sign-in's, from this machine's own socket only); the host keeps the cookies
-  (2026-11-04). A contact reads what's said in its chat, never an agent's private steps.
+  the app's plugins (the `entrances` resource: identity's session; a web line's visitor, let in when
+  its page asks, a contact once it speaks), and how people sign in too (`signIn`: Google's, dev
+  sign-in's, from this machine's own socket only); the host keeps the cookies (2026-11-04). A
+  contact reads what's said in its chat, never an agent's private steps.
 - **Changes are pushed, one hop:** each read a browser's Views made is watched on the server; a
   commit that touches it re-runs it as the person, and a different result goes to the browser, which
   re-runs the parts that read it. A reply being written streams this way (`live` is a read like any

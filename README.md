@@ -140,7 +140,7 @@ workspace, a public site where visitors chat with an agent, or a WhatsApp app wi
 | -------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------- |
 | Routes: webhooks, APIs, sockets of their own | the `routes` resource                                                                    | —                                  |
 | The page and its code                        | `code`: the app's front ends, its shell among them, bundled                              | no page: the routes, and `/health` |
-| Who a browser is                             | the `entrances` resource: identity's session (a person), contacts' web lines (a visitor) | nobody                             |
+| Who a browser is                             | the `entrances` resource: identity's session (a person), web lines (a visitor)           | nobody                             |
 | Browsers connecting                          | `tickets`, for whoever an entrance says a request is                                     | no browser connects                |
 | Signing in (`POST /signin/<name>`)           | the `signIn` resource: `googleSignIn` (`google`), `devSignIn` (`dev`, this machine only) | none                               |
 

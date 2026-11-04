@@ -3,11 +3,8 @@
  * space its record lives in. Its memberships go, which ends its access to
  * every chat at once (`member.deleted`), and so does its record
  * (`contact.deleted`: the WhatsApp plugin erases its phone, but not a block
- * on it, kept by a hash), and a web visitor's secret with it: its browser's
- * cookie is no one now (its record says so, ended, for as long as any cookie
- * made before could last: a line's days may be raised after, and a cookie
- * lasts as its line says now, so the most a line may say, from now), and its
- * browsers' connections end (`ctx.disconnect`). With
+ * on it, kept by a hash; the web lines end a visitor's cookie and its
+ * browsers' connections). With
  * `chats`, its chats go too, with everything
  * chat and its plugins keep of them (`chat.erase`), each only for someone
  * who manages that chat's space.
@@ -21,7 +18,6 @@
 import { defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
 import { type Member, must } from "../../spaces/contract.ts";
 import { CONTACT, type Contact } from "../collections/contact.ts";
-import { MOST_DAYS } from "../shared/web.ts";
 
 export const forgetAction = defineAction({
   description: "Erases a contact: its access, its record, and with `chats`, its chats",
@@ -54,18 +50,8 @@ export const forgetAction = defineAction({
     }
     await system.transaction(async (tx) => {
       await tx.db.collection("member").deleteMany({ member: key });
-      // A web visitor's browser is no one from now on: its record says so, until no cookie made
-      // before now could be good, whatever its line's days become (it keeps no personal data: its
-      // line, its chat's id, its networks' HMACs). Heard or not, it's never taken for a first
-      // message that didn't go in (contact.prune).
-      const lasts = new Date(Date.now() + MOST_DAYS * 86_400_000).toISOString();
-      await tx.db.collection("contact_visitor").updateOne({ _id: contact._id }, {
-        $set: { ended: true, spoke: true, expires: lasts },
-      });
       await tx.db.collection("contact").deleteOne({ _id: contact._id });
     });
-    // What it has open ends too: its browsers' connections, and their way back without a cookie.
-    await system.disconnect({ kind: "contact", id: contact._id });
     return { forgotten: contact._id, chats: input.chats ? chats.length : 0 };
   },
 });

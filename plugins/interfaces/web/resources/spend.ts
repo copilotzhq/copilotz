@@ -1,5 +1,5 @@
 /**
- * What a web line's visitors cost, for its `budget`: the contacts' listener
+ * What a web line's visitors cost, for its `budget`: the web lines' listener
  * on the models plugin's `modelUse`, told every model call's use in the job
  * that made it, and asked before each (`may`). A call made for a web line's
  * visitor (the turn working for it, a transcription of what it sent) on a
@@ -18,7 +18,7 @@
 import { failure, principalOf } from "../../../../runtime/mod.ts";
 import type { ModelUse, UseContext, UseListener } from "../../../models/contract.ts";
 import { BUDGET } from "../shared/budget.ts";
-import { lineOf } from "../shared/web.ts";
+import { lineOf } from "../shared/lines.ts";
 
 /** The budgeted line a call is made for, and its visitor: none for anyone else. */
 function budgeted(ctx: UseContext) {

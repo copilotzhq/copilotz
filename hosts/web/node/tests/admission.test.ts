@@ -21,6 +21,7 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models from "../../../../plugins/models/mod.ts";
 import { chat } from "../../../../plugins/agents/chat/mod.ts";
 import { access, devSignIn } from "../../../../plugins/access/mod.ts";
+import { webLines } from "../../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../../testing/mod.ts";
 import { socket } from "../../server.ts";
 import { createTickets, type Tickets } from "../../tickets.ts";
@@ -49,7 +50,7 @@ async function setup(fn: (server: Server, runtime: Runtime, tickets: Tickets) =>
   const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, app, devSignIn],
+    plugins: [models, chat, ...access, webLines, app, devSignIn],
     transports: [socket],
     admit: tickets.admit,
   });

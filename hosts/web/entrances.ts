@@ -9,8 +9,7 @@
  * - **Entrances** (the `entrances` resource, by name): each is a cookie and
  *   the query that says who its secret is (`{ secret }` in, an actor or null
  *   out, asked as the system). The identity plugin declares people's
- *   sessions (`session`); the contacts plugin, the visitors of its web
- *   lines. A request is whoever the first entrance, in order, says it is.
+ *   sessions (`session`); the web lines plugin, its visitors (`visitor`). A request is whoever the first entrance, in order, says it is.
  *   One may let a newcomer in (`arrive`): asked to connect without a cookie
  *   that's anyone (`POST /connect`), it makes them someone and gives the
  *   secret the host keeps in its cookie, or refuses (a limit), or passes.

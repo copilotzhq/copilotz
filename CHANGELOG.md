@@ -1,5 +1,18 @@
 ## Unreleased
 
+- **Breaking: web lines are the web interface's, not contacts'.** `resources.web.lines`, arrival,
+  the `visitor` entrance, the budget, the challenge, prune and the limits moved from
+  `plugins/access/contacts` into `plugins/interfaces/web`, as one plugin, `webLines` (exported from
+  `copilotz/plugins/interfaces`), as WhatsApp's, the phone's and MCP's lines are in theirs. The
+  resource shape is the same (`web: { caller?, lines: { … } }`), and so are the Actions
+  (`contact.arrive`, `contact.sending`, `contact.prune`, `contact.spent`, `contact.budget`) and
+  collections (`contact_visitor`, `contact_rate`): nothing is renamed, so no data moves. Migrate by
+  adding `webLines` beside `...access` (`plugins: [models, chat, ...access, webLines]`) and
+  importing `WebLine`, `WebLimits`, `WebSettings` and `WEB_LIMITS` from
+  `copilotz/plugins/interfaces` instead of `…/access`. Contacts keeps the contact, `contact.start`,
+  `contact.chat` and `contact.forget`; erasing a visitor's contact now ends its cookie and its
+  connections in a processor of `contact.deleted` (`web.forget`), a moment after the erasure, not in
+  the same transaction. The `contactSend` hook's key is `web` (was `contacts`).
 - **Breaking: `renderer` is `medium`.** The docs said "medium" and the API said `renderer`; now one
   word. A View's context field `ctx.renderer` is `ctx.medium`, and the wire/owner `render` job's
   `renderer` field is `medium`. Migrate by renaming `ctx.renderer` to `ctx.medium` (and a test's

@@ -21,6 +21,7 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../../plugins/models/mod.ts";
 import { chat, tool } from "../../../../plugins/agents/chat/mod.ts";
 import { access } from "../../../../plugins/access/mod.ts";
+import { webLines } from "../../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../../testing/mod.ts";
 import { socket } from "../../server.ts";
 import { createTickets } from "../../tickets.ts";
@@ -180,7 +181,7 @@ async function setup(fn: (server: Server, runtime: Runtime) => Promise<void>) {
   const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, app, page],
+    plugins: [models, chat, ...access, webLines, app, page],
     transports: [socket],
     admit: tickets.admit,
   });

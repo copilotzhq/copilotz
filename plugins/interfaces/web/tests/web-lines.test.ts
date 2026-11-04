@@ -18,15 +18,16 @@ import {
   definePlugin,
   type Plugin,
   type Runtime,
-} from "../../../runtime/mod.ts";
-import { memoryStore } from "../../../stores/memory/mod.ts";
-import models, { type LlmAdapter } from "../../models/mod.ts";
-import { chat } from "../../agents/chat/mod.ts";
-import usage from "../../billing/usage/mod.ts";
-import { access } from "../mod.ts";
-import { test } from "../../../testing/mod.ts";
-import { createTickets, type Tickets } from "../../../hosts/web/tickets.ts";
-import { setClientAddress, webServer } from "../../../hosts/web/server.ts";
+} from "../../../../runtime/mod.ts";
+import { memoryStore } from "../../../../stores/memory/mod.ts";
+import models, { type LlmAdapter } from "../../../models/mod.ts";
+import { chat } from "../../../agents/chat/mod.ts";
+import usage from "../../../billing/usage/mod.ts";
+import { access } from "../../../access/mod.ts";
+import { webLines } from "../lines.ts";
+import { test } from "../../../../testing/mod.ts";
+import { createTickets, type Tickets } from "../../../../hosts/web/tickets.ts";
+import { setClientAddress, webServer } from "../../../../hosts/web/server.ts";
 
 const PAGE = "https://book.example.com";
 const LINKS = { origin: PAGE, secret: "the-app-secret-for-web-lines-0123456789" };
@@ -86,7 +87,7 @@ async function setup(
   });
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, app, kept, ...options.plugins ?? []],
+    plugins: [models, chat, ...access, webLines, app, kept, ...options.plugins ?? []],
   });
   try {
     const serve = webServer({
@@ -570,6 +571,7 @@ test("the app's previous secret: a visitor its cookie was signed for is still wh
         models,
         chat,
         ...access,
+        webLines,
         definePlugin({
           name: "app",
           resources: {

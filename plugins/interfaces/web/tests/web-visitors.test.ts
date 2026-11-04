@@ -11,15 +11,16 @@ import {
   definePlugin,
   type Runtime,
   type Store,
-} from "../../../runtime/mod.ts";
-import { memoryStore } from "../../../stores/memory/mod.ts";
-import models from "../../models/mod.ts";
-import { chat } from "../../agents/chat/mod.ts";
-import { access } from "../mod.ts";
-import { test } from "../../../testing/mod.ts";
-import { createTickets } from "../../../hosts/web/tickets.ts";
-import { setClientAddress, webServer } from "../../../hosts/web/server.ts";
-import { newSecret, visitOf } from "../contacts/shared/secret.ts";
+} from "../../../../runtime/mod.ts";
+import { memoryStore } from "../../../../stores/memory/mod.ts";
+import models from "../../../models/mod.ts";
+import { chat } from "../../../agents/chat/mod.ts";
+import { access } from "../../../access/mod.ts";
+import { webLines } from "../lines.ts";
+import { test } from "../../../../testing/mod.ts";
+import { createTickets } from "../../../../hosts/web/tickets.ts";
+import { setClientAddress, webServer } from "../../../../hosts/web/server.ts";
+import { newSecret, visitOf } from "../shared/secret.ts";
 
 const PAGE = "https://book.example.com";
 const LINKS = { origin: PAGE, secret: "the-app-secret-for-web-visitors-0123456789" };
@@ -72,7 +73,10 @@ async function lineFor(store: Store, days: number) {
       all: { test: (asked: { c: string }, ctx) => ctx.db.collection(asked.c).find({}).value ?? [] },
     },
   });
-  const runtime = await createRuntime({ store, plugins: [models, chat, ...access, app, kept] });
+  const runtime = await createRuntime({
+    store,
+    plugins: [models, chat, ...access, webLines, app, kept],
+  });
   const serve = webServer({ runtime, tickets, code: { entry: "app.js", files: { "app.js": "" } } });
   const arrive = (cookie?: string) =>
     serve(setClientAddress(

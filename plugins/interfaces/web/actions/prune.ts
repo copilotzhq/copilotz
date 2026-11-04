@@ -10,7 +10,7 @@
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Visitor } from "../collections/visitor.ts";
-import { CONTACT } from "../collections/contact.ts";
+import { CONTACT } from "../../../access/contacts/contract.ts";
 
 /** How long a first message has to go in before its contact goes. */
 const QUIET = 10 * 60_000;

@@ -18,6 +18,7 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../models/mod.ts";
 import { chat } from "../chat/mod.ts";
 import { access } from "../../access/mod.ts";
+import { webLines } from "../../interfaces/web/lines.ts";
 import { setClientAddress, webServer } from "../../../hosts/web/server.ts";
 import { createTickets } from "../../../hosts/web/tickets.ts";
 import { test } from "../../../testing/mod.ts";
@@ -72,7 +73,7 @@ async function setup(fn: (runtime: Runtime, visitor: () => Promise<Actor>) => Pr
   const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, app, kept],
+    plugins: [models, chat, ...access, webLines, app, kept],
   });
   try {
     const serve = webServer({

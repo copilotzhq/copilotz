@@ -18,6 +18,7 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../../plugins/models/mod.ts";
 import { chat } from "../../../plugins/agents/chat/mod.ts";
 import { access, devSignIn, identity } from "../../../plugins/access/mod.ts";
+import { webLines } from "../../../plugins/interfaces/web/lines.ts";
 import { directory } from "../../../plugins/access/directory/mod.ts";
 import { test } from "../../../testing/mod.ts";
 import { setClientAddress } from "../../web/address.ts";
@@ -58,6 +59,7 @@ test("an org's web line: its page at the org's address, and visitors let in ther
           models,
           chat,
           ...access,
+          webLines,
           ...given.plugins,
           // Each org's line, by its id: the app's settings name the org each is for.
           definePlugin({

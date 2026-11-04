@@ -19,7 +19,7 @@
  *   plugins: [...access, googleSignIn, { name: "app", resources: { shared: { note: {} } } }]
  *
  * Who a browser is comes from here too: identity's session (a person), and
- * contacts' web lines (a visitor), the web host's `entrances`; and how
+ * the web interface's lines (`webLines`: a visitor), the web host's `entrances`; and how
  * people sign in, Google's and dev sign-in's `signIn`.
  */
 import type { Plugin } from "../../runtime/mod.ts";

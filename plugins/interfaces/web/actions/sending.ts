@@ -43,7 +43,7 @@ import type { Rate } from "../collections/rate.ts";
 import type { Visitor } from "../collections/visitor.ts";
 import { type Day, hold } from "../shared/budget.ts";
 import { chatOf } from "../shared/secret.ts";
-import { keyringOf, lineOf } from "../shared/web.ts";
+import { keyringOf, lineOf } from "../shared/lines.ts";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;

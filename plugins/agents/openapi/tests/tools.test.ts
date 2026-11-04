@@ -108,8 +108,9 @@ test("a retried turn gets the call it already made back, and doesn't call the AP
     { tools: ["trips_createTrip"], more: [flaky] },
   );
   const { messages, outputs } = await ask("Plan Porto");
-  // The model asked twice for the same call; the API heard it once.
-  assertEquals(calls.length, 3);
+  // The retried turn goes on with the call it had written (the model isn't asked for it again:
+  // once for the call, once for the answer), and the API heard it once.
+  assertEquals(calls.length, 2);
   assertEquals(api.seen.length, 1);
   assertEquals(JSON.parse(api.seen[0].body!), { name: "Porto" });
   assertEquals(outputs, ['{"id":"t2","name":"Porto"}']);

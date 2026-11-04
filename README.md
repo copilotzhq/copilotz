@@ -117,10 +117,10 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                    |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                    |
 | `copilotz/web`                         | the web host in the browser (`web`), and its toolkit (`Button`, `Markdown`…)                                 |
-| `copilotz/web/server`                  | its server half: `webServer`, `socket`                                                                       |
+| `copilotz/web/server`                  | its server half: `webServer`, `socket`; `routeHost` (the app's routes alone)                                 |
 | `copilotz/web/tickets`                 | `createTickets`: sessions traded for one-time tickets                                                        |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                              |
-| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve`, `listen` (HTTP, sockets)                               |
+| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve`, `serveRoutes`, `listen` (HTTP, sockets)                |
 | `copilotz/orgs`                        | `orgsHost`: many orgs behind one address, each a runtime of its own                                          |
 | `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                              |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                     |
@@ -193,6 +193,48 @@ first used. Node takes a socket before any handler runs, so `listen` serves the 
 each socket to the runtime of the org its request is for:
 `listen({ fetch: host.serve, hypervisor: (request) => host.openRuntime(request)?.hypervisor })`
 (`examples/web-node/orgs.ts`).
+
+### Without the web app
+
+An app people use on WhatsApp or on the phone needs no page: `serveRoutes` serves its plugins'
+routes alone (`routes` resources: Meta's webhook, Twilio's), `GET /health` for whatever watches it,
+and 404 for anything else. Nobody signs in there: a route's Action is called as a visitor, and its
+`allow` decides (a webhook checks the request's signature, then acts for the person it's from with
+`ctx.as`). Deno and Bun run it too.
+
+```ts
+import { createRuntime } from "copilotz";
+import { serveRoutes } from "copilotz/web/node";
+
+const runtime = await createRuntime({ store, plugins });
+const server = await serveRoutes({ runtime, hostname: "0.0.0.0", port: 8080 });
+// A deploy's SIGTERM: stop listening, give running turns a while, close the runtime.
+process.once("SIGTERM", () => server.close({ drain: 8_000 }));
+```
+
+A `serve` route may take a WebSocket of its own (a voice call's relay): `host.upgrade()` accepts the
+request's upgrade, and the route answers with the response it gives. It can refuse first (`403`,
+before any handshake). The socket is a browser's `WebSocket` as far as `onmessage`, `send` and
+`close` go; the listener (`serveRoutes`, or the web host's `serve`) takes it.
+
+```ts
+routes: {
+  relay: {
+    path: "/voice/relay",
+    serve: (request, host) => {
+      if (!signed(request)) return new Response("Forbidden", { status: 403 });
+      const { socket, response } = host.upgrade();
+      socket.onmessage = async (event) => socket.send(await answer(host.runtime, event.data));
+      return response;
+    },
+  },
+},
+```
+
+A runtime that declares the `socket` transport (remote executors) still takes its sockets at
+`/oxian`. `routeHost(runtime)` (`copilotz/web/server`) is the same as a fetch handler, for another
+listener; a route's socket needs Oxian's (`copilotz/web/node`'s). The example is
+`examples/web-node/routes.ts`.
 
 ## Installing a computer
 
@@ -313,6 +355,14 @@ name, never by importing its code.
     last four hours of a conversation, back from its newest message (summaries too, with `history`);
     what's older stays in the chat. The start moves in steps of a tenth of `maxAge`, so prompts keep
     hitting the provider's cache ([design](design/views.md#history-as-views)).
+  - **A tool call runs once:** before a step's tools run, the step's calls are written (an
+    `intent`), and what each returns as soon as it does. A retried turn (it failed after its tools
+    ran, its executor died, the runtime restarted) goes on with those calls instead of asking its
+    model again: a call that returned isn't run again, and one cut short runs again as itself, with
+    the same `ctx.callId` and `ctx.retry` true. Pass `callId` to an outside API as the idempotency
+    key, or call recorded Actions (they answer from the log), and a payment behind a tool is made
+    once. A turn that ends without its step (failed for good, stopped) keeps it, saying which calls
+    never returned, so people and its later turns know what happened.
   - **Subthreads are forks:** whoever works in one sees the conversation up to the message it hangs
     from, through every level, without anything being copied. A new thread starts from its first
     message and records the thread it came from.
@@ -640,6 +690,10 @@ The log records what happened, with no bookkeeping tables beside it:
   - **Processor deliveries:** every failed attempt records `processor.retried`
     `{ attempt, after, error }` before the next one. After the last attempt, `processor.failed`
     `{ attempts, error }` is the dead letter.
+  - **Closing:** `runtime.close()` starts no more deliveries or timer occurrences, and gives the
+    running ones `drain` ms to finish (`close({ drain })`, 5 s by default); what's still running
+    then stops where it is. A delivery that didn't finish keeps its Processor's cursor before its
+    event, so the next owner delivers it again, with `retry`: a deploy never drops one.
   - **Outside effects (payments, emails, outside APIs):** write the intent first, call out with its
     id as the idempotency key, then write the result. The intent's commit carries the call's start,
     so the attempt is on record before anything leaves the system.
@@ -802,8 +856,8 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   beside the runtime, which declares the `socket` transport). A browser reads a collection directly
   only when a rule speaks for it; anything else, through queries that let its person. Writes are
   Actions. Plugins answer their own HTTP through the `routes` resource (a webhook, an OAuth
-  callback, an API, a download), and files people sent are served at `/files/<id>` to whoever may
-  read them, with ranges.
+  callback, an API, a download, a socket of their own), and files people sent are served at
+  `/files/<id>` to whoever may read them, with ranges.
 - **The design system** (`design/views.md`, "The design system"): the web host owns a token
   vocabulary (shadcn's names) and its defaults, which are Copilotz's look (navy, the logo's cyan and
   blue, Manrope and Space Grotesk, its logo and icon), and an app rebrands with a `theme` resource

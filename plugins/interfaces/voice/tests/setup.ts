@@ -147,7 +147,9 @@ export type Setup = {
   /** Twilio opening a call's socket, from the TwiML it was given. */
   open(twiml: string, options?: { token?: string }): Promise<{ response: Response; relay: Relay }>;
   /** A whole call coming in: rung, its socket open, Twilio's `setup` told. */
-  call(options?: { from?: string; call?: string }): Promise<Relay & { id: string }>;
+  call(
+    options?: { from?: string; call?: string; form?: Record<string, string> },
+  ): Promise<Relay & { id: string }>;
   /** What's in a collection, as the system reads it. */
   docs<T = Record<string, unknown>>(collection: string): Promise<T[]>;
   /** The messages of a chat. */
@@ -156,6 +158,12 @@ export type Setup = {
 
 /** A call SID, as Twilio makes them. */
 export const callSid = (n: number) => `CA${n.toString(16).padStart(32, "0")}`;
+
+/** A caller's number of its own for each call, unless a test says whose. */
+export const numberFor = (n: number) => `+5521${String(900000000 + n)}`;
+
+/** What Twilio says of a number it verified (STIR/SHAKEN's full attestation). */
+export const VERIFIED = { StirVerstat: "TN-Validation-Passed-A" };
 
 export async function setup(
   fn: (s: Setup) => Promise<void>,
@@ -167,6 +175,8 @@ export async function setup(
       provider: { e: { adapter: "e" } },
       agents: {
         phone: { instructions: "Answer calls.", model: "e/phone", tools: ["search"] },
+        // An agent of the app's that doesn't work in the line's space.
+        desk: { instructions: "Sell.", model: "e/desk" },
       },
       tools: {
         search: tool({
@@ -196,7 +206,7 @@ export async function setup(
   });
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, voice, reads, app, ...options.plugins ?? []],
+    plugins: [models, chat, ...access, voice, reads, hands, app, ...options.plugins ?? []],
   });
   const serve = webServer({
     runtime,
@@ -209,15 +219,17 @@ export async function setup(
     runtime,
     ring: async (o = {}) => {
       const path = o.path ?? "/hooks/voice/help";
+      const n = ++rung;
+      const from = o.from ?? numberFor(n);
       const form = new URLSearchParams({
         AccountSid: ACCOUNT,
         ApiVersion: "2010-04-01",
-        CallSid: o.call ?? callSid(++rung),
+        CallSid: o.call ?? callSid(n),
         CallStatus: "ringing",
         Called: LINE_NUMBER,
-        Caller: o.from ?? CARLA,
+        Caller: from,
         Direction: "inbound",
-        From: o.from ?? CARLA,
+        From: from,
         To: LINE_NUMBER,
         ...o.form,
       });
@@ -252,8 +264,10 @@ export async function setup(
       return { response, relay };
     },
     call: async (o = {}) => {
-      const id = o.call ?? callSid(++rung);
-      const twiml = await (await s.ring({ ...o, call: id })).text();
+      const n = rung + 1;
+      const id = o.call ?? callSid(n);
+      const from = o.from ?? numberFor(n);
+      const twiml = await (await s.ring({ ...o, from, call: id })).text();
       const { response, relay } = await s.open(twiml);
       if (response.status !== 200) throw new Error(`No socket: ${await response.text()}`);
       relay.tell({
@@ -261,7 +275,7 @@ export async function setup(
         sessionId: `VX${"a".repeat(32)}`,
         accountSid: ACCOUNT,
         callSid: id,
-        from: o.from ?? CARLA,
+        from,
         to: LINE_NUMBER,
         direction: "inbound",
         customParameters: {},
@@ -299,7 +313,7 @@ export async function setup(
 export const reads = definePlugin({
   name: "reads",
   views: Object.fromEntries(
-    ["voice_call", "voice_phone", "contact", "thread", "message"].map((c) => [
+    ["voice_call", "voice_phone", "voice_blocked", "contact", "thread", "message"].map((c) => [
       c,
       {
         test: (item: { thread?: string }, ctx) =>
@@ -309,4 +323,58 @@ export const reads = definePlugin({
       },
     ]),
   ),
+});
+
+/** The caller says something, as Twilio tells it once they've finished. */
+export const say = (relay: Relay, words: string) =>
+  relay.tell({ type: "prompt", voicePrompt: words, lang: "pt-BR", last: true });
+
+/** Waits for the `n`th thing said, whole, and gives all that was said. */
+export const heard = async (relay: Relay, n: number, ms = 3_000) => {
+  await until(() => relay.sent.filter((m) => m.type === "text" && m.last).length >= n, ms, `${n}`);
+  return relay.said();
+};
+
+/** Test hands: a chat gone quiet, calls aged, a contact erased, a person in the line's space. */
+export const hands = definePlugin({
+  name: "hands",
+  actions: {
+    "test.quiet": {
+      input: { type: "object" },
+      run: (ctx, input: { thread: string; hours: number }) =>
+        ctx.db.collection("thread").updateOne({ _id: input.thread }, {
+          $set: { at: new Date(Date.now() - input.hours * 3_600_000).toISOString() },
+        }),
+    },
+    // A call back in time: when it rang (`at`) and its place (`until`).
+    "test.age": {
+      input: { type: "object" },
+      run: async (ctx, input: { call: string; ms: number }) => {
+        const calls = ctx.db.collection<{ at: string; until: string }>("voice_call");
+        const found = await calls.findOne({ _id: input.call });
+        await calls.updateOne({ _id: input.call }, {
+          $set: {
+            at: new Date(Date.parse(found!.at) - input.ms).toISOString(),
+            until: new Date(Date.parse(found!.until) - input.ms).toISOString(),
+          },
+        });
+      },
+    },
+    "test.erase": {
+      input: { type: "object" },
+      run: (ctx, input: { contact: string }) =>
+        ctx.db.collection("contact").deleteOne({ _id: input.contact }),
+    },
+    // A person in the line's space, with a role.
+    "test.member": {
+      input: { type: "object" },
+      run: (ctx, input: { person: string; role: string }) =>
+        ctx.db.collection("member").insertOne({
+          _id: `line|person:${input.person}`,
+          member: `person:${input.person}`,
+          space: "line",
+          role: input.role,
+        }),
+    },
+  },
 });

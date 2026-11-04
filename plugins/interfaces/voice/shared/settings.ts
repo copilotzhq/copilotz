@@ -29,8 +29,14 @@ export type VoiceLine = {
   stt?: string;
   /** Lines said to callers, instead of the language's own (see `TEXTS`); `greeting: ""` says none. */
   texts?: Partial<Texts>;
-  /** Hours of quiet after which a caller's next call starts a new chat (`GAP`). */
+  /**
+   * Hours of quiet after which a caller's next call starts a new chat (`GAP`). Calling back goes
+   * on in the same chat only when Twilio verified the number (STIR/SHAKEN), or with
+   * `trustCallerId`: a number alone isn't proof of who's calling.
+   */
   gap?: number;
+  /** A caller's number is who they are, verified or not: their calls go on in one chat. */
+  trustCallerId?: boolean;
   /** Keys pressed on the phone come to the agent too (Twilio's `dtmfDetection`). */
   keys?: boolean;
   /** How much calls may cost: see `Limits`. */
@@ -40,14 +46,44 @@ export type VoiceLine = {
 };
 
 /**
- * What calls on a line may cost: calls at once, calls in any 24 hours, and
- * seconds: for an agent's answer (`turn`), of silence (`idle`) and for a
- * whole call (`call`). Past them, a call isn't taken, or ends politely.
+ * What calls on a line may cost. Past them, a call isn't taken (Twilio rejects it as busy:
+ * nothing is spent), or it ends politely.
  */
-export type Limits = { atOnce: number; perDay: number; turn: number; idle: number; call: number };
+export type Limits = {
+  /** Calls at once, and calls that went on in any 24 hours, on the line. */
+  atOnce: number;
+  perDay: number;
+  /** The same, from one caller (by number; hidden numbers count as one caller), checked first. */
+  callerAtOnce: number;
+  callerPerDay: number;
+  /** Seconds for an answer, of silence, and for a whole call. */
+  turn: number;
+  idle: number;
+  call: number;
+  /** Things the caller may say in a call, and characters an answer may say. */
+  turns: number;
+  said: number;
+};
 
-/** 0.x's limits, kept: two calls at once, fifty a day, 25 s an answer, 90 s of silence, 10 minutes. */
-export const LIMITS: Limits = { atOnce: 2, perDay: 50, turn: 25, idle: 90, call: 600 };
+/**
+ * 0.x's limits, kept (2 at once, 50 a day, 25 s an answer, 90 s of silence, 10 minutes, 30
+ * things said a call), with a caller's own: 1 call at once, 10 a day; and 1,200 characters an
+ * answer (about 80 seconds said).
+ */
+export const LIMITS: Limits = {
+  atOnce: 2,
+  perDay: 50,
+  callerAtOnce: 1,
+  callerPerDay: 10,
+  turn: 25,
+  idle: 90,
+  call: 600,
+  turns: 30,
+  said: 1_200,
+};
+
+/** Days a call's record is kept (`keep`), and a caller's link to their contact. */
+export const KEEP = 30;
 
 /** Hours a caller's chat stays the one they're in, as WhatsApp's (12): calling back goes on. */
 export const GAP = 12;
@@ -69,7 +105,11 @@ export const TEXTS: Record<string, Texts> = {
   },
 };
 
-export type VoiceSettings = { lines?: Record<string, VoiceLine> };
+export type VoiceSettings = {
+  lines?: Record<string, VoiceLine>;
+  /** Days calls' records are kept (`KEEP`, 30); then they go, with the number they had. */
+  keep?: number;
+};
 
 /** Where every line's paths start: `/hooks/voice/<name>`, `…/relay`, `…/over`. */
 export const HOOKS = "/hooks/voice/";
@@ -86,6 +126,18 @@ export const linesOf = (ctx: { resources: Resources }): Record<string, VoiceLine
     Object.entries(all).filter(([, line]) => line && (org ? line.org === org : !line.org)),
   );
 };
+
+/** The longest a goodbye waits for what's being said, before Twilio's `end`; then closing. */
+export const GOODBYE_MS = 15_000;
+export const CLOSING_MS = 5_000;
+
+/** The longest a call lasts, from its socket opening: its limit, its goodbye, and closing. */
+export const lastsMs = (line: Pick<Line, "limits">) =>
+  line.limits.call * 1000 + GOODBYE_MS + CLOSING_MS;
+
+/** Days calls' records are kept. */
+export const keepOf = (ctx: { resources: Resources }): number =>
+  ((ctx.resources.voice ?? {}) as VoiceSettings).keep ?? KEEP;
 
 /** A line as the plugin uses it: its settings, its name, and every default filled in. */
 export type Line = VoiceLine & {

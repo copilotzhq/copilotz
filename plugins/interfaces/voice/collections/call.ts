@@ -5,9 +5,10 @@
  * - **ringing:** Twilio asked what to do with it, and was told to open its
  *   socket with a one-time ticket (`ticket` is that ticket's hash, gone once
  *   it's used; it lasts until `until`).
- * - **live:** its socket is open: the caller is a contact (`contact`),
- *   talking in a chat (`thread`). It holds its place among the line's calls
- *   at once until `until` (the line's longest call, and a little).
+ * - **live:** its socket is open (`started`): the caller is a contact
+ *   (`contact`), talking in a chat (`thread`). It holds its place among the
+ *   line's calls at once until `until`: its hard end (the line's longest
+ *   call, the goodbye's wait and closing), which no call outlasts.
  * - **over:** it ended (`over`), after `seconds`, for `reason`: `hangup`
  *   (the caller, or Twilio), `agent` (it said goodbye), `idle`, `limit`
  *   (the line's longest call), `setup` or `error`; with what Twilio said
@@ -16,7 +17,9 @@
  * The caller's number (`from`) and the ticket are private, and nothing
  * outside reads this collection: no rule lets anyone but the plugin's own
  * code. No events, so neither goes into the log; neither does every change
- * of a call.
+ * of a call. A record goes after the plugin's `keep` days (30), with its
+ * number; the caller's number goes when their contact is erased, and what
+ * they heard of a cut answer when their chat is.
  */
 import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
 
@@ -29,6 +32,10 @@ const callSchema = {
     /** The caller's number, as Twilio gives it (`+5511…`), and the line's. */
     from: { type: "string" },
     to: { type: "string" },
+    /** Twilio verified the caller's number (STIR/SHAKEN's full attestation). */
+    verified: { type: "boolean" },
+    /** Its caller's contact was erased, and the number with it. */
+    erased: { type: "boolean" },
     state: { type: "string", enum: ["ringing", "live", "over"] },
     ticket: { type: "string" },
     /** Its place among the calls at once is kept until then. */

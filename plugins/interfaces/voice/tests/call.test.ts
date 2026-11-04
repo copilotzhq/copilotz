@@ -2,8 +2,7 @@
  * A call over the socket, with a fake ConversationRelay: the caller is a
  * contact in a chat of their own; what they say goes to the agent, and what
  * it writes is said as it writes it (a step's words, then its answer);
- * calling back goes on in the same chat until the gap; speaking over an
- * answer cuts it, and the agent is told what was heard; a failed or too
+ * speaking over an answer cuts it, and the agent is told what was heard; a failed or too
  * slow answer says the line's short line, never the error; the agent, the
  * silence and the call's length end it; keys pressed reach the agent.
  */
@@ -12,21 +11,10 @@ import { definePlugin } from "../../../../runtime/mod.ts";
 import type { Message } from "../../../agents/chat/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import type { VoiceCall } from "../collections/call.ts";
-import type { VoicePhone } from "../collections/phone.ts";
-import { ACCOUNT, CARLA, LINE_NUMBER, offered, type Relay, setup, until } from "./setup.ts";
+import { ACCOUNT, CARLA, heard, LINE_NUMBER, offered, say, setup, until } from "./setup.ts";
 
 const FAILED = "Desculpe, não consegui responder agora. Pode repetir?";
 const BYE = "Vou encerrar a ligação agora. Até logo!";
-
-/** The caller says something, as Twilio tells it once they've finished. */
-const say = (relay: Relay, words: string) =>
-  relay.tell({ type: "prompt", voicePrompt: words, lang: "pt-BR", last: true });
-
-/** Waits for the `n`th thing said, whole. */
-const heard = async (relay: Relay, n: number, ms = 3_000) => {
-  await until(() => relay.sent.filter((m) => m.type === "text" && m.last).length >= n, ms, `${n}`);
-  return relay.said();
-};
 
 test("a whole call: a contact in a chat of its own, words said as they're written", async () => {
   await setup(async (s) => {
@@ -87,39 +75,6 @@ test("a long answer's first words are said while the rest is still being written
       "Temos muitas viagens hoje, de manhã e à tarde. ".repeat(4).trim(),
     );
   });
-});
-
-test("calling back goes on in the same chat; after the gap, a new one; a hidden number is nobody", async () => {
-  await setup(async (s) => {
-    const first = await s.call();
-    say(first, "oi");
-    await heard(first, 1);
-    first.hangUp();
-    const second = await s.call();
-    say(second, "de novo");
-    // Only what was said in this call is said: not the first call's answer again.
-    assertEquals(await heard(second, 1), ["Você disse de novo."]);
-    second.hangUp();
-    const calls = await s.docs<VoiceCall>("voice_call");
-    assertEquals(calls[0].contact, calls[1].contact);
-    assertEquals(calls[0].thread, calls[1].thread);
-
-    // Quiet for 13 hours: the same caller, a new chat.
-    await s.runtime.call("test.quiet", { thread: calls[0].thread, hours: 13 });
-    (await s.call()).hangUp();
-    const third = (await s.docs<VoiceCall>("voice_call"))[2];
-    assertEquals(third.contact, calls[0].contact);
-    assert(third.thread !== calls[0].thread);
-    const [phone] = await s.docs<VoicePhone>("voice_phone");
-    assertEquals([phone._id, phone.thread], [`help:${CARLA}`, third.thread]);
-
-    // A hidden number: a contact of its own, each call; none kept by number.
-    (await s.call({ from: "anonymous" })).hangUp();
-    (await s.call({ from: "anonymous" })).hangUp();
-    const hidden = (await s.docs<VoiceCall>("voice_call")).slice(3);
-    assert(hidden[0].contact !== hidden[1].contact && hidden[0].contact !== calls[0].contact);
-    assertEquals((await s.docs("voice_phone")).length, 1);
-  }, { plugins: [quiet] });
 });
 
 test("speaking over an answer cuts it there, and the agent is told what was heard", async () => {
@@ -234,7 +189,7 @@ test("silence, and a call too long, end it with a goodbye", async () => {
 
 test("keys pressed reach the agent, a pause or # ending them, with the line's keys on", async () => {
   await setup(async (s) => {
-    const twiml = await (await s.ring()).text();
+    const twiml = await (await s.ring({ from: "+5531988887777" })).text();
     assert(twiml.includes('dtmfDetection="true"'));
     const call = await s.call();
     for (const digit of ["1", "2", "3"]) call.tell({ type: "dtmf", digit });
@@ -276,21 +231,9 @@ test("only what the caller may read is said", async () => {
   }, { plugins: [quiet] });
 });
 
-test("a contact erased takes its number with it", async () => {
-  await setup(async (s) => {
-    (await s.call()).hangUp();
-    const [c] = await s.docs<VoiceCall>("voice_call");
-    assertEquals(c.from, CARLA);
-    await s.runtime.call("test.erase", { contact: c.contact });
-    await s.runtime.idle();
-    assertEquals(await s.docs("voice_phone"), []);
-    assertEquals((await s.docs<VoiceCall>("voice_call"))[0].from, undefined);
-  }, { plugins: [quiet] });
-});
-
 test("a call's setup names the call: numbers and account, as the webhook had them", async () => {
   await setup(async (s) => {
-    const twiml = await (await s.ring()).text();
+    const twiml = await (await s.ring({ from: CARLA })).text();
     const { relay } = await s.open(twiml);
     // Before setup, nothing counts.
     say(relay, "oi");
@@ -308,27 +251,19 @@ test("a call's setup names the call: numbers and account, as the webhook had the
   });
 });
 
-/** Test hands: a chat gone quiet, an agent's message written as trusted code does, a contact erased. */
+/** Test hands: an agent's message written as trusted code does. */
 const quiet = definePlugin({
   name: "quiet",
   actions: {
-    "test.quiet": {
-      input: { type: "object" },
-      run: (ctx, input: { thread: string; hours: number }) =>
-        ctx.db.collection("thread").updateOne({ _id: input.thread }, {
-          $set: { at: new Date(Date.now() - input.hours * 3_600_000).toISOString() },
-        }),
-    },
     "test.said": {
       input: { type: "object" },
       run: async (
         ctx,
         input: { thread: string; contact: string; text: string; sources?: string[] },
       ) => {
-        const turn = crypto.randomUUID();
+        // As trusted code says something to them (`chat.say`): no turn.
         await ctx.db.collection<Message>("message").insertOne({
-          _id: `${turn}:reply`,
-          turn,
+          _id: crypto.randomUUID(),
           thread: input.thread,
           in: "line",
           from: "phone",
@@ -339,11 +274,6 @@ const quiet = definePlugin({
           at: new Date().toISOString(),
         });
       },
-    },
-    "test.erase": {
-      input: { type: "object" },
-      run: (ctx, input: { contact: string }) =>
-        ctx.db.collection("contact").deleteOne({ _id: input.contact }),
     },
   },
 });

@@ -14,30 +14,41 @@
  *   within 5 seconds. The caller is then a contact, in their chat
  *   (`voice.start`), while Twilio says the greeting.
  * - `prompt` (what the caller said, once they've finished): it goes to the
- *   agent as theirs (`chat.send`, as the contact), at once.
+ *   agent as theirs (`chat.send`, as the contact), at once, one after the
+ *   other. Said while the agent's answer to what they said before is still
+ *   being written, that turn is stopped first, and the next turn reads both:
+ *   the caller has moved on, and only one turn of a call runs at a time.
  * - What the agent writes for them is said as it writes it (`text` tokens),
  *   word by word: the words of a step before its tools ("One moment, I'll
  *   look"), then its answer, each said once whole (the `voice_call` View).
- *   An answer that failed says the line's `failed` text, never its error.
+ *   Only the turns the caller's own words started are said: what's written
+ *   in their chat for someone else (a staff member's question) isn't. An
+ *   answer that failed says the line's `failed` text, never its error.
  * - `interrupt` (the caller spoke over it): what was being said stops
  *   there, and the agent is told what they heard (`voice.heard`).
  * - `dtmf` (with the line's `keys`): keys pressed, a pause or `#` ending
  *   them, go to the agent as theirs, as a tap (`keys:<digits>`).
  * - The line's limits: an answer that takes longer than `turn` is stopped,
- *   and the `failed` text said; past `idle` seconds of silence, or `call`
- *   seconds in all, the `bye` text is said and the call ends.
+ *   and the `failed` text said; one past `said` characters is cut there (and
+ *   stopped); past `idle` seconds of silence, `call` seconds, or `turns`
+ *   things the caller said, the `bye` text is said and the call ends.
  * - It ends with Twilio's `end` (its `handoffData` says why: `agent`, once
- *   the agent's goodbye is said (`end_call`); `idle`; `limit`), or when the
- *   caller hangs up. The call is then over (`voice.over`), and a turn still
- *   running is stopped: nobody would hear it.
+ *   the agent's goodbye is said (`end_call`); `idle`; `limit`; `turns`),
+ *   after what's being said, waiting 15 seconds at most; or when the caller
+ *   hangs up. A call that's still open at its hard end (`lastsMs`) closes
+ *   then, so it never outlasts its place among the line's calls at once.
+ *   The call is then over (`voice.over`), and its agent's turn is stopped,
+ *   and so is any turn of it that starts in the moments after: nobody would
+ *   hear it.
  *
  * Calls cost by the minute, so it waits on nothing it needn't: no quiet
- * window, the chat made while the greeting plays, words sent as they come.
+ * window (Twilio already waits for the caller to finish), the chat made
+ * while the greeting plays, words sent as they come.
  */
 import type { Actor, Runtime } from "../../../../runtime/mod.ts";
 import type { Admitted, Started } from "../actions/call.ts";
 import type { Saying } from "../views/call.ts";
-import { HOOKS, type Line, lineOf } from "../shared/settings.ts";
+import { GOODBYE_MS, HOOKS, lastsMs, type Line, lineOf } from "../shared/settings.ts";
 import { signed } from "../shared/signature.ts";
 
 /** A route's socket, as far as a call uses it (the web host's `RouteSocket`). */
@@ -64,8 +75,14 @@ export async function serveRelay(request: Request, host?: RelayHost): Promise<Re
   if (!host?.runtime || !host.upgrade) return plain(501, "This host doesn't take sockets");
   const url = new URL(request.url);
   const [name = "", what, ...more] = url.pathname.slice(HOOKS.length).split("/");
-  const line = what === "relay" && !more.length
-    ? lineOf({ resources: host.runtime.describe().resources }, decodeURIComponent(name))
+  let named = "";
+  try {
+    named = decodeURIComponent(name);
+  } catch {
+    // A malformed name names no line.
+  }
+  const line = what === "relay" && !more.length && named
+    ? lineOf({ resources: host.runtime.describe().resources }, named)
     : undefined;
   if (!line) return plain(404, "No such line");
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
@@ -102,6 +119,8 @@ const SETUP_MS = 5_000;
 const KEYS_MS = 1_500;
 /** About how long a character takes to say: when to hang up after a goodbye. */
 const MS_PER_CHAR = 65;
+/** Once a call is over, a turn of it that starts this soon after is stopped as it shows. */
+const DRAIN_MS = 5_000;
 /** The largest message from Twilio it reads, and the longest prompt. */
 const MAX_FRAME = 16 * 1024;
 const MAX_PROMPT = 4_000;
@@ -133,6 +152,10 @@ function rest(sent: string, text: string): string {
   return text.slice(i);
 }
 
+/** How long to wait before Twilio's `end`, for what's being said: 15 seconds at most. */
+export const goodbyeWait = (playedBy: number, now: number) =>
+  Math.min(GOODBYE_MS, Math.max(0, playedBy - now)) + 250;
+
 /** A call, over its socket, from Twilio's `setup` to its end (see above). */
 export function talk(
   runtime: RelayHost["runtime"],
@@ -146,12 +169,19 @@ export function talk(
   let over = false;
   /** Why it's ending, once it is: what's said after that isn't heard. */
   let ending: string | undefined;
+  /** What the caller said, one after the other; how many things so far. */
+  let asking = Promise.resolve();
   let asked = 0;
-  /** The caller said something the agent hasn't answered yet. */
+  /** The caller said something the agent hasn't answered yet: the latest thing, and when. */
   let waiting = false;
-  /** The turn writing now (its live words), and turns whose words aren't said any more. */
+  let latest = { message: "", at: "" };
+  /** The turns the caller's words started (`<message>:<agent>`): only theirs are said. */
+  const theirs = new Set<string>();
+  const ours = (turn: string | undefined) => !!turn && theirs.has(turn);
+  /** The turn of theirs writing now, turns whose words aren't said any more, and how much each said. */
   let working: string | undefined;
   const muted = new Set<string>();
+  const spoken = new Map<string, number>();
   /** What's being said as it's written: its turn, the words sent, and, once cut, what was heard. */
   let current: { turn: string; sent: string; cut?: string } | undefined;
   /** What went last, whole (what an interruption cuts, when nothing is being written). */
@@ -164,6 +194,8 @@ export function talk(
   const timers = {
     setup: setTimeout(() => finish("setup"), SETUP_MS),
     call: setTimeout(() => hangUp("limit", true), limits.call * 1000),
+    // Its hard end: whatever happens, the call is over by then.
+    hard: setTimeout(() => finish("limit"), lastsMs(line)),
     idle: undefined as ReturnType<typeof setTimeout> | undefined,
     turn: undefined as ReturnType<typeof setTimeout> | undefined,
     keys: undefined as ReturnType<typeof setTimeout> | undefined,
@@ -183,14 +215,35 @@ export function talk(
     send({ type: "text", token, last: end });
     playedBy = Math.max(playedBy, Date.now()) + token.length * MS_PER_CHAR;
   };
+  /**
+   * Says words of a turn, within the characters an answer may say (`said`):
+   * past them, what fits (to its last whole word) ends it, and the rest of
+   * that turn isn't said, nor written on.
+   */
+  const speak = (turn: string, token: string, end: boolean) => {
+    const had = spoken.get(turn) ?? 0;
+    if (had + token.length <= limits.said) {
+      spoken.set(turn, had + token.length);
+      return say(token, end);
+    }
+    const room = token.slice(0, Math.max(0, limits.said - had));
+    const at = room.search(/\s\S*$/);
+    say(at >= 0 ? room.slice(0, at + 1) : "", true);
+    spoken.set(turn, limits.said);
+    muted.add(turn);
+    if (current?.turn === turn) current = undefined;
+    if (working === turn) void stopTurns();
+  };
   const idle = () => {
     clearTimeout(timers.idle);
     if (over || ending || waiting) return;
     const after = limits.idle * 1000 + Math.max(0, playedBy - Date.now());
     timers.idle = setTimeout(() => hangUp("idle", true), after);
   };
+  /** Stops the agent's turn in the call's chat, if one runs. */
   const stopTurns = () =>
-    started?.then((s) => runtime.call("chat.stop", { thread: s.thread })).catch(() => {});
+    started?.then((s) => runtime.call("chat.stop", { thread: s.thread, agent: s.agent }))
+      .catch(() => {});
 
   /** Ends the call: says goodbye (`bye`), waits for what's being said, then Twilio's `end`. */
   function hangUp(reason: string, bye: boolean) {
@@ -199,12 +252,13 @@ export function talk(
     for (const timer of [timers.idle, timers.turn, timers.keys]) clearTimeout(timer);
     if (current) muted.add(current.turn);
     current = undefined;
+    if (waiting) void stopTurns();
     if (bye) say(texts.bye, true);
     timers.end = setTimeout(() => {
       send({ type: "end", handoffData: JSON.stringify({ reason }) });
       // Twilio closes the socket; if it doesn't, it's closed here.
       timers.end = setTimeout(() => finish(reason), 5_000);
-    }, Math.max(0, playedBy - Date.now()) + 250);
+    }, goodbyeWait(playedBy, Date.now()));
   }
 
   /** The call is over: nothing more happens, and the call says why. */
@@ -212,9 +266,9 @@ export function talk(
     if (over) return;
     over = true;
     for (const timer of Object.values(timers)) clearTimeout(timer);
-    seeing?.close();
-    // Nobody will hear what's still being worked on.
-    if (waiting) void stopTurns();
+    // Nobody will hear what's still being worked on; nor a turn of the call that starts after.
+    void stopTurns();
+    setTimeout(() => seeing?.close(), DRAIN_MS);
     void runtime.call("voice.over", { call: call._id, reason: ending ?? reason }).catch(() => {});
     try {
       socket.close(1000, "over");
@@ -223,14 +277,21 @@ export function talk(
     }
   }
 
-  /** What the caller says goes to the agent, as theirs. */
-  async function ask(text: string, tap?: { id: string; title: string }) {
+  /** What the caller says goes to the agent, as theirs, one thing after the other. */
+  const ask = (text: string, tap?: { id: string; title: string }) =>
+    asking = asking.then(() => told(text, tap));
+
+  async function told(text: string, tap?: { id: string; title: string }) {
     let on: Started;
     try {
       on = await started!;
     } catch {
       return;
     }
+    if (over || ending) return;
+    if (asked >= limits.turns) return hangUp("turns", true);
+    // They spoke again before the answer: that turn stops, and the next one reads both.
+    if (waiting) await stopTurns();
     if (over || ending) return;
     const id = `voice:${call._id}:${++asked}`;
     waiting = true;
@@ -240,11 +301,16 @@ export function talk(
     clearTimeout(timers.turn);
     timers.turn = setTimeout(tooLong, limits.turn * 1000);
     const contact: Actor = { kind: "contact", id: on.contact };
+    latest = { message: "", at: new Date().toISOString() };
     try {
-      await runtime.call("chat.send", { thread: on.thread, text, ...(tap ? { tap } : {}) }, {
-        actor: contact,
-        id,
-      });
+      const { message } = await runtime.call<{ message: string }>("chat.send", {
+        thread: on.thread,
+        text,
+        ...(tap ? { tap } : {}),
+      }, { actor: contact, id });
+      theirs.add(`${message}:${on.agent}`);
+      latest.message = message;
+      saying();
     } catch (error) {
       console.error(`voice: what a caller said couldn't go on:`, (error as Error).message);
       clearTimeout(timers.turn);
@@ -265,18 +331,30 @@ export function talk(
     idle();
   }
 
-  /** What the agents said, and are writing: what's new is said. */
+  /** What the agents said, and are writing: what's new of the caller's turns is said. */
   function saying() {
     const now = seeing?.get();
-    if (over || now?.status !== "ready") return;
+    if (now?.status !== "ready") return;
     const { said, live, end } = now.value;
+    if (over) {
+      // A turn of the call that started after it ended: stopped as it shows.
+      if (ours(live?.turn)) void stopTurns();
+      return;
+    }
     for (const item of said) {
       if (done.has(item._id)) continue;
+      // Someone else's turn in their chat isn't theirs to hear (not marked: it may yet be theirs,
+      // once `chat.send` says which message started it).
+      if (item.turn && !ours(item.turn)) continue;
       done.add(item._id);
       // What was being said as it was written is this, now whole.
       const mine = current && current.turn === item.turn ? current : undefined;
       if (mine) current = undefined;
-      if (!item.step) {
+      // Answered: what they said last, or after it (a stopped turn's answer is the one before's).
+      if (
+        !item.step &&
+        (item.replyTo === latest.message || (!item.stopped && item.at >= latest.at))
+      ) {
         waiting = false;
         clearTimeout(timers.turn);
       }
@@ -285,20 +363,22 @@ export function talk(
           .catch(() => {});
       } else if (!ending && !item.stopped && !(item.turn && muted.has(item.turn))) {
         const left = rest(mine?.sent ?? "", item.failed ? texts.failed : item.text);
-        if (left || mine?.sent) say(left, true);
+        if (item.turn) {
+          if (left || mine?.sent) speak(item.turn, left, true);
+        } else if (left) say(left, true);
         last = item._id;
       }
       if (!item.step && end && end.after === item.replyTo) hangUp(end.reason, false);
       if (!item.step) idle();
     }
-    working = live?.turn;
-    if (live && !ending && !muted.has(live.turn)) {
+    working = ours(live?.turn) ? live!.turn : undefined;
+    if (live && working && !ending && !muted.has(live.turn)) {
       if (current?.turn !== live.turn) current = { turn: live.turn, sent: "" };
       const ready = whole(live.text);
       if (current.cut === undefined && ready.length > current.sent.length) {
         const left = rest(current.sent, ready);
-        if (left) say(left, false);
         current.sent = ready;
+        if (left) speak(live.turn, left, false);
       }
     }
     if (end && !end.after && !waiting) hangUp(end.reason, false);
@@ -351,11 +431,13 @@ export function talk(
       const contact: Actor = { kind: "contact", id: on.contact };
       // Twilio says the greeting itself.
       if (on.greeting) done.add(on.greeting);
-      const { greeting: _, ...item } = on;
-      seeing = runtime.observe<Saying>("voice", "voice_call", { _id: call._id, ...item }, {
-        actor: contact,
-        viewer: { kind: "contact", name: `contact:${on.contact}` },
-      });
+      const { thread, since } = on;
+      seeing = runtime.observe<Saying>("voice", "voice_call", {
+        _id: call._id,
+        thread,
+        contact: on.contact,
+        since,
+      }, { actor: contact, viewer: { kind: "contact", name: `contact:${on.contact}` } });
       seeing.subscribe(saying);
       saying();
       idle();
@@ -368,7 +450,8 @@ export function talk(
 
   socket.onmessage = (event) => {
     if (over) return;
-    const data = event.data;
+    // As early as the socket lets it: a frame too large, or not text, is let go unread.
+    const data = event?.data;
     if (typeof data !== "string" || data.length > MAX_FRAME) return;
     let m: Relayed;
     try {
@@ -376,7 +459,8 @@ export function talk(
     } catch {
       return;
     }
-    if (m?.type === "setup") return setup(m);
+    if (!m || typeof m !== "object") return;
+    if (m.type === "setup") return setup(m);
     // Nothing counts before Twilio says which call this is.
     if (!started) return;
     if (m.type === "prompt") {

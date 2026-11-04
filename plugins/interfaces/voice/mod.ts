@@ -9,26 +9,34 @@
  *   language, voice, greeting and limits), open to anyone who calls. In
  *   Twilio's console, the number's "a call comes in" webhook is
  *   `POST <origin>/hooks/voice/<name>`.
- * - **A caller** is a contact (someone outside the org), by line and number,
- *   in a chat of their own in the line's space, answered by its agent: the
- *   same chat when they call back before the line's `gap` (12 hours), a new
- *   one after. A hidden number is a new contact each call. Erasing a contact
- *   (`contact.forget`) erases its number here too.
+ * - **A caller** is a contact (someone outside the org), in a chat of their
+ *   own in the line's space, answered by its agent. A number isn't proof of
+ *   who's calling, so a caller is the same contact, in the same chat (until
+ *   the line's `gap`, 12 hours, and never one with another call on), only
+ *   when Twilio verified their number (STIR/SHAKEN), or the line trusts
+ *   numbers (`trustCallerId`); else, and for a hidden number, each call is a
+ *   new contact. Its managers block a caller (`voice.block`), by a hash of
+ *   their number. Erasing a contact (`contact.forget`) erases its number
+ *   here too, and erasing a chat what was kept of it; calls' records go
+ *   after the plugin's `keep` days (30).
  * - **A call** (see actions/hook.ts and resources/relay.ts): Twilio's
- *   webhook is checked against Twilio's signature, taken within the line's
- *   limits (else rejected as busy: nothing is spent), and told to open the
- *   line's socket with a ticket good once, for a minute. On the socket, what
- *   the caller says goes to the agent as theirs, and what the agent writes is
- *   said as it writes it; a caller speaking over it stops it there. A failed
- *   or too slow answer says a short line in the line's language, never the
- *   error. Silence, or a call too long, ends it with a goodbye; the agent
- *   ends it too, once it said goodbye (the `end_call` tool, offered to the
- *   agent answering a call while it goes on). Each call is a small record
+ *   webhook is checked against Twilio's signature, taken within its
+ *   caller's limits and the line's (else rejected as busy: nothing is
+ *   spent), and told to open the line's socket with a ticket good once, for
+ *   a minute. On the socket, what the caller says goes to the agent as
+ *   theirs, one turn at a time (a new prompt stops the turn still answering
+ *   the one before), and what the agent writes for them is said as it writes
+ *   it; a caller speaking over it stops it there. A failed or too slow answer
+ *   says a short line in the line's language, never the error; a too long
+ *   one is cut. Silence, a call too long or too many prompts end it with a
+ *   goodbye; the agent ends it too, once it said goodbye (the `end_call`
+ *   tool, offered to the agent answering a call while it goes on). A call
+ *   that ends stops its agent's turn. Each call is a small record
  *   (`voice_call`): when, how long, why it ended.
  * - **The phone is a medium:** what an agent writes is said through its
  *   `message` View (renderer `voice`: the words, without Markdown), which an
  *   app may replace; the caller's chat is read as theirs, so only what they
- *   may read is said.
+ *   may read is said, and only of the turns their own words started.
  *
  * ```ts
  * plugins: [models, chat, ...access, voice]
@@ -45,30 +53,37 @@
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { hookAction } from "./actions/hook.ts";
 import { admitAction, heardAction, overAction, startAction } from "./actions/call.ts";
+import { blockAction } from "./actions/block.ts";
+import { pruneAction } from "./actions/prune.ts";
+import { blocked } from "./collections/blocked.ts";
 import { call } from "./collections/call.ts";
 import { phone } from "./collections/phone.ts";
-import { forgetProcessor } from "./processors/forget.ts";
+import { erasedProcessor, forgetProcessor } from "./processors/forget.ts";
 import { serveRelay } from "./resources/relay.ts";
 import { endCall } from "./resources/tools.ts";
 import { callView } from "./views/call.ts";
 import { contextView } from "./views/context.ts";
 import { messageView } from "./views/message.ts";
-import { HOOKS, linesOf, problemOf } from "./shared/settings.ts";
+import { HOOKS, keepOf, linesOf, problemOf } from "./shared/settings.ts";
 
 export * from "./contract.ts";
 
 export const voice: Plugin = definePlugin({
   name: "voice",
   requires: ["chat", "spaces", "contacts"],
-  collections: { voice_call: call, voice_phone: phone },
+  collections: { voice_call: call, voice_phone: phone, voice_blocked: blocked },
   actions: {
     "voice.hook": hookAction,
     "voice.admit": admitAction,
     "voice.start": startAction,
     "voice.heard": heardAction,
     "voice.over": overAction,
+    "voice.block": blockAction,
+    "voice.prune": pruneAction,
   },
-  processors: { "voice.forget": forgetProcessor },
+  processors: { "voice.forget": forgetProcessor, "voice.erased": erasedProcessor },
+  // What's kept of calls goes after `keep` days.
+  schedules: { "voice.prune": { cron: "40 3 * * *", call: "voice.prune", input: {} } },
   views: {
     // The phone as a medium: what a message is, said aloud; what's being said in a call.
     message: { voice: messageView },
@@ -77,6 +92,8 @@ export const voice: Plugin = definePlugin({
   },
   // At start: every line the app declares has what it needs.
   check: (merged) => {
+    const keep = keepOf(merged);
+    if (!(typeof keep === "number" && keep > 0)) throw new Error("voice.keep is days, over 0");
     for (const [name, line] of Object.entries(linesOf(merged))) {
       const problem = problemOf(name, line);
       if (problem) throw new Error(`voice.lines.${name} ${problem}`);

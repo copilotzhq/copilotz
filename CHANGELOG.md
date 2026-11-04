@@ -3,33 +3,49 @@
 - **Phone calls: the `voice` plugin** (in `copilotz/plugins/interfaces`), on Twilio's
   ConversationRelay. The app declares its lines (`resources.voice.lines.<name>`: `in`, `account`,
   `token`, `origin`, and optionally `agent`, `language`, `tts`, `voice`, `stt`, `texts`, `gap`,
-  `keys`, `limits`, `org`), each a Twilio number open to anyone who calls; their settings are
-  checked at start.
+  `trustCallerId`, `keys`, `limits`, `org`), each a Twilio number open to anyone who calls; their
+  settings are checked at start.
   - **Twilio's webhook** is `POST /hooks/voice/<line>` (the `voice.hook` route): checked against
-    `X-Twilio-Signature` with the line's auth token, then taken within the line's `limits`
-    (`atOnce`, 2; `perDay`, 50 in any 24 hours) or rejected as busy (`<Reject reason="busy"/>`:
-    nothing is spent). A call taken gets TwiML that opens the line's socket
-    (`<Connect><ConversationRelay>`, the line's language, greeting and voice) with a ticket good
-    once, for a minute; `POST /hooks/voice/<line>/over` hears the relay end and hangs up.
+    `X-Twilio-Signature` with the line's auth token. A caller the line's managers blocked
+    (`voice.block`, kept by the number's hash) isn't taken; then a call is taken within its caller's
+    limits (`callerAtOnce` 1, `callerPerDay` 10; withheld numbers are one caller), then the line's
+    (`atOnce` 2, `perDay` 50 calls that went on in any 24 hours), or rejected as busy
+    (`<Reject reason="busy"/>`: nothing is spent). A call taken gets TwiML that opens the line's
+    socket (`<Connect><ConversationRelay>`, the line's language, greeting and voice) with a ticket
+    good once, for a minute; `POST /hooks/voice/<line>/over` hears the relay end and hangs up.
   - **The socket** (`GET /hooks/voice/<line>/relay`, a `serve` route): its signature checked, its
     ticket used, then Twilio's `setup` must name the call the ticket was for. The caller is a
-    contact (`via: "voice"`), by line and number (a hidden number is a new one each call), in a chat
-    of their own in the line's space, answered by the line's agent; calling back within the line's
-    `gap` (12 hours) goes on in the same chat. What they say goes to the agent at once, as theirs;
-    what the agent writes is said as it writes it, word by word (a step's words before its tools,
-    then its answer), through the `voice_call` View, read as the caller. Speaking over it
-    (`interrupt`) cuts what was being said, and the agent is told what was heard (the `voice`
-    context). Keys pressed (with `keys`) come as a tap, `keys:<digits>`. An answer that failed, or
-    took longer than `limits.turn` (25 s, then stopped), says the line's `failed` text, never the
-    error; `idle` (90 s) of silence or a call past `call` (600 s) says `bye` and ends it; the agent
-    ends it too, once its goodbye is said (the `end_call` tool, offered to whoever answers a call
-    while it goes on: no agent lists it). Twilio's `end` says why (`handoffData`).
+    contact (`via: "voice"`) in a chat of their own in the line's space, answered by the line's
+    agent (a line whose agent doesn't answer there fails the call). A number isn't proof of who's
+    calling: calling back goes on in the same contact and chat (until the line's `gap`, 12 hours,
+    and never into a chat with another call on) only when Twilio verified the number (`StirVerstat`
+    `TN-Validation-Passed-A`) or the line sets `trustCallerId`; otherwise, and for withheld numbers
+    (Twilio's placeholders, `+266696687` and the like), each call is a new contact.
+  - **What's said:** what the caller says goes to the agent at once, one prompt after the other; a
+    prompt said while the answer to the one before is still being written stops that turn, and the
+    next turn reads both (Twilio already waits for the caller to finish: a quiet window would add to
+    every answer). What the agent writes is said as it writes it, word by word (a step's words
+    before its tools, then its answer), through the `voice_call` View read as the caller, and only
+    of the turns the caller's own words started: a staff member's turn in their chat isn't said.
+    Speaking over it (`interrupt`) cuts what was being said, and the agent is told what was heard
+    (the `voice` context). Keys pressed (with `keys`) come as a tap, `keys:<digits>`.
+  - **What a call may cost** (`limits`): an answer that failed, or took longer than `turn` (25 s,
+    then stopped), says the line's `failed` text, never the error; one past `said` characters
+    (1,200) is cut at a word and stopped; `idle` (90 s) of silence, a call past `call` (600 s) or
+    past `turns` prompts (30) says `bye` and ends it. The goodbye waits 15 seconds at most for
+    what's being said; a call is over by its hard end (`call`, the goodbye and closing), and holds
+    its place among the line's calls until then. A call that ends stops its turn, and any turn of it
+    that starts just after. The agent ends a call too, once its goodbye is said (the `end_call`
+    tool, offered to whoever answers a call while it goes on). Twilio's `end` says why
+    (`handoffData`).
   - **The phone is a medium:** messages are said through their `message` View (renderer `voice`: the
     words without Markdown, a link's words, a web address's site), which an app may replace.
-  - Each call is a small record (`voice_call`, no events: when, how long, why it ended; the caller's
-    number private), and `voice_phone` keeps each caller's contact and chat. Erasing a contact
-    erases its number from both. Agents working for a caller are told it's a phone call (the
-    `contact` context).
+  - Each call is a small record (`voice_call`, no events: when, how long, why it ended, whether the
+    number was verified; the caller's number private), and `voice_phone` keeps each verified
+    caller's contact and chat. Erasing a contact erases its number from both; erasing a chat
+    (`chat.erase`, `contact.forget` with `chats`) erases what the calls kept of it. Calls' records
+    go after the plugin's `keep` days (30: `voice.prune`, daily). Agents working for a caller are
+    told it's a phone call, and that the number isn't proof of who they are (the `contact` context).
   - It needs a host that takes a route's socket (`host.upgrade()`: `serveRoutes`, or `serve`, from
     `copilotz/web/node`).
 - **Contacts: people outside the org who talk to its agents** (the new `contacts` plugin, part of

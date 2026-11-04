@@ -12,7 +12,7 @@ import { settingsOf } from "../shared/settings.ts";
 
 export const signInAction = defineAction({
   description: "Signs in with a Google ID token: the person, and a new session",
-  // Unrecorded: its result is the session's secret, and its input Google's ID token.
+  // Unrecorded: its input is the ID token and its result the session's secret.
   record: false,
   input: {
     type: "object",

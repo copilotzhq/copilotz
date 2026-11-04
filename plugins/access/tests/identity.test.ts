@@ -162,6 +162,9 @@ test("a session's or a key's secret never lands in the log", async () => {
     const { session } = await rt.call<{ session: string }>("session.start", { person: "ana" });
     const ana = (await rt.query("credential.actor", { secret: session })) as Actor;
     const { key } = await rt.call<{ key: string }>("key.create", { name: "ci" }, { actor: ana });
+    // Ending a session shows its secret too.
+    await rt.call("session.end", { secret: session }, { actor: ana });
+    await rt.idle();
     const logged = JSON.stringify(await store.events(0, 1000));
     assertEquals([logged.includes(session), logged.includes(key)], [false, false]);
   } finally {
@@ -169,17 +172,32 @@ test("a session's or a key's secret never lands in the log", async () => {
   }
 });
 
-test("a Google sign-in's session, and the ID token it took, never land in the log", async () => {
+test("a Google sign-in leaves neither its ID token nor the session's secret in the log", async () => {
   const store = memoryStore();
   const rt = await start(store);
   try {
     const idToken = await google.sign(google.claims());
-    const { session } = await rt.call<{ session: string }>("google.sign-in", { idToken });
+    const { person, session } = await rt.call<{ person: string; session: string }>(
+      "google.sign-in",
+      { idToken },
+    );
+    // Signed in for real: the session proves them, and the person was written.
+    assertEquals(await rt.query("credential.actor", { secret: session }), {
+      kind: "person",
+      id: person,
+    });
+    const again = await rt.call<{ session: string }>("google.sign-in", {
+      idToken: await google.sign(google.claims({ name: "Ana B." })),
+    });
     await rt.idle();
-    const logged = JSON.stringify(await store.events(0, 10_000));
-    assertEquals([logged.includes(session), logged.includes(idToken)], [false, false]);
-    // What it did is still there: the person it made.
-    assert(logged.includes("google:123"));
+    const events = await store.events(0, 10_000);
+    assert(events.some((e) => e.type === "person.created" || e.type === "person.updated"));
+    const logged = JSON.stringify(events);
+    const [, payload, signature] = idToken.split(".");
+    assertEquals(
+      [idToken, payload, signature, session, again.session].map((s) => logged.includes(s)),
+      [false, false, false, false, false],
+    );
   } finally {
     await rt.close();
   }

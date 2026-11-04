@@ -38,6 +38,18 @@ export const profile = defineCollection({
         return namesOf(await profiles.find({ _id: { $in: ids } }) as Profile[]);
       },
     },
+    /** Pictures by id (`{ ids }`), for faces beside those names: only those who have one. */
+    pictures: {
+      allow: (actor) => actor.kind === "person" || actor.kind === "agent",
+      run: async (profiles, params: { ids?: unknown }) => {
+        const given = Array.isArray(params?.ids) ? params.ids : [];
+        const ids = peopleIn(given.filter((id): id is string => typeof id === "string"))
+          .slice(0, 500);
+        if (!ids.length) return {};
+        const found = await profiles.find({ _id: { $in: ids } }) as Profile[];
+        return Object.fromEntries(found.flatMap((p) => p.picture ? [[p._id, p.picture]] : []));
+      },
+    },
   },
 });
 

@@ -21,6 +21,17 @@ export const windowStart = (total: number) =>
   total <= 2 * HISTORY ? 0 : total - HISTORY - ((total - HISTORY) % HISTORY);
 
 /**
+ * Where an agent's window starts by age (its `history.maxAge`, ms), back
+ * from the newest message it sees: on a grid of a tenth of `maxAge`, rounded
+ * up. Nothing older than `maxAge` is sent, everything younger than nine
+ * tenths of it is, and between steps each prompt starts as the last one did.
+ */
+export function ageStart(newest: string, maxAge: number): string {
+  const step = Math.max(1, Math.ceil(maxAge / 10));
+  return new Date(Math.ceil((Date.parse(newest) - maxAge) / step) * step).toISOString();
+}
+
+/**
  * A thread's messages, oldest first. A fork continues with its parent's, up
  * to the message it started at, and so on up the lineage; nothing is copied.
  * `agent` limits them to what that agent sees: the shared ones and its own

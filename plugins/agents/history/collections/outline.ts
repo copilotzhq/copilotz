@@ -6,7 +6,7 @@ const outlineSchema = {
   properties: {
     /** Shared messages numbered so far: the next one's index (agents' steps aren't numbered). */
     count: { type: "integer" },
-    /** The lines shown, oldest first: [level, index, bytes]. */
+    /** The lines shown, oldest first (`Line`). */
     lines: { type: "array" },
     bytes: { type: "integer" },
     /** The first message still whole, and when it was written. */
@@ -37,6 +37,12 @@ const outlineSchema = {
 } as const;
 
 export type Outline = Infer<typeof outlineSchema> & { _id: string };
+
+/**
+ * A line shown: its level and index in the tree, its size, and when its
+ * newest message was written (lines kept before they said so have none).
+ */
+export type Line = [level: number, index: number, bytes: number, until?: string];
 
 // Rewritten on every message, and nobody listens: no events.
 export const outline = defineCollection({ schema: outlineSchema, events: false });

@@ -100,6 +100,25 @@ outline 64–128 KB by default), so the prompt cache holds between batches. A th
 `outlined` once summarized, so others never read an outline. Forks with summaries of their own drop
 their parent's part (later).
 
+**By age.** An agent with `history: { maxAge }` (ms) isn't sent what's older than that, back from
+the newest message it sees. Chat's prompt View leaves those messages out, with the history plugin or
+without, and tells the `history` View where the window starts (`from`); the history plugin's leaves
+out the lines whose messages are all older (each line says when its newest was written, `until`;
+lines from before they said so count as old). Everything stays in the chat, for people and for other
+agents.
+
+- **In steps, for the cache:** the start sits on a grid of a tenth of `maxAge`, rounded up
+  (`ageStart`). Nothing older than `maxAge` is sent, everything younger than nine tenths of it is,
+  and between steps the prompt only grows: a conversation that runs on past the window misses the
+  cache once a step, not every turn.
+- **From the newest message, not the clock:** the View reads only data, so `thread.prompt` shows
+  what the agent is sent for the latest message, and a thread that's quiet for days starts afresh
+  with the next one.
+- **What it was told** in a message that ages out is told again, in the next turn's first message
+  (as after any cut): it's sent only what it hasn't been told in the messages it still sees.
+- **A model's state** on the messages it still sees goes back as before. A provider that refuses it
+  as bound to the old start is asked once more without it.
+
 ## Views are a plugin's front end
 
 Agreed 2026-10-27. A plugin is a self-contained feature, and its Views are that feature's front end:

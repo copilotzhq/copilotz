@@ -33,7 +33,7 @@ import { Pending } from "./pending.tsx";
 import { STYLE } from "./style.ts";
 import { kindsOf } from "./tabs.ts";
 import { byKind, byMember, lastManager, roleName, ROLES, type Who, whoOf } from "./who.ts";
-import { namesIn } from "../../shared/names.ts";
+import { namesIn, picturesIn } from "../../shared/names.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -66,6 +66,8 @@ export const membersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
     ...requests.flatMap((r) => [r.member, ...(r.by ? [r.by] : [])]),
     ...invitations.map((i) => i.by),
   ]);
+  // And faces, for the people listed.
+  const pictures = picturesIn(ctx, byKind(members).people.map((m) => m.member));
   // Agents can be added where the app has them (chat adds the invite surface's Agents).
   const adds = kindsOf(ctx.resources.spaceInvite, space.kind === "personal")
     .some((k) => k.key === "agents");
@@ -115,6 +117,7 @@ export const membersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
         compact={compact}
         call={ctx.call}
         names={names}
+        pictures={pictures}
       />
     </>
   );
@@ -135,6 +138,7 @@ function Members(
     compact,
     call,
     names,
+    pictures,
   }: {
     space: Reached;
     spaces: Reached[];
@@ -150,6 +154,8 @@ function Members(
     compact: boolean;
     call: Call;
     names: Record<string, string>;
+    /** Faces by id (`picturesIn`), for those who have one. */
+    pictures: Record<string, string>;
   },
 ): ReactNode {
   const [adding, setAdding] = useState(false);
@@ -167,6 +173,7 @@ function Members(
         last={lastManager(members, m.member)}
         call={call}
         names={names}
+        picture={pictures[whoOf(m.member).id]}
       />
     ));
   return (
@@ -244,16 +251,23 @@ function Members(
   );
 }
 
-/** How someone shows in the list: their face. */
-function Face({ who }: { who: Who }): ReactNode {
-  return <Avatar name={who.name} kind={who.kind === "space" ? "space" : "person"} size={32} />;
+/** How someone shows in the list: their face (their picture, if they have one). */
+function Face({ who, picture }: { who: Who; picture?: string }): ReactNode {
+  return (
+    <Avatar
+      name={who.name}
+      kind={who.kind === "space" ? "space" : "person"}
+      picture={picture}
+      size={32}
+    />
+  );
 }
 
 const whatOf = (who: Who) =>
   who.kind === "space" ? "A space whose members are in this one" : "Person";
 
 function Row(
-  { member: m, space, me, manage, last, call, names }: {
+  { member: m, space, me, manage, last, call, names, picture }: {
     member: Member;
     space: Reached;
     me?: string;
@@ -261,6 +275,7 @@ function Row(
     last: boolean;
     call: Call;
     names: Record<string, string>;
+    picture?: string;
   },
 ): ReactNode {
   const who = whoOf(m.member, names);
@@ -280,7 +295,7 @@ function Row(
   };
   return (
     <Card as="li" padding="none" className="space-row">
-      <Face who={who} />
+      <Face who={who} picture={picture} />
       <div className="space-row-text">
         <p className="space-row-name">
           {who.name}

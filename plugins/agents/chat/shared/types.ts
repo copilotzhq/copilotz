@@ -34,6 +34,13 @@ export type Agent = {
   icon?: string;
   /** Where one people made belongs (a space). */
   in?: string;
+  /**
+   * How much of a conversation it's sent. `maxAge` (ms): what's older, back
+   * from the newest message it sees, stays out of its prompt (summaries of
+   * it too), and in the chat. The start moves in steps of a tenth of it
+   * (`ageStart`), so the prompt only grows between steps.
+   */
+  history?: { maxAge?: number };
 };
 
 export type Tool<I = Record<string, unknown>> = {
@@ -99,12 +106,13 @@ export type Step = ToolCall & { output: string; sent?: string };
 
 /**
  * A `conversation` resource: a View that a conversation shows on the web,
- * over where you type, with hints `{ thread, in, working }` (the thread, its
- * space, and whether an agent's turn is running there): something to
- * answer there, such as an agent waiting on your OK. `working` is true while
- * any turn step is live in the thread or its subthreads, and stays true
- * 600 ms after the last one ends (a turn's steps come about 50 ms apart),
- * so a View that waits for the turn to be over shows once, when it is.
+ * over where you type, with hints `{ thread, in, working, busy }` (the
+ * thread, its space, whether an agent's turn is running there, and whose):
+ * something to answer there, such as an agent waiting on your OK. `busy`
+ * lists the agents with a turn step live in the thread or its subthreads,
+ * each kept 600 ms after its last one ends (a turn's steps come about 50 ms
+ * apart), and `working` is whether there are any; so a View that waits for
+ * an agent's turn to be over shows once, when it is, whoever else works on.
  * Lowest `order` first; a View with nothing to show returns null.
  */
 export type ConversationView = { view: string; order?: number };

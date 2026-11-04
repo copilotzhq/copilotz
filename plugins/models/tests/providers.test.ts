@@ -140,6 +140,28 @@ async function server() {
     "/v1/audio/transcriptions": () =>
       Response.json({ text: "hello there", usage: { type: "duration", seconds: 3 } }),
     "/v1/fail/chat/completions": () => new Response("nope", { status: 401 }),
+    // A model that says its thinking (DeepSeek's `reasoning_content`), before what it calls.
+    "/v1/thinking/chat/completions": () =>
+      new Response(sse([
+        { choices: [{ delta: { reasoning_content: "Two dice? " } }] },
+        { choices: [{ delta: { reasoning_content: "One." } }] },
+        {
+          choices: [{
+            delta: {
+              tool_calls: [{ index: 0, id: "c1", function: { name: "roll", arguments: "{}" } }],
+            },
+          }],
+        },
+        {
+          choices: [],
+          usage: {
+            prompt_tokens: 5,
+            completion_tokens: 4,
+            completion_tokens_details: { reasoning_tokens: 3 },
+          },
+        },
+        "[DONE]",
+      ])),
     // A model thinking: only its reasoning's items, before it writes.
     "/v1/thinking/responses": () =>
       new Response(sse([
@@ -330,6 +352,47 @@ test("openai-compatible (Chat Completions): request and streamed answer", async 
       { role: "user", content: "again" },
     ]);
     assertEquals((body.tools as { function: { name: string } }[])[0].function.name, "roll");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("openai-compatible: what a model thinks comes back as state, and goes back with its answer", async () => {
+  const mock = await server();
+  try {
+    const connection = { model: "m", baseURL: `${mock.url}/v1/thinking`, apiKey: "k" };
+    const chunks: LlmChunk[] = [];
+    for await (
+      const chunk of openaiCompletions.generate({ connection, messages: conversation, tools })
+    ) chunks.push(chunk);
+    assertEquals(chunks.filter((c) => c.type === "state"), [
+      { type: "state", state: { data: { reasoning_content: "Two dice? One." }, tokens: 3 } },
+    ]);
+    assertEquals(answer(chunks).calls, [{ id: "c1", name: "roll", input: {} }]);
+    // Its next call: the thinking goes back on the answer it came with; none on one without.
+    const [first, ...rest] = conversation;
+    for await (
+      const _ of openaiCompletions.generate({
+        connection,
+        messages: [
+          first,
+          { role: "assistant", text: "Hm.", state: { data: { other: true } } },
+          { role: "user", text: "and?" },
+          {
+            role: "assistant",
+            toolCalls: [{ id: "c1", name: "roll", input: {} }],
+            state: { by: "deepseek/m", data: { reasoning_content: "Two dice? One." } },
+          },
+          { role: "tool", toolCallId: "c1", text: "3" },
+          ...rest.slice(-1),
+        ],
+        tools,
+      })
+    );
+    const sent = (mock.seen.at(-1)!.body as { messages: Record<string, unknown>[] }).messages;
+    assertEquals(sent[1], { role: "assistant", content: "Hm." });
+    assertEquals(sent[3].reasoning_content, "Two dice? One.");
+    assertEquals(sent[3].content, null);
   } finally {
     await mock.close();
   }

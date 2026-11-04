@@ -77,10 +77,15 @@ export const chat: Plugin = definePlugin({
     history: { llm: historyView },
     message: { llm: messageView },
   },
-  // Every agent's model can be called as configured (the models plugin says).
+  // Every agent's model can be called as configured (the models plugin says); a window by age
+  // is in ms.
   async check(merged) {
     for (const [name, agent] of Object.entries(agentsOf(merged))) {
       if (agent.model === undefined) throw new Error(`Agent "${name}" has no model`);
+      const maxAge = agent.history?.maxAge;
+      if (maxAge !== undefined && !(Number.isFinite(maxAge) && maxAge > 0)) {
+        throw new Error(`Agent "${name}": history.maxAge is in ms, a number over 0`);
+      }
       try {
         await merged.call("models.check", { model: modelOf(agent), port: "llm" });
       } catch (error) {

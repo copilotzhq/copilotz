@@ -116,6 +116,20 @@ test("the program connects to the plugin; agents work on it once their person sa
     const made = join(root, "personal", "made.txt");
     assert(existsSync(made), `${made} isn't there: ${JSON.stringify(ran)}`);
     assertEquals(await readFile(made, "utf8"), "hi\n");
+    // A command still running when it answers: seen again by its id alone, until it's done.
+    const slow = process.platform === "win32"
+      ? 'Start-Sleep -Seconds 2; "slept"'
+      : "sleep 2 && echo slept";
+    let seen = await tool("terminal", { command: slow }) as {
+      state: string;
+      commandId: string;
+      stdout: string;
+    };
+    assertEquals(seen.state, "running", JSON.stringify(seen));
+    for (let i = 0; seen.state === "running" && i < 20; i++) {
+      seen = await tool("terminal", { commandId: seen.commandId }) as typeof seen;
+    }
+    assertEquals([seen.state, seen.stdout.trim()], ["idle", "slept"], JSON.stringify(seen));
 
     // Writes, always: then they just happen.
     await tool("write_file", { path: "notes/a.md", content: "# A" });

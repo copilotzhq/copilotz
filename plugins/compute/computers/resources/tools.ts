@@ -114,11 +114,16 @@ const terminal = tool({
   run: (input, ctx) => {
     const wrong = misused(input);
     if (wrong) return `Error: nothing ran: ${wrong}`;
-    // The computer's shell takes a new command as its input, as its program always has.
+    // The computer's shell takes a new command as its input, as its program always has; seeing
+    // more of a running one is typing nothing into it.
     const { command, ...rest } = input;
-    return command
-      ? on(ctx, WORK.terminal, { ...rest, stdin: command }, { kind: "terminal", detail: command })
-      : on(ctx, WORK.terminal, rest);
+    if (command && rest.commandId === undefined) {
+      return on(ctx, WORK.terminal, { ...rest, stdin: command }, {
+        kind: "terminal",
+        detail: command,
+      });
+    }
+    return on(ctx, WORK.terminal, rest.operation ? rest : { stdin: "", ...rest });
   },
 });
 
@@ -135,13 +140,17 @@ function misused(input: Record<string, unknown>): string | undefined {
     return `terminal takes no ${other.join(" or ")}. Give a new command in command; for a ` +
       "running one, its commandId, with stdin to answer it or operation interrupt to stop it.";
   }
-  if (input.command !== undefined && input.commandId !== undefined) {
-    return "give a new command (command) or a running one's commandId, not both.";
+  // A running one's commandId with a blank command reads as looking at it.
+  if (
+    input.command !== undefined && input.commandId !== undefined && String(input.command).trim()
+  ) {
+    return "command starts a new command; for the running one, give only its commandId to see " +
+      "more of it, with stdin to type into it, or with operation interrupt to stop it.";
   }
+  if (input.commandId !== undefined) return undefined;
   if (input.command !== undefined) {
     return String(input.command).trim() ? undefined : "command is empty.";
   }
-  if (input.commandId !== undefined) return undefined;
   return input.stdin !== undefined
     ? "stdin answers a running command, with its commandId. Give a new command in command."
     : "give the command to run in command.";

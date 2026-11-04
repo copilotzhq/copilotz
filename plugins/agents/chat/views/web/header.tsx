@@ -18,8 +18,8 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import { moveStep } from "./move.ts";
 
-/** Someone in a chat, as it shows: an agent by its name and emoji. */
-export type Someone = { name: string; agent: boolean; icon?: string };
+/** Someone in a chat, as it shows: an agent by its name and emoji; a person, with their picture. */
+export type Someone = { name: string; agent: boolean; icon?: string; picture?: string };
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -69,6 +69,7 @@ export function Header(
                 name={p.name}
                 kind={p.agent ? "agent" : "person"}
                 icon={p.icon}
+                picture={p.picture}
                 size={26}
                 title={p.name}
               />

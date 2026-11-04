@@ -38,7 +38,7 @@ import { Queued } from "./queued.tsx";
 import { Steps } from "./steps.tsx";
 import { toolView } from "./tool-view.ts";
 import { byAgent } from "./who.ts";
-import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
+import { nameOf, namesIn, picturesIn } from "../../../../access/spaces/contract.ts";
 
 /**
  * Whether a failed message says the agent itself failed ("Maya failed: …"), or
@@ -59,6 +59,8 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
   const names = namesIn(ctx, [m.from, ...m.to].filter((id) => !who[id]));
   const named = (id: string) => who[id]?.name ?? nameOf(id, names);
   const author = named(m.from);
+  // A person's face beside what they said, if they have a picture.
+  const face = mine || agent ? undefined : picturesIn(ctx, [m.from])[m.from];
   const queued = Array.isArray(ctx.hints.queued) ? ctx.hints.queued as string[] : [];
   const to = m.to.filter((name) => name !== m.from).map((name) =>
     name === me ? "you" : named(name)
@@ -104,6 +106,7 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
               name={author}
               kind={agent ? "agent" : "person"}
               icon={agent ? who[m.from]?.icon : undefined}
+              picture={face}
               size={30}
             />
           )}

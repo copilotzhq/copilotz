@@ -1,7 +1,9 @@
 /**
  * OpenAI Chat Completions, streaming: the `openai-compatible` protocol. Most
  * providers speak it (DeepSeek, Groq, Together, OpenRouter, Ollama…); the
- * catalog knows their URLs, or `baseURL` points at one.
+ * catalog knows their URLs, or `baseURL` points at one. A model that says
+ * its thinking (`reasoning_content`: DeepSeek, Moonshot, Qwen, vLLM) gets it
+ * back on its answer (its state), as DeepSeek requires once tools are given.
  */
 import { alive, post, sse, usageOf } from "../../shared/provider.ts";
 import type { LlmAdapter, LlmMessage } from "../../shared/types.ts";
@@ -31,9 +33,12 @@ const messagesOf = (instructions: string | undefined, messages: LlmMessage[]) =>
         ],
       };
     }
+    const thought = (message.state?.data as { reasoning_content?: unknown } | undefined)
+      ?.reasoning_content;
     return {
       role: "assistant",
       content: message.text || null,
+      ...(typeof thought === "string" ? { reasoning_content: thought } : {}),
       ...(message.toolCalls?.length
         ? {
           tool_calls: message.toolCalls.map((call) => ({
@@ -85,6 +90,9 @@ export const openaiCompletions: LlmAdapter = {
     }, signal);
     // Tool calls arrive in pieces, by index; they are complete when the stream ends.
     const calls = new Map<number, { id: string; name: string; args: string }>();
+    // What it thought, in pieces too: sent back with its answer.
+    let thought = "";
+    let thinking: number | undefined;
     // A model that thinks first (DeepSeek's reasoning) sends it before it writes: alive all the same.
     const beat = alive();
     for await (const { data } of sse(response.body!)) {
@@ -96,6 +104,7 @@ export const openaiCompletions: LlmAdapter = {
       }
       for (const choice of chunk.choices ?? []) {
         const delta = choice.delta ?? {};
+        if (typeof delta.reasoning_content === "string") thought += delta.reasoning_content;
         if (delta.content) yield { type: "text", text: delta.content };
         for (const part of delta.tool_calls ?? []) {
           const call = calls.get(part.index) ?? { id: "", name: "", args: "" };
@@ -107,6 +116,7 @@ export const openaiCompletions: LlmAdapter = {
       }
       if (chunk.usage) {
         const usage = chunk.usage;
+        thinking = usage.completion_tokens_details?.reasoning_tokens;
         yield {
           type: "usage",
           ...usageOf({
@@ -122,6 +132,13 @@ export const openaiCompletions: LlmAdapter = {
           }),
         };
       }
+    }
+    // Sent back, its thinking costs about what it took to think.
+    if (thought) {
+      yield {
+        type: "state",
+        state: { data: { reasoning_content: thought }, ...(thinking ? { tokens: thinking } : {}) },
+      };
     }
     for (const [, call] of [...calls].sort(([a], [b]) => a - b)) {
       yield {

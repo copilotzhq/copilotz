@@ -221,7 +221,7 @@ test("an agent works on its space's computer, in the space's folder, once its pe
         [{ cmd: "ls" }, "terminal takes no cmd"],
         [{}, "give the command to run in command"],
         [{ command: " " }, "command is empty"],
-        [{ command: "ls", commandId: "c1" }, "not both"],
+        [{ command: "ls", commandId: "c1" }, "give only its commandId to see more"],
       ] as const
     ) {
       const said = String(await tool("terminal", input));
@@ -230,9 +230,21 @@ test("an agent works on its space's computer, in the space's folder, once its pe
     }
     assertEquals(shells(), before);
     // A running command is answered as before: its id, and what to type.
+    const last = () => computer.asked.filter((a) => a.work === WORK.terminal).at(-1)!.input;
     await tool("terminal", { commandId: "c1", stdin: "y\n" });
-    const answered = computer.asked.filter((a) => a.work === WORK.terminal).at(-1)!;
-    assertEquals([answered.input.commandId, answered.input.stdin], ["c1", "y\n"]);
+    assertEquals([last().commandId, last().stdin], ["c1", "y\n"]);
+    // Seen again by its id alone (or beside a blank command): typing nothing, as the program takes it.
+    for (const input of [{ commandId: "c1" }, { commandId: "c1", command: " " }]) {
+      await tool("terminal", input);
+      assertEquals([last().commandId, last().stdin, last().operation], ["c1", "", undefined]);
+    }
+    // And stopped by its id: no input.
+    await tool("terminal", { commandId: "c1", operation: "interrupt" });
+    assertEquals([last().commandId, last().stdin, last().operation], [
+      "c1",
+      undefined,
+      "interrupt",
+    ]);
 
     // Yes once: used up.
     await tool("write_file", { path: "a.txt", content: "hi" });

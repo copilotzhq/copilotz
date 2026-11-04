@@ -4,10 +4,12 @@
  * proved who they are (Meta's signed webhook names the phone), with an id
  * from what brought them (`id`), so a retry makes the same one; starting
  * one that exists changes only its name, if that changed. Its record is
- * shared with it on its own (it reads it, and the agent working for it does).
+ * shared with it on its own (it reads it, and the agent working for it
+ * does): a start cut short between the two (an owner restarted) shares it
+ * when it's started again.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
-import type { Contact } from "../collections/contact.ts";
+import { CONTACT, type Contact } from "../collections/contact.ts";
 
 export const startAction = defineAction({
   description: "Makes a contact: someone outside the org who came by a line",
@@ -28,9 +30,21 @@ export const startAction = defineAction({
     const contacts = ctx.db.collection<Contact>("contact");
     const id = input.id ?? `c-${crypto.randomUUID()}`;
     const name = input.name?.trim();
-    const known = await contacts.findOne({ _id: id });
+    const share = () =>
+      ctx.call("member.set", {
+        space: id,
+        on: "contact",
+        member: { kind: "contact", id },
+        role: "viewer",
+      });
+    // Its record, and its share of it (the record's own key, and the contact's).
+    const [known, shared] = await Promise.all([
+      contacts.findOne({ _id: id }),
+      ctx.as().db.collection("member").findOne({ _id: `${CONTACT}${id}|${CONTACT}${id}` }),
+    ]);
     if (known) {
       if (name && known.name !== name) await contacts.updateOne({ _id: id }, { $set: { name } });
+      if (!shared) await share();
       return { contact: id };
     }
     await contacts.insertOne({
@@ -40,12 +54,7 @@ export const startAction = defineAction({
       ...(name ? { name } : {}),
       at: new Date().toISOString(),
     });
-    await ctx.call("member.set", {
-      space: id,
-      on: "contact",
-      member: { kind: "contact", id },
-      role: "viewer",
-    });
+    await share();
     return { contact: id };
   },
 });

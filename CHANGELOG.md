@@ -1,3 +1,20 @@
+## Unreleased
+
+- **MCP: a conversation whose first call an owner stopped no longer ends for good.** A new
+  conversation's chat is made (`chat.open`) and then shared with its contact (`member.set`), two
+  writes; an owner that stopped between them (a deploy, which doesn't wait for running calls, or a
+  crash) left a chat its contact couldn't reach, which is how a contact its people took out of its
+  chat looks, so every later call said "This conversation with the app is over". A new
+  conversation's opening is now noted with its first call's counts (`mcp_opening`, durable, no
+  events, gone with its receipts after 15 minutes) and dropped once the chat is shared: a chat out
+  of its contact's reach, with its opening noted, goes on as new (asked again within 15 minutes, its
+  contact not erased); without one, it stays over. Erasure's tombstones are read first, as before.
+  This is what failed the MCP restart test on slower machines (macOS CI); the test now waits on what
+  it watches for, not on fixed times, and a new one stops an owner at each of a first call's writes.
+- **Contacts: a start cut short after a contact's record, before sharing it with the contact, is
+  finished when it's started again** (`contact.start`, on WhatsApp, voice and MCP): the contact, and
+  the agent working for it, read the record again. A known contact was returned as it was.
+
 ## 1.0.0-rc.21 — 2026-11-04
 
 - **Security: a burst of calls no longer drops an executor's connection** (Oxian 0.23.3). About 35

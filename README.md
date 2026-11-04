@@ -115,6 +115,7 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                |
 | `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`                                           |
 | `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `maintenance`                                     |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `mcp`                                             |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                    |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                    |
 | `copilotz/web`                         | the web host in the browser (`web`), and its toolkit (`Button`, `Markdown`…)                                 |
@@ -552,6 +553,16 @@ filled by the front ends through resources).
 - **`maintenance`**: HTTP for an app's operators when they can't reach its database, with one key:
   read SQL, the collections' operations through the owner, raw SQL writes inside it, blobs by id
   (see [Maintenance](#maintenance)).
+- **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A line the app
+  declares (`mcp.lines.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
+  each is shown, who calls, its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP,
+  JSON-RPC 2.0, no session, MCP 2026-07-28 and the versions with a handshake. Each conversation
+  (ChatGPT's `openai/session`, or a `chat` handle the app gives a client that names none) is a
+  contact in a chat of its own in the line's space, its ids an HMAC with the `links` secret. A call
+  runs the tool through chat's runner as that contact, is written there as a step, and answers what
+  the app's agents read of it (only public errors say their words); a request sent again to a tool
+  that changes things is answered from the first, and the line's limits (calls at once, a minute,
+  new conversations an hour, by conversation, user, caller's address and in all) refuse the rest.
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.
@@ -1029,6 +1040,7 @@ plugins/        the features, by theme
   compute/      computers: desks per space, agents' tools, approvals; program/, the computer program
   interfaces/   terminal (where each person is, the shell View), web (the web shell), the developer
                 API, WhatsApp and voice (phone calls); features'
+                API, WhatsApp and MCP; features'
                 own front ends live with them (chat/terminal.ts, chat/web.tsx…), gathered by theme
 hosts/          the media the app is used through: terminal (the Ink host and its toolkit); web
                 (the React host in the browser: theme/, the tokens and their defaults, Copilotz's

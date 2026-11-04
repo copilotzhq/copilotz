@@ -21,7 +21,7 @@
  * addition shown, in chat's `shown` (`chat.shown`). It reads the
  * conversation's number as the system: its token is what sends.
  */
-import type { Context, ProcessorDef, Viewer } from "../../../../runtime/mod.ts";
+import type { Actor, Context, ProcessorDef, Viewer } from "../../../../runtime/mod.ts";
 import {
   type Addition,
   type AdditionEntry,
@@ -59,7 +59,7 @@ export const replyProcessor: ProcessorDef = {
     const to = chat?.person ?? (chat?.contact ? `${CONTACT}${chat.contact}` : undefined);
     if (!chat || !to || !said.to?.includes(to)) return;
     // Only what they may read: an answer drawing on what they can't see (its sources) stays here.
-    const reader = chat.person
+    const reader: Actor = chat.person
       ? { kind: "person", id: chat.person }
       : { kind: "contact", id: chat.contact! };
     if (!await ctx.as(reader).db.collection("message").findOne({ _id: said._id })) return;
@@ -74,7 +74,7 @@ export const replyProcessor: ProcessorDef = {
     );
     const sending: Sending = async ({ ids, part, key }) => {
       if (ids.every((id) => done.has(id))) return;
-      const wamid = await send(ctx, on, chat.phone, part);
+      const wamid = await send(ctx, on, chat.phone, part, reader);
       const at = new Date().toISOString();
       for (const id of ids) {
         ctx.record("whatsapp_sent", {

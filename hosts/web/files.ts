@@ -71,7 +71,7 @@ export function fileServer(
     const links = linksOf(runtime.describe().resources);
     const query = Object.fromEntries(url.searchParams);
     delete query.download;
-    return !!links && !!await verifyLink(links.secret, url.pathname, query);
+    return !!links && !!await verifyLink(links, url.pathname, query);
   };
   return (request) => {
     const url = new URL(request.url);

@@ -50,8 +50,8 @@
     keeps each part by id, with its addition's `key` and `thread`).
   - **Taps:** a button's, a list row's, a carousel card's or a template's reply comes as its title
     with `tap: { id, title, key }` (`chat.send` takes `tap`; messages keep it), answering the
-    message it was on; agents read `Carla: PIX [tapped: pay:pix]`. Typing the title is just text.
-    A tap is a choice, not a permission: anyone can send any id, so a tool acting on one checks it
+    message it was on; agents read `Carla: PIX [tapped: pay:pix]`. Typing the title is just text. A
+    tap is a choice, not a permission: anyone can send any id, so a tool acting on one checks it
     against what was shown there. A quote or a tap answers only what went out in its own chat.
   - **"Typing…" while agents work:** each step an agent takes in a WhatsApp chat shows it again once
     WhatsApp may have hidden it (after 20 s, for up to five minutes); nothing says "please wait".
@@ -62,8 +62,11 @@
     with nowhere to link it sends the fallback. A message's files go as images (jpeg, png up to 5
     MB) or documents, a short text as the first one's caption.
 - **Signed links** (the runtime's `signLink` and `verifyLink`, with the app's `links` resource:
-  `{ origin, secret }`): a path, its params and an expiry, HMAC-signed. The web host serves a file
-  at a signed `/files/<id>` link without a session, as the system; expired or altered, a 404.
+  `{ origin, secret }`, a secret of at least 32 bytes, checked at start): the app's origin, a path,
+  its params and an expiry (an hour unless said), HMAC-signed, so a link for one app or org never
+  opens another. A chat's file is linked or uploaded only for someone who may read it. The web host
+  serves a file at a signed `/files/<id>` link without a session, as the system; expired or altered,
+  a 404.
 - **Chat in spaces declares its own `shared` entries** (`thread`, `message` with labels, `file`,
   `live` and `shown`, each a part of its thread). `chat.open` opens an empty chat in a space;
   `chat.say { id, thread, from, text, to? }` has an agent say a fixed message in a chat without a

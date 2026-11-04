@@ -47,7 +47,7 @@
  * resources: { whatsapp: { graph: "https://graph.facebook.com/v23.0" } }   // the default
  * ```
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, linksOf, type Plugin } from "../../../runtime/mod.ts";
 import { connectAction, credentialsAction } from "./actions/connect.ts";
 import { disconnectAction, webhookAction } from "./actions/disconnect.ts";
 import { hookAction, HOOKS } from "./actions/hook.ts";
@@ -106,6 +106,8 @@ export const whatsapp: Plugin = definePlugin({
   // WhatsApp as a medium: what a message is there (a feature's additions bring their own).
   views: { message: { whatsapp: messageView } },
   guard: rules,
+  // Where links to what it sends go, if the app says: a secret too short is refused at start.
+  check: (merged) => void linksOf(merged.resources),
   resources: {
     whatsapp: {},
     routes: { whatsapp: { path: HOOKS, action: "whatsapp.hook", methods: ["GET", "POST"] } },

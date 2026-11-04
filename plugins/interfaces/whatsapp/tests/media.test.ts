@@ -14,7 +14,7 @@ import { ana, type Setup, setup, threadsOf } from "./setup.ts";
 
 const CARLA = "5511911112222";
 const ORIGIN = "https://app.test";
-const SECRET = "links-secret-for-tests-01234";
+const SECRET = "links-secret-for-tests-0123456789abcdef";
 const PNG = btoa(String.fromCharCode(137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3));
 
 /** Where the app is, and the secret its links are signed with. */
@@ -36,7 +36,11 @@ const cards = definePlugin({
       allow: () => true,
       record: false,
       run: async (ctx, request: { path: string; query: Record<string, string> }) => {
-        const params = await verifyLink(SECRET, request.path, request.query);
+        const params = await verifyLink(
+          { origin: ORIGIN, secret: SECRET },
+          request.path,
+          request.query,
+        );
         return params
           ? { status: 200, headers: { "content-type": "text/plain" }, body: `card ${params.trip}` }
           : { status: 403, body: "Forbidden" };
@@ -87,6 +91,49 @@ async function sendFile(s: Setup, type: string, data = PNG) {
   await s.runtime.idle();
   return file;
 }
+/** A feature that shows a named file after an answer: for whom may read it only. */
+const shows = definePlugin({
+  name: "shows",
+  resources: { additions: { picture: { order: 1 } } },
+  actions: {
+    // An agent's answer in a chat, as a turn writes one, that the picture follows.
+    "test.show": defineAction({
+      input: { type: "object" },
+      run: async (ctx, input: { thread: string; file: string }) => {
+        const [last] = await ctx.db.collection<Message>("message").find(
+          { thread: input.thread, from: { $ne: "lead" } },
+          { sort: { at: -1 }, limit: 1 },
+        );
+        const turn = crypto.randomUUID();
+        await ctx.db.collection("message").insertOne({
+          _id: `${turn}:reply`,
+          thread: input.thread,
+          ...(last.in ? { in: last.in } : {}),
+          from: "lead",
+          to: [last.from],
+          text: "Here it is.",
+          hops: 1,
+          turn,
+          picture: input.file,
+          at: new Date().toISOString(),
+        });
+      },
+    }),
+  },
+  views: {
+    "addition:picture": {
+      whatsapp: ({ answer }: { answer: Message & { picture?: string } }) =>
+        answer.picture
+          ? {
+            key: `picture:${answer.picture}`,
+            parts: [image({ file: answer.picture })],
+            fallback: [text("(the picture isn't yours to see)")],
+          }
+          : undefined,
+    },
+  },
+});
+
 /** A link as the web host gets it, here. */
 const local = (link: string) => new Request(link.replace(ORIGIN, "http://localhost"));
 
@@ -148,4 +195,22 @@ test("a carousel's pictures are links: a file with nowhere to link it sends the 
     assertEquals(s.graph.requests.filter((r) => r.body?.interactive).length, 0);
     assertEquals(s.graph.texts(CARLA), ["heard *Carla: any trips?*\n\n1. 10:30\n2. 12:00"]);
   }, { plugins: [cards] });
+});
+
+test("a file goes only to whom may read it: one of another chat is neither linked nor uploaded", async () => {
+  await setup(async (s) => {
+    const file = await sendFile(s, "image/png");
+    // Another customer's chat, where a View names Carla's file.
+    await s.deliver([{ text: { body: "hi" } }], { from: "14155550123", name: "Dani" });
+    const theirs = (await threadsOf(s.runtime, s.launch)).find((t) => t.title === "Dani")!;
+    const before = s.graph.sent("14155550123").length;
+    await s.runtime.call("test.show", { thread: theirs._id, file });
+    await s.runtime.idle();
+    const sent = s.graph.sent("14155550123").slice(before);
+    assertEquals(sent.map((b) => b.type), ["text"]);
+    assertEquals(
+      (sent[0].text as { body: string }).body,
+      "Here it is.\n\n(the picture isn't yours to see)",
+    );
+  }, { plugins: [linked, shows] });
 });

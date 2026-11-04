@@ -4,7 +4,7 @@
  * about its token is noted on the number (`problem`), for those who manage
  * it to see, and cleared once it works again.
  */
-import type { Context } from "../../../../runtime/mod.ts";
+import type { Actor, Context } from "../../../../runtime/mod.ts";
 import type { WhatsAppNumber } from "../collections/number.ts";
 import type { WhatsAppSecret } from "../collections/secret.ts";
 import { type Graph, sendPart, tokenRefused } from "./graph.ts";
@@ -37,6 +37,8 @@ export async function send(
   on: Connected,
   to: string,
   what: string | WaPart,
+  /** Who it's for (a person, a contact): what it sends of theirs, they must read. */
+  reader?: Actor,
 ): Promise<string> {
   const numbers = ctx.as().db.collection("whatsapp_number");
   const part: WaPart = typeof what === "string" ? { type: "text", text: what } : what;
@@ -45,7 +47,7 @@ export async function send(
       on.graph,
       to,
       part,
-      (media, linked) => sendable(ctx, on.graph, media, linked),
+      (media, linked) => sendable(ctx, on.graph, media, reader, linked),
     );
     if (on.number.problem) {
       await numbers.updateOne({ _id: on.number._id }, { $unset: { problem: "" } });

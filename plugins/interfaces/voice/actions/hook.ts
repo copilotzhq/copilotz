@@ -4,10 +4,13 @@
  *
  * - **A call comes in** (`POST /hooks/voice/<line>`): before anything else,
  *   Twilio's signature (`X-Twilio-Signature`) is checked with the line's auth
- *   token, and the call must be an inbound one to the line's account. Then
- *   it's taken only within the line's limits: calls at once (`atOnce`, 2)
- *   and in the last 24 hours (`perDay`, 50); else Twilio is told to reject
- *   it as busy (the caller hears a busy tone, and nothing is spent). A call
+ *   token, and the call must be an inbound one to the line's account. A
+ *   caller the line's people blocked (`voice.block`) isn't taken. Then it's
+ *   taken only within its caller's limits (`callerAtOnce`, 1; `callerPerDay`,
+ *   10; hidden numbers are one caller), then the line's (`atOnce`, 2;
+ *   `perDay`, 50 calls that went on in the last 24 hours); else Twilio is
+ *   told to reject it as busy (a busy tone, and nothing is spent). Whether
+ *   Twilio verified the number (`StirVerstat`) is noted on the call. A call
  *   taken is told to open the line's socket (TwiML `<Connect>` with
  *   `<ConversationRelay>`), with a ticket good for one use, for a minute;
  *   the greeting, language and voice are the line's. Twilio asking again
@@ -24,6 +27,7 @@ import { type Context, defineAction, type Infer } from "../../../../runtime/mod.
 import type { VoiceCall } from "../collections/call.ts";
 import { HOOKS, type Line, lineOf } from "../shared/settings.ts";
 import { signed } from "../shared/signature.ts";
+import { blockedKey, callerKey, VERIFIED } from "../shared/caller.ts";
 
 /** A request as the web host hands it to a route's Action (hosts/web/routes.ts' `httpRequest`). */
 const httpRequest = {
@@ -45,9 +49,6 @@ type HttpAnswer = { status?: number; headers?: Record<string, string>; body?: st
 
 /** How long a socket's ticket works, once given. */
 export const TICKET_MS = 60_000;
-
-/** A call keeps its place among the calls at once this long past the line's longest call. */
-export const SLACK_MS = 30_000;
 
 const DAY = 86_400_000;
 
@@ -71,7 +72,7 @@ export const hookAction = defineAction({
   run: async (ctx, request): Promise<HttpAnswer> => {
     const [name = "", what = "", ...more] = request.path.slice(HOOKS.length).split("/");
     const line = request.path.startsWith(HOOKS) && !more.length
-      ? lineOf(ctx, decodeURIComponent(name))
+      ? lineOf(ctx, decoded(name))
       : undefined;
     if (!line || !["", "over"].includes(what)) return plain(404, "No such line");
     if (request.method !== "POST") return plain(405, "POST");
@@ -95,9 +96,20 @@ export const hookAction = defineAction({
   },
 });
 
+/** A path's part, decoded; a malformed one names nothing. */
+const decoded = (part: string) => {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return "";
+  }
+};
+
 /**
- * A call coming in: taken within the line's limits, with a ticket for its
- * socket; else Twilio rejects it as busy.
+ * A call coming in: taken unless its caller is blocked, and within its
+ * caller's limits and then the line's, with a ticket for its socket; else
+ * Twilio rejects it as busy. A day's calls are those that went on (a call
+ * never answered costs nothing); calls at once, those holding a place.
  */
 async function taken(ctx: Context, line: Line, id: string, form: URLSearchParams) {
   const secret = randomText(24);
@@ -106,7 +118,14 @@ async function taken(ctx: Context, line: Line, id: string, form: URLSearchParams
   const now = Date.now();
   const at = new Date(now).toISOString();
   const until = new Date(now + TICKET_MS).toISOString();
+  const from = form.get("From") ?? "";
+  const caller = callerKey(from);
   const system = ctx.as();
+  if (
+    await system.db.collection("voice_blocked").findOne({ _id: await blockedKey(line.name, from) })
+  ) {
+    return BUSY;
+  }
   // One transaction: the owner writes one at a time, so two calls can't both take the last place.
   const took = await system.transaction(async (tx) => {
     const calls = tx.db.collection<VoiceCall>("voice_call");
@@ -121,15 +140,22 @@ async function taken(ctx: Context, line: Line, id: string, form: URLSearchParams
       await calls.updateOne({ _id: id }, { $set: { ticket: hash, until } });
       return true;
     }
-    const atOnce = recent.filter((c) => c.state !== "over" && Date.parse(c.until) > now).length;
-    if (recent.length >= line.limits.perDay || atOnce >= line.limits.atOnce) return false;
-    const from = form.get("From") ?? "";
+    const holding = (c: VoiceCall) => c.state !== "over" && Date.parse(c.until) > now;
+    const theirs = recent.filter((c) => callerKey(c.from) === caller);
+    const { limits } = line;
+    if (
+      theirs.filter(holding).length >= limits.callerAtOnce ||
+      theirs.filter((c) => c.started).length >= limits.callerPerDay ||
+      recent.filter(holding).length >= limits.atOnce ||
+      recent.filter((c) => c.started).length >= limits.perDay
+    ) return false;
     await calls.insertOne({
       _id: id,
       line: line.name,
       in: line.in,
       ...(from ? { from } : {}),
       to: form.get("To") ?? "",
+      ...(form.get("StirVerstat") === VERIFIED ? { verified: true } : {}),
       state: "ringing",
       ticket: hash,
       until,

@@ -10,7 +10,8 @@ import type { Contact } from "../collections/contact.ts";
 /** How each medium's contacts talk, as an agent is told it. */
 const FROM: Record<string, string> = {
   whatsapp: "writing on WhatsApp",
-  voice: "on a phone call: they hear what you write, read aloud",
+  voice: "on a phone call: they hear what you write, read aloud. The number they call from " +
+    "isn't proof of who they are",
 };
 
 export const contactView = (_thread: unknown, ctx: ViewContext<string>) => {

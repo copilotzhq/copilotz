@@ -498,12 +498,14 @@ filled by the front ends through resources).
   ConversationRelay (Twilio hears them and speaks; the app gets and sends text). The app declares
   its lines (`voice.lines`: the space, Twilio's account and auth token, the app's public address,
   the agent, language, voice, greeting and limits); Twilio's webhook is checked against its
-  signature, a call is taken within the line's limits (calls at once, a day: else busy, nothing
-  spent) and opens the line's socket with a one-time ticket. A caller is a contact, by number, in a
-  chat of their own; what the agent writes is said as it writes it (a medium for Views: renderer
-  `voice`), a caller speaking over it cuts it there (the agent is told what was heard), a failed or
-  slow answer says a short line in the line's language, and silence, a call too long or the agent's
-  `end_call` ends it. Its socket needs a host that takes a route's socket (`serveRoutes`).
+  signature, a call is taken within its caller's limits and the line's (calls at once, a day: else
+  busy, nothing spent) and opens the line's socket with a one-time ticket. A caller is a contact in
+  a chat of their own, the same one when they call back only if Twilio verified their number; what
+  the agent writes for them is said as it writes it (a medium for Views: renderer `voice`), a caller
+  speaking over it cuts it there (the agent is told what was heard), a failed or slow answer says a
+  short line in the line's language, and silence, a call too long or too many prompts, or the
+  agent's `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that
+  takes a route's socket (`serveRoutes`).
 
 **Metrics** (`copilotz/exporters`): what the runtime and plugins do, measured. There's no plugin to
 add: each plugin instruments itself.

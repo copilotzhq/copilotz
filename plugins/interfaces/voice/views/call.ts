@@ -5,8 +5,9 @@
  * I'll look"), each as its `message` View here says it; what an agent is
  * writing right now (`live`), said the same way; and whether the agent ended
  * the call (`end`). The call's socket (resources/relay.ts) observes it, and
- * says what's new as it comes. Only what the caller may read is here: an
- * answer drawing on what they can't see isn't.
+ * says what's new as it comes, of the turns the caller's own words started.
+ * Only what the caller may read is here: an answer drawing on what they
+ * can't see isn't.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { Live, Message } from "../../../agents/chat/contract.ts";
@@ -22,6 +23,7 @@ export type Said = {
   failed?: boolean;
   stopped?: boolean;
   text: string;
+  at: string;
 };
 
 export type Saying = {
@@ -59,6 +61,7 @@ export const callView = (
       ...(m.failed ? { failed: true } : {}),
       ...(m.stopped ? { stopped: true } : {}),
       text: m.text ? say(m) : "",
+      at: m.at,
     })),
     ...(writing
       ? { live: { turn: writing.turn, text: say({ text: writing.text, from: writing.agent }) } }

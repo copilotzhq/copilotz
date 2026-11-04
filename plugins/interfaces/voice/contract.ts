@@ -4,12 +4,14 @@
  * `voice` resource), its defaults (`VOICE_LIMITS`, `VOICE_GAP`,
  * `VOICE_TEXTS`), a call's record, and Twilio's signature
  * (`twilioSignature`, for a test's fake Twilio). They reach the rest by
- * name: its collections (`voice_call`, `voice_phone`), its Views (`message`
- * and `voice_call`, renderer `voice`) and its tool (`end_call`).
+ * name: its collections (`voice_call`, `voice_phone`, `voice_blocked`), its
+ * Views (`message` and `voice_call`, renderer `voice`), its tool
+ * (`end_call`) and its Action for managers (`voice.block`).
  */
 export type { VoiceCall } from "./collections/call.ts";
 export {
   GAP as VOICE_GAP,
+  KEEP as VOICE_KEEP,
   LIMITS as VOICE_LIMITS,
   type Limits as VoiceLimits,
   TEXTS as VOICE_TEXTS,

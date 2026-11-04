@@ -1,5 +1,6 @@
 /** A turn that failed for good, or was stopped, still answers, so whoever waits on it resumes. */
 import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
+import type { Intent } from "../collections/intent.ts";
 import type { Live } from "../collections/live.ts";
 import type { Message } from "../collections/message.ts";
 import { turnOf } from "../shared/agents.ts";
@@ -26,8 +27,12 @@ const failed = async (ctx: Context, event: Event) => {
   const messages = ctx.db.collection<Message>("message");
   if (await messages.findOne({ _id: `${run}:reply` })) return;
   if (error.code === "cancelled") {
-    const written = await ctx.db.collection<Live>("live").findOne({ _id: run });
-    const text = written?.text ? `${written.text} (stopped)` : "(stopped)";
+    const [written, taking] = await Promise.all([
+      ctx.db.collection<Live>("live").findOne({ _id: run }),
+      ctx.db.collection<Intent>("intent").findOne({ _id: run }),
+    ]);
+    // Text of a step it was taking stays that step's (the answer keeps it).
+    const text = written?.text && !taking ? `${written.text} (stopped)` : "(stopped)";
     return await answer(ctx, t, run, text, { stopped: true });
   }
   // The org's limit isn't the agent failing: it says what happened, and who can change it.

@@ -16,9 +16,18 @@ export const NO_ANSWER = { writeConcern: { w: 0 } } as const;
 export const HISTORY = 50;
 export const SEND = "send_message";
 
-/** Message order is `at` order, so timestamps never repeat within a process. */
+/**
+ * Message order is `at` order, so timestamps never repeat within a process. A clock set back
+ * (a step, a test's time travel) is followed, not outwaited: only a few ms ahead of it can be
+ * this counter's own, in a burst.
+ */
 let last = 0;
-export const now = () => new Date(last = Math.max(Date.now(), last + 1)).toISOString();
+const SKEW = 1_000;
+export const now = () => {
+  const clock = Date.now();
+  last = clock > last || last - clock > SKEW ? clock : last + 1;
+  return new Date(last).toISOString();
+};
 
 /** The agents the app declares (its `agents` resource). */
 export const agentsOf = (ctx: Pick<Context, "resources">) =>

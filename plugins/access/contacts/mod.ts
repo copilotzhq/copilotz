@@ -16,9 +16,13 @@
  *   and see them by name ("People here: Ana": a `names` source, `contact:`).
  * - **Erasing one** (`contact.forget`, by its space's managers) ends its
  *   access at once and deletes its record, and with `chats` its chats.
+ * - **Lines** bring contacts in: WhatsApp's, the phone's, MCP's and the web's (`webLines`, in
+ *   the web interface: visitors of a page) are interfaces of their own; contacts keeps what
+ *   every line shares.
  *
  * ```ts
  * plugins: [models, chat, ...access]   // access brings contacts
+ * resources: { spaces: { support: { name: "Support", agents: ["guide"] } } }
  * ```
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";

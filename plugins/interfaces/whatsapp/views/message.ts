@@ -1,5 +1,5 @@
 /**
- * A chat message on WhatsApp (the `message` View, renderer `whatsapp`): its
+ * A chat message on WhatsApp (the `message` View, medium `whatsapp`): its
  * Markdown as WhatsApp formats it, in parts of at most 4096 characters split
  * where a reader would pause, then its files: pictures (jpeg or png, up to
  * 5 MB) as images, anything else as documents. A short text goes as the

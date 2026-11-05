@@ -15,8 +15,24 @@
  * commit, so its first turn already has them. `tap` says it was a choice
  * tapped (a button), not typed. With `quiet`, agents answer once the sender
  * has been quiet that long (a burst of short messages, answered together).
+ *
+ * A contact's message says at most `CONTACT_TEXT` characters, says nothing
+ * of what sent it (`via`: never "a routine"), never titles its chat nor
+ * lets an agent rename it (`title`, `renamable`: what its people see), and
+ * is let in by the app's `contactSend` hooks first (the web lines': a
+ * web line's limits, the files it takes, its visitor's own chat, made with
+ * its first message, where it goes when it names none). A hook refuses it,
+ * or says where it goes and that its audio goes untranscribed (`transcribe:
+ * false`).
+ * People's messages go as ever.
  */
-import { type Actor, defineAction, peopleOrContacts } from "../../../../runtime/mod.ts";
+import {
+  type Actor,
+  type Context,
+  defineAction,
+  failure,
+  peopleOrContacts,
+} from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
@@ -26,6 +42,54 @@ import { movedBy, startedWith } from "../shared/summary.ts";
 import { settingsOf } from "../shared/types.ts";
 
 const names = { type: "array", items: { type: "string" } } as const;
+
+/** The most a contact's message says: WhatsApp's own most, 4,096 characters. */
+export const CONTACT_TEXT = 4_096;
+
+/** The longest media type a file may say it is (RFC 6838's longest type or subtype name). */
+export const MEDIA_TYPE_LENGTH = 127;
+
+/**
+ * What a file's media type looks like: `type/subtype`, then parameters
+ * (`audio/ogg; codecs=opus`, as WhatsApp sends voice notes), on one line:
+ * an agent is told it (`[file a.bin: <type>, …]`).
+ */
+export const MEDIA_TYPE =
+  /^[A-Za-z0-9][\w!#$&^.+-]*\/[A-Za-z0-9][\w!#$&^.+-]*(?: *; *[\w!#$&^.+-]+=(?:[\w!#$&^.+-]+|"[ !#-\[\]-~]*"))* *$/;
+
+/**
+ * A `contactSend` resource: the Action that lets a contact's message in,
+ * asked as the contact before anything's sent, with where it goes (`thread`,
+ * when it names one) and what it carries (each file's name, media type and
+ * size). It refuses it (a limit), or answers where it goes when it names no
+ * chat (`thread`: the contact's own) and `transcribe: false` when its audio
+ * goes untranscribed.
+ */
+export type ContactSend = { action: string };
+
+/** What the app's `contactSend` hooks say of a contact's message, each in turn. */
+async function letIn(
+  ctx: Pick<Context, "resources" | "call">,
+  asked: { thread?: string; files: { name: string; type?: string; size: number }[] },
+): Promise<{ thread?: string; transcribe?: false }> {
+  const hooks = Object.values((ctx.resources.contactSend ?? {}) as Record<string, ContactSend>);
+  let said: { thread?: string; transcribe?: false } = {};
+  for (const hook of hooks) {
+    const answer = await ctx.call<{ thread?: unknown; transcribe?: unknown } | null>(hook.action, {
+      ...(asked.thread ? { thread: asked.thread } : {}),
+      files: asked.files,
+    });
+    said = {
+      ...said,
+      ...(typeof answer?.thread === "string" && !said.thread ? { thread: answer.thread } : {}),
+      ...(answer?.transcribe === false ? { transcribe: false as const } : {}),
+    };
+  }
+  return said;
+}
+
+/** How large a file sent as base64 is, in bytes. */
+const sizeOf = (data: string) => Math.floor(data.replace(/=+$/, "").length * 3 / 4);
 
 /** Who a message is from, pinned to whoever sends it: a person by id, a contact as `contact:<id>`. */
 const fromOf = (actor?: Actor) =>
@@ -55,7 +119,8 @@ export const sendAction = defineAction({
           type: "object",
           properties: {
             name: { type: "string", minLength: 1 },
-            type: { type: "string" },
+            // A media type, as the model is told it: `type/subtype`, with parameters at most.
+            type: { type: "string", maxLength: MEDIA_TYPE_LENGTH, pattern: MEDIA_TYPE.source },
             data: { type: "string", maxLength: 14_000_000 },
             /** A recording's length (ms) and its loudness over time, for its player. */
             voice: {
@@ -126,9 +191,28 @@ export const sendAction = defineAction({
         code: "invalid",
       });
     }
+    // A contact talks with whom its chat is with: what it says names nobody else, and the app
+    // lets it in first (its line's limits, the files it takes, its own chat).
+    const contact = ctx.actor?.kind === "contact";
+    if (contact && said.length > CONTACT_TEXT) {
+      throw failure("invalid", `A message says ${CONTACT_TEXT} characters at most.`, {
+        public: true,
+      });
+    }
+    const allowed = contact
+      ? await letIn(ctx, {
+        ...(input.thread ? { thread: input.thread } : {}),
+        files: (input.files ?? []).map((f) => ({
+          name: f.name,
+          ...(f.type ? { type: f.type } : {}),
+          size: sizeOf(f.data),
+        })),
+      })
+      : {};
     const threads = ctx.db.collection<Thread>("thread");
-    const threadId = input.thread ?? crypto.randomUUID();
-    const existing = input.thread ? await threads.findOne({ _id: threadId }) : null;
+    const named = input.thread ?? allowed.thread;
+    const threadId = named ?? crypto.randomUUID();
+    const existing = named ? await threads.findOne({ _id: threadId }) : null;
     // What it answers: a message the sender reads, in this conversation (else it answers nothing).
     const found = input.replyTo
       ? await ctx.db.collection<Message>("message").findOne({ _id: input.replyTo })
@@ -137,8 +221,6 @@ export const sendAction = defineAction({
     const where = existing ? existing.in : input.in;
     const roster = await rosterOf(ctx, where);
     const members = existing ? existing.agents ?? [] : roster.default;
-    // A contact talks with whom its chat is with: what it says names nobody else.
-    const contact = ctx.actor?.kind === "contact";
     const mentioned = contact ? [] : mentions(said);
     const asked = (contact ? undefined : input.to) ??
       (mentioned.length ? mentioned : replied ? [replied.from] : members);
@@ -159,12 +241,13 @@ export const sendAction = defineAction({
     }
     const to = asked.filter((name) => !away.includes(name));
     // A new thread is with whom it was started with: the agents named, or the space's.
-    const named = to.filter((name) => agents[name]);
-    const joined = existing ? members : named.length ? named : members;
+    const chosen = to.filter((name) => agents[name]);
+    const joined = existing ? members : chosen.length ? chosen : members;
     const id = crypto.randomUUID();
     // What audio says, before anything is sent: agents read it.
     const transcripts = await Promise.all((input.files ?? []).map(async (f) => {
-      if (input.transcribe === false || !f.type?.startsWith("audio/")) return undefined;
+      if (input.transcribe === false || allowed.transcribe === false) return undefined;
+      if (!f.type?.startsWith("audio/")) return undefined;
       try {
         const heard = await ctx.call<Transcript>("transcription.transcribe", {
           model: settingsOf(ctx).transcriber ?? "transcribe",
@@ -185,7 +268,7 @@ export const sendAction = defineAction({
       _id: `${id}:file.${i}`,
       name: f.name,
       type: f.type ?? "application/octet-stream",
-      size: Math.floor(f.data.replace(/=+$/, "").length * 3 / 4),
+      size: sizeOf(f.data),
       data: f.data,
       ...(f.voice ? { voice: f.voice } : {}),
       ...(transcripts[i] !== undefined ? { transcript: transcripts[i] } : {}),
@@ -214,7 +297,7 @@ export const sendAction = defineAction({
       text: said,
       hops: 0,
       ...(replied ? { replyTo: replied._id } : {}),
-      ...(input.via ? { via: input.via } : {}),
+      ...(input.via && !contact ? { via: input.via } : {}),
       ...(input.tap ? { tap: input.tap } : {}),
       at: now(),
     };
@@ -228,8 +311,8 @@ export const sendAction = defineAction({
           _id: threadId,
           agents: joined,
           ...(where ? { in: where } : {}),
-          ...(input.title ? { title: input.title } : {}),
-          ...(input.renamable ? { renamable: true } : {}),
+          ...(input.title && !contact ? { title: input.title } : {}),
+          ...(input.renamable && !contact ? { renamable: true } : {}),
           ...startedWith(sent),
           at: sent.at,
         });

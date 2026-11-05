@@ -32,7 +32,14 @@ import { liveWriter } from "../shared/live.ts";
 import { prepare, type Send } from "../shared/send.ts";
 import { noted, startedWith } from "../shared/summary.ts";
 import { runTool, toolText } from "../shared/tools.ts";
-import { type Agent, type Prompt, settingsOf, type Step, type Turn } from "../shared/types.ts";
+import {
+  type Agent,
+  type Prompt,
+  settingsOf,
+  type Step,
+  type Tool,
+  type Turn,
+} from "../shared/types.ts";
 
 /** Runs a turn: started by `turn.requested`, or resumed when its wait is over. */
 /**
@@ -147,8 +154,17 @@ const turn = async (ctx: Context, event: Event) => {
         return new Set(peopleIn(seen, named));
       });
 
-  // What it writes shows as it comes: the turn's live document.
-  const live = liveWriter(ctx, t, run, current.in);
+  // What it writes shows as it comes: the turn's live document. Offered no tools (or only those
+  // called beside an answer, `aside`), every step is an answer: a contact may read its words as
+  // they come too.
+  const tools = (ctx.resources.tools ?? {}) as Record<string, Tool>;
+  const live = liveWriter(
+    ctx,
+    t,
+    run,
+    current.in,
+    offered.every((tool) => tools[tool.name]?.aside === true),
+  );
   // Asked once a run: a change reaches its next reply, never a step halfway.
   const model = await modelFor(ctx, t.agent, agent, current.in);
 

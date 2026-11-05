@@ -2,16 +2,24 @@
  * Plugins' routes: a request becomes a call to their Action, as whoever its
  * session signs in or a visitor, and its answer becomes the response; a
  * `serve` route answers itself; the more specific path wins; the host's own
- * paths can't be taken; failures say only what they should. Without the web
- * app (`routeHost`), routes are all there is, and `/health`.
+ * paths can't be taken; failures say only what they should; a body past the
+ * most a route takes is refused as soon as it's known, never read whole.
+ * Without the web app (no page's code), routes are all there is, and
+ * `/health`.
  */
 import { assertEquals, assertRejects } from "@std/assert";
-import { createRuntime, defineAction, definePlugin, type Plugins } from "../../../runtime/mod.ts";
+import {
+  createRuntime,
+  defineAction,
+  definePlugin,
+  failure,
+  type Plugins,
+} from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
-import { identity } from "../../../plugins/access/mod.ts";
+import { devSignIn, identity } from "../../../plugins/access/mod.ts";
 import { test } from "../../../testing/mod.ts";
 import { createTickets } from "../tickets.ts";
-import { httpRequest, routeHost, webServer } from "../server.ts";
+import { httpRequest, setClientAddress, webServer } from "../server.ts";
 
 const hooks = definePlugin({
   name: "hooks",
@@ -55,6 +63,18 @@ const hooks = definePlugin({
         throw new Error("secret internals");
       },
     }),
+    // A refusal: coded, its words for anyone only when it says so.
+    "hooks.refuse": defineAction({
+      input: httpRequest,
+      allow: () => true,
+      run: (_ctx, input) => {
+        throw failure(
+          "forbidden",
+          input.query.open ? "Sign the request first." : "key sk-live-123 is for org-ACME only",
+          { public: !!input.query.open },
+        );
+      },
+    }),
   },
   resources: {
     routes: {
@@ -63,6 +83,7 @@ const hooks = definePlugin({
       back: { path: "/hooks/back", action: "hooks.back", methods: ["GET"] },
       people: { path: "/me", action: "hooks.people" },
       broken: { path: "/broken", action: "hooks.broken" },
+      refuse: { path: "/refuse", action: "hooks.refuse" },
       download: {
         path: "/download/",
         serve: (request: Request) => new Response(`file ${new URL(request.url).pathname}`),
@@ -75,14 +96,16 @@ async function setup(
   plugins: Plugins,
   fn: (serve: (r: Request) => Promise<Response>) => Promise<void>,
 ) {
-  const rt = await createRuntime({ store: memoryStore(), plugins: [identity, ...plugins] });
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [identity, devSignIn, ...plugins],
+  });
   try {
     const serve = webServer({
       runtime: rt,
       tickets: createTickets(),
       code: { entry: "app.js", files: { "app.js": "" } },
       upgrade: () => new Response(null, { status: 299 }),
-      dev: true,
     });
     await fn(serve);
   } finally {
@@ -127,13 +150,15 @@ test("a route's Action answers the request, as a visitor when nobody's signed in
 test("the signed-in person calls; an Action that won't take visitors refuses them", async () => {
   await setup([hooks], async (serve) => {
     assertEquals((await serve(new Request("http://localhost/me"))).status, 403);
-    const signed = await serve(
+    // From this machine (a listener says so).
+    const signed = await serve(setClientAddress(
       new Request("http://localhost/signin/dev", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: "ana" }),
       }),
-    );
+      "127.0.0.1",
+    ));
     const cookie = signed.headers.get("set-cookie")!.split(";")[0];
     const me = await serve(new Request("http://localhost/me", { headers: { cookie } }));
     assertEquals(await me.json(), { person: "ana" });
@@ -162,6 +187,48 @@ test("a failure says its code's status, and nothing of its internals", async () 
   await setup([hooks], async (serve) => {
     const broken = await serve(new Request("http://localhost/broken"));
     assertEquals([broken.status, await broken.text()], [500, "Something went wrong"]);
+    // A refusal answers its code's status, and its own words only when they're for anyone.
+    const refused = await serve(new Request("http://localhost/refuse"));
+    assertEquals([refused.status, await refused.text()], [403, "Forbidden"]);
+    const told = await serve(new Request("http://localhost/refuse?open=1"));
+    assertEquals([told.status, await told.text()], [403, "Sign the request first."]);
+  });
+});
+
+test("a body past 10 MB is refused as soon as it's known, and no more of it is read", async () => {
+  await setup([hooks], async (serve) => {
+    const MB = 1024 * 1024;
+    // Its length says so: nothing of it is read.
+    let pulled = 0;
+    const said = await serve(
+      new Request("http://localhost/hooks/echo", {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream", "content-length": String(11 * MB) },
+        body: new ReadableStream({
+          pull: (c) => void (++pulled > 11 ? c.close() : c.enqueue(new Uint8Array(MB))),
+        }),
+        duplex: "half",
+      } as RequestInit),
+    );
+    assertEquals([said.status, await said.text()], [413, "Too large"]);
+    assertEquals(pulled <= 1, true, `read ${pulled} chunks`);
+    // Streamed without a length: read up to the most, then let go.
+    let sent = 0;
+    let cancelled = false;
+    const streamed = await serve(
+      new Request("http://localhost/hooks/echo", {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: new ReadableStream({
+          pull: (c) => void (++sent > 20 ? c.close() : c.enqueue(new Uint8Array(MB))),
+          cancel: () => void (cancelled = true),
+        }),
+        duplex: "half",
+      } as RequestInit),
+    );
+    assertEquals([streamed.status, await streamed.text()], [413, "Too large"]);
+    assertEquals(cancelled, true);
+    assertEquals(sent <= 12, true, `read ${sent} chunks of a 20 MB body`);
   });
 });
 
@@ -193,7 +260,7 @@ test("without the web app: the routes, /health unless a route takes it, and 404"
   const rt = await createRuntime({ store: memoryStore(), plugins: [hooks, preview] });
   const own = await createRuntime({ store: memoryStore(), plugins: [health] });
   try {
-    const serve = routeHost(rt);
+    const serve = webServer({ runtime: rt });
     const text = async (url: string, init?: RequestInit) => {
       const answered = await serve(new Request(url, init));
       return [answered.status, await answered.text()];
@@ -209,7 +276,7 @@ test("without the web app: the routes, /health unless a route takes it, and 404"
     // A host a route takes is all its own, /health too.
     assertEquals(await text("http://ab1-preview.example.com/health"), [200, "the preview"]);
     assertEquals(
-      await (await routeHost(own)(new Request("http://localhost/health"))).text(),
+      await (await webServer({ runtime: own })(new Request("http://localhost/health"))).text(),
       "mine",
     );
   } finally {

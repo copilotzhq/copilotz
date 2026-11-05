@@ -3,7 +3,9 @@
  * space its record lives in. Its memberships go, which ends its access to
  * every chat at once (`member.deleted`), and so does its record
  * (`contact.deleted`: the WhatsApp plugin erases its phone, but not a block
- * on it, kept by a hash). With `chats`, its chats go too, with everything
+ * on it, kept by a hash; the web lines end a visitor's cookie and its
+ * browsers' connections). With
+ * `chats`, its chats go too, with everything
  * chat and its plugins keep of them (`chat.erase`), each only for someone
  * who manages that chat's space.
  *

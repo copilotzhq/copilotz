@@ -15,7 +15,7 @@ const contactSchema = {
   properties: {
     /** The space of the line it first came by. */
     in: { type: "string" },
-    /** Where it first came from: `whatsapp`. */
+    /** Where it first came from: `whatsapp`, `voice`, `mcp`, `web`. */
     via: { type: "string" },
     /** What it's called: its WhatsApp profile's name. */
     name: { type: "string" },

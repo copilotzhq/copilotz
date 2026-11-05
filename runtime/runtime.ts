@@ -6,6 +6,7 @@
 import { createExecutor } from "./executor.ts";
 import { createOwner, type Owner, type Transport } from "./owner.ts";
 import type { Blobs } from "./blobs.ts";
+import type { BrowserLimits } from "./browsers.ts";
 import type { Plugins } from "./define.ts";
 import type { Actor, Store } from "./store.ts";
 import type { Metrics } from "./metrics.ts";
@@ -39,6 +40,12 @@ export async function createRuntime(
      * ticket the host issued); undefined refuses it. Without it, no browsers.
      */
     admit?(secret: string): Actor | undefined | Promise<Actor | undefined>;
+    /**
+     * How much browsers may hold, past the defaults (see browsers.ts): each
+     * actor's, contacts' together, and a `contactsPool()` shared with other
+     * runtimes on the same listener (the orgs host gives one to each org).
+     */
+    browsers?: BrowserLimits;
   },
 ): Promise<Runtime> {
   const transport = {
@@ -54,6 +61,7 @@ export async function createRuntime(
     transports: [transport, ...options.transports ?? []],
     key,
     ...(options.admit ? { admit: options.admit } : {}),
+    ...(options.browsers ? { browsers: options.browsers } : {}),
     blobs: options.blobs,
     blobThreshold: options.blobThreshold,
     cache: options.cache,

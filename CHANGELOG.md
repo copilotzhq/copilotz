@@ -1,3 +1,231 @@
+## Unreleased
+
+- **Breaking: web lines are the web interface's, not contacts'.** `resources.web.lines`, arrival,
+  the `visitor` entrance, the budget, the challenge, prune and the limits moved from
+  `plugins/access/contacts` into `plugins/interfaces/web`, as one plugin, `webLines` (exported from
+  `copilotz/plugins/interfaces`), as WhatsApp's, the phone's and MCP's lines are in theirs. The
+  resource shape is the same (`web: { caller?, lines: { … } }`), and so are the Actions
+  (`contact.arrive`, `contact.sending`, `contact.prune`, `contact.spent`, `contact.budget`) and
+  collections (`contact_visitor`, `contact_rate`): nothing is renamed, so no data moves. Migrate by
+  adding `webLines` beside `...access` (`plugins: [models, chat, ...access, webLines]`) and
+  importing `WebLine`, `WebLimits`, `WebSettings` and `WEB_LIMITS` from
+  `copilotz/plugins/interfaces` instead of `…/access`. Contacts keeps the contact, `contact.start`,
+  `contact.chat` and `contact.forget`; erasing a visitor's contact now ends its cookie and its
+  connections in a processor of `contact.deleted` (`web.forget`), a moment after the erasure, not in
+  the same transaction. The `contactSend` hook's key is `web` (was `contacts`).
+- **Breaking: `renderer` is `medium`.** The docs said "medium" and the API said `renderer`; now one
+  word. A View's context field `ctx.renderer` is `ctx.medium`, and the wire/owner `render` job's
+  `renderer` field is `medium`. Migrate by renaming `ctx.renderer` to `ctx.medium` (and a test's
+  hand-made context `renderer: "web"` to `medium: "web"`); `render(medium, kind, item)` already took
+  the medium by position. The medium names are unchanged (`llm`, `web`, `terminal`, `whatsapp`,
+  `voice`). No alias.
+- **One web host, its parts from the app's plugins.** `serve` (and `webServer` beneath it) is the
+  host for every app: routes from `routes` resources, as before; the page and its code from `code`
+  (none: no page, the routes and `/health`); who a browser is from a new `entrances` resource; how
+  people sign in from a new `signIn` resource; browsers connecting with `tickets` (none: no browser
+  connects). `serveRoutes`, `routeHost` and `RouteListener` are gone, and so are the host's `google`
+  and `dev` options; `serve` answers a `Server`, whose `close({ drain })` stops listening and then
+  closes the runtime.
+  - **Entrances:** each is a cookie and the query that says who its secret is (`{ secret }` in, an
+    actor out), asked in `order`; one may let a newcomer in on `POST /connect` (`arrive`, given the
+    socket's address and the secret its cookie holds when that's no one yet), and end what it is on
+    sign-out (`end`). The host keeps every cookie (httpOnly; `Secure` but over plain http to this
+    machine or a LAN host, by the host the request is for as the app's front says it; `sameSite` lax
+    or strict; `hostOnly`: `__Host-<name>` wherever it's Secure), clears one that's no one (forged,
+    ended), and never takes a store's failure for no one. Identity declares the session (`session`,
+    host-only, read by `credential.actor`, ended by `session.end`, which now takes `{ secret }` and
+    is unrecorded: its secret was in the log). `/connect` answers `{ ticket, actor, name? }`
+    (`person` is gone); `web()` connects as whoever it is (`start(client, actor)`), and
+    `web({ arrive })` is what the page asks coming in, at the app's `base` (an org's, with many).
+  - **Sign-in:** `POST /signin/<name>` for each way a plugin declares: an unrecorded Action (the
+    host refuses to start with a recorded one), called as the system with the request's JSON,
+    answering `{ person, session }`; `local` ones from this machine only: the socket's address (as
+    the listener saw it, `clientAddress`) and the host must both be loopback, a request whose
+    address nobody set is refused, and so is one carrying any header a proxy adds (`forwarded`,
+    `via`, `x-forwarded-*`, `x-real-ip`, `cf-connecting-ip`…: a proxy on this machine that rewrites
+    `Host` made every request this machine's). `devSignIn` refuses to start in an app whose `links`
+    origin is public (a proxy that adds no header, as nginx's `proxy_pass` as it comes, can't be
+    told from this machine). `googleSignIn` declares `google` (the page shows its button for the
+    first client id); the new `devSignIn` plugin declares `dev` (by name or email, this machine
+    only). The orgs host signs in with whatever its directory declares (`signIn: { at: directory }`
+    for its orgs' pages). `describe()` marks unrecorded Actions (`record: false`).
+  - **Visitors** (the contacts plugin's web lines, `resources.web.lines.<name>`: `in`, `agent`,
+    `title`, `days`, `limits`, `files`, `transcribe`, `org`; `web.caller`, as MCP's; and the app's
+    `links` secret, which visitors' cookies are signed with): a page asking to come in by a line
+    (`{ line }`) that isn't anyone becomes a visitor, its browser keeping a signed secret in a
+    `SameSite=Strict` cookie (`__Host-visitor` wherever it's Secure) that's the same visitor for
+    `days` (30). Coming in makes and keeps nothing, in memory either: the visitor the server issues
+    carries its line (`web`) and its networks' tags (`from`: HMACs, never the address), which its
+    messages are counted by. Its first message (`chat.send`, naming no chat) makes its contact
+    (`via: "web"`), its own chat in the line's space and its record (`contact_visitor`), through
+    chat's new `contactSend` hook (`contact.sending`). Limits, each a plain 429 for that caller
+    alone, by address held for each network it's in (`networksOf`: an IPv4 address and its /24, an
+    IPv6 /64, its /56 and its /48, each as many callers' worth as it counts, `SCALE`: 8, 4 and 8):
+    new visitors an hour from one address (`ipVisitorsPerHour`, 20), and as many first messages,
+    counted by the address the app's front says, else the socket's (with neither, nobody's let in,
+    said loudly; all from one private address, said once); a visitor's messages a minute and a day
+    (`perMinute` 10, `perDay` 200), its address's (`ipPerMinute` 30, `ipPerDay` 1,000), the line's a
+    minute (`linePerMinute` 300, of which newcomers, who hadn't spoken before the minute, send
+    `newcomersPerMinute` 200: the rest is kept for conversations going on), and new visitors who
+    speak an hour (`visitorsPerHour`, 600), each place taken in one conditional write, so messages
+    at once can't pass a limit. A line's `budget`: what its visitors' turns may be charged a day
+    (UTC), as the usage ledger prices them (`usage.quote`, through `modelUse`); past it, its
+    visitors' messages wait for tomorrow. A line's `challenge`: an Action of the app's a newcomer
+    passes first (a CAPTCHA's check, given what the page sent,
+    `web({ arrive: { line, challenge }
+    })`). Files only on a line that takes them
+    (`files: { count, bytes }`, 1 of 5 MB unless said), each with a media type; audio transcribed
+    only with `transcribe: true`. `contact.forget` ends a visitor's cookie and its browsers'
+    connections at once (its record stays, ended, until its cookie's time is past), and so does
+    removing its line. Every ten minutes (`contact.prune`) what's past goes: counters, records past
+    their time, a contact made for a first message that never went in. A visitor fetches its own
+    chat's files (`file.content` is open to contacts, under the rules), and finds its chats by its
+    own memberships (`member` by its key, `contact:<id>`). Checked at start (a challenge that's no
+    Action, a budget without the usage plugin).
+  - **What a contact reads:** never an agent's private steps (each tool's input and output), a tool
+    call being written, a step's words before it's known to be an answer, why a model's call broke
+    (the provider's words), nor a tool's files. The access rules' `shared` resource takes `contact`,
+    a filter a contact acting itself (never the agent working for it) reads and writes through:
+    chat's messages without `private` or `toolCalls`; `live` without a tool call or a `retry`, and
+    with words only of a turn that offers no tools (`open: true`, every step an answer; of one that
+    does, a contact sees only that the agent is at work); files without a tool's (`private`, as
+    OpenAPI's are now). A turn stopped mid-step keeps its words only when they were surely an
+    answer. A contact's own reads from its browser name what of its own they read (its chat:
+    `thread`, or `_id`, 32 at most, its read 2 KB of JSON at most: `CONTACT_READ`; of spaces and
+    memberships, only its memberships by its key), else they're refused and never watched; it reads
+    no `aggregate` or `nearest` directly. The voice relay reads its call as the line's agent working
+    for the caller (only what both may read), and says what a web visitor reads: answers, never a
+    step's words before its tools, and words as they're written only of a turn that offers no tools
+    but those called beside an answer (a tool's new `aside: true`, as the voice plugin's `end_call`
+    is): one with other tools says its answer once it's whole. A contact's message says 4,096
+    characters at most (`CONTACT_TEXT`), never what sent it (`via`), and never titles its chat or
+    lets an agent rename it (`title`, `renamable`); a file's media type is one (`MEDIA_TYPE`, 127
+    characters at most, `MEDIA_TYPE_LENGTH`), which the agent is told. WhatsApp, voice and MCP
+    contacts never held a browser connection: they read only through the app's own code.
+  - **Security:** `/connect`, sign-in and sign-out (and the orgs host's own POSTs) answer only the
+    app's own page: an `Origin` that isn't this host (as the front says it), over https off this
+    machine and its LAN, or a cross-site `Sec-Fetch-Site`, is a 403, so another site can't make its
+    visitors arrive here or sign anyone in. Bodies there are JSON objects of 16 KiB at most; route
+    bodies are refused (413) as soon as `content-length` is over 10 MB, and read no further than
+    that while streaming. What either host answers in JSON is `cache-control: no-store`, and what
+    goes wrong says only its public words, with its code's status (500s are logged). So does a
+    route's Action that refuses (`forbidden`, `invalid`, `not_found`, `unauthorized`: its status,
+    and its words only when public). The caller's address parser (`callerFrom`, `callerProblem`,
+    `CallerSettings`, and `countedOf` for a socket's) moved from MCP into the runtime, so MCP and
+    web lines read callers one way. `mcp.call` refuses a contact without an MCP line (a web
+    visitor), naming a line or not.
+  - **Limits on browsers:** 30 tickets per actor a minute (`createTickets({ perMinute })`; past them
+    `/connect` is a 429 with `retry-after`, and `issue` throws `too_many`), 16 browsers (worker ids)
+    per actor, each on two connections at most (one coming while the last goes), 512 watched reads
+    per connection (past them, `too_many`; those watched keep going), 16 resume credentials per
+    actor (the oldest dropped), each working once, for the browser it was given to. A connection
+    counts from the moment it's let in (Welcome) until it goes, ready or not, and one that doesn't
+    say it's ready within 10 seconds is closed (the owner's Hypervisor `readyTimeoutMs`, for every
+    worker: none starts anything before Ready). A contact far less: 2 browsers, 32 watched reads on
+    each connection; and contacts together 16 connections from a network (as many times as it
+    counts: by the tags of `actor.from`, `scaleOf`), 300 on a web line, 400 in all: well under what
+    a listener holds (`LISTENER`, Oxian's Node adapter's 1,000), so people find room. Runtimes on
+    one listener count their contacts together with one `contactsPool()`: the orgs host gives each
+    org one (`open`'s `given.browsers`, for `createRuntime({ browsers })`). The limits are settings:
+    `createRuntime({ browsers })` (`BrowserLimits`: `sockets`, `watches`, `resumes`, `contact`,
+    `network`, `line`, `contacts`, `pool`), checked at start; people never count against contacts'.
+    A contact's browser is told a failure's words only when they're for anyone (`public`), as MCP's
+    callers are: never a provider's (a transcription's raw error said a key's prefix). Tickets and
+    resumes expire on a timer (`runtime/expiring.ts`), never by looking through them all on each one
+    issued.
+  - **Cookie names, and a one-time sign-out:** every entrance's cookie is the host's alone unless it
+    says `hostOnly: false`: identity's session is `__Host-session` wherever it's Secure, and the
+    orgs host's own cookies (`dir`, `org`, `s_<org>`) and every org's entrances' are `__Host-` too,
+    so no other host under the domain (a preview's page) can set one to make a browser someone it
+    chose. The names change: every browser signed in before is signed out once, on upgrade, and what
+    it held under the old plain name is ended where it lives and cleared (on `/connect` and on
+    sign-out), so a version rolled back that reads the plain names finds no one there. Stripping
+    `Domain` from a preview's Set-Cookie (as previews do) doesn't stop that by itself: a preview's
+    page script can still set `document.cookie` with `Domain=<parent>`; the `__Host-` names are what
+    stop it.
+  - **Signing out, and erasing a contact, end their browsers** (`runtime.disconnect(actor)`, and
+    `ctx.disconnect` from an Action): their resume credentials go and each connection closes. A
+    browser comes back only with a new ticket: the client now asks for one when its way back is
+    refused (it used to stop, until its page reloaded), which only a cookie that's still someone
+    gets; another device of the same person comes straight back. A connection let in before (not yet
+    ready) is never ready, and tickets handed out to them not yet used are no one's (`Tickets.end`,
+    which sign-out calls). An org's own (`bound:`) executor can't end anyone's browsers; plugins are
+    trusted code, as with `cancel`. With the orgs host, sign-out ends every open org's session the
+    browser holds.
+  - **Migration:** `serveRoutes({ runtime, … })` is `serve({ runtime, … })` with no `code`.
+    `google: { clientId }` and `dev: true` are the plugins' resources now: add `googleSignIn` (with
+    the `google` resource) and `devSignIn` to the runtime's plugins (the directory's, with orgs). A
+    listener of the app's own (`Deno.serve`) says where each request came from
+    (`setClientAddress(request, info.remoteAddr.hostname)`, from `copilotz/web/server`), and so do
+    tests that sign in with dev sign-in through a hand-made `Request`
+    (`setClientAddress(request, "127.0.0.1")`); `serve` and `listen` do it themselves. Web lines
+    need the `links` resource. `whomOf(runtime, { cookie?, front? })` (was
+    `whomOf(runtime,
+    cookie?)`), and `setCookie` takes the request's site
+    (`siteOf(request, front)`). An entrance whose cookie something else under the domain reads says
+    `hostOnly: false`. A visitor's page finds its chat through its memberships (`member`
+    `{ member: "contact:<id>" }`), not by reading every `thread`. An app that ran this branch
+    before: visitors' cookies (their secret's format and key changed) and links signed before
+    upgrading don't open; visitors are newcomers once.
+- **The runtime, for the web host's limits** (from the second security review of the one host):
+  - **The in-memory store reaches a document by its id at once.** A filter that keeps to ids (`_id`
+    a string, `$eq` one, `$in` strings, also in a top-level `$and`) looks them up, rather than
+    copying and scanning the whole collection on every read and write; other reads scan without a
+    copy, and stop at a `limit` without a `sort`. The `durable: false` collections (`live`, the web
+    lines' counters, billing's `room`) share that store and its one transaction queue, so their cost
+    no longer grows with what they hold. Results come in the same order.
+  - **Links are signed with a key of their own** (`keyOf(secret, use)`, HKDF-SHA256 of the `links`
+    secret; web visitors' cookies use another), never the secret itself, and the `links` resource
+    takes the one before it (`previous`), while what it signed should still open: a link until it
+    expires, a visitor's cookie (the same contact) while it lasts. **Breaking:** links signed before
+    upgrading (an hour's) no longer open. A secret that leaked is never given as `previous`: it goes
+    at once.
+  - **A rule hears a browser's own reads** (`Guard`'s `direct`, asked with the read's filter before
+    it's watched) and may refuse one it won't watch, throwing. Plugins' `check` sees every Action
+    (`merged.actions`). A contact reads its own memberships by its key (anyone else, memberships as
+    far as they reach: a key `within` a space, that space's).
+  - **An aggregate with its own `$match` works under a rule:** the rule's filter joins it in one
+    `$match`; before, every such read failed `invalid`.
+  - **Who calls, by network:** `networksOf(counted)` (an address's wider networks, each with its
+    prefix and `scale`), `SCALE`, `scaleOf(tag)`, `privateAddress(address)`.
+- **From the third security review of the one host:**
+  - **A watched read is matched only against changes it could concern.** A read whose filter names
+    values of a field of its own (a string, `$eq`, `$in` of up to 256 strings: a chat's `thread`, an
+    `_id`) is filed under them; a change to a document holding none of them (before or after, in
+    that field or an array there) skips it before any matching. The owner's read cache does the same
+    for the queries it keeps. Results are exactly as before. New in the reference
+    (`runtime/mongo.ts`): `namedBy(filter)`, `valuesAt(doc, field)`.
+  - **A web line's budget holds, and fails closed.** Each visitor's message holds an estimate of its
+    turn's cost as it goes in (the most one of the line's visitors' model calls cost lately; before
+    any is known, the rest of the day's budget, so one turn goes at a time until a cost is),
+    released as its first call is charged, or lapsing in two minutes: messages at once can't all
+    pass a budget only one fits. Before each model call (and transcription) for a visitor, a spent
+    budget refuses it, for good, so a turn's tool loop stops there: the models plugin's `modelUse`
+    listeners may now refuse a call before it's made (`may`, its refusal `final`; `mayUse`,
+    `ModelCall`). Use the ledger prices at nothing (no price for the model, or pricing failing)
+    closes the line for the day, said in the log. New: `contact.budget`; `contact.spent` takes
+    `contact`, and `unpriced`.
+  - **Web visitors:** a secret dated more than 5 minutes ahead is nobody's. An erased visitor's
+    record is kept as long as any cookie made before could last (400 days, the most a line may say,
+    `MOST_DAYS`), so raising a line's `days` can't bring an erased visitor back.
+  - **MCP's ids** (contacts, chats, users, addresses) are HMACs with the `mcp` key of the app's
+    secret (`keyOf`), never the secret itself; with `links.previous`, a conversation made under the
+    one before goes on as itself (the new system-only `mcp.conversation`; `mcp.call` takes the chat
+    the route found, `thread`). **Breaking:** every MCP conversation from before is new once (no
+    deployment uses the MCP interface yet).
+- **A tab comes back after a network flap.** A new connection on a worker id that already has two
+  closes the oldest instead of being refused (a Welcome lost on the way no longer locks the tab
+  out), and a client that was in once keeps re-enrolling, longer apart, when it's refused.
+- **A model the app doesn't pay for is checked against a web line's budget too** (`paid`-tagged ones
+  skipped `may`, so a visitor's tool loop could go on past a spent day).
+- **A web line's budget loses no charge under load:** `charge` is one atomic write (`$inc` the
+  spend, `$unset` the hold), and `hold` retries with jitter until a deadline instead of eight
+  immediate tries (no more false "busy"). One call costing more than the whole budget no longer
+  closes the line for 30 days: with nothing held, a message holds at most what's left.
+- **Voice: a line's `waiting` phrase** (`voice.lines.<name>.waiting`, none by default) is spoken
+  once when a turn starts running tools before any answer, so a caller doesn't hear silence. Never
+  for an answer without tools, nor for `end_call`.
+
 ## 1.0.0-rc.22 — 2026-11-04
 
 **A security release: upgrade now.** Before it, a Google sign-in wrote the new session's secret to

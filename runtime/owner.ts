@@ -25,7 +25,17 @@ import { createCache } from "./cache.ts";
 import { createMaintenance, type Maintenance } from "./maintain.ts";
 import { createObservers, type Observation, type ObserveOptions } from "./observe.ts";
 import { reading, startup } from "./reads.ts";
-import { BROWSER, createBrowsers, READ_VIEW, readView, SESSION, WIRE } from "./browsers.ts";
+import {
+  BROWSER,
+  type BrowserLimits,
+  createBrowsers,
+  limitsProblem,
+  READ_VIEW,
+  readView,
+  SESSION,
+  WIRE,
+} from "./browsers.ts";
+import { expiring } from "./expiring.ts";
 import { memoryStore } from "./memory.ts";
 import {
   type Hooks,
@@ -108,7 +118,8 @@ export type Stats = {
 /** What a runtime's plugins declare, for hosts: help, forms, defaults. */
 export type Description = {
   collections: Record<string, { schema: unknown }>;
-  actions: Record<string, { description?: string; input?: unknown }>;
+  /** `record: false`: unrecorded, so nothing of its calls is in the log (a sign-in's). */
+  actions: Record<string, { description?: string; input?: unknown; record?: false }>;
   /** The media each kind has a View for. */
   views: Record<string, string[]>;
   resources: Resources;
@@ -136,7 +147,7 @@ export type Owner = {
    * or the medium's default View (kind `"*"`); undefined when there's neither.
    */
   render<R = unknown>(
-    renderer: string,
+    medium: string,
     kind: string,
     item: unknown,
     options?: RenderOptions,
@@ -169,6 +180,14 @@ export type Owner = {
    * False when nothing was running.
    */
   cancel(target: { call: string } | { processor: string; key: string }): Promise<boolean>;
+  /**
+   * Ends an actor's browsers, when who they were ends (signed out, erased):
+   * their resume credentials go and each connection closes (one let in but
+   * not yet ready is never ready); one comes back only with a new ticket,
+   * which only a cookie that's still someone gets. How many connections it
+   * ended.
+   */
+  disconnect(actor: Actor): number;
   /** Resolves when no Processor delivery or timer occurrence is pending, and observed Views caught up. */
   idle(): Promise<void>;
   /**
@@ -223,6 +242,8 @@ const DAY = 86_400_000;
 const DELIVERY_ATTEMPTS = 3;
 /** How long a closing owner waits for running deliveries to finish, by default (ms). */
 const DRAIN_MS = 5_000;
+/** How long a worker welcomed has to say it's ready (ms) before its connection closes. */
+const READY_MS = 10_000;
 
 const aborted = Object.freeze({ aborted: true });
 
@@ -258,9 +279,13 @@ export async function createOwner(
      * ticket the host issued): undefined refuses it. Without it, no browsers.
      */
     admit?(secret: string): Actor | undefined | Promise<Actor | undefined>;
+    /** How much browsers may hold (see browsers.ts): contacts' caps, a pool shared with others. */
+    browsers?: BrowserLimits;
   },
 ): Promise<Owner> {
   const { store } = options;
+  const limited = limitsProblem(options.browsers);
+  if (limited) throw invalid(limited);
   const registry = merge(options.plugins);
   // The View a browser's watched read is: one read, made as its person.
   registry.views[READ_VIEW] = { [WIRE]: readView as ViewDef };
@@ -832,12 +857,22 @@ export async function createOwner(
     }
     return rules.length > 1 ? { $and: rules } : rules[0];
   };
-  /** Whether any rule speaks for a collection's reads by this actor: a browser reads nothing else directly. */
-  const ruled = async (actor: Actor, collection: string) => {
+  /**
+   * Whether any rule speaks for a collection's reads by this actor: a browser
+   * reads nothing else directly. Asked as its own read (`direct`), with its
+   * filter: a rule may refuse one it won't watch (thrown).
+   */
+  const ruled = async (actor: Actor, collection: string, filter?: Filter) => {
+    let found = false;
     for (const guard of registry.guards as Guard[]) {
-      if (await guard(actor, { collection, access: "read" }, ruleReads) !== undefined) return true;
+      const said = await guard(
+        actor,
+        { collection, access: "read", ...(filter ? { filter } : {}), direct: true },
+        ruleReads,
+      );
+      if (said !== undefined) found = true;
     }
-    return false;
+    return found;
   };
   /** Whether an actor may run a query from outside: one that lets them, as Actions do. */
   const askable = (
@@ -874,7 +909,18 @@ export async function createOwner(
         }
         case "aggregate": {
           const found = await rule(actor, "read", op.collection, undefined, reads);
-          return found ? { ...op, pipeline: [{ $match: found }, ...op.pipeline] } : op;
+          if (!found) return op;
+          // One `$match`, first: a pipeline's own joins the rule's.
+          const [first, ...rest] = op.pipeline;
+          const own = first && Object.keys(first).length === 1 && "$match" in first
+            ? (first as { $match: Filter }).$match
+            : undefined;
+          return {
+            ...op,
+            pipeline: own
+              ? [{ $match: both(own, found) }, ...rest]
+              : [{ $match: found }, ...op.pipeline],
+          };
         }
         case "nearest": {
           const found = await rule(actor, "read", op.collection, op.options.filter, reads);
@@ -1066,6 +1112,12 @@ export async function createOwner(
       if ("tx" in request || request.ops.length !== 1) throw invalid("A cancel goes on its own.");
       return cancel(first);
     }
+    if (first?.op === "disconnect") {
+      if ("tx" in request || request.ops.length !== 1) {
+        throw invalid("A disconnect goes on its own.");
+      }
+      return disconnect(first.actor);
+    }
     const lowered = request.ops.map((op) => timers.lower(op, request.actor));
     lowered.forEach(known);
     const guarded = await guard(lowered, request.actor);
@@ -1098,7 +1150,8 @@ export async function createOwner(
 
   // Workers of plugins' kinds (computers…): admitted by their kind's Action, then found by id.
   const connected = workerPresence();
-  const resumed = new Map<string, { kind: string; id: string; until: number }>();
+  /** What a worker shows to reconnect: a secret of its own, for a day. */
+  const resumed = expiring<string, { kind: string; id: string }>(DAY);
   /** Who a worker of a plugin's kind is, from `<kind>:<secret>`; undefined: not one. */
   const workerOf = async (credential: { kind: string; capability: unknown }) => {
     const capability = String(credential.capability);
@@ -1107,7 +1160,7 @@ export async function createOwner(
     if (!def) return undefined;
     if (credential.kind === "resume") {
       const kept = resumed.get(capability);
-      if (!kept || kept.until < Date.now()) throw invalid(`Unknown ${kind}.`);
+      if (!kept) throw invalid(`Unknown ${kind}.`);
       return kept;
     }
     const who = await api.call<{ id: string } | null>(def.admit, {
@@ -1127,9 +1180,8 @@ export async function createOwner(
     const worker = await workerOf(credential);
     if (worker) {
       const now = Date.now();
-      for (const [kept, { until }] of resumed) if (until < now) resumed.delete(kept);
       const again = `${worker.kind}:${crypto.randomUUID()}${crypto.randomUUID()}`;
-      resumed.set(again, { ...worker, until: now + DAY });
+      resumed.set(again, { kind: worker.kind, id: worker.id });
       return {
         definition: {
           workerId: identity.workerId,
@@ -1150,25 +1202,29 @@ export async function createOwner(
       };
     }
     if (!options.key || !same(secret, options.key)) {
+      // Who's ended from here on (signed out, erased) isn't let in by what it showed before.
+      const since = browsers.ends();
       const actor = credential.kind === "resume"
-        ? browsers.resumed(secret)
+        ? browsers.resumed(secret, identity.workerId)
         : options.admit
         ? await options.admit(secret)
         : undefined;
       if (!actor) throw invalid("Unknown executor key.");
-      // A browser: its person rides on the connection, and it takes no work but its session.
+      browsers.room(actor, identity.workerId, since);
+      // A browser: its person rides on the connection, and it takes no work but its session. Its
+      // place is taken as it's let in (`onHandshake`).
       return {
         definition: {
           workerId: identity.workerId,
           providerId: BROWSER,
           workloads: [SESSION],
           capacity: 1,
-          providerConfig: browsers.config(actor),
+          providerConfig: browsers.config(actor, since),
           labels: {},
         },
         sessionGeneration: ++generation,
         authenticatedWith: credential.kind,
-        resume: browsers.resume(actor),
+        resume: browsers.resume(actor, identity.workerId),
       };
     }
     return {
@@ -1235,7 +1291,13 @@ export async function createOwner(
         options.transports.some((t) => t.type !== "in-process")
       ? { admit }
       : {}),
-    config: { maxQueuedDispatches: 100_000, dispatchQueueTimeoutMs: 30_000 },
+    // A worker says it's ready as soon as it's welcomed (none starts anything first): one that
+    // doesn't soon is closed, so a connection let in can't hold its place without being used.
+    config: {
+      maxQueuedDispatches: 100_000,
+      dispatchQueueTimeoutMs: 30_000,
+      readyTimeoutMs: READY_MS,
+    },
     workerCalls: {
       maxConcurrent: 65_536,
       maxPerConnection: 1_024,
@@ -1248,11 +1310,14 @@ export async function createOwner(
         if (context.workload === DISPATCH) return sending(context.metadata);
         if (context.workload !== OP) return undefined;
         // Executors holding the owner's key run the app's own code. One admitted as bound
-        // (`bound:…`, an org's own) runs only as its jobs.
+        // (`bound:…`, an org's own) runs only as its jobs: it ends nobody's browsers.
         const trusted = !provider.startsWith("bound:");
         return async ({ input }) => {
           try {
             const request = await decode<OpRequest>(input);
+            if (!trusted && request.ops.some((op) => op.op === "disconnect")) {
+              throw forbidden("This job can't end browsers");
+            }
             await authorize(request, job, trusted);
             return encode({ value: await serve(request, job) });
           } catch (error) {
@@ -1264,13 +1329,14 @@ export async function createOwner(
       admitUnassigned: (context) => browsers.admit(context),
     },
   }, {
+    // A browser takes its place as it's let in: connections let in together can't pass a limit.
+    onHandshake: ({ fence, definition }) => {
+      if (definition.providerId !== BROWSER) return;
+      browsers.take(fence.identity.workerId, fence.connectionId, definition.providerConfig);
+    },
     onReady: ({ fence, definition }) => {
       if (definition.providerId === BROWSER) {
-        return browsers.ready(
-          fence.identity.workerId,
-          definition.providerConfig,
-          fence.connectionId,
-        );
+        return browsers.ready(fence.identity.workerId, fence.connectionId);
       }
       if (definition.providerId.startsWith("worker:")) {
         const { kind, id } = definition.providerConfig as { kind: string; id: string };
@@ -1336,6 +1402,11 @@ export async function createOwner(
       return { metadata: {}, body: handle.output };
     };
 
+  /** Ends an actor's browsers: see `Owner.disconnect`. */
+  const disconnect = (actor: Actor) =>
+    browsers.end(actor, (workerId) => {
+      void hypervisor.drain(workerId, "ended").catch(() => {});
+    });
   const browsers = createBrowsers({
     observers,
     ruled,
@@ -1343,6 +1414,7 @@ export async function createOwner(
     call: (action, input, actor) => api.call(action, input, { actor }),
     emit: (type, data, actor) => emit(type, data, { actor }),
     dispatch: (input) => hypervisor.dispatch(input),
+    ...(options.browsers ? { limits: options.browsers } : {}),
   });
 
   // Sends a job to an executor; its live frames are published as they arrive.
@@ -1353,7 +1425,7 @@ export async function createOwner(
       : job.kind === "process"
       ? job.processor
       : job.kind === "render"
-      ? `${job.renderer}:${job.view}`
+      ? `${job.medium}:${job.view}`
       : `${job.collection}.${job.query}`;
     try {
       const result = await dispatch(job, signal);
@@ -1760,7 +1832,7 @@ export async function createOwner(
     async render(medium, kind, item, options = {}) {
       return await run({
         kind: "render",
-        renderer: medium,
+        medium,
         view: kind,
         item: json(item),
         ...(options.viewer ? { viewer: options.viewer } : {}),
@@ -1777,6 +1849,7 @@ export async function createOwner(
         Object.entries(registry.actions).map(([name, def]) => [name, {
           ...(def.description ? { description: def.description } : {}),
           ...(def.input ? { input: def.input } : {}),
+          ...(def.record === false ? { record: false as const } : {}),
         }]),
       ),
       views: Object.fromEntries(
@@ -1808,6 +1881,7 @@ export async function createOwner(
       return () => listeners.delete(listener);
     },
     cancel: (target) => Promise.resolve(cancel(target)),
+    disconnect: (actor) => disconnect(actor),
     // Nothing pending, and every observed View showing what that left.
     async idle() {
       do {
@@ -1851,7 +1925,8 @@ export async function createOwner(
       clearTimeout(flushing);
       // A browser's session is a stream that never ends on its own: end them, so the
       // shutdown's drain doesn't wait them out.
-      browsers.closeAll();
+      browsers.close();
+      resumed.close();
       await hypervisor.shutdown();
       // Processors' last positions are saved if they can be (a fenced owner can't): the store
       // closes either way, and a failure still reaches the caller.

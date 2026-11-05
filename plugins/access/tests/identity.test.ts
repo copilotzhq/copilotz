@@ -1,7 +1,8 @@
 /**
  * Identity: keys and sessions prove someone (hashed at rest, revoked by
  * deleting them); Google sign-in turns a verified ID token into a person and
- * a session, and refuses anything else.
+ * a session, and refuses anything else. No secret, nor Google's token, is
+ * ever in the log.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { type Actor, createRuntime, definePlugin, type Runtime } from "../../../runtime/mod.ts";
@@ -103,7 +104,7 @@ test("a session proves its person until it ends or expires", async () => {
     });
     // Only the system starts sessions: a person can't make one for anyone.
     await assertRejects(() => rt.call("session.start", { person: "bob" }, { actor: ana }));
-    await rt.call("session.end", { session }, { actor: ana });
+    await rt.call("session.end", { secret: session }, { actor: ana });
     assertEquals(await rt.query("credential.actor", { secret: session }), null);
     const old = await rt.call<{ session: string }>("session.start", { person: "ana", ms: -1 });
     assertEquals(await rt.query("credential.actor", { secret: old.session }), null);
@@ -162,7 +163,7 @@ test("a session's or a key's secret never lands in the log", async () => {
     const ana = (await rt.query("credential.actor", { secret: session })) as Actor;
     const { key } = await rt.call<{ key: string }>("key.create", { name: "ci" }, { actor: ana });
     // Ending a session shows its secret too.
-    await rt.call("session.end", { session }, { actor: ana });
+    await rt.call("session.end", { secret: session }, { actor: ana });
     await rt.idle();
     const logged = JSON.stringify(await store.events(0, 1000));
     assertEquals([logged.includes(session), logged.includes(key)], [false, false]);

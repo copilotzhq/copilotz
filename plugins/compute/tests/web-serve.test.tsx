@@ -45,7 +45,7 @@ function ctxOf(
       }),
     } as unknown as ViewContext<ReactNode>["db"],
     resources: {},
-    renderer: "web",
+    medium: "web",
     kind: "test",
     viewer: { name: "ana" },
     hints,

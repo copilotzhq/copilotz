@@ -111,8 +111,11 @@ const cookiesOf = (request: Request, name: string) =>
 
 /**
  * A cookie the computer's server sets, for its preview's host alone: its
- * `Domain` goes, so no preview sets cookies on the domain's other hosts (other
- * previews, apps).
+ * `Domain` goes, so its headers set no cookies on the domain's other hosts
+ * (other previews, apps). That doesn't stop a preview tossing cookies: its
+ * page's script can still set `document.cookie` with `Domain=<parent>`. What
+ * stops that is the app's cookies' `__Host-` names (an entrance's
+ * `hostOnly`, identity's session), which no other host can set.
  */
 const hostOnly = (cookie: string) => cookie.replace(/;\s*domain=[^;]*/gi, "");
 

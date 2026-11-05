@@ -1,39 +1,45 @@
 /**
  * Which conversation a call belongs to, and its ids, without a table: each
- * comes from what names the conversation, through an HMAC with the app's
- * secret (the `links` resource's), so nobody without the secret can work
- * one out from another, and nothing maps sessions to chats.
+ * comes from what names the conversation, through an HMAC with the MCP key
+ * of the app's secret (the `links` resource's, through `keyOf`: never the
+ * secret itself, nor the key its links or visitors' cookies are signed
+ * with), so nobody without the secret can work one out from another, and
+ * nothing maps sessions to chats.
  *
  * - **What names a conversation** (its key): ChatGPT's `openai/session`
  *   with its `openai/subject`, or a `chat` handle the app gave.
  * - **Its contact** is `c-<hmac>`, of the key, the line and the org; **its
  *   chat** is `mcp-<hmac>` of the contact. A contact, which is all an MCP
  *   call ever acts as, is in that chat and no other.
+ * - **The secret before** (`links.previous`): a conversation its contact
+ *   was made with stays that contact, and its chat (`conversationsOf` gives
+ *   each secret's, the app's own first; whoever looks them up takes the one
+ *   that's there, else the first). Only the app's own secret makes new ones.
  * - **A handle** is 128 random bits, shown to the client and kept nowhere.
  * - **A call's id** is `mcp:<thread>:<request>:<what>`, hashes of the
  *   JSON-RPC request's id and of the tool and its input: a request sent
  *   again is the same call, and two different ones under the same request
  *   id (a client that counts from 1 for each call) never are. Nothing a
  *   client sends goes into it as it came.
- * - **A caller's address** is counted as `a-<hmac>`, never kept as it is.
+ * - **A caller's address** is counted as `a-<hmac>`, never kept as it is
+ *   (and a user, `u-<hmac>`): counted afresh once the secret changes.
  */
+import { keyOf } from "../../../../runtime/mod.ts";
 
 const encoder = new TextEncoder();
 
 const hex = (bytes: ArrayBuffer) =>
   [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-/** HMAC-SHA256 of `parts` (kept apart as JSON), in hex. */
-async function mac(secret: string, parts: unknown[]): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
+/** HMAC-SHA256 of `parts` (kept apart as JSON) with the MCP key of `secret`, in hex. */
+const mac = async (secret: string, parts: unknown[]): Promise<string> =>
+  hex(
+    await crypto.subtle.sign(
+      "HMAC",
+      await keyOf(secret, "mcp"),
+      encoder.encode(JSON.stringify(parts)),
+    ),
   );
-  return hex(await crypto.subtle.sign("HMAC", key, encoder.encode(JSON.stringify(parts))));
-}
 
 /** What names a conversation: ChatGPT's session (and user), or a handle the app gave. */
 export type Key = { session: string; subject?: string } | { handle: string };
@@ -55,6 +61,17 @@ export async function conversationOf(
   }`;
   return { contact, thread: await threadOf(secret, contact) };
 }
+
+/**
+ * The contact and chat a conversation is under each of the app's secrets
+ * (`secretsOf`: its own first, then the one before it).
+ */
+export const conversationsOf = (
+  secrets: string[],
+  scope: Scope,
+  key: Key,
+): Promise<{ contact: string; thread: string }[]> =>
+  Promise.all(secrets.map((secret) => conversationOf(secret, scope, key)));
 
 /** A conversation's chat, from its contact. */
 export const threadOf = async (secret: string, contact: string): Promise<string> =>

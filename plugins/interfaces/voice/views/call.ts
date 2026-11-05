@@ -1,13 +1,20 @@
 /**
- * What's being said in a call (the `voice_call` View, renderer `voice`),
- * read as its caller: what agents wrote for them since the call began, in
- * order (their answers, and a step's words before its tools: "One moment,
- * I'll look"), each as its `message` View here says it; what an agent is
- * writing right now (`live`), said the same way; and whether the agent ended
- * the call (`end`). The call's socket (resources/relay.ts) observes it, and
- * says what's new as it comes, of the turns the caller's own words started.
- * Only what the caller may read is here: an answer drawing on what they
- * can't see isn't.
+ * What's being said in a call (the `voice_call` View, medium `voice`),
+ * read as the line's agent working for its caller: what agents answered
+ * them since the call began, in order, each as its `message` View here says
+ * it; what an agent is writing right now (`live`); and whether the agent
+ * ended the call (`end`). The call's socket (resources/relay.ts) observes
+ * it, and says what's new as it comes, of the turns the caller's own words
+ * started.
+ *
+ * A caller hears what a web visitor reads, no more: answers, never a step's
+ * words before its tools ("Let me check the supplier's sheet…" is the
+ * agent's own working, not meant for them), and what's being written only
+ * when its turn offers no tools but those called beside an answer (`open`:
+ * every step an answer; `end_call` is one). Otherwise
+ * `live` names the turn at work with no words: nothing is said while it
+ * works. Only what the caller may read is here (the agent working for them
+ * reads what both may): an answer drawing on what they can't see isn't.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { Live, Message } from "../../../agents/chat/contract.ts";
@@ -18,8 +25,6 @@ export type Said = {
   _id: string;
   turn?: string;
   replyTo?: string;
-  /** A step's words (before its tools), not an answer. */
-  step?: boolean;
   failed?: boolean;
   stopped?: boolean;
   text: string;
@@ -28,7 +33,8 @@ export type Said = {
 
 export type Saying = {
   said: Said[];
-  live?: { turn: string; text: string };
+  /** The turn writing now, and its words so far when they may be said (else none). */
+  live?: { turn: string; text: string; tools?: true };
   end?: { reason: string; after?: string };
 };
 
@@ -46,25 +52,37 @@ export const callView = (
       thread: item.thread,
       at: { $gte: item.since },
       from: { $ne: to },
-      $or: [{ to }, { private: true, text: { $exists: true } }],
+      to,
+      private: { $ne: true },
     },
     { sort: { at: -1 }, limit: LATEST },
   ).value ?? [];
   const [writing] = ctx.db.collection<Live>("live").find({ thread: item.thread }).value ?? [];
   const say = (m: Pick<Message, "text" | "from">) => String(ctx.show("message", m) ?? "");
+  // Words being written may be said only while they can't turn out to be a step's: its turn
+  // offers no tools, and nothing broke (a retry's reason is the provider's).
+  const sayable = (l: Live) => l.open === true && !l.calls?.length && !l.retry;
   return {
     said: written.toReversed().map((m) => ({
       _id: m._id,
       ...(m.turn ? { turn: m.turn } : {}),
       ...(m.replyTo ? { replyTo: m.replyTo } : {}),
-      ...(m.private ? { step: true } : {}),
       ...(m.failed ? { failed: true } : {}),
       ...(m.stopped ? { stopped: true } : {}),
       text: m.text ? say(m) : "",
       at: m.at,
     })),
     ...(writing
-      ? { live: { turn: writing.turn, text: say({ text: writing.text, from: writing.agent }) } }
+      ? {
+        live: {
+          turn: writing.turn,
+          text: sayable(writing) ? say({ text: writing.text, from: writing.agent }) : "",
+          // Tools running before any answer (not those called beside one: `open`, nor ending the call).
+          ...(!writing.open && writing.calls?.some((c) => c.name !== "end_call")
+            ? { tools: true as const }
+            : {}),
+        },
+      }
       : {}),
     ...(call?.end ? { end: call.end } : {}),
   };

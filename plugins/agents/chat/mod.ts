@@ -26,9 +26,12 @@
  *   everything in it; not while an agent is writing in it.
  * - A chat can be opened empty (`chat.open`), to share it with a contact
  *   (someone outside the org, who then writes there with `chat.send` and
- *   reaches only it); trusted code has an agent say a fixed message in one
- *   without a turn (`chat.say`: a payment confirmed), and erases one with
- *   everything in it (`chat.erase`: someone's data, gone).
+ *   reaches only it, never its agents' private steps); a contact's message
+ *   is let in first by the app's `contactSend` hooks (a web visitor's
+ *   limits, and its own chat, opened with its first message); trusted code
+ *   has an agent say a fixed message in one without a turn (`chat.say`: a
+ *   payment confirmed), and erases one with everything in it (`chat.erase`:
+ *   someone's data, gone).
  * - After an agent's answer, a medium may show more (additions: a carousel
  *   of trips after the answer that found them), each once per chat per key,
  *   recorded in `shown` (`chat.shown`), and told to the model after that
@@ -58,6 +61,9 @@
  * - `agentSources`: { action }: `{ names }` in, the definitions of those the asker meets out;
  * - `roster`: { action }: `{ space }` in, `{ agents, default? }` out;
  * - `agentModel`: { action }: `{ agent, space? }` in, a model or null out;
+ * - `contactSend`: { action }: asked as a contact about to send, `{ thread?,
+ *   files }` in (each file's name, type and size); it refuses, or answers
+ *   `{ thread?, transcribe?: false }` (see actions/send.ts);
  * - `additions`: { order?, agents? }, each with an `addition:<name>` View in
  *   the medium that shows it, given `{ thread, answer }` (see `Addition`).
  */
@@ -134,12 +140,27 @@ export const chat: Plugin = definePlugin({
     // Conversations by title on Usage.
     usageNames: { thread: { tag: "tags.thread", collection: "thread", field: "title" } },
     // With the access plugin, chats live in spaces, and what's in a chat comes with it when it's
-    // shared on its own (with a contact): its messages, files and what's being written.
+    // shared on its own (with a contact): its messages, files and what's being written. A contact
+    // reads what's said there, never its agents' private steps (their tools' calls, with what each
+    // returned), a tool's files, nor what's being written that may become one: of a turn that
+    // offers tools, only that the agent is at work (no words, no call, no broken call's reason, a
+    // provider's own); of one that offers none (`open`: every step an answer), its words as they come.
     shared: {
       thread: {},
-      message: { labels: true, part: "thread" },
-      file: { part: "thread" },
-      live: { part: "thread" },
+      message: {
+        labels: true,
+        part: "thread",
+        contact: { private: { $ne: true }, toolCalls: { $exists: false } },
+      },
+      file: { part: "thread", contact: { private: { $ne: true } } },
+      live: {
+        part: "thread",
+        contact: {
+          "calls.0": { $exists: false },
+          retry: { $exists: false },
+          $or: [{ open: true }, { text: "" }],
+        },
+      },
       shown: { part: "thread" },
     },
   },

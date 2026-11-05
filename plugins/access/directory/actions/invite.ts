@@ -4,7 +4,7 @@
  * theirs when they sign in, and accepting one makes them belong, with the
  * invitation's role for their first entering. All are the system's.
  */
-import { defineAction, forbidden } from "../../../../runtime/mod.ts";
+import { defineAction, failure } from "../../../../runtime/mod.ts";
 import type { Invite } from "../collections/invite.ts";
 import type { Org } from "../collections/org.ts";
 
@@ -99,7 +99,7 @@ export const answerInviteAction = defineAction({
     const invites = ctx.db.collection<Invite>("invite");
     const found = await invites.findOne({ _id: input.invite });
     if (!found || found.email !== input.email.toLowerCase()) {
-      throw forbidden("No such invitation for you.");
+      throw failure("forbidden", "No such invitation for you.", { public: true });
     }
     await ctx.transaction(async (tx) => {
       if (input.accept) {

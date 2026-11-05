@@ -1,5 +1,5 @@
 /**
- * A chat message on the phone (the `message` View, renderer `voice`): its
+ * A chat message on the phone (the `message` View, medium `voice`): its
  * words as they're said aloud. Agents write Markdown, so its marks go (bold,
  * headings, bullets, code), a link says its words, a web address its site,
  * and pictographs (emoji) go; a line that ends without a stop gets one, so

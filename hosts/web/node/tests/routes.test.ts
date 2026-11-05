@@ -1,10 +1,10 @@
 /**
- * An app without the web app (`serveRoutes`): its routes answer, a route's
- * socket too, `/health` says it's up, and nothing else is there. The
- * runtime's own socket still takes its clients. Closing stops listening,
- * lets what's running finish, and closes the runtime with what it was given.
- * The web host's routes (`serve`) take sockets the same way. Deno and Bun run
- * it too, through their Node compatibility.
+ * An app without the web app (`serve` with no page's code): its routes
+ * answer, a route's socket too, `/health` says it's up, and nothing else is
+ * there. The runtime's own socket still takes its clients. Closing stops
+ * listening, lets what's running finish, and closes the runtime with what it
+ * was given. With the page, the routes take sockets the same way. Deno and
+ * Bun run it too, through their Node compatibility.
  */
 import { assertEquals, assertRejects } from "@std/assert";
 import {
@@ -19,7 +19,7 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import { httpRequest, type Served, socket } from "../../server.ts";
 import { createTickets } from "../../tickets.ts";
-import { serve, serveRoutes } from "../mod.ts";
+import { serve } from "../mod.ts";
 
 const hooks = definePlugin({
   name: "hooks",
@@ -77,9 +77,9 @@ const message = (ws: WebSocket) =>
 const closed = (ws: WebSocket) =>
   new Promise<void>((resolve) => ws.addEventListener("close", () => resolve(), { once: true }));
 
-test("serveRoutes: the app's routes, a route's socket, /health, and nothing else", async () => {
+test("without a page: the app's routes, a route's socket, /health, and nothing else", async () => {
   const runtime = await createRuntime({ store: memoryStore(), plugins: [hooks] });
-  const server = await serveRoutes({ runtime });
+  const server = await serve({ runtime });
   const base = `http://127.0.0.1:${server.port}`;
   try {
     const hello = await fetch(`${base}/hooks/hello?from=meta`, { method: "POST", body: "{}" });
@@ -115,7 +115,7 @@ async function echo(url: string) {
   return answer;
 }
 
-test("serve: the web host's routes take sockets of their own too", async () => {
+test("with the page, the routes take sockets of their own too", async () => {
   const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
@@ -131,12 +131,11 @@ test("serve: the web host's routes take sockets of their own too", async () => {
   try {
     assertEquals(await echo(`ws://127.0.0.1:${server.port}/relay`), "echo: hello");
   } finally {
-    await server.shutdown();
-    await runtime.close();
+    await server.close();
   }
 });
 
-test("serveRoutes: the runtime's own socket still takes its clients", async () => {
+test("without a page, the runtime's own socket still takes its clients", async () => {
   const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
@@ -144,7 +143,7 @@ test("serveRoutes: the runtime's own socket still takes its clients", async () =
     transports: [socket],
     admit: tickets.admit,
   });
-  const server = await serveRoutes({ runtime });
+  const server = await serve({ runtime });
   const ana: Actor = { kind: "person", id: "ana" };
   const client = connect({
     transport: {
@@ -163,7 +162,7 @@ test("serveRoutes: the runtime's own socket still takes its clients", async () =
   }
 });
 
-test("serveRoutes: closing lets a running request finish, then closes the runtime", async () => {
+test("closing lets a running request finish, then closes the runtime", async () => {
   const runtime = await createRuntime({ store: memoryStore(), plugins: [hooks] });
   const asked: unknown[] = [];
   const owned: Runtime = {
@@ -173,7 +172,7 @@ test("serveRoutes: closing lets a running request finish, then closes the runtim
       return runtime.close();
     },
   };
-  const server = await serveRoutes({ runtime: owned });
+  const server = await serve({ runtime: owned });
   const base = `http://127.0.0.1:${server.port}`;
   const relay = await opened(`ws://127.0.0.1:${server.port}/relay`);
   const hungUp = closed(relay);

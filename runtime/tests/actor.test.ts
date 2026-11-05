@@ -136,6 +136,14 @@ const plugin = definePlugin({
     },
     // A View knows whom it renders as, wherever it's drawn.
     whoami: { test: (_: unknown, ctx: ViewContext) => ctx.actor?.id ?? "system" },
+    // How many of these texts, of what the reader reaches: an aggregate with its own $match.
+    tally: {
+      test: (texts: string[], ctx: ViewContext) =>
+        ctx.db.collection("note").aggregate([
+          { $match: { text: { $in: texts } } },
+          { $group: { _id: null, n: { $count: {} } } },
+        ]).value,
+    },
   },
   // Each person reaches their own notes.
   guard: (actor, { collection }) => collection === "note" ? { owner: actor.id } : undefined,
@@ -187,6 +195,25 @@ each("everything an actor's call causes is theirs, events included", async (rt, 
   assertEquals(by(events, "note.echoed"), ["ana"]);
   assertEquals(by(events, "action.completed"), ["ana", "ana"]);
 });
+
+each(
+  "an aggregate's own $match joins the rules': it counts what the actor reaches of it",
+  async (rt) => {
+    await rt.call("note.add", { text: "a1" }, { actor: ana });
+    await rt.call("note.add", { text: "a2" }, { actor: ana });
+    await rt.call("note.add", { text: "b1" }, { actor: bob });
+    const tally = async (actor: Actor) => {
+      const seen = rt.observe("test", "tally", ["a1", "b1"], { actor });
+      try {
+        return await seen.ready;
+      } finally {
+        seen.close();
+      }
+    };
+    assertEquals(await tally(ana), { status: "ready", value: [{ _id: null, n: 1 }] });
+    assertEquals(await tally(bob), { status: "ready", value: [{ _id: null, n: 1 }] });
+  },
+);
 
 each("rules are filters: an actor reads, changes and removes only what they reach", async (rt) => {
   await rt.call("note.add", { text: "a1" }, { actor: ana });

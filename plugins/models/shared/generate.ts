@@ -14,7 +14,7 @@ import {
 import { filesFor } from "./files.ts";
 import { calledBy } from "./provider.ts";
 import { backoff, quietly, RETRY, SILENCE, transient, wait } from "./retry.ts";
-import { used } from "./use.ts";
+import { mayUse, used } from "./use.ts";
 import { measure } from "./telemetry.ts";
 import {
   EFFORTS,
@@ -147,13 +147,21 @@ async function keyed(ctx: Reach, m: Resolved): Promise<Resolved> {
 
 /**
  * Whether what's about to run may spend (the `spending` resource: whoever
- * keeps an org's limits). Not asked from a read, for a model the app doesn't
- * pay for (the org's own key, a person's subscription). Saying no is final:
+ * keeps an org's limits), which isn't asked for a model the app doesn't pay for
+ * (the org's own key, a person's subscription). Saying no is final:
  * trying again won't help.
  */
 async function mayRun(ctx: Reach, m: Resolved, request: Generate): Promise<void> {
+  // Whoever listens to model use may refuse it first (a web line's budget, spent): a model
+  // the app doesn't pay for too, since the line's budget counts a visitor's use of any.
+  await mayUse(ctx, {
+    meter: "llm",
+    subject: m.id,
+    ...(request.tags ? { tags: request.tags } : {}),
+  });
+  if (m.tags?.paid) return;
   const spending = ctx.resources.spending as { check?: string } | undefined;
-  if (!spending?.check || !ctx.as || m.tags?.paid) return;
+  if (!spending?.check || !ctx.as) return;
   const purpose = request.tags?.purpose;
   const verdict = await ctx.as().call<{ ok: boolean; why?: string; message?: string }>(
     spending.check,

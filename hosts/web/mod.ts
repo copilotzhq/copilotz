@@ -10,7 +10,7 @@
  * on those variables. The server half is `server.ts` (with
  * `tickets.ts`), for the process that serves the page.
  */
-export { go, signOut, web, type WebOptions, type Where } from "./host.tsx";
+export { go, signOut, web, type WebOptions, type Where, type Who } from "./host.tsx";
 export { appBase } from "./base.ts";
 // Orgs, when the server serves many (`hosts/orgs`): the person's, and going between them.
 export {

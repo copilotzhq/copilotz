@@ -3,13 +3,14 @@
  * A path ending in `/` takes everything under it; any other, itself alone.
  *
  * - `{ path, action }`: the request becomes a call to that Action (its input
- *   an `HttpRequest`), as the person its session cookie signs in, or else a
+ *   an `HttpRequest`), as whoever the request is (the app's entrances say:
+ *   the person its session signs in, a web line's visitor), or else a
  *   visitor (`{ kind: "visitor", id: "" }`): the Action's `allow` decides.
  *   It answers with an `HttpAnswer`. Webhooks, OAuth callbacks, an API.
  * - `{ path, serve }`: a function that answers the request itself, here in
  *   the host's process: files as they are (downloads), or an API that must
  *   stream, choose call ids or keep a request's secrets out of the log. It's
- *   given the runtime and who the request's session signs in (`Served`). It
+ *   given the runtime and who the request is (`Served`). It
  *   may take a WebSocket (a voice call's relay): `host.upgrade()` accepts
  *   the request's upgrade, and it answers with the response that gives.
  * - `{ host, serve }` (or `action`): every request to a host, whatever its
@@ -42,9 +43,9 @@ export type Route =
   & ({ action: string } | { serve(request: Request, host: Served): Response | Promise<Response> });
 
 /**
- * What a `serve` route is given: the runtime, who the request's session
- * signs in, and the host the request is for (as the front says, when it's
- * trusted: not always `request.url`'s).
+ * What a `serve` route is given: the runtime, who the request is (by the
+ * app's entrances), and the host the request is for (as the front says,
+ * when it's trusted: not always `request.url`'s).
  */
 export type Served = {
   runtime: Runtime;
@@ -145,7 +146,7 @@ export const VISITOR: Actor = { kind: "visitor", id: "" };
 /** Paths the web host answers itself. */
 const OWN = ["/app/", "/assets/", "/files/", "/oxian", "/connect", "/signin", "/signout"];
 
-/** Bodies larger than this are refused (10 MB). */
+/** Bodies larger than this are refused (10 MB): a 413 once that's known, the rest never read. */
 const MAX_BODY = 10 * 1024 * 1024;
 
 const textual = (type: string) =>
@@ -158,8 +159,49 @@ const STATUS: Record<string, number> = {
   unauthorized: 401,
 };
 
+/** What a refusal says when its own words aren't for anyone (`public`), by its code. */
+const SAID: Record<string, string> = {
+  forbidden: "Forbidden",
+  invalid: "Not a request this takes",
+  not_found: "Not found",
+  unauthorized: "Unauthorized",
+};
+
 const plain = (status: number, text: string) =>
   new Response(text, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+
+/**
+ * A request's body, `most` bytes at most: undefined past it, said by its
+ * `content-length` before anything is read, or found while reading, which
+ * stops there (the rest is never read).
+ */
+export async function bodyOf(request: Request, most: number): Promise<Uint8Array | undefined> {
+  if (!request.body) return new Uint8Array();
+  if (Number(request.headers.get("content-length") ?? 0) > most) {
+    await request.body.cancel().catch(() => {});
+    return undefined;
+  }
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > most) {
+      await reader.cancel().catch(() => {});
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.length;
+  }
+  return bytes;
+}
 
 /** Reads a request as an Action takes it. */
 async function read(request: Request, url: URL): Promise<HttpRequest | Response> {
@@ -175,8 +217,8 @@ async function read(request: Request, url: URL): Promise<HttpRequest | Response>
     headers,
   };
   if (!request.body) return asked;
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.length > MAX_BODY) return plain(413, "Too large");
+  const bytes = await bodyOf(request, MAX_BODY);
+  if (!bytes) return plain(413, "Too large");
   if (textual(headers["content-type"] ?? "")) {
     return { ...asked, body: new TextDecoder().decode(bytes) };
   }
@@ -261,9 +303,13 @@ async function answered(
   try {
     return answer(await runtime.call(route.action, asked, { actor }));
   } catch (error) {
-    const code = (error as { code?: string }).code;
+    // A refusal answers its code's status, and its words only when they're for anyone.
+    const { code, public: open } = (error ?? {}) as { code?: string; public?: boolean };
     if (code && STATUS[code]) {
-      return plain(STATUS[code], error instanceof Error ? error.message : String(error));
+      return plain(
+        STATUS[code],
+        open === true && error instanceof Error ? error.message : SAID[code],
+      );
     }
     console.error(`routes.${name}:`, error instanceof Error ? error.message : error);
     return plain(500, "Something went wrong");
@@ -317,8 +363,8 @@ export function hostServer(
 
 /**
  * Answers the requests a plugin's route takes; undefined for any other. `whom`
- * says who the request's session signs in, if anyone. A request to a host a
- * route takes is that route's, whatever its path; any other goes by path.
+ * says who the request is, if anyone. A request to a host a route takes is
+ * that route's, whatever its path; any other goes by path.
  */
 export function routeServer(
   runtime: Runtime,
@@ -349,30 +395,6 @@ export function routeServer(
       url,
       served(runtime, request, whom, hostOf(request, options.front)),
     );
-  };
-}
-
-/** Where a host without the web app says it's up. */
-const HEALTH = "/health";
-
-/**
- * A host for an app without the web app (on WhatsApp, on the phone): its
- * routes alone, by host and then by path, their sockets included; `GET
- * /health`, unless a route takes it; and 404 for anything else. Nobody signs
- * in here: a route's Action is called as a visitor, and its `allow` decides.
- * `serveRoutes` (`copilotz/web/node`) listens with it.
- */
-export function routeHost(
-  runtime: Runtime,
-  options: { front?: Front } = {},
-): (request: Request) => Promise<Response> {
-  const routes = routeServer(runtime, () => Promise.resolve(null), options);
-  return async (request) => {
-    const answering = routes(request);
-    if (answering) return await answering;
-    const healthy = (request.method === "GET" || request.method === "HEAD") &&
-      new URL(request.url).pathname === HEALTH;
-    return healthy ? plain(200, "ok") : plain(404, "Not found");
   };
 }
 

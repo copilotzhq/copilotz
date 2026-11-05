@@ -18,9 +18,15 @@ import { handler } from "@oxian/oxian-js/adapters/deno";
 import { createRuntime, definePlugin, type Plugins } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
-import { googleSignIn } from "../../plugins/access/mod.ts";
+import { devSignIn, googleSignIn } from "../../plugins/access/mod.ts";
 import { createTickets } from "../../hosts/web/tickets.ts";
-import { type Asset, type Code, socket, webServer } from "../../hosts/web/server.ts";
+import {
+  type Asset,
+  type Code,
+  setClientAddress,
+  socket,
+  webServer,
+} from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
 import { computerDownloads } from "../../plugins/compute/computers/resources/downloads.ts";
 import { VERSION } from "../../plugins/compute/computers/program/version.ts";
@@ -71,6 +77,8 @@ const runtime = await createRuntime({
   store: sqlite ? await sqliteStore({ path: sqlite }) : memoryStore(),
   plugins: [
     ...plugins,
+    // Sign in by name on this machine, and with Google when GOOGLE_CLIENT_ID is set.
+    devSignIn,
     ...(clientId
       ? [googleSignIn, definePlugin({ name: "google", resources: { google: { clientId } } })]
       : []),
@@ -117,17 +125,17 @@ async function bundle(): Promise<Code> {
 }
 
 const code = await bundle();
+const serve = webServer({
+  runtime,
+  tickets,
+  code,
+  upgrade: handler(runtime.hypervisor),
+  title: brand.title,
+  theme: themeOf(brand.theme),
+  assets,
+});
+// This machine alone (dev sign-in is its own); each request says where it came from, as the socket did.
 Deno.serve(
   { port, hostname: "127.0.0.1", onListen: () => console.log(`http://localhost:${port}`) },
-  webServer({
-    runtime,
-    tickets,
-    code,
-    upgrade: handler(runtime.hypervisor),
-    title: brand.title,
-    theme: themeOf(brand.theme),
-    assets,
-    dev: true,
-    ...(clientId ? { google: { clientId } } : {}),
-  }),
+  (request, info) => serve(setClientAddress(request, info.remoteAddr.hostname)),
 );

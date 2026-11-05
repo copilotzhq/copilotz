@@ -35,7 +35,7 @@
  *   that ends stops its agent's turn. Each call is a small record
  *   (`voice_call`): when, how long, why it ended.
  * - **The phone is a medium:** what an agent writes is said through its
- *   `message` View (renderer `voice`: the words, without Markdown), which an
+ *   `message` View (medium `voice`: the words, without Markdown), which an
  *   app may replace; the caller's chat is read as theirs, so only what they
  *   may read is said, and only of the turns their own words started.
  *
@@ -48,8 +48,8 @@
  * }
  * ```
  *
- * The socket needs a host that takes a route's socket (`serveRoutes`, or the
- * web host, from `copilotz/web/node`).
+ * The socket needs a host that takes a route's socket: the web host's
+ * listener (`serve`, from `copilotz/web/node`), with or without a page.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { hookAction } from "./actions/hook.ts";

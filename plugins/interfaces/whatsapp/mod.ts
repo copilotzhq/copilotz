@@ -30,7 +30,7 @@
  * - **What agents say there** to them goes back to the phone, as WhatsApp
  *   formats it, a long answer in several messages; "typing…" shows while
  *   they work, and nothing says "please wait".
- * - **WhatsApp is a medium:** a View for it (renderer `whatsapp`) returns
+ * - **WhatsApp is a medium:** a View for it (medium `whatsapp`) returns
  *   parts, each one WhatsApp message, built with the toolkit in the contract
  *   (`text`, `buttons`, `list`, `carousel`, `image`, `document`), which
  *   checks Meta's limits. A message shows through its `message` View (this

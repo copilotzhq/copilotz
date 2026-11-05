@@ -2,7 +2,7 @@
  * A Copilotz app served to browsers from Node: the app's plugins (app.ts)
  * beside the web host's server half, the page's code (browser.tsx) bundled
  * with esbuild as it starts, and browsers' sockets taken through Oxian's Node
- * adapter (`copilotz/web/node`). Sign in by name on this machine (dev).
+ * adapter (`copilotz/web/node`). Sign in by name on this machine (`devSignIn`).
  *
  *   node examples/web-node/server.ts [--port=8080] [--sqlite[=path]]
  *   node --env-file=.env examples/web-node/server.ts      # a real model (OPENAI_API_KEY)
@@ -21,6 +21,7 @@ import { socket } from "../../hosts/web/server.ts";
 import { createTickets } from "../../hosts/web/tickets.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
 import { bundle, serve } from "../../hosts/web/node/mod.ts";
+import { devSignIn } from "../../plugins/access/mod.ts";
 import { plugins } from "./app.ts";
 
 const { values } = parseArgs({
@@ -33,7 +34,8 @@ if (sqlite === ".data/web-node.sqlite") mkdirSync(".data", { recursive: true });
 const tickets = createTickets();
 const runtime = await createRuntime({
   store: sqlite ? await sqliteStore({ path: sqlite }) : memoryStore(),
-  plugins,
+  // Signing in by name, from this machine only: leave it out of a deployed app.
+  plugins: [...plugins, devSignIn],
   executors: 2,
   transports: [socket],
   admit: tickets.admit,
@@ -46,13 +48,11 @@ const server = await serve({
   port: Number(values.port),
   // The page's first paint, in the default theme (a brand gives its theme resources here).
   theme: themeOf([]),
-  dev: true,
 });
 console.log(`${server.url}`);
 
 // Ctrl+C: stop listening, then the runtime.
 process.once("SIGINT", async () => {
-  await server.shutdown();
-  await runtime.close();
+  await server.close();
   process.exit(0);
 });

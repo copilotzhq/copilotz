@@ -8,10 +8,10 @@
 import { assertEquals } from "@std/assert";
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
-import { access } from "../mod.ts";
+import { access, devSignIn } from "../mod.ts";
 import { accounts, type Connecting } from "../accounts/mod.ts";
 import { createTickets } from "../../../hosts/web/tickets.ts";
-import { webServer } from "../../../hosts/web/server.ts";
+import { setClientAddress, webServer } from "../../../hosts/web/server.ts";
 import { test } from "../../../testing/mod.ts";
 import { CLIENT, fakeOpenAI } from "./openai-fake.ts";
 
@@ -23,6 +23,7 @@ test("a provider that sends people back to the app finishes at its route, as its
     store: memoryStore(),
     plugins: [
       ...access,
+      devSignIn,
       accounts,
       definePlugin({
         name: "app",
@@ -50,16 +51,17 @@ test("a provider that sends people back to the app finishes at its route, as its
     tickets: createTickets(),
     code: { entry: "app.js", files: { "app.js": "" } },
     upgrade: () => new Response(null, { status: 299 }),
-    dev: true,
   });
   const signIn = async (name: string) => {
-    const answer = await serve(
+    // From this machine (a listener says so).
+    const answer = await serve(setClientAddress(
       new Request("http://localhost/signin/dev", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name }),
       }),
-    );
+      "127.0.0.1",
+    ));
     return answer.headers.get("set-cookie")!.split(";")[0];
   };
   const start = async () => {

@@ -58,6 +58,13 @@ export type Tool<I = Record<string, unknown>> = {
   title?: string;
   /** What it does to the world, for whoever decides how to call it (see `ToolAnnotations`). */
   annotations?: ToolAnnotations;
+  /**
+   * Called beside an answer, never for what it tells the model (hanging up a
+   * call once the answer is said): a turn offered no tools but these is all
+   * answers, so a contact reads (and a caller hears) its words as they're
+   * written (`live.open`), as with no tools at all.
+   */
+  aside?: boolean;
 };
 
 /**
@@ -112,6 +119,7 @@ export const tool = <const S extends JSONSchema>(
     offer?: Offer;
     title?: string;
     annotations?: ToolAnnotations;
+    aside?: boolean;
   },
 ): Tool => def as Tool;
 

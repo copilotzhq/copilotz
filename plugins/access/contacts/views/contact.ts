@@ -12,6 +12,7 @@ const FROM: Record<string, string> = {
   whatsapp: "writing on WhatsApp",
   voice: "on a phone call: they hear what you write, read aloud. The number they call from " +
     "isn't proof of who they are",
+  web: "chatting on the website, with nothing that proves who they are",
 };
 
 export const contactView = (_thread: unknown, ctx: ViewContext<string>) => {

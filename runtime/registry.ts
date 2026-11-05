@@ -169,8 +169,8 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     into(registry.actions, plugin.actions, "action");
     into(registry.events, plugin.events, "event");
     into(registry.processors, plugin.processors, "processor");
-    for (const [kind, renderers] of Object.entries(plugin.views ?? {})) {
-      replace(registry.views[kind] ??= {}, renderers);
+    for (const [kind, media] of Object.entries(plugin.views ?? {})) {
+      replace(registry.views[kind] ??= {}, media);
     }
     for (const [kind, entries] of Object.entries(plugin.resources ?? {})) {
       registry.resources[kind] = patch(registry.resources[kind], entries) as Record<
@@ -226,7 +226,12 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
  * the first that throws stops the runtime from starting.
  */
 export async function checked(registry: Registry, call: Merged["call"]): Promise<void> {
-  const merged: Merged = { resources: registry.resources, adapters: registry.adapters, call };
+  const merged: Merged = {
+    resources: registry.resources,
+    adapters: registry.adapters,
+    actions: registry.actions,
+    call,
+  };
   for (const { name, check } of registry.checks) {
     try {
       await check(merged);
@@ -275,6 +280,7 @@ export async function readCall<R>(
     schedule: refuse,
     unschedule: refuse,
     cancel: refuse,
+    disconnect: refuse,
     stream: refuse,
     graph: { ...reads.graph, link: refuse, unlink: refuse },
   } as unknown as Context;

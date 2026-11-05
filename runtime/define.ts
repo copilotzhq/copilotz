@@ -79,7 +79,19 @@ export type Context = {
    * was running.
    */
   cancel(target: { call: string } | { processor: string; key: string }): Promise<boolean>;
-  /** Renders `item` through the View registered for its kind and the renderer (see Views). */
+  /**
+   * Ends an actor's browsers, when who they were ends (signed out, erased):
+   * each connection closes, and comes back only with a new ticket. How many
+   * it ended.
+   *
+   * Like `cancel`, it checks nothing of who asks: plugins are trusted code,
+   * and it's theirs to call only once who the actor was has ended (a sign-out,
+   * an erasure the rules allowed). It reaches only this runtime's browsers:
+   * with the orgs host, each org's runtime has its own owner, so one org's
+   * code never ends another org's browsers.
+   */
+  disconnect(actor: Actor): Promise<number>;
+  /** Renders `item` through the View registered for its kind and the medium (see Views). */
   render: Render;
   /**
    * Appends a document to a records collection, and returns its `_id`. It
@@ -143,15 +155,17 @@ export type ReadContext = {
 export type Merged = {
   resources: Resources;
   adapters: Adapters;
+  /** Every plugin's Actions, by name: whether one a declaration names is there. */
+  actions: Readonly<Record<string, ActionDef>>;
   /** Calls an unrecorded Action, as a read does (another plugin's check: `models.check`). */
   call<R = unknown>(action: string, input?: unknown): Promise<R>;
 };
 
 /**
  * Views present data to a medium. A plugin registers them by kind (a
- * collection's name, `tool:<name>`, a named datum) and renderer (a medium:
- * `llm`, later `react`). The runtime gives neither name a meaning; for a kind
- * and renderer, the last plugin's View wins.
+ * collection's name, `tool:<name>`, a named datum) and medium (`llm`,
+ * `web`…). The runtime gives neither name a meaning; for a kind
+ * and medium, the last plugin's View wins.
  */
 export type Views = Record<string, Record<string, ViewDef>>;
 
@@ -168,16 +182,16 @@ export type Viewer = { name: string; kind?: string; label?: string };
 
 export type RenderOptions = { viewer?: Viewer; hints?: Record<string, unknown> };
 
-/** Renders through the View for a kind and renderer; undefined when there is none. */
+/** Renders through the View for a kind and medium; undefined when there is none. */
 export type Render = (
-  renderer: string,
+  medium: string,
   kind: string,
   item: unknown,
   options?: RenderOptions,
 ) => Promise<unknown>;
 
 /**
- * A read inside a View: it returns at once. While `loading`, the renderer
+ * A read inside a View: it returns at once. While `loading`, the runtime
  * waits for it and runs the View again, until a pass reads nothing new.
  */
 export type Read<T> =
@@ -199,7 +213,7 @@ export type ViewContext<Shown = unknown> = {
   db: { collection<T = Record<string, unknown>>(name: string): ViewCollection<T> };
   resources: Resources;
   /** The medium being rendered. */
-  renderer: string;
+  medium: string;
   /** The kind being rendered: a medium's default View (kind `"*"`) renders any kind. */
   kind: string;
   viewer?: Viewer;
@@ -208,7 +222,7 @@ export type ViewContext<Shown = unknown> = {
   /** What the caller asked for (`mode`: a density, …). Open-ended. */
   hints: Record<string, unknown>;
   /**
-   * Renders `item` through its kind's View in this renderer; undefined when
+   * Renders `item` through its kind's View in this medium; undefined when
    * there is none. Observed, the shown View is a part of its own: it runs
    * again on its own when what it read changes (see `Owner.observe`).
    */
@@ -462,6 +476,11 @@ export type Labels = {
  * to what the actor reaches). `undefined`: the collection has no rule, so code
  * acting for the actor reads and writes it unchecked. Runs in the owner, on
  * every operation an actor's work makes, with read access to everything.
+ *
+ * Asked about a browser's own read (`direct`) before it's watched, a rule may
+ * refuse it (throwing, `forbidden`) when it won't watch it as asked: a
+ * contact's that doesn't name what of its own it reads would run again on
+ * every change to the collection.
  */
 export type Guard = (
   actor: Actor,
@@ -470,6 +489,8 @@ export type Guard = (
     /** Reads, or writes (inserts, updates, replaces and deletes). */
     access: "read" | "write";
     filter?: Filter;
+    /** A browser's own read, asked before it's watched. */
+    direct?: true;
   },
   ctx: ReadContext,
 ) => Filter | true | undefined | Promise<Filter | true | undefined>;

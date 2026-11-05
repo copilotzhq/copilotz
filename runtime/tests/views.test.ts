@@ -1,7 +1,7 @@
 /**
- * Views: data presented to a medium. Registered by kind and renderer, composed
+ * Views: data presented to a medium. Registered by kind and medium, composed
  * with `ctx.show`, relative to a viewer, overridden by later plugins, and
- * reading synchronously while the renderer runs them until nothing is pending.
+ * reading synchronously while the medium runs them until nothing is pending.
  */
 import { assertEquals, assertRejects } from "@std/assert";
 import {
@@ -36,10 +36,10 @@ const notes = definePlugin({
         // Renders through a query, so clients can see what a View makes.
         render: (
           _notes,
-          p: { renderer: string; kind: string; item: unknown; viewer?: string },
+          p: { medium: string; kind: string; item: unknown; viewer?: string },
           ctx,
         ) =>
-          ctx.render(p.renderer, p.kind, p.item, {
+          ctx.render(p.medium, p.kind, p.item, {
             ...(p.viewer ? { viewer: { name: p.viewer } } : {}),
             hints: { mode: "line" },
           }),
@@ -101,24 +101,24 @@ const notes = definePlugin({
 
 async function start(...more: Plugin[]) {
   const runtime = await createRuntime({ store: memoryStore(), plugins: [notes, ...more] });
-  const render = (renderer: string, kind: string, item: unknown, viewer?: string) =>
-    runtime.query("note.render", { renderer, kind, item, viewer });
+  const render = (medium: string, kind: string, item: unknown, viewer?: string) =>
+    runtime.query("note.render", { medium, kind, item, viewer });
   return { runtime, render };
 }
 
-test("a View presents its kind for a renderer, relative to the viewer", async () => {
+test("a View presents its kind for a medium, relative to the viewer", async () => {
   const { runtime, render } = await start();
   const note = { _id: "a", text: "hello", author: "ana" };
   assertEquals(await render("llm", "note", note, "bob"), "ana: hello");
   assertEquals(await render("llm", "note", note, "ana"), "you: hello");
   assertEquals(await render("html", "note", note), "<p>hello</p>");
-  // No View for this kind, or for this renderer: nothing.
+  // No View for this kind, or for this medium: nothing.
   assertEquals(await render("llm", "nothing", note), undefined);
   assertEquals(await render("react", "note", note), undefined);
   await runtime.close();
 });
 
-test("reads settle: the renderer runs a View again until it reads nothing new", async () => {
+test("reads settle: the medium runs a View again until it reads nothing new", async () => {
   const { runtime } = await start();
   await runtime.call("note.add", { _id: "a", text: "first", author: "ana", next: "b" });
   await runtime.call("note.add", { _id: "b", text: "second", author: "bob" });
@@ -128,7 +128,7 @@ test("reads settle: the renderer runs a View again until it reads nothing new", 
   assertEquals(passes, 3);
   // Queries are reads too.
   assertEquals(
-    await runtime.query("note.render", { renderer: "llm", kind: "first", item: null }),
+    await runtime.query("note.render", { medium: "llm", kind: "first", item: null }),
     "ana: first (full)",
   );
   await runtime.close();
@@ -141,7 +141,7 @@ test("a View that never settles, or whose read fails, fails its render", async (
   await runtime.close();
 });
 
-test("the last plugin's View wins, for its kind and renderer only", async () => {
+test("the last plugin's View wins, for its kind and medium only", async () => {
   const app = definePlugin({
     name: "app",
     views: { note: { llm: (n: Note) => `[${n.author}] ${n.text}` } },

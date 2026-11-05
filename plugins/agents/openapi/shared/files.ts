@@ -137,6 +137,8 @@ export async function withFiles(
           data: f.data,
           thread: ctx.thread,
           ...(thread?.in ? { in: thread.in } : {}),
+          // A tool's output, as its step is: a contact in the conversation never reads it.
+          private: true,
           at: new Date().toISOString(),
         }, { upsert: true });
       }

@@ -11,7 +11,7 @@
  * - `org.leave`: someone no longer belongs (their org took them out);
  * - `org.suspend`, `org.rename`, `org.report` (its summary), `org.list`.
  */
-import { defineAction, forbidden } from "../../../../runtime/mod.ts";
+import { defineAction, failure } from "../../../../runtime/mod.ts";
 import type { Membership } from "../collections/membership.ts";
 import type { Org } from "../collections/org.ts";
 import { isStaff, placementOf } from "../shared/settings.ts";
@@ -113,15 +113,21 @@ export const enterOrgAction = defineAction({
   },
   run: async (ctx, input) => {
     const org = await ctx.db.collection<Org>("org").findOne({ _id: input.org });
-    if (!org) throw forbidden("No such org, or not one you belong to.");
+    if (!org) {
+      throw failure("forbidden", "No such org, or not one you belong to.", { public: true });
+    }
     const memberships = ctx.db.collection<Membership>("membership");
     const mine = await memberships.findOne({ _id: `${input.org}|${input.person}` });
     // Staff who belong to an org go in as one of its people, unless they ask.
     const staff = (!mine || input.staff === true) &&
       await isStaff(ctx, input.person, input.email);
-    if (!mine && !staff) throw forbidden("No such org, or not one you belong to.");
-    if (input.staff === true && !staff) throw forbidden("Staff only.");
-    if (org.suspended && !staff) throw forbidden("This org is suspended.");
+    if (!mine && !staff) {
+      throw failure("forbidden", "No such org, or not one you belong to.", { public: true });
+    }
+    if (input.staff === true && !staff) throw failure("forbidden", "Staff only.", { public: true });
+    if (org.suspended && !staff) {
+      throw failure("forbidden", "This org is suspended.", { public: true });
+    }
     if (mine) {
       await memberships.updateOne({ _id: mine._id }, {
         $set: { entered: new Date().toISOString() },

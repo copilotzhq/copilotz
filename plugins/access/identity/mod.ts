@@ -10,8 +10,10 @@
  * ```
  *
  * A browser keeps its session in an httpOnly, Secure cookie its host sets
- * from `session.start`'s result; a key goes in an Authorization header.
- * Secrets are kept only as hashes; deleting a credential revokes it.
+ * from a sign-in's session (`session`: the web host's entrance this plugin
+ * declares, which `credential.actor` reads and `session.end` ends on sign
+ * out); a key goes in an Authorization header. Secrets are kept only as
+ * hashes; deleting a credential revokes it.
  *
  * A sign-in method keeps what it verified about someone (`person.set`: their
  * email), and plugins that match people by email ask for it (`person.email`).
@@ -38,6 +40,19 @@ export const identity: Plugin = definePlugin({
     "key.revoke": revokeKey,
     "person.set": setPerson,
     "person.email": emailOf,
+  },
+  // A browser is the person its session cookie proves (the web host's entrances), first of all.
+  // The cookie is the host's alone (`__Host-session` wherever it's Secure): no other host under
+  // the domain (a preview's) can put a session of its choosing in its place.
+  resources: {
+    entrances: {
+      session: {
+        cookie: "session",
+        query: "credential.actor",
+        end: "session.end",
+        hostOnly: true,
+      },
+    },
   },
   // Each person sees only themselves, and their own credentials: nobody else does, whatever their id.
   guard: (actor, { collection }) => {

@@ -1,9 +1,10 @@
 /**
- * An app without the web app: what a WhatsApp or voice app serves. Its
- * routes alone (a webhook, and a socket of its own, as a voice call's relay
- * would be), `/health` for whatever watches it, and nothing else: no page,
- * no code, no sign-in. Stopped (Ctrl+C, or SIGTERM from a deploy), it stops
- * listening, gives running work a while to finish, and closes the runtime.
+ * An app without the web app: what a WhatsApp or voice app serves, with the
+ * same host as any app (`serve`), given no page's code. Its routes alone (a
+ * webhook, and a socket of its own, as a voice call's relay would be),
+ * `/health` for whatever watches it, and nothing else: no page, no code, no
+ * sign-in. Stopped (Ctrl+C, or SIGTERM from a deploy), it stops listening,
+ * gives running work a while to finish, and closes the runtime.
  *
  *   node examples/web-node/routes.ts [--port=8080]       # Deno and Bun run it too
  *   curl -X POST 'http://127.0.0.1:8080/hooks/ping' -d 'hello'
@@ -15,7 +16,7 @@ import { parseArgs } from "node:util";
 import { createRuntime, defineAction, definePlugin } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { httpRequest, type Served } from "../../hosts/web/server.ts";
-import { serveRoutes } from "../../hosts/web/node/mod.ts";
+import { serve } from "../../hosts/web/node/mod.ts";
 
 const { values } = parseArgs({ options: { port: { type: "string", default: "8080" } } });
 
@@ -55,7 +56,7 @@ const relay = definePlugin({
 });
 
 const runtime = await createRuntime({ store: memoryStore(), plugins: [relay] });
-const server = await serveRoutes({ runtime, port: Number(values.port) });
+const server = await serve({ runtime, port: Number(values.port) });
 console.log(`${server.url}`);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

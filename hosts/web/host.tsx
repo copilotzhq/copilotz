@@ -1,9 +1,10 @@
 /**
- * The web host, in the browser: it connects as the signed-in person (a
- * ticket from `/connect`, which trades the session cookie), observes the web
- * shell for the address it's at (its path, where the person works, `?in=`,
- * and its other parameters), and draws it with React, each part a
- * component redrawn on its own. Where you are is the address: links are
+ * The web host, in the browser: it connects as whoever the browser is (a
+ * ticket from `/connect`, which trades the cookie the server keeps: the
+ * signed-in person, or a web line's visitor, let in when the page asks,
+ * `arrive`), observes the web shell for the address it's at (its path, where
+ * the person works, `?in=`, and its other parameters), and draws it with
+ * React, each part a component redrawn on its own. Where you are is the address: links are
  * followed without reloading, back and forward work, two tabs differ. The
  * connection is kept for `LazyView`, which observes a View on demand.
  *
@@ -40,11 +41,21 @@ export type WebOptions = {
   /** The owner's socket (this page's origin, `/oxian`, by default). */
   url?: string;
   /**
-   * The app's first steps once connected, as the person; what it returns
-   * is where they work until the address says otherwise (`?in=`).
+   * What the page asks coming in, when the browser isn't anyone yet: `{
+   * line: "site" }` makes it a visitor of the app's web line `site` (the
+   * contacts plugin's). Someone signed in comes in as themselves.
    */
-  start?(client: Client, person: string): Promise<{ space?: string } | void>;
+  arrive?: Record<string, unknown>;
+  /**
+   * The app's first steps once connected, as whoever the browser is (a
+   * person, a contact); what it returns is where they work until the
+   * address says otherwise (`?in=`).
+   */
+  start?(client: Client, actor: Who): Promise<{ space?: string } | void>;
 };
+
+/** Who the browser is: a person (their id), or a web line's visitor (`contact`). */
+export type Who = { kind: string; id: string };
 
 /**
  * What the shell is shown: the address, where the person works, and the
@@ -80,17 +91,32 @@ export async function signOut(): Promise<void> {
 
 const config = () =>
   JSON.parse(document.getElementById("copilotz-config")?.textContent ?? "{}") as {
-    google: { clientId: string } | null;
-    dev: boolean;
+    /** The ways to sign in the app declares, each with what its button needs. */
+    signIn?: Record<string, Record<string, unknown>>;
     /** Where the socket connects, when not `/oxian` (see `WebServerOptions.socket`). */
     socket?: string;
+    /** Where the app is under its host, when not the root (an org's, `/o/<org>`). */
+    base?: string;
   };
 
-/** A ticket for one connection, or nothing when nobody is signed in. */
-async function ticket(): Promise<{ ticket: string; person: string; name?: string } | undefined> {
-  const response = await fetch("/connect", { method: "POST" });
+/**
+ * A ticket for one connection, or nothing when the browser is nobody: from
+ * the app the page is (its `base`, with many orgs: an org's web line is its
+ * own, there).
+ */
+async function ticket(
+  arrive: Record<string, unknown> | undefined,
+): Promise<{ ticket: string; actor: Who; name?: string } | undefined> {
+  const response = await fetch(`${config().base ?? ""}/connect`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(arrive ?? {}),
+  });
   if (response.status === 401) return undefined;
-  if (!response.ok) throw new Error(`Couldn't connect: ${response.statusText}`);
+  if (!response.ok) {
+    const said = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(said?.error ?? `Couldn't connect: ${response.statusText}`);
+  }
   return await response.json();
 }
 
@@ -120,15 +146,16 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   draw(null);
   // Installable, and told when a new version is ready (see pwa.ts).
   registerWorker();
-  const first = await ticket();
+  const first = await ticket(options.arrive);
   if (!first) {
     // Still signed in, but no longer in this org (with many): into another of theirs.
     if (await reenter()) return undefined;
-    draw(<SignIn config={config()} />);
+    draw(<SignIn signIn={config().signIn ?? {}} />);
     return undefined;
   }
+  const person = first.actor.kind === "person";
   // The person's orgs (when the server serves many), asked while the connection is made.
-  void loadOrgs();
+  if (person) void loadOrgs();
   let fresh: string | undefined = first.ticket;
   const url = options.url ??
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${
@@ -140,7 +167,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     ticket: async () => {
       const kept = fresh;
       fresh = undefined;
-      const next = kept ?? (await ticket())?.ticket;
+      const next = kept ?? (await ticket(options.arrive))?.ticket;
       if (!next) {
         location.reload();
         throw new Error("Signed out");
@@ -150,15 +177,15 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     plugins: options.plugins,
   });
   await client.ready;
-  // Who they are (their id), and what they're shown as (their name).
+  // Who they are (a person by their id; a contact as messages name it), and their name.
   const viewer = {
-    kind: "person",
-    name: first.person,
+    kind: first.actor.kind,
+    name: person ? first.actor.id : `${first.actor.kind}:${first.actor.id}`,
     ...(first.name ? { label: first.name } : {}),
   };
   session.client = client;
   session.viewer = viewer;
-  let space = (await options.start?.(client, first.person))?.space;
+  let space = (await options.start?.(client, first.actor))?.space;
 
   let shown: Observation | undefined;
   const show = () => {

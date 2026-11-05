@@ -46,7 +46,7 @@ const tab = (can: Reached["can"], numbers: WhatsAppNumber[]) => {
       }),
     },
     resources: {},
-    renderer: "web",
+    medium: "web",
     kind: "whatsapp.space",
     viewer: { name: "ana" },
     hints: {},

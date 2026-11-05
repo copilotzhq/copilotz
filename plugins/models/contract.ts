@@ -44,7 +44,7 @@ export type {
   LlmTool,
   ToolCall,
 } from "./shared/types.ts";
-export type { ModelUse, UseContext, UseListener } from "./shared/use.ts";
+export type { ModelCall, ModelUse, UseContext, UseListener } from "./shared/use.ts";
 
 /** What `models.price` answers: the catalog's cost for a model, and which catalog said it. */
 export type Price = { cost?: Cost; source: string };

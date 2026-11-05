@@ -18,9 +18,11 @@
  *   other. Said while the agent's answer to what they said before is still
  *   being written, that turn is stopped first, and the next turn reads both:
  *   the caller has moved on, and only one turn of a call runs at a time.
- * - What the agent writes for them is said as it writes it (`text` tokens),
- *   word by word: the words of a step before its tools ("One moment, I'll
- *   look"), then its answer, each said once whole (the `voice_call` View).
+ * - What the agent answers them is said (`text` tokens): as it writes it,
+ *   word by word, when its turn offers no tools but those called beside an
+ *   answer (`aside`, as `end_call` is); else once it's whole. A
+ *   step's words before its tools are never said, nor anything while tools
+ *   run: a caller hears what a web visitor reads (the `voice_call` View).
  *   Only the turns the caller's own words started are said: what's written
  *   in their chat for someone else (a staff member's question) isn't. An
  *   answer that failed says the line's `failed` text, never its error.
@@ -181,6 +183,8 @@ export function talk(
   /** The turn of theirs writing now, turns whose words aren't said any more, and how much each said. */
   let working: string | undefined;
   const muted = new Set<string>();
+  /** Turns whose `waiting` phrase was said. */
+  const filled = new Set<string>();
   const spoken = new Map<string, number>();
   /** What's being said as it's written: its turn, the words sent, and, once cut, what was heard. */
   let current: { turn: string; sent: string; cut?: string } | undefined;
@@ -351,10 +355,7 @@ export function talk(
       const mine = current && current.turn === item.turn ? current : undefined;
       if (mine) current = undefined;
       // Answered: what they said last, or after it (a stopped turn's answer is the one before's).
-      if (
-        !item.step &&
-        (item.replyTo === latest.message || (!item.stopped && item.at >= latest.at))
-      ) {
+      if (item.replyTo === latest.message || (!item.stopped && item.at >= latest.at)) {
         waiting = false;
         clearTimeout(timers.turn);
       }
@@ -368,8 +369,8 @@ export function talk(
         } else if (left) say(left, true);
         last = item._id;
       }
-      if (!item.step && end && end.after === item.replyTo) hangUp(end.reason, false);
-      if (!item.step) idle();
+      if (end && end.after === item.replyTo) hangUp(end.reason, false);
+      idle();
     }
     working = ours(live?.turn) ? live!.turn : undefined;
     if (live && working && !ending && !muted.has(live.turn)) {
@@ -380,6 +381,14 @@ export function talk(
         current.sent = ready;
         if (left) speak(live.turn, left, false);
       }
+    }
+    // Tools run before any answer: the line's `waiting` phrase fills the silence, once per turn.
+    if (
+      line.waiting && live?.tools && working === live.turn && !ending && !muted.has(live.turn) &&
+      !spoken.has(live.turn) && !filled.has(live.turn)
+    ) {
+      filled.add(live.turn);
+      say(line.waiting, false);
     }
     if (end && !end.after && !waiting) hangUp(end.reason, false);
   }
@@ -432,12 +441,17 @@ export function talk(
       // Twilio says the greeting itself.
       if (on.greeting) done.add(on.greeting);
       const { thread, since } = on;
+      // Read as the line's agent working for the caller: only what both may read, and of that,
+      // what a contact would (answers, not steps), the View keeps to.
       seeing = runtime.observe<Saying>("voice", "voice_call", {
         _id: call._id,
         thread,
         contact: on.contact,
         since,
-      }, { actor: contact, viewer: { kind: "contact", name: `contact:${on.contact}` } });
+      }, {
+        actor: { kind: "agent", id: on.agent, for: contact },
+        viewer: { kind: "contact", name: `contact:${on.contact}` },
+      });
       seeing.subscribe(saying);
       saying();
       idle();

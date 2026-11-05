@@ -9,7 +9,7 @@ import type { Context, Plugins, ReadContext, TransactionScope } from "./define.t
 import { isRead, type Op, type Outcome, RESULTS, type TimerOp } from "./ops.ts";
 import type { Scheduled, ScheduleOptions } from "./schedules.ts";
 import { compile, events, fingerprint, invalid, json, merge, unprivate } from "./registry.ts";
-import { renderer } from "./views.ts";
+import { presenter } from "./views.ts";
 import { refuseBlobKeys } from "./blobs.ts";
 import { querying as queryingOver, reading as readingOver } from "./reads.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
@@ -225,7 +225,9 @@ export function createExecutor(
       },
       unschedule: async (timer) => Number(await run({ op: "unschedule", timer })) > 0,
       cancel: async (target) => Boolean(await run({ op: "cancel", ...target } as Op)),
-      render: renderer(registry.views, () => reading(run, job.record, actor)),
+      disconnect: async (actor) =>
+        Number(await run({ op: "disconnect", actor: { kind: actor.kind, id: actor.id } })),
+      render: presenter(registry.views, () => reading(run, job.record, actor)),
       record: job.record,
       metrics,
       resources: registry.resources,
@@ -373,9 +375,9 @@ export function createExecutor(
       async send(request) {
         const tx = "tx" in request ? request.tx : undefined;
         const end = "end" in request ? request.end : undefined;
-        // A cancel stops other work: it writes nothing of this call's.
+        // A cancel stops other work, a disconnect ends browsers: neither writes this call's.
         const writes = tx !== undefined ||
-          request.ops.some((op) => !isRead(op) && op.op !== "cancel");
+          request.ops.some((op) => !isRead(op) && op.op !== "cancel" && op.op !== "disconnect");
         const carry = pending && writes && (tx === undefined || !carrying.has(tx));
         if (carry && tx !== undefined) carrying.add(tx);
         try {
@@ -488,7 +490,7 @@ export function createExecutor(
           request.params,
         );
       case "render":
-        return renderer(
+        return presenter(
           registry.views,
           () =>
             reading(
@@ -500,7 +502,7 @@ export function createExecutor(
               job.record,
               request.actor,
             ),
-        )(request.renderer, request.view, request.item, {
+        )(request.medium, request.view, request.item, {
           ...(request.viewer ? { viewer: request.viewer } : {}),
           ...(request.hints ? { hints: request.hints } : {}),
         });

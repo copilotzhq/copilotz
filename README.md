@@ -22,7 +22,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.21"`),
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.22"`),
 and the imports below are the same everywhere. Some pieces need a package of their own, installed
 beside it: `esbuild` to bundle the web host on Node, `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types.
@@ -141,7 +141,7 @@ workspace, a public site where visitors chat with an agent, or a WhatsApp app wi
 | -------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------- |
 | Routes: webhooks, APIs, sockets of their own | the `routes` resource                                                                    | —                                  |
 | The page and its code                        | `code`: the app's front ends, its shell among them, bundled                              | no page: the routes, and `/health` |
-| Who a browser is                             | the `entrances` resource: identity's session (a person), contacts' web lines (a visitor) | nobody                             |
+| Who a browser is                             | the `entrances` resource: identity's session (a person), web lines (a visitor)           | nobody                             |
 | Browsers connecting                          | `tickets`, for whoever an entrance says a request is                                     | no browser connects                |
 | Signing in (`POST /signin/<name>`)           | the `signIn` resource: `googleSignIn` (`google`), `devSignIn` (`dev`, this machine only) | none                               |
 
@@ -335,7 +335,7 @@ and an app serves it from there by default:
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.21" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.22" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 
@@ -618,8 +618,8 @@ filled by the front ends through resources).
 - **`whatsapp`**: people talk to their agents from WhatsApp, through Meta's Cloud API. A space's
   managers connect a number; a person links their phone with a code; what they send becomes their
   messages, and what agents say to them goes back, a long answer in several messages. It's a medium
-  for Views (renderer `whatsapp`, parts built with its toolkit: text, buttons, a list, a carousel,
-  an image, a document, each checked against Meta's limits): after an answer, features show more
+  for Views (medium `whatsapp`, parts built with its toolkit: text, buttons, a list, a carousel, an
+  image, a document, each checked against Meta's limits): after an answer, features show more
   (`additions`: a carousel of trips, buttons to pay), once per chat per key, the answer's text in
   the same message when there's room, a fallback when Meta refuses one; taps come back with their
   ids. Pictures and files go as public links, signed links to the app's routes or files (the `links`
@@ -635,11 +635,11 @@ filled by the front ends through resources).
   signature, a call is taken within its caller's limits and the line's (calls at once, a day: else
   busy, nothing spent) and opens the line's socket with a one-time ticket. A caller is a contact in
   a chat of their own, the same one when they call back only if Twilio verified their number; what
-  the agent writes for them is said as it writes it (a medium for Views: renderer `voice`), a caller
-  speaking over it cuts it there (the agent is told what was heard), a failed or slow answer says a
-  short line in the line's language, and silence, a call too long or too many prompts, or the
-  agent's `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that
-  takes a route's socket (`serve`).
+  the agent writes for them is said as it writes it (a medium for Views: `voice`), a caller speaking
+  over it cuts it there (the agent is told what was heard), a failed or slow answer says a short
+  line in the line's language, and silence, a call too long or too many prompts, or the agent's
+  `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that takes a
+  route's socket (`serve`).
 - **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A line the app
   declares (`mcp.lines.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
   each is shown, who calls, its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP,

@@ -176,15 +176,24 @@ export function connect(
    * in again with a new ticket, which only a browser that's still someone gets
    * (a page's `ticket` reloads it otherwise). One never let in stays out.
    */
-  const follow = (current: NonNullable<typeof worker>) => {
+  const follow = (current: NonNullable<typeof worker>, again = 0) => {
     current.closed.catch(() => {});
+    // Back in after having been in: a refusal (a busy moment) is tried again, longer apart.
+    const retry = () => {
+      if (closed || current !== worker || !again) return;
+      setTimeout(() => {
+        if (closed || current !== worker) return;
+        worker = enrol(oxian!);
+        follow(worker, again + 1);
+      }, Math.min(500 * 2 ** (again - 1), 5_000));
+    };
     void current.ready.then(() =>
       current.closed.then((result) => {
         if (closed || current !== worker || result.reason !== "reenrollment_required") return;
         worker = enrol(oxian!);
-        follow(worker);
+        follow(worker, 1);
       })
-    ).catch(() => {});
+    ).catch(retry);
   };
   if (worker) follow(worker);
 

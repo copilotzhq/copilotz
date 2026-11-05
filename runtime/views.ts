@@ -1,6 +1,6 @@
 /**
  * Renders Views. A View reads synchronously: each read returns at once, as
- * `{ status: "loading" }` until its data arrives. After a pass the renderer
+ * `{ status: "loading" }` until its data arrives. After a pass the runtime
  * waits for the reads that were pending and runs the View again, until a pass
  * reads nothing new; that pass's output is the result. Repeated reads are
  * answered from this render's own cache (and the owner's), so a pass costs
@@ -94,7 +94,7 @@ const once = () =>
   Promise.reject(invalid("Only a View being observed calls Actions, from its handlers."));
 
 /** A Render over `views`, loading data through `reads` (a read-only context). */
-export function renderer(views: Views, reads: () => ReadContext): Render {
+export function presenter(views: Views, reads: () => ReadContext): Render {
   return async (medium, kind, item, options: RenderOptions = {}) => {
     const view = viewOf(views, kind, medium);
     if (!view) return undefined;
@@ -105,7 +105,7 @@ export function renderer(views: Views, reads: () => ReadContext): Render {
     const context = (kind: string, hints: Record<string, unknown>): ViewContext => ({
       db,
       resources: source.resources,
-      renderer: medium,
+      medium,
       kind,
       ...(options.viewer ? { viewer: options.viewer } : {}),
       ...(source.actor ? { actor: source.actor } : {}),

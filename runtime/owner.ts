@@ -147,7 +147,7 @@ export type Owner = {
    * or the medium's default View (kind `"*"`); undefined when there's neither.
    */
   render<R = unknown>(
-    renderer: string,
+    medium: string,
     kind: string,
     item: unknown,
     options?: RenderOptions,
@@ -1425,7 +1425,7 @@ export async function createOwner(
       : job.kind === "process"
       ? job.processor
       : job.kind === "render"
-      ? `${job.renderer}:${job.view}`
+      ? `${job.medium}:${job.view}`
       : `${job.collection}.${job.query}`;
     try {
       const result = await dispatch(job, signal);
@@ -1832,7 +1832,7 @@ export async function createOwner(
     async render(medium, kind, item, options = {}) {
       return await run({
         kind: "render",
-        renderer: medium,
+        medium,
         view: kind,
         item: json(item),
         ...(options.viewer ? { viewer: options.viewer } : {}),

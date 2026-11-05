@@ -4,7 +4,7 @@
  * browser keeps, in an httpOnly cookie the web host sets. Nothing is made
  * or kept: the secret stands on its own (signed, see shared/secret.ts), and
  * the visitor's contact, chat and record come with its first message
- * (`contact.sending`). Only the system calls it: the contacts' entrance, for
+ * (`contact.sending`). Only the system calls it: the web lines' entrance, for
  * the web host, with the caller's address as it's counted (`address`: the
  * app's front's word for it, else its socket's; none for a caller exempt
  * from limits by address).
@@ -30,7 +30,7 @@
 import { defineAction, failure, networksOf, scaleOf } from "../../../../runtime/mod.ts";
 import type { Visitor } from "../collections/visitor.ts";
 import { contactOf, newSecret, tagsOf, type Visit, visitOf } from "../shared/secret.ts";
-import { keyringOf, lineOf } from "../shared/web.ts";
+import { keyringOf, lineOf } from "../shared/lines.ts";
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;

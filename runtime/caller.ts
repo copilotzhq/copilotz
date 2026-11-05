@@ -2,7 +2,7 @@
  * Who's calling, as far as the network says: the caller's address, from the
  * header the app's front sets, believed only through the front. What a
  * plugin that limits callers by address reads them with (MCP's lines, the
- * contacts' web lines), each from its own settings (`CallerSettings`).
+ * the web lines), each from its own settings (`CallerSettings`).
  *
  * - **With `front`** (the front's secret): a request without it came around
  *   the front, straight to the app: it's refused (`refused`).
@@ -143,7 +143,7 @@ export function networksOf(counted: string): Network[] {
 
 /**
  * How many callers a network's tag counts as: a tag is `<bits>-<…>` (the
- * contacts' web lines tag each network a visitor came from that way, an
+ * the web lines tag each network a visitor came from that way, an
  * HMAC after the dash: never the address). One, for anything else.
  */
 export const scaleOf = (tag: string): number => SCALE[Number(tag.split("-")[0])] ?? 1;

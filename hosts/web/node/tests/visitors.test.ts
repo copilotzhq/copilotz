@@ -26,6 +26,7 @@ import models, { type LlmAdapter } from "../../../../plugins/models/mod.ts";
 import type { Transcript } from "../../../../plugins/models/contract.ts";
 import { chat, tool } from "../../../../plugins/agents/chat/mod.ts";
 import { access } from "../../../../plugins/access/mod.ts";
+import { webLines } from "../../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../../testing/mod.ts";
 import { socket } from "../../server.ts";
 import { createTickets } from "../../tickets.ts";
@@ -198,7 +199,7 @@ async function setup(fn: (server: Server, runtime: Runtime) => Promise<void>) {
   const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, app, kept],
+    plugins: [models, chat, ...access, webLines, app, kept],
     transports: [socket],
     admit: tickets.admit,
   });

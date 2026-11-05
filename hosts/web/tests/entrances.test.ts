@@ -27,6 +27,7 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../../plugins/models/mod.ts";
 import { chat } from "../../../plugins/agents/chat/mod.ts";
 import { access, devSignIn, googleSignIn, identity } from "../../../plugins/access/mod.ts";
+import { webLines } from "../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../testing/mod.ts";
 import { createTickets, type Tickets } from "../tickets.ts";
 import { httpRequest, setClientAddress, webServer } from "../server.ts";
@@ -92,6 +93,7 @@ async function setup(
       models,
       chat,
       ...access,
+      webLines,
       devSignIn,
       who,
       app(options.limits, options.caller !== false),
@@ -331,7 +333,7 @@ test("a forged cookie is no one: never the visitor it imitates, and cleared; an 
     // One the app made for another app (its own secret), and this one moved to another line.
     const other = await createRuntime({
       store: memoryStore(),
-      plugins: [models, chat, ...access, app()],
+      plugins: [models, chat, ...access, webLines, app()],
     });
     const elsewhere = await (async () => {
       try {
@@ -516,7 +518,10 @@ test("a visitor's line removed: its visitors are no one, at once", async () => {
       },
     });
   const tickets = createTickets();
-  const first = await createRuntime({ store, plugins: [models, chat, ...access, lines(true)] });
+  const first = await createRuntime({
+    store,
+    plugins: [models, chat, ...access, webLines, lines(true)],
+  });
   let cookie: string | undefined;
   let quiet: string | undefined;
   try {
@@ -534,7 +539,10 @@ test("a visitor's line removed: its visitors are no one, at once", async () => {
   } finally {
     await first.close();
   }
-  const then = await createRuntime({ store, plugins: [models, chat, ...access, lines(false)] });
+  const then = await createRuntime({
+    store,
+    plugins: [models, chat, ...access, webLines, lines(false)],
+  });
   try {
     const serve = webServer({ runtime: then, tickets });
     for (const held of [cookie, quiet]) {
@@ -665,6 +673,7 @@ test("an app without a page or tickets serves its routes alone, whatever its plu
       models,
       chat,
       ...access,
+      webLines,
       devSignIn,
       googleSignIn,
       who,
@@ -799,6 +808,7 @@ test("what the app declares is checked as the host starts", async () => {
         store: memoryStore(),
         plugins: [
           ...access,
+          webLines,
           declaring({ web, agents: { guide: { instructions: "", model: "x" } } }),
         ],
       });

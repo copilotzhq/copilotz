@@ -14,7 +14,7 @@
 import { defineAction, invalid } from "../../../../runtime/mod.ts";
 import type { Rate } from "../collections/rate.ts";
 import { charge, close, type Day, left } from "../shared/budget.ts";
-import { lineOf } from "../shared/web.ts";
+import { lineOf } from "../shared/lines.ts";
 
 const LINE = { type: "string", minLength: 1, maxLength: 60 } as const;
 

@@ -18,15 +18,16 @@ import {
   definePlugin,
   type Plugin,
   type Runtime,
-} from "../../../runtime/mod.ts";
-import { memoryStore } from "../../../stores/memory/mod.ts";
-import models, { type LlmAdapter } from "../../models/mod.ts";
-import { chat } from "../../agents/chat/mod.ts";
-import usage from "../../billing/usage/mod.ts";
-import { access } from "../mod.ts";
-import { test } from "../../../testing/mod.ts";
-import { createTickets, type Tickets } from "../../../hosts/web/tickets.ts";
-import { setClientAddress, webServer } from "../../../hosts/web/server.ts";
+} from "../../../../runtime/mod.ts";
+import { memoryStore } from "../../../../stores/memory/mod.ts";
+import models, { type LlmAdapter } from "../../../models/mod.ts";
+import { chat } from "../../../agents/chat/mod.ts";
+import usage from "../../../billing/usage/mod.ts";
+import { access } from "../../../access/mod.ts";
+import { webLines } from "../lines.ts";
+import { test } from "../../../../testing/mod.ts";
+import { createTickets, type Tickets } from "../../../../hosts/web/tickets.ts";
+import { setClientAddress, webServer } from "../../../../hosts/web/server.ts";
 
 const PAGE = "https://book.example.com";
 const LINKS = { origin: PAGE, secret: "the-app-secret-for-web-lines-0123456789" };
@@ -86,7 +87,7 @@ async function setup(
   });
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, app, kept, ...options.plugins ?? []],
+    plugins: [models, chat, ...access, webLines, app, kept, ...options.plugins ?? []],
   });
   try {
     const serve = webServer({
@@ -432,6 +433,97 @@ test("a line's budget: use nothing prices closes the line for the day; a hold ne
   });
 });
 
+/** The tool loop's setup, with the model's provider tagged as the org's own (`paid`). */
+const lookingResources = (model: string | string[], provider: Record<string, unknown>) => ({
+  ...prices,
+  agents: { guide: { instructions: "Help.", model, tools: ["look"] } },
+  provider,
+  price: { "looking/*": { input: 1 }, "own/*": { input: 1 } },
+});
+
+test("a paid-tagged model (the org's own key) is stopped by the line's budget too", async () => {
+  await setup(async ({ runtime, visitor, send }) => {
+    const carla = await visitor("198.51.100.30");
+    assertEquals(await send(carla, "look it up"), "done");
+    await runtime.idle();
+    // Before: `paid` skipped the check, and seven calls ($7) went on a $3 budget.
+    assertEquals(await charged(runtime), [3]);
+  }, {
+    plugins: [usage, spending],
+    resources: lookingResources("looking/main", {
+      looking: { adapter: "looking", tags: { paid: "own-key" } },
+    }),
+    line: { budget: 3 },
+  });
+});
+
+test("a turn can't fall over to a paid model to go on past the day's budget", async () => {
+  await setup(async ({ runtime, visitor, send }) => {
+    const carla = await visitor("198.51.100.30");
+    assertEquals(await send(carla, "look it up"), "done");
+    await runtime.idle();
+    assertEquals(await charged(runtime), [3]);
+  }, {
+    plugins: [usage, spending],
+    resources: lookingResources(["looking/main", "own/main"], {
+      looking: { adapter: "looking" },
+      own: { adapter: "looking", tags: { paid: "own-key" } },
+    }),
+    line: { budget: 3 },
+  });
+});
+
+test("charges at once are all recorded, and messages at once on a large budget all pass", async () => {
+  await setup(async ({ runtime }) => {
+    const N = 40;
+    // Before: charges overwrote each other, and some gave up after 8 tries.
+    const results = await Promise.all(
+      Array.from(
+        { length: N },
+        (_, i) =>
+          runtime.call("contact.spent", { line: "site", contact: `c-${i}`, price: 0.25 }).then(
+            () => "ok",
+            (e: { code?: string; message: string }) => `${e.code}: ${e.message}`,
+          ),
+      ),
+    );
+    assertEquals(results.filter((r) => r !== "ok"), []);
+    assertEquals(await charged(runtime), [N * 0.25]);
+  }, { plugins: [usage, spending], resources: prices, line: { budget: 1000 } });
+  await setup(async ({ runtime, visitor, send }) => {
+    assertEquals(await send(await visitor("198.51.100.1"), "hi"), "done");
+    await runtime.idle();
+    const actors = await Promise.all(
+      Array.from({ length: 40 }, (_, i) => visitor(`198.51.${101 + i}.7`)),
+    );
+    // Before: some of these were refused as busy, and some turns' costs were lost.
+    const said = await Promise.all(actors.map((a) => send(a, "hi")));
+    await runtime.idle();
+    assertEquals(said.filter((s) => s !== "done"), []);
+    assertEquals(await charged(runtime), [41]);
+  }, { plugins: [usage, spending], resources: prices, line: { budget: 1000 } });
+});
+
+test("one call costing more than the whole budget doesn't close the line for 30 days", async () => {
+  await setup(async ({ runtime, visitor, send }) => {
+    const carla = await visitor("198.51.100.30");
+    const dani = await visitor("198.51.100.31");
+    assertEquals(await send(carla, "a long one"), "done");
+    await runtime.idle();
+    assertEquals(await charged(runtime), [3]);
+    // The next day takes a message: it holds what's left of the budget (before: the 3 it cost).
+    at(realNow() + 86_400_000);
+    assertEquals(await send(dani, "next day"), "done");
+    await runtime.idle();
+    at(realNow() + 20 * 86_400_000);
+    assertEquals(await send(dani, "much later"), "done");
+  }, {
+    plugins: [usage, spending],
+    resources: { ...prices, price: { "dollar/*": { input: 3 } } },
+    line: { budget: 2 },
+  });
+});
+
 /** A CAPTCHA's check, as the app's Action: the answer "human" passes. */
 const captcha = definePlugin({
   name: "captcha",
@@ -479,6 +571,7 @@ test("the app's previous secret: a visitor its cookie was signed for is still wh
         models,
         chat,
         ...access,
+        webLines,
         definePlugin({
           name: "app",
           resources: {

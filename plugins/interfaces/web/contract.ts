@@ -7,6 +7,9 @@
  * serves many orgs: members, usage, about), each a View of the front end's
  * own, and the words for org roles.
  *
+ * The web lines' settings (`resources.web`) have their shapes here too (`WebLine`, `WebSettings`,
+ * `WEB_LIMITS`). See lines.ts.
+ *
  * ```ts
  * resources: {
  *   orgSettings: { usage: { title: "Usage", view: "usage.org", icon: "chart", order: 30 } },
@@ -18,3 +21,9 @@ export type { Panel } from "./shared/panel.ts";
 export type { PaletteSource } from "./shared/palette.ts";
 export type { UserMenuEntry } from "./shared/menu.ts";
 export { ORG_ROLES, orgRoleName, type OrgSection, runs, type Standing } from "./shared/orgs.ts";
+export {
+  LIMITS as WEB_LIMITS,
+  type WebLimits,
+  type WebLine,
+  type WebSettings,
+} from "./shared/lines.ts";

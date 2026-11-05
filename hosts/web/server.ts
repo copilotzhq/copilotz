@@ -7,7 +7,7 @@
  * | --- | --- | --- |
  * | Routes: webhooks, APIs, sockets of their own | the `routes` resource | — |
  * | The page and its code | `code` (the app's front ends, its shell among them, bundled) | no page: the routes, and `/health` |
- * | Who a browser is | the `entrances` resource (identity's session; contacts' web lines) | nobody |
+ * | Who a browser is | the `entrances` resource (identity's session; web lines) | nobody |
  * | Browsers connecting | `tickets`, for whoever an entrance says | no browser connects |
  * | Signing in | the `signIn` resource (Google sign-in, dev sign-in) | none |
  *

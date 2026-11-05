@@ -31,7 +31,7 @@ const ctxOf = (reads: Record<string, unknown>): ViewContext<ReactNode> => ({
     }),
   } as unknown as ViewContext<ReactNode>["db"],
   resources: merge([spacesWeb], { elsewhere: true }).resources,
-  renderer: "web",
+  medium: "web",
   kind: "test",
   viewer: { name: ANA },
   hints: {},

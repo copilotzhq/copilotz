@@ -1,5 +1,5 @@
 /**
- * The contacts plugin's web lines (the `web` resource): browsers that
+ * The web lines (the `web` resource): browsers that
  * aren't anyone, coming in as visitors. Each line the app declares, by
  * name, is a front door for them: the space their chats live in, who
  * answers, how long a visitor stays the same one, what they may send and

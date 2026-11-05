@@ -37,7 +37,7 @@ export type Job =
   /** A View, rendered for a medium (see `Owner.render`). */
   | {
     kind: "render";
-    renderer: string;
+    medium: string;
     view: string;
     item: unknown;
     viewer?: { name: string; kind?: string };

@@ -27,6 +27,8 @@ const DAY = 86_400_000;
 export const HOLD_MS = 120_000;
 /** How long what one call cost is remembered, as the estimate. */
 const REMEMBERED = 30 * DAY;
+/** How long (ms) a change keeps trying while others change the day too. */
+const PATIENCE = 3_000;
 
 /** The web lines' counters (`contact_rate`), as the system reaches them. */
 type Rates = Collection<Rate & Day>;
@@ -58,7 +60,7 @@ const sum = (holds: Day["holds"]) =>
 
 /**
  * Changes the day as `change` says from what it was: one write, applying
- * only if nothing came between (else read again, a few times).
+ * only if nothing came between (else read again, with jitter, until `PATIENCE` runs out).
  */
 async function changeDay(
   rates: Rates,
@@ -67,7 +69,10 @@ async function changeDay(
   change: (day: Day | null) => Partial<Day> | undefined,
 ): Promise<void> {
   const _id = dayOf(line, now);
-  for (let tries = 0; tries < 8; tries++) {
+  const deadline = performance.now() + PATIENCE;
+  for (let tries = 0; performance.now() < deadline; tries++) {
+    // Another came between: read again after a moment, apart from the others by chance.
+    if (tries) await new Promise((r) => setTimeout(r, Math.random() * Math.min(5 * tries, 50)));
     const day = await rates.findOne({ _id });
     const next = change(day);
     if (!next) return;
@@ -106,7 +111,10 @@ export async function hold(
     const holds = heldOf(day, now);
     const rest = line.budget - (day?.spent ?? 0) - sum(holds);
     // Nothing known yet: the rest of the day's, so one at a time until a cost is.
-    const estimate = known ?? rest;
+    // A call known to cost more than the whole budget holds what's left: it runs, and is charged.
+    // (With other holds in place, it must fit beside them.)
+    const alone = !Object.keys(holds).length;
+    const estimate = known === undefined ? rest : alone ? Math.min(known, rest) : known;
     if (known === undefined ? rest <= 0 : estimate > rest) {
       throw failure("too_many", BUDGET.held, { public: true });
     }
@@ -123,11 +131,21 @@ export async function charge(
   price: number,
   now = Date.now(),
 ): Promise<void> {
-  await changeDay(rates, line, now, (day) => {
-    const holds = heldOf(day, now);
-    if (contact) delete holds[contact];
-    return { spent: (day?.spent ?? 0) + price, holds };
-  });
+  // One atomic write: nothing read first, so charges at once can't overwrite each other.
+  const _id = dayOf(line, now);
+  const until = Math.floor(now / DAY) * DAY + DAY;
+  const change = {
+    $inc: { spent: price, v: 1 },
+    $set: { until },
+    ...(contact ? { $unset: { [`holds.${contact}`]: "" } } : {}),
+  };
+  try {
+    await rates.updateOne({ _id }, change as never, { upsert: true });
+  } catch (error) {
+    // Made meanwhile by another (an upsert race): this one applies to it.
+    if ((error as { code?: string }).code !== "duplicate_key") throw error;
+    await rates.updateOne({ _id }, change as never);
+  }
   // The most one call cost lately, coming down slowly: what the next message holds.
   const cost = await rates.findOne({ _id: costOf(line) });
   const was = cost?.spent ?? 0;

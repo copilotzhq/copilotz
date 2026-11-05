@@ -345,6 +345,47 @@ test("what a call says is what a web visitor reads: answers, and words being wri
   // Not once it calls a tool, nor a retry's reason (the provider's own).
   const calling = live({ open: true, calls: [{ id: "c2", name: "search" }] });
   assertEquals(sayingOf({ message, live: [calling] }).live!.text, "");
+  // Tools running before any answer show as `tools`; those beside one (`open`), and a hang-up, don't.
+  const looking = live({ calls: [{ id: "c3", name: "search" }] });
+  assertEquals(sayingOf({ message, live: [looking] }).live, {
+    turn: "m2:phone",
+    text: "",
+    tools: true,
+  });
+  assertEquals(sayingOf({ message, live: [calling] }).live!.tools, undefined);
+  const ending = live({ calls: [{ id: "c4", name: "end_call" }] });
+  assertEquals(sayingOf({ message, live: [ending] }).live!.tools, undefined);
   const broke = live({ open: true, retry: { attempt: 1, at: at(5), reason: "429 sk-proj-…" } });
   assertEquals(sayingOf({ message, live: [broke] }).live!.text, "");
+});
+
+test("a line's `waiting` phrase fills the silence while tools run: once, never for a plain answer", async () => {
+  await setup(async (s) => {
+    const call = await s.call();
+    const words = () => call.sent.filter((m) => m.type === "text").map((m) => [m.token, m.last]);
+    // An answer without tools: no filler.
+    say(call, "oi");
+    await heard(call, 1);
+    assert(!call.sent.some((m) => m.token === "Um momento."), "filler for an answer without tools");
+    // Tools before the answer: the phrase is said once, then the answer.
+    say(call, "search a trip");
+    await heard(call, 2);
+    assertEquals(call.sent.filter((m) => m.token === "Um momento.").length, 1);
+    assertEquals(words().find(([t]) => t === "Um momento."), ["Um momento.", false]);
+    assertEquals(call.said().at(-1), "Um momento.Encontrei três viagens.");
+    // Ending the call isn't a wait.
+    const before = call.sent.length;
+    say(call, "bye");
+    await until(() => call.sent.some((m) => m.type === "end"), 5_000, "the end");
+    assert(!call.sent.slice(before).some((m) => m.token === "Um momento."), "filler on goodbye");
+  }, { line: { waiting: "Um momento." } });
+});
+
+test("without `waiting`, nothing is said while tools run", async () => {
+  await setup(async (s) => {
+    const call = await s.call();
+    say(call, "search a trip");
+    await heard(call, 1);
+    assertEquals(call.said(), ["Encontrei três viagens."]);
+  });
 });

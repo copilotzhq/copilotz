@@ -15,7 +15,7 @@
  */
 import { type Actor, defineCollection, type Infer } from "../../../../runtime/mod.ts";
 import { contactOf, visitOf } from "../shared/secret.ts";
-import { keyringOf, lineOf } from "../shared/web.ts";
+import { keyringOf, lineOf } from "../shared/lines.ts";
 
 const visitorSchema = {
   type: "object",

@@ -1,5 +1,5 @@
 /**
- * What's being said in a call (the `voice_call` View, renderer `voice`),
+ * What's being said in a call (the `voice_call` View, medium `voice`),
  * read as the line's agent working for its caller: what agents answered
  * them since the call began, in order, each as its `message` View here says
  * it; what an agent is writing right now (`live`); and whether the agent
@@ -34,7 +34,7 @@ export type Said = {
 export type Saying = {
   said: Said[];
   /** The turn writing now, and its words so far when they may be said (else none). */
-  live?: { turn: string; text: string };
+  live?: { turn: string; text: string; tools?: true };
   end?: { reason: string; after?: string };
 };
 
@@ -77,6 +77,10 @@ export const callView = (
         live: {
           turn: writing.turn,
           text: sayable(writing) ? say({ text: writing.text, from: writing.agent }) : "",
+          // Tools running before any answer (not those called beside one: `open`, nor ending the call).
+          ...(!writing.open && writing.calls?.some((c) => c.name !== "end_call")
+            ? { tools: true as const }
+            : {}),
         },
       }
       : {}),

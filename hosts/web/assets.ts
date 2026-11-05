@@ -45,12 +45,17 @@ export type Asset =
 export const ASSETS = "/assets/";
 
 /** What each extension is served as, and whether it's kept for good. */
-const TYPES = new Map<string, { type: string; immutable?: boolean }>([
-  ["css", { type: "text/css; charset=utf-8" }],
-  ["woff2", { type: "font/woff2", immutable: true }],
-  ["woff", { type: "font/woff", immutable: true }],
-  ["ttf", { type: "font/ttf", immutable: true }],
-  ["otf", { type: "font/otf", immutable: true }],
+/**
+ * The types served, and how. Fonts and their stylesheets are anyone's to load (`shared`: any
+ * origin may, as Google's are): an app's widget, in an outside assistant's sandbox on another
+ * origin, takes the app's fonts from here, and a font from another origin needs CORS.
+ */
+const TYPES = new Map<string, { type: string; immutable?: boolean; shared?: true }>([
+  ["css", { type: "text/css; charset=utf-8", shared: true }],
+  ["woff2", { type: "font/woff2", immutable: true, shared: true }],
+  ["woff", { type: "font/woff", immutable: true, shared: true }],
+  ["ttf", { type: "font/ttf", immutable: true, shared: true }],
+  ["otf", { type: "font/otf", immutable: true, shared: true }],
   ["svg", { type: "image/svg+xml" }],
   ["png", { type: "image/png" }],
 ]);
@@ -129,6 +134,7 @@ export function assetServer(
         const headers = {
           "cache-control": file.kind.immutable ? "public, max-age=31536000, immutable" : "no-cache",
           etag: tag,
+          ...(file.kind.shared ? { "access-control-allow-origin": "*" } : {}),
           ...SAFE,
         };
         if (fresh(request.headers.get("if-none-match"), tag)) {

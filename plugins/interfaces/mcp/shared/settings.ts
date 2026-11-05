@@ -10,7 +10,14 @@
 import { callerProblem, type CallerSettings, type Resources } from "../../../../runtime/mod.ts";
 import { agentsOf, SEND, type Tool, type ToolAnnotations } from "../../../agents/chat/contract.ts";
 
-/** How one of the app's tools is offered on a line: what only MCP needs. */
+/** Who may call an entry: the model, the app's own widget (MCP Apps' `ui.visibility`). */
+export type Visibility = "model" | "app";
+
+/**
+ * How one of the app's tools is offered on a line: what only MCP needs. Or, with `action`, one
+ * of the app's Actions offered to the line's widgets alone: what a person does by hand in a
+ * widget (a form sent, a tap), never the model's to call.
+ */
 export type McpTool = {
   /** What people see it called, instead of the tool's own `title` (or its name). */
   title?: string;
@@ -19,6 +26,45 @@ export type McpTool = {
   /** What ChatGPT shows while it runs, and once it's done (64 characters at most). */
   invoking?: string;
   invoked?: string;
+  /**
+   * The web View its calls are shown through in a widget (an MCP Apps host draws it: ChatGPT,
+   * Claude): a View kind of the app's widget front ends (`widgetsOf`), given the call as its
+   * item (`{ _id, name, input, output }`) and hints `{ thread, mode, surface: "widget" }`.
+   * Its output goes to the widget as it is (its caller's own: never the model's), so a tool
+   * drawn by a widget returns nothing its caller mustn't see.
+   */
+  widget?: string;
+  /**
+   * Who calls it: the model and the app's widgets (`["model", "app"]`, unless said), or the
+   * widgets alone (`["app"]`): never listed for the model, and refused unless the call carries
+   * the widget's grant (which only results' `_meta` hold: the host's, never the model's).
+   */
+  visibility?: Visibility[];
+  /**
+   * An Action of the app's (its name) instead of a tool: called as the conversation's contact
+   * (its `allow` decides, the rules keep it to the contact's own), by the widgets alone
+   * (`visibility` is `["app"]`); its result goes to the widget, never in the model's content.
+   */
+  action?: string;
+  /** For an Action, what hosts are told it does (the Action's own description unless said). */
+  description?: string;
+};
+
+/**
+ * A line's widgets: how the template the app's widget Views are drawn in is offered (MCP Apps'
+ * resource `_meta.ui`, and ChatGPT's aliases).
+ */
+export type McpWidgets = {
+  /**
+   * The widgets' own origin in the host (`ui.domain`, `openai/widgetDomain`): ChatGPT requires
+   * one, unique to the app, when it's submitted (`https://widgets.example.com`). The host's
+   * default sandbox unless said.
+   */
+  domain?: string;
+  /** Whether the host should draw them in a bordered card (`ui.prefersBorder`). */
+  prefersBorder?: boolean;
+  /** What the model is told a widget shows, once drawn (`openai/widgetDescription`). */
+  description?: string;
 };
 
 /** What a line takes before it says no: see `LIMITS`. */
@@ -89,6 +135,12 @@ export type McpLine = {
   handles?: boolean;
   /** The browser origins it answers (`Origin`): none unless said (no browser calls MCP). */
   origins?: string[];
+  /**
+   * Its widgets (with the web host's `widgets`, `widgetsOf`): the template's options. A line
+   * whose tools name a `widget`, or that offers Actions, offers widgets, and the widgets' read
+   * tool (`READ`: what a widget reads that its snapshot didn't have).
+   */
+  widgets?: McpWidgets;
   limits?: Partial<McpLimits>;
   /** With the orgs host, the org it's for (its id): no other org has it. */
   org?: string;
@@ -159,6 +211,20 @@ export type Line = Omit<McpLine, "tools" | "limits"> & {
 /** Where every line is: `/mcp/<name>`. */
 export const PATH = "/mcp/";
 
+/** The widgets' own tool: what a widget reads as the conversation's contact (queries only). */
+export const READ = "copilotz_read";
+
+/** Who may call an entry: as it says, else the model and the widgets; an Action, the widgets. */
+export const visibilityOf = (entry: McpTool): Visibility[] =>
+  entry.visibility ?? (entry.action ? ["app"] : ["model", "app"]);
+
+/** Whether only the widgets call an entry (never the model). */
+export const appOnly = (entry: McpTool): boolean => !visibilityOf(entry).includes("model");
+
+/** Whether a line offers widgets: a tool shown through one, or an Action they call. */
+export const hasWidgets = (line: Pick<Line, "tools">): boolean =>
+  Object.values(line.tools).some((entry) => entry.widget || entry.action);
+
 const settingsOf = (ctx: { resources: Resources }) => (ctx.resources.mcp ?? {}) as McpSettings;
 
 /** How the app knows who's calling, and how many calls a process takes at once. */
@@ -207,8 +273,16 @@ export const hintsOf = (line: Line, name: string, tool: Tool): ToolAnnotations =
 /** Tool names an MCP client takes as they are. */
 const NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 
-/** What's wrong with a line's settings, if anything (checked when the app starts). */
-export function problemOf(name: string, line: McpLine, resources: Resources): string | undefined {
+/**
+ * What's wrong with a line's settings, if anything (checked when the app starts): `actions`
+ * are the app's Actions' names, which an entry's `action` must be one of.
+ */
+export function problemOf(
+  name: string,
+  line: McpLine,
+  resources: Resources,
+  actions: readonly string[] = [],
+): string | undefined {
   if (!/^[\w-]{1,60}$/.test(name)) return "its name is letters, digits, - and _";
   if (typeof line?.in !== "string" || !line.in) return "needs its in (the space its chats live in)";
   if ("agent" in line) {
@@ -225,23 +299,47 @@ export function problemOf(name: string, line: McpLine, resources: Resources): st
     return `its client "${client}" is an agent's name`;
   }
   for (const tool of offered) {
-    const own = Object.hasOwn(tools, tool) ? tools[tool] : undefined;
-    if (tool === SEND) return `${SEND} is agents' own, not a tool to offer`;
-    if (!own) return `offers "${tool}", which isn't one of the app's tools`;
-    if (!NAME.test(tool)) return `"${tool}" isn't a name MCP takes (A-Z, a-z, 0-9, _ . -)`;
-    const input = own.input as { type?: unknown; properties?: Record<string, unknown> } | undefined;
-    if (input && input.type !== "object") return `"${tool}" takes an object (its input's type)`;
-    if ((line.handles ?? true) && input?.properties && Object.hasOwn(input.properties, "chat")) {
-      return `"${tool}" has an input called chat, which handles take: set handles: false`;
-    }
     const how = line.tools[tool] ?? {};
+    if (tool === READ) return `${READ} is the widgets' own tool, not a name to offer`;
+    if (!NAME.test(tool)) return `"${tool}" isn't a name MCP takes (A-Z, a-z, 0-9, _ . -)`;
+    const seen = how.visibility;
+    if (
+      seen !== undefined &&
+      (!Array.isArray(seen) || !seen.length || seen.some((v) => v !== "model" && v !== "app"))
+    ) {
+      return `tools.${tool}.visibility is "model" and or "app"`;
+    }
+    if (how.widget !== undefined && (typeof how.widget !== "string" || !how.widget)) {
+      return `tools.${tool}.widget is a View's kind`;
+    }
+    let own: Tool | undefined;
+    if (how.action !== undefined) {
+      if (typeof how.action !== "string" || !actions.includes(how.action)) {
+        return `tools.${tool}.action "${how.action}" isn't one of the app's Actions`;
+      }
+      if (!appOnly(how)) {
+        return `tools.${tool} is an Action: only the widgets call it (visibility ["app"])`;
+      }
+      if (how.widget) return `tools.${tool} is an Action: its widget is the one that called it`;
+    } else {
+      own = Object.hasOwn(tools, tool) ? tools[tool] ?? undefined : undefined;
+      if (tool === SEND) return `${SEND} is agents' own, not a tool to offer`;
+      if (!own) return `offers "${tool}", which isn't one of the app's tools`;
+      const input = own.input as
+        | { type?: unknown; properties?: Record<string, unknown> }
+        | undefined;
+      if (input && input.type !== "object") return `"${tool}" takes an object (its input's type)`;
+      if ((line.handles ?? true) && input?.properties && Object.hasOwn(input.properties, "chat")) {
+        return `"${tool}" has an input called chat, which handles take: set handles: false`;
+      }
+    }
     for (const field of ["invoking", "invoked"] as const) {
       const text = how[field];
       if (text !== undefined && (typeof text !== "string" || !text || text.length > STATUS)) {
         return `tools.${tool}.${field} is text of ${STATUS} characters at most`;
       }
     }
-    for (const [hint, value] of Object.entries({ ...own.annotations, ...how.annotations })) {
+    for (const [hint, value] of Object.entries({ ...own?.annotations, ...how.annotations })) {
       if (!["readOnly", "destructive", "idempotent", "openWorld"].includes(hint)) {
         return `"${tool}": ${hint} isn't an annotation (readOnly, destructive, idempotent, openWorld)`;
       }
@@ -254,6 +352,13 @@ export function problemOf(name: string, line: McpLine, resources: Resources): st
   }
   for (const origin of line.origins ?? []) {
     if (!originOk(origin)) return `"${origin}" isn't an origin (https://example.com)`;
+  }
+  const domain = line.widgets?.domain;
+  if (
+    domain !== undefined &&
+    (typeof domain !== "string" || !/^https:\/\//.test(domain) || !originOk(domain))
+  ) {
+    return `widgets.domain "${domain}" isn't an https origin (https://widgets.example.com)`;
   }
   return undefined;
 }

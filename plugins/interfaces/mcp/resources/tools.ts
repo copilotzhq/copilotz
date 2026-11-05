@@ -45,9 +45,10 @@ import {
   newHandle,
   sameCallOf,
   type Scope,
+  threadOf,
   userOf,
 } from "../shared/keys.ts";
-import { hintsOf, type Line } from "../shared/settings.ts";
+import { appOnly, hasWidgets, hintsOf, type Line, READ, visibilityOf } from "../shared/settings.ts";
 import type { Offering } from "../views/offered.ts";
 import { busy, hold } from "./running.ts";
 
@@ -64,14 +65,19 @@ const toolsOf = (resources: Resources) => (resources.tools ?? {}) as Record<stri
 /** Lines already told about in the log, by runtime: once each. */
 const told = new WeakMap<object, Set<string>>();
 
-/** The tools the line lists that have their `tool:<name>` View; the others, said once in the log. */
+/**
+ * The tools the line lists that have their `tool:<name>` View (an Action offered to the widgets
+ * needs none: its result goes to the widget alone); the others, said once in the log.
+ */
 export function usable(
   runtime: Pick<Runtime, "describe">,
   line: Line,
 ): string[] {
   const { views } = runtime.describe();
   const names = Object.keys(line.tools);
-  const shown = names.filter((name) => views[`tool:${name}`]?.includes("llm"));
+  const shown = names.filter((name) =>
+    line.tools[name].action !== undefined || views[`tool:${name}`]?.includes("llm")
+  );
   const left = names.filter((name) => !shown.includes(name));
   const seen = told.get(runtime) ?? new Set<string>();
   told.set(runtime, seen);
@@ -95,9 +101,9 @@ export function offeredOf(
   names: string[],
 ): Promise<string[]> {
   const tools = toolsOf(runtime.describe().resources);
-  if (!names.some((name) => typeof tools[name]?.offer === "function")) {
-    return Promise.resolve(names);
-  }
+  const offers = (name: string) =>
+    line.tools[name]?.action === undefined && typeof tools[name]?.offer === "function";
+  if (!names.some(offers)) return Promise.resolve(names);
   // The same for every listing: asked once a minute, however many list at once.
   const lines = listings.get(runtime) ??
     new Map<string, { at: number; names: Promise<string[]> }>();
@@ -162,8 +168,8 @@ function inputOf(line: Line, tool: Tool): Schema {
 }
 
 /** MCP's hints for a tool, each said: the app's where it says, else what MCP assumes. */
-function mcpHintsOf(line: Line, name: string, tool: Tool) {
-  const said = hintsOf(line, name, tool);
+function mcpHintsOf(line: Line, name: string, tool: Pick<Tool, "annotations">) {
+  const said = hintsOf(line, name, tool as Tool);
   const readOnly = said.readOnly ?? false;
   return {
     readOnlyHint: readOnly,
@@ -174,27 +180,98 @@ function mcpHintsOf(line: Line, name: string, tool: Tool) {
   };
 }
 
-/** The tools `names` (the line's), as `tools/list` answers them. */
-export function listed(line: Line, resources: Resources, names: string[]) {
+/** What a widget's call carries beside its input: its grant, and the reads to answer after. */
+export const GRANT = "_grant";
+export const READS = "_reads";
+
+/** An input as a widget's call takes it: with its grant (and, for an Action, reads to answer). */
+const forWidgets = (input: Schema, reads: boolean): Schema => ({
+  ...input,
+  properties: {
+    ...input.properties,
+    [GRANT]: {
+      type: "string",
+      description: "The widget's grant: its host passes it, from the tool result that drew it.",
+    },
+    _call: { type: "string", description: "This call's own id: a retry of it sends the same." },
+    ...(reads
+      ? { [READS]: { type: "array", maxItems: 32, description: "Reads to answer after it." } }
+      : {}),
+  },
+});
+
+/** The widgets' read tool, as listed: only they call it. */
+const readTool = () => ({
+  name: READ,
+  title: "Read",
+  description: "What a widget of this app reads, as its conversation: named queries only.",
+  inputSchema: forWidgets({
+    type: "object",
+    properties: { reads: { type: "array", maxItems: 32 } },
+    required: ["reads"],
+  }, false),
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  securitySchemes: NOAUTH,
+  _meta: {
+    ui: { visibility: ["app"] },
+    "openai/widgetAccessible": true,
+    "openai/visibility": "private",
+    securitySchemes: NOAUTH,
+  },
+});
+
+/**
+ * The tools `names` (the line's), as `tools/list` answers them. With widgets (`template`: the
+ * URI of the page their Views are drawn in), each says who may call it (`ui.visibility`; ChatGPT's
+ * `openai/visibility` and `openai/widgetAccessible`), a tool shown through a widget says its
+ * template (`ui.resourceUri`, `openai/outputTemplate`), and the widgets' read tool is listed too.
+ */
+export function listed(
+  line: Line,
+  resources: Resources,
+  names: string[],
+  actions: Record<string, { description?: string; input?: unknown }> = {},
+  template?: string,
+) {
   const tools = toolsOf(resources);
-  return names.map((name) => {
-    const tool = tools[name];
+  const widgets = !!template && hasWidgets(line);
+  // Without widgets, what only they call isn't listed: nothing could call it.
+  const entries = names.filter((name) => widgets || !appOnly(line.tools[name])).map((name) => {
     const how = line.tools[name];
-    const title = how.title ?? tool.title;
+    const action = how.action ? actions[how.action] : undefined;
+    const tool = how.action ? undefined : tools[name];
+    const title = how.title ?? tool?.title;
+    const app = appOnly(how);
+    const shown = !!(widgets && how.widget);
+    const input = action ? (action.input ?? { type: "object" }) as Schema : inputOf(line, tool!);
     return {
       name,
       ...(title ? { title } : {}),
-      description: tool.description,
-      inputSchema: inputOf(line, tool),
-      annotations: mcpHintsOf(line, name, tool),
+      description: action ? how.description ?? action.description ?? name : tool!.description,
+      inputSchema: app ? forWidgets(input, !!action) : input,
+      annotations: mcpHintsOf(line, name, tool ?? {}),
       securitySchemes: NOAUTH,
       _meta: {
         ...(how.invoking ? { "openai/toolInvocation/invoking": how.invoking } : {}),
         ...(how.invoked ? { "openai/toolInvocation/invoked": how.invoked } : {}),
+        ...(widgets
+          ? {
+            ui: { visibility: visibilityOf(how), ...(shown ? { resourceUri: template } : {}) },
+            ...(shown ? { "openai/outputTemplate": template } : {}),
+            "openai/widgetAccessible": visibilityOf(how).includes("app"),
+            ...(app ? { "openai/visibility": "private" } : {}),
+          }
+          : {}),
         securitySchemes: NOAUTH,
       },
     };
   });
+  return widgets ? [...entries, readTool()] : entries;
 }
 
 /**
@@ -226,7 +303,7 @@ export type Said = { session?: string; subject?: string };
  * secret, or under the one before it (`links.previous`) when that's the one
  * there (made before the secret changed): the owner says which.
  */
-async function conversationHere(
+export async function conversationHere(
   runtime: Pick<Runtime, "call">,
   scope: Scope & { secrets: string[] },
   key: Key,
@@ -256,16 +333,25 @@ export async function called(
     caller?: Exclude<Caller, "refused">;
     /** Calls the runtime runs at once. */
     atOnce: number;
+    /**
+     * The conversation's contact, when a widget's grant named it (an app-only tool, called by
+     * the line's widgets): its conversation must be one already; and its chat, as the route
+     * found it.
+     */
+    contact?: string;
+    thread?: string;
   },
-) {
+): Promise<Answered> {
   const [secret] = scope.secrets;
   const input = { ...call.input };
   const given = input.chat;
   if (line.handles) delete input.chat;
-  let key: Key;
+  let key: Key | undefined;
   let made: string | undefined;
   let by: "session" | "handle" | "new";
-  if (call.said.session !== undefined) {
+  if (call.contact !== undefined) {
+    by = "handle";
+  } else if (call.said.session !== undefined) {
     key = {
       session: call.said.session,
       ...(call.said.subject ? { subject: call.said.subject } : {}),
@@ -288,7 +374,10 @@ export async function called(
     key = { handle: made };
     by = "new";
   }
-  const { contact, thread } = await conversationHere(runtime, scope, key);
+  // A widget's call names its conversation by its grant (the route found its chat).
+  const { contact, thread } = call.contact !== undefined
+    ? { contact: call.contact, thread: call.thread ?? await threadOf(secret, call.contact) }
+    : await conversationHere(runtime, scope, key!);
   const [id, same] = await Promise.all([
     callIdOf(thread, call.request, call.tool, input),
     sameCallOf(thread, call.tool, input),
@@ -389,7 +478,15 @@ export async function called(
     ? `${said.slice(0, line.limits.result)}\n[…cut]`
     : said;
   // The handle, once: in the answer that made the conversation.
-  return answer(made && done.ran ? `${text}\n\nchat: ${made}` : text, !!done.isError);
+  return {
+    ...answer(made && done.ran ? `${text}\n\nchat: ${made}` : text, !!done.isError),
+    // For a tool shown through a widget: whose conversation it is, and what the tool returned.
+    conversation: {
+      contact,
+      thread,
+      ...(done.output !== undefined ? { output: done.output, call: id } : {}),
+    },
+  };
 }
 
 /** How a call that's still running ends, for whoever waits on it. */
@@ -449,7 +546,18 @@ function sweep(runtime: object, pending: Map<string, Run>, line: Line) {
   for (const [key, run] of pending) if (run.at < oldest) pending.delete(key);
 }
 
-const answer = (text: string, isError: boolean) => ({
+const answer = (text: string, isError: boolean): Answered => ({
   content: [{ type: "text", text }],
   ...(isError ? { isError: true } : {}),
 });
+
+/**
+ * What a call answers: MCP's content (and whether it's an error), and, when it ran, whose
+ * conversation it was and (for a tool shown through a widget) what the tool returned: for the
+ * route, which never sends it as it is.
+ */
+export type Answered = {
+  content: { type: string; text: string }[];
+  isError?: boolean;
+  conversation?: { contact: string; thread: string; output?: string; call?: string };
+};

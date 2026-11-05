@@ -45,7 +45,22 @@
  *   with every other such call, as one caller.
  * - **The protocol** (see resources/server.ts): MCP's Streamable HTTP,
  *   JSON-RPC 2.0, with no session; 2026-07-28 and the versions with a
- *   handshake (2025-11-25, 2025-06-18, 2025-03-26). Tools are all it serves.
+ *   handshake (2025-11-25, 2025-06-18, 2025-03-26). Tools are what it serves,
+ *   and with widgets, their template.
+ * - **Widgets** (see resources/widgets.ts; MCP Apps, and ChatGPT's Apps SDK):
+ *   a tool's calls drawn by a web View of the app's (`tools.<name>.widget`:
+ *   its kind), inside the assistant, with the web host's widgets
+ *   (`webServer({ widgets: widgetsOf({ code, plugins }) })`: the template,
+ *   one page for the line, and snapshots). Its result says, in `_meta` (the
+ *   host's for the widget, never the model's), what the widget draws: the
+ *   View, the call, what the View reads answered as the conversation's
+ *   contact, and the widget's grant. What only the widgets call
+ *   (`visibility: ["app"]`; an Action, `{ action }`: what a person does by
+ *   hand in the widget, never the model) is refused without that grant, and
+ *   with another conversation's; the widgets read through the line's
+ *   `copilotz_read` (named queries, as the contact). The line's `widgets`
+ *   say the template's domain (`ui.domain`, which ChatGPT requires at
+ *   submission), border and description.
  *
  * **Security notes** (to verify in ChatGPT's developer mode before a line
  * offers more):
@@ -78,6 +93,13 @@
  *   },
  * }
  * views: { "tool:search_trips": { llm: tripsForModels } }   // each offered tool's, in a plugin
+ *
+ * // With widgets: a tool drawn by a View, an Action only the widget calls, the template's domain.
+ * tools: {
+ *   get_seats: { widget: "trips.seats" },
+ *   hold_seats: { action: "trips.hold", title: "Hold the seats" },   // visibility ["app"]
+ * },
+ * widgets: { domain: "https://widgets.example.com", prefersBorder: true },
  * ```
  */
 import { definePlugin, linksOf, type Plugin } from "../../../runtime/mod.ts";
@@ -125,7 +147,7 @@ export const mcp: Plugin = definePlugin({
       );
     }
     for (const [name, line] of lines) {
-      const problem = problemOf(name, line, merged.resources);
+      const problem = problemOf(name, line, merged.resources, Object.keys(merged.actions));
       if (problem) throw new Error(`mcp.lines.${name} ${problem}`);
     }
   },

@@ -37,7 +37,16 @@ test("as CSS: light on :root, dark under the media query, radii from radius", ()
   assertMatch(css, /--radius: 8px;/);
   assertMatch(css, /--radius-xl: calc\(var\(--radius\) \* 7 \/ 6\);/);
   assertMatch(css, /--primary: #0f766e;/);
-  assertMatch(css, /@media \(prefers-color-scheme: dark\) \{\n:root \{\n[^}]*--primary: #1bdada;/);
+  // Dark by the system's preference, unless the page says (a widget's host: `data-theme`).
+  assertMatch(
+    css,
+    /@media \(prefers-color-scheme: dark\) \{\n:root:not\(\[data-theme="light"\]\) \{\n[^}]*--primary: #1bdada;/,
+  );
+  assertMatch(
+    css,
+    /:root\[data-theme="dark"\] \{\n  color-scheme: dark;\n[^}]*--primary: #1bdada;/,
+  );
+  assertMatch(css, /:root\[data-theme="light"\] \{\n  color-scheme: light;\n\}/);
 });
 
 test("Copilotz by default: its logo, Manrope for text and Space Grotesk for headings, its own", () => {

@@ -41,6 +41,17 @@ export {
   useSwitching,
 } from "./orgs.ts";
 export { message, node, Part } from "./part.tsx";
+// Where Views are drawn (the page, or a widget in an outside assistant), and what a widget asks of
+// its host: no-ops on the page.
+export {
+  display,
+  type DisplayMode,
+  openLink,
+  remind,
+  surface,
+  tell,
+  useRefresh,
+} from "./surface.ts";
 export { LazyView } from "./lazy.tsx";
 // The command palette: the page's (the shell shows it), and opening it at a step from anywhere.
 export { Palette } from "./palette/palette.tsx";
@@ -110,4 +121,8 @@ export { AudioPlayer } from "./toolkit/audio-player.tsx";
 export { Waveform } from "./toolkit/waveform.tsx";
 export { resample } from "./toolkit/resample.ts";
 export { clock } from "./toolkit/clock.ts";
-export type { Client } from "../../runtime/client.ts";
+// The client a page connects with (over Oxian, or over a host's link: a widget's), for an app's
+// own tests and hosts too.
+export { type Client, type ClientLink, connect, type Known } from "../../runtime/client.ts";
+// What a route is handed of the app's widgets (the server's half, `copilotz/web/server`).
+export type { Widgets } from "./widgets.ts";

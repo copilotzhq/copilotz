@@ -703,3 +703,18 @@ test("a session cookie another host under the domain set isn't anyone, on https"
     await rt.close();
   }
 });
+
+test("the page says its language: English unless the app says (lang)", async () => {
+  const runtime = await createRuntime({ store: memoryStore(), plugins: [] });
+  try {
+    const code = { entry: "app.js", files: { "app.js": "" } };
+    const english = await webServer({ runtime, code })(new Request("http://localhost/"));
+    assert((await english.text()).includes('<html lang="en">'));
+    const portuguese = await webServer({ runtime, code, lang: "pt-BR" })(
+      new Request("http://localhost/"),
+    );
+    assert((await portuguese.text()).includes('<html lang="pt-BR">'));
+  } finally {
+    await runtime.close();
+  }
+});

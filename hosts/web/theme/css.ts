@@ -1,6 +1,7 @@
 /**
  * A theme as the page's CSS variables: its tokens for a light screen, those
- * for a dark one under `prefers-color-scheme: dark`, the radii that scale
+ * for a dark one under `prefers-color-scheme: dark` (or when the page's root
+ * says `data-theme="dark"`, as a widget's host does), the radii that scale
  * from `radius`, and the fonts. `themeOf` is the app's theme: the defaults,
  * with the front ends' `theme` resources merged over them in order, as every
  * resource merges, except that `font` and `logo` are each given whole. A
@@ -114,10 +115,18 @@ export function themeCss(theme: Theme): string {
     "font-mono": theme.font?.mono ?? SYSTEM_MONO,
     ...theme.light,
   });
+  // Dark by the system's preference, unless the page says which (`data-theme`: a widget's
+  // host says light or dark, whatever the system prefers).
   return [
     `:root {\n  color-scheme: ${dark.length ? "light dark" : "light"};\n${root.join("\n")}\n}`,
     ...(dark.length
-      ? [`@media (prefers-color-scheme: dark) {\n:root {\n${dark.join("\n")}\n}\n}`]
+      ? [
+        `@media (prefers-color-scheme: dark) {\n:root:not([data-theme="light"]) {\n${
+          dark.join("\n")
+        }\n}\n}`,
+        `:root[data-theme="dark"] {\n  color-scheme: dark;\n${dark.join("\n")}\n}`,
+        `:root[data-theme="light"] {\n  color-scheme: light;\n}`,
+      ]
       : []),
   ].join("\n");
 }

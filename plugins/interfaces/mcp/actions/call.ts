@@ -53,6 +53,14 @@
  *    public: true })`, and input that didn't fit); any other says only that
  *    it went wrong, and the step keeps what it was.
  *
+ * **A widget's own call** (`app`: an Action offered to the line's widgets,
+ * or their read tool; the route checked the widget's grant first) is only
+ * admitted here: its conversation must be one already (made by a call of
+ * the model's, whose result drew the widget), not over, and within its
+ * calls a minute (the conversation's, the address's, the line's), which it
+ * counts. The route then calls the Action, or answers the reads, as the
+ * contact: its `allow` and the rules decide, as a browser's call.
+ *
  * It isn't recorded: the step is the call's record, and a tool's own
  * Actions are recorded as they are.
  */
@@ -68,14 +76,26 @@ import type { Step, Thread, Tool } from "../../../agents/chat/contract.ts";
 import { runTool } from "../../../agents/chat/contract.ts";
 import { RERUN_MS, RESEND_MS } from "../collections/receipt.ts";
 import { sameCallOf, threadOf } from "../shared/keys.ts";
-import { hintsOf, type Line, lineOf } from "../shared/settings.ts";
+import { appOnly, hintsOf, type Line, lineOf, READ } from "../shared/settings.ts";
 import type { Offering } from "../views/offered.ts";
 
 /**
  * What a call answers: the text the model reads, whether it's an error, whether it ran, and
  * whether it's what an earlier, identical call answered (`again`), not done twice.
  */
-export type Called = { text: string; isError?: true; ran: boolean; again?: true };
+export type Called = {
+  text: string;
+  isError?: true;
+  ran: boolean;
+  again?: true;
+  /** What the tool returned, as it is, for a tool shown through a widget (16 KiB at most). */
+  output?: string;
+  /** A widget's own call (`app`), admitted: the route makes it. */
+  admitted?: true;
+};
+
+/** The most of a tool's output a widget is handed. */
+const OUTPUT = 16_384;
 
 /** What the model is told when a call can't go on. */
 const SAID = {
@@ -132,6 +152,8 @@ export const callAction = defineAction({
       user: { type: "string", maxLength: 40 },
       /** Where it comes from, when the app's front says (an HMAC of the address): for its limits. */
       address: { type: "string", maxLength: 40 },
+      /** A widget's own call (its grant checked by the route): admitted here, made there. */
+      app: { type: "boolean" },
     },
     required: ["line", "tool", "input", "call", "by"],
     additionalProperties: false,
@@ -145,6 +167,7 @@ export const callAction = defineAction({
     actor.kind === "contact" && typeof actor.mcp === "string" &&
     actor.mcp === (input as { line?: unknown })?.line,
   run: async (ctx, input): Promise<Called> => {
+    if (input.app) return await admitted(ctx, input);
     const line = lineOf(ctx, input.line);
     const links = linksOf(ctx.resources);
     const contact = ctx.actor?.id;
@@ -273,9 +296,66 @@ export const callAction = defineAction({
         }
       }
     });
-    return { text, ...(told ? { isError: true as const } : {}), ran: true };
+    const widget = !!line.tools[input.tool]?.widget;
+    return {
+      text,
+      ...(told ? { isError: true as const } : {}),
+      ran: true,
+      ...(widget ? { output: ran.output.slice(0, OUTPUT) } : {}),
+    };
   },
 });
+
+/**
+ * A widget's own call, admitted or not: its conversation's chat there and its contact's (not
+ * over), within the conversation's, the address's and the line's calls a minute, counted.
+ */
+async function admitted(
+  ctx: Context,
+  input: { line: string; tool: string; address?: string; user?: string; thread?: string },
+): Promise<Called> {
+  const line = lineOf(ctx, input.line);
+  const links = linksOf(ctx.resources);
+  const contact = ctx.actor?.id;
+  const entry = line && Object.hasOwn(line.tools, input.tool) ? line.tools[input.tool] : undefined;
+  if (!line || !links || !contact || !(input.tool === READ || (entry && appOnly(entry)))) {
+    throw failure("not_found", "No such tool on this line.");
+  }
+  // Its chat, under whichever of the app's secrets the conversation was made with (as the route
+  // found it), else the app's own.
+  const threads = await Promise.all(secretsOf(links).map((key) => threadOf(key, contact)));
+  const thread = input.thread !== undefined && threads.includes(input.thread)
+    ? input.thread
+    : threads[0];
+  const now = Date.now();
+  const { calls } = countersOf(line, thread, input, now);
+  const system = ctx.as();
+  const [there, reached, over, counted] = await Promise.all([
+    system.db.collection<Thread>("thread").findOne({ _id: thread }),
+    ctx.db.collection<Thread>("thread").findOne({ _id: thread }),
+    system.db.collection("mcp_closed").findOne({
+      _id: { $in: [`contact:${contact}`, `thread:${thread}`] },
+    }),
+    system.db.collection<{ count: number }>("mcp_rate")
+      .find({ _id: { $in: calls.map((c) => c._id) } }),
+  ]);
+  if (over || (there && !reached)) return { text: SAID.closed, isError: true, ran: false };
+  if (!there) return { text: SAID.unknown, isError: true, ran: false };
+  const counts = new Map(counted.map((c) => [c._id, c.count]));
+  const past = calls.find((c) => (counts.get(c._id) ?? 0) >= c.most);
+  if (past) return { text: past.say, isError: true, ran: false };
+  await system.transaction(async (tx) => {
+    const rates = tx.db.collection("mcp_rate");
+    for (const c of calls) {
+      await rates.updateOne(
+        { _id: c._id },
+        { $inc: { count: 1 }, $set: { until: c.until } },
+        UPSERT,
+      );
+    }
+  });
+  return { text: "", ran: false, admitted: true };
+}
 
 /** The counters a call goes by, each its window's: calls this minute, new conversations this hour. */
 function countersOf(

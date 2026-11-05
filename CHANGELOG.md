@@ -8,8 +8,8 @@
    contexts (`renderer: "web"` to `medium: "web"`). No alias.
 2. **Web lines moved to the web interface:** add `webLines` beside `...access`
    (`plugins: [models, chat, ...access, webLines]`) and import `WebLine`, `WebLimits`, `WebSettings`
-   and `WEB_LIMITS` from `copilotz/plugins/interfaces`. The `contactSend` hook's key is `web`
-   (was `contacts`). No data moves.
+   and `WEB_LIMITS` from `copilotz/plugins/interfaces`. The `contactSend` hook's key is `web` (was
+   `contacts`). No data moves.
 3. **One web host:** `serveRoutes`, `routeHost` and `RouteListener` are gone, and so are `serve`'s
    `google` and `dev` options: declare sign-in with `googleSignIn` and `devSignIn` plugins instead.
    `serve` answers a `Server` (`close({ drain })`); `/connect` answers `{ ticket, actor, name? }`

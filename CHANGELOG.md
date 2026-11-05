@@ -1,5 +1,20 @@
 ## Unreleased
 
+## 1.0.0-rc.23 — 2026-11-05
+
+**Upgrading from rc.22** (three renames and one host change; nothing else needs doing):
+
+1. **`renderer` is `medium`:** rename `ctx.renderer` to `ctx.medium` in Views and in hand-made test
+   contexts (`renderer: "web"` to `medium: "web"`). No alias.
+2. **Web lines moved to the web interface:** add `webLines` beside `...access`
+   (`plugins: [models, chat, ...access, webLines]`) and import `WebLine`, `WebLimits`, `WebSettings`
+   and `WEB_LIMITS` from `copilotz/plugins/interfaces`. The `contactSend` hook's key is `web`
+   (was `contacts`). No data moves.
+3. **One web host:** `serveRoutes`, `routeHost` and `RouteListener` are gone, and so are `serve`'s
+   `google` and `dev` options: declare sign-in with `googleSignIn` and `devSignIn` plugins instead.
+   `serve` answers a `Server` (`close({ drain })`); `/connect` answers `{ ticket, actor, name? }`
+   (`person` is gone).
+
 - **Breaking: web lines are the web interface's, not contacts'.** `resources.web.lines`, arrival,
   the `visitor` entrance, the budget, the challenge, prune and the limits moved from
   `plugins/access/contacts` into `plugins/interfaces/web`, as one plugin, `webLines` (exported from
@@ -213,6 +228,14 @@
     one before goes on as itself (the new system-only `mcp.conversation`; `mcp.call` takes the chat
     the route found, `thread`). **Breaking:** every MCP conversation from before is new once (no
     deployment uses the MCP interface yet).
+- **MCP widgets: an app's web Views drawn inside ChatGPT and other MCP Apps hosts** (#165). A line's
+  tool can name a web View (`mcp.lines.<name>.tools.<tool>.widget`); the web host serves one
+  `ui://<line>/widget-<version>.html` template per line (`webServer({ widgets: widgetsOf(...) })`),
+  and a result carries the View, a snapshot of what it reads, and a short-lived grant in `_meta`
+  only, never in what the model reads. Widget-only tools (`visibility: ["app"]`, `action`) refuse
+  calls without a grant for that conversation. The widget host is `copilotz/web/widget`
+  (`widget({ plugins, root })`), speaking MCP Apps' postMessage bridge with ChatGPT's
+  `window.openai` as fallback.
 - **A tab comes back after a network flap.** A new connection on a worker id that already has two
   closes the oldest instead of being refused (a Welcome lost on the way no longer locks the tab
   out), and a client that was in once keeps re-enrolling, longer apart, when it's refused.

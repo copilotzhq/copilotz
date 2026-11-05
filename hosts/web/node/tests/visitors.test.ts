@@ -379,6 +379,9 @@ test("a visitor's messages: a few a minute, at once too, as large as a contact's
     const client = browser(server, carla.ticket);
     try {
       await client.ready;
+      // The line counts by the clock's minute: start well inside one, so the five share it.
+      const left = 60_000 - (Date.now() % 60_000);
+      if (left < 10_000) await new Promise((resolve) => setTimeout(resolve, left + 100));
       // Four a minute on this line: the fifth is refused, saying so; nothing more is sent.
       for (let i = 0; i < 4; i++) {
         assertEquals(await code(client.call("chat.send", { text: `hello ${i}` })), "done");

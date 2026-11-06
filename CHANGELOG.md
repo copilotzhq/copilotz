@@ -1,5 +1,18 @@
 ## Unreleased
 
+- **Every word Copilotz's web front ends show is the app's to change.** An app in another language
+  no longer rewrites the page as it is drawn: it gives a `words` resource
+  (`{ "chat.send":
+  "Enviar" }`), on any plugin the page runs, merged over the English in order.
+  Words are by key (`hosts/web/WORDS.md` lists them: the shell, chat, spaces, memory, team, usage,
+  the command palette, the toolkit and the host's notices), with `{blanks}` for names and numbers
+  and plural forms by the page's language (`{ one, other }`). Dates, times, numbers and currency
+  follow the page's `lang` (`webPage({ lang })`) instead of the browser's. Front ends of an app's
+  own use the same way: `defineWords(area, { … })` from `copilotz/web`. English is unchanged, so an
+  app that sets nothing looks as before. Not covered: the other front ends (billing's credits,
+  routines, skills, computers, apps, API keys, WhatsApp, tiers), text the server sends, and the
+  offline page.
+
 ## 1.0.0-rc.26 — 2026-11-06
 
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the

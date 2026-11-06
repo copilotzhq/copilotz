@@ -8,6 +8,7 @@ import { type ReactNode, useId, useState } from "react";
 import { Avatar, Button, EmptyState, Icon, Input, Tabs } from "../../../../../hosts/web/mod.ts";
 import type { Memory } from "../../collections/memory.ts";
 import { MemoryCard } from "./card.tsx";
+import { say } from "./words.ts";
 import { nameOf, withNames } from "../../../../access/spaces/contract.ts";
 
 type Group = { key: string; label: string; avatar: ReactNode; rank: number; items: Memory[] };
@@ -27,10 +28,10 @@ function groupOf(
   if (kind === "person") {
     const person = nameOf(name, names);
     return name === me
-      ? { key: about, label: "About you", avatar: <Avatar name={person} size={26} />, rank: 0 }
+      ? { key: about, label: say("aboutYou"), avatar: <Avatar name={person} size={26} />, rank: 0 }
       : {
         key: about,
-        label: `About ${person}`,
+        label: say("aboutPerson", { name: person }),
         avatar: <Avatar name={person} size={26} />,
         rank: 1,
       };
@@ -39,7 +40,7 @@ function groupOf(
     const agent = agents[name];
     return {
       key: about,
-      label: `About ${agent?.name ?? name}`,
+      label: say("aboutAgent", { name: agent?.name ?? name }),
       avatar: <Avatar name={agent?.name ?? name} kind="agent" icon={agent?.icon} size={26} />,
       rank: 2,
     };
@@ -47,7 +48,7 @@ function groupOf(
   if (kind === "thread") {
     return {
       key: "thread",
-      label: "About particular chats",
+      label: say("aboutChats"),
       avatar: (
         <span className="mem-group-icon">
           <Icon name="chat" size={14} />
@@ -58,7 +59,7 @@ function groupOf(
   }
   return {
     key: about,
-    label: "About everyone",
+    label: say("aboutEveryone"),
     avatar: (
       <span className="mem-group-icon">
         <Icon name="sparkles" size={14} />
@@ -94,16 +95,15 @@ export function MemoryList(
       <EmptyState
         icon="sparkles"
         tone="primary"
-        title="Nothing remembered yet"
+        title={say("emptyTitle")}
         className="mem-empty"
         action={
           <Button variant="primary" icon="compose" href={fresh}>
-            Start a chat
+            {say("startChat")}
           </Button>
         }
       >
-        As you talk, agents keep here what will matter later: who you are, what you prefer, what you
-        decided.
+        {say("emptyBody")}
       </EmptyState>
     );
   }
@@ -134,24 +134,24 @@ export function MemoryList(
           type="search"
           size={compact ? "sm" : "md"}
           className="mem-search"
-          aria-label="Search memories"
+          aria-label={say("searchMemories")}
           value={search}
-          placeholder="Search memories"
+          placeholder={say("searchMemories")}
           autoComplete="off"
           onChange={(event) => setSearch(event.target.value)}
         />
         <Tabs
-          label="Which memories"
+          label={say("whichMemories")}
           value={which}
           onChange={setWhich}
           panel={`${id}-shown`}
           tabs={[
-            { value: "all", label: "All", count: memories.length },
+            { value: "all", label: say("all"), count: memories.length },
             {
               value: "core",
               label: (
                 <>
-                  <span className="mem-star" aria-hidden="true">★</span> Core
+                  <span className="mem-star" aria-hidden="true">★</span> {say("core")}
                 </>
               ),
               count: cores,
@@ -159,7 +159,11 @@ export function MemoryList(
           ]}
         />
       </div>
-      <div id={`${id}-shown`} role="tabpanel" aria-label={core ? "Core memories" : "All memories"}>
+      <div
+        id={`${id}-shown`}
+        role="tabpanel"
+        aria-label={core ? say("coreMemories") : say("allMemories")}
+      >
         {sorted.length
           ? sorted.map((g) => (
             <section key={g.key} className="mem-group" aria-labelledby={`${id}-${g.key}`}>
@@ -184,7 +188,7 @@ export function MemoryList(
           ))
           : (
             <p className="mem-none">
-              {words ? `No memories match “${search.trim()}”.` : "No core memories yet."}
+              {words ? say("noMatch", { search: search.trim() }) : say("noCore")}
             </p>
           )}
       </div>

@@ -1,6 +1,7 @@
 /** Making a space, in place: a button that becomes a name field; Enter makes it, Escape doesn't. */
 import { type ReactNode, useId, useState } from "react";
 import { Icon, IconButton, Input, message, NavItem } from "../../../../../hosts/web/mod.ts";
+import { say } from "./words.ts";
 
 export function NewSpace({ create }: { create(name: string): Promise<void> }): ReactNode {
   const [open, setOpen] = useState(false);
@@ -24,7 +25,7 @@ export function NewSpace({ create }: { create(name: string): Promise<void> }): R
           </span>
         }
       >
-        New space
+        {say("newSpace")}
       </NavItem>
     );
   }
@@ -46,13 +47,13 @@ export function NewSpace({ create }: { create(name: string): Promise<void> }): R
         }
       }}
     >
-      <label className="copilotz-sr" htmlFor={id}>Name the new space</label>
+      <label className="copilotz-sr" htmlFor={id}>{say("nameNewSpace")}</label>
       <Input
         id={id}
         size="sm"
         value={name}
         maxLength={60}
-        placeholder="Name the space"
+        placeholder={say("nameSpace")}
         autoComplete="off"
         autoFocus
         invalid={!!error}
@@ -67,12 +68,12 @@ export function NewSpace({ create }: { create(name: string): Promise<void> }): R
             <IconButton
               type="submit"
               icon="check"
-              label="Make the space"
+              label={say("makeSpace")}
               size="sm"
               loading={busy}
               disabled={!name.trim()}
             />
-            <IconButton icon="close" label="Cancel" size="sm" onClick={close} />
+            <IconButton icon="close" label={say("cancel")} size="sm" onClick={close} />
           </>
         }
       />

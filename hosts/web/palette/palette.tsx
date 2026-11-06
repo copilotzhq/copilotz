@@ -44,6 +44,7 @@ import { Skeleton } from "../toolkit/skeleton.tsx";
 import { groupsOf, listOf } from "./list.ts";
 import { Row } from "./row.tsx";
 import { useOutputs } from "./sources.ts";
+import { say } from "./words.ts";
 import {
   closePalette,
   type PaletteControl,
@@ -138,7 +139,7 @@ const thenable = (value: unknown): value is PromiseLike<unknown> =>
   !!value && typeof (value as PromiseLike<unknown>).then === "function";
 
 export function Palette(
-  { sources, hints, own = [], placeholder = "Search, or type a command" }: {
+  { sources, hints, own = [], placeholder }: {
     /** Front ends' lists: Views that return groups for what's typed (the `palette` resource). */
     sources: { view: string }[];
     /** Where the person is, for every View it shows; `search`, what's typed, is added. */
@@ -148,7 +149,7 @@ export function Palette(
     placeholder?: string;
   },
 ): ReactNode {
-  const state = useSyncExternalStore(paletteState.subscribe, paletteState.get);
+  const state = useSyncExternalStore(paletteState.subscribe, paletteState.get, paletteState.get);
   const [seen, setSeen] = useState(state);
   const [entries, setEntries] = useState<Entry[]>(() => entriesOf(state.steps));
   const [active, setActive] = useState<string>();
@@ -296,6 +297,7 @@ export function Palette(
   };
 
   const title = step?.title;
+  const hint = placeholder ?? say("searchOrCommand");
   const count = listed.items.length;
   // A name being typed lists only what it would do: nothing, until there's something to.
   const quiet = step?.filter === false;
@@ -305,14 +307,14 @@ export function Palette(
       <dialog
         ref={ref}
         className="copilotz-palette"
-        aria-label={title ?? "Command palette"}
+        aria-label={title ?? say("commandPalette")}
         closedby="any"
         {...events}
         onKeyDown={keys}
       >
         <div className="copilotz-palette-head">
           {entries.length > 1
-            ? <IconButton icon="chevron-left" label="Back" size="sm" onClick={back} />
+            ? <IconButton icon="chevron-left" label={say("back")} size="sm" onClick={back} />
             : <Icon name="search" size={18} />}
           {title
             ? (
@@ -334,8 +336,8 @@ export function Palette(
               aria-controls={`${id}-list`}
               aria-autocomplete="list"
               aria-activedescendant={current ? optionId(current) : undefined}
-              aria-label={title ?? placeholder}
-              placeholder={step?.placeholder ?? (step ? "Search" : placeholder)}
+              aria-label={title ?? hint}
+              placeholder={step?.placeholder ?? (step ? say("search") : hint)}
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -354,7 +356,7 @@ export function Palette(
             className="copilotz-palette-cancel"
             onClick={closePalette}
           >
-            Cancel
+            {say("cancel")}
           </Button>
         </div>
         {step?.note ? <p className="copilotz-palette-note">{step.note}</p> : null}
@@ -369,7 +371,7 @@ export function Palette(
           ref={list}
           id={`${id}-list`}
           role="listbox"
-          aria-label={title ?? "Commands"}
+          aria-label={title ?? say("commands")}
           className="copilotz-palette-list"
           // A question's choices take the keys themselves.
           tabIndex={asking ? 0 : -1}
@@ -414,25 +416,23 @@ export function Palette(
             )
             : (
               <p className="copilotz-palette-empty">
-                {search.trim() ? <>Nothing found for “{search.trim()}”</> : "Nothing here yet"}
+                {search.trim() ? say("nothingFound", { search: search.trim() }) : say("nothingYet")}
               </p>
             )}
         </div>
         <p className="copilotz-sr" role="status">
-          {search.trim() && !loading
-            ? count ? `${count} result${count === 1 ? "" : "s"}` : "No results"
-            : ""}
+          {search.trim() && !loading ? count ? say("results", { count }) : say("noResults") : ""}
         </p>
         <footer className="copilotz-palette-foot" aria-hidden="true">
           <span>
             <Kbd>↑</Kbd>
-            <Kbd>↓</Kbd> to move
+            <Kbd>↓</Kbd> {say("toMove")}
           </span>
           <span>
-            <Kbd>↵</Kbd> to choose
+            <Kbd>↵</Kbd> {say("toChoose")}
           </span>
           <span>
-            <Kbd>esc</Kbd> {entries.length > 1 ? "to go back" : "to close"}
+            <Kbd>esc</Kbd> {entries.length > 1 ? say("toGoBack") : say("toClose")}
           </span>
         </footer>
       </dialog>
@@ -444,7 +444,9 @@ export function Palette(
             title={dialog.title}
             description={dialog.description}
             size={dialog.size}
-            footer={<Button onClick={() => setDialog({ ...dialog, open: false })}>Done</Button>}
+            footer={
+              <Button onClick={() => setDialog({ ...dialog, open: false })}>{say("done")}</Button>
+            }
           >
             <LazyView kind={dialog.view} item={dialog.item ?? {}} hints={dialog.hints ?? {}} />
           </Dialog>

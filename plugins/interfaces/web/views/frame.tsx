@@ -45,6 +45,7 @@ import { useStanding } from "../shared/standing.ts";
 import { STYLE } from "../shared/style.ts";
 import { Me } from "./me.tsx";
 import { NewOrg, orgsPalette, OrgSwitcher, Switching } from "./orgs.tsx";
+import { say } from "./words.ts";
 import { type Offered, PanelSheet, PanelToggle, SidePanel, usePanel } from "./panel.tsx";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
@@ -117,7 +118,7 @@ export function Frame(
     openPalette();
   };
   const own: PaletteGroup[] = [...(orgs ? orgsPalette(orgs, here, standing) : []), {
-    title: "General",
+    title: say("general"),
     order: 90,
     items: [
       ...(panel
@@ -125,19 +126,19 @@ export function Frame(
           key: "shell:panel",
           label: toggleLabel(side.shown, panel.title),
           icon: "panel" as const,
-          keywords: ["side panel", "toggle"],
+          keywords: say("keysPanel").split(/\s+/).filter(Boolean),
           run: () => side.toggle(),
         }]
         : []),
       {
         key: "shell:home",
-        label: "Go home",
+        label: say("goHome"),
         icon: "home",
         href: typeof palette.hints.in === "string"
           ? `/?in=${encodeURIComponent(palette.hints.in)}`
           : "/",
       },
-      { key: "shell:signout", label: "Sign out", icon: "signout", run: () => signOut() },
+      { key: "shell:signout", label: say("signOut"), icon: "signout", run: () => signOut() },
     ],
   }];
 
@@ -147,7 +148,11 @@ export function Frame(
         {orgs
           ? (
             <>
-              <a className="copilotz-brand copilotz-brand-mark" href="/" title={`${brand}: home`}>
+              <a
+                className="copilotz-brand copilotz-brand-mark"
+                href="/"
+                title={say("homeOf", { brand })}
+              >
                 <Logo name={brand} size={24} />
               </a>
               <OrgSwitcher
@@ -168,7 +173,7 @@ export function Frame(
             </a>
           )}
         {narrow
-          ? <IconButton icon="close" label="Close sidebar" onClick={() => setOpen(false)} />
+          ? <IconButton icon="close" label={say("closeSidebar")} onClick={() => setOpen(false)} />
           : null}
       </div>
       <div className="copilotz-find">
@@ -177,12 +182,12 @@ export function Frame(
           icon="search"
           onClick={find}
           end={narrow ? null : <Kbd>{shortcutOf(mac)}</Kbd>}
-          title={`Search spaces and chats, or run a command (${shortcutOf(mac)})`}
+          title={say("searchTitle", { shortcut: shortcutOf(mac) })}
         >
-          Search
+          {say("search")}
         </NavItem>
       </div>
-      <nav className="copilotz-sections" aria-label="Spaces and chats">{sidebar}</nav>
+      <nav className="copilotz-sections" aria-label={say("spacesAndChats")}>{sidebar}</nav>
       {viewer
         ? (
           <Me
@@ -203,7 +208,7 @@ export function Frame(
         ? (
           <div className="copilotz-staff-line" role="note">
             <span className="copilotz-sr">
-              You're in this org as platform staff: what you do is on its record.
+              {say("staffLine")}
             </span>
           </div>
         )
@@ -212,20 +217,20 @@ export function Frame(
         className="copilotz-skip"
         onClick={() => document.getElementById("copilotz-main")?.focus()}
       >
-        Skip to content
+        {say("skipToContent")}
       </Button>
       {narrow
         ? (
           <Drawer
             open={open}
             onClose={() => setOpen(false)}
-            label="Sidebar"
+            label={say("sidebar")}
             className="copilotz-sidebar"
           >
             {content}
           </Drawer>
         )
-        : <aside className="copilotz-sidebar" aria-label="Sidebar">{content}</aside>}
+        : <aside className="copilotz-sidebar" aria-label={say("sidebar")}>{content}</aside>}
       <div className="copilotz-stage">
         <main
           id="copilotz-main"
@@ -240,7 +245,7 @@ export function Frame(
             ? (
               <IconButton
                 icon="menu"
-                label="Open sidebar"
+                label={say("openSidebar")}
                 size="lg"
                 className="copilotz-shell-menu"
                 aria-haspopup="dialog"

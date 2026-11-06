@@ -11,6 +11,7 @@ import { type CSSProperties, type ReactNode, useId, useState } from "react";
 import { Button } from "./button.tsx";
 import { cx } from "./cx.ts";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 
 const SHEET = sheet(
   "long-text",
@@ -56,7 +57,7 @@ export function LongText(
             aria-controls={id}
             onClick={() => setOpen(!open)}
           >
-            {open ? "Show less" : "Show more"}
+            {open ? say("showLess") : say("showMore")}
           </Button>
         )
         : null}

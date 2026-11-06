@@ -10,6 +10,7 @@ import type { Observed } from "../../runtime/mod.ts";
 import { Button } from "./toolkit/button.tsx";
 import { Notice } from "./toolkit/notice.tsx";
 import { Spinner } from "./toolkit/spinner.tsx";
+import { say } from "./host-words.ts";
 
 /** How the host lays out a part loading or failed: its own CSS, as a front end's is. */
 const STYLE = `
@@ -24,7 +25,7 @@ const STYLE = `
 const SHEET = <style href="copilotz-part" precedence="copilotz">{STYLE}</style>;
 
 export function Part({ part }: { part: Observed }): ReactNode {
-  const output = useSyncExternalStore(part.subscribe, part.get);
+  const output = useSyncExternalStore(part.subscribe, part.get, part.get);
   const shown = useRef<ReactNode>(undefined);
   if (output.status === "loading") return shown.current ?? <Loading />;
   shown.current = output.status === "failed" ? <Failed error={output.error} /> : node(output.value);
@@ -36,7 +37,7 @@ export function Loading(): ReactNode {
   return (
     <div className="copilotz-loading" role="status">
       {SHEET}
-      <span className="copilotz-sr">Loading</span>
+      <span className="copilotz-sr">{say("loading")}</span>
       <Spinner variant="dots" size={7} />
     </div>
   );
@@ -49,9 +50,9 @@ const refused = (error: unknown) =>
 function Failed({ error }: { error: unknown }): ReactNode {
   if (refused(error)) {
     return (
-      <Notice tone="neutral" className="copilotz-failed" title="You can't see this here">
+      <Notice tone="neutral" className="copilotz-failed" title={say("forbiddenTitle")}>
         {SHEET}
-        It isn't shared with you, or it only shows inside another page.
+        {say("forbidden")}
       </Notice>
     );
   }
@@ -60,8 +61,8 @@ function Failed({ error }: { error: unknown }): ReactNode {
       tone="destructive"
       role="alert"
       className="copilotz-failed"
-      title="Something went wrong here"
-      action={<Button onClick={() => location.reload()}>Reload</Button>}
+      title={say("failedTitle")}
+      action={<Button onClick={() => location.reload()}>{say("reload")}</Button>}
     >
       {SHEET}
       {message(error)}

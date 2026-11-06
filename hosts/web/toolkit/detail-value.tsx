@@ -14,10 +14,12 @@ import type { ReactNode } from "react";
 import { Chip } from "./chip.tsx";
 import { CopyButton } from "./copy-button.tsx";
 import { DetailList } from "./detail-list.tsx";
+import { formatDate, formatNumber, lang } from "../words.ts";
 import { Icon } from "./icon.tsx";
 import { LongText } from "./long-text.tsx";
 import { safeHref } from "./markdown/spans.ts";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 import { Time } from "./time.tsx";
 
 const SHEET = sheet(
@@ -83,7 +85,7 @@ function Id({ id }: { id: string }): ReactNode {
   return (
     <span className="copilotz-value-id">
       <code>{id}</code>
-      <CopyButton text={id} label="Copy ID" />
+      <CopyButton text={id} label={say("copyId")} />
     </span>
   );
 }
@@ -117,7 +119,7 @@ function List({ items, field, depth }: { items: unknown[]; field: string; depth:
       <Fold
         summary={
           <>
-            {items.length} items
+            {say("items", { count: items.length })}
             <span className="copilotz-value-preview">{items.slice(0, 4).join(", ")}…</span>
           </>
         }
@@ -135,7 +137,9 @@ function List({ items, field, depth }: { items: unknown[]; field: string; depth:
       ))}
     </ol>
   );
-  return items.length > ITEMS ? <Fold summary={<>{items.length} items</>}>{list}</Fold> : list;
+  return items.length > ITEMS
+    ? <Fold summary={<>{say("items", { count: items.length })}</>}>{list}</Fold>
+    : list;
 }
 
 function Fields({ value, depth }: { value: Record<string, unknown>; depth: number }) {
@@ -193,13 +197,18 @@ function shown(value: unknown, field: string, as: string | undefined, depth: num
     return value
       ? (
         <span className="copilotz-value-yes">
-          <Icon name="check" size={15} />Yes
+          <Icon name="check" size={15} />
+          {say("yes")}
         </span>
       )
-      : <span className="copilotz-value-no">No</span>;
+      : <span className="copilotz-value-no">{say("no")}</span>;
   }
   if (typeof value === "number" || typeof value === "bigint") {
-    return <span className="copilotz-value-number">{value.toLocaleString()}</span>;
+    return (
+      <span className="copilotz-value-number">
+        {typeof value === "bigint" ? value.toLocaleString(lang()) : formatNumber(value)}
+      </span>
+    );
   }
   if (typeof value === "string") {
     const name = field.split(".").at(-1) ?? "";
@@ -210,7 +219,7 @@ function shown(value: unknown, field: string, as: string | undefined, depth: num
       const [year, month, day] = value.split("-").map(Number);
       return (
         <time dateTime={value}>
-          {new Date(year, month - 1, day).toLocaleDateString(undefined, { dateStyle: "medium" })}
+          {formatDate(new Date(year, month - 1, day), { dateStyle: "medium" })}
         </time>
       );
     }

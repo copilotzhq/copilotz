@@ -33,6 +33,7 @@ import { BASE } from "./style.ts";
 import { ThemeContext } from "./theme/context.ts";
 import { fontsOf, fromGoogle, preloadsOf, themeCss, themeOf } from "./theme/css.ts";
 import { UpdateReady } from "./update.tsx";
+import { say } from "./host-words.ts";
 import { setWords, wordsOf } from "./words.ts";
 
 export type WebOptions = {
@@ -97,10 +98,13 @@ const config = () =>
   };
 
 /** What the runtime answered, or the error it said. */
-async function answered<T>(response: Response, what: string): Promise<T> {
+async function answered<T>(
+  response: Response,
+  what: "couldntComeIn" | "couldntConnect",
+): Promise<T> {
   if (!response.ok) {
     const said = await response.json().catch(() => null) as { error?: string } | null;
-    throw new Error(said?.error ?? `${what}: ${response.statusText}`);
+    throw new Error(said?.error ?? `${say(what)}: ${response.statusText}`);
   }
   return await response.json() as T;
 }
@@ -115,7 +119,7 @@ async function arriving(arrive: { name: string; challenge?: string }): Promise<v
     headers: { "content-type": "application/json" },
     body: JSON.stringify(arrive.challenge ? { challenge: arrive.challenge } : {}),
   });
-  await answered(response, "Couldn't come in");
+  await answered(response, "couldntComeIn");
 }
 
 /**
@@ -125,7 +129,7 @@ async function arriving(arrive: { name: string; challenge?: string }): Promise<v
 async function ticket(): Promise<{ ticket: string; actor: Who } | undefined> {
   const response = await fetch(`${config().base ?? ""}/connect`, { method: "POST" });
   if (response.status === 401) return undefined;
-  return await answered(response, "Couldn't connect");
+  return await answered(response, "couldntConnect");
 }
 
 /** What the person signed in is shown as: their name (identity's `/me`), else nothing. */
@@ -209,7 +213,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
       const next = kept ?? (await ticket())?.ticket;
       if (!next) {
         location.reload();
-        throw new Error("Signed out");
+        throw new Error(say("signedOut"));
       }
       return next;
     },

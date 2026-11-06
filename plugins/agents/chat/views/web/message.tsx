@@ -38,6 +38,7 @@ import { Queued } from "./queued.tsx";
 import { Steps } from "./steps.tsx";
 import { toolView } from "./tool-view.ts";
 import { byAgent } from "./who.ts";
+import { say } from "./words.ts";
 import { nameOf, namesIn, picturesIn } from "../../../../access/spaces/contract.ts";
 
 /**
@@ -47,6 +48,16 @@ import { nameOf, namesIn, picturesIn } from "../../../../access/spaces/contract.
  */
 export const failedOwn = (m: Pick<Message, "from" | "text">): boolean =>
   !m.text || m.text.startsWith(`${m.from} failed:`);
+
+/** What sent a message for someone, as a chip says it: "Routine: Morning news". */
+const viaSaid = (via: NonNullable<Message["via"]>): string =>
+  via.kind === "routine"
+    ? say("viaRoutine", { name: via.name })
+    : via.kind === "answer"
+    ? say("viaAnswer", { name: via.name })
+    : via.kind === "delegated"
+    ? say("viaDelegated", { name: via.name })
+    : say("viaOther", { kind: via.kind[0].toUpperCase() + via.kind.slice(1), name: via.name });
 
 export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode => {
   const me = ctx.viewer?.name;
@@ -63,7 +74,7 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
   const face = mine || agent ? undefined : picturesIn(ctx, [m.from])[m.from];
   const queued = Array.isArray(ctx.hints.queued) ? ctx.hints.queued as string[] : [];
   const to = m.to.filter((name) => name !== m.from).map((name) =>
-    name === me ? "you" : named(name)
+    name === me ? say("you") : named(name)
   );
   const usual = Array.isArray(ctx.hints.usual) ? ctx.hints.usual as string[] : [];
   const addressed = mine ? m.to.some((name) => !usual.includes(name)) : to.length > 0;
@@ -75,7 +86,7 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
     ? (
       <span className="msg-to">
         <span aria-hidden="true">→</span>
-        <span className="copilotz-sr">to</span> {to.join(", ")}
+        <span className="copilotz-sr">{say("to")}</span> {to.join(", ")}
       </span>
     )
     : null;
@@ -87,7 +98,7 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
           ? <a className="msg-name" href={agentPath(m.from)}>{author}</a>
           : <span className="msg-name">{author}</span>}
         {addressees}
-        {aside ? <Badge>side thread</Badge> : null}
+        {aside ? <Badge>{say("sideThread")}</Badge> : null}
         <Time at={m.at} />
       </header>
     );
@@ -97,7 +108,11 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
       className={`msg msg-${kind}${follows ? " msg-follows" : ""}${aside ? " msg-aside" : ""}${
         m.failed ? " msg-failed" : ""
       }`}
-      aria-label={`${mine ? "You" : author}${to.length ? ` to ${to.join(", ")}` : ""}`}
+      aria-label={to.length
+        ? say("messageByTo", { author: mine ? say("youLabel") : author, to: to.join(", ") })
+        : mine
+        ? say("youLabel")
+        : author}
     >
       {mine ? null : (
         <div className="msg-gutter">
@@ -118,7 +133,7 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
             ? (
               <header className="msg-head msg-head-again">
                 {addressees}
-                {aside ? <Badge>side thread</Badge> : null}
+                {aside ? <Badge>{say("sideThread")}</Badge> : null}
               </header>
             )
             : null)
@@ -135,7 +150,7 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
               className="msg-via"
               {...(m.via.path ? { href: m.via.path } : {})}
             >
-              {m.via.kind[0].toUpperCase() + m.via.kind.slice(1)}: {m.via.name}
+              {viaSaid(m.via)}
             </Chip>
           )
           : null}
@@ -154,7 +169,7 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
             <div className="msg-body">
               {m.failed
                 ? failedOwn(m)
-                  ? <Notice tone="destructive">{m.text || "Couldn't answer."}</Notice>
+                  ? <Notice tone="destructive">{m.text || say("couldntAnswer")}</Notice>
                   : (
                     <Notice tone="warning" className="msg-limit">
                       <Markdown text={m.text ?? ""} />
@@ -177,14 +192,14 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
           ? (
             <p className="msg-note">
               <Icon name="branch" size={14} />
-              Asked in a side thread
+              {say("askedInSideThread")}
             </p>
           )
           : null}
         {ctx.hints.asked === true
           ? (
             <Chip size="sm" variant="primary" icon="chat" className="msg-asked">
-              Waiting on your answer: your next message replies.
+              {say("waitingOnAnswer")}
             </Chip>
           )
           : null}
@@ -200,19 +215,19 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
                   icon="share"
                   onClick={() => void ctx.call("share", { collection: "message", id: m._id })}
                 >
-                  Share
+                  {say("share")}
                 </Button>
               }
             >
-              Uses <b>{sources.join(", ")}</b>. Not everyone here can see it.
+              {say.nodes("usesSources", { sources: <b>{sources.join(", ")}</b> })}
             </Notice>
           )
           : null}
-        {m.stopped ? <p className="msg-note">Stopped</p> : null}
+        {m.stopped ? <p className="msg-note">{say("stopped")}</p> : null}
         {agent && !m.toolCalls && m.text && !m.failed
           ? (
             <div className="msg-actions">
-              <CopyButton text={m.text} label="Copy reply" />
+              <CopyButton text={m.text} label={say("copyReply")} />
             </div>
           )
           : null}

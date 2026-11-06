@@ -8,6 +8,7 @@
 import { type ReactNode, useState } from "react";
 import { Button, message } from "../../../../../hosts/web/mod.ts";
 import { names } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -21,12 +22,11 @@ export function Queued(
 ): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const one = agents.length === 1;
   return (
     <p className="msg-queued" role="status">
       {error ?? (
         <>
-          Goes to {names(agents.map((a) => a.name))} when {one ? "it's" : "they're"} done
+          {say("goesTo", { names: names(agents.map((a) => a.name)), count: agents.length })}
           <span aria-hidden="true">·</span>
           <Button
             variant="link"
@@ -44,7 +44,7 @@ export function Queued(
               }
             }}
           >
-            Stop to send now
+            {say("stopToSendNow")}
           </Button>
         </>
       )}

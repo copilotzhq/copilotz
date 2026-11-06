@@ -39,6 +39,11 @@ import {
   useSwitching,
 } from "../../../access/directory/contract.ts";
 import { orgRoleName, runs, type Standing, standingName } from "../shared/orgs.ts";
+import { lang } from "../../../../hosts/web/mod.ts";
+import { say } from "./words.ts";
+
+/** The words a phrase gives to find an item by (its keywords), apart. */
+const keywords = (key: Parameters<typeof say>[0]) => say(key).split(/\s+/).filter(Boolean);
 
 /** An org's face: yours (Personal) is you; a team's, its initials. */
 export function OrgFace(
@@ -55,8 +60,8 @@ export function OrgFace(
 
 /** What the switcher says under the org's name: your standing there. */
 function subline(org: Org | undefined, standing: Standing | undefined, staff: boolean) {
-  if (staff) return "Staff access";
-  if (org?.kind === "personal") return "Just you";
+  if (staff) return say("staffAccess");
+  if (org?.kind === "personal") return say("justYou");
   return standingName(standing) || " ";
 }
 
@@ -79,14 +84,14 @@ export function OrgSwitcher(
     enterOrg(org, staff).catch((e) => setFailed(message(e)));
   };
   const waiting = orgs.invites.length;
-  const name = here ? orgName(here) : "Organization";
+  const name = here ? orgName(here) : say("organization");
   const mine = [...orgs.orgs].sort((a, b) =>
     Number(b.kind === "personal") - Number(a.kind === "personal") ||
     a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
   );
   return (
     <Popover
-      label="Your organizations"
+      label={say("yourOrgs")}
       width={312}
       className="copilotz-orgs"
       trigger={(props) => (
@@ -95,9 +100,7 @@ export function OrgSwitcher(
           {...props}
           className="copilotz-org"
           data-staff={staff || undefined}
-          title={staff
-            ? `You're in ${name} as platform staff: what you do is on its record`
-            : `${name}: switch organization`}
+          title={staff ? say("inAsStaffTitle", { name }) : say("switchOrg", { name })}
         >
           {here
             ? <OrgFace org={here} person={orgs.person} size={28} />
@@ -111,7 +114,10 @@ export function OrgSwitcher(
           </span>
           {waiting
             ? (
-              <span className="copilotz-org-dot" aria-label={`${waiting} invitations`}>
+              <span
+                className="copilotz-org-dot"
+                aria-label={say("invitationsCount", { count: waiting })}
+              >
                 {waiting}
               </span>
             )
@@ -123,14 +129,14 @@ export function OrgSwitcher(
       {(close) => (
         <div className="copilotz-orgs-box">
           <p className="copilotz-orgs-who">
-            Signed in as <b>{orgs.email ?? orgs.person}</b>
+            {say.nodes("signedInAs", { who: <b>{orgs.email ?? orgs.person}</b> })}
           </p>
           {staff && here
             ? (
               <div className="copilotz-orgs-staff">
                 <Icon name="shield" size={15} />
                 <span>
-                  You're in <b>{here.name}</b> as staff. What you do here is on its record.
+                  {say.nodes("inAsStaff", { name: <b>{here.name}</b> })}
                   {standing?.role
                     ? (
                       <button
@@ -139,7 +145,7 @@ export function OrgSwitcher(
                         className="copilotz-orgs-staff-back"
                         onClick={() => switchTo(here, false)}
                       >
-                        Continue as {standingName(standing)}
+                        {say("continueAs", { role: standingName(standing) })}
                       </button>
                     )
                     : null}
@@ -148,7 +154,7 @@ export function OrgSwitcher(
             )
             : null}
           {failed ? <Notice tone="destructive" role="alert">{failed}</Notice> : null}
-          <ul className="copilotz-orgs-list" aria-label="Organizations">
+          <ul className="copilotz-orgs-list" aria-label={say("organizations")}>
             {mine.map((org) => (
               <li key={org.id}>
                 <OrgRow
@@ -164,7 +170,7 @@ export function OrgSwitcher(
             ? (
               <section className="copilotz-orgs-invites" aria-labelledby="copilotz-orgs-invites">
                 <h3 id="copilotz-orgs-invites">
-                  Invitations <Badge tone="primary">{waiting}</Badge>
+                  {say("invitations")} <Badge tone="primary">{waiting}</Badge>
                 </h3>
                 <ul>
                   {orgs.invites.map((invite) => (
@@ -189,7 +195,7 @@ export function OrgSwitcher(
               <span className="copilotz-orgs-icon copilotz-orgs-icon-new">
                 <Icon name="plus" size={15} />
               </span>
-              New organization…
+              {say("newOrgMore")}
             </button>
             {here && (runs(standing) || standing?.role)
               ? (
@@ -202,7 +208,7 @@ export function OrgSwitcher(
                   <span className="copilotz-orgs-icon">
                     <Icon name="settings" size={15} />
                   </span>
-                  {runs(standing) ? "Organization settings" : "About this organization"}
+                  {runs(standing) ? say("orgSettings") : say("aboutOrg")}
                 </a>
               )
               : null}
@@ -217,7 +223,7 @@ export function OrgSwitcher(
                   <span className="copilotz-orgs-icon">
                     <Icon name="shield" size={15} />
                   </span>
-                  Enter as staff
+                  {say("enterAsStaff")}
                 </button>
               )
               : null}
@@ -232,7 +238,7 @@ export function OrgSwitcher(
                   <span className="copilotz-orgs-icon">
                     <Icon name="server" size={15} />
                   </span>
-                  All orgs (console)
+                  {say("allOrgsConsole")}
                 </a>
               )
               : null}
@@ -261,7 +267,7 @@ function OrgRow(
       className="copilotz-orgs-row"
       aria-current={current || undefined}
       aria-disabled={suspended || undefined}
-      title={suspended ? `${org.name} is suspended: nobody goes in for now` : undefined}
+      title={suspended ? say("suspendedTitle", { name: org.name }) : undefined}
       onClick={() => {
         if (suspended) return;
         if (current) return close();
@@ -277,10 +283,10 @@ function OrgRow(
         {error
           ? <span className="copilotz-orgs-row-error">{error}</span>
           : org.kind === "personal"
-          ? <span className="copilotz-orgs-row-sub">Your own</span>
+          ? <span className="copilotz-orgs-row-sub">{say("yourOwn")}</span>
           : null}
       </span>
-      {suspended ? <Badge tone="warning">Suspended</Badge> : null}
+      {suspended ? <Badge tone="warning">{say("suspended")}</Badge> : null}
       {current ? <Icon name="check" size={16} className="copilotz-orgs-check" /> : null}
     </button>
   );
@@ -307,12 +313,11 @@ function InviteRow({ invite, close }: { invite: OrgInvite; close(): void }): Rea
       <div className="copilotz-orgs-invite-text">
         <p className="copilotz-orgs-invite-name">{invite.name}</p>
         <p className="copilotz-orgs-invite-meta">
-          {error ?? (
-            <>
-              {invite.from ? `${invite.from} invited you` : "You're invited"}, as{" "}
-              {orgRoleName(invite.role).toLowerCase()} · <Time at={invite.at} />
-            </>
-          )}
+          {error ?? say.nodes(invite.from ? "invitedFromAsAt" : "invitedAsAt", {
+            from: invite.from ?? "",
+            role: orgRoleName(invite.role).toLocaleLowerCase(lang()),
+            time: <Time at={invite.at} />,
+          })}
         </p>
         <div className="copilotz-orgs-invite-answers">
           <Button
@@ -323,7 +328,7 @@ function InviteRow({ invite, close }: { invite: OrgInvite; close(): void }): Rea
             disabled={!!busy}
             onClick={() => answer(true)}
           >
-            Join
+            {say("join")}
           </Button>
           <Button
             size="sm"
@@ -333,7 +338,7 @@ function InviteRow({ invite, close }: { invite: OrgInvite; close(): void }): Rea
             disabled={!!busy}
             onClick={() => answer(false)}
           >
-            Decline
+            {say("decline")}
           </Button>
         </div>
       </div>
@@ -375,18 +380,18 @@ export function NewOrg({ open, onClose }: { open: boolean; onClose(): void }): R
       open={open}
       onClose={onClose}
       size="sm"
-      title="New organization"
-      description="For a team: you'll own it, and invite people by email."
+      title={say("newOrg")}
+      description={say("newOrgAbout")}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>{say("cancel")}</Button>
           <Button
             variant="primary"
             loading={busy}
             disabled={!typed || long}
             onClick={() => void create()}
           >
-            Create organization
+            {say("createOrg")}
           </Button>
         </>
       }
@@ -396,18 +401,16 @@ export function NewOrg({ open, onClose }: { open: boolean; onClose(): void }): R
           <Avatar name={typed || "?"} kind="org" size={44} />
         </div>
         <Field
-          label="Name"
-          hint={long
-            ? undefined
-            : "Usually your team's or company's name. You can change it later."}
-          error={long ? `At most ${LONGEST} characters` : error}
+          label={say("name")}
+          hint={long ? undefined : say("newOrgNameHint")}
+          error={long ? say("atMost", { count: LONGEST }) : error}
         >
           {(control) => (
             <Input
               {...control}
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Acme"
+              placeholder={say("newOrgPlaceholder")}
               autoComplete="organization"
               maxLength={LONGEST + 20}
               autoFocus
@@ -446,7 +449,7 @@ export function Switching(): ReactNode {
             ref={layer}
             className="copilotz-switching"
             aria-live="assertive"
-            aria-label={`Going into ${orgName(to)}`}
+            aria-label={say("goingInto", { name: orgName(to) })}
             // It ends when the page starts over, not on Escape.
             onCancel={(event) => event.preventDefault()}
           >
@@ -466,7 +469,7 @@ export function Switching(): ReactNode {
                   />
                 )}
               <p className="copilotz-switching-label">
-                {to.staff ? "Entering as staff" : "Switching to"}
+                {to.staff ? say("enteringAsStaff") : say("switchingTo")}
               </p>
               <p className="copilotz-switching-name">{orgName(to)}</p>
               <Spinner variant="dots" size={6} />
@@ -487,22 +490,10 @@ export function Switching(): ReactNode {
               : <Icon name={welcome.moved ? "info" : "check"} size={16} />}
             <span>
               {welcome.staff
-                ? (
-                  <>
-                    You're in <b>{welcome.name}</b> as staff. What you do here is on its record.
-                  </>
-                )
+                ? say.nodes("inAsStaff", { name: <b>{welcome.name}</b> })
                 : welcome.moved
-                ? (
-                  <>
-                    You're no longer in the org you were in. You're in <b>{orgName(welcome)}</b>.
-                  </>
-                )
-                : (
-                  <>
-                    You're in <b>{orgName(welcome)}</b>
-                  </>
-                )}
+                ? say.nodes("movedOrg", { name: <b>{orgName(welcome)}</b> })
+                : say.nodes("youreIn", { name: <b>{orgName(welcome)}</b> })}
             </span>
           </div>
         )
@@ -512,10 +503,10 @@ export function Switching(): ReactNode {
 }
 
 /** Making a team org from the palette: its name, then you're in it. */
-const newOrgStep: PaletteStep = {
-  title: "New organization",
-  placeholder: "Name it",
-  note: "For a team: you'll own it, and invite people by email.",
+const newOrgStep = (): PaletteStep => ({
+  title: say("newOrg"),
+  placeholder: say("nameIt"),
+  note: say("newOrgAbout"),
   filter: false,
   items: (search) => {
     const name = search.trim();
@@ -525,15 +516,15 @@ const newOrgStep: PaletteStep = {
       title: "",
       items: [{
         key: "org:create",
-        label: `Create “${name}”`,
+        label: say("createNamed", { name }),
         icon: "plus",
         disabled: long,
-        ...(long ? { description: `At most ${LONGEST} characters` } : {}),
+        ...(long ? { description: say("atMost", { count: LONGEST }) } : {}),
         run: () => createOrg(name),
       }],
     }];
   },
-};
+});
 
 /**
  * What the palette offers for orgs: the others to switch to, invitations to
@@ -547,43 +538,43 @@ export function orgsPalette(
 ): PaletteGroup[] {
   const others = orgs.orgs.filter((o) => o.id !== orgs.current);
   const groups: PaletteGroup[] = [{
-    title: "Organizations",
+    title: say("organizations"),
     order: 25,
     items: [
       ...others.map((org): PaletteItem => ({
         key: `org:${org.id}`,
-        label: `Switch to ${orgName(org)}`,
+        label: say("switchTo", { name: orgName(org) }),
         leading: <OrgFace org={org} person={orgs.person} size={26} />,
         ...(org.suspended
-          ? { description: "Suspended", disabled: true }
+          ? { description: say("suspended"), disabled: true }
           : org.kind === "personal"
-          ? { description: "Your own org" }
+          ? { description: say("yourOwnOrg") }
           : {}),
-        keywords: ["organization", "org", "switch", org.name],
+        keywords: [...keywords("keysSwitch"), org.name],
         run: () => enterOrg(org),
       })),
       {
         key: "org:new",
-        label: "New organization…",
+        label: say("newOrgMore"),
         icon: "plus",
-        keywords: ["create", "team", "organization", "org"],
-        step: newOrgStep,
+        keywords: keywords("keysNewOrg"),
+        step: newOrgStep(),
       },
       ...(here
         ? [{
           key: "org:settings",
-          label: runs(standing) ? "Organization settings" : "About this organization",
+          label: runs(standing) ? say("orgSettings") : say("aboutOrg"),
           icon: "settings" as const,
-          keywords: ["members", "usage", "invite", "roles", "organization"],
+          keywords: keywords("keysOrgSettings"),
           href: "/org",
         }]
         : []),
       ...(orgs.staff
         ? [{
           key: "org:console",
-          label: "All orgs (console)",
+          label: say("allOrgsConsole"),
           icon: "server" as const,
-          keywords: ["staff", "console", "platform", "suspend"],
+          keywords: keywords("keysConsole"),
           href: "/console",
         }]
         : []),
@@ -591,24 +582,25 @@ export function orgsPalette(
   }];
   if (orgs.invites.length) {
     groups.unshift({
-      title: "Invitations",
+      title: say("invitations"),
       order: 5,
       items: orgs.invites.flatMap((invite): PaletteItem[] => [
         {
           key: `org-invite:${invite.id}`,
-          label: `Join ${invite.name}`,
+          label: say("joinNamed", { name: invite.name }),
           leading: <Avatar name={invite.name} kind="org" size={26} tint={invite.org} />,
-          description: `${invite.from ? `${invite.from} invited you` : "You're invited"}, as ${
-            orgRoleName(invite.role).toLowerCase()
-          }`,
-          keywords: ["invitation", "accept", "organization"],
+          description: say(invite.from ? "invitedFromAs" : "invitedAs", {
+            from: invite.from ?? "",
+            role: orgRoleName(invite.role).toLocaleLowerCase(lang()),
+          }),
+          keywords: keywords("keysAcceptOrgInvite"),
           run: () => answerOrgInvite(invite, true),
         },
         {
           key: `org-decline:${invite.id}`,
-          label: `Decline ${invite.name}'s invitation`,
+          label: say("declineOrgInvite", { name: invite.name }),
           icon: "close",
-          keywords: ["invitation", "organization"],
+          keywords: keywords("keysOrgInvite"),
           run: () => answerOrgInvite(invite, false),
         },
       ]),

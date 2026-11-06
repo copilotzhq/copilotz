@@ -101,6 +101,7 @@
     "lineWidth": 100,
     "exclude": [
       "plugins/models/shared/catalog.json",
+      "hosts/web/WORDS.md",
       "package-lock.json"
     ]
   },

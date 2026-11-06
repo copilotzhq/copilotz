@@ -14,6 +14,7 @@ import { FORMULA_STYLE } from "./formula-style.ts";
 import { mathml } from "./mathml.ts";
 import { useTemml } from "./temml.ts";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 
 const SHEET = sheet(
   "formula",
@@ -38,10 +39,10 @@ export function Formula(
   const drawn = useMemo(
     () =>
       pending
-        ? { error: "Still being written" }
+        ? { error: say("mathPending") }
         : temml
         ? mathml(temml, tex, display)
-        : { error: "Loading math" },
+        : { error: say("mathLoading") },
     [temml, tex, display, pending],
   );
   // A span either way, so a formula on its own line may sit in a paragraph.

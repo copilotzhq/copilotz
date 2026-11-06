@@ -3,6 +3,8 @@
  * how wide it is, and what this browser keeps of it for each person (open or
  * not, its width), so it's as they left it on the next page and next time.
  */
+import { lang } from "../../../../hosts/web/mod.ts";
+import { say } from "../views/words.ts";
 
 /**
  * The `panel` resource: the View the panel shows (item `{ _id }`, the space
@@ -39,4 +41,6 @@ export const keysOf = (viewer: string) => ({
 
 /** What the panel's button says: "Show the space panel", "Hide the space panel". */
 export const toggleLabel = (open: boolean, title = "") =>
-  `${open ? "Hide" : "Show"} the ${title ? `${title.toLowerCase()} ` : ""}panel`;
+  title
+    ? say(open ? "hidePanelTitled" : "showPanelTitled", { title: title.toLocaleLowerCase(lang()) })
+    : say(open ? "hidePanel" : "showPanel");

@@ -14,6 +14,7 @@ import { cx } from "./cx.ts";
 import { IconButton } from "./icon-button.tsx";
 import { useModal } from "./modal.ts";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 
 const SHEET = sheet(
   "drawer",
@@ -68,7 +69,7 @@ export function Drawer(
           ? (
             <header className="copilotz-drawer-head">
               <h2 className="copilotz-drawer-title">{title}</h2>
-              <IconButton icon="close" label="Close" onClick={() => ref.current?.close()} />
+              <IconButton icon="close" label={say("close")} onClick={() => ref.current?.close()} />
             </header>
           )
           : null}

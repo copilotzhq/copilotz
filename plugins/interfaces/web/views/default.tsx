@@ -17,6 +17,8 @@ import {
   Title,
 } from "../../../../hosts/web/mod.ts";
 
+import { say } from "./words.ts";
+
 type Doc = Record<string, unknown>;
 
 /** The fields a document goes by, if it has one: what titles its page. */
@@ -35,14 +37,14 @@ export const defaultView = (item: unknown, ctx: ViewContext<ReactNode>): ReactNo
   if (!doc || !fields.length) {
     return (
       <div className="copilotz-shell-empty">
-        <Title text="Nothing to show" />
+        <Title text={say("nothingToShow")} />
         <EmptyState
           icon="search"
           heading="h1"
-          title="Nothing to show"
-          action={<Button href="/" icon="compose">Go home</Button>}
+          title={say("nothingToShow")}
+          action={<Button href="/" icon="compose">{say("goHome")}</Button>}
         >
-          There's no page for this here, or it isn't shared with you.
+          {say("nothingToShowAbout")}
         </EmptyState>
       </div>
     );

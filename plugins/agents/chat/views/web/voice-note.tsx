@@ -8,6 +8,7 @@
  */
 import { type ReactNode, useId, useState } from "react";
 import { AudioPlayer, Icon, IconButton } from "../../../../../hosts/web/mod.ts";
+import { say } from "./words.ts";
 
 /** Transcripts up to this long show open. */
 const SHORT = 180;
@@ -30,7 +31,7 @@ export function VoiceNote(
       src={src}
       duration={voice?.duration}
       peaks={voice?.peaks}
-      label={voice ? "Voice message" : name}
+      label={voice ? say("voiceMessage") : name}
       variant={mine ? "bubble" : "muted"}
       className="voice-note"
     >
@@ -41,7 +42,7 @@ export function VoiceNote(
           <IconButton
             icon="download"
             size="sm"
-            label={`Download ${name}`}
+            label={say("download", { name })}
             href={`${src}?download=1`}
             download={name}
           />
@@ -57,10 +58,10 @@ export function VoiceNote(
             onClick={() => setOpen(!open)}
           >
             <Icon name="chevron" size={13} />
-            {open ? "Transcript" : "Show transcript"}
+            {open ? say("transcript") : say("showTranscript")}
           </button>
           <p id={id} className="voice-said-text" hidden={!open}>
-            {said || "No speech was heard."}
+            {said || say("noSpeech")}
           </p>
         </div>
       )}

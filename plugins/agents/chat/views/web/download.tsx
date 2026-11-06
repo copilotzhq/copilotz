@@ -1,6 +1,7 @@
 /** A file as a chip: its name, kind and size; a link that saves it (from where it's served). */
 import type { ReactNode } from "react";
 import { Card, Icon } from "../../../../../hosts/web/mod.ts";
+import { say } from "./words.ts";
 
 export function Download(
   { name, type, size, href }: { name: string; type: string; size: string; href: string },
@@ -15,7 +16,7 @@ export function Download(
       className="file-chip"
       href={href}
       download={name}
-      aria-label={`Download ${name}, ${size}`}
+      aria-label={say("downloadFile", { name, size })}
     >
       <span className="file-chip-icon" aria-hidden="true">
         <Icon name="file" size={18} />

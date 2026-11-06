@@ -8,6 +8,7 @@
 import type { ReactNode } from "react";
 import { Card, Chip, Icon, Markdown } from "../../../../../hosts/web/mod.ts";
 import type { Step } from "../../shared/types.ts";
+import { say } from "./words.ts";
 
 type Call = { name: string; input?: Record<string, unknown> };
 
@@ -27,23 +28,21 @@ export function did(
   named: (id: string) => string = (id) => id,
 ): ReactNode {
   const to = [...new Set(calls.flatMap((c) => sentTo(c) ?? []))]
-    .map((name) => name === me ? "you" : named(name));
+    .map((name) => name === me ? say("you") : named(name));
   const used = [...new Set(calls.filter((c) => !sentTo(c)).map((c) => c.name))];
   return (
     <>
       {to.length
         ? (
-          <>
-            {running ? "Messaging" : "Messaged"} <b className="step-who">{to.join(", ")}</b>
-          </>
+          say.nodes(running ? "messaging" : "messaged", {
+            names: <b className="step-who">{to.join(", ")}</b>,
+          })
         )
         : null}
       {to.length && used.length ? " · " : null}
       {used.length
         ? (
-          <>
-            {running ? "Using" : "Used"} <b>{used.join(", ")}</b>
-          </>
+          say.nodes(running ? "using" : "used", { names: <b>{used.join(", ")}</b> })
         )
         : null}
     </>
@@ -102,13 +101,13 @@ function Calls(
             {c.input && Object.keys(c.input).length
               ? (
                 <div className="step-io">
-                  <span>Input</span>
+                  <span>{say("input")}</span>
                   <pre>{pretty(c.input)}</pre>
                 </div>
               )
               : null}
             <div className="step-io">
-              <span>Result</span>
+              <span>{say("result")}</span>
               <pre>{pretty(c.output)}</pre>
             </div>
           </Card>

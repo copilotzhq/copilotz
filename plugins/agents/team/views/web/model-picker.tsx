@@ -14,6 +14,7 @@ import {
   Badge,
   Button,
   Dialog,
+  formatNumber,
   Icon,
   IconButton,
   Input,
@@ -22,6 +23,7 @@ import {
   Skeleton,
 } from "../../../../../hosts/web/mod.ts";
 import type { OfferedModel, OfferedProvider } from "../../../../models/contract.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -30,13 +32,21 @@ const TYPING_MS = 180;
 
 /** Tokens, shortly: `200K`, `1M`. */
 const tokens = (count: number) =>
-  count >= 1_000_000
-    ? `${+(count / 1_000_000).toFixed(1)}M`
-    : count >= 1_000
-    ? `${Math.round(count / 1_000)}K`
-    : String(count);
+  count >= 1_000
+    ? formatNumber(count, {
+      notation: "compact",
+      maximumFractionDigits: count >= 1_000_000 ? 1 : 0,
+    })
+    : formatNumber(count);
 
-const usd = (amount: number) => `$${+amount.toFixed(amount < 1 ? 3 : 2)}`;
+/** Dollars, in the page's language; the currency stays. */
+const usd = (amount: number) =>
+  formatNumber(+amount.toFixed(amount < 1 ? 3 : 2), {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3,
+  });
 
 /**
  * What a model costs, per million tokens in and out; nothing, when it says so. On
@@ -45,35 +55,40 @@ const usd = (amount: number) => `$${+amount.toFixed(amount < 1 ? 3 : 2)}`;
  */
 function priced({ price, ownKey }: OfferedModel): string | undefined {
   if (price?.input === undefined || price.output === undefined) return undefined;
-  if (!price.input && !price.output) return "No credits used";
-  const per = `${usd(price.input)} in · ${usd(price.output)} out per 1M tokens`;
-  return ownKey ? `No credits used: your key, at ${per}` : per;
+  if (!price.input && !price.output) return say("noCreditsUsed");
+  const per = say("priceLine", { input: usd(price.input), output: usd(price.output) });
+  return ownKey ? say("priceOwnKey", { price: per }) : per;
 }
 
-const MEDIA: Record<string, string> = {
-  image: "Images",
-  pdf: "PDFs",
-  audio: "Audio",
-  video: "Video",
-};
+/** What a kind of input is called. */
+const media = (kind: string): string =>
+  kind === "image"
+    ? say("mediaImage")
+    : kind === "pdf"
+    ? say("mediaPdf")
+    : kind === "audio"
+    ? say("mediaAudio")
+    : kind === "video"
+    ? say("mediaVideo")
+    : kind;
 
 /** What a model can do, in a line. */
 function abilities(model: OfferedModel): string[] {
   return [
-    ...(model.context ? [`${tokens(model.context)} context`] : []),
-    ...(model.input ?? []).map((kind) => MEDIA[kind] ?? kind),
-    ...(model.reasons ? ["Reasoning"] : []),
+    ...(model.context ? [say("contextSize", { size: tokens(model.context) })] : []),
+    ...(model.input ?? []).map(media),
+    ...(model.reasons ? [say("reasoning")] : []),
   ];
 }
 
 export function ModelPicker(
-  { value, onChange, call, disabled, id, look = "field", label = "Change" }: {
+  { value, onChange, call, disabled, id, look = "field", label }: {
     value: string;
     onChange(model: string): void;
     call: Call;
     disabled?: boolean;
     id?: string;
-    /** A field showing what's chosen (the default), or a small button saying `label`. */
+    /** A field showing what's chosen (the default), or a small button saying `label` ("Change"). */
     look?: "field" | "link";
     label?: string;
   },
@@ -100,7 +115,7 @@ export function ModelPicker(
           setOpen(false);
           load();
         }}
-        title="Choose a model"
+        title={say("chooseModel")}
         className="model-dialog"
       >
         <Choosing
@@ -127,7 +142,7 @@ export function ModelPicker(
           aria-haspopup="dialog"
           onClick={() => setOpen(true)}
         >
-          {label}
+          {label ?? say("change")}
         </Button>
         {dialog}
       </>
@@ -144,13 +159,13 @@ export function ModelPicker(
         onClick={() => setOpen(true)}
       >
         <span className="model-chosen-text">
-          <b>{chosen?.model?.name ?? (value || "Choose a model")}</b>
+          <b>{chosen?.model?.name ?? (value || say("chooseModel"))}</b>
           <span>
             {chosen?.provider?.name}
             {chosen?.model && priced(chosen.model) ? ` · ${priced(chosen.model)}` : ""}
           </span>
         </span>
-        {stuck ? <Badge tone="warning">Needs a key</Badge> : null}
+        {stuck ? <Badge tone="warning">{say("needsKey")}</Badge> : null}
         <Icon name="selector" size={16} />
       </button>
       {/* Outside the page: the form this is in mustn't hear what's typed or pressed in it. */}
@@ -210,8 +225,8 @@ function Choosing(
     <div className="model-choose">
       <Input
         icon="search"
-        placeholder="Search providers and models"
-        aria-label="Search providers and models"
+        placeholder={say("searchModels")}
+        aria-label={say("searchModels")}
         value={typed}
         autoFocus
         onChange={(event) => setTyped(event.target.value)}
@@ -239,11 +254,11 @@ function ProviderRow(
         <span className="model-row-text">
           <b>{provider.name}</b>
           <span>
-            {provider.models} model{provider.models === 1 ? "" : "s"}
+            {say("providerModels", { count: provider.models })}
             {provider.note ? ` · ${provider.note}` : ""}
           </span>
         </span>
-        {provider.hint ? <Badge tone="primary">Your key</Badge> : null}
+        {provider.hint ? <Badge tone="primary">{say("yourKey")}</Badge> : null}
         <Icon name="chevron" size={15} />
       </button>
     </li>
@@ -251,7 +266,7 @@ function ProviderRow(
 }
 
 /** The providers: those that can be used now, then those that take a key. */
-function Providers(
+export function Providers(
   { listing, onProvider }: { listing?: Listing; onProvider(id: string): void },
 ): ReactNode {
   if (!listing) return <Loading />;
@@ -262,7 +277,7 @@ function Providers(
       {ready.length
         ? (
           <section>
-            <h3 className="model-group">Ready to use</h3>
+            <h3 className="model-group">{say("readyToUse")}</h3>
             <ul className="model-list">
               {ready.map((p) => (
                 <ProviderRow
@@ -278,7 +293,7 @@ function Providers(
       {others.length
         ? (
           <section>
-            <h3 className="model-group">With your own key</h3>
+            <h3 className="model-group">{say("withOwnKey")}</h3>
             <ul className="model-list">
               {others.map((p) => (
                 <ProviderRow
@@ -295,7 +310,7 @@ function Providers(
   );
 }
 
-function ModelRow(
+export function ModelRow(
   { model, value, withProvider, onChoose }: {
     model: OfferedModel;
     value: string;
@@ -325,7 +340,7 @@ function ModelRow(
   );
 }
 
-function Results(
+export function Results(
   { found, value, onProvider, onChoose }: {
     found?: Found;
     value: string;
@@ -335,14 +350,14 @@ function Results(
 ): ReactNode {
   if (!found) return <Loading />;
   if (!found.providers.length && !found.models.length) {
-    return <p className="model-none">Nothing matches that.</p>;
+    return <p className="model-none">{say("nothingMatches")}</p>;
   }
   return (
     <div className="model-groups">
       {found.providers.length
         ? (
           <section>
-            <h3 className="model-group">Providers</h3>
+            <h3 className="model-group">{say("providers")}</h3>
             <ul className="model-list">
               {found.providers.map((p) => (
                 <ProviderRow
@@ -358,7 +373,7 @@ function Results(
       {found.models.length
         ? (
           <section>
-            <h3 className="model-group">Models</h3>
+            <h3 className="model-group">{say("models")}</h3>
             <ul className="model-list">
               {found.models.map((m) =>
                 m.ready
@@ -383,7 +398,7 @@ function Results(
                           <b>{m.name}</b>
                           <span>{m.from}</span>
                         </span>
-                        <Badge>Needs a key</Badge>
+                        <Badge>{say("needsKey")}</Badge>
                       </button>
                     </li>
                   )
@@ -421,7 +436,7 @@ function ProviderModels(
   return (
     <div className="model-choose">
       <div className="model-provider-head">
-        <IconButton icon="chevron-left" label="All providers" size="sm" onClick={onBack} />
+        <IconButton icon="chevron-left" label={say("allProviders")} size="sm" onClick={onBack} />
         <h3>{provider?.name ?? id}</h3>
       </div>
       {provider?.note ? <p className="model-provider-note">{provider.note}</p> : null}
@@ -448,7 +463,7 @@ function ProviderModels(
 }
 
 /** The org's key for a provider: added, replaced or removed by those who run it. */
-function ProviderKey(
+export function ProviderKey(
   { provider, may, call, onChange }: {
     provider: OfferedProvider;
     may: boolean;
@@ -478,7 +493,7 @@ function ProviderKey(
   if (!may) {
     return provider.ready ? null : (
       <Notice tone="neutral" icon="info">
-        This org has no key for {provider.name}. Its owners and admins can add one.
+        {say("noKeyForProvider", { provider: provider.name })}
       </Notice>
     );
   }
@@ -496,20 +511,24 @@ function ProviderKey(
           }
         }}
       >
-        <label htmlFor={`key-${provider.id}`}>Your {provider.name} API key</label>
+        <label htmlFor={`key-${provider.id}`}>
+          {say("apiKeyLabel", { provider: provider.name })}
+        </label>
         <div className="model-key-entry">
           <Input
             id={`key-${provider.id}`}
             type="password"
             autoComplete="off"
             spellCheck={false}
-            placeholder="Paste it here"
+            placeholder={say("pasteIt")}
             value={key}
             invalid={!!error}
             disabled={busy}
             onChange={(event) => setKey(event.target.value)}
           />
-          <Button type="submit" variant="primary" disabled={busy || !key.trim()}>Save</Button>
+          <Button type="submit" variant="primary" disabled={busy || !key.trim()}>
+            {say("save")}
+          </Button>
           {provider.ready || provider.hint
             ? (
               <Button
@@ -518,15 +537,13 @@ function ProviderKey(
                 disabled={busy}
                 onClick={() => setEditing(false)}
               >
-                Cancel
+                {say("cancel")}
               </Button>
             )
             : null}
         </div>
         <p>
-          Encrypted, and never shown again. All of this org's agents use it for {provider.name}, and
-          {" "}
-          {provider.name} charges your account.
+          {say("keyNote", { provider: provider.name })}
         </p>
         {error ? <p className="model-key-error" role="alert">{error}</p> : null}
       </form>
@@ -536,12 +553,8 @@ function ProviderKey(
     <div className="model-key-kept">
       <span>
         {provider.hint
-          ? (
-            <>
-              This org's key <code>{provider.hint}</code>
-            </>
-          )
-          : "Uses the app's key"}
+          ? say.nodes("orgKey", { hint: <code>{provider.hint}</code> })
+          : say("usesAppKey")}
       </span>
       <span className="model-key-actions">
         <Button
@@ -551,7 +564,7 @@ function ProviderKey(
           disabled={busy}
           onClick={() => setEditing(true)}
         >
-          {provider.hint ? "Replace" : "Use your own key"}
+          {provider.hint ? say("replace") : say("useOwnKey")}
         </Button>
         {provider.hint
           ? (
@@ -562,7 +575,7 @@ function ProviderKey(
               disabled={busy}
               onClick={() => void act(() => call("modelKey.remove", { provider: provider.id }))}
             >
-              Remove
+              {say("remove")}
             </Button>
           )
           : null}

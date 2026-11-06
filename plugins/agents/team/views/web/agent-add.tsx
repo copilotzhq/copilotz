@@ -16,6 +16,7 @@ import { NewAgent } from "./agent-new.tsx";
 import type { Options } from "./agents.ts";
 import { manages, type Place, placeName } from "./places.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -40,10 +41,10 @@ export const agentAddView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
     return (
       <Notice tone="neutral" icon="lock">
         {!space
-          ? "This space isn't one of yours."
+          ? say("notYourSpace")
           : space.archived
-          ? `${placeName(space)} is archived: restore it to add agents.`
-          : `Those who manage ${placeName(space)} add agents to it.`}
+          ? say("archivedSpace", { place: placeName(space) })
+          : say("managersAdd", { place: placeName(space) })}
       </Notice>
     );
   }

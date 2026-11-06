@@ -155,5 +155,7 @@ export const formatNumber = (n: number, options?: Intl.NumberFormatOptions): str
   n.toLocaleString(lang(), options);
 
 /** A list as the page's language writes it ("a, b and c"). */
-export const formatList = (items: string[], type: "conjunction" | "disjunction" = "conjunction") =>
-  new Intl.ListFormat(lang(), { style: "long", type }).format(items);
+export const formatList = (
+  items: string[],
+  type: "conjunction" | "disjunction" = "conjunction",
+): string => new Intl.ListFormat(lang(), { style: "long", type }).format(items);

@@ -2,7 +2,9 @@
  * Gift codes in staff's console, as words: where each stands, and what a person
  * types turned into what's asked for. Pure.
  */
+import { formatDate, formatNumber } from "../../../../hosts/web/mod.ts";
 import type { GiftCode } from "../../../access/directory/contract.ts";
+import { say } from "../views/words.ts";
 
 export type CodeStatus = "waiting" | "claimed" | "revoked" | "expired";
 
@@ -14,23 +16,23 @@ export function codeStatus(code: GiftCode, now = new Date().toISOString()): Code
   return "waiting";
 }
 
-/** The status as a label, with the toolkit's tone for it. */
-export const STATUS: Record<
-  CodeStatus,
-  { label: string; tone: "success" | "neutral" | "primary" | "warning" }
-> = {
-  waiting: { label: "Waiting", tone: "primary" },
-  claimed: { label: "Claimed", tone: "success" },
-  revoked: { label: "Taken back", tone: "neutral" },
-  expired: { label: "Expired", tone: "neutral" },
-};
+/** The status as a label (said now, in the app's words), with the toolkit's tone for it. */
+export const statusOf = (
+  status: CodeStatus,
+): { label: string; tone: "success" | "neutral" | "primary" | "warning" } =>
+  ({
+    waiting: { label: say("codeWaiting"), tone: "primary" as const },
+    claimed: { label: say("codeClaimed"), tone: "success" as const },
+    revoked: { label: say("codeRevoked"), tone: "neutral" as const },
+    expired: { label: say("codeExpired"), tone: "neutral" as const },
+  })[status];
 
 /** What the form asks for, as `POST /console/codes` takes it; or why it can't be. */
 export function newCodeOf(
   form: { amount: string; expires: string; until: string; note: string },
 ): { amount: number; expires?: string; until?: string; note?: string } | { error: string } {
   const amount = Number(form.amount.trim().replace(/^\$\s*/, "").replace(/,/g, ""));
-  if (!Number.isFinite(amount) || amount <= 0) return { error: "Say how many dollars of credits." };
+  if (!Number.isFinite(amount) || amount <= 0) return { error: say("sayDollars") };
   return {
     amount: Math.round(amount * 100) / 100,
     ...(form.expires ? { expires: form.expires } : {}),
@@ -42,7 +44,7 @@ export function newCodeOf(
 
 /** A day (`YYYY-MM-DD`, or a moment's), as the calendar has it, wherever you are. */
 export const dayOf = (at: string): string =>
-  new Date(`${at.slice(0, 10)}T00:00:00Z`).toLocaleDateString("en-US", {
+  formatDate(new Date(`${at.slice(0, 10)}T00:00:00Z`), {
     timeZone: "UTC",
     month: "short",
     day: "numeric",
@@ -51,7 +53,7 @@ export const dayOf = (at: string): string =>
 
 /** US dollars, cents only when there are some. */
 export const dollarsOf = (n: number): string =>
-  n.toLocaleString("en-US", {
+  formatNumber(n, {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: Math.round(n * 100) % 100 ? 2 : 0,

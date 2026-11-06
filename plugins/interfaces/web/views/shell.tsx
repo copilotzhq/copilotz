@@ -15,6 +15,7 @@ import { userMenuOf } from "../shared/menu.ts";
 import { pageOf, sourcesOf } from "../shared/palette.ts";
 import { offered, type Panel } from "../shared/panel.ts";
 import { Frame } from "./frame.tsx";
+import { say } from "./words.ts";
 
 /** The app's name, which its logo says: the title the page came with. */
 const app = globalThis.document?.title || "Copilotz";
@@ -75,8 +76,8 @@ export const shellView = (
     >
       {open ?? (
         <div className="copilotz-shell-empty">
-          <EmptyState icon="search" heading="h1" title="Nothing here">
-            This address doesn't open anything.
+          <EmptyState icon="search" heading="h1" title={say("nothingHere")}>
+            {say("nothingOpens")}
           </EmptyState>
         </div>
       )}

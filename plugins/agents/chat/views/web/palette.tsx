@@ -16,6 +16,7 @@ import type { Thread } from "../../collections/thread.ts";
 import { type Listed, titleOf } from "./listed.ts";
 import { moveStep } from "./move.ts";
 import { plain } from "./plain.ts";
+import { say } from "./words.ts";
 
 type Space = { _id: string; name: string; kind: string };
 
@@ -34,27 +35,32 @@ export const chatPaletteView = (_: unknown, ctx: ViewContext<ReactNode>): Palett
   const spaces = ctx.db.collection<Space>("space").find({}).value;
   const thread = open ? ctx.db.collection<Thread>("thread").findOne({ _id: open }).value : null;
   if (!threads || !spaces) return null;
-  const named = new Map(spaces.map((s) => [s._id, s.kind === "personal" ? "Personal" : s.name]));
+  const named = new Map(
+    spaces.map((s) => [s._id, s.kind === "personal" ? say("personal") : s.name]),
+  );
   const groups: PaletteGroup[] = [];
 
   if (open && thread) {
     const listed = threads.find((t) => t._id === open);
-    const title = listed ? titleOf(listed) : plain(thread.title) || "this chat";
+    const title = listed ? titleOf(listed) : plain(thread.title) || say("thisChat");
     groups.push({
-      title: "This chat",
+      title: say("thisChatGroup"),
       order: 10,
       items: [{
         key: "chat:move",
-        label: "Move this chat to another space…",
+        label: say("moveThisChat"),
         icon: "move",
-        keywords: ["space", ...(thread.in && named.has(thread.in) ? [named.get(thread.in)!] : [])],
+        keywords: [
+          say("keywordSpace"),
+          ...(thread.in && named.has(thread.in) ? [named.get(thread.in)!] : []),
+        ],
         step: moveStep({ thread: open, title, from: thread.in, call: ctx.call, open: true }),
       }],
     });
   }
 
   groups.push({
-    title: "Chats",
+    title: say("chats"),
     order: 30,
     limit: searching ? SHOWN.searching : SHOWN.idle,
     items: threads.filter((t) => t._id !== open).map((t) => ({
@@ -68,25 +74,27 @@ export const chatPaletteView = (_: unknown, ctx: ViewContext<ReactNode>): Palett
   });
 
   groups.push({
-    title: "Create",
+    title: say("create"),
     order: 40,
     items: [
       {
         key: "chat:new",
-        label: "New chat",
+        label: say("newChat"),
         icon: "compose",
-        ...(here && named.has(here) ? { description: `In ${named.get(here)}` } : {}),
-        keywords: ["start", "conversation"],
+        ...(here && named.has(here)
+          ? { description: say("inSpace", { space: named.get(here)! }) }
+          : {}),
+        keywords: [say("keywordStart"), say("keywordConversation")],
         href: `/${inSpace(here)}`,
       },
       {
         key: "chat:new-in",
-        label: "New chat in…",
+        label: say("newChatIn"),
         icon: "compose",
-        keywords: ["start", "conversation", "space"],
+        keywords: [say("keywordStart"), say("keywordConversation"), say("keywordSpace")],
         step: {
-          title: "New chat in…",
-          placeholder: "Find a space",
+          title: say("newChatIn"),
+          placeholder: say("findSpace"),
           view: "space.pick",
           pick: (space) => go(`/${inSpace((space as Space)._id)}`),
         },

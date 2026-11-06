@@ -15,6 +15,7 @@ import { agentPath, type Shown } from "./agents.ts";
 import { Retrying } from "./retrying.tsx";
 import { did } from "./steps.tsx";
 import { toolView } from "./tool-view.ts";
+import { say } from "./words.ts";
 
 export const liveView = (l: Live, ctx: ViewContext<ReactNode>): ReactNode => {
   const aside = typeof ctx.hints.thread === "string" && l.thread !== ctx.hints.thread;
@@ -29,7 +30,7 @@ export const liveView = (l: Live, ctx: ViewContext<ReactNode>): ReactNode => {
     <article
       className={`msg msg-agent msg-live${aside ? " msg-aside" : ""}`}
       aria-busy="true"
-      aria-label={`${name}, writing`}
+      aria-label={say("writingLabel", { name })}
     >
       <div className="msg-gutter">
         <Avatar name={name} kind="agent" icon={who[l.agent]?.icon} size={30} />
@@ -37,15 +38,15 @@ export const liveView = (l: Live, ctx: ViewContext<ReactNode>): ReactNode => {
       <div className="msg-main">
         <header className="msg-head">
           <a className="msg-name" href={agentPath(l.agent)}>{name}</a>
-          {aside ? <Badge>side thread</Badge> : null}
+          {aside ? <Badge>{say("sideThread")}</Badge> : null}
           <span className="msg-writing">
             {l.retry
-              ? "reconnecting"
+              ? say("reconnecting")
               : l.text
-              ? "writing"
+              ? say("writing")
               : l.calls.length
-              ? "working"
-              : "thinking"}
+              ? say("working")
+              : say("thinking")}
           </span>
         </header>
         {shown.some((view) => view !== undefined)
@@ -79,7 +80,7 @@ export const liveView = (l: Live, ctx: ViewContext<ReactNode>): ReactNode => {
           )
           : l.calls.length || l.retry
           ? null
-          : <Spinner variant="dots" label="Thinking" className="chat-thinking" />}
+          : <Spinner variant="dots" label={say("thinkingLabel")} className="chat-thinking" />}
         {l.retry ? <Retrying retry={l.retry} /> : null}
       </div>
     </article>

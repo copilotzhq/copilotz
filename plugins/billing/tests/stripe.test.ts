@@ -5,7 +5,14 @@
  * page, for who may, with what the webhook will need.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
+import {
+  type Actor,
+  createRuntime,
+  defineAction,
+  definePlugin,
+  runtimes,
+} from "../../../runtime/mod.ts";
+import { memoryStore } from "../../../stores/memory/mod.ts";
 import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
 import models from "../../models/mod.ts";
 import { access } from "../../access/mod.ts";
@@ -91,6 +98,7 @@ async function setup(
       usage,
       credits,
       stripe,
+      stripeWebhook,
       definePlugin({
         name: "app",
         resources: {
@@ -116,21 +124,15 @@ async function setup(
   });
   await rt.call("org.join", { person: "ana", role: "owner" });
   await rt.call("org.join", { person: "bob" });
-  const hook = stripeWebhook({
-    settings,
-    fetch: fakeFetch,
-    start: "free",
-    runtime: (org) => Promise.resolve(org === "org-1" ? rt : undefined),
-  });
+  // The webhook in the org's own runtime: an event for it lands here, under its id.
   const send = async (event: unknown, seller = "main", secret = "whsec_main") => {
     const payload = JSON.stringify(event);
-    return await hook(
-      new Request("https://app.test/__stripe/main", {
+    return await rt.fetch(
+      new Request(`https://app.test/__stripe/${seller}`, {
         method: "POST",
         body: payload,
         headers: { "stripe-signature": await sign(secret, payload) },
       }),
-      seller,
     );
   };
   try {
@@ -557,4 +559,63 @@ test("plans offered are those its seller sells, for its kind of org; checkout ke
     );
     assertEquals(asked.length, 0, "Stripe was never asked");
   });
+});
+
+test("with many orgs, the webhook is the directory's: each event lands in its org's runtime", async () => {
+  const applied: [string, unknown][] = [];
+  // Each org's runtime, as the app opens it (one that takes what the webhook hands it).
+  const orgs = runtimes(async (org) =>
+    org === "nobody" ? undefined : await createRuntime({
+      store: memoryStore(),
+      plugins: [definePlugin({
+        name: "books",
+        actions: {
+          "billing.apply": defineAction({
+            input: { type: "object" },
+            run: (_ctx, facts) => void applied.push([org, facts]),
+          }),
+        },
+      })],
+    })
+  );
+  const dir = await createRuntime({
+    store: memoryStore(),
+    fetch: fakeFetch,
+    plugins: [
+      stripeWebhook,
+      definePlugin({ name: "settings", resources: { stripe: { ...settings, orgs } } }),
+    ],
+  });
+  const send = async (event: unknown) => {
+    const payload = JSON.stringify(event);
+    return await dir.fetch(
+      new Request("https://app.test/__stripe/main", {
+        method: "POST",
+        body: payload,
+        headers: { "stripe-signature": await sign("whsec_main", payload) },
+      }),
+    );
+  };
+  try {
+    assertEquals((await send(paidCredits)).status, 200);
+    assertEquals(applied.map(([org]) => org), ["org-1"]);
+    assertEquals((applied[0][1] as { payment: { credits: number } }).payment.credits, 25);
+    // An org that isn't there: received, and nothing tried again.
+    const gone = {
+      ...paidCredits,
+      id: "evt_gone",
+      data: {
+        object: {
+          ...paidCredits.data.object,
+          metadata: { ...paidCredits.data.object.metadata, org: "nobody" },
+        },
+      },
+    };
+    assertEquals(await (await send(gone)).json(), { ignored: "no such org" });
+    // Only POST, from Stripe.
+    assertEquals((await dir.fetch(new Request("https://app.test/__stripe/main"))).status, 405);
+  } finally {
+    await orgs.close();
+    await dir.close();
+  }
 });

@@ -1,5 +1,5 @@
 /** Stripe's settings: the `stripe` resource, which an app patches. */
-import type { Resources } from "../../../../runtime/mod.ts";
+import type { Resources, Runtime } from "../../../../runtime/mod.ts";
 
 /** A Stripe account that sells: an org pays one of them. */
 export type Seller = {
@@ -26,6 +26,11 @@ export type StripeSettings = {
   url: string;
   /** Real money: a test mode's customers and subscriptions don't carry over. */
   live?: boolean;
+  /**
+   * Where the webhook finds an org's runtime, in an app of many (the
+   * directory's: its `runtimes`); without it, the webhook's own runtime.
+   */
+  orgs?: { get(org: string): Promise<Runtime | undefined> };
 };
 
 export const settingsOf = (ctx: { resources: Resources }): StripeSettings =>

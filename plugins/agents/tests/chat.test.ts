@@ -188,6 +188,27 @@ each("@mentions choose who a message goes to", async (make) => {
   await runtime.close();
 });
 
+each(
+  "an @word that names no one is plain text, and the message goes where it would without it",
+  async (make) => {
+    const { runtime, calls, send, history } = await start(make, {
+      a: { default: true, script: () => "a here" },
+      b: { script: () => "b here" },
+    });
+    // A social handle alone: the space's default agent answers.
+    const first = await send({ text: "my profile is @ana.marca" });
+    assertEquals(calls.map((c) => c.agent), ["a"]);
+    assertEquals((await history(first.thread)).find((m) => m.text?.startsWith("my"))!.to, ["a"]);
+    // A handle beside a real mention: only the agent named answers.
+    await send({ thread: first.thread, text: "@b see @ana.marca" });
+    assertEquals(calls.map((c) => c.agent), ["a", "b"]);
+    // An email address names no one; the conversation goes on with whoever it was with.
+    await send({ thread: first.thread, text: "write to ana@example.com or @ana.marca again" });
+    assertEquals(calls.map((c) => c.agent), ["a", "b", "a"]);
+    await runtime.close();
+  },
+);
+
 each("an agent waits for every reply, then resumes once with all of them", async (make) => {
   const { runtime, calls, send, history } = await start(make, {
     lead: {

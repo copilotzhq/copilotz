@@ -36,7 +36,15 @@ import {
 import type { Transcript } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
-import { agentsNamed, mentions, NO_ANSWER, now, rosterOf } from "../shared/agents.ts";
+import {
+  agentsNamed,
+  handles,
+  mentions,
+  NO_ANSWER,
+  now,
+  type Roster,
+  rosterOf,
+} from "../shared/agents.ts";
 import { delivery } from "../shared/delivery.ts";
 import { movedBy, startedWith } from "../shared/summary.ts";
 import { settingsOf } from "../shared/types.ts";
@@ -86,6 +94,35 @@ async function letIn(
     };
   }
   return said;
+}
+
+/**
+ * The `@word`s in `text` that name someone who can be addressed: an agent
+ * (the app's, a source's, or one answering here), one of the thread's agents,
+ * or a person who has spoken in or been written to in the thread. Any other
+ * `@word` (a social handle, say) is plain text.
+ */
+async function mentionsIn(
+  ctx: Pick<Context, "resources" | "call" | "db">,
+  text: string,
+  thread: string,
+  roster: Roster,
+  members: string[],
+): Promise<string[]> {
+  const candidates = handles(text);
+  if (!candidates.length) return [];
+  const agents = await agentsNamed(ctx, candidates);
+  const known = new Set([...roster.here, ...members, ...Object.keys(agents)]);
+  const messages = ctx.db.collection<Message>("message");
+  const named: string[] = [];
+  for (const name of candidates) {
+    if (
+      known.has(name) || await messages.findOne({ thread, $or: [{ from: name }, { to: name }] })
+    ) {
+      named.push(name);
+    }
+  }
+  return mentions(text, named);
 }
 
 /** How large a file sent as base64 is, in bytes. */
@@ -221,7 +258,7 @@ export const sendAction = defineAction({
     const where = existing ? existing.in : input.in;
     const roster = await rosterOf(ctx, where);
     const members = existing ? existing.agents ?? [] : roster.default;
-    const mentioned = contact ? [] : mentions(said);
+    const mentioned = contact ? [] : await mentionsIn(ctx, said, threadId, roster, members);
     const asked = (contact ? undefined : input.to) ??
       (mentioned.length ? mentioned : replied ? [replied.from] : members);
     // Agents answer only where they work: one named that doesn't is refused; one gone, left out.

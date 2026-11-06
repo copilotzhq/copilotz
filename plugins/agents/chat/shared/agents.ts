@@ -151,10 +151,20 @@ export const defaults = (agents: Record<string, Agent>): string[] => {
   return chosen.length ? chosen : Object.keys(agents).slice(0, 1);
 };
 
-/** `@name` mentions, in order, once each. */
-export const mentions = (text: string) => [
+/** Every `@word` in a text, in order, once each: a candidate, not yet a mention. */
+export const handles = (text: string) => [
   ...new Set([...text.matchAll(/(?:^|\s)@([\w.-]*\w)/g)].map((m) => m[1])),
 ];
+
+/**
+ * `@name` mentions, in order, once each: only the `@word`s that name someone
+ * who can be addressed here (`who`: the roster's agents, the thread's members,
+ * its people). Any other `@word` (a social handle, an address) is plain text.
+ */
+export const mentions = (text: string, who: Iterable<string>) => {
+  const known = new Set(who);
+  return handles(text).filter((name) => known.has(name));
+};
 
 export const turnOf = (event: Pick<Event, "type" | "data">): Turn =>
   (event.type === "wait.updated" ? event.data.doc : event.data) as Turn;

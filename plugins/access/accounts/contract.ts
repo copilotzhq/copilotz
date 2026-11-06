@@ -70,7 +70,7 @@ export type OAuth = {
   params?: Record<string, string>;
   /**
    * Where the provider sends the person back. By default, this app's own
-   * callback (`<app>/accounts/callback/<name>`, the web host's route). A
+   * callback (`<app>/accounts/callback/<name>`, the accounts plugin's route). A
    * fixed address the app can't serve (a command-line tool's loopback): the
    * person lands there and pastes its address back into the app.
    */

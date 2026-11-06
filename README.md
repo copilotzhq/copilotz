@@ -109,7 +109,7 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`         |
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                   |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                       |
-| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `accounts`, `directory`, `googleSignIn`, `devSignIn`                 |
+| `copilotz/plugins/access`              | `access`, `accounts`, `directory`, `email`, `googleSignIn`, `emailSignIn`, `devSignIn`                            |
 | `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`, and the directory's browser half (`useOrgs`, `enterOrg`…)              |
 | `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                  |
 | `copilotz/plugins/billing`             | `usage` (the ledger), `credits`, `stripe`, `stripeWebhook`                                                        |
@@ -150,13 +150,13 @@ export default { fetch: runtime.fetch }; // workerd (Cloudflare Workers)
 What it answers comes from the app's plugins, so the same call serves a signed-in workspace, a
 public site where visitors chat with an agent, or a WhatsApp app with no page at all:
 
-| Part                                                       | Comes from                                                                  |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `POST /connect`, the socket (`/oxian`), `/api/`, `/health` | the runtime itself                                                          |
-| Webhooks, APIs, sockets of their own                       | plugins' `routes`                                                           |
-| Who a request is (if nobody says, it's anonymous)          | plugins' `who`: identity's sessions, the api plugin's keys, site visitors   |
-| The page and its code (without it, there's no page)        | the page plugin (`webPage`) and the `page` resource                         |
-| Signing in and out (without them, nobody signs in)         | `googleSignIn`, `devSignIn` (this machine only), identity's `POST /signout` |
+| Part                                                       | Comes from                                                                 |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `POST /connect`, the socket (`/oxian`), `/api/`, `/health` | the runtime itself                                                         |
+| Webhooks, APIs, sockets of their own                       | plugins' `routes`                                                          |
+| Who a request is (if nobody says, it's anonymous)          | plugins' `who`: identity's sessions, the api plugin's keys, site visitors  |
+| The page and its code (without it, there's no page)        | the page plugin (`webPage`) and the `page` resource                        |
+| Signing in and out (without them, nobody signs in)         | `googleSignIn`, `emailSignIn`, `devSignIn` (this machine), `POST /signout` |
 
 **Routes** are plain functions on a plugin, by URL pattern (a `URLPattern` pathname, a web
 standard). Routes deal with HTTP; Actions do the work, given plain data:
@@ -290,7 +290,29 @@ Oxian's Node adapter, sockets included, and tells the runtime the address each r
 (`clientAddress`); Bun runs it too. On Deno, `Deno.serve({ hostname, port }, runtime.fetch)` is the
 whole host, and `deno bundle` makes the code (`examples/terminal-agent/web.ts`). The Node example is
 in `examples/web-node/` (`node examples/web-node/server.ts`). Google sign-in is `googleSignIn` with
-the `google` resource's `clientId`: the page shows its button.
+the `google` resource's `clientId`: the page shows its button. Email sign-in is `emailSignIn` with
+`email` (how mail goes) and the `links` resource: the page shows its form, and its screens for
+making an account, the code, a new password and an invitation's link:
+
+```ts
+plugins: [
+  ...plugins,
+  email,
+  emailSignIn,
+  definePlugin({
+    name: "app",
+    resources: {
+      links: { origin: "https://app.example.com", secret: process.env.LINKS_SECRET },
+      email: {
+        adapter: "resend",
+        from: "App <noreply@example.com>",
+        apiKey: process.env.RESEND_API_KEY,
+      },
+      // On a laptop: email: { adapter: "console" } writes each message to the log.
+    },
+  }),
+];
+```
 
 Tests need no listener: `await runtime.fetch(new Request("http://localhost/hooks/ping", init))`. To
 connect a client in the process as someone, add `testWho` (from `copilotz/testing`) to the plugins,
@@ -743,6 +765,36 @@ name, never by importing its code.
 - **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client). Its
   routes: `POST /signin/google`, which Google's button posts its token to, sets the session's
   cookie; `GET /google` gives the page the client id for its button.
+- **`emailSignIn`**: sign-in with an email and a password (with identity and `email`, the app's
+  email port). Its routes are `GET /signin/email` (it's here, and whether people make accounts) and
+  `POST /signin/email` with its steps under it, each that ends signed in setting the session's
+  cookie.
+  - **Making an account:** `email.sign-up` sends a six-digit code, the password hashed and waiting
+    for it; `email.verify` with the code makes the person and signs in. An address that has an
+    account gets a word saying so instead, with the same answer; a stranger signing up first with
+    someone's address can't choose their password (each code confirms the password it came with).
+    `emailSignIn.signUp: false` leaves only invitations.
+  - **Signing in:** `email.sign-in`, refused with `unverified` (a new code sent) until the address
+    is confirmed. A wrong password and an address nobody has are one refusal, as slow.
+  - **A new password:** `email.forgot` sends a code (the same answer for any address); `email.reset`
+    with it sets the password, ends the person's other sessions and signs in.
+  - **Invitations:** trusted code (a webhook, once someone bought) calls `email.invite`: the person,
+    answered at once, and a link working once for a day (`/#email-invite=<token>`, in the fragment,
+    so no server logs it) where they choose a password and arrive signed in.
+  - **Moving in:** `email.import` brings a person with the hash another app kept, as it is (legacy
+    `salt:hash` hex, PBKDF2-SHA256 at 100,000), hashed again, stronger, at their first sign-in.
+  - **Passwords** are PBKDF2-SHA256 on WebCrypto in six stages of 100,000 (workerd takes no more in
+    one call): `pbkdf2-sha256$6x100000$<salt>$<hash>`, compared in constant time, a private field no
+    event or actor's read holds. Codes and tokens are kept only as HMACs under the `links` secret,
+    used once, codes for 15 minutes and five wrong tries. Messages to an address (5 an hour), tries
+    at it (10 in 15 minutes) and one caller's asks (30) are limited (`emailSignIn.limits`).
+  - **Its words** are the `emailSignIn` resource's `messages` (`verify`, `reset`, `invite`,
+    `exists`: a subject, text and HTML with blanks such as `{code}`, `{link}`, `{app}`), English
+    unless the app gives its own.
+- **`email`**: the app's email port: `email.send` `{ to, subject, text, html? }` (trusted code's,
+  unrecorded) sends through the adapter the `email` resource names: `resend` (Resend's API, its
+  `apiKey`), or `console`, which writes each message to the log for a laptop (refused where the
+  `links` origin is public). An adapter of your own is an `email` adapter (`EmailAdapter`).
 - **`devSignIn`**: sign-in by name or email, from this machine only, for trying an app out
   (`/signin/dev`).
 - **`accounts`**: outside accounts a person connects once, for their agents to use: first their
@@ -1153,6 +1205,7 @@ deno task bench [--rtt=1.74] [--remote] [--sqlite | --postgres=URL]   # overhead
 
 deno task web [--sqlite]                      # the same app in a browser: http://localhost:8790
 BRAND=harbor deno task web                    # …rebranded by one theme resource (/gallery: the toolkit)
+EMAIL=1 deno task web                         # …with email sign-in, its messages in the terminal
 node examples/web-node/server.ts              # a web app on Node: http://localhost:8080
 node examples/web-node/orgs.ts                # many orgs behind one address, on Node
 ```
@@ -1174,12 +1227,14 @@ Inside the chat: `/new`, `/threads`, `/open <n>`, `/history`, `/memories`, `/usa
 `/quit`. Every turn prints its time, its database round trips, the jobs sent to executors and the
 calls they made back to the owner.
 
-In the browser, you sign in by name or email (this machine only), or with Google when
-`GOOGLE_CLIENT_ID` is set. Where you are is the address (`/thread/<id>`, `?in=<space>`), so links,
-back and forward, and two tabs work. ⌘K (Ctrl+K) opens the command palette: go to any space, chat or
-agent, make a space, a chat or an agent, invite someone, move this chat (or a memory, a note, a
-computer) to another space, rename, archive or leave a space, each from the plugin it belongs to.
-The composer also records voice messages.
+In the browser, you sign in by name or email (this machine only), with Google when
+`GOOGLE_CLIENT_ID` is set, or with an email and a password with `EMAIL=1` (its codes and links
+written to the terminal; `EMAIL_INVITE=<address>` invites someone as it starts). Where you are is
+the address (`/thread/<id>`, `?in=<space>`), so links, back and forward, and two tabs work. ⌘K
+(Ctrl+K) opens the command palette: go to any space, chat or agent, make a space, a chat or an
+agent, invite someone, move this chat (or a memory, a note, a computer) to another space, rename,
+archive or leave a space, each from the plugin it belongs to. The composer also records voice
+messages.
 
 ### Developing Copilotz
 

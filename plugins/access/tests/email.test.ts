@@ -987,3 +987,76 @@ test("what the plugins need is checked as they start", async () => {
     await rt.close();
   }
 });
+
+test("past an address's messages this hour, signing in unconfirmed sends none: the last code works", async () => {
+  const { rt, resend } = await start({ settings: { limits: { sends: 2 } } });
+  try {
+    await ask(rt, "/signin/email/sign-up", { email: "ana@example.com", password: "correct horse" });
+    const first = await ask(rt, "/signin/email", {
+      email: "ana@example.com",
+      password: "correct horse",
+    });
+    assertMatch(first.said.error, /we've sent a new code/);
+    const { code } = codeTo(resend.sent, "ana@example.com");
+    const sent = resend.sent.length;
+    const second = await ask(rt, "/signin/email", {
+      email: "ana@example.com",
+      password: "correct horse",
+    });
+    assertEquals([second.status, second.said.code], [403, "unverified"]);
+    assertMatch(second.said.error, /enter the code we sent/);
+    assertEquals(resend.sent.length, sent);
+    assertEquals(
+      (await ask(rt, "/signin/email/verify", { email: "ana@example.com", code })).status,
+      200,
+    );
+  } finally {
+    await rt.close();
+  }
+});
+
+test("behind the app's front, callers are told apart by its word, and nothing comes around it", async () => {
+  const FRONT = "the-front-secret-for-tests-0123";
+  const { rt } = await start({
+    settings: { limits: { address: 2 } },
+    more: [
+      definePlugin({
+        name: "front",
+        resources: { caller: { header: "cf-connecting-ip", front: FRONT } },
+      }),
+    ],
+  });
+  const from = (address: string | null, body: unknown) =>
+    rt.fetch(setClientAddress(
+      new Request("http://localhost/signin/email", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(address ? { "x-copilotz-front": FRONT, "cf-connecting-ip": address } : {}),
+        },
+        body: JSON.stringify(body),
+      }),
+      "10.0.0.2",
+    ));
+  try {
+    const around = await read(await from(null, { email: "ana@example.com", password: "x" }));
+    assertEquals([around.status, around.said.code], [403, "forbidden"]);
+    // Two callers, one proxy's address between them: each held on its own.
+    for (let i = 0; i < 2; i++) {
+      assertEquals(
+        (await from("198.51.100.1", { email: `a${i}@example.com`, password: "x" })).status,
+        401,
+      );
+    }
+    assertEquals(
+      (await from("198.51.100.1", { email: "a9@example.com", password: "x" })).status,
+      429,
+    );
+    assertEquals(
+      (await from("198.51.100.2", { email: "a9@example.com", password: "x" })).status,
+      401,
+    );
+  } finally {
+    await rt.close();
+  }
+});

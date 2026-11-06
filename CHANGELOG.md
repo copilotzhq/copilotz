@@ -15,6 +15,44 @@ resources: { hosts: { "app.example.com": true, "*.run.app": true } }
   `{ own: [...] }`, like every other resource: a later plugin adds a host, or takes one away with
   `null`, without restating the rest. What it does is unchanged: with the app's hosts named, any
   other host is answered only by routes that take it. `HostsSettings` is `Record<string, true>`.
+- **Email sign-in** (`emailSignIn`, in `copilotz/plugins/access`, with identity and `email`): people
+  sign in with an email and a password. Nothing changes for apps that don't add it.
+  - **Flows,** each an unrecorded Action behind a route, those that end signed in answering with
+    identity's `signedIn`: `email.sign-up` (a six-digit code by email, the password waiting for it)
+    and `email.verify` (the person made, and a session); `email.sign-in`, refused with `unverified`
+    (and a new code sent) until the address is confirmed; `email.forgot` (the same answer for any
+    address) and `email.reset` (the password set, the person's other sessions ended);
+    `email.invite`, trusted code's (a webhook after a purchase: the person, answered at once, and a
+    link that works once for a day, `/#email-invite=<token>`), `email.invitation` and `email.accept`
+    (the password chosen, signed in); and `email.import`, the system's, which keeps another app's
+    password hashes as they are, for a migration, with the person ids the importer chooses. Routes:
+    `GET /signin/email` (it's here; `signUp`), `POST /signin/email`, and `/signin/email/sign-up`,
+    `verify`, `forgot`, `reset`, `invitation`, `accept`; a refusal answers `{ error, code }`.
+  - **Passwords:** legacy hashes (`"<saltHex>:<hashHex>"`, PBKDF2-HMAC-SHA256 at 100,000, as
+    Copilotz 0.x apps kept them) verify as stored and are hashed again at the next sign-in; new ones
+    are `pbkdf2-sha256$6x100000$<salt>$<hash>` (PBKDF2 in six stages of 100,000, each salted with
+    the stage before: workerd refuses more than 100,000 in one call), on WebCrypto, compared in
+    constant time, in a private field (`email_login.hash`) no event or actor's read holds.
+  - **Codes and links** are kept only as HMACs under the `links` secret (still matching under its
+    `previous` while it changes), used once; codes last 15 minutes and five wrong tries. A stranger
+    signing up first with someone's address can't choose their password: each code confirms the
+    password its sign-up came with. Messages to an address (5 an hour), tries at it (10 in 15
+    minutes) and one caller's asks (30, by the `caller` resource or the socket's address) are
+    limited (`too_many`), the same whether or not the address has an account (`emailSignIn.limits`).
+    What's past goes every ten minutes (`email.prune`).
+  - **Its words** are the `emailSignIn` resource's `messages` (`verify`, `reset`, `invite`,
+    `exists`), English unless the app gives its own; `app` names the app in them (the `links`
+    origin's host unless said). It needs the `links` resource (`{ origin, secret }`) to start.
+- **`email`, the app's email port:** `email.send` `{ to, subject, text, html? }` (trusted code's,
+  unrecorded) through the adapter the `email` resource names: `resend` (Resend's API, through
+  `ctx.fetch`, with its `apiKey` and `from`) or `console` (each message in the log, for a laptop;
+  refused where the `links` origin is public). `EmailAdapter` and the settings' types are in its
+  contract.
+- **The sign-in page offers email** when `GET /signin/email` says it's there: sign in, create an
+  account, the code (sent on once typed or pasted; a new one every 30 seconds), a new password by
+  code, and arriving by an invitation's link to choose a password. Signing in by name moves under
+  it, a click away. The toolkit has an `eye-off` icon. The example web app takes `EMAIL=1` (and
+  `EMAIL_INVITE=<address>`) to try it, its messages in the terminal.
 
 ## 1.0.0-rc.25 — 2026-11-06
 

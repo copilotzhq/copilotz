@@ -28,6 +28,7 @@
     "./plugins/interfaces/web": "./plugins/interfaces/web.tsx",
     "./plugins/interfaces/terminal": "./plugins/interfaces/terminal/terminal.ts",
     "./web": "./hosts/web/mod.ts",
+    "./web/words": "./hosts/web/words.ts",
     "./web/server": "./hosts/web/server.ts",
     "./web/widget": "./hosts/web/widget.tsx",
     "./web/theme": "./hosts/web/theme/css.ts",

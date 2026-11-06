@@ -5,7 +5,7 @@
  * yesterday, this week, this month, then by month.
  */
 import type { Thread } from "../../collections/thread.ts";
-import { formatDate } from "../../../../../hosts/web/mod.ts";
+import { formatDate } from "../../../../../hosts/web/words.ts";
 import { plain } from "./plain.ts";
 import { say } from "./words.ts";
 

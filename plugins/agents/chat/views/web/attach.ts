@@ -1,6 +1,6 @@
 /** Files chosen to send: read as `chat.send` takes them (base64), with a preview for images. */
 
-import { formatNumber } from "../../../../../hosts/web/mod.ts";
+import { formatNumber } from "../../../../../hosts/web/words.ts";
 import { say } from "./words.ts";
 
 export type Attached = {

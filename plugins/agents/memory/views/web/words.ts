@@ -1,5 +1,5 @@
 /** Every word Memory's web front end shows, to be changed by the app (`memory.<key>`). */
-import { defineWords } from "../../../../../hosts/web/mod.ts";
+import { defineWords } from "../../../../../hosts/web/words.ts";
 
 export const say = defineWords("memory", {
   // The page and its space tab

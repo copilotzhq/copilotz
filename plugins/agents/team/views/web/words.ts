@@ -1,5 +1,5 @@
 /** Every word Team's web front end shows, to be changed by the app (`team.<key>`). */
-import { defineWords } from "../../../../../hosts/web/mod.ts";
+import { defineWords } from "../../../../../hosts/web/words.ts";
 
 export const say = defineWords("team", {
   // Names in a sentence

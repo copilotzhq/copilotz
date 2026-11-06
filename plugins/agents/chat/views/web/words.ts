@@ -1,5 +1,5 @@
 /** Every word Chat's web front end shows, to be changed by the app (`chat.<key>`). */
-import { defineWords } from "../../../../../hosts/web/mod.ts";
+import { defineWords } from "../../../../../hosts/web/words.ts";
 
 export const say = defineWords("chat", {
   // Shared

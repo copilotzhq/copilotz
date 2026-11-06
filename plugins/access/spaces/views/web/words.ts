@@ -2,7 +2,7 @@
  * The words of spaces' web front end (the tree, a space's page, its members, settings and
  * invitations, the palette's steps), in English. An app gives its own under `spaces.<key>`.
  */
-import { defineWords } from "../../../../../hosts/web/mod.ts";
+import { defineWords } from "../../../../../hosts/web/words.ts";
 
 export const say = defineWords("spaces", {
   // Space names and roles (who.ts)

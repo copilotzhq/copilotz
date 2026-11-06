@@ -2,7 +2,7 @@
  * The words of the web shell (sidebar, frame, side panel, account menu, orgs and staff's
  * console), in English. An app gives its own under `shell.<key>`.
  */
-import { defineWords } from "../../../../hosts/web/mod.ts";
+import { defineWords } from "../../../../hosts/web/words.ts";
 
 export const say = defineWords("shell", {
   // The frame (frame.tsx)

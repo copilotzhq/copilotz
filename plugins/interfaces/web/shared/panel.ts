@@ -3,7 +3,7 @@
  * how wide it is, and what this browser keeps of it for each person (open or
  * not, its width), so it's as they left it on the next page and next time.
  */
-import { lang } from "../../../../hosts/web/mod.ts";
+import { lang } from "../../../../hosts/web/words.ts";
 import { say } from "../views/words.ts";
 
 /**

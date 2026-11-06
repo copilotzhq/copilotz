@@ -2,7 +2,7 @@
  * Every word the Usage page says, in English, by key (`usage.spendBy`). An app gives its own in
  * a `words` resource under the full key; blanks are `{name}`s and plurals are by the `count` blank.
  */
-import { defineWords } from "../../../../../hosts/web/mod.ts";
+import { defineWords } from "../../../../../hosts/web/words.ts";
 
 export const say = defineWords("usage", {
   // Who and what a row or an item is about

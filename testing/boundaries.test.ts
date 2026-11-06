@@ -8,7 +8,8 @@
  *   files, and other plugins' `contract.ts` (shapes, no code). One plugin
  *   reaches another only through the runtime, by name: its Actions, the
  *   resource kinds it reads, its events. The web host's toolkit is
- *   `hosts/web/mod.ts`, nothing deeper.
+ *   `hosts/web/mod.ts`, nothing deeper (plus `hosts/web/words.ts`, the words
+ *   and formats, which draws nothing, so code that isn't React can use it).
  * - `hosts/`, the media the app is used through (a terminal): the runtime.
  *
  * Tests, examples and a theme's own `mod.ts` and `terminal.ts` compose the
@@ -81,7 +82,10 @@ function broken(from: string, to: string): string | undefined {
   }
   const mine = pluginOf(from);
   if (!mine) return undefined; // A theme's mod.ts or terminal.ts: it composes its plugins.
-  if (to.startsWith(join("hosts", "web") + sep) && to !== join("hosts", "web", "mod.ts")) {
+  if (
+    to.startsWith(join("hosts", "web") + sep) && to !== join("hosts", "web", "mod.ts") &&
+    to !== join("hosts", "web", "words.ts")
+  ) {
     return "the web host's insides: import its toolkit from hosts/web/mod.ts";
   }
   if (top === "runtime" || top === "hosts") return undefined;

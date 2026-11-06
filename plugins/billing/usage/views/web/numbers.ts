@@ -13,7 +13,7 @@
  */
 import type { Quantities } from "../../shared/rate.ts";
 import type { PriceTotals } from "../../shared/totals.ts";
-import { formatDate, formatNumber } from "../../../../../hosts/web/mod.ts";
+import { formatDate, formatNumber } from "../../../../../hosts/web/words.ts";
 import { say } from "./words.ts";
 
 /** A total as the page gets it: its price; for platform staff, its cost too. */

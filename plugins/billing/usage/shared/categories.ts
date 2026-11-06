@@ -1,6 +1,7 @@
 /**
  * Categories: what people read a use as, by its meter. Agents' are the
- * models' meters (`llm`, `embeddings`, `transcription`) and the web search's (`search`), computers' the
+ * models' meters (`llm`, `embeddings`, `transcription`, `image`) and the web search's
+ * (`search`), computers' the
  * cloud's (`computer`), apps' theirs (`app`). A meter in none is a category
  * of its own, by its name (an app's `tool`).
  *
@@ -14,7 +15,7 @@ import type { Filter } from "../../../../runtime/mod.ts";
 export type Categories = Record<string, string[]>;
 
 export const CATEGORIES: Categories = {
-  agents: ["llm", "embeddings", "transcription", "search"],
+  agents: ["llm", "embeddings", "transcription", "image", "search"],
   computers: ["computer"],
   apps: ["app"],
 };

@@ -2,7 +2,9 @@
  * OpenTelemetry's GenAI metrics for a model call: how long it took
  * (`gen_ai.client.operation.duration`, seconds) and the tokens it used
  * (`gen_ai.client.token.usage`), plus, for streamed answers, the time to the
- * first piece (`copilotz.llm.time_to_first_token`). Nothing without metrics.
+ * first piece (`copilotz.llm.time_to_first_token`). Images are
+ * `generate_content`, as the conventions name multimodal output. Nothing
+ * without metrics.
  */
 import type { Attributes, Metrics } from "../../../runtime/mod.ts";
 import type { Resolved } from "./choice.ts";
@@ -30,7 +32,7 @@ const TOKENS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 41
 export function measure(
   metrics: Metrics | undefined,
   model: Resolved,
-  operation: "chat" | "embeddings" | "transcription",
+  operation: "chat" | "embeddings" | "transcription" | "generate_content",
 ) {
   const started = performance.now();
   const attributes: Attributes = {

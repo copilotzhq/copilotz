@@ -5,7 +5,7 @@ import { nonzero, rate } from "./rate.ts";
 
 /** One use of something: a model call, an API call, a machine's seconds. */
 export type Use = {
-  /** What measures it: `llm`, `embeddings`, `transcription`, `tool`, `compute`… */
+  /** What measures it: `llm`, `embeddings`, `transcription`, `image`, `tool`, `compute`… */
   meter: string;
   /** What was used: a model (`"provider/model"`), a tool, a machine size. */
   subject: string;

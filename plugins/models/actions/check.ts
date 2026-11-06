@@ -13,6 +13,7 @@ import { defineAction } from "../../../runtime/mod.ts";
 import { type ModelRef, resolve } from "../shared/choice.ts";
 import { embedder } from "../shared/embed.ts";
 import { chooseModels } from "../shared/generate.ts";
+import { imagers } from "../shared/image.ts";
 import { transcribers } from "../shared/transcribe.ts";
 
 export const check = defineAction({
@@ -22,7 +23,7 @@ export const check = defineAction({
     type: "object",
     properties: {
       model: { type: ["string", "object", "array"] },
-      port: { enum: ["llm", "embeddings", "transcription"] },
+      port: { enum: ["llm", "embeddings", "transcription", "image"] },
     },
     required: ["model", "port"],
     additionalProperties: false,
@@ -31,6 +32,7 @@ export const check = defineAction({
     const model = input.model as ModelRef;
     if (input.port === "llm") chooseModels(ctx, model);
     else if (input.port === "embeddings") embedder(ctx, model);
+    else if (input.port === "image") imagers(ctx, model);
     else transcribers(ctx, model);
   },
 });

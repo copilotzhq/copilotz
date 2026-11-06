@@ -15,14 +15,16 @@ export const failedProcessor: ProcessorDef = {
 /**
  * Writes an answer for a turn that failed for good, so whoever waits on it
  * resumes. A stopped turn (`chat.stop`) answers with what it had written,
- * when that was surely an answer (its turn offered no tools).
+ * when that was surely an answer (its turn offered no tools). A refusal
+ * written for people (a failure made public: the org's spending check, a
+ * web line's budget) answers in its own words.
  */
 const failed = async (ctx: Context, event: Event) => {
   const { event: run, type, data, error } = event.data as {
     event: string;
     type: string;
     data: Record<string, unknown>;
-    error: { message?: string; code?: string };
+    error: { message?: string; code?: string; public?: true };
   };
   const t = turnOf({ type, data });
   const messages = ctx.db.collection<Message>("message");
@@ -40,9 +42,10 @@ const failed = async (ctx: Context, event: Event) => {
       : "(stopped)";
     return await answer(ctx, t, run, text, { stopped: true });
   }
-  // The org's limit isn't the agent failing: it says what happened, and who can change it.
-  if (error.code === "credits" || error.code === "budget") {
-    return await answer(ctx, t, run, error.message ?? "This org can't spend right now.", {
+  // A limit isn't the agent failing (the org's spending, a line's budget): it says what happened,
+  // and who can change it, in words written for whoever's there.
+  if (error.public || error.code === "credits" || error.code === "budget") {
+    return await answer(ctx, t, run, error.message || "This org can't spend right now.", {
       failed: true,
     });
   }

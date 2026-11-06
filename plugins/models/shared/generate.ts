@@ -1,11 +1,9 @@
 /** Calling a model: the model choice resolved, fallbacks, state, and its use told. */
 import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
-import { failure, invalid } from "../../../runtime/mod.ts";
+import { invalid } from "../../../runtime/mod.ts";
 import {
   adapterFor,
-  keyable,
   type Media,
-  type ModelKeys,
   type ModelRef,
   type Provider,
   resolve,
@@ -14,7 +12,7 @@ import {
 import { filesFor } from "./files.ts";
 import { calledBy } from "./provider.ts";
 import { backoff, quietly, RETRY, SILENCE, transient, wait } from "./retry.ts";
-import { mayUse, used } from "./use.ts";
+import { keyed, mayRun, used } from "./use.ts";
 import { measure } from "./telemetry.ts";
 import {
   EFFORTS,
@@ -124,57 +122,6 @@ const stale = (error: unknown) =>
   );
 
 /**
- * A model with its org's own key for its provider, which goes before the
- * app's. A provider only an org's key reaches, without one, is told so.
- */
-async function keyed(ctx: Reach, m: Resolved): Promise<Resolved> {
-  const keys = ctx.resources.modelKeys as ModelKeys | undefined;
-  if (!keys || !keyable(m.provider)) return m;
-  // From a read there's no system to ask as, and so no key: only the app's.
-  const key = ctx.as
-    ? await ctx.as().call<string | null>(keys.open, { provider: m.provider })
-    : null;
-  if (key) {
-    return {
-      ...m,
-      endpoint: { ...m.endpoint, apiKey: key },
-      tags: { ...m.tags, paid: "own-key" },
-    };
-  }
-  if (m.endpoint.apiKey || m.endpoint.headers) return m;
-  throw failure("key_missing", `There's no key for ${m.provider}: this org's admins can add one.`);
-}
-
-/**
- * Whether what's about to run may spend (the `spending` resource: whoever
- * keeps an org's limits), which isn't asked for a model the app doesn't pay for
- * (the org's own key, a person's subscription). Saying no is final:
- * trying again won't help.
- */
-async function mayRun(ctx: Reach, m: Resolved, request: Generate): Promise<void> {
-  // Whoever listens to model use may refuse it first (a web line's budget, spent): a model
-  // the app doesn't pay for too, since the line's budget counts a visitor's use of any.
-  await mayUse(ctx, {
-    meter: "llm",
-    subject: m.id,
-    ...(request.tags ? { tags: request.tags } : {}),
-  });
-  if (m.tags?.paid) return;
-  const spending = ctx.resources.spending as { check?: string } | undefined;
-  if (!spending?.check || !ctx.as) return;
-  const purpose = request.tags?.purpose;
-  const verdict = await ctx.as().call<{ ok: boolean; why?: string; message?: string }>(
-    spending.check,
-    purpose ? { purpose } : {},
-  );
-  if (verdict.ok) return;
-  throw Object.assign(
-    failure(verdict.why ?? "spending", verdict.message ?? "This org can't spend right now."),
-    { final: true },
-  );
-}
-
-/**
  * Streams a model's answer: text, tool calls, state and usage, as they come.
  * A call that breaks (the network, nothing coming for the provider's
  * `silence`, a provider timing out or busy) is tried again, longer waits
@@ -192,7 +139,7 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
     let m: Resolved;
     try {
       m = await keyed(ctx, choice);
-      await mayRun(ctx, m, request);
+      await mayRun(ctx, m, "llm", request.tags);
     } catch (error) {
       if ((error as { final?: boolean }).final) stopped ??= error;
       // No key for this one, or no credits: the next, if there is one.

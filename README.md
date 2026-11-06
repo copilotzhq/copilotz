@@ -105,7 +105,7 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                              |
 | `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                                   |
 | `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account         |
-| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                                  |
+| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, image, the models.dev catalog                                           |
 | `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`         |
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                   |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                       |
@@ -610,7 +610,7 @@ identity) says so (`requires: ["chat"]`), and imports from it only its `contract
 its documents and resource kinds, its Actions' inputs and outputs, and declaration helpers such as
 chat's `tool()`. Never its code. Plugins that would share code are one plugin (`models`).
 
-**`models/`**: talking to models, one plugin (`models`) for three kinds. Other plugins call it by
+**`models/`**: talking to models, one plugin (`models`) for four kinds. Other plugins call it by
 name, never by importing its code.
 
 - **`llm`**: `llm.stream` (chunks as they come, for a job in the same process: an agent's turn) or
@@ -622,10 +622,38 @@ name, never by importing its code.
   vectors from different models don't compare.
 - **`transcription`**: `transcription.transcribe`, with base64 audio. Adapters: `openai`,
   `openai-compatible`.
+- **`image`**: `image.generate`, images from a prompt and images to work from. Adapters: `gemini`
+  (`generateContent` asking for images: `gemini-3-pro-image`, `gemini-3.1-flash-image`…), `openai`
+  (`gpt-image-2`…), and `fake` for offline runs (`"fake/image"`).
+  - **References** are an image made here (`{ id }`), a document the caller may read holding a file
+    as `type` and `data` (`{ id, collection: "file" }`: chat's files; read as the caller, so the
+    rules decide), or inline (`{ data, type }`, or a data URL).
+  - **What it makes** is kept in the `image` collection, a document each (its content a blob, so the
+    same image attached to a message is stored once), and answered by id, media type and size, with
+    what the model said. Posting one in a conversation is the caller's: models knows nothing of
+    chat.
+  - **Metered like every model call:** the org's own key if it has one, `modelUse` listeners and the
+    `spending` check before; its tokens told after, which the ledger prices from the catalog as it
+    prices a chat's. A model that refuses (its safety rules) fails `image_refused`, and no other
+    model is asked; one that makes nothing fails `no_image` once the list is spent.
+
+  ```ts
+  // In a tool or an Action: the images kept, by id; their content is read by id when needed.
+  const { images, text } = await ctx.call<Images>("image.generate", {
+    model: "google/gemini-3-pro-image", // or an alias, or a list tried in order
+    prompt: "Our mascot on a beach, flat illustration",
+    references: [{ id: fileId, collection: "file" }],
+    aspectRatio: "4:5",
+    size: "2K", // the provider's own: Gemini's 1K, 2K, 4K
+    tags: { thread, space, purpose: "post" },
+  });
+  const image = await ctx.db.collection<Image>("image").findOne({ _id: images[0].id });
+  ```
 - **`models.check`** says what's wrong with a model for a port (other plugins' startup checks ask
   it); **`models.price`** says what the catalog says a model costs (the usage ledger asks it).
 - These are unrecorded Actions: called from a job they run inline (no events, no commit of their
-  own), and queries, Views and startup checks may call them too, read-only.
+  own), and queries, Views and startup checks may call them too, read-only. `image.generate` is
+  recorded: it writes what it made and costs, so a job that runs again finds it done.
 
 **`agents/`**: conversations and the agents in them.
 
@@ -788,7 +816,7 @@ name, never by importing its code.
     from an older day. `schedules: { "usage.close": null }` turns them off.
   - **Re-rating** (`usage.rerate`) never changes a record: it appends adjustments, dated when made,
     and totals follow.
-  - **Categories:** each meter is one (`llm`, `embeddings` and `transcription` are agents',
+  - **Categories:** each meter is one (`llm`, `embeddings`, `transcription` and `image` are agents',
     `computer` computers', `app` apps'; any other its own); totals group and filter by `category`,
     and rollups serve it. Rollups keep `tags.space` too; days rolled up in another shape are closed
     again, and read from records until then.
@@ -930,8 +958,8 @@ resources: {
   missing provider, an unknown protocol or a wrong effort fails `createRuntime`, not a turn.
 
 Action inputs name models and never carry keys, because Action inputs are recorded in events. Any
-plugin can add its own adapter under `adapters.llm`, `adapters.embeddings` or
-`adapters.transcription`, named by the protocol it speaks.
+plugin can add its own adapter under `adapters.llm`, `adapters.embeddings`, `adapters.transcription`
+or `adapters.image`, named by the protocol it speaks.
 
 `plugins/models/tests/providers.test.ts` checks each adapter against a local server speaking that
 provider's API; `plugins/models/tests/live.test.ts` runs against the real APIs when
@@ -1489,8 +1517,8 @@ stores/         where the runtime keeps things: the Store port's implementations
                 (blobs/files, blobs/http, blobs/gcs); tests/ (conformance)
 exporters/      where measurements go: the Exporter port's implementations (OTLP, Prometheus)
 plugins/        the features, by theme
-  models/       one plugin: llm, embeddings, transcription; shared/ (providers, model choice,
-                models.dev catalog)
+  models/       one plugin: llm, embeddings, transcription, image; shared/ (providers, model
+                choice, models.dev catalog)
   agents/       chat, history, memory, team, skills, routines, tiers
   billing/      usage (the ledger)
   access/       spaces (members, reach, rules), identity, Google sign-in, connected accounts, the

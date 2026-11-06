@@ -1,5 +1,7 @@
 ## Unreleased
 
+## 1.0.0-rc.27 — 2026-11-06
+
 **Upgrading.** Chat's `file.content` query is `file.about`, and answers a file without its content
 (`data`). Host code that wants the content reads it as bytes, in parts:
 `runtime.bytes("file", { _id }, "data", { actor })`, or serves it at `/files/<id>`. A file's content

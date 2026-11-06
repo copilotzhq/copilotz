@@ -106,12 +106,21 @@ test("Origin: a browser's page only from an origin the line names; none, unless 
       headers: { "mcp-protocol-version": "2025-11-25", origin },
     });
   await setup(async (s) => {
-    assertEquals((await ping(s, "https://chatgpt.com")).status, 200);
+    // The runtime's cross-site rule refuses an Origin that isn't the site's own, before the
+    // route: so the origin a line names that can reach it is the site's own (here, localhost).
+    assertEquals((await ping(s, "http://localhost")).status, 200);
     const other = await ping(s, "https://evil.example");
     assertEquals([other.status, other.body.id], [403, undefined]);
-  }, { line: { origins: ["https://chatgpt.com"] } });
+  }, { line: { origins: ["http://localhost"] } });
   await setup(async (s) => {
-    for (const origin of ["https://somewhere.example", "null", "https://chatgpt.com"]) {
+    for (
+      const origin of [
+        "https://somewhere.example",
+        "null",
+        "https://chatgpt.com",
+        "http://localhost",
+      ]
+    ) {
       assertEquals((await ping(s, origin)).status, 403);
     }
     // No Origin, as servers (ChatGPT's) call: taken.

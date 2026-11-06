@@ -20,7 +20,7 @@
  *   Erasing a contact (`contact.forget`) erases its number here too, and
  *   erasing a chat what was kept of it; calls' records go after the
  *   plugin's `keep` days (30), once they're over.
- * - **A call** (see actions/hook.ts and resources/relay.ts): Twilio's
+ * - **A call** (see routes/hook.ts, actions/ring.ts and routes/relay.ts): Twilio's
  *   webhook is checked against Twilio's signature, taken within its
  *   caller's limits and the line's (else rejected as busy: nothing is
  *   spent), and told to open the line's socket with a ticket good once, for
@@ -48,11 +48,11 @@
  * }
  * ```
  *
- * The socket needs a host that takes a route's socket: the web host's
- * listener (`serve`, from `copilotz/web/node`), with or without a page.
+ * The socket needs a listener that takes a route's socket: `listen` from
+ * `copilotz/web/node` (with or without a page), or `Deno.serve(runtime.fetch)`.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
-import { hookAction } from "./actions/hook.ts";
+import { hangupAction, ringAction } from "./actions/ring.ts";
 import { admitAction, heardAction, overAction, startAction } from "./actions/call.ts";
 import { blockAction, unblockAction } from "./actions/block.ts";
 import { pruneAction } from "./actions/prune.ts";
@@ -60,12 +60,13 @@ import { blocked } from "./collections/blocked.ts";
 import { call } from "./collections/call.ts";
 import { phone } from "./collections/phone.ts";
 import { erasedProcessor, forgetProcessor } from "./processors/forget.ts";
-import { serveRelay } from "./resources/relay.ts";
+import { hookRoute } from "./routes/hook.ts";
+import { relayRoute } from "./routes/relay.ts";
 import { endCall } from "./resources/tools.ts";
 import { callView } from "./views/call.ts";
 import { contextView } from "./views/context.ts";
 import { messageView } from "./views/message.ts";
-import { HOOKS, keepOf, linesOf, problemOf } from "./shared/settings.ts";
+import { keepOf, linesOf, problemOf } from "./shared/settings.ts";
 
 export * from "./contract.ts";
 
@@ -74,7 +75,8 @@ export const voice: Plugin = definePlugin({
   requires: ["chat", "spaces", "contacts"],
   collections: { voice_call: call, voice_phone: phone, voice_blocked: blocked },
   actions: {
-    "voice.hook": hookAction,
+    "voice.ring": ringAction,
+    "voice.hangup": hangupAction,
     "voice.admit": admitAction,
     "voice.start": startAction,
     "voice.heard": heardAction,
@@ -101,13 +103,14 @@ export const voice: Plugin = definePlugin({
       if (problem) throw new Error(`voice.lines.${name} ${problem}`);
     }
   },
+  // Twilio's webhook (a call coming in, and the end of its relay), then each call's socket.
+  routes: {
+    "/hooks/voice/:name": hookRoute,
+    "/hooks/voice/:name/over": hookRoute,
+    "/hooks/voice/:name/relay": relayRoute,
+  },
   resources: {
     voice: {},
-    // Twilio's webhook (and the end of a call's relay), then each call's socket.
-    routes: {
-      voice: { path: HOOKS, action: "voice.hook", methods: ["POST"] },
-      "voice.relay": { path: HOOKS, serve: serveRelay, methods: ["GET"] },
-    },
     tools: { end_call: endCall },
     // A line's blocks live in its space: its members see them (never the number's hash), its
     // managers change them.

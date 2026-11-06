@@ -9,6 +9,7 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import { type Actor, defineAction, definePlugin } from "../../../../runtime/mod.ts";
 import type { Message, Thread } from "../../../agents/chat/mod.ts";
 import { test } from "../../../../testing/mod.ts";
+import { hookRoute } from "../mod.ts";
 import {
   ana,
   ANA_PHONE,
@@ -386,10 +387,8 @@ const declaring = definePlugin({
         },
       },
     },
-    routes: {
-      meta: { path: "/webhooks/meta", action: "whatsapp.hook", methods: ["GET", "POST"] },
-    },
   },
+  routes: { "/webhooks/meta": hookRoute },
   actions: {
     // Someone changed its document behind the settings' back.
     "test.close": defineAction({

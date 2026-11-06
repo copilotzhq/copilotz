@@ -11,8 +11,8 @@
  *   theirs, under the access plugin's rules, and these rules (its `guard`)
  *   keep its work, and its agents' turns, to that space. Everything it
  *   causes says which key (`actor.key`): the log tells it apart.
- * - **The HTTP** is a `routes` resource of the web host (a `serve` route
- *   at `/api/`), which hands it the runtime: Actions by call id, their
+ * - **The HTTP** is the plugin's route at `/api/*`, which is given the
+ *   runtime: Actions by call id, their
  *   `allow`, the reference from `describe()`, events as they commit.
  *
  * ```ts
@@ -29,7 +29,7 @@ import { serveApi } from "./shared/server.ts";
 import { leftProcessor } from "./processors/left.ts";
 
 export * from "./contract.ts";
-export { serveApi, type Served } from "./shared/server.ts";
+export { serveApi } from "./shared/server.ts";
 
 export const api: Plugin = definePlugin({
   name: "api",
@@ -43,9 +43,7 @@ export const api: Plugin = definePlugin({
   },
   guard: rules,
   processors: { "api.left": leftProcessor },
-  resources: {
-    routes: { api: { path: "/api/", serve: serveApi } },
-  },
+  routes: { "/api/*": serveApi },
 });
 
 export default api;

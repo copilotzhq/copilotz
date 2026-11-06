@@ -40,7 +40,7 @@
  *   -32022, with those it takes.
  * - **Methods.** `initialize`, `server/discover`, `ping`, `tools/list`,
  *   `tools/call` (see tools.ts); with widgets (a line whose tools are shown
- *   through the app's web Views, and the web host's `widgets`: see
+ *   through the app's web Views, and the app's `widgets` resource: see
  *   widgets.ts), `resources/list` and `resources/read` (the widgets'
  *   template), and the widgets' own calls: the entries only they may call,
  *   refused without their grant, which the model never has.
@@ -53,6 +53,7 @@ import {
   type Caller,
   callerFrom,
   linksOf,
+  type Route,
   type Runtime,
   secretsOf,
 } from "../../../../runtime/mod.ts";
@@ -79,15 +80,6 @@ import {
   templateOf,
   widgetMeta,
 } from "./widgets.ts";
-
-/**
- * What the web host hands the route: the runtime, and the app's widgets when it has them
- * (`webServer({ widgets })`: the template, and snapshots of what a View reads).
- */
-export type McpHost = {
-  runtime: Pick<Runtime, "call" | "cancel" | "describe" | "observe" | "query">;
-  widgets?: Widgets;
-};
 
 /** The version without a handshake, and the ones with one, newest first. */
 const MODERN = "2026-07-28";
@@ -150,10 +142,12 @@ const failed = (
 const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 
-/** Answers a request to `/mcp/<line>`. */
-export async function serveMcp(request: Request, host?: McpHost): Promise<Response> {
-  if (!host?.runtime) return respond(501, fault(undefined, INTERNAL, "No runtime here"));
-  const resources = host.runtime.describe().resources;
+/**
+ * Answers a request to `/mcp/<line>`. The app's widgets (the template, and snapshots of what a
+ * View reads) are its `widgets` resource, when it has one.
+ */
+export const serveMcp: Route = async (request, { runtime }) => {
+  const resources = runtime.describe().resources;
   const url = new URL(request.url);
   const name = url.pathname.slice(PATH.length).replace(/\/$/, "");
   const line = /^[\w-]{1,60}$/.test(name) ? lineOf({ resources }, name) : undefined;
@@ -188,7 +182,6 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
   const links = linksOf(resources);
   if (!links) return respond(500, fault(undefined, INTERNAL, "Internal error"));
   const org = (resources.org as { id?: string } | undefined)?.id;
-  const { runtime } = host;
   const context: Context = {
     runtime,
     line,
@@ -197,7 +190,7 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
     caller,
     scope: { line: line.name, ...(org ? { org } : {}), secrets: secretsOf(links) },
     atOnce: atOnceOf({ resources }),
-    ...(host.widgets ? { widgets: host.widgets } : {}),
+    ...(resources.widgets ? { widgets: resources.widgets as Widgets } : {}),
     origin: linksOf(resources)?.origin,
   };
   if (Array.isArray(parsed)) {
@@ -232,14 +225,14 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
   }
   const { status, body, again } = await answered(context, parsed, false);
   return respond(status, body, again ? AGAIN : {});
-}
+};
 
 /** A request's id, when it's one JSON-RPC takes. */
 const idOf = (id: unknown): Id | undefined =>
   (typeof id === "string" && id.length <= 200) || Number.isSafeInteger(id) ? id as Id : undefined;
 
 type Context = {
-  runtime: McpHost["runtime"];
+  runtime: Pick<Runtime, "call" | "cancel" | "describe" | "observe" | "query">;
   line: Line;
   resources: Record<string, Record<string, unknown>>;
   request: Request;
@@ -248,7 +241,7 @@ type Context = {
   scope: { line: string; org?: string; secrets: string[] };
   /** Calls the runtime runs at once. */
   atOnce: number;
-  /** The app's widgets, when its web host has them; and the app's own origin (`links`). */
+  /** The app's widgets, when it has the `widgets` resource; and the app's own origin (`links`). */
   widgets?: Widgets;
   origin?: string;
 };

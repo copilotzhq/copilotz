@@ -136,7 +136,7 @@ export type McpLine = {
   /** The browser origins it answers (`Origin`): none unless said (no browser calls MCP). */
   origins?: string[];
   /**
-   * Its widgets (with the web host's `widgets`, `widgetsOf`): the template's options. A line
+   * Its widgets (with the app's `widgets` resource, `widgetsOf`): the template's options. A line
    * whose tools name a `widget`, or that offers Actions, offers widgets, and the widgets' read
    * tool (`READ`: what a widget reads that its snapshot didn't have).
    */

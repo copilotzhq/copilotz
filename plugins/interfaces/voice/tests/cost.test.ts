@@ -10,7 +10,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { test } from "../../../../testing/mod.ts";
 import type { VoiceCall } from "../collections/call.ts";
-import { goodbyeWait } from "../resources/relay.ts";
+import { goodbyeWait } from "../routes/relay.ts";
 import { GOODBYE_MS, lastsMs, LIMITS } from "../shared/settings.ts";
 import { heard, say, setup, until } from "./setup.ts";
 
@@ -134,10 +134,9 @@ test("frames that aren't Twilio's messages change nothing", async () => {
   await setup(async (s) => {
     const call = await s.call();
     for (const data of ["null", "42", "[]", '"prompt"', "{", "x".repeat(20_000)]) {
-      call.socket.onmessage?.({ data });
+      call.raw(data);
     }
-    call.socket.onmessage?.({ data: new Uint8Array([1, 2, 3]) });
-    call.socket.onmessage?.(null as unknown as { data: unknown });
+    call.raw(new Uint8Array([1, 2, 3]));
     say(call, "oi");
     assertEquals(await heard(call, 1), ["Você disse oi."]);
   });

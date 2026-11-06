@@ -20,21 +20,14 @@
  * code says. The runtime checks each Action's and query's `allow` and the
  * rules, as for any outside call; the key's lists are checked here first.
  *
- * It runs in the web host's process (a `serve` route) and needs the runtime
- * the host hands it: calls by id, `allow`, `describe()` and following
- * events are the runtime's public API, not plugin code's.
+ * It is the plugin's route (`/api/*`), given the runtime: calls by id, `allow`,
+ * `describe()` and following events are the runtime's public API, not plugin code's.
  */
-import type { Actor, Runtime } from "../../../../runtime/mod.ts";
+import type { Route, RouteContext } from "../../../../runtime/mod.ts";
 import type { Proven } from "../collections/key.ts";
 import { eventStream } from "./events.ts";
 import { answerFor, bodyOf, CORS, failure, fault, json } from "./http.ts";
 import { catalogOf, referenceOf, takesSpace } from "./reference.ts";
-
-/** What the web host hands a `serve` route: the runtime, and who the request's session signs in. */
-export type Served = {
-  runtime: Pick<Runtime, "call" | "query" | "describe" | "subscribe" | "observe">;
-  whom?(): Promise<Actor | null>;
-};
 
 /** A key's last use is noted at most this often. */
 const USED_EVERY_MS = 60_000;
@@ -51,7 +44,7 @@ const notAllowed = (what: string, name: string) =>
   fault("forbidden", `This key may not ${what} "${name}": its person can let it, in the API tab.`);
 
 /** The key a request shows, and who calling with it is; null when it shows none that works. */
-async function proven(request: Request, runtime: Served["runtime"]): Promise<Proven | null> {
+async function proven(request: Request, runtime: RouteContext["runtime"]): Promise<Proven | null> {
   const [scheme, secret] = (request.headers.get("authorization") ?? "").split(/\s+/, 2);
   if (scheme?.toLowerCase() !== "bearer" || !secret) return null;
   return await runtime.query<Proven | null>("api_key.actor", { secret });
@@ -77,27 +70,17 @@ function callId(request: Request, proven: Proven): string | undefined {
 }
 
 /** Answers a request under `/api/`. */
-export async function serveApi(request: Request, host?: Served): Promise<Response> {
+export const serveApi: Route = async (request, { runtime, actor: who }) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-  if (!host?.runtime) {
-    return failure(
-      501,
-      "unavailable",
-      "The web host doesn't hand this route the runtime: the API can't answer here.",
-    );
-  }
-  const { runtime } = host;
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api\/?/, "/");
   try {
     const key = await proven(request, runtime);
     if (!key) {
       // The app's own page, signed in: every Action, to choose what a key does.
-      const person =
-        path === "/" && request.method === "GET" && !request.headers.has("authorization")
-          ? await host.whom?.().catch(() => null)
-          : null;
-      if (person?.kind === "person") return json({ actions: catalogOf(runtime.describe()) });
+      const signedIn = path === "/" && request.method === "GET" &&
+        !request.headers.has("authorization") && who.kind === "person";
+      if (signedIn) return json({ actions: catalogOf(runtime.describe()) });
       return unauthorized();
     }
     used(runtime, key);
@@ -148,10 +131,10 @@ export async function serveApi(request: Request, host?: Served): Promise<Respons
   } catch (error) {
     return answerFor(error);
   }
-}
+};
 
 /** Notes the key's use, at most once a minute, without waiting for it. */
-function used(runtime: Served["runtime"], { key }: Proven) {
+function used(runtime: RouteContext["runtime"], { key }: Proven) {
   const now = Date.now();
   if (key.used && now - Date.parse(key.used) < USED_EVERY_MS) return;
   void runtime.call("api_key.used", { key: key._id, at: new Date(now).toISOString() })
@@ -160,7 +143,7 @@ function used(runtime: Served["runtime"], { key }: Proven) {
 
 /** A View as the key reads it: once, or (`follow=1`) as server-sent events while it changes. */
 async function viewOf(
-  runtime: Served["runtime"],
+  runtime: RouteContext["runtime"],
   url: URL,
   kind: string,
   actor: Proven["actor"],

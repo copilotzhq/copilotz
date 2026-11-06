@@ -42,9 +42,8 @@
  *   it failed to fetch). A tap comes back as its title, with its id.
  *   Pictures and files go as links (public ones; signed ones to the app's
  *   routes and files, with its `links` resource), or uploaded to Meta.
- * - **The webhook** (`/hooks/whatsapp/<number>`, the web host's `routes`
- *   resource) checks Meta's signature before anything else. Credentials are
- *   kept where no event and no reader outside reaches them.
+ * - **The webhook** (`/hooks/whatsapp/<number>`, `routes/hook.ts`) checks Meta's signature
+ *   before anything else. Credentials are kept where no event and no reader outside reaches them.
  *
  * ```ts
  * plugins: [models, chat, ...access, whatsapp]
@@ -54,7 +53,7 @@
 import { definePlugin, linksOf, type Plugin } from "../../../runtime/mod.ts";
 import { connectAction, credentialsAction } from "./actions/connect.ts";
 import { disconnectAction, webhookAction } from "./actions/disconnect.ts";
-import { hookAction, HOOKS } from "./actions/hook.ts";
+import { lineAction, receiveAction } from "./actions/hook.ts";
 import { linkAction, moveAction, unlinkAction } from "./actions/link.ts";
 import { blockAction, setAction } from "./actions/set.ts";
 import { code } from "./collections/code.ts";
@@ -72,10 +71,12 @@ import { forgetProcessor } from "./processors/forget.ts";
 import { receiveProcessor } from "./processors/receive.ts";
 import { replyProcessor, undeliveredProcessor } from "./processors/reply.ts";
 import { typingProcessor } from "./processors/typing.ts";
+import { hookRoute } from "./routes/hook.ts";
 import { messageView } from "./views/message.ts";
 import { rules } from "./shared/rules.ts";
 import { linesOf } from "./shared/settings.ts";
 
+export { hookRoute } from "./routes/hook.ts";
 export * from "./contract.ts";
 
 export const whatsapp: Plugin = definePlugin({
@@ -98,7 +99,8 @@ export const whatsapp: Plugin = definePlugin({
     "whatsapp.credentials": credentialsAction,
     "whatsapp.disconnect": disconnectAction,
     "whatsapp.webhook": webhookAction,
-    "whatsapp.hook": hookAction,
+    "whatsapp.line": lineAction,
+    "whatsapp.receive": receiveAction,
     "whatsapp.link": linkAction,
     "whatsapp.unlink": unlinkAction,
     "whatsapp.move": moveAction,
@@ -129,9 +131,10 @@ export const whatsapp: Plugin = definePlugin({
       }
     }
   },
+  // Meta's webhook: each connected number's, and the app's lines' under it.
+  routes: { "/hooks/whatsapp/*": hookRoute },
   resources: {
     whatsapp: {},
-    routes: { whatsapp: { path: HOOKS, action: "whatsapp.hook", methods: ["GET", "POST"] } },
     // A number lives in a space: its members see it, its managers change it.
     shared: { whatsapp_number: { write: "manage" } },
   },

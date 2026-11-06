@@ -25,7 +25,7 @@ export type WhatsAppLine = {
   verify: string;
   /**
    * Where its webhook is: `/hooks/whatsapp/<name>` unless the app routes
-   * another path to `whatsapp.hook` (its `routes` resource).
+   * another path to the plugin's `hookRoute` (its `routes` field).
    */
   path?: string;
   /**

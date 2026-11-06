@@ -1,5 +1,7 @@
 ## Unreleased
 
+## 1.0.0-rc.25 — 2026-11-06
+
 **Upgrading from rc.24.** The runtime now answers HTTP itself. `runtime.fetch(request)` is a fetch
 handler (a function from a web-standard `Request` to a `Response`) that every host calls; plugins
 declare their HTTP as `routes` (plain functions by URL pattern) and say who a request is with `who`

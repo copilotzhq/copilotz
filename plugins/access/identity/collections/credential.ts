@@ -27,7 +27,8 @@ export const credential = defineCollection({
   queries: {
     /** Who a secret proves, if anyone: a person. Hosts ask once per connection. */
     actor: async (credentials, params: { secret: string }) => {
-      const found = await credentials.findOne({ _id: await hash(params.secret) });
+      // A session only: a key identity made before (`kind: "key"`, unscoped) proves nobody now.
+      const found = await credentials.findOne({ _id: await hash(params.secret), kind: "session" });
       if (!found || (found.expires && found.expires < new Date().toISOString())) return null;
       return { kind: "person", id: found.person, ...(found.staff ? { staff: true } : {}) };
     },

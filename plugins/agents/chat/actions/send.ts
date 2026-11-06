@@ -34,6 +34,7 @@ import {
   peopleOrContacts,
 } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
+import { BASE64 } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { agentsNamed, mentions, NO_ANSWER, now, rosterOf } from "../shared/agents.ts";
@@ -121,7 +122,7 @@ export const sendAction = defineAction({
             name: { type: "string", minLength: 1 },
             // A media type, as the model is told it: `type/subtype`, with parameters at most.
             type: { type: "string", maxLength: MEDIA_TYPE_LENGTH, pattern: MEDIA_TYPE.source },
-            data: { type: "string", maxLength: 14_000_000 },
+            data: { type: "string", maxLength: 14_000_000, pattern: BASE64 },
             /** A recording's length (ms) and its loudness over time, for its player. */
             voice: {
               type: "object",

@@ -5,13 +5,13 @@
  * audio says (transcribed as it's sent), and see the rest by name.
  */
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import { createRuntime, definePlugin, type Store } from "../../../runtime/mod.ts";
+import { createRuntime, defineAction, definePlugin, type Store } from "../../../runtime/mod.ts";
 import { isBlobRef } from "../../../runtime/blobs.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
 import { httpBlobs } from "../../../stores/blobs/http/mod.ts";
 import models, { type LlmAdapter, type Transcript } from "../../models/mod.ts";
-import { chat, type File, type Message, type Prompt } from "../chat/mod.ts";
+import { chat, type File, type FileAbout, type Message, type Prompt } from "../chat/mod.ts";
 import { serve, tempFile, test } from "../../../testing/mod.ts";
 
 const quiet: LlmAdapter = {
@@ -187,8 +187,8 @@ test("audio is transcribed as it's sent; agents read what it says", async () => 
     // A voice message's conversation is titled by what it says.
     const [listed] = await runtime.query<{ first?: string }[]>("thread.recent");
     assertEquals(listed.first, "(A recording, 6 bytes.)");
-    // And its content, with what it says, is the file's.
-    const file = await runtime.query<File>("file.content", { id: `${sent._id}:file.0` });
+    // And what it says is the file's.
+    const file = await runtime.query<FileAbout>("file.about", { id: `${sent._id}:file.0` });
     assertEquals([file.transcript, file.voice], ["(A recording, 6 bytes.)", voice]);
   } finally {
     await runtime.close();
@@ -229,6 +229,77 @@ test("when transcribing fails nothing is sent; sent without transcribing, audio 
     // A message with nothing to say, and nothing sent, isn't one.
     const empty = await assertRejects(() => runtime.call("chat.send", { from: "ana", text: " " }));
     assertEquals((empty as { code?: string }).code, "invalid");
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("a message's pictures reach the prompt however large together: each read on its own", async () => {
+  /** Base64 of `size` bytes that look like nothing, the same each run. */
+  const noise = (size: number, seed: number) => {
+    let text = "";
+    let x = seed;
+    for (let i = 0; i < size; i++) {
+      x = (x * 1_103_515_245 + 12_345) >>> 0;
+      text += String.fromCharCode(x >>> 24);
+    }
+    return btoa(text);
+  };
+  // Pictures a tool made, kept on a message one at a time: together, more than one answer of the
+  // owner's carries (16 MiB), each alone well within it.
+  const pictures = definePlugin({
+    name: "pictures",
+    actions: {
+      "test.picture": defineAction({
+        input: { type: "object" },
+        run: async (ctx, input: { thread: string; id: string; seed: number }) => {
+          await ctx.db.collection("file").insertOne({
+            _id: input.id,
+            name: `${input.id}.png`,
+            type: "image/png",
+            size: 6_500_000,
+            data: noise(6_500_000, input.seed),
+            thread: input.thread,
+            at: new Date().toISOString(),
+          });
+        },
+      }),
+      "test.shown": defineAction({
+        input: { type: "object" },
+        run: (ctx, input: { thread: string; files: string[] }) =>
+          ctx.db.collection("message").insertOne({
+            _id: `${input.thread}:shown`,
+            thread: input.thread,
+            from: "ana",
+            to: ["lead"],
+            text: "These two",
+            files: input.files.map((id) => ({ id, name: `${id}.png`, type: "image/png", size: 1 })),
+            at: new Date().toISOString(),
+          }),
+      }),
+    },
+  });
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [models, chat, echoing({ model: "fake/echo", input: ["image"] }), pictures],
+  });
+  try {
+    const { thread } = await runtime.call<{ thread: string }>("chat.send", {
+      from: "ana",
+      text: "hi",
+    });
+    await runtime.idle();
+    for (const [id, seed] of [["p1", 3], ["p2", 5]] as const) {
+      await runtime.call("test.picture", { thread, id, seed });
+    }
+    await runtime.call("test.shown", { thread, files: ["p1", "p2"] });
+    const prompt = await runtime.query<Prompt>("thread.prompt", { thread, agent: "lead" });
+    const shown = prompt.history.flatMap((m) => m.role === "user" ? m.files ?? [] : []);
+    assertEquals(shown.map((f) => [f.name, f.data.length]), [
+      ["p1.png", noise(6_500_000, 3).length],
+      ["p2.png", noise(6_500_000, 5).length],
+    ]);
+    assertEquals(shown[1].data, noise(6_500_000, 5));
   } finally {
     await runtime.close();
   }

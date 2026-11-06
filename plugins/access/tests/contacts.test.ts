@@ -513,9 +513,9 @@ test("every Action, query and event stays shut to contacts, but those opened to 
     ...Object.entries(registry.events).filter(([, def]) => def.allow?.(contact))
       .map(([type]) => type),
   ]).sort();
-  // `file.content` is a file as its reader reaches it: a contact, its own chat's. Meta's webhook
+  // `file.about` is a file as its reader reaches it: a contact, its own chat's. Meta's webhook
   // is WhatsApp's route, which calls `whatsapp.receive` as trusted code: no Action of it is open.
-  assertEquals(open, ["chat.send", "file.content"]);
+  assertEquals(open, ["chat.send", "file.about"]);
 });
 
 test("an agent says a fixed message to a contact's chat without a turn, once", async () => {

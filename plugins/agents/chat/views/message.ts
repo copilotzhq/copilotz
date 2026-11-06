@@ -13,16 +13,17 @@ const viewable = (type: string) =>
 /**
  * Its files, as an agent reads them: text files' content, what audio says,
  * images and PDFs as they are (named in the text too), the rest by name.
+ * Each file's content is read on its own, all in the same pass: one answer
+ * from the owner carries one file, never a message's files together, which
+ * could pass the most one answer carries (16 MiB).
  */
 function attached(m: Message, ctx: ViewContext): { text: string; files: LlmFile[] } {
   if (!m.files?.length) return { text: "", files: [] };
-  const wanted = m.files.filter((f) => textual(f.type) || viewable(f.type)).map((f) => f.id);
-  const loaded = wanted.length
-    ? ctx.db.collection<File>("file").find({ _id: { $in: wanted } }).value ?? []
-    : [];
   const files: LlmFile[] = [];
   const lines = m.files.map((f) => {
-    const data = loaded.find((c) => c._id === f.id)?.data;
+    const data = textual(f.type) || viewable(f.type)
+      ? ctx.db.collection<File>("file").findOne({ _id: f.id }).value?.data
+      : undefined;
     if (f.transcript !== undefined) {
       return `\n[${f.voice ? "voice message" : `audio ${f.name}`}, transcribed]\n${f.transcript}` +
         `\n[end of ${f.voice ? "voice message" : f.name}]`;

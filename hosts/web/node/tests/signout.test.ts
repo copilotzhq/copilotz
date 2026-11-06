@@ -11,9 +11,7 @@ import { type Client, connect } from "../../../../runtime/client.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 import { identity } from "../../../../plugins/access/identity/mod.ts";
 import { test } from "../../../../testing/mod.ts";
-import { socket } from "../../server.ts";
-import { createTickets } from "../../tickets.ts";
-import { serve, type Server } from "../mod.ts";
+import { listen, type Listener } from "../serve.ts";
 
 /** Who a browser is, as the runtime sees it when it calls. */
 const who = definePlugin({
@@ -28,7 +26,7 @@ const who = definePlugin({
 });
 
 /** A page's POST, from its own origin, with a session's cookie. */
-const post = (server: Server, path: string, cookie: string) =>
+const post = (server: Listener, path: string, cookie: string) =>
   fetch(`${server.url.origin}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: server.url.origin, cookie },
@@ -39,13 +37,13 @@ const post = (server: Server, path: string, cookie: string) =>
  * A browser holding `cookie`: each new connection asks `/connect` for a
  * ticket, as the page does; what each asking answered is kept.
  */
-const browser = (server: Server, cookie: string) => {
+const browser = (server: Listener, cookie: string) => {
   const asked: number[] = [];
   const client: Client = connect({
     transport: {
       type: "websocket",
       config: {
-        url: `ws://127.0.0.1:${server.port}${socket.config.path}`,
+        url: `ws://127.0.0.1:${server.port}/oxian`,
         allowInsecureLoopback: true,
       },
     },
@@ -73,18 +71,8 @@ const until = async (ready: () => boolean, ms = 5_000) => {
 
 /** Ana's runtime on a real socket, with two sessions of hers: a laptop's and a phone's. */
 async function twoDevices() {
-  const tickets = createTickets();
-  const runtime = await createRuntime({
-    store: memoryStore(),
-    plugins: [identity, who],
-    transports: [socket],
-    admit: tickets.admit,
-  });
-  const server = await serve({
-    runtime,
-    tickets,
-    code: { entry: "app.js", files: { "app.js": "" } },
-  });
+  const runtime = await createRuntime({ store: memoryStore(), plugins: [identity, who] });
+  const server = await listen(runtime.fetch);
   const start = async () =>
     (await runtime.call<{ session: string }>("session.start", { person: "ana" })).session;
   const [laptop, phone] = [await start(), await start()];
@@ -92,7 +80,8 @@ async function twoDevices() {
   const b = browser(server, `session=${phone}`);
   const close = async () => {
     await Promise.all([a.client, b.client].map((c) => c.close().catch(() => {})));
-    await server.close();
+    await server.shutdown();
+    await runtime.close();
   };
   try {
     await Promise.all([a.client.ready, b.client.ready]);

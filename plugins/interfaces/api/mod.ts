@@ -16,9 +16,11 @@
  *   plugin's rules). The runtime checks its scope where its calls come in,
  *   never inside them: an Action it may call does its work as usual.
  *   Everything it causes says which key (`actor.key`): the log tells it apart.
- * - **The HTTP** is a `routes` resource of the web host (a `serve` route
- *   at `/api/`), which hands it the runtime: Actions by call id, the
- *   reference from `describe()`, events as they commit.
+ * - **Who calls with a key** is the plugin's `who`: a request's
+ *   `Authorization: Bearer <key>` is the key's person, with its scope.
+ * - **The HTTP** is the plugin's route at `/api/*`, which is given the
+ *   runtime: Actions by call id, the reference from `describe()`, events as
+ *   they commit.
  *
  * ```ts
  * plugins: [models, chat, ...access, api]            // the server
@@ -29,12 +31,13 @@ import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { createAction } from "./actions/create.ts";
 import { revokeAction, usedAction } from "./actions/revoke.ts";
 import { apiKey } from "./collections/key.ts";
+import { keyWho } from "./shared/actor.ts";
 import { rules } from "./shared/rules.ts";
 import { serveApi } from "./shared/server.ts";
 import { leftProcessor } from "./processors/left.ts";
 
 export * from "./contract.ts";
-export { serveApi, type Served } from "./shared/server.ts";
+export { serveApi } from "./shared/server.ts";
 
 export const api: Plugin = definePlugin({
   name: "api",
@@ -49,10 +52,11 @@ export const api: Plugin = definePlugin({
   guard: rules,
   processors: { "api.left": leftProcessor },
   resources: {
-    routes: { api: { path: "/api/", serve: serveApi } },
     // A key's record lives in its space: read where the space is, changed by its managers.
     shared: { api_key: { write: "manage" } },
   },
+  routes: { "/api/*": serveApi },
+  who: keyWho,
 });
 
 export default api;

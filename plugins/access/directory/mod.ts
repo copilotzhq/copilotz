@@ -7,8 +7,8 @@
  * (its people's roles, spaces, conversations) lives in the org.
  *
  * It runs in a runtime of its own, beside identity and a sign-in method;
- * the orgs host calls its Actions, as the system, for people it has
- * verified (`hosts/orgs`).
+ * the host serving the orgs calls its Actions, as the system, for people it
+ * has verified.
  *
  *   createRuntime({ store, plugins: [identity, googleSignIn, directory, { name: "d",
  *     resources: { directory: { staff: ["you@example.com"] } } }] })

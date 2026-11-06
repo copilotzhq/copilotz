@@ -19,15 +19,11 @@ import {
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
 import { chat, type ToolContext } from "../../agents/chat/mod.ts";
-import { access, devSignIn, identity } from "../../access/mod.ts";
-import { directory } from "../../access/directory/mod.ts";
+import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
-import { orgsHost } from "../../../hosts/orgs/mod.ts";
 import { type Computer, computers, type Desk } from "../mod.ts";
 import { tools } from "../computers/resources/tools.ts";
 import { type HttpRequestHead, type Job, WORK } from "../computers/shared/workloads.ts";
-import { createTickets } from "../../../hosts/web/tickets.ts";
-import { setClientAddress, webServer } from "../../../hosts/web/server.ts";
 import { test } from "../../../testing/mod.ts";
 import { fakeComputer } from "./fake-computer.ts";
 
@@ -126,10 +122,7 @@ function browser(serve: (request: Request) => Promise<Response>) {
     const cookie = [...jar].map(([n, v]) => `${n}=${v}`).join("; ");
     const headers = new Headers(init.headers);
     if (cookie && !headers.has("cookie")) headers.set("cookie", cookie);
-    // From this machine (a listener says so).
-    const response = await serve(
-      setClientAddress(new Request(url, { ...init, headers }), "127.0.0.1"),
-    );
+    const response = await serve(new Request(url, { ...init, headers }));
     for (const line of response.headers.getSetCookie()) {
       set.push(line);
       const [pair] = line.split(";");
@@ -168,7 +161,7 @@ type World = {
 
 /**
  * Ana's computer, shared into Launch (Bob an editor, Cy a viewer; Eve in no
- * way), Bob's conversation there, and the web host serving it all.
+ * way), Bob's conversation there, and the runtime's fetch serving it all.
  */
 async function setup(fn: (world: World) => Promise<void>, more: Plugin[] = []) {
   const topic = `previews-test.${crypto.randomUUID()}`;
@@ -228,13 +221,7 @@ async function setup(fn: (world: World) => Promise<void>, more: Plugin[] = []) {
       in: launch,
     }, { actor: bob });
     await rt.idle();
-    const serve = webServer({
-      runtime: rt,
-      tickets: createTickets(),
-      code: { entry: "app.js", files: { "app.js": "" } },
-      upgrade: () => new Response("the app's socket", { status: 299 }),
-      front: FRONT,
-    });
+    const serve = rt.fetch;
     try {
       await fn({
         rt,
@@ -500,7 +487,7 @@ test("who gets in: members, or anyone with a link one; and only to paths on the 
   });
 });
 
-test("a sleeping computer is woken for its preview, and kept awake; where many orgs, hosts are claimed", async () => {
+test("a sleeping computer is woken for its preview, and kept awake; where there's a directory, hosts are claimed", async () => {
   const woken: string[] = [];
   const touched: string[] = [];
   const claimed: string[] = [];
@@ -510,7 +497,7 @@ test("a sleeping computer is woken for its preview, and kept awake; where many o
     name: "cloud-test",
     resources: {
       computerWake: { wake: "test.wake", touch: "test.touch" },
-      // As the orgs host gives an org's runtime.
+      // As a directory gives an org's runtime.
       directory: {
         claimHost: (host: string) => Promise.resolve(void claimed.push(host)),
         releaseHost: (host: string) => Promise.resolve(void released.push(host)),
@@ -562,95 +549,6 @@ test("a sleeping computer is woken for its preview, and kept awake; where many o
     await rt.call("computer.unpreview", { label }, { actor: ana });
     assertEquals(released, [`${label}.preview.test`]);
   }, [cloud]);
-});
-
-test("where many orgs are served: the preview's host is the org's, and the grant is under its address", async () => {
-  const topic = `previews-orgs.${crypto.randomUUID()}`;
-  const dir = await createRuntime({
-    store: memoryStore(),
-    plugins: [identity, directory, devSignIn],
-  });
-  const host = orgsHost({
-    directory: dir,
-    hosts: ["localhost"],
-    open: async (_org, given) =>
-      await createRuntime({
-        store: memoryStore(),
-        plugins: [
-          models,
-          chat,
-          ...access,
-          computers,
-          ...given.plugins,
-          definePlugin({
-            name: "app",
-            resources: {
-              computers: {
-                previews: { domain: "preview.test", key: "the-key", app: "http://localhost" },
-              },
-            },
-          }),
-        ],
-        admit: given.admit,
-        transports: [{ type: "in-process", config: { topic } }],
-      }),
-    upgrade: () => new Response(null, { status: 299 }),
-    code: { entry: "app.js", files: { "app.js": "" } },
-  });
-  const { workloads } = serving();
-  let computer: ReturnType<typeof fakeComputer> | undefined;
-  try {
-    const a = browser(host.serve);
-    const signed = await (await a.send("http://localhost/signin/dev", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "ana" }),
-    })).json();
-    const org: string = signed.org.id;
-    const rt = (await host.runtime(org)) as Runtime;
-    const { code } = await rt.call<{ code: string }>("computer.code", {}, { actor: ana });
-    computer = fakeComputer(topic, `code:${code}`, { workloads });
-    await computer.worker.ready;
-    await until(
-      async () => (await rt.query<Computer[]>("computer.mine", {}, { actor: ana }))[0]?.online,
-      "it came",
-    );
-    const { url, label } = await rt.call<{ url: string; label: string }>("computer.preview", {
-      port: 3000,
-    }, { actor: ana });
-    const previewHost = `${label}.preview.test`;
-    assertEquals(await dir.query("orgHost.resolve", { host: previewHost }), { org });
-
-    // To the org's own address on the app, which knows her there, and back.
-    const toApp = location(await a.send(url), url);
-    assertEquals(
-      toApp,
-      `http://localhost/o/${org}/__copilotz/previews/grant?host=${previewHost}&to=%2F`,
-    );
-    const back = location(await a.send(toApp), toApp);
-    assertEquals(location(await a.send(back), back), url);
-    const page = await a.send(`${url}hello`);
-    assertEquals([page.status, (await page.json()).port], [200, 3000]);
-
-    // Someone signed in elsewhere, with no session in this org, isn't let in.
-    const e = browser(host.serve);
-    await e.send("http://localhost/signin/dev", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "eve" }),
-    });
-    assertEquals((await e.send(toApp)).status, 401);
-    // A preview host nobody claimed is nobody's.
-    assertEquals((await e.send("https://abcdefghij-preview.preview.test/")).status, 404);
-    // Taken away, its host is released.
-    await rt.call("computer.unpreview", { label }, { actor: ana });
-    assertEquals(await dir.query("orgHost.resolve", { host: previewHost }), null);
-    assertEquals((await a.send(`${url}hello`)).status, 404);
-  } finally {
-    await computer?.worker.stop().catch(() => {});
-    await host.close();
-    await dir.close();
-  }
 });
 
 test("without a wake hook, an offline computer's preview says so", async () => {

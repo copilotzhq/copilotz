@@ -21,10 +21,9 @@ import {
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 import { sqliteStore } from "../../../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../../../stores/sql/postgres/mod.ts";
-import { routeServer } from "../../../../hosts/web/routes.ts";
 import { env, tempFile, test } from "../../../../testing/mod.ts";
 import { maintainer } from "../../../../stores/tests/maintainer.ts";
-import { maintenance, type MaintenanceLog, serveMaintenance } from "../mod.ts";
+import { maintenance, type MaintenanceLog } from "../mod.ts";
 import { sameKey, weak } from "../resources/routes.ts";
 
 const KEY = "mk_Zq8vT2xLp9WcR4nY7bH3kJ6dF1sA5gE0uM";
@@ -116,7 +115,7 @@ async function send(
   options: { body?: unknown; key?: string | null; headers?: Record<string, string> } = {},
 ): Promise<Sent> {
   const key = options.key === undefined ? KEY : options.key;
-  const response = await serveMaintenance(
+  const response = await runtime.fetch(
     new Request(`http://app.test/maintenance${path}`, {
       method,
       headers: {
@@ -126,7 +125,6 @@ async function send(
       },
       ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     }),
-    { runtime },
   );
   const type = response.headers.get("content-type") ?? "";
   const body = type.startsWith("application/json")
@@ -168,8 +166,8 @@ test("maintenance: the key, in constant time; without one, nothing says it's her
     const index = await send(runtime, "GET", "/");
     assertEquals(index.status, 200);
     assertEquals([index.body.sql, index.body.limit, index.body.collections], [false, 50, ["note"]]);
-    // The web host routes it, by its `routes` resource.
-    const routed = await routeServer(runtime, () => Promise.resolve(null))(
+    // The runtime routes it, by the plugin's `/maintenance/*` route, with the bare slash too.
+    const routed = await runtime.fetch(
       new Request("http://app.test/maintenance/", { headers: { authorization: `Bearer ${KEY}` } }),
     );
     assertEquals(routed?.status, 200);

@@ -50,7 +50,7 @@
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { readAction } from "./actions/read.ts";
 import { writeAction } from "./actions/write.ts";
-import { route, settingsOf } from "./resources/routes.ts";
+import { serveMaintenance, settingsOf } from "./resources/routes.ts";
 
 export * from "./contract.ts";
 export { serveMaintenance } from "./resources/routes.ts";
@@ -61,9 +61,7 @@ export const maintenance: Plugin = definePlugin({
     "maintenance.read": readAction,
     "maintenance.write": writeAction,
   },
-  resources: {
-    routes: { maintenance: route },
-  },
+  routes: { "/maintenance/*": serveMaintenance },
   // A key too short to be safe stops the app from starting.
   check: ({ resources }) => void settingsOf(resources),
 });

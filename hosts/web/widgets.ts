@@ -26,7 +26,8 @@
  *   code: await bundle(new URL("./widgets.tsx", import.meta.url), { split: false }),
  *   plugins: [brandTheme, bookingWeb],
  * });
- * await serve({ runtime, widgets, port: 8080 });
+ * // The MCP interface's routes find them in the app's settings:
+ * definePlugin({ name: "settings", resources: { widgets } });
  * ```
  */
 import { answeredAs } from "../../runtime/browsers.ts";

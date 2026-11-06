@@ -21,7 +21,6 @@ import {
   ACCOUNT,
   callSid,
   CARLA,
-  fakeRelay,
   LINE_NUMBER,
   ORIGIN,
   setup,
@@ -29,7 +28,6 @@ import {
   until,
   VERIFIED,
 } from "./setup.ts";
-import { serveRelay } from "../resources/relay.ts";
 
 test("Twilio's signature: its own example, and nothing else", async () => {
   // Twilio's example request (its helper libraries' tests): the URL, then the sorted fields.
@@ -104,23 +102,24 @@ test("a ticket opens one socket, once, for its call, within a minute", async () 
   await setup(async (s) => {
     const twiml = await (await s.ring()).text();
     // Signed by someone else: refused, and the ticket still good.
-    assertEquals((await s.open(twiml, { token: "not-twilios" })).response.status, 401);
+    assertEquals((await s.knock(twiml, { token: "not-twilios" })).status, 401);
+    // The first use opens a real socket; the second finds the ticket used.
     const first = await s.open(twiml);
-    assertEquals(first.response.status, 200);
-    assertEquals((await s.open(twiml)).response.status, 401);
+    assertEquals(first.relay.closed, false);
+    assertEquals((await s.knock(twiml)).status, 401);
     const [call] = await s.docs<VoiceCall>("voice_call");
     assertEquals(call.ticket, undefined);
 
     // A ticket's secret made up, or another call's: refused.
     const other = await (await s.ring()).text();
     const forged = other.replace(/ticket=CA[0-9a-f]+\.[\w-]+/, `ticket=${callSid(2)}.made-up`);
-    assertEquals((await s.open(forged)).response.status, 401);
+    assertEquals((await s.knock(forged)).status, 401);
     const crossed = other.replace(/ticket=CA[0-9a-f]+/, `ticket=${callSid(1)}`);
-    assertEquals((await s.open(crossed)).response.status, 401);
+    assertEquals((await s.knock(crossed)).status, 401);
 
     // A minute later, it's too old.
     await s.runtime.call("test.age", { call: callSid(2), ms: 61_000 });
-    assertEquals((await s.open(other)).response.status, 401);
+    assertEquals((await s.knock(other)).status, 401);
   });
 });
 
@@ -293,14 +292,10 @@ test("Twilio's verification of the number is noted on the call", async () => {
 test("a path that doesn't decode names no line", async () => {
   await setup(async (s) => {
     assertEquals((await s.ring({ path: "/hooks/voice/%E0%A4%A" })).status, 404);
-    const relay = await serveRelay(
+    const relay = await s.runtime.fetch(
       new Request("http://localhost/hooks/voice/%E0%A4%A/relay", {
         headers: { upgrade: "websocket" },
       }),
-      {
-        runtime: s.runtime,
-        upgrade: () => ({ socket: fakeRelay().socket, response: new Response() }),
-      },
     );
     assertEquals(relay.status, 404);
   });

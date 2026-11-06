@@ -20,8 +20,8 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, type Thread } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
-import { api, type ApiKey, serveApi } from "../mod.ts";
-import { test } from "../../../../testing/mod.ts";
+import { api, type ApiKey } from "../mod.ts";
+import { test, TEST_ACTOR, testWho } from "../../../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -120,7 +120,7 @@ type Setup = {
 async function setup(fn: (s: Setup) => Promise<void>, whom: Actor | null = null) {
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, api, notes, app],
+    plugins: [models, chat, ...access, api, notes, app, testWho],
   });
   try {
     const { space: personal } = await runtime.call<{ space: string }>(
@@ -133,8 +133,13 @@ async function setup(fn: (s: Setup) => Promise<void>, whom: Actor | null = null)
       { name: "Launch" },
       { actor: ana },
     );
-    const serve = (request: Request) =>
-      serveApi(request, { runtime, whom: () => Promise.resolve(whom) });
+    // `whom` is the person whose page asks (the runtime's `who`: testWho believes the header).
+    const serve = (request: Request) => {
+      if (!whom) return runtime.fetch(request);
+      const headers = new Headers(request.headers);
+      headers.set(TEST_ACTOR, JSON.stringify(whom));
+      return runtime.fetch(new Request(request, { headers }));
+    };
     await fn({
       runtime,
       serve,
@@ -325,10 +330,7 @@ test("a call acts as the key's person, in its space, and only for what its scope
 
 /** A request with no key at all. */
 const serveApiAnonymously = (runtime: Runtime) =>
-  serveApi(new Request("http://localhost/api/actions/chat.send", { method: "POST" }), {
-    runtime,
-    whom: () => Promise.resolve(null),
-  });
+  runtime.fetch(new Request("http://localhost/api/actions/chat.send", { method: "POST" }));
 
 test("a key reaches its space alone: not its person's others, nor through their agents", async () => {
   await setup(async ({ runtime, personal, launch, key, call }) => {

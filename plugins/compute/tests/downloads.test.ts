@@ -18,8 +18,6 @@ import { type Computer, computers } from "../mod.ts";
 import { computerDownloads, releaseOf } from "../computers/resources/downloads.ts";
 import { VERSION } from "../computers/program/version.ts";
 import { type Manifest, UPDATE } from "../computers/program/release.ts";
-import { createTickets } from "../../../hosts/web/tickets.ts";
-import { webServer } from "../../../hosts/web/server.ts";
 import { serve, tempDir, test } from "../../../testing/mod.ts";
 import { fakeComputer } from "./fake-computer.ts";
 
@@ -68,14 +66,8 @@ async function setup(
 
 test("a release folder is served at /computer/download/: its files only, binaries by their hash", async () => {
   await setup(await computerDownloads({ dir: folder() }), async (rt) => {
-    const server = webServer({
-      runtime: rt,
-      tickets: createTickets(),
-      code: { entry: "app.js", files: { "app.js": "" } },
-      upgrade: () => new Response(null, { status: 299 }),
-    });
     const get = (path: string, init?: RequestInit) =>
-      server(new Request(`http://localhost/computer/download/${path}`, init));
+      rt.fetch(new Request(`http://localhost/computer/download/${path}`, init));
     const listed = await get("manifest.json");
     assertEquals(listed.headers.get("content-type"), "application/json");
     assertEquals(await listed.json(), manifest);
@@ -118,7 +110,7 @@ test("a release at a URL is read once, as the app starts; a folder that isn't on
   try {
     const plugin = await computerDownloads({ url: `${server.url}/v1` });
     assertEquals(plugin.resources?.downloads, { base: `${server.url}/v1/`, manifest });
-    assertEquals(plugin.resources?.routes, undefined);
+    assertEquals(plugin.routes, undefined);
     await assertRejects(() => computerDownloads({ url: `${server.url}/v2/` }), Error, "404");
   } finally {
     await server.close();

@@ -32,7 +32,7 @@
  * resource: `{ label, icon?, href, order? }`, pages of the person's own,
  * such as Connected accounts), then signing out.
  *
- * Where the app serves many orgs (`hosts/orgs`; the web host's `useOrgs`),
+ * Where the app serves many orgs (the web host's `useOrgs`),
  * the shell is where you are among them: the org switcher at the top of the
  * sidebar (your orgs, Personal first; invitations, answered in place; a new
  * org; going into one shows a short transition, then its home), the user

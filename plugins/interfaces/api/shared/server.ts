@@ -20,22 +20,17 @@
  * code says. The runtime checks everything a call from outside is checked
  * for: each Action's and query's `allow`, the key's scope, and the rules.
  *
- * It runs in the web host's process (a `serve` route) and needs the runtime
- * the host hands it: calls by id, `describe()` and following events are the
- * runtime's public API, not plugin code's.
+ * Who calls is the plugin's `who` (see actor.ts): the key's person, with its
+ * scope. It is the plugin's route (`/api/*`), given the runtime: calls by id,
+ * `describe()` and following events are the runtime's public API, not plugin
+ * code's.
  */
-import type { Actor, Runtime } from "../../../../runtime/mod.ts";
+import type { Route, RouteContext } from "../../../../runtime/mod.ts";
 import type { ApiKey } from "../collections/key.ts";
-import type { KeyActor } from "./actor.ts";
+import { bearerOf, isKey, type KeyActor } from "./actor.ts";
 import { eventStream } from "./events.ts";
 import { answerFor, bodyOf, CORS, failure, fault, json } from "./http.ts";
 import { catalogOf, referenceOf, takesSpace } from "./reference.ts";
-
-/** What the web host hands a `serve` route: the runtime, and who the request's session signs in. */
-export type Served = {
-  runtime: Pick<Runtime, "call" | "query" | "describe" | "subscribe" | "observe">;
-  whom?(): Promise<Actor | null>;
-};
 
 /** A key's last use is noted at most this often. */
 const USED_EVERY_MS = 60_000;
@@ -51,15 +46,14 @@ const unauthorized = () =>
     { "www-authenticate": 'Bearer realm="api"' },
   );
 
-/** Who calls with a request's key (its person, with its scope); null when none that works. */
-async function proven(request: Request, runtime: Served["runtime"]): Promise<KeyActor | null> {
-  const [scheme, secret] = (request.headers.get("authorization") ?? "").split(/\s+/, 2);
-  if (scheme?.toLowerCase() !== "bearer" || !secret) return null;
-  return await runtime.query<KeyActor | null>("api_key.actor", { secret });
+/** Who calls with a request's key (its person, with its scope), asked now; null when none that works. */
+async function proven(request: Request, runtime: RouteContext["runtime"]): Promise<KeyActor | null> {
+  const secret = bearerOf(request);
+  return secret ? await runtime.query<KeyActor | null>("api_key.actor", { secret }) : null;
 }
 
 /** The key calling, as its person reads it (its name, its space): the system's read. */
-async function keyOf(runtime: Served["runtime"], actor: KeyActor): Promise<ApiKey> {
+async function keyOf(runtime: RouteContext["runtime"], actor: KeyActor): Promise<ApiKey> {
   const key = await runtime.query<ApiKey | null>("api_key.get", { key: actor.key });
   if (!key) throw fault("unauthorized", "The key was revoked.");
   return key;
@@ -85,27 +79,19 @@ function callId(request: Request, actor: KeyActor): string | undefined {
 }
 
 /** Answers a request under `/api/`. */
-export async function serveApi(request: Request, host?: Served): Promise<Response> {
+export const serveApi: Route = async (request, { runtime, actor: who }) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-  if (!host?.runtime) {
-    return failure(
-      501,
-      "unavailable",
-      "The web host doesn't hand this route the runtime: the API can't answer here.",
-    );
-  }
-  const { runtime } = host;
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api\/?/, "/");
   try {
-    const actor = await proven(request, runtime);
+    // The key the plugin's `who` proved; with a session's cookie too, an earlier plugin's `who`
+    // answered for the cookie, so the key the request shows is asked here.
+    const actor = isKey(who) ? who as KeyActor : await proven(request, runtime);
     if (!actor) {
       // The app's own page, signed in: every Action, to choose what a key does.
-      const person =
-        path === "/" && request.method === "GET" && !request.headers.has("authorization")
-          ? await host.whom?.().catch(() => null)
-          : null;
-      if (person?.kind === "person") return json({ actions: catalogOf(runtime.describe()) });
+      const signedIn = path === "/" && request.method === "GET" &&
+        !request.headers.has("authorization") && who.kind === "person";
+      if (signedIn) return json({ actions: catalogOf(runtime.describe()) });
       return unauthorized();
     }
     used(runtime, actor);
@@ -149,10 +135,10 @@ export async function serveApi(request: Request, host?: Served): Promise<Respons
   } catch (error) {
     return answerFor(error);
   }
-}
+};
 
 /** Notes the key's use, at most once a minute, without waiting for it. */
-function used(runtime: Served["runtime"], actor: KeyActor) {
+function used(runtime: RouteContext["runtime"], actor: KeyActor) {
   let last = noted.get(runtime);
   if (!last) noted.set(runtime, last = new Map());
   const now = Date.now();
@@ -167,7 +153,7 @@ function used(runtime: Served["runtime"], actor: KeyActor) {
  * or (`follow=1`) as server-sent events while it changes.
  */
 async function viewOf(
-  runtime: Served["runtime"],
+  runtime: RouteContext["runtime"],
   url: URL,
   name: string,
   actor: KeyActor,

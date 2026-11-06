@@ -168,8 +168,8 @@ export const orgMeAction = defineAction({
 });
 
 /**
- * The `directory` resource, which a host serving many orgs gives each org
- * (`hosts/orgs`): how the org reaches the directory, for what only it holds.
+ * The `directory` resource, which a host serving many orgs gives each org:
+ * how the org reaches the directory, for what only it holds.
  */
 export type DirectoryPort = {
   invite(invite: { email: string; role: string; by: string; from?: string }): Promise<void>;

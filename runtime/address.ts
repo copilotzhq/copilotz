@@ -1,16 +1,16 @@
 /**
  * Where a request came from, as the socket says: the peer address the
  * listener saw (Oxian's adapters keep it on the request they make, from the
- * socket: `getClientAddress`), never a header anyone may send. What the web
- * host goes by for what only this machine may do (`local` sign-in) and, for
- * an app without a front that says who calls, what a web line counts its
+ * socket: `getClientAddress`), never a header anyone may send. What routes
+ * go by for what only this machine may do (dev sign-in) and, for an app
+ * without a front that says who calls, what the site chat counts its
  * visitors by.
  *
- * A request the host makes from another (the orgs host's, for an org) keeps
- * the address (`carry`). An app serving with a listener of its own sets it
- * (`setClientAddress(request, info.remoteAddr.hostname)` with `Deno.serve`);
- * without one, a request comes from nowhere known: never this machine, and
- * no visitor is let in by address.
+ * A request `runtime.fetch` makes from another (the site the front says, the
+ * path under the app's base) keeps the address (`carry`). An app serving
+ * with a listener of its own sets it (`setClientAddress(request,
+ * info.remoteAddr.hostname)` with `Deno.serve`); without one, a request comes
+ * from nowhere known: never this machine, and no visitor is let in by address.
  */
 import { getClientAddress } from "@oxian/oxian-js/http";
 

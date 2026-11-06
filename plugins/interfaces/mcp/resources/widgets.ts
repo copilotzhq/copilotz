@@ -1,7 +1,7 @@
 /**
  * A line's widgets, as the MCP route answers about them (MCP Apps, SEP-1865, and ChatGPT's
  * Apps SDK aliases): the app's web Views drawn inside the assistant's conversation, through
- * the web host's widgets (`Served.widgets`: `widgetsOf`, which owns front-end code).
+ * the app's widgets (its `widgets` resource: `widgetsOf`, which owns front-end code).
  *
  * - **The template** (`resources/list`, `resources/read`): one page for all of a line's
  *   widgets, `ui://<line>/widget-<version>.html`, `text/html;profile=mcp-app`; any older

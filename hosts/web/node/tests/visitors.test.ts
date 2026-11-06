@@ -1,6 +1,6 @@
 /**
  * A web line's visitor over the real socket (Oxian's Node adapter, as a
- * browser connects): let in by `/connect`, counted by the address its socket
+ * browser connects): let in by its line (`POST /web/<line>`, then `/connect`), counted by the address its socket
  * came from, it connects with its ticket as the visitor it is, and nothing
  * is made until it speaks: its first message makes its contact and its own
  * chat. It reads what's said there, never its agent's private steps (a
@@ -28,9 +28,7 @@ import { chat, tool } from "../../../../plugins/agents/chat/mod.ts";
 import { access } from "../../../../plugins/access/mod.ts";
 import { webLines } from "../../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../../testing/mod.ts";
-import { socket } from "../../server.ts";
-import { createTickets } from "../../tickets.ts";
-import { serve, type Server } from "../mod.ts";
+import { listen, type Listener } from "../serve.ts";
 
 /** What a tool call holds while it runs: released by the test, once it's looked. */
 let holding: PromiseWithResolvers<void> | undefined;
@@ -122,25 +120,33 @@ const page = definePlugin({
   },
 });
 
-/** A visitor's way in: `/connect` asking for a line, from the app's page. */
-async function arrive(server: Server, line = "site") {
+/** A visitor's way in, as the page does: arrives by a line, then asks `/connect` for a ticket. */
+async function arrive(server: Listener, line = "site") {
+  const headers = { "content-type": "application/json", origin: server.url.origin };
+  const came = await fetch(`${server.url.origin}/web/${line}`, {
+    method: "POST",
+    headers,
+    body: "{}",
+  });
+  assertEquals(came.status, 200);
+  const cookie = came.headers.get("set-cookie")!.split(";")[0];
+  await came.body?.cancel();
   const response = await fetch(`${server.url.origin}/connect`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: server.url.origin },
-    body: JSON.stringify({ line }),
+    headers: { ...headers, cookie },
   });
   assertEquals(response.status, 200);
   const { ticket, actor } = await response.json() as { ticket: string; actor: Actor };
-  return { ticket, actor, cookie: response.headers.get("set-cookie")!.split(";")[0] };
+  return { ticket, actor, cookie };
 }
 
 /** A browser on the socket, with one ticket. */
-const browser = (server: Server, ticket: string): Client =>
+const browser = (server: Listener, ticket: string): Client =>
   connect({
     transport: {
       type: "websocket",
       config: {
-        url: `ws://127.0.0.1:${server.port}${socket.config.path}`,
+        url: `ws://127.0.0.1:${server.port}/oxian`,
         allowInsecureLoopback: true,
       },
     },
@@ -179,23 +185,20 @@ const kept = definePlugin({
   },
 });
 
-async function setup(fn: (server: Server, runtime: Runtime) => Promise<void>) {
+async function setup(fn: (server: Listener, runtime: Runtime) => Promise<void>) {
   holding = undefined;
   heard = 0;
-  const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
     plugins: [models, chat, ...access, webLines, app, kept],
-    transports: [socket],
-    admit: tickets.admit,
   });
-  let server: Server | undefined;
+  let server: Listener | undefined;
   try {
-    server = await serve({ runtime, tickets, code: { entry: "app.js", files: { "app.js": "" } } });
+    server = await listen(runtime.fetch);
     await fn(server, runtime);
   } finally {
-    if (server) await server.close();
-    else await runtime.close();
+    await server?.shutdown();
+    await runtime.close();
   }
 }
 
@@ -468,7 +471,7 @@ test("a ticket admits once: the same one again is refused", async () => {
       transport: {
         type: "websocket",
         config: {
-          url: `ws://127.0.0.1:${server.port}${socket.config.path}`,
+          url: `ws://127.0.0.1:${server.port}/oxian`,
           allowInsecureLoopback: true,
         },
       },
@@ -489,7 +492,6 @@ test("a ticket admits once: the same one again is refused", async () => {
     const response = await fetch(`${server.url.origin}/connect`, {
       method: "POST",
       headers: { origin: server.url.origin, cookie: carla.cookie },
-      body: JSON.stringify({ line: "site" }),
     });
     const { ticket, actor } = await response.json() as { ticket: string; actor: Actor };
     assertEquals(actor, carla.actor);
@@ -505,9 +507,9 @@ test("a ticket admits once: the same one again is refused", async () => {
 });
 
 /** A socket at the runtime's path, speaking its protocol, open. */
-const raw = (server: Server) =>
+const raw = (server: Listener) =>
   new Promise<WebSocket>((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${server.port}${socket.config.path}`, [
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/oxian`, [
       "oxian.worker.v1",
     ]);
     ws.onopen = () => resolve(ws);

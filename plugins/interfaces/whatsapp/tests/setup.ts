@@ -17,8 +17,6 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, type Thread } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
-import { createTickets } from "../../../../hosts/web/tickets.ts";
-import { webServer } from "../../../../hosts/web/server.ts";
 import { serve as listen } from "../../../../testing/mod.ts";
 import { whatsapp } from "../mod.ts";
 import { sign } from "../shared/signature.ts";
@@ -341,14 +339,6 @@ export async function setup(
       ...(options.clock ? { clock: options.clock } : {}),
     });
   let runtime = await start();
-  const serving = () =>
-    webServer({
-      runtime,
-      tickets: createTickets(),
-      code: { entry: "app.js", files: { "app.js": "" } },
-      upgrade: () => new Response(null, { status: 299 }),
-    });
-  let serve = serving();
   try {
     const { space: personal } = await runtime.call<{ space: string }>("space.personal", {}, {
       actor: ana,
@@ -367,11 +357,10 @@ export async function setup(
         return runtime;
       },
       graph,
-      serve: (request) => serve(request),
+      serve: (request) => runtime.fetch(request),
       restart: async () => {
         await runtime.close();
         runtime = await start();
-        serve = serving();
       },
       launch,
       personal,
@@ -404,7 +393,7 @@ export async function setup(
           }],
         });
         const bytes = new TextEncoder().encode(body);
-        const answered = await serve(
+        const answered = await runtime.fetch(
           new Request(`http://localhost/hooks/whatsapp/${number}`, {
             method: "POST",
             headers: {

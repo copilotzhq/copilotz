@@ -14,13 +14,13 @@
  *   ChatGPT plan, as a model provider); its front end is `accountsWeb`
  *   (accounts/web.tsx);
  * - `directory`: who signs in and which orgs they belong to, for apps that
- *   serve many orgs (`hosts/orgs`; see design/tenancy.md).
+ *   serve many orgs (see design/tenancy.md).
  *
  *   plugins: [...access, googleSignIn, { name: "app", resources: { shared: { note: {} } } }]
  *
- * Who a browser is comes from here too: identity's session (a person), and
- * the web interface's lines (`webLines`: a visitor), the web host's `entrances`; and how
- * people sign in, Google's and dev sign-in's `signIn`.
+ * Who a request is comes from here too: identity's `who` (its session's
+ * cookie: a person), beside the web interface's lines' (`webLines`: a
+ * visitor); and how people sign in, Google's and dev sign-in's routes.
  */
 import type { Plugin } from "../../runtime/mod.ts";
 import { contacts } from "./contacts/mod.ts";

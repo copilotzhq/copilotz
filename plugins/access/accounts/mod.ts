@@ -15,8 +15,8 @@
  *   declared; GitHub, Google and others are more of the same.
  * - **Connecting** (`account.connect`) is OAuth's code flow with PKCE, the
  *   state bound to the person who started it, used once, within ten
- *   minutes. The provider sends them back to the app's callback (the web
- *   host's route, `/accounts/callback/<provider>`: `account.callback`), or,
+ *   minutes. The provider sends them back to the app's callback (this
+ *   plugin's route, `/accounts/callback/<provider>`: `account.callback`), or,
  *   for one that only sends people to a fixed address the app can't serve
  *   (ChatGPT's), they paste that address back (`account.complete`).
  * - **Renewing:** each account's timer renews its tokens before they run
@@ -50,7 +50,8 @@
  * ```
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
-import { CALLBACK, callbackAction } from "./actions/callback.ts";
+import { callbackAction } from "./actions/callback.ts";
+import { callbackRoute } from "./routes/callback.ts";
 import { completeAction } from "./actions/complete.ts";
 import { connectAction } from "./actions/connect.ts";
 import { disconnectAction } from "./actions/disconnect.ts";
@@ -105,13 +106,14 @@ export const accounts: Plugin = definePlugin({
   },
   events: { "account.changed": changed },
   guard: rules,
+  // Where a provider sends the person back after they sign in.
+  routes: { "/accounts/callback/:provider": callbackRoute },
   resources: {
     accounts: {},
     accountProviders: { chatgpt },
     provider: { chatgpt: chatgptModels },
     modelKeys: { open: "modelKey.open", list: "modelKey.list", may: "modelKey.may" },
     cost: { "chatgpt/*": chatgptCost },
-    routes: { accounts: { path: CALLBACK, action: "account.callback", methods: ["GET"] } },
   },
   check(merged) {
     for (const [name, provider] of Object.entries(providersOf(merged))) {

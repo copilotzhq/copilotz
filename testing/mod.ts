@@ -2,7 +2,8 @@
  * One test suite on every runtime: `deno test`, `node --test` and `bun test`.
  * Tests use `test` and the helpers here instead of a runtime's own APIs:
  * temporary files, environment variables, a local HTTP server, a child
- * process, and serving an owner's Hypervisor to remote executors.
+ * process, serving an owner's Hypervisor to remote executors, and saying
+ * who a request is (`testWho`, `ticketFor`).
  *
  * Only tests import this module; library code uses web standards alone.
  */
@@ -12,6 +13,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hypervisor } from "@oxian/oxian-js";
+import { type Actor, definePlugin, type Plugin } from "../runtime/mod.ts";
 
 type Fn = () => unknown;
 type Options = { name: string; fn: Fn; ignore?: boolean };
@@ -154,8 +156,42 @@ export async function host(
 ): Promise<{ url: string | URL; shutdown(): Promise<void> }> {
   // A full specifier: a published module has no import map to resolve a bare one.
   const adapter = runtime === "deno"
-    ? "jsr:@oxian/oxian-js@0.23.3/adapters/deno"
+    ? "jsr:@oxian/oxian-js@0.23.4/adapters/deno"
     : "@oxian/oxian-js/adapters/node";
   const { serve } = await import(adapter);
   return await serve({ hypervisor, hostname: "127.0.0.1", port: 0 });
+}
+
+/** The header `testWho` believes: who a test's request is, as JSON (`{ kind, id }`). */
+export const TEST_ACTOR = "x-test-actor";
+
+/**
+ * A test's way to say who a request is: a plugin whose `who` believes the
+ * `x-test-actor` header (an actor, as JSON). For tests alone: in an app, it
+ * would let anyone be anyone.
+ */
+export const testWho: Plugin = definePlugin({
+  name: "test-who",
+  who: (request) => {
+    const said = request.headers.get(TEST_ACTOR);
+    return said ? JSON.parse(said) as Actor : null;
+  },
+});
+
+/**
+ * A one-time ticket for `actor`, from the runtime's `POST /connect` (with
+ * `testWho` among its plugins): what an in-process client connects with.
+ */
+export async function ticketFor(
+  runtime: { fetch(request: Request): Promise<Response> },
+  actor: Actor,
+): Promise<string> {
+  const response = await runtime.fetch(
+    new Request("http://localhost/connect", {
+      method: "POST",
+      headers: { [TEST_ACTOR]: JSON.stringify(actor) },
+    }),
+  );
+  if (!response.ok) throw new Error(`ticketFor: /connect answered ${response.status}`);
+  return (await response.json() as { ticket: string }).ticket;
 }

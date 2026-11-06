@@ -1,6 +1,6 @@
 /**
  * Orgs, for the browser: what the server says of the orgs the signed-in
- * person belongs to, when it serves many behind one address (`hosts/orgs`),
+ * person belongs to, when it serves many behind one address (the directory's),
  * and going between them. A server that serves one org has none of this, and
  * `useOrgs()` says so (`none`): the shell then shows no switcher.
  *

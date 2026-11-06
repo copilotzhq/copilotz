@@ -1,7 +1,7 @@
 /**
  * What the MCP tests share: an app with one line (`chatgpt`, in the app's
  * own space) and a way to call it as a client does: JSON-RPC over HTTP to
- * the web host, legacy (with a protocol version header) or modern
+ * the runtime, legacy (with a protocol version header) or modern
  * (2026-07-28's `_meta` and headers), from an address its front vouches for.
  *
  * The tools, each with its `tool:<name>` View (what a model reads of it):
@@ -33,8 +33,7 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, tool } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
-import { createTickets } from "../../../../hosts/web/tickets.ts";
-import { webServer, type Widgets } from "../../../../hosts/web/server.ts";
+import type { Widgets } from "../../../../hosts/web/server.ts";
 import { mcp } from "../mod.ts";
 import type { DeclaredServer } from "../shared/settings.ts";
 
@@ -457,7 +456,7 @@ export async function setup(
     plugins?: Plugin[];
     /** One store for several runtimes in turn (an owner restarted). */
     store?: Store;
-    /** The web host's widgets (`widgetsOf`): the line's tools drawn by Views. */
+    /** The app's widgets (`widgetsOf`, its `widgets` resource): the line's tools drawn by Views. */
     widgets?: Widgets;
   } = {},
 ) {
@@ -483,18 +482,14 @@ export async function setup(
           mcp: options.lines ?? { chatgpt: { ...LINE, ...options.line } },
         },
       }),
+      ...options.widgets
+        ? [definePlugin({ name: "widgets", resources: { widgets: options.widgets } })]
+        : [],
       ...options.plugins ?? [],
     ],
   });
-  const serve = webServer({
-    runtime,
-    tickets: createTickets(),
-    code: { entry: "app.js", files: { "app.js": "" } },
-    upgrade: () => new Response(null, { status: 501 }),
-    ...(options.widgets ? { widgets: options.widgets } : {}),
-  });
   const post: Setup["post"] = async (body, o = {}) => {
-    const response = await serve(
+    const response = await runtime.fetch(
       new Request(`http://localhost/mcp/${o.line ?? "chatgpt"}`, {
         method: o.method ?? "POST",
         // As the app's front sends it: who calls, and its secret. A header said empty isn't sent.

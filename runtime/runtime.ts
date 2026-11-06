@@ -1,17 +1,18 @@
 /**
  * A runtime is one owner and its executors, composed with Oxian. By default
  * they share this process over Oxian's in-process transport. The same owner
- * and executors run in separate processes over its WebSocket transport.
+ * and executors run in separate processes over its WebSocket transport. It
+ * answers HTTP as a fetch handler (`runtime.fetch`, see fetch.ts): plugins'
+ * routes, `POST /connect` and its socket, `/oxian`.
  */
 import { createExecutor } from "./executor.ts";
 import { createOwner, type Owner, type Transport } from "./owner.ts";
 import type { Blobs } from "./blobs.ts";
 import type { BrowserLimits } from "./browsers.ts";
 import type { Plugins } from "./define.ts";
-import type { Actor, Store } from "./store.ts";
+import type { Store } from "./store.ts";
 import type { Metrics } from "./metrics.ts";
 import type { Clock } from "./schedules.ts";
-import { merge } from "./registry.ts";
 
 export type Runtime = Owner;
 
@@ -23,7 +24,7 @@ export async function createRuntime(
     executors?: number;
     /** More ways for executors to connect, for example Oxian's WebSocket transport. */
     transports?: Transport[];
-    /** The key remote executors must present. */
+    /** The key remote executors must present (a new one each start, unless said). */
     key?: string;
     /** Where large values live; by default, in the store itself. */
     blobs?: Blobs;
@@ -38,14 +39,9 @@ export async function createRuntime(
     /** What plugin code (`ctx.fetch`) calls outside services with: the platform's, or a test's fake. */
     fetch?: typeof fetch;
     /**
-     * Who a browser is, from what it presents when it connects (a one-time
-     * ticket the host issued); undefined refuses it. Without it, no browsers.
-     */
-    admit?(secret: string): Actor | undefined | Promise<Actor | undefined>;
-    /**
      * How much browsers may hold, past the defaults (see browsers.ts): each
-     * actor's, contacts' together, and a `contactsPool()` shared with other
-     * runtimes on the same listener (the orgs host gives one to each org).
+     * actor's sockets and tickets a minute, contacts' together, and a
+     * `contactsPool()` shared with other runtimes on the same listener.
      */
     browsers?: BrowserLimits;
   },
@@ -54,15 +50,14 @@ export async function createRuntime(
     type: "in-process",
     config: { topic: `copilotz.${crypto.randomUUID()}` },
   } as const;
-  // With browsers or a plugin's workers admitted, everyone shows something: these executors, the key.
-  const others = !!options.admit || Object.keys(merge(options.plugins).workers).length > 0;
-  const key = options.key ?? (others ? crypto.randomUUID() : undefined);
+  // Browsers and plugins' workers may connect to its socket, so everyone shows something: these
+  // executors, the key.
+  const key = options.key ?? crypto.randomUUID();
   const owner = await createOwner({
     store: options.store,
     plugins: options.plugins,
     transports: [transport, ...options.transports ?? []],
     key,
-    ...(options.admit ? { admit: options.admit } : {}),
     ...(options.browsers ? { browsers: options.browsers } : {}),
     blobs: options.blobs,
     blobThreshold: options.blobThreshold,
@@ -80,7 +75,7 @@ export async function createRuntime(
         id: `executor-${i}`,
         metrics: options.metrics,
         fetch: options.fetch,
-        ...(others ? { key } : {}),
+        key,
       }),
   );
   await Promise.all(executors.map((executor) => executor.ready));

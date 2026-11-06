@@ -30,10 +30,8 @@
     "./web": "./hosts/web/mod.ts",
     "./web/server": "./hosts/web/server.ts",
     "./web/widget": "./hosts/web/widget.tsx",
-    "./web/tickets": "./hosts/web/tickets.ts",
     "./web/theme": "./hosts/web/theme/css.ts",
     "./web/node": "./hosts/web/node/mod.ts",
-    "./orgs": "./hosts/orgs/mod.ts",
     "./terminal": "./hosts/terminal/mod.ts",
     "./exporters": "./exporters/mod.ts",
     "./testing": "./testing/mod.ts"

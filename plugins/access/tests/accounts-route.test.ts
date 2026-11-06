@@ -1,17 +1,15 @@
 /**
- * Connected accounts through the web host: a provider that sends people back
+ * Connected accounts through the app's routes: a provider that sends people back
  * to the app (most do: GitHub's, Google's) finishes the sign-in at the
  * app's callback route, as the person the session cookie signs in, and
  * lands them on Connected accounts saying how it went; a visitor, or
  * someone else's session, finishes nothing.
  */
 import { assertEquals } from "@std/assert";
-import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
+import { type Actor, createRuntime, definePlugin, setClientAddress } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { access, devSignIn } from "../mod.ts";
 import { accounts, type Connecting } from "../accounts/mod.ts";
-import { createTickets } from "../../../hosts/web/tickets.ts";
-import { setClientAddress, webServer } from "../../../hosts/web/server.ts";
 import { test } from "../../../testing/mod.ts";
 import { CLIENT, fakeOpenAI } from "./openai-fake.ts";
 
@@ -46,12 +44,7 @@ test("a provider that sends people back to the app finishes at its route, as its
       }),
     ],
   });
-  const serve = webServer({
-    runtime: rt,
-    tickets: createTickets(),
-    code: { entry: "app.js", files: { "app.js": "" } },
-    upgrade: () => new Response(null, { status: 299 }),
-  });
+  const serve = (request: Request) => rt.fetch(request);
   const signIn = async (name: string) => {
     // From this machine (a listener says so).
     const answer = await serve(setClientAddress(

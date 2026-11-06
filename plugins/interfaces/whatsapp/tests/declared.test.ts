@@ -10,8 +10,6 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models from "../../../models/mod.ts";
 import { chat, type Thread } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
-import { createTickets } from "../../../../hosts/web/tickets.ts";
-import { webServer } from "../../../../hosts/web/server.ts";
 import { test } from "../../../../testing/mod.ts";
 import { whatsapp } from "../mod.ts";
 import { sign } from "../shared/signature.ts";
@@ -60,13 +58,7 @@ test("an app with only a declared line answers strangers, in a space of its own 
         }],
       }],
     });
-    const serve = webServer({
-      runtime,
-      tickets: createTickets(),
-      code: { entry: "app.js", files: { "app.js": "" } },
-      upgrade: () => new Response(null, { status: 299 }),
-    });
-    const answered = await serve(
+    const answered = await runtime.fetch(
       new Request("http://localhost/hooks/whatsapp/azul", {
         method: "POST",
         headers: {

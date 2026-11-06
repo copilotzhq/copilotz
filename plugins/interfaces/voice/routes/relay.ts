@@ -1,7 +1,8 @@
 /**
  * A line's socket: Twilio's ConversationRelay, at `/hooks/voice/<line>/relay`
- * (a `serve` route of the web host, which hands it the runtime and takes
- * the socket: `host.upgrade()`). Twilio turns speech into text and text
+ * (a route that takes the socket with Oxian's `upgradeWebSocket`, so it needs
+ * a listener that completes it: `listen` from `copilotz/web/node`, or
+ * `Deno.serve(runtime.fetch)`). Twilio turns speech into text and text
  * into speech; here, a call is a chat.
  *
  * **Opening it:** Twilio's signature of the socket's address (the one the
@@ -47,13 +48,14 @@
  * window (Twilio already waits for the caller to finish), the chat made
  * while the greeting plays, words sent as they come.
  */
-import type { Actor, Runtime } from "../../../../runtime/mod.ts";
+import { upgradeWebSocket } from "@oxian/oxian-js/http";
+import type { Actor, Route, Runtime } from "../../../../runtime/mod.ts";
 import type { Admitted, Started } from "../actions/call.ts";
 import type { Saying } from "../views/call.ts";
-import { declaredOf, GOODBYE_MS, HOOKS, lastsMs, type VoiceNumber } from "../shared/settings.ts";
+import { declaredOf, GOODBYE_MS, lastsMs, type VoiceNumber } from "../shared/settings.ts";
 import { signed } from "../shared/signature.ts";
 
-/** A route's socket, as far as a call uses it (the web host's `RouteSocket`). */
+/** A route's socket, as far as a call uses it (Oxian's `upgradeWebSocket` gives one). */
 export type RelaySocket = {
   readonly readyState: number;
   onmessage: ((event: { data: unknown }) => void) | null;
@@ -63,33 +65,24 @@ export type RelaySocket = {
   close(code?: number, reason?: string): void;
 };
 
-/** What the web host hands a `serve` route, as far as this one uses it. */
-export type RelayHost = {
-  runtime: Pick<Runtime, "call" | "observe" | "describe">;
-  upgrade?(options?: { protocol?: string }): { socket: RelaySocket; response: Response };
-};
-
 const plain = (status: number, text: string) =>
   new Response(text, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 
 /** Answers a request for a line's socket: the socket, or why not. */
-export async function serveRelay(request: Request, host?: RelayHost): Promise<Response> {
-  if (!host?.runtime || !host.upgrade) return plain(501, "This host doesn't take sockets");
-  const url = new URL(request.url);
-  const [name = "", what, ...more] = url.pathname.slice(HOOKS.length).split("/");
+export const relayRoute: Route = async (request, { runtime, params }) => {
   let named = "";
   try {
-    named = decodeURIComponent(name);
+    named = decodeURIComponent(params.name ?? "");
   } catch {
     // A malformed name names no line.
   }
-  const line = what === "relay" && !more.length && named
-    ? declaredOf({ resources: host.runtime.describe().resources }, named)
-    : undefined;
+  const line = named ? declaredOf({ resources: runtime.describe().resources }, named) : undefined;
   if (!line) return plain(404, "No such line");
+  if (request.method !== "GET") return plain(405, "GET");
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
     return plain(426, "A socket only");
   }
+  const url = new URL(request.url);
   // Signed as the webhook gave it (`wss://`); some of Twilio's say `https://` for the same.
   const where = `${new URL(line.origin).host}${url.pathname}${url.search}`;
   const signature = request.headers.get("x-twilio-signature");
@@ -97,21 +90,21 @@ export async function serveRelay(request: Request, host?: RelayHost): Promise<Re
   const fine = await signed(line.token, signature, `${scheme}://${where}`) ||
     await signed(line.token, signature, `${scheme === "ws" ? "http" : "https"}://${where}`);
   if (!fine) return plain(401, "Bad signature");
-  const call = await host.runtime.call<Admitted | null>("voice.admit", {
+  const call = await runtime.call<Admitted | null>("voice.admit", {
     line: line.name,
     ticket: (url.searchParams.get("ticket") ?? "").slice(0, 200),
   });
   if (!call) return plain(401, "That ticket was used, or is too old");
-  let upgraded: ReturnType<NonNullable<RelayHost["upgrade"]>>;
+  let upgraded: { socket: RelaySocket; response: Response };
   try {
-    upgraded = host.upgrade();
+    upgraded = upgradeWebSocket(request) as unknown as typeof upgraded;
   } catch {
-    await host.runtime.call("voice.over", { call: call._id, reason: "setup" }).catch(() => {});
+    await runtime.call("voice.over", { call: call._id, reason: "setup" }).catch(() => {});
     return plain(400, "Not a socket");
   }
-  talk(host.runtime, upgraded.socket, call, line);
+  talk(runtime, upgraded.socket, call, line);
   return upgraded.response;
-}
+};
 
 /** A socket's state when it's open. */
 const OPEN = 1;
@@ -160,7 +153,7 @@ export const goodbyeWait = (playedBy: number, now: number) =>
 
 /** A call, over its socket, from Twilio's `setup` to its end (see above). */
 export function talk(
-  runtime: RelayHost["runtime"],
+  runtime: Pick<Runtime, "call" | "observe">,
   socket: RelaySocket,
   call: Admitted,
   line: VoiceNumber,

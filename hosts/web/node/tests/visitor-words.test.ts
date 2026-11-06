@@ -23,9 +23,7 @@ import { chat, tool } from "../../../../plugins/agents/chat/mod.ts";
 import { access } from "../../../../plugins/access/mod.ts";
 import { webLines } from "../../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../../testing/mod.ts";
-import { socket } from "../../server.ts";
-import { createTickets } from "../../tickets.ts";
-import { serve, type Server } from "../mod.ts";
+import { listen, type Listener } from "../serve.ts";
 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -116,11 +114,19 @@ const page = definePlugin({
 type LiveDoc = { text: string; calls?: unknown[]; retry?: unknown; open?: boolean };
 
 /** A visitor's way in, and its browser on the socket. */
-async function visitor(server: Server, line: string): Promise<Client> {
+async function visitor(server: Listener, line: string): Promise<Client> {
+  const headers = { "content-type": "application/json", origin: server.url.origin };
+  const came = await fetch(`${server.url.origin}/web/${line}`, {
+    method: "POST",
+    headers,
+    body: "{}",
+  });
+  assertEquals(came.status, 200);
+  const cookie = came.headers.get("set-cookie")!.split(";")[0];
+  await came.body?.cancel();
   const response = await fetch(`${server.url.origin}/connect`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: server.url.origin },
-    body: JSON.stringify({ line }),
+    headers: { ...headers, cookie },
   });
   assertEquals(response.status, 200);
   const { ticket } = await response.json() as { ticket: string; actor: Actor };
@@ -128,7 +134,7 @@ async function visitor(server: Server, line: string): Promise<Client> {
     transport: {
       type: "websocket",
       config: {
-        url: `ws://127.0.0.1:${server.port}${socket.config.path}`,
+        url: `ws://127.0.0.1:${server.port}/oxian`,
         allowInsecureLoopback: true,
       },
     },
@@ -170,22 +176,19 @@ const answered = (runtime: Runtime, thread: string) => async () =>
   (await runtime.query<{ _id: string }[]>("message.history", { thread }))
     .some((m) => m._id.endsWith(":reply"));
 
-async function setup(fn: (server: Server, runtime: Runtime) => Promise<void>) {
+async function setup(fn: (server: Listener, runtime: Runtime) => Promise<void>) {
   breakOnce = false;
-  const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
     plugins: [models, chat, ...access, webLines, app, page],
-    transports: [socket],
-    admit: tickets.admit,
   });
-  let server: Server | undefined;
+  let server: Listener | undefined;
   try {
-    server = await serve({ runtime, tickets, code: { entry: "app.js", files: { "app.js": "" } } });
+    server = await listen(runtime.fetch);
     await fn(server, runtime);
   } finally {
-    if (server) await server.close();
-    else await runtime.close();
+    await server?.shutdown();
+    await runtime.close();
   }
 }
 

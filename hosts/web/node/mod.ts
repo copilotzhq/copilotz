@@ -1,38 +1,27 @@
 /**
- * The web host on Node: what an app needs beside `webServer` to serve it
- * there. `bundle` makes the browser's code with esbuild (code splitting, as on
- * Deno), and `serve` listens with Node's HTTP server, taking browsers'
- * sockets through Oxian's Node adapter (with no `code`, it serves the app's
- * routes alone); `listen` does it for any fetch handler, each socket going to
- * the runtime it's for (a host with one runtime per org). Bun and Deno run it
- * too.
+ * Copilotz on Node: what an app needs beside its runtime to serve it there.
+ * `listen` serves a fetch handler with Node's HTTP server, through Oxian's
+ * Node adapter, sockets included (`runtime.fetch` accepts its own); `bundle`
+ * makes the browser's code with esbuild (code splitting, as on Deno), for
+ * the page (`webPage`'s `code`). Bun and Deno run it too.
  *
  * ```ts
- * import { createRuntime } from "copilotz";
- * import { socket } from "copilotz/web/server";
- * import { createTickets } from "copilotz/web/tickets";
- * import { bundle, serve } from "copilotz/web/node";
+ * import { createRuntime, definePlugin } from "copilotz";
+ * import { webPage } from "copilotz/web/server";
+ * import { bundle, listen } from "copilotz/web/node";
  *
- * const tickets = createTickets();
+ * const code = await bundle(new URL("./browser.tsx", import.meta.url));
  * const runtime = await createRuntime({
- *   store, plugins, transports: [socket], admit: tickets.admit,
+ *   store,
+ *   plugins: [...plugins, webPage, definePlugin({ name: "settings", resources: { page: { code } } })],
  * });
- * const server = await serve({
- *   runtime,
- *   tickets,
- *   code: await bundle(new URL("./browser.tsx", import.meta.url)),
- *   port: 8080,
- * });
+ * const server = await listen(runtime.fetch, { port: 8080 });
  * console.log(`${server.url}`);
- * process.once("SIGTERM", () => server.close({ drain: 8_000 }));
+ * process.once("SIGTERM", async () => {
+ *   await server.shutdown();
+ *   await runtime.close({ drain: 8_000 });
+ * });
  * ```
  */
 export { bundle, type BundleOptions } from "./bundle.ts";
-export {
-  listen,
-  type Listener,
-  type ListenOptions,
-  serve,
-  type ServeOptions,
-  type Server,
-} from "./serve.ts";
+export { listen, type Listener, type ListenOptions } from "./serve.ts";

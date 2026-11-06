@@ -1,6 +1,6 @@
 /**
  * A line's widgets (see resources/widgets.ts): the app's web Views drawn inside the assistant,
- * through the web host's widgets (`widgetsOf`). The template is a resource; a tool shown
+ * through the app's widgets (`widgetsOf`, a resource). The template is a resource; a tool shown
  * through a widget answers what the widget draws in `_meta` (its View, the call, a snapshot of
  * what the View reads as the conversation's contact, the widget's grant), never in what the
  * model reads; what only the widgets call (an Action, the read tool) is refused without the
@@ -172,7 +172,7 @@ test("tools say who calls them and which template draws them; resources are the 
   }, { line, plugins: [cards], widgets: widgets() });
 });
 
-test("without the web host's widgets: no template, and nothing only widgets call is listed", async () => {
+test("without the app's widgets: no template, and nothing only widgets call is listed", async () => {
   await setup(async (s) => {
     const tools = res(await s.legacy("tools/list")).tools as Tool[];
     const names = tools.map((t) => t.name);

@@ -8,6 +8,7 @@ import type { Metrics } from "./metrics.ts";
 import type { Scheduled, ScheduleDef, ScheduleOptions, SchedulePatch } from "./schedules.ts";
 import type { Collection, NearestOptions, WithId } from "./collection.ts";
 import type { Actor, Edge, Event, Filter, FindOptions } from "./store.ts";
+import type { Owner } from "./owner.ts";
 
 /** The TypeScript type a JSON Schema describes. Deferred so generics stay cheap. */
 export type Infer<S> = S extends JSONSchema ? FromSchema<S> : never;
@@ -453,7 +454,78 @@ export type Plugin = {
   labels?: Labels;
   /** Kinds of worker it declares, by name (see `WorkerKind`). */
   workers?: Record<string, WorkerKind>;
+  /**
+   * Its HTTP, by `URLPattern` pathname (`/hooks/whatsapp/:name`, `/app/*`):
+   * what `runtime.fetch` answers with (see `Route`). A later plugin's route
+   * replaces an earlier one's of the same pattern; `null` removes it. A key
+   * that's a whole `URLPattern` (`https://*-preview.example.com/:path*`) takes every request to
+   * the hosts it matches, whatever the path (see runtime/routes.ts).
+   */
+  routes?: Record<string, Route | null>;
+  /**
+   * Who a request is, by a credential this plugin knows (see `Who`). The
+   * runtime asks each plugin's, in plugin order; the first that answers wins.
+   */
+  who?: Who;
 };
+
+/**
+ * A cookie, as `runtime.fetch` keeps it for a plugin (see runtime/cookies.ts):
+ * by its plain name, which the runtime turns into the one it goes by
+ * (`__Host-<name>` wherever it's Secure, renamed as `resources.cookies` says).
+ */
+export type Cookies = {
+  /** The secret the request carries under this name; undefined for none, or one unfit for a cookie. */
+  get(name: string): string | undefined;
+  /**
+   * Sets it on the route's response: `secret` is 16 to 512 cookie-safe
+   * characters, kept `days` (30 unless said), `SameSite=Lax` unless `strict`.
+   */
+  set(name: string, secret: string, options?: { days?: number; sameSite?: "lax" | "strict" }): void;
+  /** Clears it on the route's response, as it was set (`sameSite` as it was, `lax` unless said). */
+  clear(name: string, options?: { sameSite?: "lax" | "strict" }): void;
+};
+
+/** What a route is given beside its request. */
+export type RouteContext = {
+  /** The runtime, as trusted code: what a route calls runs as the actor it names, or the system. */
+  runtime: Owner;
+  /** Who the request is, as plugins' `who` say: `{ kind: "anonymous", id: "" }` when none does. */
+  actor: Actor;
+  /** The pattern's named groups (`:name`) and wildcards (`0`…), as the URL has them (still encoded). */
+  params: Record<string, string>;
+  /** The request's cookies, and this route's to set and clear on its response. */
+  cookies: Cookies;
+};
+
+/**
+ * A plugin's HTTP: a plain function from a `Request` to a `Response`. Routes
+ * deal with HTTP; the work is an Action's, called with plain data. The
+ * request is as the browser sent it, on the site it asked for (the front's
+ * host) and under the app's base (`/o/<org>/x` is `/x`). What it throws is
+ * answered as an error (`failure`'s code: 400, 401, 403, 404, 429, else 500).
+ */
+export type Route = (request: Request, ctx: RouteContext) => Response | Promise<Response>;
+
+/** What `who` is given beside the request. */
+export type WhoContext = {
+  resources: Resources;
+  /** Runs a named query as the system, kept a few seconds per query and params. */
+  query<R = unknown>(name: string, params?: unknown): Promise<R>;
+  /** The request's cookies, by their plain names (see `Cookies`). */
+  cookies: Pick<Cookies, "get">;
+};
+
+/**
+ * Who a request is, by a credential its plugin knows (a session's cookie, a
+ * key in `Authorization`): the actor it proves, or nothing, for the next
+ * plugin's to say. A request with no credential of its own costs nothing
+ * here: each plugin reads its credential first, and asks only when there is one.
+ */
+export type Who = (
+  request: Request,
+  ctx: WhoContext,
+) => Actor | null | undefined | Promise<Actor | null | undefined>;
 
 /**
  * Labels: the owner keeps, for each job an actor's work runs, the labels of

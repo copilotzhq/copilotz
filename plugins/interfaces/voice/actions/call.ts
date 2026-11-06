@@ -32,7 +32,7 @@ import type { VoicePhone } from "../collections/phone.ts";
 import type { Thread } from "../../../agents/chat/contract.ts";
 import { declaredOf, lastsMs, type VoiceNumber } from "../shared/settings.ts";
 import { numberOf } from "../shared/caller.ts";
-import { sha256 } from "./hook.ts";
+import { sha256 } from "./ring.ts";
 
 /** What the socket knows of its call once admitted. */
 export type Admitted = Pick<VoiceCall, "_id" | "line" | "from" | "to">;

@@ -49,8 +49,8 @@
  *   and with widgets, their template.
  * - **Widgets** (see resources/widgets.ts; MCP Apps, and ChatGPT's Apps SDK):
  *   a tool's calls drawn by a web View of the app's (`tools.<name>.widget`:
- *   its kind), inside the assistant, with the web host's widgets
- *   (`webServer({ widgets: widgetsOf({ code, plugins }) })`: the template,
+ *   its kind), inside the assistant, with the app's widgets (its `widgets`
+ *   resource: `resources: { widgets: widgetsOf({ code, plugins }) }`: the template,
  *   one page for the server, and snapshots). Its result says, in `_meta` (the
  *   host's for the widget, never the model's), what the widget draws: the
  *   View, the call, what the View reads answered as the conversation's
@@ -153,8 +153,8 @@ export const mcp: Plugin = definePlugin({
   },
   resources: {
     mcp: {},
-    routes: { mcp: { path: PATH, serve: serveMcp } },
   },
+  routes: { [`${PATH}*`]: serveMcp },
 });
 
 export default mcp;

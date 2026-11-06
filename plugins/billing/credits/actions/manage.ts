@@ -212,7 +212,7 @@ export const budgetAction = defineAction({
   },
 });
 
-/** How an org claims a code from the directory (`hosts/orgs`). */
+/** How an org claims a code from the directory (its `directory` resource). */
 type Claiming = {
   claimCode?(code: string, person: string): Promise<{
     id: string;

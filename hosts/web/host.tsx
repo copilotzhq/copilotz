@@ -1,8 +1,8 @@
 /**
  * The web host, in the browser: it connects as whoever the browser is (a
- * ticket from `/connect`, which trades the cookie the server keeps: the
- * signed-in person, or a web line's visitor, let in when the page asks,
- * `arrive`), observes the web shell for the address it's at (its path, where
+ * ticket from the runtime's `/connect`, which trades the cookie the runtime
+ * keeps: the signed-in person, or a site visitor, let in first when the page
+ * asks, `arrive`: `POST /web/<name>`), observes the web shell for the address it's at (its path, where
  * the person works, `?in=`, and its other parameters), and draws it with
  * React, each part a component redrawn on its own. Where you are is the address: links are
  * followed without reloading, back and forward work, two tabs differ. The
@@ -12,7 +12,7 @@
  * front ends' `theme` resources merged over the defaults, as CSS variables
  * for light and dark, with the fonts it names (Google's, or the app's own)
  * and its logo, which the toolkit's `Logo` draws. What the server put in the
- * page for its first paint (`webServer({ theme })`) gives way to it. It
+ * page for its first paint (`webPage`, from the `theme` resource) gives way to it. It
  * registers the app's service worker, and offers a new version once one is
  * ready (`install.ts`).
  *
@@ -26,7 +26,6 @@ import { createRoot } from "react-dom/client";
 import { type Client, connect } from "../../runtime/client.ts";
 import type { Observation, Plugins } from "../../runtime/mod.ts";
 import { registerWorker } from "./install.ts";
-import { loadOrgs, reenter } from "./orgs.ts";
 import { Part } from "./part.tsx";
 import { session } from "./session.ts";
 import { SignIn } from "./signin.tsx";
@@ -38,14 +37,15 @@ import { UpdateReady } from "./update.tsx";
 export type WebOptions = {
   plugins: Plugins;
   root: Element;
-  /** The owner's socket (this page's origin, `/oxian`, by default). */
+  /** The runtime's socket (this page's origin, under the app's base, `/oxian`, by default). */
   url?: string;
   /**
-   * What the page asks coming in, when the browser isn't anyone yet: `{
-   * line: "site" }` makes it a visitor of the app's web line `site` (the
-   * contacts plugin's). Someone signed in comes in as themselves.
+   * Coming in as a visitor of one of the app's site chats (`web` resource
+   * entries, by name), when the browser isn't anyone yet: the page posts to
+   * `/web/<name>` first (with the answer to its challenge, when it has one),
+   * which lets it in and sets its cookie. Someone signed in comes in as themselves.
    */
-  arrive?: Record<string, unknown>;
+  arrive?: { name: string; challenge?: string };
   /**
    * The app's first steps once connected, as whoever the browser is (a
    * person, a contact); what it returns is where they work until the
@@ -91,33 +91,69 @@ export async function signOut(): Promise<void> {
 
 const config = () =>
   JSON.parse(document.getElementById("copilotz-config")?.textContent ?? "{}") as {
-    /** The ways to sign in the app declares, each with what its button needs. */
-    signIn?: Record<string, Record<string, unknown>>;
-    /** Where the socket connects, when not `/oxian` (see `WebServerOptions.socket`). */
-    socket?: string;
     /** Where the app is under its host, when not the root (an org's, `/o/<org>`). */
     base?: string;
   };
 
-/**
- * A ticket for one connection, or nothing when the browser is nobody: from
- * the app the page is (its `base`, with many orgs: an org's web line is its
- * own, there).
- */
-async function ticket(
-  arrive: Record<string, unknown> | undefined,
-): Promise<{ ticket: string; actor: Who; name?: string } | undefined> {
-  const response = await fetch(`${config().base ?? ""}/connect`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(arrive ?? {}),
-  });
-  if (response.status === 401) return undefined;
+/** What the runtime answered, or the error it said. */
+async function answered<T>(response: Response, what: string): Promise<T> {
   if (!response.ok) {
     const said = await response.json().catch(() => null) as { error?: string } | null;
-    throw new Error(said?.error ?? `Couldn't connect: ${response.statusText}`);
+    throw new Error(said?.error ?? `${what}: ${response.statusText}`);
   }
-  return await response.json();
+  return await response.json() as T;
+}
+
+/**
+ * Comes in as a visitor of a site chat (`POST <base>/web/<name>`), unless the
+ * browser is someone already: its cookie is set on the way back.
+ */
+async function arriving(arrive: { name: string; challenge?: string }): Promise<void> {
+  const response = await fetch(`${config().base ?? ""}/web/${encodeURIComponent(arrive.name)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(arrive.challenge ? { challenge: arrive.challenge } : {}),
+  });
+  await answered(response, "Couldn't come in");
+}
+
+/**
+ * A ticket for one connection, or nothing when the browser is nobody: from
+ * the app the page is (its `base`).
+ */
+async function ticket(): Promise<{ ticket: string; actor: Who } | undefined> {
+  const response = await fetch(`${config().base ?? ""}/connect`, { method: "POST" });
+  if (response.status === 401) return undefined;
+  return await answered(response, "Couldn't connect");
+}
+
+/** What the person signed in is shown as: their name (identity's `/me`), else nothing. */
+async function nameOf(): Promise<string | undefined> {
+  const response = await fetch(`${config().base ?? ""}/me`).catch(() => undefined);
+  if (!response?.ok) return undefined;
+  const me = await response.json().catch(() => null) as { name?: unknown } | null;
+  return typeof me?.name === "string" && me.name ? me.name : undefined;
+}
+
+/**
+ * The ways to sign in the app has, by what its routes answer: Google's, with
+ * its client id (`GET /google`), and dev sign-in, on this machine
+ * (`GET /signin/dev`). One that isn't there answers 404.
+ */
+async function waysToSignIn(): Promise<{ google?: { clientId: string }; dev?: true }> {
+  const asked = async (path: string) => {
+    const response = await fetch(path, { headers: { accept: "application/json" } }).catch(() =>
+      undefined
+    );
+    const json = response?.ok && response.headers.get("content-type")?.includes("json");
+    return json ? await response!.json().catch(() => undefined) : undefined;
+  };
+  const [google, dev] = await Promise.all([asked("/google"), asked("/signin/dev")]);
+  const clientId = (google as { clientId?: unknown } | undefined)?.clientId;
+  return {
+    ...(typeof clientId === "string" && clientId ? { google: { clientId } } : {}),
+    ...(dev ? { dev: true as const } : {}),
+  };
 }
 
 export async function web(options: WebOptions): Promise<Client | undefined> {
@@ -146,28 +182,28 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   draw(null);
   // Installable, and told when a new version is ready (see pwa.ts).
   registerWorker();
-  const first = await ticket(options.arrive);
+  if (options.arrive) await arriving(options.arrive);
+  // Their name, asked while the ticket is: a person's, as they signed in.
+  const named = options.arrive ? Promise.resolve(undefined) : nameOf();
+  const first = await ticket();
   if (!first) {
-    // Still signed in, but no longer in this org (with many): into another of theirs.
-    if (await reenter()) return undefined;
-    draw(<SignIn signIn={config().signIn ?? {}} />);
+    draw(<SignIn signIn={await waysToSignIn()} />);
     return undefined;
   }
   const person = first.actor.kind === "person";
-  // The person's orgs (when the server serves many), asked while the connection is made.
-  if (person) void loadOrgs();
+  const name = person ? await named : undefined;
   let fresh: string | undefined = first.ticket;
   const url = options.url ??
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${
-      config().socket ?? "/oxian"
-    }`;
+      config().base ?? ""
+    }/oxian`;
   const client = connect({
     transport: { type: "websocket", config: { url, allowInsecureLoopback: true } },
     // The first connection takes the ticket in hand; a new one asks again.
     ticket: async () => {
       const kept = fresh;
       fresh = undefined;
-      const next = kept ?? (await ticket(options.arrive))?.ticket;
+      const next = kept ?? (await ticket())?.ticket;
       if (!next) {
         location.reload();
         throw new Error("Signed out");
@@ -181,7 +217,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   const viewer = {
     kind: first.actor.kind,
     name: person ? first.actor.id : `${first.actor.kind}:${first.actor.id}`,
-    ...(first.name ? { label: first.name } : {}),
+    ...(name ? { label: name } : {}),
   };
   session.client = client;
   session.viewer = viewer;

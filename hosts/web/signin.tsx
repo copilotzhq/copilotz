@@ -1,7 +1,8 @@
 /**
- * Signing in, before anyone is connected, the ways the app's plugins declare
- * (the server's `signIn`): with Google (`google`: its button, for the client
- * id it gives), or by name on this machine (`dev`). Either sets the session cookie;
+ * Signing in, before anyone is connected, the ways the app's routes offer:
+ * with Google (`google`: its button, for the client id `GET /google` gives;
+ * the button posts its token to `/signin/google`), or by name on this
+ * machine (`dev`: `/signin/dev`). Either sets the session cookie;
  * the page then starts over, connected, where the server lands them (with
  * many orgs, the one they were in last; their own the first time), with a
  * word on where they're going while it does. Beside the form, what the app
@@ -19,8 +20,8 @@ import { Logo } from "./toolkit/logo.tsx";
 import { Notice } from "./toolkit/notice.tsx";
 import { Spinner } from "./toolkit/spinner.tsx";
 
-/** The ways to sign in the server declares, by name, each with what its button needs. */
-type Ways = Record<string, Record<string, unknown>>;
+/** The ways to sign in the app's routes offer, each with what its button needs. */
+type Ways = { google?: { clientId: string }; dev?: true };
 
 declare const google: {
   accounts: {
@@ -138,8 +139,7 @@ const POINTS: { icon: IconName; title: string; text: string }[] = [
 ];
 
 export function SignIn({ signIn }: { signIn: Ways }): ReactNode {
-  const clientId = typeof signIn.google?.clientId === "string" ? signIn.google.clientId : undefined;
-  const config = { google: clientId ? { clientId } : null, dev: !!signIn.dev };
+  const config = { google: signIn.google ?? null, dev: !!signIn.dev };
   const [name, setName] = useState("");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);

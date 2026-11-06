@@ -1,12 +1,13 @@
 /**
  * The web host on Node: `bundle` makes the page's code with esbuild, split
- * where it imports lazily, and `serve` answers the page, the code and
- * sign-in through `webServer`, and takes a signed-in browser's socket to the
- * runtime through Oxian's Node adapter: a client connects with its ticket and
- * calls an Action as its person. `listen` serves any fetch handler, each
- * socket going to the runtime its request is for (one per org). Deno and Bun
- * run it too, through their Node compatibility.
+ * where it imports lazily, and `listen` serves the runtime's `fetch`: the
+ * page and its code (`webPage`), sign-in, and a signed-in browser's socket
+ * to the runtime through Oxian's Node adapter: a client connects with its
+ * ticket and calls an Action as its person. A handler of its own may pick
+ * the runtime a socket goes to (one per org). Deno and Bun run it too,
+ * through their Node compatibility.
  */
+import { get } from "node:http";
 import { assert, assertEquals, assertMatch } from "@std/assert";
 import {
   type Actor,
@@ -18,12 +19,11 @@ import {
 import { connect } from "../../../../runtime/client.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 import { devSignIn, identity } from "../../../../plugins/access/mod.ts";
-import { test } from "../../../../testing/mod.ts";
-import { socket } from "../../server.ts";
-import { createTickets } from "../../tickets.ts";
-import { bundle, listen, serve } from "../mod.ts";
+import { test, testWho, ticketFor } from "../../../../testing/mod.ts";
+import { webPage } from "../../server.ts";
+import { bundle, listen } from "../mod.ts";
 
-test("bundle: the page's code, split where it imports lazily, named for webServer", async () => {
+test("bundle: the page's code, split where it imports lazily, named for webPage", async () => {
   const code = await bundle(new URL("./page/page.tsx", import.meta.url));
   assertEquals(code.entry, "page.js");
   const chunk = Object.keys(code.files).find((name) => /^later-\w+\.js$/.test(name));
@@ -34,8 +34,7 @@ test("bundle: the page's code, split where it imports lazily, named for webServe
   assert(String(plain.files["page.js"]).includes("A page"));
 });
 
-test("serve: the page and its code, sign-in, and a browser's socket, as its person", async () => {
-  const tickets = createTickets();
+test("listen: the page and its code, sign-in, and a browser's socket, as its person", async () => {
   const probe = definePlugin({
     name: "probe",
     actions: {
@@ -46,24 +45,27 @@ test("serve: the page and its code, sign-in, and a browser's socket, as its pers
       }),
     },
   });
+  const code = await bundle(new URL("./page/page.tsx", import.meta.url));
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [identity, devSignIn, probe],
-    transports: [socket],
-    admit: tickets.admit,
+    plugins: [
+      identity,
+      devSignIn,
+      probe,
+      webPage,
+      definePlugin({ name: "settings", resources: { page: { code } } }),
+    ],
   });
-  const server = await serve({
-    runtime,
-    tickets,
-    code: await bundle(new URL("./page/page.tsx", import.meta.url)),
-  }).catch(async (error) => {
+  const server = await listen(runtime.fetch).catch(async (error) => {
     await runtime.close();
     throw error;
   });
   const base = `http://127.0.0.1:${server.port}`;
   try {
-    const page = await fetch(`${base}/`);
-    assertMatch(await page.text(), /<script type="module" src="\/app\/page\.js"><\/script>/);
+    assertMatch(
+      await navigate(`${base}/`),
+      /<script type="module" src="\/app\/page\.js"><\/script>/,
+    );
     const script = await fetch(`${base}/app/page.js`);
     assertEquals(script.headers.get("content-type"), "text/javascript; charset=utf-8");
     await script.body?.cancel();
@@ -93,36 +95,46 @@ test("serve: the page and its code, sign-in, and a browser's socket, as its pers
       await client.close();
     }
   } finally {
-    await server.close();
+    await server.shutdown();
+    await runtime.close();
   }
 });
 
-/** A runtime that says its name and who called: `probe.who`. */
-async function named(name: string) {
-  const tickets = createTickets();
-  const runtime = await createRuntime({
-    store: memoryStore(),
-    plugins: [definePlugin({
-      name: "probe",
-      actions: {
-        "probe.who": defineAction({
-          input: { type: "object" },
-          allow: (actor) => actor.kind === "person",
-          run: (ctx) => `${name}: ${ctx.actor?.id}`,
-        }),
-      },
-    })],
-    transports: [socket],
-    admit: tickets.admit,
+/** The page as a browser navigating gets it (Node's `fetch` always says `Sec-Fetch-Mode: cors`). */
+const navigate = (url: string) =>
+  new Promise<string>((resolve, reject) => {
+    get(url, { headers: { "sec-fetch-mode": "navigate" } }, (answer) => {
+      let body = "";
+      answer.on("data", (chunk) => (body += chunk));
+      answer.on("end", () => resolve(body));
+    }).on("error", reject);
   });
-  return { runtime, tickets };
+
+/** A runtime that says its name and who called: `probe.who`. */
+function named(name: string) {
+  return createRuntime({
+    store: memoryStore(),
+    plugins: [
+      testWho,
+      definePlugin({
+        name: "probe",
+        actions: {
+          "probe.who": defineAction({
+            input: { type: "object" },
+            allow: (actor) => actor.kind === "person",
+            run: (ctx) => `${name}: ${ctx.actor?.id}`,
+          }),
+        },
+      }),
+    ],
+  });
 }
 
-/** Connects as `actor` to the socket at `url`, with a ticket from `tickets`, and asks who. */
-async function who(url: string, tickets: { issue(actor: Actor): string }, actor: Actor) {
+/** Connects as `actor` to the socket at `url`, with a ticket from `runtime`, and asks who. */
+async function who(url: string, runtime: Runtime, actor: Actor) {
   const client = connect({
     transport: { type: "websocket", config: { url, allowInsecureLoopback: true } },
-    ticket: () => Promise.resolve(tickets.issue(actor)),
+    ticket: () => ticketFor(runtime, actor),
     plugins: [],
   });
   try {
@@ -135,27 +147,25 @@ async function who(url: string, tickets: { issue(actor: Actor): string }, actor:
 
 test("listen: each socket goes to the runtime its request is for; none, to the handler", async () => {
   // As orgs on hosts of their own would be: by the name the request was sent to.
-  const orgs: Record<string, { runtime: Runtime; tickets: ReturnType<typeof createTickets> }> = {
+  const orgs: Record<string, Runtime> = {
     "127.0.0.1": await named("north"),
     localhost: await named("south"),
   };
-  const server = await listen({
-    fetch: () => new Response("Connect again", { status: 503 }),
-    hypervisor: (request) => {
-      const url = new URL(request.url);
-      return url.searchParams.has("closed") ? undefined : orgs[url.hostname]?.runtime.hypervisor;
-    },
+  const server = await listen((request) => {
+    const url = new URL(request.url);
+    const runtime = url.searchParams.has("closed") ? undefined : orgs[url.hostname];
+    return runtime ? runtime.fetch(request) : new Response("Connect again", { status: 503 });
   });
   const ana: Actor = { kind: "person", id: "ana" };
   try {
-    for (const [host, { tickets }] of Object.entries(orgs)) {
-      const said = await who(`ws://${host}:${server.port}/oxian`, tickets, ana);
+    for (const [host, runtime] of Object.entries(orgs)) {
+      const said = await who(`ws://${host}:${server.port}/oxian`, runtime, ana);
       assertEquals(said, `${host === "localhost" ? "south" : "north"}: ana`);
     }
     const closed = await fetch(`http://127.0.0.1:${server.port}/oxian?closed`);
     assertEquals([closed.status, await closed.text()], [503, "Connect again"]);
   } finally {
     await server.shutdown();
-    for (const { runtime } of Object.values(orgs)) await runtime.close();
+    for (const runtime of Object.values(orgs)) await runtime.close();
   }
 });

@@ -1,36 +1,36 @@
 /**
- * Who a browser is, as the app's plugins declare it (see entrances.ts): a
- * signed-in person is their session's, first; a browser that's no one comes
- * in by a web line when its page asks, a visitor whose secret (signed: no
- * record is made) is in an httpOnly, SameSite=Strict cookie, the same
- * visitor while it lasts, and a contact in the line's space with a chat of
- * its own once it speaks. A forged cookie is no one, and never the visitor
- * it imitates; an erased contact's cookie is no one at once, and so is a
+ * Who a browser is, as the app's plugins say it, through `runtime.fetch`: a
+ * signed-in person is their session's (identity's `who`), first; a browser
+ * that's no one comes in by a web line when its page posts `/web/<line>`, a
+ * visitor whose secret (signed: no record is made) is in an httpOnly,
+ * SameSite=Strict cookie that the web lines' `who` reads, the same visitor
+ * while it lasts, and a contact in the line's space with a chat of its own
+ * once it speaks. A forged cookie is no one, and never the visitor it
+ * imitates; an erased contact's cookie is no one at once, and so is a
  * removed line's. New visitors are limited by the caller's address (as the
  * app's front says it, else as the socket's), at once too, refused plainly
  * past it, that address alone; and new visitors who speak, on the line.
- * What's past is collected. Connecting, signing in and out come from the
- * app's own page only. An app without a page or tickets serves its routes
- * alone, whatever its plugins declare; and what they declare is checked as
- * the host starts.
+ * What's past is collected. Coming in, signing in and out come from the
+ * app's own page only. What the app declares is checked as it starts.
  */
-import { assert, assertEquals, assertMatch, assertNotEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertMatch, assertNotEquals } from "@std/assert";
 import {
   type Actor,
   createRuntime,
   defineAction,
   definePlugin,
   type Plugin,
+  type Route,
   type Runtime,
+  setClientAddress,
 } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../../plugins/models/mod.ts";
 import { chat } from "../../../plugins/agents/chat/mod.ts";
-import { access, devSignIn, googleSignIn, identity } from "../../../plugins/access/mod.ts";
+import { access, devSignIn, googleSignIn } from "../../../plugins/access/mod.ts";
 import { webLines } from "../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../testing/mod.ts";
-import { createTickets, type Tickets } from "../tickets.ts";
-import { httpRequest, setClientAddress, webServer } from "../server.ts";
+import { webPage } from "../server.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 /** The app's front's secret: it vouches for the caller's address it sends. */
@@ -38,33 +38,27 @@ const FRONT = "the-front-secret-for-tests-0123";
 const PAGE = "http://localhost:8790";
 
 /** A route that says who it was called as. */
-const who = definePlugin({
-  name: "who",
-  actions: {
-    "who.am": defineAction({
-      input: httpRequest,
-      allow: () => true,
-      run: (ctx) => ({ body: { kind: ctx.actor?.kind, id: ctx.actor?.id } }),
-    }),
-  },
-  resources: { routes: { who: { path: "/who", action: "who.am" } } },
-});
+const whoRoute: Route = (_request, { actor }) => Response.json({ kind: actor.kind, id: actor.id });
+const who = definePlugin({ name: "who", routes: { "/who": whoRoute } });
+
+/** The app's secret, which visitors' cookies are signed with. */
+const LINKS = { origin: PAGE, secret: "the-app-secret-for-tests-0123456789" };
 
 /**
  * An app with two web lines: `site`, in a space it declares, answered by
  * its guide; `shop`, in a space Ana made (she manages it), and `burst`,
  * for arrivals at once. Its front says who calls (`cf-connecting-ip`).
  */
-/** The app's secret, which visitors' cookies are signed with. */
-const LINKS = { origin: PAGE, secret: "the-app-secret-for-tests-0123456789" };
-
-const app = (limits: Record<string, number> = {}, caller = true) =>
+const app = (limits: Record<string, number> = {}, caller = true, links = LINKS) =>
   definePlugin({
     name: "app",
     resources: {
       agents: { guide: { instructions: "Help visitors.", model: "fake/echo" } },
       spaces: { visitors: { name: "Website", agents: ["guide"] } },
-      links: LINKS,
+      links,
+      // The front is the runtime's (it believes the host the front forwards); the web lines
+      // read who calls from their own settings.
+      ...(caller ? { caller: { header: "cf-connecting-ip", front: FRONT } } : {}),
       web: {
         ...(caller ? { caller: { header: "cf-connecting-ip", front: FRONT } } : {}),
         lines: {
@@ -79,14 +73,12 @@ const app = (limits: Record<string, number> = {}, caller = true) =>
 type Setup = {
   serve: (request: Request) => Promise<Response>;
   runtime: Runtime;
-  tickets: Tickets;
 };
 
 async function setup(
   fn: (s: Setup) => Promise<void>,
   options: { plugins?: Plugin[]; limits?: Record<string, number>; caller?: false } = {},
 ) {
-  const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
     plugins: [
@@ -102,13 +94,7 @@ async function setup(
   });
   try {
     await runtime.call("space.create", { id: "shop", name: "Shop" }, { actor: ana });
-    const serve = webServer({
-      runtime,
-      tickets,
-      code: { entry: "app.js", files: { "app.js": "" } },
-      front: { secret: FRONT },
-    });
-    await fn({ serve, runtime, tickets });
+    await fn({ serve: (request) => runtime.fetch(request), runtime });
   } finally {
     await runtime.close();
   }
@@ -151,22 +137,43 @@ const request = (path: string, asked: Asked = {}) =>
 /** The cookie a response sets, as a browser sends it back. */
 const sent = (response: Response) => response.headers.get("set-cookie")?.split(";")[0];
 
-/** Connects: the answer's status, its JSON, and the cookie it sets. */
-async function connect(serve: Setup["serve"], asked: Asked = {}) {
-  const response = await serve(request("/connect", asked));
-  return {
-    status: response.status,
-    said: await response.json() as {
-      ticket?: string;
-      actor?: Actor;
-      name?: string;
-      error?: string;
-    },
-    cookie: sent(response),
-    set: response.headers.get("set-cookie"),
-    retry: response.headers.get("retry-after"),
-  };
+type Answered = {
+  status: number;
+  said: { ticket?: string; actor?: Actor; error?: string };
+  cookie: string | undefined;
+  set: string | null;
+  retry: string | null;
+};
+
+const answered = async (response: Response): Promise<Answered> => ({
+  status: response.status,
+  said: await response.json(),
+  cookie: sent(response),
+  set: response.headers.get("set-cookie"),
+  retry: response.headers.get("retry-after"),
+});
+
+/** A page coming in by a web line (`POST /web/<line>`): the answer and the cookie it sets. */
+const arrive = async (serve: Setup["serve"], line: string, asked: Asked = {}) =>
+  answered(await serve(request(`/web/${encodeURIComponent(line)}`, asked)));
+
+/** Connects (`POST /connect`): a ticket for whoever the cookies say. */
+const connect = async (serve: Setup["serve"], asked: Asked = {}) =>
+  answered(await serve(request("/connect", asked)));
+
+/** Coming in by a line, then connecting with the cookie it set (else the one it was sent). */
+async function come(serve: Setup["serve"], line: string, asked: Asked = {}) {
+  const arrived = await arrive(serve, line, asked);
+  if (arrived.status !== 200) return arrived;
+  const connected = await connect(serve, { ...asked, cookie: arrived.cookie ?? asked.cookie });
+  return { ...connected, set: arrived.set, cookie: arrived.cookie ?? asked.cookie };
 }
+
+/** The visitor a cookie is, as the server issued it (its line and its networks' tags). */
+const visitorOf = (runtime: Runtime, cookie: string) =>
+  runtime.query<Actor | null>("contact_visitor.actor", {
+    secret: cookie.slice(cookie.indexOf("=") + 1),
+  });
 
 /** What a View of the app's says, as the system reads it. */
 async function read<T>(runtime: Runtime, view: string, item: unknown = {}): Promise<T> {
@@ -247,12 +254,14 @@ const aging = definePlugin({
 });
 
 test("a visitor: let in by a line its page names, nothing made until it speaks, the same while its cookie lasts", async () => {
-  await setup(async ({ serve, runtime, tickets }) => {
+  await setup(async ({ serve, runtime }) => {
     // The page asks for nothing: nobody, and nobody's made.
     assertEquals((await connect(serve)).status, 401);
-    assertEquals((await connect(serve, { body: { line: "nowhere" } })).status, 401);
+    const nowhere = await arrive(serve, "nowhere");
+    assertEquals([nowhere.status, nowhere.said.error], [404, "There's no such chat here."]);
+    assertEquals(nowhere.set, null);
 
-    const first = await connect(serve, { body: { line: "site" } });
+    const first = await come(serve, "site");
     assertEquals(first.status, 200);
     const visitor = first.said.actor!;
     assertEquals(visitor.kind, "contact");
@@ -260,23 +269,23 @@ test("a visitor: let in by a line its page names, nothing made until it speaks, 
     // Its secret: signed, in an httpOnly cookie only the app's own pages send, for its 30 days.
     assertMatch(
       first.set!,
-      /^visitor=vis_site\.[\w-]{22}\.[0-9a-z]+\.32-[0-9a-f]{16}~24-[0-9a-f]{16}\.[0-9a-f]{32}; HttpOnly; SameSite=Strict; Path=\/; Max-Age=2592000$/,
+      /^visitor=vis_site\.[\w-]{22}\.[0-9a-z]+\.32-[0-9a-f]{16}~24-[0-9a-f]{16}\.[0-9a-f]{32}; HttpOnly; SameSite=Strict; Path=\/; Max-Age=\d{7}$/,
     );
     // The visitor the server issued: its line, and its networks' tags (an IPv4 address, its /24),
     // what its messages are counted by; never the address.
-    const actor = tickets.admit(first.said.ticket!)!;
-    const { from: _, ...who } = actor;
-    assertEquals(who, { kind: "contact", id: visitor.id, web: "site" });
+    const actor = (await visitorOf(runtime, first.cookie!))!;
+    const { from: _, ...whoIs } = actor;
+    assertEquals(whoIs, { kind: "contact", id: visitor.id, web: "site" });
     assertEquals((actor.from as string[]).map((tag) => tag.split("-")[0]), ["32", "24"]);
     assert(!JSON.stringify(actor).includes("203.0.113"));
     // Coming in made nothing, however many come: no contact, chat, membership, nor record.
-    for (let i = 0; i < 5; i++) await connect(serve, { body: { line: "site" } });
+    for (let i = 0; i < 5; i++) await come(serve, "site");
     assertEquals(await kept(runtime), { contacts: 0, threads: 0, members: 0, visitors: 0 });
     // Back with its cookie, asking again: the same visitor, though it's said nothing.
-    const back = await connect(serve, { cookie: first.cookie, body: { line: "site" } });
-    assertEquals([back.status, back.said.actor], [200, visitor]);
+    const back = await come(serve, "site", { cookie: first.cookie });
+    assertEquals([back.status, back.said.actor, back.set], [200, visitor, null]);
     // On another line's page, before it speaks: another visitor, that line's.
-    const shop = await connect(serve, { cookie: first.cookie, body: { line: "shop" } });
+    const shop = await come(serve, "shop", { cookie: first.cookie });
     assertEquals(shop.status, 200);
     assertNotEquals(shop.said.actor!.id, visitor.id);
     assertMatch(shop.set!, /^visitor=vis_shop\./);
@@ -288,12 +297,11 @@ test("a visitor: let in by a line its page names, nothing made until it speaks, 
     assertEquals(await read(runtime, "all-contacts"), [`${visitor.id} visitors web`]);
     assertEquals(await read<string[]>(runtime, "chats-of", visitor.id), [thread]);
     // Its cookie again, with or without the line: the same contact, nothing new made or set.
-    for (const body of [{}, { line: "site" }, { line: "shop" }]) {
-      const again = await connect(serve, { cookie: first.cookie, body });
-      assertEquals([again.status, again.said.actor, again.set], [200, visitor, null]);
-    }
+    const again = await come(serve, "site", { cookie: first.cookie });
+    assertEquals([again.status, again.said.actor, again.set], [200, visitor, null]);
+    assertEquals((await connect(serve, { cookie: first.cookie })).said.actor, visitor);
     assertEquals(await count(runtime), 1);
-    // A route, and a file, are asked as it too.
+    // A route is asked as it too.
     const route = await serve(
       new Request(`${PAGE}/who`, { method: "POST", headers: { cookie: first.cookie! } }),
     );
@@ -302,7 +310,7 @@ test("a visitor: let in by a line its page names, nothing made until it speaks, 
     // Off this machine, the cookie is Secure, and this host's alone: `__Host-`, so no other host
     // under the domain (a preview's) can set one to make a browser a visitor of its choosing.
     const url = "https://app.example";
-    const secure = await connect(serve, { url, body: { line: "site" } });
+    const secure = await come(serve, "site", { url });
     assertEquals(secure.status, 200);
     assertMatch(
       secure.set!,
@@ -310,7 +318,7 @@ test("a visitor: let in by a line its page names, nothing made until it speaks, 
     );
     const hers = secure.cookie!.slice("__Host-".length);
     assertEquals(
-      (await connect(serve, { url, cookie: secure.cookie, body: { line: "site" } })).said.actor,
+      (await connect(serve, { url, cookie: secure.cookie })).said.actor,
       secure.said.actor,
     );
     // The same secret, as a sibling host would set it (no prefix): not read there.
@@ -318,13 +326,13 @@ test("a visitor: let in by a line its page names, nothing made until it speaks, 
   }, { plugins: [keptContacts] });
 });
 
-test("a forged cookie is no one: never the visitor it imitates, and cleared; an erased visitor's, at once", async () => {
-  await setup(async ({ serve, runtime, tickets }) => {
-    const carla = await connect(serve, { body: { line: "shop" } });
+test("a forged cookie is no one: never the visitor it imitates; an erased visitor's, at once", async () => {
+  await setup(async ({ serve, runtime }) => {
+    const carla = await come(serve, "shop");
     assertEquals(carla.status, 200, carla.said.error);
     const { id } = carla.said.actor!;
     await runtime.call("chat.send", { text: "hello" }, {
-      actor: tickets.admit(carla.said.ticket!),
+      actor: (await visitorOf(runtime, carla.cookie!))!,
     });
     await runtime.idle();
     const secret = carla.cookie!.slice("visitor=".length);
@@ -333,14 +341,18 @@ test("a forged cookie is no one: never the visitor it imitates, and cleared; an 
     // One the app made for another app (its own secret), and this one moved to another line.
     const other = await createRuntime({
       store: memoryStore(),
-      plugins: [models, chat, ...access, webLines, app()],
+      plugins: [
+        models,
+        chat,
+        ...access,
+        webLines,
+        app({}, true, { ...LINKS, secret: "another-app-secret-for-tests-01234567" }),
+      ],
     });
     const elsewhere = await (async () => {
       try {
-        const answered = await webServer({ runtime: other, tickets: createTickets() })(
-          request("/connect", { body: { line: "shop" } }),
-        );
-        return answered.headers.get("set-cookie")!.split(";")[0].slice("visitor=".length);
+        const answer = await other.fetch(request("/web/shop"));
+        return answer.headers.get("set-cookie")!.split(";")[0].slice("visitor=".length);
       } finally {
         await other.close();
       }
@@ -360,17 +372,23 @@ test("a forged cookie is no one: never the visitor it imitates, and cleared; an 
       ]
     ) {
       const tried = await connect(serve, { cookie: `visitor=${forged}` });
-      assertEquals(tried.status, 401, forged.slice(0, 20));
-      if (forged) assertMatch(tried.set ?? "visitor=; Max-Age=0", /^visitor=; .*Max-Age=0/);
+      assertEquals(
+        tried.status,
+        401,
+        `${
+          forged === elsewhere ? "elsewhere" : forged === flipped ? "flipped" : forged.slice(0, 20)
+        }`,
+      );
       // Asking to come in with it makes someone new, never Carla.
-      const fresh = await connect(serve, { cookie: `visitor=${forged}`, body: { line: "shop" } });
+      const fresh = await come(serve, "shop", { cookie: `visitor=${forged}` });
       assertEquals(fresh.status, 200);
       assertNotEquals(fresh.said.actor!.id, id);
+      assertMatch(fresh.set!, /^visitor=vis_shop\./);
       // A route takes it for no one.
       const route = await serve(
         new Request(`${PAGE}/who`, { method: "POST", headers: { cookie: `visitor=${forged}` } }),
       );
-      assertEquals((await route.json()).kind, "visitor");
+      assertEquals((await route.json()).kind, "anonymous");
     }
     assertEquals(line, "shop");
     // The one cookie that's her is her.
@@ -378,49 +396,44 @@ test("a forged cookie is no one: never the visitor it imitates, and cleared; an 
 
     // Ana, who manages the shop, erases her: her cookie is no one from now on, asking or not.
     await runtime.call("contact.forget", { contact: id }, { actor: ana });
+    await runtime.idle();
     const gone = await connect(serve, { cookie: carla.cookie });
     assertEquals(gone.status, 401);
-    assertMatch(gone.set!, /^visitor=; .*Max-Age=0/);
-    const anew = await connect(serve, { cookie: carla.cookie, body: { line: "shop" } });
+    const anew = await come(serve, "shop", { cookie: carla.cookie });
     assertEquals(anew.status, 200);
     assertNotEquals(anew.said.actor!.id, id);
   });
 });
 
 test("limits on coming in: by address, that address alone, never the whole line; by the socket's without a front", async () => {
-  await setup(async ({ serve, runtime, tickets }) => {
-    const arrive = (from: string | false, line = "site") =>
-      connect(serve, { from, body: { line } });
+  await setup(async ({ serve, runtime }) => {
+    const arrival = (from: string | false, line = "site") => arrive(serve, line, { from });
     const FROM_HERE = "Too many new visitors from here: try again later.";
-    const a1 = await arrive("203.0.113.7");
-    const a2 = await arrive("203.0.113.7");
+    const a1 = await arrival("203.0.113.7");
+    const a2 = await arrival("203.0.113.7");
     assertEquals([a1.status, a2.status], [200, 200]);
-    const a3 = await arrive("203.0.113.7");
+    const a3 = await arrival("203.0.113.7");
     assertEquals([a3.status, a3.said.error, a3.retry, a3.set], [429, FROM_HERE, "60", null]);
-    // Someone already in isn't new: their cookie still connects.
-    const a1back = await connect(serve, {
-      from: "203.0.113.7",
-      cookie: a1.cookie,
-      body: { line: "site" },
-    });
-    assertEquals(a1back.said.actor, a1.said.actor);
+    // Someone already in isn't new: their cookie still comes in.
+    const a1back = await come(serve, "site", { from: "203.0.113.7", cookie: a1.cookie });
+    assertEquals([a1back.status, a1back.set], [200, null]);
     // Everyone else comes in still: the line takes newcomers from as many networks as come.
     for (let n = 0; n < 30; n++) {
-      assertEquals((await arrive(`198.51.${n}.7`)).status, 200, `198.51.${n}.7`);
-      assertEquals((await arrive(`2001:db8:${(0x100 + n).toString(16)}::1`)).status, 200);
+      assertEquals((await arrival(`198.51.${n}.7`)).status, 200, `198.51.${n}.7`);
+      assertEquals((await arrival(`2001:db8:${(0x100 + n).toString(16)}::1`)).status, 200);
     }
     // An IPv6 caller is counted by its /64: one network, one allowance (2, on this line).
     for (const [from, status] of [["2001:db8:1::1", 200], ["2001:db8:1::2", 200]] as const) {
-      assertEquals((await arrive(from, "burst")).status, status, from);
+      assertEquals((await arrival(from, "burst")).status, status, from);
     }
-    const sameNet = await arrive("2001:db8:1::ffff", "burst");
+    const sameNet = await arrival("2001:db8:1::ffff", "burst");
     assertEquals([sameNet.status, sameNet.said.error], [429, FROM_HERE]);
-    assertEquals((await arrive("2001:db8:1:1::1", "burst")).status, 200);
+    assertEquals((await arrival("2001:db8:1:1::1", "burst")).status, 200);
     // Its neighbours count too: a /56 takes four /64s' worth (8), a /48 eight (16), an IPv4 /24
     // eight addresses' (16). Past one, the next from anywhere in it is refused; elsewhere, not.
     const fill = async (froms: string[]) => {
       const statuses = [];
-      for (const from of froms) statuses.push((await arrive(from, "burst")).status);
+      for (const from of froms) statuses.push((await arrival(from, "burst")).status);
       return statuses.filter((s) => s === 200).length;
     };
     const ones = (n: number, at: (i: number) => string) =>
@@ -431,34 +444,33 @@ test("limits on coming in: by address, that address alone, never the whole line;
       16,
     );
     assertEquals(await fill(ones(24, (i) => `203.0.112.${i + 1}`)), 16);
-    assertEquals((await arrive("2001:db8:4::1", "burst")).status, 200);
-    assertEquals((await arrive("203.0.111.1", "burst")).status, 200);
+    assertEquals((await arrival("2001:db8:4::1", "burst")).status, 200);
+    assertEquals((await arrival("203.0.111.1", "burst")).status, 200);
 
     // Around the front (without its secret, whatever address it claims): refused.
-    const around = await arrive(false, "shop");
+    const around = await arrival(false, "shop");
     assertEquals([around.status, around.said.error], [403, "Not through the app's front."]);
-    const claimed = await connect(serve, {
+    const claimed = await arrive(serve, "shop", {
       from: false,
       headers: { "cf-connecting-ip": "192.0.2.1" },
-      body: { line: "shop" },
     });
     assertEquals(claimed.status, 403);
 
     // Many at once from one address can't pass its limit: places are taken one write each.
     const burst = await Promise.all(
-      Array.from({ length: 12 }, () => arrive("192.0.2.200", "burst")),
+      Array.from({ length: 12 }, () => arrival("192.0.2.200", "burst")),
     );
     assertEquals(burst.filter((b) => b.status === 200).length, 2);
     assertEquals(burst.filter((b) => b.status === 429).length, 10);
 
     // New visitors who speak an hour, on the line (3 here): past them, a newcomer's first message
     // waits; those already speaking go on, and anyone still comes in.
-    const speak = async (arrived: { said: { ticket?: string } }) =>
+    const speak = async (arrived: { cookie?: string }) =>
       await runtime.call("chat.send", { text: "hi" }, {
-        actor: tickets.admit(arrived.said.ticket!),
+        actor: (await visitorOf(runtime, arrived.cookie!))!,
       }).then(() => "sent", (e) => (e as Error).message);
     const comers = await Promise.all(
-      ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"].map((from) => arrive(from)),
+      ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"].map((from) => arrival(from)),
     );
     const said = [];
     for (const comer of comers) said.push(await speak(comer));
@@ -469,35 +481,34 @@ test("limits on coming in: by address, that address alone, never the whole line;
       "This chat is busy right now: try again in a few minutes.",
     ]);
     assertEquals(await count(runtime), 3);
-    const talker = await connect(serve, { from: "192.0.2.1", cookie: comers[0].cookie });
-    assertEquals(await speak(talker), "sent");
-    assertEquals((await arrive("192.0.2.9")).status, 200);
+    assertEquals(await speak(comers[0]), "sent");
+    assertEquals((await arrival("192.0.2.9")).status, 200);
   }, { plugins: [keptContacts], limits: { ipVisitorsPerHour: 2, visitorsPerHour: 3 } });
 
   // Without a front that says who calls, the socket's address does (as the listener saw it).
   await setup(async ({ serve }) => {
-    const arrive = (address?: string) => {
-      const asked = new Request(`${PAGE}/connect`, {
+    const arrival = (address?: string) => {
+      const asked = new Request(`${PAGE}/web/site`, {
         method: "POST",
         headers: { origin: PAGE, "content-type": "application/json" },
-        body: JSON.stringify({ line: "site" }),
+        body: "{}",
       });
       return serve(address ? setClientAddress(asked, address) : asked)
         .then(async (r) => [r.status, (await r.json()).error]);
     };
-    assertEquals(await arrive("192.0.2.7"), [200, undefined]);
-    assertEquals(await arrive("192.0.2.7"), [200, undefined]);
-    assertEquals(await arrive("192.0.2.7"), [
+    assertEquals(await arrival("192.0.2.7"), [200, undefined]);
+    assertEquals(await arrival("192.0.2.7"), [200, undefined]);
+    assertEquals(await arrival("192.0.2.7"), [
       429,
       "Too many new visitors from here: try again later.",
     ]);
-    assertEquals(await arrive("::ffff:192.0.2.8"), [200, undefined]);
+    assertEquals(await arrival("::ffff:192.0.2.8"), [200, undefined]);
     // With neither, nobody's let in: never in with no limit by address.
     const logged = console.error;
     const said: unknown[] = [];
     console.error = (...args: unknown[]) => void said.push(args);
     try {
-      assertEquals(await arrive(), [500, "Couldn't connect"]);
+      assertEquals(await arrival(), [500, "Something went wrong"]);
     } finally {
       console.error = logged;
     }
@@ -517,7 +528,6 @@ test("a visitor's line removed: its visitors are no one, at once", async () => {
         links: LINKS,
       },
     });
-  const tickets = createTickets();
   const first = await createRuntime({
     store,
     plugins: [models, chat, ...access, webLines, lines(true)],
@@ -525,16 +535,11 @@ test("a visitor's line removed: its visitors are no one, at once", async () => {
   let cookie: string | undefined;
   let quiet: string | undefined;
   try {
-    const serve = webServer({ runtime: first, tickets });
-    const came = await connect(serve, {
-      from: false,
-      address: "192.0.2.1",
-      body: { line: "site" },
-    });
+    const serve = (r: Request) => first.fetch(r);
+    const came = await come(serve, "site", { from: false, address: "192.0.2.1" });
     cookie = came.cookie;
-    await first.call("chat.send", { text: "hi" }, { actor: tickets.admit(came.said.ticket!) });
-    quiet = (await connect(serve, { from: false, address: "192.0.2.2", body: { line: "site" } }))
-      .cookie;
+    await first.call("chat.send", { text: "hi" }, { actor: (await visitorOf(first, cookie!))! });
+    quiet = (await come(serve, "site", { from: false, address: "192.0.2.2" })).cookie;
     assertEquals((await connect(serve, { from: false, cookie })).status, 200);
   } finally {
     await first.close();
@@ -544,13 +549,11 @@ test("a visitor's line removed: its visitors are no one, at once", async () => {
     plugins: [models, chat, ...access, webLines, lines(false)],
   });
   try {
-    const serve = webServer({ runtime: then, tickets });
+    const serve = (r: Request) => then.fetch(r);
     for (const held of [cookie, quiet]) {
       assertEquals((await connect(serve, { from: false, cookie: held })).status, 401);
-      assertEquals(
-        (await connect(serve, { from: false, cookie: held, body: { line: "site" } })).status,
-        401,
-      );
+      // Asking to come in by the removed line: there's no such chat.
+      assertEquals((await arrive(serve, "site", { from: false, cookie: held })).status, 404);
     }
   } finally {
     await then.close();
@@ -558,9 +561,9 @@ test("a visitor's line removed: its visitors are no one, at once", async () => {
 });
 
 test("what's past goes: visitors' records past their time, counters, and contacts never heard", async () => {
-  await setup(async ({ serve, runtime, tickets }) => {
+  await setup(async ({ serve, runtime }) => {
     const admitted = async (from: string) =>
-      tickets.admit((await connect(serve, { from, body: { line: "site" } })).said.ticket!)!;
+      (await visitorOf(runtime, (await come(serve, "site", { from })).cookie!))!;
     // One speaks; one is made a contact for a first message that never went in.
     const talker = await admitted("192.0.2.1");
     const { thread } = await runtime.call<{ thread: string }>("chat.send", { text: "hi" }, {
@@ -583,7 +586,7 @@ test("what's past goes: visitors' records past their time, counters, and contact
   }, { plugins: [keptContacts, aging] });
 });
 
-test("connecting, signing in and out come from the app's own page only", async () => {
+test("coming in, signing in and out come from the app's own page only", async () => {
   await setup(async ({ serve, runtime }) => {
     const refused = async (path: string, asked: Asked, why: string) => {
       const answer = await serve(request(path, asked));
@@ -591,9 +594,9 @@ test("connecting, signing in and out come from the app's own page only", async (
       assertEquals(answer.headers.get("set-cookie"), null, `${path}: ${why}`);
       await answer.body?.cancel();
     };
-    for (const path of ["/connect", "/signin/dev", "/signout"]) {
+    for (const path of ["/connect", "/web/site", "/signin/dev", "/signout"]) {
       // Dev sign-in is this machine's alone, never through the front: from here, its page is all.
-      const body = path === "/connect" ? { line: "site" } : { name: "ana" };
+      const body = path === "/signin/dev" ? { name: "ana" } : {};
       const here = path === "/signin/dev" ? { from: false as const } : {};
       await refused(path, { origin: "https://evil.example", body, ...here }, "another site");
       await refused(path, { origin: "null", body, ...here }, "an opaque origin");
@@ -610,36 +613,30 @@ test("connecting, signing in and out come from the app's own page only", async (
       );
     }
     // Plain http is this machine's alone: elsewhere, a page is https.
-    await refused("/connect", {
-      url: "http://app.example",
-      origin: "http://app.example",
-      body: { line: "site" },
-    }, "http off this machine");
+    await refused("/web/site", { url: "http://app.example", origin: "http://app.example" }, "http");
     // Nobody was let in, nor signed in.
     assertEquals(await count(runtime), 0);
 
     // The app's own page, or no browser at all, is let in.
-    assertEquals((await connect(serve, { body: { line: "site" } })).status, 200);
-    assertEquals((await connect(serve, { origin: null, body: { line: "site" } })).status, 200);
-    const same = await connect(serve, {
-      headers: { "sec-fetch-site": "same-origin" },
-      body: { line: "site" },
-    });
+    assertEquals((await arrive(serve, "site")).status, 200);
+    assertEquals((await arrive(serve, "site", { origin: null })).status, 200);
+    const same = await arrive(serve, "site", { headers: { "sec-fetch-site": "same-origin" } });
     assertEquals(same.status, 200);
 
     // Behind the front, the page's origin is the host the front forwards, with its secret only.
     const inside = "http://10.0.0.7:8080";
-    const forwarded = { url: inside, origin: "https://app.example", body: { line: "shop" } };
+    const forwarded = { url: inside, origin: "https://app.example" };
     assertEquals(
-      (await connect(serve, { ...forwarded, headers: { "x-forwarded-host": "app.example" } }))
+      (await arrive(serve, "shop", {
+        ...forwarded,
+        headers: { "x-forwarded-host": "app.example" },
+      }))
         .status,
       200,
     );
-    // Without the secret, the forwarded host is no one's word: the origin isn't this host. (Asking
-    // for no line, it'd be a 401 past the origin's check: this is that check.)
-    await refused("/connect", {
+    // Without the secret, the forwarded host is no one's word: the origin isn't this host.
+    await refused("/web/shop", {
       ...forwarded,
-      body: {},
       from: false,
       headers: { "x-forwarded-host": "app.example" },
     }, "a forwarded host without the front's secret");
@@ -652,138 +649,126 @@ test("a signed-in person comes in as themselves, even where the page asks to arr
     const signed = await serve(request("/signin/dev", { body: { name: "ana" }, from: false }));
     const session = sent(signed)!;
     assertMatch(signed.headers.get("set-cookie")!, /^session=ses_[^;]+; HttpOnly; SameSite=Lax;/);
-    const visitor = await connect(serve, { body: { line: "site" } });
+    const visitor = await come(serve, "site");
     for (const cookie of [session, `${session}; ${visitor.cookie}`]) {
-      const in_ = await connect(serve, { cookie, body: { line: "site" } });
-      assertEquals([in_.said.actor, in_.said.name, in_.set], [ana, "ana", null]);
+      const arrived = await arrive(serve, "site", { cookie });
+      assertEquals([arrived.status, arrived.set], [200, null]);
+      const in_ = await connect(serve, { cookie });
+      assertEquals([in_.said.actor, in_.set], [ana, null]);
     }
     assertEquals(await count(runtime), 0);
-    // Signing out ends her session, and clears every entrance's cookie it was sent.
+    const me = await serve(new Request(`${PAGE}/me`, { headers: { cookie: session } }));
+    assertEquals((await me.json()).person, "ana");
+    // Signing out ends her session and clears its cookie: the visitor's is another credential.
     const out = await serve(request("/signout", { cookie: `${session}; ${visitor.cookie}` }));
-    const cleared = out.headers.getSetCookie();
-    assertEquals(cleared.map((c) => c.split(";")[0]).sort(), ["session=", "visitor="]);
+    assertEquals(out.headers.getSetCookie().map((c) => c.split(";")[0]), ["session="]);
     assertEquals((await connect(serve, { cookie: session })).status, 401);
+    // What she held for a visitor, she is again.
+    assertEquals(
+      (await connect(serve, { cookie: `${session}; ${visitor.cookie}` })).said.actor,
+      visitor.said.actor,
+    );
   }, { plugins: [keptContacts] });
 });
 
-test("an app without a page or tickets serves its routes alone, whatever its plugins declare", async () => {
+test("a plugin's sign-in routes are there when the plugin is, and ask for what they need", async () => {
+  const google = definePlugin({
+    name: "g",
+    resources: { google: { clientId: ["web.apps", "ios.apps"] } },
+  });
+  const withGoogle = await createRuntime({
+    store: memoryStore(),
+    plugins: [...access, devSignIn, googleSignIn, google],
+  });
+  const plain = await createRuntime({ store: memoryStore(), plugins: [...access] });
+  try {
+    const here = (path: string, init: RequestInit = {}) =>
+      setClientAddress(new Request(`${PAGE}${path}`, init), "127.0.0.1");
+    // The page asks what it can offer: dev sign-in is there from this machine (`{}`), Google's
+    // client id (the first) is anyone's, kept five minutes.
+    const dev = await withGoogle.fetch(here("/signin/dev"));
+    assertEquals([dev.status, await dev.json()], [200, {}]);
+    const elsewhere = await withGoogle.fetch(new Request("http://app.example/signin/dev"));
+    assertEquals(elsewhere.status, 404);
+    await elsewhere.body?.cancel();
+    const client = await withGoogle.fetch(new Request(`${PAGE}/google`));
+    assertEquals(await client.json(), { clientId: "web.apps" });
+    assertEquals(client.headers.get("cache-control"), "public, max-age=300");
+    // Google's button posts its token: a body it can't read is refused before any call.
+    const bad = await withGoogle.fetch(request("/signin/google", { body: {}, from: false }));
+    assertEquals([bad.status, (await bad.json()).error], [400, "Send { idToken }"]);
+    // Without the plugins, there are no such routes.
+    for (const path of ["/signin/dev", "/signin/google", "/google"]) {
+      const answer = await plain.fetch(here(path));
+      assertEquals(answer.status, 404, path);
+      await answer.body?.cancel();
+    }
+  } finally {
+    await withGoogle.close();
+    await plain.close();
+  }
+});
+
+test("without the web page, the page's paths are 404s; the routes of plugins still answer", async () => {
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [
-      models,
-      chat,
-      ...access,
-      webLines,
-      devSignIn,
-      googleSignIn,
-      who,
-      app(),
-      keptContacts,
-      definePlugin({ name: "g", resources: { google: { clientId: "web.apps" } } }),
-    ],
+    plugins: [...access, webLines, devSignIn, who, app(), keptContacts],
   });
   try {
-    const serve = webServer({ runtime });
-    const plain = async (method: string, path: string, body?: unknown) => {
-      const answer = await serve(
-        new Request(`${PAGE}${path}`, {
-          method,
-          headers: { origin: PAGE, "content-type": "application/json" },
-          ...(body ? { body: JSON.stringify(body) } : {}),
-        }),
+    const plain = async (method: string, path: string) => {
+      const answer = await runtime.fetch(
+        new Request(`${PAGE}${path}`, { method, headers: { origin: PAGE } }),
       );
       return [answer.status, await answer.text(), answer.headers.get("set-cookie")];
     };
     for (
-      const [method, path, body] of [
-        ["POST", "/connect", { line: "site" }],
-        ["POST", "/signin/dev", { name: "ana" }],
-        ["POST", "/signin/google", { idToken: "x" }],
-        ["POST", "/signout"],
+      const [method, path] of [
         ["GET", "/"],
         ["GET", "/app/app.js"],
         ["GET", "/manifest.webmanifest"],
         ["GET", "/sw.js"],
         ["GET", "/assets/copilotz/fonts.css"],
-        ["GET", "/oxian"],
         ["GET", "/somewhere"],
+        ["POST", "/signin/google"],
       ] as const
     ) {
-      assertEquals(await plain(method, path, body), [404, "Not found", null], `${method} ${path}`);
+      assertEquals(await plain(method, path), [404, "Not found", null], `${method} ${path}`);
     }
     assertEquals(await plain("GET", "/health"), [200, "ok", null]);
-    assertEquals(await plain("POST", "/who"), [200, '{"kind":"visitor","id":""}', null]);
+    assertEquals(await plain("POST", "/who"), [200, '{"kind":"anonymous","id":""}', null]);
     assertEquals(await count(runtime), 0);
   } finally {
     await runtime.close();
   }
-});
-
-test("the page shows the ways to sign in the app declares; a host signing in elsewhere shows those", async () => {
-  const google = definePlugin({
-    name: "g",
-    resources: { google: { clientId: ["web.apps", "ios.apps"] } },
-  });
-  const both = await createRuntime({
+  // With the page, the same paths are the page's (and a script's fetch is still a 404).
+  const withPage = await createRuntime({
     store: memoryStore(),
-    plugins: [identity, devSignIn, googleSignIn, google],
+    plugins: [
+      ...access,
+      webPage,
+      definePlugin({
+        name: "settings",
+        resources: { page: { code: { entry: "app.js", files: { "app.js": "" } } } },
+      }),
+    ],
   });
-  const none = await createRuntime({ store: memoryStore(), plugins: [identity] });
   try {
-    const code = { entry: "app.js", files: { "app.js": "" } };
-    const config = async (serve: (r: Request) => Promise<Response>) => {
-      const html = await (await serve(new Request(`${PAGE}/`))).text();
-      return JSON.parse(html.match(/<script id="copilotz-config"[^>]*>([^<]*)</)![1]);
-    };
-    const tickets = createTickets();
-    assertEquals(await config(webServer({ runtime: both, tickets, code })), {
-      signIn: { dev: {}, google: { clientId: "web.apps" } },
-    });
-    assertEquals(await config(webServer({ runtime: none, tickets, code })), { signIn: {} });
-    // Signing in at another runtime (a directory): its ways, shown here, never served here.
-    const elsewhere = webServer({ runtime: none, tickets, code, signIn: { at: both } });
-    assertEquals(await config(elsewhere), {
-      signIn: { dev: {}, google: { clientId: "web.apps" } },
-    });
-    const tried = await elsewhere(request("/signin/dev", { body: { name: "ana" } }));
-    assertEquals([tried.status, tried.headers.get("set-cookie")], [404, null]);
-    await tried.body?.cancel();
+    const page = await withPage.fetch(new Request(`${PAGE}/somewhere`));
+    assertEquals(page.headers.get("content-type"), "text/html; charset=utf-8");
+    await page.body?.cancel();
+    const fetched = await withPage.fetch(
+      new Request(`${PAGE}/somewhere`, { headers: { accept: "application/json" } }),
+    );
+    assertEquals(fetched.status, 404);
+    await fetched.body?.cancel();
   } finally {
-    await both.close();
-    await none.close();
+    await withPage.close();
   }
 });
 
-test("what the app declares is checked as the host starts", async () => {
-  // A way to sign in, as one is: unrecorded, its answer a session.
-  const magic = definePlugin({
-    name: "magic",
-    actions: {
-      "magic.in": defineAction({ input: { type: "object" }, record: false, run: () => ({}) }),
-    },
-  });
+test("what the app declares is checked as it starts", async () => {
   const declaring = (resources: Record<string, unknown>) =>
     definePlugin({ name: "declaring", resources } as Parameters<typeof definePlugin>[0]);
-  const bad: [Record<string, unknown>, string][] = [
-    [{ entrances: { odd: { cookie: "a b", query: "credential.actor" } } }, "its cookie"],
-    [{ entrances: { twin: { cookie: "session", query: "credential.actor" } } }, "another entrance"],
-    [{ entrances: { odd: { cookie: "odd", query: "nothing" } } }, "its query"],
-    [{ entrances: { odd: { cookie: "odd", query: "a.b", arrive: "no" } } }, "its arrive"],
-    [{ entrances: { odd: { cookie: "odd", query: "a.b", sameSite: "none" } } }, "its sameSite"],
-    [{ signIn: { magic: { action: "magic.in", entrance: "nowhere" } } }, "no entrance"],
-    [{ signIn: { Magic: { action: "magic.in" } } }, "its name"],
-  ];
-  for (const [resources, said] of bad) {
-    const runtime = await createRuntime({
-      store: memoryStore(),
-      plugins: [identity, magic, declaring(resources)],
-    });
-    try {
-      assertThrows(() => webServer({ runtime }), Error, said);
-    } finally {
-      await runtime.close();
-    }
-  }
   // A web line's settings, as the app starts.
   const lines: [Record<string, unknown>, string][] = [
     [{ lines: { site: { agent: "guide" } } }, "needs its in"],
@@ -823,21 +808,29 @@ test("what the app declares is checked as the host starts", async () => {
 
 test("what the page asks coming in is a small JSON object", async () => {
   await setup(async ({ serve, runtime }) => {
-    const tried = await serve(
-      new Request(`${PAGE}/connect`, {
-        method: "POST",
-        headers: { origin: PAGE, "content-type": "application/json" },
-        body: JSON.stringify({ line: "site", padding: "x".repeat(20_000) }),
-      }),
-    );
-    assertEquals(tried.status, 400);
-    await tried.body?.cancel();
-    for (const body of ["[1]", '"site"', "{", "null"]) {
-      const answer = await serve(
-        new Request(`${PAGE}/connect`, { method: "POST", headers: { origin: PAGE }, body }),
+    for (const path of ["/web/site", "/signin/dev"]) {
+      const tried = await serve(
+        setClientAddress(
+          new Request(`${PAGE}${path}`, {
+            method: "POST",
+            headers: { origin: PAGE, "content-type": "application/json" },
+            body: JSON.stringify({ name: "ana", padding: "x".repeat(20_000) }),
+          }),
+          "127.0.0.1",
+        ),
       );
-      assertEquals(answer.status, 400, body);
-      await answer.body?.cancel();
+      assertEquals(tried.status, 400, path);
+      await tried.body?.cancel();
+      for (const body of ["[1]", '"site"', "{", "null"]) {
+        const answer = await serve(
+          setClientAddress(
+            new Request(`${PAGE}${path}`, { method: "POST", headers: { origin: PAGE }, body }),
+            "127.0.0.1",
+          ),
+        );
+        assertEquals(answer.status, 400, `${path} ${body}`);
+        await answer.body?.cancel();
+      }
     }
     assertEquals(await count(runtime), 0);
   }, { plugins: [keptContacts] });

@@ -1,5 +1,5 @@
 /**
- * The web host's own files, which `webServer` serves under `/assets/copilotz/`
+ * The web host's own files, which `webPage` serves under `/assets/copilotz/`
  * with no configuration (that prefix is the host's: an app's assets go
  * elsewhere under `/assets/`): the default theme's typefaces and their
  * stylesheet (Manrope and Space Grotesk, from Google Fonts, under the SIL

@@ -60,7 +60,7 @@ export function themeOf(plugins: Plugins): Theme {
 /**
  * A theme's font stylesheet, when it names one where fonts may load from:
  * Google Fonts (`https://fonts.googleapis.com/…`), or a path on the app's own
- * origin (`/assets/fonts/brand.css`, served by `webServer({ assets })`; see
+ * origin (`/assets/fonts/brand.css`, served by `webPage`, its `page.assets`; see
  * `ownPath`). Nothing in it can end the attribute it goes in.
  */
 export function fontsOf(theme: Theme): string | undefined {

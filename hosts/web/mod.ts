@@ -7,12 +7,12 @@
  * items and steps (`openPalette`, at a step, from anywhere), and the toolkit
  * (`toolkit/`), whose pieces take their look from the theme's variables
  * (`theme/`): a front end composes them, and its own CSS is only its layout,
- * on those variables. The server half is `server.ts` (with
- * `tickets.ts`), for the process that serves the page.
+ * on those variables. The server half is `server.ts` (the page, as a
+ * plugin: `webPage`), for the runtime that serves it.
  */
 export { go, signOut, web, type WebOptions, type Where, type Who } from "./host.tsx";
 export { appBase } from "./base.ts";
-// Orgs, when the server serves many (`hosts/orgs`): the person's, and going between them.
+// Orgs, when the server serves many: the person's, and going between them.
 export {
   answerOrgInvite,
   arrived,

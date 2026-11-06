@@ -52,7 +52,7 @@ export type Theme = {
     mono?: string;
     /**
      * A stylesheet that loads the fonts: Google Fonts' (`https://fonts.googleapis.com/…`), or
-     * the app's own, served with its font files (`/assets/fonts/brand.css`; see `webServer`).
+     * the app's own, served with its font files (`/assets/fonts/brand.css`; see `webPage`).
      */
     url?: string;
     /**

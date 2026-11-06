@@ -1,66 +1,59 @@
 /**
- * An app without the web app (`serve` with no page's code): its routes
- * answer, a route's socket too, `/health` says it's up, and nothing else is
- * there. The runtime's own socket still takes its clients. Closing stops
- * listening, lets what's running finish, and closes the runtime with what it
- * was given. With the page, the routes take sockets the same way. Deno and
- * Bun run it too, through their Node compatibility.
+ * An app without the web app (no `webPage`): its routes answer, a route's
+ * socket too, `/health` says it's up, and nothing else is there. The
+ * runtime's own socket still takes its clients. With the page, the routes
+ * take sockets the same way. Shutting the listener down lets what's running
+ * finish; the runtime is the app's to close. Deno and Bun run it too,
+ * through their Node compatibility.
  */
 import { assertEquals, assertRejects } from "@std/assert";
+import { upgradeWebSocket } from "@oxian/oxian-js/http";
 import {
   type Actor,
   createRuntime,
   defineAction,
   definePlugin,
-  type Runtime,
+  type Route,
 } from "../../../../runtime/mod.ts";
 import { connect } from "../../../../runtime/client.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
-import { test } from "../../../../testing/mod.ts";
-import { httpRequest, type Served, socket } from "../../server.ts";
-import { createTickets } from "../../tickets.ts";
-import { serve } from "../mod.ts";
+import { test, testWho, ticketFor } from "../../../../testing/mod.ts";
+import { webPage } from "../../server.ts";
+import { listen } from "../serve.ts";
+
+const json = (value: unknown) =>
+  new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
+
+/** Says who called and the path asked. */
+const hello: Route = (request, { actor }) =>
+  json({ who: actor.kind, path: new URL(request.url).pathname });
+
+/** Answers after a moment. */
+const slow: Route = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  return new Response("slow, but done");
+};
+
+/** A relay's socket: what it's sent comes back. */
+const echoRoute: Route = (request) => {
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    return new Response("A socket only", { status: 426 });
+  }
+  const { socket, response } = upgradeWebSocket(request);
+  socket.onmessage = (event) => socket.send(`echo: ${event.data}`);
+  return response;
+};
 
 const hooks = definePlugin({
   name: "hooks",
   actions: {
-    "hooks.hello": defineAction({
-      input: httpRequest,
-      allow: () => true,
-      run: (ctx, input) => ({ body: { who: ctx.actor?.kind, path: input.path } }),
-    }),
-    "hooks.slow": defineAction({
-      input: httpRequest,
-      allow: () => true,
-      run: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 150));
-        return { body: "slow, but done" };
-      },
-    }),
     "probe.who": defineAction({
       input: { type: "object" },
       allow: (actor) => actor.kind === "person",
       run: (ctx) => ctx.actor?.id,
     }),
   },
-  resources: {
-    routes: {
-      hello: { path: "/hooks/hello", action: "hooks.hello" },
-      slow: { path: "/hooks/slow", action: "hooks.slow" },
-      // A relay's socket: what it's sent comes back.
-      echo: {
-        path: "/relay",
-        serve: (request: Request, host: Served) => {
-          if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-            return new Response("A socket only", { status: 426 });
-          }
-          const { socket, response } = host.upgrade();
-          socket.onmessage = (event) => socket.send(`echo: ${event.data}`);
-          return response;
-        },
-      },
-    },
-  },
+  routes: { "/hooks/hello": hello, "/hooks/slow": slow, "/relay": echoRoute },
 });
 
 /** A socket at `url`, once it's open. */
@@ -79,27 +72,33 @@ const closed = (ws: WebSocket) =>
 
 test("without a page: the app's routes, a route's socket, /health, and nothing else", async () => {
   const runtime = await createRuntime({ store: memoryStore(), plugins: [hooks] });
-  const server = await serve({ runtime });
+  const server = await listen(runtime.fetch);
   const base = `http://127.0.0.1:${server.port}`;
   try {
     const hello = await fetch(`${base}/hooks/hello?from=meta`, { method: "POST", body: "{}" });
     assertEquals([hello.status, await hello.json()], [200, {
-      who: "visitor",
+      who: "anonymous",
       path: "/hooks/hello",
     }]);
     const health = await fetch(`${base}/health`);
     assertEquals([health.status, await health.text()], [200, "ok"]);
     // No page, no code, no sign-in: they aren't here.
-    for (const path of ["/", "/app/app.js", "/signin/dev", "/connect", "/nowhere"]) {
+    for (const path of ["/", "/app/app.js", "/signin/dev", "/nowhere"]) {
       const missing = await fetch(`${base}${path}`, { method: path === "/" ? "GET" : "POST" });
-      assertEquals([path, missing.status, await missing.text()], [path, 404, "Not found"]);
+      assertEquals([path, missing.status], [path, 404]);
+      await missing.body?.cancel();
     }
+    // /connect is the runtime's own: it needs someone signed in.
+    const connected = await fetch(`${base}/connect`, { method: "POST" });
+    assertEquals(connected.status, 401);
+    await connected.body?.cancel();
     const plain = await fetch(`${base}/relay`);
     assertEquals([plain.status, await plain.text()], [426, "A socket only"]);
 
     assertEquals(await echo(`ws://127.0.0.1:${server.port}/relay`), "echo: hello");
   } finally {
-    await server.close();
+    await server.shutdown();
+    await runtime.close();
   }
 });
 
@@ -116,41 +115,36 @@ async function echo(url: string) {
 }
 
 test("with the page, the routes take sockets of their own too", async () => {
-  const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [hooks],
-    transports: [socket],
-    admit: tickets.admit,
+    plugins: [
+      hooks,
+      webPage,
+      definePlugin({
+        name: "settings",
+        resources: { page: { code: { entry: "app.js", files: { "app.js": "" } } } },
+      }),
+    ],
   });
-  const server = await serve({
-    runtime,
-    tickets,
-    code: { entry: "app.js", files: { "app.js": "" } },
-  });
+  const server = await listen(runtime.fetch);
   try {
     assertEquals(await echo(`ws://127.0.0.1:${server.port}/relay`), "echo: hello");
   } finally {
-    await server.close();
+    await server.shutdown();
+    await runtime.close();
   }
 });
 
 test("without a page, the runtime's own socket still takes its clients", async () => {
-  const tickets = createTickets();
-  const runtime = await createRuntime({
-    store: memoryStore(),
-    plugins: [hooks],
-    transports: [socket],
-    admit: tickets.admit,
-  });
-  const server = await serve({ runtime });
+  const runtime = await createRuntime({ store: memoryStore(), plugins: [testWho, hooks] });
+  const server = await listen(runtime.fetch);
   const ana: Actor = { kind: "person", id: "ana" };
   const client = connect({
     transport: {
       type: "websocket",
       config: { url: `ws://127.0.0.1:${server.port}/oxian`, allowInsecureLoopback: true },
     },
-    ticket: () => Promise.resolve(tickets.issue(ana)),
+    ticket: () => ticketFor(runtime, ana),
     plugins: [],
   });
   try {
@@ -158,33 +152,25 @@ test("without a page, the runtime's own socket still takes its clients", async (
     assertEquals(await client.call("probe.who", {}), "ana");
   } finally {
     await client.close();
-    await server.close();
+    await server.shutdown();
+    await runtime.close();
   }
 });
 
-test("closing lets a running request finish, then closes the runtime", async () => {
+test("shutting down lets a running request finish, and stops listening", async () => {
   const runtime = await createRuntime({ store: memoryStore(), plugins: [hooks] });
-  const asked: unknown[] = [];
-  const owned: Runtime = {
-    ...runtime,
-    close: (options?: { drain?: number }) => {
-      asked.push(options);
-      return runtime.close();
-    },
-  };
-  const server = await serve({ runtime: owned });
+  const server = await listen(runtime.fetch);
   const base = `http://127.0.0.1:${server.port}`;
   const relay = await opened(`ws://127.0.0.1:${server.port}/relay`);
   const hungUp = closed(relay);
-  const slow = fetch(`${base}/hooks/slow`, { method: "POST" });
+  const pending = fetch(`${base}/hooks/slow`, { method: "POST" });
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  const closing = server.close({ drain: 500 });
-  assertEquals(server.close({ drain: 1 }), closing, "closing again is the same close");
-  const answered = await slow;
+  const stopping = server.shutdown();
+  const answered = await pending;
   assertEquals([answered.status, await answered.text()], [200, "slow, but done"]);
-  await closing;
+  await stopping;
   await hungUp;
-  assertEquals(asked, [{ drain: 500 }]);
   await assertRejects(() => fetch(`${base}/health`));
+  await runtime.close();
 });

@@ -11,7 +11,7 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../../stores/sql/postgres/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
-import { chat, type Prompt } from "../chat/mod.ts";
+import { chat, type Message, type Prompt } from "../chat/mod.ts";
 import { type Memory, memory, memoryExtraction } from "../memory/mod.ts";
 import { env, tempFile, temporary, test } from "../../../testing/mod.ts";
 
@@ -39,7 +39,7 @@ const text = (m: LlmMessage) => "text" in m ? m.text ?? "" : "";
  * (! for core), "about <who>: remember <text>", "recall <query>", "forget <id>".
  * The extractor turns "I live in <city>" into a core memory.
  */
-async function start(make: () => Store | Promise<Store>) {
+async function start(make: () => Store | Promise<Store>, embedder = "hash/words") {
   const tools: string[] = [];
   const extractor: string[] = [];
   const script: LlmAdapter = {
@@ -78,11 +78,17 @@ async function start(make: () => Store | Promise<Store>) {
   const app = definePlugin({
     name: "app",
     resources: {
-      provider: { script: { adapter: "script" } },
+      provider: { script: { adapter: "script" }, down: { adapter: "down" } },
       agents: { agent: { instructions: "Help.", model: "script/main" } },
-      memory: { embedder: "hash/words", extractor: "script/cheap", every: 4 },
+      memory: { embedder, extractor: "script/cheap", every: 4 },
     },
-    adapters: { llm: { script } },
+    adapters: {
+      llm: { script },
+      // An embedding provider that refuses every call (a revoked key).
+      embeddings: {
+        down: { embed: () => Promise.reject(new Error("401 Unauthorized")) },
+      },
+    },
   });
   const runtime = await createRuntime({
     store: await make(),
@@ -164,6 +170,32 @@ each("relevant memories come up on their own, in the turn after the conversation
   assert(!q.history.some((m) => "text" in m && m.text?.includes('<context name="recall">')));
   await runtime.close();
 });
+
+each(
+  "a failing recall goes on without memories; a failing remember is the agent's to see",
+  async (make) => {
+    const errors: unknown[][] = [];
+    const log = console.error;
+    console.error = (...args: unknown[]) => void errors.push(args);
+    try {
+      const { runtime, tools, say, prompt } = await start(make, "down/words");
+      // The turn answers, with nothing recalled; the failure is logged.
+      const thread = await say("what is my dog called?");
+      const answers = await runtime.query<Message[]>("message.history", { thread });
+      assertEquals(answers.at(-1)?.text, "ok");
+      const p = await prompt(thread);
+      assert(!toldIn(p).includes("Memories that may be relevant"));
+      assert(errors.some((e) => String(e[0]).startsWith("memory: recall failed")));
+      assert(errors.some((e) => String(e[1]).includes("401")));
+      // remember is a tool: its failure is the agent's to see.
+      await say("remember Ana's dog is called Rex", thread);
+      assertStringIncludes(tools.at(-1)!, "401 Unauthorized");
+      await runtime.close();
+    } finally {
+      console.error = log;
+    }
+  },
+);
 
 each(
   "a core memory learned in a conversation leaves its system text as it began: it comes up there, and is in mind in the next",

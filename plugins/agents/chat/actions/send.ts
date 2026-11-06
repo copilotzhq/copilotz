@@ -3,9 +3,11 @@
  * shared with them: the rules keep them to it). It goes to `to` when given,
  * else to the agents `@mentioned` in it, else to the sender of the message
  * it replies to, else to the thread's agents (a new thread's: those it
- * names, or who answers new chats in its space). A contact's goes to the
- * sender of what it replies to, else the thread's agents: never whom it
- * names. It replies only to a message of the same conversation that its
+ * names, or who answers new chats in its space); `to: []`, to nobody: it's
+ * said, agents read it later, and none answers it (what someone did on a
+ * page beside the chat). A contact's goes to the sender of what it replies
+ * to, else the thread's agents: never whom it names, though it too may say
+ * something to nobody (`to: []`). It replies only to a message of the same conversation that its
  * sender reads. Only agents answering in
  * its space answer there: naming one that doesn't fails (`not_here`). Audio
  * sent with it is transcribed first (what agents read): if that fails,
@@ -60,8 +62,9 @@ export const MEDIA_TYPE =
 /**
  * A `contactSend` resource: the Action that lets a contact's message in,
  * asked as the contact before anything's sent, with where it goes (`thread`,
- * when it names one) and what it carries (each file's name, media type and
- * size). It refuses it (a limit), or answers where it goes when it names no
+ * when it names one), what it carries (each file's name, media type and
+ * size), and `to: []` when it goes to nobody (no agent answers it: no turn
+ * to pay for). It refuses it (a limit), or answers where it goes when it names no
  * chat (`thread`: the contact's own) and `transcribe: false` when its audio
  * goes untranscribed.
  */
@@ -70,7 +73,11 @@ export type ContactSend = { action: string };
 /** What the app's `contactSend` hooks say of a contact's message, each in turn. */
 async function letIn(
   ctx: Pick<Context, "resources" | "call">,
-  asked: { thread?: string; files: { name: string; type?: string; size: number }[] },
+  asked: {
+    thread?: string;
+    files: { name: string; type?: string; size: number }[];
+    to?: [];
+  },
 ): Promise<{ thread?: string; transcribe?: false }> {
   const hooks = Object.values((ctx.resources.contactSend ?? {}) as Record<string, ContactSend>);
   let said: { thread?: string; transcribe?: false } = {};
@@ -78,6 +85,7 @@ async function letIn(
     const answer = await ctx.call<{ thread?: unknown; transcribe?: unknown } | null>(hook.action, {
       ...(asked.thread ? { thread: asked.thread } : {}),
       files: asked.files,
+      ...(asked.to ? { to: asked.to } : {}),
     });
     said = {
       ...said,
@@ -194,6 +202,8 @@ export const sendAction = defineAction({
     // A contact talks with whom its chat is with: what it says names nobody else, and the app
     // lets it in first (its line's limits, the files it takes, its own chat).
     const contact = ctx.actor?.kind === "contact";
+    // A contact names no agent, but may say something to nobody: no agent answers it.
+    const nobody = input.to?.length === 0;
     if (contact && said.length > CONTACT_TEXT) {
       throw failure("invalid", `A message says ${CONTACT_TEXT} characters at most.`, {
         public: true,
@@ -207,6 +217,7 @@ export const sendAction = defineAction({
           ...(f.type ? { type: f.type } : {}),
           size: sizeOf(f.data),
         })),
+        ...(nobody ? { to: [] as [] } : {}),
       })
       : {};
     const threads = ctx.db.collection<Thread>("thread");
@@ -222,7 +233,7 @@ export const sendAction = defineAction({
     const roster = await rosterOf(ctx, where);
     const members = existing ? existing.agents ?? [] : roster.default;
     const mentioned = contact ? [] : mentions(said);
-    const asked = (contact ? undefined : input.to) ??
+    const asked = (contact ? (nobody ? [] : undefined) : input.to) ??
       (mentioned.length ? mentioned : replied ? [replied.from] : members);
     // Agents answer only where they work: one named that doesn't is refused; one gone, left out.
     const agents = await agentsNamed(ctx, asked);

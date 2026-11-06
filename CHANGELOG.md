@@ -1,5 +1,13 @@
 ## Unreleased
 
+- **A contact's message may go to nobody** (`chat.send` with `to: []`), as a person's already could:
+  it's kept in the chat, its agents read it the next time they answer there (with its `tap`, as
+  `[tapped: <id>]`), and none answers it. It's how a page beside the chat says what the customer did
+  there (a trip chosen in a booking panel) without a turn for each tap. A contact still names no
+  agent: any other `to` goes to its chat's agents, as before. `contactSend` hooks are told
+  (`to: []`): a web line's visitor's message to nobody counts against its limits but holds none of
+  the line's budget, since no turn will be charged for it.
+
 ## 1.0.0-rc.26 — 2026-11-06
 
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the

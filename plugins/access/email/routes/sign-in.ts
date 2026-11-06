@@ -120,13 +120,15 @@ async (
   }
 };
 
+const signInStep = step("email.sign-in", ["email", "password"], true);
+
 /** `GET /signin/email` (it's here: whether people make accounts), `POST` signs in. */
 export const signInRoute: Route = (request, ctx) => {
   if (request.method === "GET" || request.method === "HEAD") {
     const settings = signInOf({ resources: ctx.runtime.describe().resources });
     return json({ signUp: settings.signUp !== false });
   }
-  return step("email.sign-in", ["email", "password"], true)(request, ctx);
+  return signInStep(request, ctx);
 };
 
 export const signUpRoute: Route = step("email.sign-up", ["email", "password", "name"]);

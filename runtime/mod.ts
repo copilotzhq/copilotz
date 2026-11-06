@@ -33,9 +33,11 @@ export { keyOf, linksOf, type LinksSettings, secretsOf, signLink, verifyLink } f
 export {
   type Caller,
   callerFrom,
+  callerOf,
   callerProblem,
   type CallerSettings,
   countedOf,
+  exemptProblem,
   type Network,
   networksOf,
   privateAddress,

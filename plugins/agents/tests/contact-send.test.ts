@@ -41,7 +41,7 @@ const app = definePlugin({
     agents: { guide: { instructions: "x", model: "script/main" } },
     spaces: { visitors: { name: "Website", agents: ["guide"] } },
     links: { origin: PAGE, secret: "the-app-secret-for-tests-0123456789" },
-    web: { lines: { notes: { in: "visitors", agent: "guide", files: { count: 2 } } } },
+    web: { notes: { in: "visitors", agent: "guide", files: { count: 2 } } },
   },
   adapters: { llm: { script } },
 });

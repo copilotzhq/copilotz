@@ -65,13 +65,11 @@ const app = (limits: Record<string, number> = {}, caller = true) =>
       agents: { guide: { instructions: "Help visitors.", model: "fake/echo" } },
       spaces: { visitors: { name: "Website", agents: ["guide"] } },
       links: LINKS,
+      ...(caller ? { caller: { header: "cf-connecting-ip", front: FRONT } } : {}),
       web: {
-        ...(caller ? { caller: { header: "cf-connecting-ip", front: FRONT } } : {}),
-        lines: {
-          site: { in: "visitors", agent: "guide", limits },
-          shop: { in: "shop", title: "Shop chat" },
-          burst: { in: "visitors", limits: { ipVisitorsPerHour: 2 } },
-        },
+        site: { in: "visitors", agent: "guide", limits },
+        shop: { in: "shop", title: "Shop chat" },
+        burst: { in: "visitors", limits: { ipVisitorsPerHour: 2 } },
       },
     },
   });
@@ -507,7 +505,7 @@ test("a visitor's line removed: its visitors are no one, at once", async () => {
       resources: {
         agents: { guide: { instructions: "Help visitors.", model: "fake/echo" } },
         spaces: { visitors: { name: "Website", agents: ["guide"] } },
-        web: { lines: declared ? { site: { in: "visitors", agent: "guide" } } : {} },
+        web: declared ? { site: { in: "visitors", agent: "guide" } } : {},
         links: LINKS,
       },
     });
@@ -778,24 +776,24 @@ test("what the app declares is checked as the host starts", async () => {
       await runtime.close();
     }
   }
-  // A web line's settings, as the app starts.
+  // A web site's settings, as the app starts.
   const lines: [Record<string, unknown>, string][] = [
-    [{ lines: { site: { agent: "guide" } } }, "needs its in"],
-    [{ lines: { site: { in: "s", agent: "nobody" } } }, "isn't one of the app's agents"],
-    [{ lines: { site: { in: "s", limits: { perHour: 3 } } } }, "isn't a limit"],
-    [{ lines: { site: { in: "s", files: { count: 0 } } } }, "files.count is a whole number"],
-    [{ lines: { site: { in: "s", files: { bytes: 50_000_000 } } } }, "10000000 at most"],
-    [{ lines: { site: { in: "s", files: { size: 1 } } } }, "files.size isn't one"],
-    [{ lines: { site: { in: "s", transcribe: "yes" } } }, "its transcribe is true or false"],
+    [{ web: { site: { agent: "guide" } } }, "needs its in"],
+    [{ web: { site: { in: "s", agent: "nobody" } } }, "isn't one of the app's agents"],
+    [{ web: { site: { in: "s", limits: { perHour: 3 } } } }, "isn't a limit"],
+    [{ web: { site: { in: "s", files: { count: 0 } } } }, "files.count is a whole number"],
+    [{ web: { site: { in: "s", files: { bytes: 50_000_000 } } } }, "10000000 at most"],
+    [{ web: { site: { in: "s", files: { size: 1 } } } }, "files.size isn't one"],
+    [{ web: { site: { in: "s", transcribe: "yes" } } }, "its transcribe is true or false"],
     // Visitors' secrets are signed with the app's: a line needs it.
-    [{ lines: { site: { in: "s" } } }, "the app's secret"],
-    [{ lines: { site: { in: "s", limits: { visitorsPerHour: 0 } } } }, "a whole number over 0"],
-    [{ lines: { site: { in: "s", days: 500 } } }, "400 at most"],
-    [{ lines: { "a b": { in: "s" } } }, "its name"],
-    [{ caller: { header: "x-forwarded-for" }, lines: {} }, "why its header is believed"],
-    [{ caller: { header: "x-forwarded-for", front: FRONT }, lines: {} }, "say its hops"],
+    [{ web: { site: { in: "s" } } }, "the app's secret"],
+    [{ web: { site: { in: "s", limits: { visitorsPerHour: 0 } } } }, "a whole number over 0"],
+    [{ web: { site: { in: "s", days: 500 } } }, "400 at most"],
+    [{ web: { "a b": { in: "s" } } }, "its name"],
+    [{ caller: { header: "x-forwarded-for" } }, "why its header is believed"],
+    [{ caller: { header: "x-forwarded-for", front: FRONT } }, "say its hops"],
   ];
-  for (const [web, said] of lines) {
+  for (const [declared, said] of lines) {
     let started: Runtime | undefined;
     try {
       started = await createRuntime({
@@ -803,12 +801,12 @@ test("what the app declares is checked as the host starts", async () => {
         plugins: [
           ...access,
           webLines,
-          declaring({ web, agents: { guide: { instructions: "", model: "x" } } }),
+          declaring({ ...declared, agents: { guide: { instructions: "", model: "x" } } }),
         ],
       });
-      assert(false, `started with ${JSON.stringify(web)}`);
+      assert(false, `started with ${JSON.stringify(declared)}`);
     } catch (error) {
-      assertMatch((error as Error).message, new RegExp(said), JSON.stringify(web));
+      assertMatch((error as Error).message, new RegExp(said), JSON.stringify(declared));
     } finally {
       await started?.close();
     }

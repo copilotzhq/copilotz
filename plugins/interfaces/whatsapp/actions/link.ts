@@ -12,7 +12,7 @@
  */
 import { defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
 import type { WhatsAppNumber } from "../collections/number.ts";
-import { settingsOf } from "../shared/settings.ts";
+import { CODE_MINUTES } from "../shared/settings.ts";
 import { may } from "../../../access/spaces/contract.ts";
 
 const which = {
@@ -40,7 +40,7 @@ export const linkAction = defineAction({
     const person = ctx.actor!.id;
     const codes = ctx.db.collection("whatsapp_code");
     await codes.deleteMany({ number: number._id, person });
-    const expires = new Date(Date.now() + settingsOf(ctx).codeMinutes * 60_000).toISOString();
+    const expires = new Date(Date.now() + CODE_MINUTES * 60_000).toISOString();
     for (let tries = 0;; tries++) {
       const code = digits();
       try {

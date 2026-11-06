@@ -79,7 +79,7 @@ async function setup(
       agents: { guide: { instructions: "Help.", model: "fake/echo" } },
       spaces: { visitors: { name: "Website", agents: ["guide"] } },
       links: LINKS,
-      web: { lines: { site: { in: "visitors", agent: "guide", ...options.line } } },
+      web: { site: { in: "visitors", agent: "guide", ...options.line } },
       ...options.resources,
     },
   });
@@ -576,7 +576,7 @@ test("the app's previous secret: a visitor its cookie was signed for is still wh
             agents: { guide: { instructions: "Help.", model: "fake/echo" } },
             spaces: { visitors: { name: "Website", agents: ["guide"] } },
             links: { origin: PAGE, ...links },
-            web: { lines: { site: { in: "visitors", agent: "guide" } } },
+            web: { site: { in: "visitors", agent: "guide" } },
           },
         }),
       ],
@@ -636,7 +636,7 @@ test("the app's previous secret: a visitor its cookie was signed for is still wh
   }
 });
 
-test("visitors all from a private address (a proxy's, without web.caller): said once, clearly", async () => {
+test("visitors all from a private address (a proxy's, without the caller resource): said once, clearly", async () => {
   const warned: string[] = [];
   const warn = console.warn;
   console.warn = (...args: unknown[]) => void warned.push(args.map(String).join(" "));
@@ -652,5 +652,5 @@ test("visitors all from a private address (a proxy's, without web.caller): said 
   }
   assertEquals(warned.length, 1);
   assert(warned[0].includes("10.0.0.5, a private address"));
-  assert(warned[0].includes("web.caller"));
+  assert(warned[0].includes("caller resource"));
 });

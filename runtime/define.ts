@@ -101,6 +101,11 @@ export type Context = {
   record(collection: string, doc: Record<string, unknown>): string;
   /** Counters, histograms and gauges (see runtime/metrics.ts); they do nothing unless configured. */
   metrics: Metrics;
+  /**
+   * Calls to outside services (Meta, Stripe, Google…): the platform's `fetch`
+   * unless `createRuntime({ fetch })` replaced it, as tests do with a fake.
+   */
+  fetch: typeof fetch;
   resources: Resources;
   adapters: Adapters;
   /** Workers of the kinds plugins declare (a computer…), sent jobs by kind and id. */
@@ -137,6 +142,8 @@ export type ReadContext = {
   /** Records what a read used (an embedding's tokens…): the only write a read makes. */
   record: Context["record"];
   metrics: Metrics;
+  /** Calls to outside services: the platform's `fetch`, or the one `createRuntime({ fetch })` gave. */
+  fetch: typeof fetch;
   resources: Resources;
   /** Ports a read may use, such as an embedder; the store stays read-only. */
   adapters: Adapters;

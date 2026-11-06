@@ -24,7 +24,7 @@ export const signInAction = defineAction({
     const port = Object.values(ctx.adapters.googleKeys ?? {})[0] as GoogleKeys | undefined;
     if (!port) throw new Error("No googleKeys adapter");
     const { clientId } = settingsOf(ctx);
-    const claims = await verify(input.idToken, await port.keys(), clientId);
+    const claims = await verify(input.idToken, await port.keys(ctx.fetch), clientId);
     const people = ctx.db.collection<Person>("person");
     const known = await people.findOne({ "accounts.google": claims.sub });
     const id = known?._id ?? `google:${claims.sub}`;

@@ -61,18 +61,14 @@ test("an org's web line: its page at the org's address, and visitors let in ther
           ...access,
           webLines,
           ...given.plugins,
-          // Each org's line, by its id: the app's settings name the org each is for.
+          // Each org's site, by its id: each org's runtime gets its own entries.
           definePlugin({
             name: "lines",
             resources: {
               agents: { guide: { instructions: "Help.", model: "fake/echo" } },
               spaces: { visitors: { name: "Website", agents: ["guide"] } },
               links: { origin: BASE, secret: "the-app-secret-for-tests-0123456789" },
-              web: {
-                lines: {
-                  [`site-${org.id}`]: { in: "visitors", agent: "guide", org: org.id },
-                },
-              },
+              web: { [`site-${org.id}`]: { in: "visitors", agent: "guide" } },
             },
           }),
         ],

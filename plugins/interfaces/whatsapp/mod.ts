@@ -10,9 +10,9 @@
  *   a code (`whatsapp.link`) and send it to the number from WhatsApp.
  *   Anyone else who writes is told how, once a day, and nothing more,
  *   unless the number is open to anyone.
- * - **A customer line:** those who manage the space open the number to
+ * - **An open number:** those who manage the space open it to
  *   anyone (`whatsapp.set`), or the app declares one in its settings
- *   (`resources.whatsapp.lines`: the space, Meta's ids, token and secret,
+ *   (`resources.whatsapp.<name>`: the space, Meta's ids, token and secret,
  *   its verify token, its webhook's path, its agent and gap), kept as they
  *   say with no person, and changed only there. A stranger who writes is then a contact
  *   (someone outside the org), in a chat of their own in the number's
@@ -48,7 +48,9 @@
  *
  * ```ts
  * plugins: [models, chat, ...access, whatsapp]
- * resources: { whatsapp: { graph: "https://graph.facebook.com/v23.0" } }   // the default
+ * resources: {
+ *   whatsapp: { vendas: { in: "customers", phoneId, token, secret, verify, agent: "mobi" } },
+ * }
  * ```
  */
 import { definePlugin, linksOf, type Plugin } from "../../../runtime/mod.ts";
@@ -74,7 +76,7 @@ import { replyProcessor, undeliveredProcessor } from "./processors/reply.ts";
 import { typingProcessor } from "./processors/typing.ts";
 import { messageView } from "./views/message.ts";
 import { rules } from "./shared/rules.ts";
-import { linesOf } from "./shared/settings.ts";
+import { numbersOf } from "./shared/settings.ts";
 
 export * from "./contract.ts";
 
@@ -115,17 +117,17 @@ export const whatsapp: Plugin = definePlugin({
   // WhatsApp's Views: what a message is there (a feature's additions bring their own).
   views: { "whatsapp.message": messageView },
   guard: rules,
-  // At start: links to what it sends (a secret too short is refused), and the app's own lines.
+  // At start: links to what it sends (a secret too short is refused), and the app's own numbers.
   check: (merged) => {
     linksOf(merged.resources);
-    for (const [name, line] of Object.entries(linesOf(merged))) {
+    for (const [name, number] of Object.entries(numbersOf(merged))) {
       for (const field of ["in", "phoneId", "token", "secret", "verify"] as const) {
-        if (typeof line?.[field] !== "string" || !line[field]) {
-          throw new Error(`whatsapp.lines.${name} needs its ${field}`);
+        if (typeof number?.[field] !== "string" || !number[field]) {
+          throw new Error(`whatsapp.${name} needs its ${field}`);
         }
       }
-      if (line.path !== undefined && !line.path.startsWith("/")) {
-        throw new Error(`whatsapp.lines.${name}: its path starts with "/"`);
+      if (number.path !== undefined && !number.path.startsWith("/")) {
+        throw new Error(`whatsapp.${name}: its path starts with "/"`);
       }
     }
   },

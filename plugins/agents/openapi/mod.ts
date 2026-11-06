@@ -113,9 +113,6 @@ export function openapi(options: OpenApiOptions): OpenApi {
           );
         }
       }
-      if (s.fetch !== undefined && typeof s.fetch !== "function") {
-        throw new Error(`OpenAPI "${name}": fetch must be a function`);
-      }
     },
     tools: byOperation,
     operations,

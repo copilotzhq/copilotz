@@ -48,7 +48,14 @@ import {
   threadOf,
   userOf,
 } from "../shared/keys.ts";
-import { appOnly, hasWidgets, hintsOf, type Line, READ, visibilityOf } from "../shared/settings.ts";
+import {
+  appOnly,
+  hasWidgets,
+  hintsOf,
+  READ,
+  type Server,
+  visibilityOf,
+} from "../shared/settings.ts";
 import type { Offering } from "../views/offered.ts";
 import { busy, hold } from "./running.ts";
 
@@ -71,7 +78,7 @@ const told = new WeakMap<object, Set<string>>();
  */
 export function usable(
   runtime: Pick<Runtime, "describe">,
-  line: Line,
+  line: Server,
 ): string[] {
   const { views } = runtime.describe();
   const names = Object.keys(line.tools);
@@ -97,7 +104,7 @@ export function usable(
  */
 export function offeredOf(
   runtime: Pick<Runtime, "describe" | "observe">,
-  line: Line,
+  line: Server,
   names: string[],
 ): Promise<string[]> {
   const tools = toolsOf(runtime.describe().resources);
@@ -124,7 +131,7 @@ const listings = new WeakMap<object, Map<string, { at: number; names: Promise<st
 /** What a stand-in contact, in no chat yet, is offered of `names`. */
 async function standIn(
   runtime: Pick<Runtime, "observe">,
-  line: Line,
+  line: Server,
   names: string[],
 ): Promise<string[]> {
   const actor: Actor = {
@@ -151,7 +158,7 @@ async function standIn(
 }
 
 /** A tool's input, as the line offers it: with the handle, when it gives them. */
-function inputOf(line: Line, tool: Tool): Schema {
+function inputOf(line: Server, tool: Tool): Schema {
   const input = (tool.input ?? { type: "object" }) as Schema;
   if (!line.handles) return input;
   return {
@@ -168,7 +175,7 @@ function inputOf(line: Line, tool: Tool): Schema {
 }
 
 /** MCP's hints for a tool, each said: the app's where it says, else what MCP assumes. */
-function mcpHintsOf(line: Line, name: string, tool: Pick<Tool, "annotations">) {
+function mcpHintsOf(line: Server, name: string, tool: Pick<Tool, "annotations">) {
   const said = hintsOf(line, name, tool as Tool);
   const readOnly = said.readOnly ?? false;
   return {
@@ -232,7 +239,7 @@ const readTool = () => ({
  * template (`ui.resourceUri`, `openai/outputTemplate`), and the widgets' read tool is listed too.
  */
 export function listed(
-  line: Line,
+  line: Server,
   resources: Resources,
   names: string[],
   actions: Record<string, { description?: string; input?: unknown }> = {},
@@ -278,7 +285,7 @@ export function listed(
  * The input properties a tool mirrors into headers (`x-mcp-header`, MCP
  * 2026-07-28): each header's name and where its value is in the input.
  */
-export function mirrored(line: Line, name: string, resources: Resources) {
+export function mirrored(line: Server, name: string, resources: Resources) {
   const found: { header: string; path: string[] }[] = [];
   if (!Object.hasOwn(line.tools, name)) return found;
   // Only along `properties`, as MCP says: never into lists or alternatives.
@@ -321,7 +328,7 @@ export async function conversationHere(
  */
 export async function called(
   runtime: Pick<Runtime, "call" | "cancel" | "describe">,
-  line: Line,
+  line: Server,
   /** The line's scope, and the app's secrets (`secretsOf`: its own first). */
   scope: Scope & { secrets: string[] },
   call: {
@@ -331,8 +338,6 @@ export async function called(
     said: Said;
     /** Who calls, as the app's front says (undefined without its `caller` settings). */
     caller?: Exclude<Caller, "refused">;
-    /** Calls the runtime runs at once. */
-    atOnce: number;
     /**
      * The conversation's contact, when a widget's grant named it (an app-only tool, called by
      * the line's widgets): its conversation must be one already; and its chat, as the route
@@ -396,8 +401,7 @@ export async function called(
   const joined = !!run;
   if (!run) {
     const release = hold(runtime, [
-      { key: "runtime", most: call.atOnce },
-      { key: `line:${line.name}`, most: line.limits.atOnce },
+      { key: `server:${line.name}`, most: line.limits.atOnce },
       ...(address
         ? [{ key: `address:${line.name}|${address}`, most: line.limits.addressAtOnce }]
         : []),
@@ -538,7 +542,7 @@ const runningOf = (runtime: object) => {
  * settles. Swept as calls come, not by a timer, which would keep a host's process from ending.
  */
 const swept = new WeakMap<object, number>();
-function sweep(runtime: object, pending: Map<string, Run>, line: Line) {
+function sweep(runtime: object, pending: Map<string, Run>, line: Server) {
   const now = Date.now();
   if (now - (swept.get(runtime) ?? 0) < 60_000) return;
   swept.set(runtime, now);

@@ -265,6 +265,11 @@ export async function fakeGraph() {
   return {
     url: server.url,
     close: server.close,
+    /** The `fetch` to give the runtime: Meta's Graph address answers from this fake. */
+    fetch: ((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      return fetch(url.replace("https://graph.facebook.com/v23.0", `${server.url}/v23.0`), init);
+    }) as typeof fetch,
     requests,
     /** The texts sent to a phone, in order. */
     texts: (to: string) =>
@@ -324,7 +329,6 @@ export async function setup(
         lead: { instructions: "Hi.", model: "e/lead", default: true, tools: ["send_message"] },
         desk: { instructions: "Sell.", model: "e/desk" },
       },
-      whatsapp: { graph: `${graph.url}/v23.0` },
     },
     adapters: { llm: { e: options.llm ?? echo } },
   });
@@ -332,6 +336,7 @@ export async function setup(
   const start = () =>
     createRuntime({
       store,
+      fetch: graph.fetch,
       plugins: [models, chat, ...access, whatsapp, reads, app, ...options.plugins ?? []],
       ...(options.clock ? { clock: options.clock } : {}),
     });

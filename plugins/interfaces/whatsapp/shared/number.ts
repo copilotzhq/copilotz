@@ -11,13 +11,13 @@ import type { WhatsAppSecret } from "../collections/secret.ts";
 import { type Graph, sendPart, tokenRefused } from "./graph.ts";
 import { sendable } from "./media.ts";
 import type { WaPart } from "./parts.ts";
-import { linesOf, settingsOf, type WhatsAppLine } from "./settings.ts";
+import { type DeclaredNumber, GRAPH, numbersOf } from "./settings.ts";
 
 export type Connected = { number: WhatsAppNumber; graph: Graph };
 
 /**
  * A number and its Graph API, read as the system (its token); null once it's
- * disconnected. A line the app declares (its settings' `lines`) is kept as
+ * disconnected. A number the app declares (its settings') is kept as
  * they say first: written when it isn't yet, or changed.
  */
 export async function connected(ctx: Context, id: string): Promise<Connected | null> {
@@ -26,46 +26,46 @@ export async function connected(ctx: Context, id: string): Promise<Connected | n
     db.collection<WhatsAppNumber>("whatsapp_number").findOne({ _id: id }),
     db.collection<WhatsAppSecret>("whatsapp_secret").findOne({ _id: id }),
   ]);
-  const line = linesOf(ctx)[id];
-  if (line) [number, own] = await kept(ctx, id, line, number, own);
+  const declared = numbersOf(ctx)[id];
+  if (declared) [number, own] = await kept(ctx, id, declared, number, own);
   if (!number || !own) return null;
   return {
     number,
-    graph: { base: settingsOf(ctx).graph, phoneId: number.phoneId, token: own.token },
+    graph: { base: GRAPH, phoneId: number.phoneId, token: own.token, fetch: ctx.fetch },
   };
 }
 
-/** A declared line's documents, as its settings say: written only when they don't yet. */
+/** A declared number's documents, as its settings say: written only when they don't yet. */
 async function kept(
   ctx: Context,
   id: string,
-  line: WhatsAppLine,
+  declared: DeclaredNumber,
   number: WhatsAppNumber | null,
   own: WhatsAppSecret | null,
 ): Promise<[WhatsAppNumber, WhatsAppSecret]> {
   const said = {
-    in: line.in,
-    phoneId: line.phoneId,
-    phone: line.phone ?? line.phoneId,
-    ...(line.name ? { name: line.name } : {}),
+    in: declared.in,
+    phoneId: declared.phoneId,
+    phone: declared.phone ?? declared.phoneId,
+    ...(declared.name ? { name: declared.name } : {}),
     open: true,
     declared: true,
-    ...(line.agent ? { agent: line.agent } : {}),
-    ...(line.gap !== undefined ? { gap: line.gap } : {}),
-    ...(line.rate !== undefined ? { rate: line.rate } : {}),
-    ...(line.quiet !== undefined ? { quiet: line.quiet } : {}),
-    ...(line.language ? { language: line.language } : {}),
+    ...(declared.agent ? { agent: declared.agent } : {}),
+    ...(declared.gap !== undefined ? { gap: declared.gap } : {}),
+    ...(declared.rate !== undefined ? { rate: declared.rate } : {}),
+    ...(declared.quiet !== undefined ? { quiet: declared.quiet } : {}),
+    ...(declared.language ? { language: declared.language } : {}),
     by: "app",
   } as const;
-  const secret = { token: line.token, secret: line.secret, verify: line.verify };
+  const secret = { token: declared.token, secret: declared.secret, verify: declared.verify };
   // Its space, when the app declares that too (the spaces plugin's `spaces`): made, or kept, first.
   const spaces = (ctx.resources.spaces ?? {}) as Record<string, { name?: string } | null>;
-  const space = Object.hasOwn(spaces, line.in) ? spaces[line.in] : undefined;
+  const space = Object.hasOwn(spaces, declared.in) ? spaces[declared.in] : undefined;
   if (space) {
     const found = await ctx.as().db.collection<{ name?: string; declared?: boolean }>("space")
-      .findOne({ _id: line.in });
+      .findOne({ _id: declared.in });
     if (!found?.declared || found.name !== space.name) {
-      await ctx.as().call("space.keep", { id: line.in });
+      await ctx.as().call("space.keep", { id: declared.in });
     }
   }
   const same = (a: Record<string, unknown> | null, b: Record<string, unknown>) =>

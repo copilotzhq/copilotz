@@ -483,14 +483,8 @@ test("limits by address: as the app's front says it, only through it; exempt ran
       assertEquals(said(proxied).slice(0, 7), "2 trips");
     }
   }, {
-    line: { limits: { ipPerMinute: 2 } },
-    settings: {
-      caller: {
-        header: "cf-connecting-ip",
-        front: "the-front-secret-for-tests",
-        exempt: ["192.0.2.0/24"],
-      },
-    },
+    line: { limits: { ipPerMinute: 2 }, exempt: ["192.0.2.0/24"] },
+    caller: { header: "cf-connecting-ip", front: "the-front-secret-for-tests" },
   });
 });
 
@@ -520,8 +514,8 @@ test("limits by address: behind proxies (hops), the entry they appended; any oth
     }
     assertEquals((await s.docs("thread")).length, 4);
   }, {
-    line: { limits: { ipPerMinute: 2 } },
-    settings: { caller: { header: "x-forwarded-for", hops: 1, exempt: ["192.0.2.0/24"] } },
+    line: { limits: { ipPerMinute: 2 }, exempt: ["192.0.2.0/24"] },
+    caller: { header: "x-forwarded-for", hops: 1 },
   });
 });
 
@@ -795,27 +789,6 @@ test("who the user is and where they call from are in no event", async () => {
     assert(!logged.includes('"user"') && !logged.includes('"address"'), "an event names them");
     assert(!/"u-[0-9a-f]{24}"|"a-[0-9a-f]{24}"/.test(logged), "an event holds their HMACs");
   });
-});
-
-test("a runtime's calls at once are its own: one org's busy line leaves another's free", async () => {
-  await setup(async (a) => {
-    await setup(async (b) => {
-      const held = a.call("slow", {}, { session: "a1" });
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      assertEquals(
-        (await a.call("slow", {}, {
-          session: "a2",
-          headers: { "cf-connecting-ip": "203.0.113.2" },
-        })).status,
-        503,
-      );
-      assertEquals(
-        said(await b.call("search", { to: "Rio" }, { session: "b1" })).slice(0, 7),
-        "2 trips",
-      );
-      await held;
-    }, { settings: { atOnce: 1 } });
-  }, { settings: { atOnce: 1 } });
 });
 
 test("the same request while it runs, from another address, joins it", async () => {

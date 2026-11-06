@@ -1,5 +1,22 @@
 ## Unreleased
 
+**Upgrading from rc.24** (settings shapes; nothing else needs doing):
+
+1. **`ctx.fetch`:** plugin code calls outside services through `ctx.fetch` (the platform's `fetch`,
+   or the one `createRuntime({ fetch })` gives, as `clock` is replaced in tests). Gone: the
+   `whatsapp.graph` setting, Stripe's `settings.fetch` (`stripeWebhook` takes `fetch` instead),
+   `googleKeys(fetcher)` and openapi's `fetch` setting: tests pass a fake `fetch` to
+   `createRuntime`.
+2. **Flat settings:** each interface plugin's resource is a map of what the app declares, by name,
+   with no `lines` key: `whatsapp: { vendas: { in, phoneId, … } }`, `voice: { central: { … } }`,
+   `mcp: { chatgpt: { … } }`, `web: { site: { … } }`. `web.caller` and `mcp.caller` are one `caller`
+   resource; `caller.exempt` is the MCP server's own `exempt`; `voice.keep` is each number's `keep`;
+   `mcp.atOnce`, `whatsapp.codeMinutes` and `whatsapp.maxFileMb` are gone (limits per server;
+   constants); a declared entry's `org` is gone (each org's runtime gets its own entries). Types:
+   `WhatsAppLine` is `DeclaredNumber`, `VoiceLine` `DeclaredVoiceNumber`, `McpLine`
+   `DeclaredServer`, `WebLine` `DeclaredSite`; `McpCaller` is gone (`CallerSettings`). Webhook paths
+   don't change.
+
 ## 1.0.0-rc.24 — 2026-11-06
 
 **Upgrading from rc.23** (two breaking renames; no aliases, no data moves):

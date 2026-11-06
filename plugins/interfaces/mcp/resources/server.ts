@@ -14,8 +14,7 @@
  * - **Who calls.** With the app's `caller` settings, the caller's address,
  *   as its front says it (the runtime's `callerFrom`); a request that came around
  *   the front (without its secret) is refused (403).
- * - **At once.** Tool calls running at once: in the runtime (`mcp.atOnce`,
- *   4), on the line (`limits.atOnce`, 4), from one caller's address
+ * - **At once.** Tool calls running at once: on the server (`limits.atOnce`, 4), from one caller's address
  *   (`addressAtOnce`, 2: a batch's every call counts) and in one
  *   conversation (`chatAtOnce`, 2), each call taking its places until it's
  *   done. Past any, it's busy (503, `Retry-After`, -31000, its own code),
@@ -52,13 +51,14 @@
 import {
   type Caller,
   callerFrom,
+  callerOf,
   linksOf,
   type Runtime,
   secretsOf,
 } from "../../../../runtime/mod.ts";
 import type { Widgets } from "../../../../hosts/web/mod.ts";
 import { addressKey, callIdOf, threadOf, userOf } from "../shared/keys.ts";
-import { appOnly, atOnceOf, callerOf, type Line, lineOf, PATH, READ } from "../shared/settings.ts";
+import { appOnly, PATH, READ, type Server, serverOf } from "../shared/settings.ts";
 import { busy, hold, isBusy } from "./running.ts";
 import {
   called,
@@ -156,7 +156,7 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
   const resources = host.runtime.describe().resources;
   const url = new URL(request.url);
   const name = url.pathname.slice(PATH.length).replace(/\/$/, "");
-  const line = /^[\w-]{1,60}$/.test(name) ? lineOf({ resources }, name) : undefined;
+  const line = /^[\w-]{1,60}$/.test(name) ? serverOf({ resources }, name) : undefined;
   if (!line) return respond(404, fault(undefined, REQUEST, "No MCP server here"));
   if (request.method !== "POST") {
     return new Response(null, {
@@ -170,7 +170,7 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
     return respond(403, fault(undefined, REQUEST, "Not from this origin"));
   }
   // Around the app's front, straight to it: refused, when the front vouches for callers.
-  const caller = callerFrom(request, callerOf({ resources }));
+  const caller = callerFrom(request, callerOf({ resources }), line.exempt);
   if (caller === "refused") {
     return respond(403, fault(undefined, REQUEST, "Not through the app's front"));
   }
@@ -196,7 +196,6 @@ export async function serveMcp(request: Request, host?: McpHost): Promise<Respon
     request,
     caller,
     scope: { line: line.name, ...(org ? { org } : {}), secrets: secretsOf(links) },
-    atOnce: atOnceOf({ resources }),
     ...(host.widgets ? { widgets: host.widgets } : {}),
     origin: linksOf(resources)?.origin,
   };
@@ -240,14 +239,12 @@ const idOf = (id: unknown): Id | undefined =>
 
 type Context = {
   runtime: McpHost["runtime"];
-  line: Line;
+  line: Server;
   resources: Record<string, Record<string, unknown>>;
   request: Request;
   /** Who calls, as the front says (undefined without the app's `caller` settings). */
   caller?: Exclude<Caller, "refused">;
   scope: { line: string; org?: string; secrets: string[] };
-  /** Calls the runtime runs at once. */
-  atOnce: number;
   /** The app's widgets, when its web host has them; and the app's own origin (`links`). */
   widgets?: Widgets;
   origin?: string;
@@ -411,7 +408,6 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
           request: rpc,
           said: conversation,
           caller: c.caller,
-          atOnce: c.atOnce,
         });
         // Drawn by a widget: what it draws, for the widget alone (`_meta`: never the model's).
         const drawn = template && c.widgets && c.line.tools[tool]?.widget && whose &&
@@ -584,7 +580,6 @@ async function widgetCalled(
       request,
       said,
       caller: c.caller,
-      atOnce: c.atOnce,
       contact,
       ...(named ? { thread: named.thread } : {}),
     });
@@ -593,8 +588,7 @@ async function widgetCalled(
   const address = c.caller && !c.caller.exempt ? c.caller.counted : undefined;
   const thread = named?.thread ?? await threadOf(secret, contact);
   const release = hold(c.runtime, [
-    { key: "runtime", most: c.atOnce },
-    { key: `line:${c.line.name}`, most: c.line.limits.atOnce },
+    { key: `server:${c.line.name}`, most: c.line.limits.atOnce },
     ...(address
       ? [{ key: `address:${c.line.name}|${address}`, most: c.line.limits.addressAtOnce }]
       : []),
@@ -627,7 +621,7 @@ async function widgetCalled(
 }
 
 /** Who the server is. */
-const serverOf = (line: Line) => ({
+const serverInfo = (line: Server) => ({
   name: line.name,
   ...(line.title ? { title: line.title } : {}),
   version: line.version,
@@ -637,32 +631,32 @@ const serverOf = (line: Line) => ({
 const capabilitiesOf = (widgets: boolean) => widgets ? { tools: {}, resources: {} } : { tools: {} };
 
 /** A legacy client's handshake: the version it asked for when taken, else the newest legacy one. */
-function initialized(line: Line, params: Params, widgets: boolean) {
+function initialized(line: Server, params: Params, widgets: boolean) {
   const asked = params.protocolVersion;
   return {
     protocolVersion: typeof asked === "string" && LEGACY.includes(asked) ? asked : LEGACY[0],
     capabilities: capabilitiesOf(widgets),
-    serverInfo: serverOf(line),
+    serverInfo: serverInfo(line),
     ...(line.instructions ? { instructions: line.instructions } : {}),
   };
 }
 
 /** What `server/discover` says: versions, what it has, who it is. */
-const discovered = (line: Line, widgets: boolean) => ({
+const discovered = (line: Server, widgets: boolean) => ({
   supportedVersions: VERSIONS,
   capabilities: capabilitiesOf(widgets),
-  _meta: { "io.modelcontextprotocol/serverInfo": serverOf(line) },
+  _meta: { "io.modelcontextprotocol/serverInfo": serverInfo(line) },
   ...(line.instructions ? { instructions: line.instructions } : {}),
   ttlMs: TTL_MS,
   cacheScope: "public",
 });
 
 /** A result as a modern client takes it: complete, and saying who answered. */
-const modernOf = (line: Line, result: Record<string, unknown>) => ({
+const modernOf = (line: Server, result: Record<string, unknown>) => ({
   resultType: "complete",
   ...result,
   _meta: {
     ...(isObject(result._meta) ? result._meta : {}),
-    "io.modelcontextprotocol/serverInfo": serverOf(line),
+    "io.modelcontextprotocol/serverInfo": serverInfo(line),
   },
 });

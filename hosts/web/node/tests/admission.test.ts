@@ -33,7 +33,7 @@ const app = definePlugin({
     provider: { script: { adapter: "script" } },
     agents: { guide: { instructions: "x", model: "script/main" } },
     spaces: { visitors: { name: "Website", agents: ["guide"] } },
-    web: { lines: { site: { in: "visitors", agent: "guide" } } },
+    web: { site: { in: "visitors", agent: "guide" } },
     links: { origin: "http://127.0.0.1", secret: "the-app-secret-for-tests-0123456789" },
   },
   adapters: { llm: { script: { async *generate() {} } } },

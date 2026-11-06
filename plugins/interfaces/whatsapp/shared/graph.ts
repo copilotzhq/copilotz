@@ -7,14 +7,14 @@
  */
 import type { WaMedia, WaPart } from "./parts.ts";
 
-/** A number to call the Graph API for: where it is, its phone number id, its token. */
-export type Graph = { base: string; phoneId: string; token: string };
+/** A number to call the Graph API for: where it is, its phone number id, its token, and the `fetch` to call with. */
+export type Graph = { base: string; phoneId: string; token: string; fetch: typeof fetch };
 
 /** What the Graph API refused, with its status and Meta's own code (190: the token). */
 export type GraphError = Error & { code: "graph"; status: number; graph?: number };
 
 async function call<T>(graph: Graph, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`${graph.base}/${path}`, {
+  const response = await graph.fetch(`${graph.base}/${path}`, {
     method: body === undefined ? "GET" : "POST",
     headers: {
       authorization: `Bearer ${graph.token}`,
@@ -183,7 +183,7 @@ export async function uploadMedia(
   form.set("messaging_product", "whatsapp");
   form.set("type", file.type);
   form.set("file", new Blob([file.bytes as BlobPart], { type: file.type }), file.name);
-  const response = await fetch(`${graph.base}/${encodeURIComponent(graph.phoneId)}/media`, {
+  const response = await graph.fetch(`${graph.base}/${encodeURIComponent(graph.phoneId)}/media`, {
     method: "POST",
     headers: { authorization: `Bearer ${graph.token}` },
     body: form,
@@ -229,7 +229,9 @@ export async function fetchMedia(
       code: "too_large",
     });
   if ((meta.file_size ?? 0) > max) throw tooLarge();
-  const response = await fetch(meta.url, { headers: { authorization: `Bearer ${graph.token}` } });
+  const response = await graph.fetch(meta.url, {
+    headers: { authorization: `Bearer ${graph.token}` },
+  });
   if (!response.ok) {
     throw Object.assign(new Error(`WhatsApp said: HTTP ${response.status} for a file`), {
       code: "graph",

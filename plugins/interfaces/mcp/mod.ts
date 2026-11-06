@@ -4,8 +4,8 @@
  * conversation a chat in the app, so what's built for its agents (a
  * booking, its debugging, its queries) works for them too.
  *
- * - **A line** is an MCP server the app declares in its settings
- *   (`resources.mcp.lines.<name>`), at `POST /mcp/<name>` (under many orgs,
+ * - **A server** is an MCP server the app declares in its settings
+ *   (`resources.mcp.<name>`), at `POST /mcp/<name>` (under many orgs,
  *   `/o/<org>/mcp/<name>`): the space its conversations' chats live in, the
  *   tools it offers (`tools`, by name: only these, each with its
  *   `tool:<name>` View, what a model reads of it), how each is shown (its
@@ -13,10 +13,10 @@
  *   runs), who calls (`client`, `ChatGPT`), its limits. Anyone may call it:
  *   no sign-in yet. In ChatGPT, the app's connector points at that URL.
  * - **A conversation** is a contact (someone outside the org) in a chat of
- *   its own in the line's space: they reach that chat and nothing else; the
+ *   its own in the server's space: they reach that chat and nothing else; the
  *   space's members read it. ChatGPT names its conversation in every call
  *   (`_meta["openai/session"]`, with its user, `openai/subject`); a client
- *   that names none is given a handle (`chat`, which the line's tools then
+ *   that names none is given a handle (`chat`, which the server's tools then
  *   take), said once at the end of its first answer (`chat: <handle>`), or,
  *   with `handles: false`, is refused. Ids come from these through an HMAC
  *   with the MCP key of the app's secret (the `links` resource's, `keyOf`):
@@ -31,8 +31,8 @@
  *   (`failure(code, message, { public: true })`). A request sent again to a
  *   tool that changes things is answered from the first; a read-only tool
  *   always runs.
- * - **Limits** (a line's `limits`): calls at once (in the runtime, on the
- *   line, from one caller's address, in one conversation: the server is busy
+ * - **Limits** (a server's `limits`): calls at once (on the
+ *   server, from one caller's address, in one conversation: the server is busy
  *   past them), how long the route waits for an answer (20 s: then the model
  *   is told it's still working, while few calls are, and asking again under
  *   any request id gets what it did, from its receipt) and a call may run (a
@@ -51,18 +51,18 @@
  *   a tool's calls drawn by a web View of the app's (`tools.<name>.widget`:
  *   its kind), inside the assistant, with the web host's widgets
  *   (`webServer({ widgets: widgetsOf({ code, plugins }) })`: the template,
- *   one page for the line, and snapshots). Its result says, in `_meta` (the
+ *   one page for the server, and snapshots). Its result says, in `_meta` (the
  *   host's for the widget, never the model's), what the widget draws: the
  *   View, the call, what the View reads answered as the conversation's
  *   contact, and the widget's grant. What only the widgets call
  *   (`visibility: ["app"]`; an Action, `{ action }`: what a person does by
  *   hand in the widget, never the model) is refused without that grant, and
- *   with another conversation's; the widgets read through the line's
- *   `copilotz_read` (named queries, as the contact). The line's `widgets`
+ *   with another conversation's; the widgets read through the server's
+ *   `copilotz_read` (named queries, as the contact). The server's `widgets`
  *   say the template's domain (`ui.domain`, which ChatGPT requires at
  *   submission), border and description.
  *
- * **Security notes** (to verify in ChatGPT's developer mode before a line
+ * **Security notes** (to verify in ChatGPT's developer mode before a server
  * offers more):
  *
  * - **What names a conversation is a bearer value.** Whoever holds it
@@ -72,7 +72,7 @@
  *   `openai/session` and `openai/subject` are ChatGPT's, sent only to us,
  *   but whether ChatGPT scopes `openai/session` to one connector (or the
  *   same id reaches every app in a conversation) isn't verified.
- * - **So, until it is,** a line shouldn't offer tools that read personal
+ * - **So, until it is,** a server shouldn't offer tools that read personal
  *   data back (a saved buyer's details, past orders): a leaked key would
  *   read them. A tool that only writes, or reads what the conversation
  *   itself said, risks only that conversation.
@@ -85,11 +85,11 @@
  * plugins: [models, chat, ...access, mcp]
  * resources: {
  *   links: { origin, secret },   // the secret its ids are made with
- *   spaces: { line: { name: "ChatGPT", agents: ["booking"] } },
+ *   caller: { header: "cf-connecting-ip", front: env.FRONT_SECRET },
+ *   spaces: { customers: { name: "ChatGPT", agents: ["booking"] } },
  *   mcp: {
- *     caller: { header: "cf-connecting-ip", front: env.FRONT_SECRET },
- *     lines: { chatgpt: { in: "line", client: "ChatGPT", handles: false,
- *       tools: { search_trips: { annotations: { readOnly: true }, invoking: "Buscando…" } } } },
+ *     chatgpt: { in: "customers", client: "ChatGPT", handles: false, exempt: OPENAI_EGRESS,
+ *       tools: { search_trips: { annotations: { readOnly: true }, invoking: "Buscando…" } } },
  *   },
  * }
  * views: { "tool:search_trips": tripsForModels }   // each offered tool's, in a plugin
@@ -112,7 +112,7 @@ import { rate } from "./collections/rate.ts";
 import { receipt } from "./collections/receipt.ts";
 import { erasedProcessor, forgottenProcessor } from "./processors/closed.ts";
 import { serveMcp } from "./resources/server.ts";
-import { linesOf, PATH, problemOf, settingsProblem } from "./shared/settings.ts";
+import { PATH, problemOf, serversOf, settingsProblem } from "./shared/settings.ts";
 import { offeredView } from "./views/offered.ts";
 
 export * from "./contract.ts";
@@ -136,19 +136,19 @@ export const mcp: Plugin = definePlugin({
   schedules: { "mcp.prune": { every: "10m", call: "mcp.prune", input: {} } },
   // Which tools a contact is offered, as each tool's `offer` says.
   views: { "mcp:offered": offeredView },
-  // At start: every line the app declares has what it needs, and the secret its ids come from.
+  // At start: every server the app declares has what it needs, and the secret its ids come from.
   check: (merged) => {
     const settings = settingsProblem(merged.resources);
     if (settings) throw new Error(`mcp.${settings}`);
-    const lines = Object.entries(linesOf(merged));
-    if (lines.length && !linksOf(merged.resources)) {
+    const servers = Object.entries(serversOf(merged));
+    if (servers.length && !linksOf(merged.resources)) {
       throw new Error(
         "mcp needs the links resource (its origin and secret): its ids are made with it",
       );
     }
-    for (const [name, line] of lines) {
+    for (const [name, line] of servers) {
       const problem = problemOf(name, line, merged.resources, Object.keys(merged.actions));
-      if (problem) throw new Error(`mcp.lines.${name} ${problem}`);
+      if (problem) throw new Error(`mcp.${name} ${problem}`);
     }
   },
   resources: {

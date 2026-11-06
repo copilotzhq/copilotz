@@ -43,7 +43,7 @@ import type { Rate } from "../collections/rate.ts";
 import type { Visitor } from "../collections/visitor.ts";
 import { type Day, hold } from "../shared/budget.ts";
 import { chatOf } from "../shared/secret.ts";
-import { keyringOf, lineOf } from "../shared/lines.ts";
+import { keyringOf, siteOf } from "../shared/lines.ts";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -100,7 +100,7 @@ export const sendingAction = defineAction({
     // Not a web line's visitor: its line keeps its own limits.
     if (actor?.kind !== "contact" || !web) return {};
     const ring = keyringOf(ctx);
-    const line = lineOf(ctx, web);
+    const line = siteOf(ctx, web);
     if (!line || !ring) throw failure("forbidden", SAID.closed, { public: true });
     const files = input.files ?? [];
     if (files.length) {

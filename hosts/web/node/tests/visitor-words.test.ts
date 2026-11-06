@@ -92,11 +92,9 @@ const app = definePlugin({
     },
     spaces: { visitors: { name: "Website", agents: ["guide", "chatty", "polite"] } },
     web: {
-      lines: {
-        site: { in: "visitors", agent: "guide" },
-        talk: { in: "visitors", agent: "chatty" },
-        bye: { in: "visitors", agent: "polite" },
-      },
+      site: { in: "visitors", agent: "guide" },
+      talk: { in: "visitors", agent: "chatty" },
+      bye: { in: "visitors", agent: "polite" },
     },
     links: { origin: "http://127.0.0.1", secret: "the-app-secret-for-tests-0123456789" },
   },

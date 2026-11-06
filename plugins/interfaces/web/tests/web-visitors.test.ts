@@ -64,7 +64,7 @@ async function lineFor(store: Store, days: number) {
     resources: {
       agents: { guide: { instructions: "Help.", model: "fake/echo" } },
       links: LINKS,
-      web: { lines: { site: { in: "shop", agent: "guide", days } } },
+      web: { site: { in: "shop", agent: "guide", days } },
     },
   });
   const kept = definePlugin({

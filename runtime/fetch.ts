@@ -12,7 +12,7 @@
  *   site.ts), and under the app's base (`resources.page.base`: `/o/<org>/x`
  *   is `/x`). Routes are given the request as that.
  * - **Routes with a host** (a preview's): every request to a host they take.
- *   With the app's own hosts named (`resources.hosts.own`, see site.ts), a
+ *   With the app's own hosts named (`resources.hosts`, see site.ts), a
  *   request to any other host is theirs alone (a 404 when none takes it),
  *   and the app's own hosts are never theirs.
  * - **The socket** (`/oxian`, and `<base>/oxian`): Oxian's worker protocol,

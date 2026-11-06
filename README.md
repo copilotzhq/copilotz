@@ -353,7 +353,7 @@ const server = await listen(dir.fetch, { port: 8080 }); // or Deno.serve(dir.fet
 Each org's runtime gets from `directory.member` which org it is (`resources.org`), where it's served
 (`page.base`: `/o/<org>`), its cookies' names (`s_<org>` for its session, `<name>_<org>` for the
 rest), and the directory's hooks (invitations, leaving, renaming). Name the app's own hosts
-(`hosts: { own: ["app.example.com"] }`) and any other host is an org's claimed one, answered by its
+(`hosts: { "app.example.com": true }`) and any other host is an org's claimed one, answered by its
 host routes alone. Whatever has one address for every org lives in the directory's runtime: Stripe's
 webhook (`stripeWebhook`, with the `stripe` resource's `orgs`), the cloud pool's socket. The whole
 example is `examples/web-node/orgs.ts` (in memory), and `examples/terminal-agent/orgs.ts` on Deno

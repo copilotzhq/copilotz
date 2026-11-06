@@ -13,7 +13,7 @@
  * - **The site** (`siteOf`): the address as the browser asked for it, on the
  *   host the front says. Routes match it, and cookies are named and secured
  *   by it.
- * - **The app's own hosts** (`resources.hosts.own`, patterns: `app.example.com`,
+ * - **The app's own hosts** (`resources.hosts`, patterns: `app.example.com`,
  *   `*.run.app`): when the app names them, a request to any other host is
  *   answered only by routes that take its host (a preview's, or `*` for
  *   every other host: the hosts a directory's orgs claimed), never by the
@@ -70,22 +70,38 @@ export function siteOf(request: Request, secret: string | undefined): URL {
   return url;
 }
 
-/** The `hosts` resource: the app's own hosts, as patterns (see `hostMatches`). */
-export type HostsSettings = { own?: string[] };
+/**
+ * The `hosts` resource: the app's own hosts, an entry each (a pattern, see
+ * `hostMatches`): `{ "app.example.com": true, "*.run.app": true }`. A later
+ * plugin adds one, or takes one away with `null`, as with any resource.
+ */
+export type HostsSettings = Record<string, true>;
 
 /** A host pattern: a host (and maybe a port), or `*` then the rest of one (`*.run.app`). */
 const HOST = /^\*?[a-z0-9.-]+(:\d{1,5})?$/;
 
+const HOSTS_EXAMPLE = '{ "app.example.com": true, "*.run.app": true }';
+
 /** What's wrong with the app's `hosts` resource, if anything (checked at start). */
-export function hostsProblem(settings: unknown): string | undefined {
-  if (settings === undefined) return undefined;
-  const own = (settings as HostsSettings | null)?.own;
-  if (own === undefined) return undefined;
-  if (!Array.isArray(own) || !own.length) return "hosts.own is a list of the app's own hosts";
-  const bad = own.find((pattern) => typeof pattern !== "string" || !HOST.test(pattern));
-  return bad === undefined
-    ? undefined
-    : `hosts.own: "${bad}" isn't a host (app.example.com), nor * and the rest of one (*.run.app)`;
+export function hostsProblem(hosts: unknown): string | undefined {
+  if (hosts === undefined) return undefined;
+  if (
+    typeof hosts !== "object" || hosts === null || Array.isArray(hosts) ||
+    !Object.keys(hosts).length
+  ) {
+    return `hosts names the app's own hosts, an entry each: ${HOSTS_EXAMPLE}`;
+  }
+  for (const [pattern, own] of Object.entries(hosts)) {
+    if (own !== true) {
+      return `hosts: "${pattern}" is true, one of the app's own hosts (not ${
+        JSON.stringify(own)
+      }): ${HOSTS_EXAMPLE}`;
+    }
+    if (!HOST.test(pattern)) {
+      return `hosts: "${pattern}" isn't a host (app.example.com), nor * and the rest of one (*.run.app)`;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -108,8 +124,8 @@ export function hostMatches(pattern: string, host: string): boolean {
  * undefined when it names none (every host is then the app's).
  */
 export function ownHost(hosts: unknown, host: string): boolean | undefined {
-  const own = (hosts as HostsSettings | undefined)?.own;
-  return own ? own.some((pattern) => hostMatches(pattern, host)) : undefined;
+  if (!hosts || typeof hosts !== "object") return undefined;
+  return Object.keys(hosts).some((pattern) => hostMatches(pattern, host));
 }
 
 /** Whether a host name is this machine's own: `localhost`, 127.0.0.0/8, `::1`. */

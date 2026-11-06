@@ -47,7 +47,7 @@ export function member(
       org: { id: org.id, name: org.name, kind: org.kind, base },
       page: { base },
       cookies: { names: { session: sessionOf(org.id) }, suffix: `_${org.id}` },
-      ...(hosts?.own ? { hosts: { own: hosts.own } } : {}),
+      ...(hosts ? { hosts } : {}),
       directory: {
         invite: (invite: { email: string; role: string; by: string; from?: string }) =>
           ask("invite.send", invite).then(() => {}),

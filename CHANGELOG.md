@@ -1,5 +1,21 @@
 ## Unreleased
 
+**Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the
+`own` key it had alone. An app that names its hosts changes one line; one that doesn't changes
+nothing. The shape before is refused at start, saying what's expected.
+
+```ts
+// rc.25
+resources: { hosts: { own: ["app.example.com", "*.run.app"] } }
+// now
+resources: { hosts: { "app.example.com": true, "*.run.app": true } }
+```
+
+- **`resources.hosts` is an entry per host** (`{ "app.example.com": true }`), in place of
+  `{ own: [...] }`, like every other resource: a later plugin adds a host, or takes one away with
+  `null`, without restating the rest. What it does is unchanged: with the app's hosts named, any
+  other host is answered only by routes that take it. `HostsSettings` is `Record<string, true>`.
+
 ## 1.0.0-rc.25 — 2026-11-06
 
 **Upgrading from rc.24.** The runtime now answers HTTP itself. `runtime.fetch(request)` is a fetch

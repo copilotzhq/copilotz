@@ -16,7 +16,7 @@
  *   (302). Anything else with no org is the lobby's (the sign-in page, the
  *   app's settings), as is everything for someone signed in nowhere.
  * - **Hosts orgs claimed** (`*` for every host but the app's own, which the
- *   app names: `resources.hosts.own`): the org that claimed it, for its
+ *   app names: `resources.hosts`): the org that claimed it, for its
  *   routes by host alone (its runtime has the app's hosts too); a host
  *   nobody claimed, a 404.
  * - `GET /__copilotz/hosts/resolve?host=<h>`: whose a host is, `{ org,

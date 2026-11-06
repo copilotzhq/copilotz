@@ -53,7 +53,7 @@ const FRONT = "the-front-secret-0123";
 test("orgs: a claimed host is its org's routes; unknown hosts 404; the front resolves hosts", async () => {
   const app = await served({
     resources: {
-      hosts: { own: ["localhost", "*.run.test"] },
+      hosts: { localhost: true, "*.run.test": true },
       caller: { header: "cf-connecting-ip", front: FRONT },
     },
     plugins: (org) => [sites(org.id)],

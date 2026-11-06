@@ -90,9 +90,9 @@ its body, its socket), to the org's own `runtime.fetch`, which answers it by the
   longer theirs or suspended) goes in first: the org they were in, else their last, else their own,
   made now; then the same page again (a 302). Anything else for someone signed in nowhere is the
   lobby's (`directory.lobby`: the sign-in page, a runtime with the page plugin).
-- **A host an org claimed** (a route for every host but the app's own, which `hosts.own` names):
-  that org's host routes alone; `GET /__copilotz/hosts/resolve?host=` says whose a host is, for the
-  app's front.
+- **A host an org claimed** (a route for every host but the app's own, which `hosts` names): that
+  org's host routes alone; `GET /__copilotz/hosts/resolve?host=` says whose a host is, for the app's
+  front.
 - **Its own:** `GET /orgs` and `POST /orgs` (the account's orgs, a new one), `POST /orgs/enter`,
   `POST /orgs/invites/answer`, `POST /signout` out of every org it holds a session for (each ends
   where its org is open; signing out never opens one), and staff's `/console/orgs…` and
@@ -103,7 +103,7 @@ its body, its socket), to the org's own `runtime.fetch`, which answers it by the
 - which org it is (`resources.org`: its id, name, kind and address) and where it's served
   (`page.base`: `/o/<org>`, so its page, its `/connect` and its socket work at its address);
 - its cookies' names (below);
-- the app's own hosts (`hosts.own`), so a host it claimed reaches only its host routes;
+- the app's own hosts (`hosts`), so a host it claimed reaches only its host routes;
 - how it reaches the directory (`resources.directory`): invitations, leaving, renaming, claiming a
   host, gift codes; and its `/enter`.
 

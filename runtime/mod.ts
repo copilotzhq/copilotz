@@ -1,5 +1,6 @@
 export * from "./define.ts";
 export { createRuntime, type Runtime } from "./runtime.ts";
+export { type Runtimes, runtimes } from "./runtimes.ts";
 export {
   createOwner,
   type Description,
@@ -32,7 +33,7 @@ export { inScope, personOf, principalOf, type Scope } from "./actor.ts";
 export { clientAddress, loopbackAddress, setClientAddress } from "./address.ts";
 export { bodyOf, jsonOf } from "./body.ts";
 export { cookieSafe, type CookieSettings } from "./cookies.ts";
-export { loopback, nearby } from "./site.ts";
+export { hostMatches, type HostsSettings, loopback, nearby, ownHost, vouched } from "./site.ts";
 export { keyOf, linksOf, type LinksSettings, secretsOf, signLink, verifyLink } from "./links.ts";
 export {
   type Caller,

@@ -118,6 +118,100 @@ test("a route by host takes every path there, before anything else", async () =>
   }
 });
 
+test("the app's own hosts: any other is host routes' alone, and the app's own never are", async () => {
+  const routes = {
+    "/x": echo("x"),
+    "*://*.sites.test:*/*": echo("site"),
+    "*://*:*/*": echo("others"),
+  };
+  const rt = await runtimeWith([
+    definePlugin({ name: "app", routes }),
+    definePlugin({
+      name: "settings",
+      resources: { hosts: { own: ["app.test", "*.run.test", "own.sites.test"] } },
+    }),
+  ]);
+  try {
+    const at = async (url: string, init?: RequestInit) => {
+      const answer = await get(rt, url, init);
+      return answer.headers.get("content-type")?.includes("json")
+        ? (await answer.json()).name
+        : answer.status;
+    };
+    // The app's own: its paths, never a host route, whatever they'd match.
+    assertEquals(await at("http://app.test/x"), "x");
+    assertEquals(await at("https://api.run.test:8443/x"), "x");
+    assertEquals(await at("https://own.sites.test/x"), "x");
+    assertEquals(await at("http://a.b.run.test/x"), "others");
+    // Any other: its host routes alone, the runtime's own paths too; one for every other host last.
+    assertEquals(await at("https://shop.sites.test/x"), "site");
+    assertEquals(await at("https://shop.sites.test/connect", { method: "POST" }), "site");
+    assertEquals(await at("https://shop.sites.test/oxian"), "site");
+    assertEquals(await at("https://elsewhere.test/health"), "others");
+    // Behind the front, the host it says.
+    const behind = await runtimeWith([
+      definePlugin({ name: "app", routes: { "/x": echo("x") } }),
+      definePlugin({
+        name: "settings",
+        resources: {
+          hosts: { own: ["app.test"] },
+          caller: { header: "cf-connecting-ip", front: "the-front-secret-0123" },
+        },
+      }),
+    ]);
+    try {
+      const fronted = (host: string, secret?: string) =>
+        get(behind, "http://10.0.0.5:8080/x", {
+          headers: { "x-forwarded-host": host, ...(secret ? { "x-copilotz-front": secret } : {}) },
+        });
+      assertEquals((await fronted("app.test", "the-front-secret-0123")).status, 200);
+      // Nobody's host: a 404, never the app's paths, nor its socket or `/connect`, nor /health.
+      assertEquals((await fronted("evil.test", "the-front-secret-0123")).status, 404);
+      for (const path of ["/connect", "/oxian", "/health"]) {
+        const answer = await get(behind, `http://evil.test${path}`, {
+          method: path === "/connect" ? "POST" : "GET",
+        });
+        assertEquals(answer.status, 404, path);
+      }
+      // Without the front's secret, its word is no one's: the host it came to (not one of the app's).
+      assertEquals((await fronted("app.test")).status, 404);
+    } finally {
+      await behind.close();
+    }
+  } finally {
+    await rt.close();
+  }
+});
+
+test("without the app's own hosts named, every host is the app's: a route for every other takes none", async () => {
+  const rt = await runtimeWith([
+    definePlugin({
+      name: "app",
+      routes: {
+        "/x": echo("x"),
+        "*://*.sites.test:*/*": echo("site"),
+        "*://*:*/*": echo("others"),
+      },
+    }),
+  ]);
+  try {
+    const at = async (url: string) => (await (await get(rt, url)).json()).name;
+    assertEquals(await at("http://app.test/x"), "x");
+    assertEquals(await at("http://elsewhere.test/x"), "x");
+    // A host route still takes the hosts it names.
+    assertEquals(await at("http://shop.sites.test/x"), "site");
+  } finally {
+    await rt.close();
+  }
+  for (const own of [[], ["https://app.test"], ["app test"], "app.test"]) {
+    await assertRejects(
+      () => runtimeWith([definePlugin({ name: "s", resources: { hosts: { own } } })]),
+      Error,
+      "hosts.own",
+    );
+  }
+});
+
 test("who: the first plugin that answers, in plugin order; anonymous when none does", async () => {
   const asked: string[] = [];
   const header = (name: string, kind: string): Plugin =>
@@ -204,7 +298,7 @@ const jar = (name: string, cookie = "session"): Plugin =>
         return new Response(null, { status: 204 });
       },
       [`/${name}/bad`]: (_r, { cookies }) => {
-        cookies.set(cookie, "short");
+        cookies.set(cookie, "not; a value");
         return new Response("never");
       },
       [`/${name}/get`]: (_r, { cookies }) => Response.json({ held: cookies.get(cookie) ?? null }),
@@ -249,7 +343,9 @@ test("cookies: __Host- wherever they're Secure, the plain name over http nearby"
       await held("http://localhost/a/get", "session=a-secret-of-sixteen"),
       "a-secret-of-sixteen",
     );
-    assertEquals(await held("http://localhost/a/get", "session=short"), null);
+    // A short value is one (which org a browser is in); one with what a cookie can't hold, none.
+    assertEquals(await held("http://localhost/a/get", "session=p-1a2b"), "p-1a2b");
+    assertEquals(await held("http://localhost/a/get", "session=bad,value"), null);
     // A value unfit for a cookie is the route's mistake: refused, and nothing set.
     const bad = await get(rt, "http://localhost/a/bad");
     assertEquals(bad.status, 500);
@@ -281,6 +377,24 @@ test("cookies: renamed as the app says, and one plugin's each (or one built on i
     assertEquals(taken.status, 500);
     assertEquals(taken.headers.get("set-cookie"), null);
     assertEquals(await name("https://app.example.com/d/set"), "__Host-s_acme");
+  } finally {
+    await rt.close();
+  }
+});
+
+test("cookies: two plugins built on the same one share its cookie, whichever sets it first", async () => {
+  const rt = await runtimeWith([
+    definePlugin({ name: "base" }),
+    { ...jar("google"), requires: ["base"] },
+    { ...jar("dev"), requires: ["base"] },
+    jar("other"),
+  ]);
+  try {
+    assertEquals((await get(rt, "http://localhost/dev/set")).status, 200);
+    assertEquals((await get(rt, "http://localhost/google/set")).status, 200);
+    assertEquals((await get(rt, "http://localhost/google/clear")).status, 204);
+    const taken = await get(rt, "http://localhost/other/set");
+    assertEquals([taken.status, taken.headers.get("set-cookie")], [500, null]);
   } finally {
     await rt.close();
   }

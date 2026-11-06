@@ -88,7 +88,7 @@ export type Context = {
    * Like `cancel`, it checks nothing of who asks: plugins are trusted code,
    * and it's theirs to call only once who the actor was has ended (a sign-out,
    * an erasure the rules allowed). It reaches only this runtime's browsers:
-   * with the orgs host, each org's runtime has its own owner, so one org's
+   * with many orgs behind a directory, each org's runtime has its own owner, so one org's
    * code never ends another org's browsers.
    */
   disconnect(actor: Actor): Promise<number>;
@@ -478,8 +478,9 @@ export type Cookies = {
   /** The secret the request carries under this name; undefined for none, or one unfit for a cookie. */
   get(name: string): string | undefined;
   /**
-   * Sets it on the route's response: `secret` is 16 to 512 cookie-safe
-   * characters, kept `days` (30 unless said), `SameSite=Lax` unless `strict`.
+   * Sets it on the route's response: `secret` is 1 to 512 cookie-safe
+   * characters (a credential's, long: the plugin's to make so), kept `days`
+   * (30 unless said), `SameSite=Lax` unless `strict`.
    */
   set(name: string, secret: string, options?: { days?: number; sameSite?: "lax" | "strict" }): void;
   /** Clears it on the route's response, as it was set (`sameSite` as it was, `lax` unless said). */

@@ -13,6 +13,13 @@
  * - **The site** (`siteOf`): the address as the browser asked for it, on the
  *   host the front says. Routes match it, and cookies are named and secured
  *   by it.
+ * - **The app's own hosts** (`resources.hosts.own`, patterns: `app.example.com`,
+ *   `*.run.app`): when the app names them, a request to any other host is
+ *   answered only by routes that take its host (a preview's, or `*` for
+ *   every other host: the hosts a directory's orgs claimed), never by the
+ *   app's paths; and the app's own are never a host route's. Unnamed, every
+ *   host is the app's, but a host route still takes the hosts it names (a
+ *   preview's), and one for every other host (`*`) takes none.
  * - **Other sites** (`crossSite`): a browser says where a request comes from
  *   (`Origin` on every POST, `Sec-Fetch-Site`). A request that may change
  *   something (anything but GET, HEAD and OPTIONS), sent from a page of
@@ -61,6 +68,48 @@ export function siteOf(request: Request, secret: string | undefined): URL {
     // Not a host at all: the front's word is no one's.
   }
   return url;
+}
+
+/** The `hosts` resource: the app's own hosts, as patterns (see `hostMatches`). */
+export type HostsSettings = { own?: string[] };
+
+/** A host pattern: a host (and maybe a port), or `*` then the rest of one (`*.run.app`). */
+const HOST = /^\*?[a-z0-9.-]+(:\d{1,5})?$/;
+
+/** What's wrong with the app's `hosts` resource, if anything (checked at start). */
+export function hostsProblem(settings: unknown): string | undefined {
+  if (settings === undefined) return undefined;
+  const own = (settings as HostsSettings | null)?.own;
+  if (own === undefined) return undefined;
+  if (!Array.isArray(own) || !own.length) return "hosts.own is a list of the app's own hosts";
+  const bad = own.find((pattern) => typeof pattern !== "string" || !HOST.test(pattern));
+  return bad === undefined
+    ? undefined
+    : `hosts.own: "${bad}" isn't a host (app.example.com), nor * and the rest of one (*.run.app)`;
+}
+
+/**
+ * Whether a host matches a pattern: exactly, or `*<suffix>` for any one
+ * first label then the suffix (`*.run.app`: `x.run.app`, not `a.b.run.app`).
+ * Without a port in the pattern, the host's is ignored. Case doesn't matter.
+ */
+export function hostMatches(pattern: string, host: string): boolean {
+  const wanted = pattern.toLowerCase();
+  const plain = host.toLowerCase().replace(/\.$/, "");
+  const asked = /:\d+$/.test(wanted) ? plain : plain.replace(/:\d+$/, "");
+  if (!wanted.startsWith("*")) return asked === wanted;
+  const suffix = wanted.slice(1);
+  const first = asked.slice(0, asked.length - suffix.length);
+  return asked.endsWith(suffix) && first.length > 0 && !first.includes(".");
+}
+
+/**
+ * Whether a host is the app's own, as its `hosts` resource names them:
+ * undefined when it names none (every host is then the app's).
+ */
+export function ownHost(hosts: unknown, host: string): boolean | undefined {
+  const own = (hosts as HostsSettings | undefined)?.own;
+  return own ? own.some((pattern) => hostMatches(pattern, host)) : undefined;
 }
 
 /** Whether a host name is this machine's own: `localhost`, 127.0.0.0/8, `::1`. */

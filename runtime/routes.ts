@@ -7,7 +7,9 @@
  * **The order a request is matched in**, the same every time:
  * 1. Routes with a host, before anything else (the runtime's own paths
  *    included): a host a route takes is that route's alone. A host with no
- *    wildcard comes first, then the longer pattern.
+ *    wildcard comes first, then the longer pattern. One for every host (its
+ *    hostname `*`) takes only the hosts that aren't the app's own (see
+ *    site.ts, `hosts`): with none named, none.
  * 2. Routes by pathname, the more specific first, segment by segment from
  *    the left: at the first segment where two differ in kind, a literal one
  *    (`/google`) comes before one with a parameter (`/:name`), which comes
@@ -27,6 +29,8 @@ export type RouteEntry = {
   pattern: URLPattern;
   /** Whether it takes a host, whatever the path. */
   host: boolean;
+  /** A host route for every host (`*`): only the hosts that aren't the app's own. */
+  others: boolean;
 };
 
 /** The paths the runtime answers itself, which no plugin's route takes. */
@@ -67,7 +71,14 @@ export function routeTable(
         `${plugin}: routes["${key}"] isn't a URL pattern (${(error as Error).message})`,
       );
     }
-    (host ? hosts : paths).push({ key, plugin, route, pattern, host });
+    (host ? hosts : paths).push({
+      key,
+      plugin,
+      route,
+      pattern,
+      host,
+      others: host && pattern.hostname === "*",
+    });
   }
   hosts.sort((a, b) =>
     Number(a.pattern.hostname.includes("*")) - Number(b.pattern.hostname.includes("*")) ||
@@ -88,14 +99,19 @@ function paramsOf(result: URLPatternResult, host: boolean): Record<string, strin
   return params;
 }
 
-/** The first route that takes `url` (a host route only when `hosts`), and its parameters. */
+/**
+ * The first route that takes `url` (a host route only when `hosts`), and its
+ * parameters. A host route for every host only when `others`: the host isn't
+ * the app's own.
+ */
 export function matchRoute(
   table: RouteEntry[],
   url: URL,
-  options: { hosts: boolean },
+  options: { hosts: boolean; others?: boolean },
 ): { entry: RouteEntry; params: Record<string, string> } | undefined {
   for (const entry of table) {
     if (entry.host !== options.hosts) continue;
+    if (entry.others && !options.others) continue;
     const result = entry.host
       ? entry.pattern.exec(url.href)
       : entry.pattern.exec({ pathname: url.pathname });

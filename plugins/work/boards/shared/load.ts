@@ -3,7 +3,7 @@
  * and whether someone is in a space (a card's assignee has to be). What the
  * caller doesn't reach, the rules keep out of sight, so it reads as missing.
  */
-import { nameOf, namesFor } from "../../../access/mod.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
 import type { Board, Card } from "../contract.ts";
 import { invalid, notFound } from "./errors.ts";
 

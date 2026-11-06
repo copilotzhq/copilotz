@@ -4,7 +4,7 @@
  * `namesIn`/`namesFor`; else an email's first part), an agent by what it's
  * shown as when that's known ("North"), else by what it's called.
  */
-import { nameOf as shownName } from "../../../access/mod.ts";
+import { nameOf as shownName } from "../../../access/spaces/contract.ts";
 
 export type Who = { kind: string; id: string };
 

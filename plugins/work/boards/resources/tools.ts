@@ -8,8 +8,8 @@
  * are named as people say them (`me`, "North", an email), matched against
  * who's in the space. Answers are short and name the board with its link.
  */
-import { namesFor } from "../../../access/mod.ts";
-import { type Thread, type Tool, tool, type ToolContext } from "../../../agents/mod.ts";
+import { namesFor } from "../../../access/spaces/contract.ts";
+import { type Thread, type Tool, tool, type ToolContext } from "../../../agents/chat/contract.ts";
 import type { Board, Card, Column } from "../contract.ts";
 import { columnOf, fold, stageOf } from "../shared/columns.ts";
 import { dueSaid, todayOf } from "../shared/dates.ts";

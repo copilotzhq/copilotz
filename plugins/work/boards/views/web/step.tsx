@@ -9,7 +9,7 @@
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
-import type { ShownCall } from "../../../../agents/mod.ts";
+import type { ShownCall } from "../../../../agents/chat/contract.ts";
 import { Icon, Spinner } from "../../../../../hosts/web/mod.ts";
 import { boardPath } from "../../contract.ts";
 import { heard } from "../../shared/said.ts";

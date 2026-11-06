@@ -8,7 +8,7 @@
  * The same title and text as now saves nothing (`unchanged`).
  */
 import { defineAction } from "../../../../runtime/mod.ts";
-import { namesFor } from "../../../access/mod.ts";
+import { namesFor } from "../../../access/spaces/contract.ts";
 import { type DocumentVersion, versionId } from "../collections/document-version.ts";
 import { merge, mergeField } from "../shared/merge.ts";
 import { keyOf, LIMIT, TITLE, UNTITLED } from "../shared/text.ts";

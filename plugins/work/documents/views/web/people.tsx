@@ -8,8 +8,8 @@
  */
 import { type ReactNode, useEffect, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
-import { namesIn } from "../../../../access/mod.ts";
-import type { Agent, Team } from "../../../../agents/mod.ts";
+import { namesIn } from "../../../../access/spaces/contract.ts";
+import type { Agent, Team } from "../../../../agents/chat/contract.ts";
 import { Avatar } from "../../../../../hosts/web/mod.ts";
 import { personName, whoOf } from "../../shared/who.ts";
 

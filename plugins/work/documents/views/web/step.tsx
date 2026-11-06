@@ -8,7 +8,7 @@
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
-import type { ShownCall, Thread } from "../../../../agents/mod.ts";
+import type { ShownCall, Thread } from "../../../../agents/chat/contract.ts";
 import { Button, Icon, Spinner } from "../../../../../hosts/web/mod.ts";
 import type { Document } from "../../contract.ts";
 import { documentPath } from "../../shared/text.ts";

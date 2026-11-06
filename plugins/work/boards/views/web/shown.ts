@@ -6,7 +6,7 @@
  * a board's cards by column, with moves still on their way shown where
  * they're going.
  */
-import { nameOf } from "../../../../access/mod.ts";
+import { nameOf } from "../../../../access/spaces/contract.ts";
 import type { Board, Card, Column } from "../../contract.ts";
 import { fold, stageOf } from "../../shared/columns.ts";
 import { daysUntil } from "../../shared/dates.ts";

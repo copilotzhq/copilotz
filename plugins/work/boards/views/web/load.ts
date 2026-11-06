@@ -8,7 +8,7 @@
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
-import { namesIn } from "../../../../access/mod.ts";
+import { namesIn } from "../../../../access/spaces/contract.ts";
 import type { Board, Card } from "../../contract.ts";
 import { type Names, peopleOf, type Someone, type Team } from "./shown.ts";
 

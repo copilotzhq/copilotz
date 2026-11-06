@@ -8,8 +8,8 @@
  * to the agent (and the person it works for). Answers are short, and link
  * the document (`[Title](/document/<id>)`), so agents link it too.
  */
-import { namesFor } from "../../../access/mod.ts";
-import { type Thread, type Tool, tool, type ToolContext } from "../../../agents/mod.ts";
+import { namesFor } from "../../../access/spaces/contract.ts";
+import { type Thread, type Tool, tool, type ToolContext } from "../../../agents/chat/contract.ts";
 import type { Document } from "../collections/document.ts";
 import { type DocumentVersion, versionId } from "../collections/document-version.ts";
 import { excerptOf, forOf, kb, keyOf, LIMIT, TITLE } from "../shared/text.ts";

@@ -5,8 +5,8 @@
  * key a card's assignee holds (`person:<id>`, `agent:<name>`). A name typed
  * is matched against them: `me` is the agent asking.
  */
-import { nameOf, namesFor } from "../../../access/mod.ts";
-import type { ToolContext } from "../../../agents/mod.ts";
+import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
+import type { ToolContext } from "../../../agents/chat/contract.ts";
 import { fold } from "./columns.ts";
 
 /** Someone in a space: the key a card holds, how they're named, and what else matches them. */

@@ -1,7 +1,8 @@
 /**
  * Memberships read by one's own key: a contact finds its chats so, all of
- * them; anyone else reads memberships as far as they reach, so a key
- * `within` one space reads that space's, never where else its person is.
+ * them; anyone else reads memberships as far as they reach, so a developer
+ * key, a member of one space, reads that space's, never where else its
+ * person is.
  */
 import { assertEquals } from "@std/assert";
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
@@ -26,7 +27,7 @@ const app = definePlugin({
   },
 });
 
-test("memberships by one's own key: a contact's all, a key within a space only that space's", async () => {
+test("memberships by one's own key: a contact's all, a developer key only its space's", async () => {
   const runtime = await createRuntime({
     store: memoryStore(),
     plugins: [models, chat, ...access, app],
@@ -45,9 +46,15 @@ test("memberships by one's own key: a contact's all, a key within a space only t
     for (const id of ["s1", "s2", "secret"]) {
       await runtime.call("space.create", { id, name: id }, { actor: ana });
     }
-    // Her key within s1: s1's memberships, by her key or not (before: s1, s2 and secret).
-    const scoped: Actor = { ...ana, within: "s1" };
+    // Her key, a member of s1: s1's memberships, by her key or not (before: s1, s2 and secret).
+    await runtime.call("member.set", {
+      space: "s1",
+      member: { kind: "key", id: "k1" },
+      role: "viewer",
+    });
+    const scoped: Actor = { ...ana, key: "k1" };
     assertEquals(await read(scoped, { member: "person:ana" }), ["s1"]);
+    assertEquals(await read(scoped, { member: "key:k1" }), ["s1"]);
     assertEquals(await read(scoped, { space: "secret" }), []);
     // She reads hers everywhere she is.
     assertEquals(await read(ana, { member: "person:ana" }), ["s1", "s2", "secret"]);

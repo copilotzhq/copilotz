@@ -17,7 +17,7 @@
  */
 import { type Actor, failure, type Filter, type Guard } from "../../../../runtime/mod.ts";
 import { membersOf } from "./agents.ts";
-import { homeOf, memberKey, type Reach, reachOf, type Verb, where } from "./reach.ts";
+import { homeOf, keyOf, memberKey, type Reach, reachOf, type Verb, where } from "./reach.ts";
 
 /**
  * The `shared` resource: collections whose documents live in spaces, the
@@ -90,7 +90,8 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
   const reach = await reachOf(actor, ctx);
   if (collection === "invitation") {
     const managed = { space: { $in: where(reach, "manage") } };
-    if (access === "write" || actor.kind !== "person" || actor.within) return managed;
+    // A key isn't who an invitation to its person's email is for.
+    if (access === "write" || actor.kind !== "person" || keyOf(actor)) return managed;
     const { email } = await ctx.call<{ email: string | null }>("person.email", {
       person: actor.id,
     });
@@ -106,7 +107,7 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
     const spaces = where(by, access === "read" ? "read" : "manage");
     if (collection === "space") return { _id: { $in: spaces } };
     // Where a contact is a member, asked by its own key: it finds its chats so. (Anyone else
-    // reads memberships as far as they reach, as below: a key `within` a space, that space.)
+    // reads memberships as far as they reach, as below: a developer key, its space's.)
     if (access === "read" && actor.kind === "contact" && filter?.member === memberKey(actor)) {
       return { member: memberKey(actor) };
     }

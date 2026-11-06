@@ -148,16 +148,15 @@ export function byMember(
   );
 }
 
-/** Members by kind, as the Members tab lists them: people, agents, and spaces drawing on this one. */
+/**
+ * Members by kind, as the Members tab lists them: people, agents, and spaces
+ * drawing on this one. Others (developer keys) are other front ends' to show.
+ */
 export function byKind(
   members: Member[],
 ): { people: Member[]; agents: Member[]; spaces: Member[] } {
   const of = (kind: string) => members.filter((m) => whoOf(m.member).kind === kind);
-  return {
-    people: of("person"),
-    agents: of("agent"),
-    spaces: members.filter((m) => !["person", "agent"].includes(whoOf(m.member).kind)),
-  };
+  return { people: of("person"), agents: of("agent"), spaces: of("space") };
 }
 
 /** The people among them. */

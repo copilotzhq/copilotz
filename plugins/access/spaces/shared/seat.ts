@@ -1,8 +1,8 @@
 /**
  * Giving a member a role in a space, however they came to it (a manager
- * setting it, a request granted): the role is one this app has, an agent or a
- * contact never manages, a contact is let into documents only (its chat),
- * never a whole space, and a space keeps a manager.
+ * setting it, a request granted): the role is one this app has, an agent, a
+ * key or a contact never manages, a contact is let into documents only (its
+ * chat), never a whole space, and a space keeps a manager.
  */
 import { type Context, invalid } from "../../../../runtime/mod.ts";
 import { keepsAManager } from "./managers.ts";
@@ -14,6 +14,9 @@ export function checkRole(ctx: Context, member: string, role: string) {
   if (!verbs) throw invalid(`No role "${role}".`);
   if (member.startsWith("agent:") && verbs.includes("manage")) {
     throw invalid("Agents work here as viewers or editors.");
+  }
+  if (member.startsWith("key:") && verbs.includes("manage")) {
+    throw invalid("A key works here as a viewer or an editor.");
   }
   if (member.startsWith("contact:") && verbs.includes("manage")) {
     throw invalid("A contact reads or writes in what's shared with them, never manages it.");

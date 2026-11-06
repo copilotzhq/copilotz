@@ -97,7 +97,7 @@ export type { Invitation } from "./collections/invitation.ts";
 export type { DirectoryPort } from "./actions/org.ts";
 export type { Member } from "./collections/member.ts";
 export type { Reached, Space } from "./collections/space.ts";
-export type { SpaceAgents, SpaceInvite, SpaceSidebar, SpaceTab } from "./contract.ts";
+export type { SpaceAgents, SpaceInvite, SpaceMembers, SpaceSidebar, SpaceTab } from "./contract.ts";
 export type { Request } from "./collections/request.ts";
 // People by name, wherever an id would show (see shared/names.ts).
 export {

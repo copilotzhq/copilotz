@@ -1,6 +1,7 @@
 /**
  * A Personal space is its person's alone: agents join it, to work there for
- * them, and nobody else does. Working with others is what shared spaces are for.
+ * them, and their keys, and nobody else does. Working with others is what
+ * shared spaces are for.
  */
 export const PERSONAL = "personal";
 
@@ -10,7 +11,9 @@ const alone = () =>
     { code: "forbidden" },
   );
 
-/** Throws unless `member` (`person:bob`) may join `space`: anyone but agents, unless it's personal. */
+/** Throws unless `member` (`person:bob`) may join `space`: a personal one, only agents and keys. */
 export function joinable(space: Record<string, unknown> | null | undefined, member: string) {
-  if (space?.kind === PERSONAL && !member.startsWith("agent:")) throw alone();
+  if (space?.kind === PERSONAL && !member.startsWith("agent:") && !member.startsWith("key:")) {
+    throw alone();
+  }
 }

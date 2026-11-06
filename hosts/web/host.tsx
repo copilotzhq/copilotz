@@ -33,6 +33,7 @@ import { BASE } from "./style.ts";
 import { ThemeContext } from "./theme/context.ts";
 import { fontsOf, fromGoogle, preloadsOf, themeCss, themeOf } from "./theme/css.ts";
 import { UpdateReady } from "./update.tsx";
+import { setWords, wordsOf } from "./words.ts";
 
 export type WebOptions = {
   plugins: Plugins;
@@ -158,6 +159,8 @@ async function waysToSignIn(): Promise<{ google?: { clientId: string }; dev?: tr
 
 export async function web(options: WebOptions): Promise<Client | undefined> {
   const react = createRoot(options.root);
+  // The app's words (its plugins' `words` resources) are what every front end says from the start.
+  setWords(wordsOf(options.plugins));
   // The app's look goes with everything drawn, from the start: its theme, then the page's base.
   const theme = themeOf(options.plugins);
   const css = themeCss(theme);

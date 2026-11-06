@@ -98,6 +98,9 @@ import { prompt } from "./views/prompt.ts";
 export * from "./contract.ts";
 export { lineage } from "./shared/lineage.ts";
 
+/** Chat's collections, changed only through its Actions. */
+const CHAT_RECORDS = ["message", "live", "thread", "file", "shown"];
+
 export const chat: Plugin = definePlugin({
   name: "chat",
   requires: ["models"],
@@ -169,11 +172,13 @@ export const chat: Plugin = definePlugin({
     "chat.turn": turnProcessor,
     "chat.failed": failedProcessor,
   },
-  // What's said (who said it) and what a turn is doing are the Actions' and the turn's to write:
-  // never written directly from outside. Threads, files and what's shown are, within the rules.
+  // Chat's records change through its Actions, never written directly from outside: what's said
+  // (who said it), what a turn is doing, a conversation's state, its files, what was shown.
   guard: (_actor, { collection, access, direct }) => {
-    if ((collection === "message" || collection === "live") && direct && access === "write") {
-      throw failure("forbidden", "Messages are sent through chat.send.", { public: true });
+    if (direct && access === "write" && CHAT_RECORDS.includes(collection)) {
+      throw failure("forbidden", `"${collection}" changes through chat's Actions (chat.send…).`, {
+        public: true,
+      });
     }
     return undefined;
   },

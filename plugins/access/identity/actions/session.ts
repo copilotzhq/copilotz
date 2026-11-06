@@ -68,6 +68,8 @@ export const revokeCredentials = defineAction({
   // No `allow`: the system's (taking someone out of an org).
   run: async (ctx, input) => {
     const ended = await ctx.db.collection("credential").deleteMany({ person: input.person });
+    // Their browsers go too, and who a request of theirs was, kept a moment, is forgotten.
+    await ctx.disconnect({ kind: "person", id: input.person });
     return { ended: ended.deletedCount };
   },
 });

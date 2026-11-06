@@ -74,8 +74,9 @@ The runtime knows only these, and plugins are made of them:
   id, and everything it causes is its caller's.
 - **Processors:** what happens when events happen: ordered per key, at least once, from a durable
   cursor, idempotent by deterministic ids.
-- **Views:** a plugin's front end, per medium: text for `llm` (the agents' prompt is a View), Ink
-  elements for `terminal`, React for `web`. Observed Views run again when what they read changes.
+- **Views:** a plugin's front end, found by name: text for the model (`llm.thread`, the agents'
+  prompt, is a View), Ink elements for the terminal, React for the web. Observed Views run again
+  when what they read changes.
 - **Resources:** configuration as named plain objects, by kind (`agents`, `tools`, `provider`,
   `theme`…): a later plugin patches an earlier one's (JSON Merge Patch), so an app changes one
   agent's `effort` without redefining it.
@@ -288,8 +289,9 @@ await web({ root, plugins: [siteShell, chatWeb], arrive: { line: "site" } });
 An app people use on WhatsApp or on the phone needs no page: `serve` without `code` (or `tickets`)
 serves its plugins' routes alone (`routes` resources: Meta's webhook, Twilio's), `GET /health` for
 whatever watches it, and 404 for anything else, whatever else its plugins declare. Nobody signs in
-there: a route's Action is called as a visitor, and its `allow` decides (a webhook checks the
-request's signature, then acts for the person it's from with `ctx.as`). Deno and Bun run it too.
+there: a route's Action is called as anonymous (`{ kind: "anonymous", id: "" }`), and its `allow`
+decides (a webhook checks the request's signature, then acts for the person it's from with
+`ctx.as`). Deno and Bun run it too.
 
 ```ts
 import { createRuntime } from "copilotz";
@@ -475,7 +477,7 @@ name, never by importing its code.
     come with it. `chat.open` opens an empty chat in a space; `chat.say` has an agent say a fixed
     message there without a turn (trusted code only: a payment confirmed), which goes out like any
     of its answers.
-  - **After an answer:** a medium that can (WhatsApp) shows features' additions
+  - **After an answer:** a place that can (WhatsApp) shows features' additions
     (`resources.additions.<name> = { order?, agents? }` and an `addition:<name>` View there), each
     once per chat per key, recorded in `shown`; the model is told what went (`[then shown: …]`). A
     message tapped from a button carries `tap: { id, title, key }`, and agents read the id.
@@ -617,9 +619,9 @@ filled by the front ends through resources).
   server-sent events, as that person, in that space only.
 - **`whatsapp`**: people talk to their agents from WhatsApp, through Meta's Cloud API. A space's
   managers connect a number; a person links their phone with a code; what they send becomes their
-  messages, and what agents say to them goes back, a long answer in several messages. It's a medium
-  for Views (medium `whatsapp`, parts built with its toolkit: text, buttons, a list, a carousel, an
-  image, a document, each checked against Meta's limits): after an answer, features show more
+  messages, and what agents say to them goes back, a long answer in several messages. It has Views
+  of its own (`whatsapp.message`, parts built with its toolkit: text, buttons, a list, a carousel,
+  an image, a document, each checked against Meta's limits): after an answer, features show more
   (`additions`: a carousel of trips, buttons to pay), once per chat per key, the answer's text in
   the same message when there's room, a fallback when Meta refuses one; taps come back with their
   ids. Pictures and files go as public links, signed links to the app's routes or files (the `links`
@@ -635,7 +637,7 @@ filled by the front ends through resources).
   signature, a call is taken within its caller's limits and the line's (calls at once, a day: else
   busy, nothing spent) and opens the line's socket with a one-time ticket. A caller is a contact in
   a chat of their own, the same one when they call back only if Twilio verified their number; what
-  the agent writes for them is said as it writes it (a medium for Views: `voice`), a caller speaking
+  the agent writes for them is said as it writes it (`voice.message`, a View), a caller speaking
   over it cuts it there (the agent is told what was heard), a failed or slow answer says a short
   line in the line's language, and silence, a call too long or too many prompts, or the agent's
   `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that takes a
@@ -1174,12 +1176,16 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   `ctx.db.collection("message").query("history", params)`. They never write. An actor calling from
   outside runs only those that let them (`{ allow, run }`, as Actions); a bare function is the
   system's.
-- **Views** are each plugin's front end, per medium (see [design/views.md](design/views.md)): text
-  for `llm`, Ink elements for `terminal`, React for `web`. A View for kind `"*"` is a medium's
-  default for kinds without one. `runtime.render(medium, kind, item)` renders one once (an agent's
-  prompt); `runtime.observe(medium, kind, item, { part })` keeps one live: it runs again when a
-  commit changes a document it read, and each View it shows (`ctx.show`) is a part that runs again
-  on its own. Views call Actions from their handlers (`ctx.call`, `ctx.emit`).
+- **Views** are each plugin's front end, found by name (see [design/views.md](design/views.md)):
+  `views: { "booking.panel": BookingPanel }`. A name says what the View shows; where the same thing
+  is shown in several places it takes the place as a prefix (`llm.message`, `web.message`,
+  `terminal.message`, `whatsapp.message`, `voice.message`; likewise `thread`, `memory`, `live`,
+  `shell` and `spaces`), and `ctx.show("web.message", m)` shows exactly the View it names. A host
+  asks for its own default (`web.default`, `terminal.default`) when a name has no View.
+  `runtime.render(name, item)` renders one once (an agent's prompt);
+  `runtime.observe(name, item, { part })` keeps one live: it runs again when a commit changes a
+  document it read, and each View it shows (`ctx.show`) is a part that runs again on its own. Views
+  call Actions from their handlers (`ctx.call`, `ctx.emit`).
 - **A feature's front end is its own:** chat, memory and usage each have a `terminal.ts`
   (`chatTerminal`…) with their terminal Views and commands, added only where the terminal draws;
   chat, team, memory, spaces and computers a `web.tsx` (`chatWeb`…), loaded only by the browser. The
@@ -1299,9 +1305,9 @@ examples/       terminal-agent (an app: its plugins and resources, run in the te
 Each layer imports only what it may (`testing/boundaries.test.ts` fails otherwise): the runtime
 nothing outside it; stores, exporters and hosts the runtime; a plugin the runtime, the hosts'
 toolkits (the web's through `hosts/web/mod.ts` only), its own files and other plugins'
-`contract.ts`. A **host** runs the app in a medium and uses the runtime's public API only; a
-**shell** is the medium's root View, a plugin; a feature's **front end** for a medium is its own
-Views and commands there.
+`contract.ts`. A **host** runs the app in a place (the web, the terminal) and uses the runtime's
+public API only; a **shell** is that place's root View (`web.shell`, `terminal.shell`), a plugin; a
+feature's **front end** there is its own Views and commands.
 
 ## Designs
 

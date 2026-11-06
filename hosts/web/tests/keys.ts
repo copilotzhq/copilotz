@@ -2,6 +2,7 @@
  * The keys of every front end's words, as a Markdown list: `deno run -A hosts/web/tests/keys.ts`
  * writes `hosts/web/WORDS.md`; the words test fails when the file is out of date.
  */
+import { writeFileSync } from "node:fs";
 import "../../../plugins/agents/web.tsx";
 import "../../../plugins/access/web.tsx";
 import "../../../plugins/billing/web.tsx";
@@ -35,5 +36,5 @@ export function keysDoc(): string {
 }
 
 if (import.meta.main) {
-  await Deno.writeTextFile(new URL("../WORDS.md", import.meta.url), keysDoc());
+  writeFileSync(new URL("../WORDS.md", import.meta.url), keysDoc());
 }

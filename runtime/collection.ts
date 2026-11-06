@@ -107,7 +107,8 @@ export type NearestOptions = { filter?: Filter; limit?: number; field?: string }
  */
 export type Run = (op: Op, options?: { unanswered?: boolean }) => Promise<unknown>;
 
-function cursor<T>(
+/** A cursor over what `load` finds with the options it's given (sorted, limited, skipped). */
+export function cursor<T>(
   load: (options: FindOptions) => Promise<unknown>,
   options: FindOptions,
 ): Cursor<T> {

@@ -1,10 +1,11 @@
 /**
- * The developer API: keys (made by a person in a space, a member of it,
- * shown once, kept as a hash, revoked), and calls with them over HTTP: as
- * the key's person, reaching what both its membership and its person reach,
- * only what its scope lists (the runtime checks it); Idempotency-Key as the
- * call id; JSON errors; queries, Views, the reference, and events as they
- * happen, of what the key may see.
+ * Developer keys over the runtime's REST API (`/api/`): keys (made by a
+ * person in a space, a member of it, shown once, kept as a hash, revoked),
+ * and calls with them: as the key's person, reaching what both its
+ * membership and its person reach, only what its scope lists (the runtime
+ * checks it); Idempotency-Key as the call id; JSON errors; queries, Views,
+ * collections, the reference, and events as they happen, of what the key
+ * may see. A key's record never changes from outside.
  */
 import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
 import {
@@ -290,7 +291,11 @@ test("a call acts as the key's person, in its space, and only for what its scope
     assertEquals(anonymous.status, 401);
     assertEquals(anonymous.headers.get("www-authenticate"), 'Bearer realm="api"');
 
-    const sent = await call(secret, "/api/actions/chat.send", post({ text: "hello" }));
+    const sent = await call(
+      secret,
+      "/api/actions/chat.send",
+      post({ text: "hello", in: personal }),
+    );
     assertEquals(sent.status, 200);
     const { thread } = await sent.json() as { thread: string };
     await runtime.idle();
@@ -312,7 +317,7 @@ test("a call acts as the key's person, in its space, and only for what its scope
     assertEquals(wiped.status, 403);
     // Not there at all; bad input; not JSON; the wrong method.
     assertEquals((await call(secret, "/api/actions/nope", post({}))).status, 404);
-    const bad = await call(secret, "/api/actions/chat.send", post({ text: 3 }));
+    const bad = await call(secret, "/api/actions/chat.send", post({ text: 3, in: personal }));
     assertEquals([bad.status, (await bad.json()).error.code], [400, "invalid"]);
     const garbled = await call(secret, "/api/actions/chat.send", {
       method: "POST",
@@ -347,14 +352,18 @@ test("a key reaches its space alone: not its person's others, nor through their 
     // An agent working for the key: the key's space too.
     const agent = await call(secret, "/api/actions/note.agent", post({}));
     assertEquals(await agent.json(), ["launch plan"]);
-    // Writing elsewhere is refused; where it works, by default.
+    // Writing elsewhere is refused; where it works, it writes.
     const elsewhere = await call(
       secret,
       "/api/actions/note.write",
       post({ text: "x", in: personal }),
     );
     assertEquals(elsewhere.status, 403);
-    const here = await call(secret, "/api/actions/note.write", post({ text: "from code" }));
+    const here = await call(
+      secret,
+      "/api/actions/note.write",
+      post({ text: "from code", in: launch }),
+    );
     assertEquals(here.status, 200);
     assertEquals(
       (await runtime.query<{ text: string; in: string }[]>("note.list", {}, { actor: ana }))
@@ -383,7 +392,7 @@ test("a key reaches its space alone: not its person's others, nor through their 
 test("an Idempotency-Key makes the call's id: sent again, it answers the first, done once", async () => {
   await setup(async ({ runtime, personal, key, call }) => {
     const secret = await key();
-    const once = post({ text: "only once" }, { "idempotency-key": "order-42" });
+    const once = post({ text: "only once", in: personal }, { "idempotency-key": "order-42" });
     const first = await (await call(secret, "/api/actions/chat.send", once)).json();
     const again = await (await call(secret, "/api/actions/chat.send", once)).json();
     assertEquals(again, first);
@@ -396,7 +405,7 @@ test("an Idempotency-Key makes the call's id: sent again, it answers the first, 
     const other = await call(
       secret,
       "/api/actions/chat.send",
-      post({ text: "something else" }, { "idempotency-key": "order-42" }),
+      post({ text: "something else", in: personal }, { "idempotency-key": "order-42" }),
     );
     assertEquals([other.status, (await other.json()).error.code], [409, "id_conflict"]);
     // Another key's same Idempotency-Key is its own.
@@ -407,7 +416,7 @@ test("an Idempotency-Key makes the call's id: sent again, it answers the first, 
     const bad = await call(
       secret,
       "/api/actions/chat.send",
-      post({ text: "x" }, {
+      post({ text: "x", in: personal }, {
         "idempotency-key": "",
       }),
     );
@@ -428,12 +437,8 @@ test("the reference: what the key's scope lets it use, each Action's input as de
       },
     });
     const reference = await (await call(secret, "/api/")).json();
-    assertEquals(reference.key, {
-      name: "Script",
-      in: launch,
-      hint: secret.slice(0, 8),
-      role: "editor",
-    });
+    assertEquals(reference.actor, { kind: "person", id: "ana", key: reference.actor.key });
+    assertEquals(reference.actor.key.length, 12);
     assertEquals(reference.actions.map((a: { name: string }) => a.name), ["note.write"]);
     assertEquals(reference.actions[0].path, "/api/actions/note.write");
     assertEquals(reference.actions[0].input.required, ["text"]);
@@ -443,8 +448,8 @@ test("the reference: what the key's scope lets it use, each Action's input as de
     );
     assertEquals(reference.views, [{ name: "thread", method: "GET", path: "/api/views/thread" }]);
     assertEquals(reference.collections, [
-      { name: "note", read: true, write: true },
-      { name: "thread", read: true, write: false },
+      { name: "note", read: true, write: true, path: "/api/collections/note" },
+      { name: "thread", read: true, write: false, path: "/api/collections/thread" },
     ]);
   });
 });
@@ -454,6 +459,8 @@ test("from the app's page, signed in, the catalog of Actions; nobody else", asyn
     const catalog = await (await serve(new Request("http://localhost/api/"))).json();
     const names = catalog.actions.map((a: { name: string }) => a.name);
     assert(names.includes("chat.send") && names.includes("note.write"));
+    // What lets someone in from outside: the system's alone isn't among them.
+    assert(!names.includes("note.wipe"));
     assertEquals(names, [...names].sort((a: string, b: string) => a.localeCompare(b)));
   }, ana);
   await setup(async ({ serve }) => {
@@ -481,8 +488,10 @@ test("a View, as the key reads it: once, or as it changes", async () => {
     const secret = await key({ in: launch, scope: { view: ["note.count"] } });
     const shown = await call(secret, "/api/views/note.count");
     assertEquals(await shown.json(), "1 notes");
-    assertEquals((await call(secret, "/api/views/thread")).status, 403);
-    const followed = await call(secret, "/api/views/note.count?follow=1");
+    assertEquals((await call(secret, "/api/views/llm.thread")).status, 403);
+    const followed = await call(secret, "/api/views/note.count", {
+      headers: { accept: "text/event-stream" },
+    });
     const reader = followed.body!.pipeThrough(new TextDecoderStream()).getReader();
     let said = "";
     const next = async (until: string) => {
@@ -529,7 +538,7 @@ test("events: what happens in the key's space as it happens, as the key reads it
     // Elsewhere: never shown. Here: shown, without what's private.
     await runtime.call("note.write", { text: "diary", in: personal }, { actor: ana });
     await runtime.call("note.write", { text: "plan", in: launch }, { actor: ana });
-    const sent = await call(secret, "/api/actions/chat.send", post({ text: "go" }));
+    const sent = await call(secret, "/api/actions/chat.send", post({ text: "go", in: launch }));
     assertEquals(sent.status, 200);
     const events = await follow(
       stream,
@@ -570,19 +579,49 @@ test("events end, saying so, as soon as the key is revoked", async () => {
     await runtime.call("api_key.revoke", { key: mine._id }, { actor: ana });
     // At once, not at the next ping.
     assertEquals((await said).at(-1)?.data, {
-      error: { code: "unauthorized", message: "The key was revoked." },
+      error: { code: "unauthorized", message: "No longer signed in, or the key was revoked." },
     });
   });
 });
 
-test("events end at the ping too, should the key stop working some other way", async () => {
-  await setup(async ({ runtime, key }) => {
+test("a key's record never changes from outside, not even by the managers who read it", async () => {
+  await setup(async ({ runtime, personal, key, serve }) => {
     await key();
     const [mine] = await runtime.query<ApiKey[]>("api_key.mine", {}, { actor: ana });
-    const { eventStream } = await import("../shared/events.ts");
-    const actor = { kind: "person" as const, id: "ana", key: mine._id, scope: mine.scope };
-    const fast = eventStream(runtime, actor, () => Promise.resolve(false), 10);
-    const said = await follow(fast, (seen) => seen.some((e) => e.event === "revoked"));
-    assertEquals(said.at(-1)?.event, "revoked");
-  });
+    // She reads it where its space is, without its hash.
+    const read =
+      await (await serve(new Request(`http://localhost/api/collections/api_key/${mine._id}`)))
+        .json();
+    assertEquals([read.person, read.in, "hash" in read], ["ana", personal, false]);
+    // Its person and scope are what it acts as: only its Actions change them.
+    for (
+      const [method, body] of [
+        ["PATCH", { person: "bob" }],
+        ["PATCH", { $set: { "scope.call": ["note.wipe"] } }],
+        ["PUT", { ...read, _id: undefined, scope: { call: ["note.wipe"] } }],
+        ["DELETE", undefined],
+      ] as const
+    ) {
+      const answered = await serve(
+        new Request(`http://localhost/api/collections/api_key/${mine._id}`, {
+          method,
+          ...(body
+            ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } }
+            : {}),
+        }),
+      );
+      assertEquals([method, answered.status], [method, 403]);
+    }
+    // Nor are spaces' memberships, nor sessions, written directly.
+    for (const collection of ["member", "space", "credential", "person"]) {
+      const answered = await serve(
+        new Request(`http://localhost/api/collections/${collection}`, {
+          method: "POST",
+          body: JSON.stringify({ space: personal, member: "person:bob", role: "manager" }),
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      assertEquals([collection, answered.status], [collection, 403]);
+    }
+  }, ana);
 });

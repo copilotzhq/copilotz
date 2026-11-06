@@ -12,12 +12,9 @@
  */
 import { defineCollection, type Infer, inPerson, type Scope } from "../../../../runtime/mod.ts";
 import { hash } from "../shared/secret.ts";
-import { isKey, type KeyActor } from "../shared/actor.ts";
+import type { KeyActor } from "../shared/actor.ts";
 
 const names = { type: "array", items: { type: "string" } } as const;
-
-/** The spaces plugin's own records, which live in spaces too (a space, its memberships…). */
-export const PLACED = new Set(["space", "member", "request", "invitation"]);
 
 const keySchema = {
   type: "object",
@@ -92,31 +89,6 @@ export const apiKey = defineCollection({
     actor: async (keys, params: { secret: string }): Promise<KeyActor | null> => {
       const found = await keys.findOne({ hash: await hash(String(params.secret ?? "")) });
       return found ? actorOf(found as StoredKey) : null;
-    },
-    /** A key by its id, without its hash: what the API says of the key calling. The system's. */
-    get: async (keys, params: { key: string }): Promise<ApiKey | null> => {
-      const found = await keys.findOne({ _id: String(params.key ?? "") });
-      if (!found) return null;
-      const { hash: _, ...key } = found as Record<string, unknown>;
-      return key as ApiKey;
-    },
-    /**
-     * Documents of a collection that lives in spaces, by id, as a key reads
-     * them (the rules, without private fields): what the API's event stream
-     * shows of a change. Only as the stream asks it, for the key without its
-     * scope (the stream follows the rules): a key calling with its own scope
-     * never runs it.
-     */
-    see: {
-      allow: (actor) => isKey(actor) && actor.scope === undefined,
-      run: (_, params: { collection: string; ids: string[] }, ctx) => {
-        const collection = String(params.collection);
-        const shared = (ctx.resources.shared ?? {}) as Record<string, unknown>;
-        if (!PLACED.has(collection) && !Object.hasOwn(shared, collection)) return [];
-        return ctx.db.collection(collection).find({
-          _id: { $in: (params.ids ?? []).map(String) },
-        });
-      },
     },
   },
 });

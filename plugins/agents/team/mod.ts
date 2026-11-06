@@ -15,7 +15,7 @@
  * plugins: [models, chat, ...access, team, app]
  * ```
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
 import {
   createAgentAction,
   deleteAgentAction,
@@ -44,6 +44,13 @@ export const team: Plugin = definePlugin({
     // With the access plugin: an agent belongs where it was made, its managers change it,
     // and it's read where it works.
     shared: { agent: { member: "agent", write: "manage" } },
+  },
+  // An agent is a member of spaces, with its tools and model: its Actions check what it's given.
+  guard: (_actor, { collection, access, direct }) => {
+    if (collection === "agent" && direct && access === "write") {
+      throw failure("forbidden", "Agents change through their Actions.", { public: true });
+    }
+    return undefined;
   },
 });
 

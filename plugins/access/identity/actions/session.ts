@@ -58,7 +58,7 @@ export const endSession = defineAction({
 });
 
 export const revokeCredentials = defineAction({
-  description: "Ends every session and key of a person: they're out, wherever they're signed in",
+  description: "Ends every session of a person: they're out, wherever they're signed in",
   input: {
     type: "object",
     properties: { person: { type: "string" } },

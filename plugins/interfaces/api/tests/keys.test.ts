@@ -62,6 +62,12 @@ const app = definePlugin({
       allow: person,
       run: (ctx, input) => ctx.db.collection("note").insertOne(input).then(() => ({ ok: true })),
     }),
+    // A key's record, as the system reads it: whether it's still there.
+    "test.key": defineAction({
+      input: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
+      record: false,
+      run: (ctx, input) => ctx.db.collection("api_key").findOne({ _id: input.key }),
+    }),
     // Who's in a space, as the system reads it.
     "test.members": defineAction({
       input: { type: "object", properties: { space: { type: "string" } }, required: ["space"] },
@@ -120,7 +126,7 @@ async function setup(fn: (s: Setup) => Promise<void>) {
           // A ticket from the runtime's /connect: only while the key (if it's one) still works.
           ticket: async () => {
             const key = typeof actor.key === "string" ? actor.key : undefined;
-            if (key && !await runtime.query("api_key.get", { key })) throw new Error("Revoked");
+            if (key && !await runtime.call("test.key", { key })) throw new Error("Revoked");
             return await ticketFor(runtime, actor);
           },
           plugins: [],

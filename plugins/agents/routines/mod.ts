@@ -32,7 +32,7 @@
  * plugins: [models, chat, ...access, routines, app]
  * ```
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
 import { createAction } from "./actions/create.ts";
 import { deleteAction } from "./actions/delete.ts";
 import { fireAction } from "./actions/fire.ts";
@@ -68,6 +68,14 @@ export const routines: Plugin = definePlugin({
     origins: { routine: { action: "routine.origin" } },
     // A space's routines, and their runs, are its members' to see; who changes one, the Actions say.
     shared: { routine: {}, routineRun: {} },
+  },
+  // A routine runs as its maker, on the yes they gave for what it does (`rev`): only its Actions
+  // change it, or its runs, never a write from outside.
+  guard: (_actor, { collection, access, direct }) => {
+    if ((collection === "routine" || collection === "routineRun") && direct && access === "write") {
+      throw failure("forbidden", "Routines change through their Actions.", { public: true });
+    }
+    return undefined;
   },
 });
 

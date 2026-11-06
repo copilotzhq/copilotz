@@ -67,7 +67,7 @@
  * - `additions`: { order?, agents? }, each with an `addition:<name>` View in
  *   the place that shows it, given `{ thread, answer }` (see `Addition`).
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
 import { eraseAction } from "./actions/erase.ts";
 import { forkAction } from "./actions/fork.ts";
 import { moveAction } from "./actions/move.ts";
@@ -168,6 +168,14 @@ export const chat: Plugin = definePlugin({
   processors: {
     "chat.turn": turnProcessor,
     "chat.failed": failedProcessor,
+  },
+  // What's said (who said it) and what a turn is doing are the Actions' and the turn's to write:
+  // never written directly from outside. Threads, files and what's shown are, within the rules.
+  guard: (_actor, { collection, access, direct }) => {
+    if ((collection === "message" || collection === "live") && direct && access === "write") {
+      throw failure("forbidden", "Messages are sent through chat.send.", { public: true });
+    }
+    return undefined;
   },
   // Files people sent, as whoever asks reaches them (or by a link signed for one).
   routes: { "/files/*": serveFile },

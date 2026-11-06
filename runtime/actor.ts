@@ -79,3 +79,25 @@ export function inScope(actor: Actor | undefined, what: keyof Scope, name: strin
   const listed = (actor.scope as Scope | null)?.[what];
   return Array.isArray(listed) && listed.includes(name);
 }
+
+/**
+ * An outside caller's own id for a call (an `Idempotency-Key`), as the call
+ * id it becomes: theirs alone, so two callers' same id are two calls. 1 to
+ * 200 visible ASCII characters (else thrown, `invalid`), from someone: an
+ * anonymous caller is nobody to tell apart, so it has none.
+ */
+export function callIdOf(actor: Actor, given: string): string {
+  if (!/^[\x21-\x7e]{1,200}$/.test(given)) {
+    throw Object.assign(new Error("A call's id is 1 to 200 visible ASCII characters."), {
+      code: "invalid",
+      public: true,
+    });
+  }
+  if (actor.kind === "anonymous") {
+    throw Object.assign(new Error("A call's own id needs a caller: sign in, or call with a key."), {
+      code: "invalid",
+      public: true,
+    });
+  }
+  return `call:${encodeURIComponent(holderOf(actor))}:${given}`;
+}

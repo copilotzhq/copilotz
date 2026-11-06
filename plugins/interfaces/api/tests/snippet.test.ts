@@ -9,7 +9,9 @@ import { namesIn, sameScope, snippets, summary } from "../views/web/snippet.ts";
 import { presets } from "../resources/presets.ts";
 
 test("trying a key: sending a message when it may, a query, and following what happens", () => {
-  const made = snippets("https://app.test", { call: ["chat.send"], query: ["thread.recent"] });
+  const made = snippets("https://app.test", { call: ["chat.send"], query: ["thread.recent"] }, {
+    space: "s1",
+  });
   assertEquals(made.map((s) => s.title), [
     "Send a message",
     "Run thread.recent",
@@ -21,12 +23,12 @@ test("trying a key: sending a message when it may, a query, and following what h
       "curl -X POST https://app.test/api/actions/chat.send \\",
       '  -H "Authorization: Bearer $COPILOTZ_KEY" \\',
       '  -H "Content-Type: application/json" \\',
-      `  -d '{"text":"Hello from my code"}'`,
+      `  -d '{"text":"Hello from my code","in":"s1"}'`,
     ].join("\n"),
   );
   // The key, when it's just been made, stands out.
   const secret = "cpz_abc";
-  const shown = snippets("https://app.test", { call: ["note.write"] }, secret);
+  const shown = snippets("https://app.test", { call: ["note.write"] }, { secret });
   assertEquals(shown.map((s) => s.title), ["Call note.write", "Follow what happens"]);
   assert(shown.every((s) => s.text.includes(`Bearer ${secret}`)));
   assertEquals(shown[0].code.filter((p) => p.tone === "accent").map((p) => p.text), [secret]);

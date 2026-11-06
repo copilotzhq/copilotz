@@ -71,7 +71,7 @@
  * plugins: [...orgPlugins, cloud, remotePool((action, input) => directory.call(action, input), org.id)]
  * ```
  */
-import { definePlugin, personOf, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, personOf, type Plugin } from "../../../runtime/mod.ts";
 import { createAction } from "./actions/create.ts";
 import { dailyAction } from "./actions/daily.ts";
 import { destroyAction } from "./actions/destroy.ts";
@@ -154,9 +154,14 @@ export const cloud: Plugin = definePlugin({
     tools,
   },
   adapters: { cloudHost: hosts },
-  // Each person reaches their own cloud computers.
-  guard: (actor, { collection }) => {
+  // Each person reaches their own cloud computers; its disk, where it runs and what it's metered
+  // for are the plugin's to change, never a write from outside.
+  guard: (actor, { collection, access, direct }) => {
     if (collection !== "cloudComputer") return undefined;
+    if (direct && access === "write") {
+      throw failure("forbidden", "Cloud computers change through their Actions.", { public: true });
+    }
+
     const person = personOf(actor);
     return person ? { owner: person } : { owner: { $in: [] } };
   },

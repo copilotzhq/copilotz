@@ -115,7 +115,7 @@ export function CreateDialog(
         </>
       )}
     >
-      {made ? <Made secret={made.key} scope={made.scope} /> : (
+      {made ? <Made secret={made.key} scope={made.scope} space={space} /> : (
         <form
           className="api-form"
           onSubmit={(event) => {
@@ -366,7 +366,9 @@ function Custom(
 }
 
 /** The key, once: copy it, and try it. */
-function Made({ secret, scope }: { secret: string; scope: Scope }): ReactNode {
+function Made(
+  { secret, scope, space }: { secret: string; scope: Scope; space: string },
+): ReactNode {
   const origin = appBase();
   return (
     <div className="api-made">
@@ -381,7 +383,7 @@ function Made({ secret, scope }: { secret: string; scope: Scope }): ReactNode {
         copy={secret}
       />
       <h3 className="api-sub">Try it</h3>
-      {snippets(origin, scope, secret).map((s) => (
+      {snippets(origin, scope, { secret, space }).map((s) => (
         <CodeBlock key={s.title} title={s.title} code={s.code} copy={s.text} />
       ))}
       <p className="api-note">

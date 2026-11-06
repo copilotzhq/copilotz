@@ -191,7 +191,7 @@ test("a client reads directly only what a rule speaks for; anything else, throug
     const failed = await direct.ready;
     assertEquals(failed.status, "failed");
     assert(
-      String((failed as { error: Error }).error.message).includes("No rule lets a browser read"),
+      String((failed as { error: Error }).error.message).includes('No rule lets person ana read "'),
     );
     const total = client.observe("total", {});
     assertEquals(await total.ready, { status: "ready", value: 0 });

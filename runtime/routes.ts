@@ -29,8 +29,8 @@ export type RouteEntry = {
   host: boolean;
 };
 
-/** The paths the runtime answers itself, which no plugin's route takes. */
-export const OWN = ["/connect", "/oxian"];
+/** The paths the runtime answers itself, which no plugin's route takes: and all under `/api/`. */
+export const OWN = ["/connect", "/oxian", "/api"];
 
 /** How specific a segment is: a literal 3, with a parameter 2, with a wildcard 1. */
 const rankOf = (segment: string) => /\*/.test(segment) ? 1 : /[:({]/.test(segment) ? 2 : 3;
@@ -56,7 +56,7 @@ export function routeTable(
     if (!host && !key.startsWith("/")) {
       throw invalid(`${plugin}: routes["${key}"] is a pathname ("/…") or a whole URL pattern`);
     }
-    if (!host && OWN.includes(key)) {
+    if (!host && (OWN.includes(key) || key.startsWith("/api/"))) {
       throw invalid(`${plugin}: routes["${key}"] is the runtime's own path`);
     }
     let pattern: URLPattern;

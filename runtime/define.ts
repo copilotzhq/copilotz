@@ -512,6 +512,8 @@ export type WhoContext = {
   resources: Resources;
   /** Runs a named query as the system, kept a few seconds per query and params. */
   query<R = unknown>(name: string, params?: unknown): Promise<R>;
+  /** Calls an Action as the system: what a credential's use changes (a key's last use). */
+  call<R = unknown>(action: string, input?: unknown): Promise<R>;
   /** The request's cookies, by their plain names (see `Cookies`). */
   cookies: Pick<Cookies, "get">;
 };
@@ -554,10 +556,13 @@ export type Labels = {
  * acting for the actor reads and writes it unchecked. Runs in the owner, on
  * every operation an actor's work makes, with read access to everything.
  *
- * Asked about a browser's own read (`direct`) before it's watched, a rule may
- * refuse it (throwing, `forbidden`) when it won't watch it as asked: a
+ * Asked about an outsider's own read or write (`direct`: REST, the socket)
+ * before it runs, a rule speaks for it (any answer but `undefined`) or not:
+ * a collection no rule speaks for never reaches outsiders. A rule may refuse
+ * it there (throwing, `forbidden`): a read it won't watch as asked (a
  * contact's that doesn't name what of its own it reads would run again on
- * every change to the collection.
+ * every change to the collection), or a write that only an Action's logic
+ * may make (who's in a space, a session, a key).
  */
 export type Guard = (
   actor: Actor,
@@ -566,7 +571,7 @@ export type Guard = (
     /** Reads, or writes (inserts, updates, replaces and deletes). */
     access: "read" | "write";
     filter?: Filter;
-    /** A browser's own read, asked before it's watched. */
+    /** An outsider's own read or write (REST, the socket), asked before it runs. */
     direct?: true;
   },
   ctx: ReadContext,

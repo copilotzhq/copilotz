@@ -104,8 +104,9 @@ const cookiesOf = (request: Request, name: string) =>
  * `Domain` goes, so its headers set no cookies on the domain's other hosts
  * (other previews, apps). That doesn't stop a preview tossing cookies: its
  * page's script can still set `document.cookie` with `Domain=<parent>`. What
- * stops that is the app's cookies' `__Host-` names (an entrance's
- * `hostOnly`, identity's session), which no other host can set.
+ * stops that is that the app's own cookies are named `__Host-` wherever
+ * they're Secure (the runtime names every plugin's so, identity's session
+ * among them), and no other host can set one of those.
  */
 const hostOnly = (cookie: string) => cookie.replace(/;\s*domain=[^;]*/gi, "");
 

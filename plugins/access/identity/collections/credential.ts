@@ -25,7 +25,7 @@ export const credential = defineCollection({
   schema: credentialSchema,
   indexes: [["person"]],
   queries: {
-    /** Who a secret proves, if anyone: a person. Hosts ask once per connection. */
+    /** Who a secret proves, if anyone: a person. Identity's `who` asks it for a session cookie. */
     actor: async (credentials, params: { secret: string }) => {
       const found = await credentials.findOne({ _id: await hash(params.secret) });
       if (!found || (found.expires && found.expires < new Date().toISOString())) return null;

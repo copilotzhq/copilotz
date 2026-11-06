@@ -53,6 +53,8 @@ export type {
   ToolCall,
 } from "./shared/types.ts";
 export type { ModelCall, ModelUse, UseContext, UseListener } from "./shared/use.ts";
+/** Metered uses outside models (a web search) ask and tell the same listeners a model call does. */
+export { mayUse, used } from "./shared/use.ts";
 
 /** What `models.price` answers: the catalog's cost for a model, and which catalog said it. */
 export type Price = { cost?: Cost; source: string };

@@ -95,6 +95,41 @@ events. Time is a caller too: schedules call Actions (see Schedules).
 
 The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`):
 
+| Import                                 | What it has                                                                                                           |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, `runtimes`, `connect` (the client)…                     |
+| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference                                                                             |
+| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                                                      |
+| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`…          |
+| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                        |
+| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                                  |
+| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                                       |
+| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account             |
+| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                                      |
+| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `webTools`, `tool` |
+| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                       |
+| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                           |
+| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `accounts`, `directory`, `googleSignIn`, `devSignIn`                     |
+| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`, and the directory's browser half (`useOrgs`, `enterOrg`…)                  |
+| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                      |
+| `copilotz/plugins/billing`             | `usage` (the ledger), `credits`, `stripe`, `stripeWebhook`                                                            |
+| `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                            |
+| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                       |
+| `copilotz/plugins/compute`             | `computers`: people's computers, where agents work                                                                    |
+| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                        |
+| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                                   |
+| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                         |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`     |
+| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                             |
+| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                             |
+| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`…)             |
+| `copilotz/web/server`                  | its server half: `webPage` (the page, as a plugin), `widgetsOf`                                                       |
+| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (`widget`, MCP Apps, ChatGPT)                         |
+| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                       |
+| `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)      |
+| `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                                       |
+| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                              |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun (`test`, `tempDir`, `serve`, `testWho`, `ticketFor`…)                             |
 | Import                                 | What it has                                                                                                       |
 | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, `runtimes`, `connect` (the client)…                 |
@@ -781,6 +816,37 @@ name, never by importing its code.
   image as base64 or a data URL, in the fields `files` names, or a response that is one) become
   files of the conversation, and the agent gets a reference instead (`maxFileBytes`, `fileTypes`). A
   tool of your own is `{ ...trips.tools.getTrip, run }`.
+- **`webTools`**: agents that search the web and read a page, without a computer. Two tools, which
+  agents get by listing them: `web_search` `{ query, count?, language?, country? }` (results
+  `{ title, url, snippet }`) and `read_page` `{ url, start? }` (the final URL, title, main text
+  without scripts, styles or navigation, and links; long pages come in parts, `start` reads on; the
+  text is marked as data, never instructions). Search is the `search` adapter port
+  (`resources.webTools.search`: `adapter`, `apiKey`): `duckduckgo` by default (its HTML page: no
+  key, no cost; a bot challenge or an empty page is a public "search is unavailable" error the agent
+  reads; `language` with `country` set its region), `serper` optional, `fake` offline, and Brave or
+  Google are one more adapter. Reading is safe by design: http(s) only, through `ctx.fetch`, no
+  cookies, an honest user agent; the host is resolved and loopback, private, link-local (the
+  metadata address) and reserved addresses refused, again on every redirect (4 at most); ports other
+  than 80 and 443 only if `ports` lists them; 15 s, 2 MB, HTML or text (no PDF); 8 pages per turn. A
+  search is a `search` use in the usage ledger, priced from resources (DuckDuckGo's is 0), and asks
+  `modelUse` listeners and the `spending` check first, like a model call; reading is free.
+
+  ```ts
+  plugins: [
+    models,
+    chat,
+    usage,
+    webTools,
+    definePlugin({
+      name: "app",
+      resources: {
+        webTools: { search: { adapter: "serper", apiKey: env.SERPER_KEY } }, // none for DuckDuckGo
+        cost: { serper: { queries: 0.001, per: 1 } }, // what a search costs the app
+        agents: { scout: { instructions, model, tools: ["web_search", "read_page"] } },
+      },
+    }),
+  ];
+  ```
 
 **`access/`**: who can see and do what (see [design/access.md](design/access.md)).
 

@@ -1,5 +1,25 @@
 ## Unreleased
 
+- **An agent's message with files.** `chat.say` takes `files`, and `text` may be left out when there
+  are files. Trusted code, such as a tool during a turn, can now post what it made without writing
+  chat's collections itself. Each file is one of these:
+  - `{ id, collection? }`: a document the caller reads that holds a file as `type` and `data`.
+    That's chat's own `file` by default, or another plugin's, such as the models plugin's `image`.
+  - `{ name, type, data }`: the file given as it is.
+
+  Each becomes a file of the chat, with its `thread` and space. People and contacts read it there as
+  they read people's files, and it meets the same limits: ten at most, about 10 MB each, and a media
+  type. Its content is the same blob, so a picture kept elsewhere isn't stored twice. The answer
+  adds the files' ids: `{ message, files }`. Saying it again sends nothing, files included. An
+  agent's own message tells it next time what it sent: `[sent: logo.png]`.
+
+- **A refusal says why.** A turn that fails with a refusal written for people answers in that
+  refusal's own words, where only the codes `credits` and `budget` did before. That covers any
+  failure made public, including the `spending` check's refusal whatever its `why`: an app's own
+  reason, such as an inactive subscription, no longer needs to borrow `credits`. The `spending`
+  refusal is now public, so a model outside the app reads its message too. A web line's spent budget
+  now shows its own words ("This chat has done all it can for today…"). Every other failure still
+  shows people the short line, with the details in the event.
 Moving in from another app. Nothing changes for an app that doesn't call these.
 
 - **`chat.import`** (the system's: a migration) brings a conversation in as it was: its thread (the

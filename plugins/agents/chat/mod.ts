@@ -30,8 +30,8 @@
  *   is let in first by the app's `contactSend` hooks (a web visitor's
  *   limits, and its own chat, opened with its first message); trusted code
  *   has an agent say a fixed message in one without a turn (`chat.say`: a
- *   payment confirmed), and erases one with everything in it (`chat.erase`:
- *   someone's data, gone).
+ *   payment confirmed; with files, a picture a tool made), and erases one
+ *   with everything in it (`chat.erase`: someone's data, gone).
  * - After an agent's answer, the place it goes to may show more (additions: a carousel
  *   of trips after the answer that found them), each once per chat per key,
  *   recorded in `shown` (`chat.shown`), and told to the model after that

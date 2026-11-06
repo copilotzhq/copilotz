@@ -139,7 +139,11 @@ export async function mayRun(
   );
   if (verdict.ok) return;
   throw Object.assign(
-    failure(verdict.why ?? "spending", verdict.message ?? "This org can't spend right now."),
+    failure(verdict.why ?? "spending", verdict.message ?? "This org can't spend right now.", {
+      // Its words are for whoever asked ("your subscription isn't active"): a failed turn
+      // says them in its chat.
+      public: true,
+    }),
     { final: true },
   );
 }

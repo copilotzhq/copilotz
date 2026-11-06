@@ -11,6 +11,7 @@ import {
   defineAction,
   defineCollection,
   definePlugin,
+  failure,
   type Plugin,
   type Store,
   type ViewContext,
@@ -543,6 +544,50 @@ each("a provider's refusal stays the event's: people read a short line", async (
   assertEquals((failed.data.error as { message: string }).message, refusal);
   await runtime.close();
 });
+
+each(
+  "a refusal written for people says why: the org's spending check, any public failure",
+  async (make) => {
+    // An app's spending check, kept by a subscription: a reason of its own, in its own words.
+    const subscription = definePlugin({
+      name: "subscription",
+      resources: { spending: { check: "test.check" } },
+      actions: {
+        "test.check": defineAction({
+          input: { type: "object" },
+          record: false,
+          run: () => ({
+            ok: false,
+            why: "subscription",
+            message: "Your subscription isn't active: renew it to go on.",
+          }),
+        }),
+      },
+    });
+    const limited = await start(make, { booking: { script: () => "never" } }, {}, [subscription]);
+    const { thread } = await limited.send({ text: "Book me a table", from: "ana" });
+    const refused = (await limited.history(thread)).find((m) => m.failed)!;
+    assertEquals(
+      { to: refused.to, text: refused.text },
+      { to: ["ana"], text: "Your subscription isn't active: renew it to go on." },
+    );
+    assertEquals(limited.calls.length, 0);
+    await limited.runtime.close();
+    // Any failure made public answers in its own words; any other, in a short line.
+    const told = await start(make, {
+      booking: {
+        script: () => {
+          throw Object.assign(failure("closed", "Bookings open at 9.", { public: true }), {
+            final: true,
+          });
+        },
+      },
+    });
+    const { thread: closed } = await told.send({ text: "Book me a table", from: "ana" });
+    assertEquals((await told.history(closed)).find((m) => m.failed)?.text, "Bookings open at 9.");
+    await told.runtime.close();
+  },
+);
 
 each("a turn takes as many steps as it needs, unless maxSteps says otherwise", async (make) => {
   // Twelve tool steps, then an answer: no limit by default.

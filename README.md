@@ -701,6 +701,27 @@ name, never by importing its code.
     come with it. `chat.open` opens an empty chat in a space; `chat.say` has an agent say a fixed
     message there without a turn (trusted code only: a payment confirmed), which goes out like any
     of its answers.
+  - **An agent's message with files:** `chat.say` takes `files`, so a tool posts what it made (a
+    picture) without writing chat's collections. Each is a document the caller reads that holds a
+    file as `type` and `data`: one of chat's own (`{ id }`) or another plugin's
+    (`{ id, collection: "image" }`, the models plugin's pictures). Or it's given as it is
+    (`{ name, type, data }`). Each becomes a file of the chat, under people's limits (ten, about 10
+    MB each, a media type). Its content is the same blob, so it isn't stored again. The message may
+    then say nothing else, and the agent is told next time what it sent (`[sent: logo.png]`).
+
+    ```ts
+    const { images } = await ctx.call<Images>("image.generate", { model, prompt });
+    await ctx.call("chat.say", {
+      id: `image:${images[0].id}`, // said once
+      thread,
+      from: "designer",
+      files: images.map(({ id }) => ({ id, collection: "image" })),
+    }); // → { message, files: [ids of the chat's files] }
+    ```
+  - **A turn that fails** still answers, so whoever waits on it resumes. People read a short line
+    (`<agent> failed: something went wrong…`), and what went wrong stays in the `processor.failed`
+    event. A refusal written for people answers in its own words: any failure made public, such as
+    the `spending` check's refusal (its `message`, whatever its `why`) or a web line's budget.
   - **After an answer:** a place that can (WhatsApp) shows features' additions
     (`resources.additions.<name> = { order?, agents? }` and an `addition:<name>` View there), each
     once per chat per key, recorded in `shown`; the model is told what went (`[then shown: …]`). A

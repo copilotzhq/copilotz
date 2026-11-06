@@ -120,14 +120,14 @@ export const computers: Plugin = definePlugin({
   processors: { "computers.left": leftProcessor },
   // Agents with computer tools know, each turn, whose computer they work on and what waits for a yes.
   views: contextViews,
+  // What jobs serve, at addresses of their own, once the app says where (`previews`).
+  routes: previewRoutes,
   resources: {
     tools,
     computers: {},
     context: { computer: { place: "turn" } },
     // A space's members see its computers (their desks there), as they see its conversations.
     shared: { desk: {}, preview: { field: "space" }, envVar: { field: "space" } },
-    // What jobs serve, at addresses of their own, once the app says where (`previews`).
-    routes: previewRoutes,
     // A computer's uses (a cloud computer's time, its disk) by its name, as its desks say it.
     usageNames: {
       computer: { tag: "tags.computer", collection: "desk", key: "computer", field: "name" },

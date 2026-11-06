@@ -226,7 +226,16 @@ export function createExecutor(
       unschedule: async (timer) => Number(await run({ op: "unschedule", timer })) > 0,
       cancel: async (target) => Boolean(await run({ op: "cancel", ...target } as Op)),
       disconnect: async (actor) =>
-        Number(await run({ op: "disconnect", actor: { kind: actor.kind, id: actor.id } })),
+        Number(
+          await run({
+            op: "disconnect",
+            actor: {
+              kind: actor.kind,
+              id: actor.id,
+              ...(typeof actor.key === "string" ? { key: actor.key } : {}),
+            },
+          }),
+        ),
       render: presenter(registry.views, () => reading(run, job.record, actor)),
       record: job.record,
       metrics,

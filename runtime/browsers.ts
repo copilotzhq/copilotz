@@ -214,8 +214,13 @@ export function limitsProblem(limits: BrowserLimits | undefined): string | undef
   return undefined;
 }
 
-/** Who an actor is, for counting what they hold. */
-const whoOf = (actor: Actor) => `${actor.kind}:${actor.id}`;
+/**
+ * Who an actor is, for counting what they hold and ending them: a key of a
+ * person's (`actor.key`) is apart from them, so revoking it ends its
+ * connections alone, and signing out ends none of its.
+ */
+const whoOf = (actor: Actor) =>
+  `${actor.kind}:${actor.id}${typeof actor.key === "string" ? `|key:${actor.key}` : ""}`;
 
 /**
  * The pools a contact's connections are counted in with others' (none for
@@ -268,10 +273,11 @@ export function createBrowsers(env: {
   /**
    * Whether a rule speaks for an actor's reads of a collection: a browser
    * reads nothing else directly. Asked with the read's filter (`direct`, for
-   * the rules): one that won't be watched as asked is refused (thrown).
+   * the rules): one that won't be watched as asked is refused (thrown), as is
+   * one the actor's scope doesn't list.
    */
   ruled(actor: Actor, collection: string, filter?: Filter): Promise<boolean>;
-  /** Whether a query lets an actor run it (its `allow`). */
+  /** Whether a query lets an actor run it (its `allow`, and the actor's scope). */
   askable(actor: Actor, collection: string, query: string, params: unknown): boolean;
   call(action: string, input: unknown, actor: Actor): Promise<unknown>;
   emit(type: string, data: Record<string, unknown>, actor: Actor): Promise<void>;

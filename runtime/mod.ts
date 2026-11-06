@@ -28,7 +28,7 @@ export type {
 } from "./collection.ts";
 export type { Actor, Doc, Edge, Event, Executed, Inspected, Row, Store } from "./store.ts";
 export { type Maintenance, MAINTENANCE_SQL, redacted, type Written } from "./maintain.ts";
-export { personOf, principalOf } from "./actor.ts";
+export { inScope, personOf, principalOf, type Scope } from "./actor.ts";
 export { keyOf, linksOf, type LinksSettings, secretsOf, signLink, verifyLink } from "./links.ts";
 export {
   type Caller,

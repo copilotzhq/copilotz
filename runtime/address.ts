@@ -7,10 +7,12 @@
  * visitors by.
  *
  * A request `runtime.fetch` makes from another (the site the front says, the
- * path under the app's base) keeps the address (`carry`). An app serving
- * with a listener of its own sets it (`setClientAddress(request,
- * info.remoteAddr.hostname)` with `Deno.serve`); without one, a request comes
- * from nowhere known: never this machine, and no visitor is let in by address.
+ * path under the app's base) keeps the address (`carry`). Under
+ * `Deno.serve(runtime.fetch)` (or Bun's server) the runtime takes it from what
+ * the listener hands it beside the request (see fetch.ts); a listener of the
+ * app's own that hands it neither sets it (`setClientAddress`). Without one,
+ * a request comes from nowhere known: never this machine, and no visitor is
+ * let in by address.
  */
 import { getClientAddress } from "@oxian/oxian-js/http";
 

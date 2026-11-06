@@ -1,11 +1,11 @@
 /**
- * A site visitor arriving: `POST /web/<line>` (the page's `web({ arrive: {
+ * A site visitor arriving: `POST /web/<name>` (the page's `web({ arrive: {
  * name } })` posts it before `/connect`). A browser that's someone already
  * (a person signed in, or this line's visitor: its cookie, which the web
  * lines' `who` reads) passes as it is. One that isn't anyone is let in as a
  * newcomer (`contact.arrive`): within the line's limits by address, and past
  * its challenge, when it has one (`{ challenge }`, what the page answered
- * it with). The address is the app's front's word for it (`web.caller`),
+ * it with). The address is the app's front's word for it (the `caller` resource),
  * else the socket's, as the listener saw it; with neither, nobody is let in
  * (the limits by address would hold nothing). Its secret goes in the
  * `visitor` cookie, which comes only with the app's own pages' requests
@@ -15,6 +15,7 @@
  */
 import {
   callerFrom,
+  callerOf,
   clientAddress,
   countedOf,
   failure,
@@ -23,7 +24,7 @@ import {
   type Resources,
   type Route,
 } from "../../../../runtime/mod.ts";
-import { lineOf, settingsOf } from "../shared/lines.ts";
+import { siteOf } from "../shared/lines.ts";
 
 /** The cookie a visitor's secret is kept in. */
 export const VISITOR_COOKIE = "visitor";
@@ -49,16 +50,16 @@ function tellPrivate(runtime: object, address: string) {
   if (told.has(runtime) || !privateAddress(address)) return;
   told.add(runtime);
   console.warn(
-    `web.lines: visitors come from ${address}, a private address: a proxy or a load ` +
+    `web: visitors come from ${address}, a private address: a proxy or a load ` +
       "balancer's before the app, not theirs. Every visitor is then counted as one caller, " +
       "so the limits by address hold for everyone together. Say how the app's front names " +
-      "callers (web.caller), unless this is a machine of your own.",
+      "callers (the caller resource), unless this is a machine of your own.",
   );
 }
 
 /** What a visitor is counted by: refused, or an address (none: exempt from limits by address). */
 function countedBy(request: Request, runtime: object, resources: Resources): { address?: string } {
-  const caller = settingsOf({ resources }).caller;
+  const caller = callerOf({ resources });
   if (caller) {
     // Around the app's front, straight to the app: refused, when the front vouches for callers.
     const said = callerFrom(request, caller);
@@ -72,8 +73,8 @@ function countedBy(request: Request, runtime: object, resources: Resources): { a
   if (!address) {
     throw failure(
       "unavailable",
-      "web.lines: no way to tell visitors apart, so none is let in: say how the app's front " +
-        "names callers (web.caller), or serve with a listener that gives the socket's address " +
+      "web: no way to tell visitors apart, so none is let in: say how the app's front " +
+        "names callers (the caller resource), or serve with a listener that gives the socket's address " +
         "(Deno.serve(runtime.fetch), copilotz/web/node's listen; with one of your own, " +
         "setClientAddress)",
     );
@@ -82,7 +83,7 @@ function countedBy(request: Request, runtime: object, resources: Resources): { a
   return { address };
 }
 
-/** `POST /web/<line>`: a browser coming in by one of the app's web lines (see above). */
+/** `POST /web/<name>`: a browser coming in by one of the app's web sites (see above). */
 export const arriveRoute: Route = async (request, { runtime, actor, params, cookies }) => {
   if (request.method !== "POST") return json({ error: "Only POST" }, 405);
   let line: string;
@@ -92,7 +93,7 @@ export const arriveRoute: Route = async (request, { runtime, actor, params, cook
     line = "";
   }
   const resources: Resources = runtime.describe().resources;
-  if (!lineOf({ resources }, line)) return json({ error: "There's no such chat here." }, 404);
+  if (!siteOf({ resources }, line)) return json({ error: "There's no such chat here." }, 404);
   // Someone already: a person signed in comes in as themselves, a visitor of this line as itself.
   if (actor.kind === "person" || (actor.kind === "contact" && actor.web === line)) return json({});
   const asked = await jsonOf(request);

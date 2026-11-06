@@ -20,7 +20,7 @@
 import { type Context, defineAction } from "../../../../runtime/mod.ts";
 import type { VoiceCall } from "../collections/call.ts";
 import type { VoiceBlock } from "../collections/blocked.ts";
-import { type Line, lineOf } from "../shared/settings.ts";
+import { declaredOf, type VoiceNumber } from "../shared/settings.ts";
 import { blockedKey, callerKey, VERIFIED } from "../shared/caller.ts";
 
 /** How long a socket's ticket works, once given. */
@@ -45,7 +45,7 @@ export const ringAction = defineAction({
   },
   record: false,
   run: async (ctx, input): Promise<{ ticket: string } | null> => {
-    const line = lineOf(ctx, input.line);
+    const line = declaredOf(ctx, input.line);
     if (!line) return null;
     return await taken(ctx, line, input.call, input);
   },
@@ -83,7 +83,7 @@ async function blockedNow(ctx: Context, line: string, from: string, now: number)
  */
 async function taken(
   ctx: Context,
-  line: Line,
+  line: VoiceNumber,
   id: string,
   call: { from?: string; to?: string; verstat?: string },
 ): Promise<{ ticket: string } | null> {

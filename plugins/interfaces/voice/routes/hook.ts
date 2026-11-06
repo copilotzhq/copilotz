@@ -18,7 +18,7 @@
  * nothing.
  */
 import { bodyOf, type Route } from "../../../../runtime/mod.ts";
-import { lineOf } from "../shared/settings.ts";
+import { declaredOf } from "../shared/settings.ts";
 import { signed } from "../shared/signature.ts";
 
 /** The largest form it reads: Twilio's are a few KiB. */
@@ -50,7 +50,7 @@ const decoded = (part: string) => {
 };
 
 export const hookRoute: Route = async (request, { runtime, params }) => {
-  const line = lineOf({ resources: runtime.describe().resources }, decoded(params.name ?? ""));
+  const line = declaredOf({ resources: runtime.describe().resources }, decoded(params.name ?? ""));
   const url = new URL(request.url);
   const over = url.pathname.endsWith("/over");
   if (!line) return plain(404, "No such line");

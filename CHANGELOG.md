@@ -34,6 +34,27 @@ resources: { hosts: { "app.example.com": true, "*.run.app": true } }
   `{ own: [...] }`, like every other resource: a later plugin adds a host, or takes one away with
   `null`, without restating the rest. What it does is unchanged: with the app's hosts named, any
   other host is answered only by routes that take it. `HostsSettings` is `Record<string, true>`.
+- **Image generation** in `models`: `image.generate`
+  `{ model, prompt, references?, count?, aspectRatio?, size?, tags? }` answers
+  `{ images: [{ id, type, size }], text, usage }`. The images are kept in the `image` collection, a
+  document each, with the content as a blob, and the answer names them by id. A reference is an
+  image made here (`{ id }`), a document the caller may read that holds a file as `type` and `data`
+  (`{ id, collection: "file" }`, read as the caller), or inline data (`{ data, type }`, or a data
+  URL). Models are chosen as `llm`'s are: an alias, settings around one, or a list tried in order.
+  Adapters go under `adapters.image`: `gemini` (`generateContent` with `responseModalities`; `count`
+  images are that many calls, made together), `openai` (`/images/generations`, or `/images/edits`
+  with references), and `fake` (`"fake/image"`).
+  - **Metered like every model call.** The org's own key comes first. `modelUse` listeners and the
+    `spending` check go before the call. Its tokens are told to the ledger after, with meter
+    `image`, priced from the catalog as `llm`'s are, and counted under agents. The provider's
+    `silence` and `retry` apply.
+  - **Refusals are final.** A model whose safety rules say no fails `image_refused`, and no other
+    model is asked. One that makes nothing fails `no_image` once the list is spent. Both are public
+    messages: an agent's tool tells its model why.
+  - **Recorded, unlike the other ports' Actions.** It writes what it made, so a job that runs again
+    finds the call done and doesn't pay twice. `models.check` takes `port: "image"`.
+  - `keyed` and `mayRun` (the org's own key, and the spending check) moved from the llm port to
+    `shared/use.ts`, so every port that spends asks the same way. Nothing changes for `llm`.
 
 ## 1.0.0-rc.25 — 2026-11-06
 

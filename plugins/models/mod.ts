@@ -1,6 +1,7 @@
 /**
  * Models: talking to models, one way for every kind. `llm` (text and tools),
- * `embeddings` (text to vectors) and `transcription` (speech to text) all
+ * `embeddings` (text to vectors), `transcription` (speech to text) and
+ * `image` (pictures from words and pictures) all
  * name a model as `"provider/model"` with the settings to call it with,
  * declare each provider once as a `provider` resource, and let the
  * models.dev catalog fill in what it leaves out (see `shared/choice.ts`).
@@ -17,6 +18,16 @@
  * - **transcription:** settings `options` (extra form fields).
  *   `transcription.transcribe` (audio as base64). Adapters: `openai`,
  *   `openai-compatible`.
+ * - **image:** settings `options` (into the request as they are).
+ *   `image.generate` { model, prompt, references?, count?, aspectRatio?,
+ *   size?, tags? }: images from a prompt and images to work from (one made
+ *   here, a file the caller may read, or inline), kept in the `image`
+ *   collection and answered by id, media type and size, with what the model
+ *   said. It's recorded, so a job run again doesn't pay twice. A model that
+ *   refuses (its safety rules) fails `image_refused`, for good; one that
+ *   makes nothing fails `no_image`, after the next has tried. Adapters:
+ *   `gemini` (generateContent, `gemini-3-pro-image`…), `openai`
+ *   (`gpt-image-2`…), and `fake` for offline runs (`"fake/image"`).
  *
  * Other plugins' startup checks ask `models.check` about the models they're
  * configured with; the usage ledger asks `models.price` what the catalog says
@@ -29,15 +40,19 @@
  * app's (`shared/choice.ts`). Those uses are tagged `paid: "own-key"`.
  *
  * A list of models is tried in order. Any plugin adds adapters of its own
- * under `adapters.llm`, `adapters.embeddings` or `adapters.transcription`.
+ * under `adapters.llm`, `adapters.embeddings`, `adapters.transcription` or
+ * `adapters.image`.
  *
- * After every call, whoever plugs into the `modelUse` resource hears what it
- * used, in the job that made it (the usage ledger records it, rated).
+ * Before every call, whoever plugs into the `modelUse` resource may refuse
+ * it, and so may the `spending` check (an org's limits) unless the org's own
+ * key pays; after it, they hear what it used, in the job that made it (the
+ * usage ledger records it, rated).
  */
 import { definePlugin, type Plugin } from "../../runtime/mod.ts";
 import { check, efforts } from "./actions/check.ts";
 import { embed } from "./actions/embed.ts";
 import { generate } from "./actions/generate.ts";
+import { generateImage } from "./actions/image.ts";
 import { keyableAction, offered } from "./actions/offered.ts";
 import { price } from "./actions/price.ts";
 import { stream } from "./actions/stream.ts";
@@ -49,12 +64,17 @@ import { fake } from "./adapters/llm/fake.ts";
 import { gemini } from "./adapters/llm/gemini.ts";
 import { openaiCompletions } from "./adapters/llm/openai-compatible.ts";
 import { openaiResponses } from "./adapters/llm/openai.ts";
+import { fake as fakeImage } from "./adapters/image/fake.ts";
+import { gemini as geminiImage } from "./adapters/image/gemini.ts";
+import { openai as openaiImage } from "./adapters/image/openai.ts";
 import { fake as fakeTranscription } from "./adapters/transcription/fake.ts";
 import { openai as openaiTranscription } from "./adapters/transcription/openai.ts";
+import { image } from "./collections/image.ts";
 import { providers } from "./resources/providers.ts";
 
 export * from "./contract.ts";
 export type { EmbeddingsAdapter } from "./shared/embed.ts";
+export type { ImageAdapter, ImageAnswer, ImageData, ImageRequest } from "./shared/image.ts";
 export type { Endpoint, Usage } from "./shared/provider.ts";
 export { EFFORTS } from "./shared/types.ts";
 /** The offline model (`"fake/echo"`), with a delay of its own for demos. */
@@ -67,12 +87,14 @@ export const models: Plugin = definePlugin({
     "llm.stream": stream,
     "embeddings.embed": embed,
     "transcription.transcribe": transcribe,
+    "image.generate": generateImage,
     "models.check": check,
     "models.efforts": efforts,
     "models.price": price,
     "models.offered": offered,
     "models.keyable": keyableAction,
   },
+  collections: { image },
   resources: { provider: providers },
   adapters: {
     llm: {
@@ -91,6 +113,11 @@ export const models: Plugin = definePlugin({
       openai: openaiTranscription,
       "openai-compatible": openaiTranscription,
       fake: fakeTranscription,
+    },
+    image: {
+      gemini: geminiImage,
+      openai: openaiImage,
+      fake: fakeImage,
     },
   },
 });

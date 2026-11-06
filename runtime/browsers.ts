@@ -43,6 +43,7 @@
  *   resume credentials go, and a connection let in before is never ready.
  */
 import type { JsonObject, WorkInput } from "@oxian/oxian-js";
+import { holderOf } from "./actor.ts";
 import type { ViewContext } from "./define.ts";
 import type { Observers, Output } from "./observe.ts";
 import type { ReadOp } from "./ops.ts";
@@ -217,14 +218,6 @@ export function limitsProblem(limits: BrowserLimits | undefined): string | undef
 }
 
 /**
- * Who an actor is, for counting what they hold and ending them: a key of a
- * person's (`actor.key`) is apart from them, so revoking it ends its
- * connections alone, and signing out ends none of its.
- */
-const whoOf = (actor: Actor) =>
-  `${actor.kind}:${actor.id}${typeof actor.key === "string" ? `|key:${actor.key}` : ""}`;
-
-/**
  * The pools a contact's connections are counted in with others' (none for
  * anyone else): every contact's here, its web line's, each network's it came from.
  */
@@ -323,12 +316,12 @@ export function createBrowsers(env: {
   let ends = 0;
   const ended = expiring<string, number>(DAY);
   /** Whether an actor was ended after `since` (a count of ends). */
-  const endedSince = (actor: Actor, since: number) => (ended.get(whoOf(actor)) ?? 0) > since;
+  const endedSince = (actor: Actor, since: number) => (ended.get(holderOf(actor)) ?? 0) > since;
 
   /** Why a browser can't come in on `workerId` now (a refusal to throw), if it can't. */
   const full = (actor: Actor, workerId: string, since: number) => {
     if (endedSince(actor, since)) return refusal("forbidden", "Signed out: sign in again");
-    const theirs = held.get(whoOf(actor));
+    const theirs = held.get(holderOf(actor));
     const same = theirs?.get(workerId);
     const most = own(actor).sockets;
     // A tab already on two connections (one maybe half-open, after a network flap) isn't
@@ -355,7 +348,7 @@ export function createBrowsers(env: {
 
   /** A connection let in takes its place: as its actor's (its browser's), and in its pools. */
   const take = (place: Place) => {
-    const who = whoOf(place.actor);
+    const who = holderOf(place.actor);
     // A tab on two connections already gives up its oldest (never ready after this: refused there).
     const old = held.get(who)?.get(place.workerId);
     while (old && old.size >= 2) release(old.values().next().value!);
@@ -375,7 +368,7 @@ export function createBrowsers(env: {
   const release = (place: Place) => {
     if (places.get(place.via) !== place) return;
     places.delete(place.via);
-    const who = whoOf(place.actor);
+    const who = holderOf(place.actor);
     const theirs = held.get(who);
     const same = theirs?.get(place.workerId);
     same?.delete(place);
@@ -597,7 +590,7 @@ export function createBrowsers(env: {
     resume: (actor: Actor, workerId: string) => {
       const secret = crypto.randomUUID() + crypto.randomUUID();
       resumes.set(secret, { actor, workerId });
-      const who = whoOf(actor);
+      const who = holderOf(actor);
       const theirs = (lately.get(who) ?? []).filter((kept) => resumes.get(kept));
       theirs.push(secret);
       while (theirs.length > limits.resumes) resumes.delete(theirs.shift()!);
@@ -624,7 +617,7 @@ export function createBrowsers(env: {
      * still someone gets. How many connections it had.
      */
     end: (actor: Actor, drain: (workerId: string) => void): number => {
-      const who = whoOf(actor);
+      const who = holderOf(actor);
       ended.set(who, ++ends);
       for (const secret of lately.get(who) ?? []) resumes.delete(secret);
       lately.delete(who);

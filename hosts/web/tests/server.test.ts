@@ -11,7 +11,7 @@
  * typed and cached; the host's own (Copilotz's fonts and icons) under
  * /assets/copilotz/, with no configuration, and nothing from Google.
  */
-import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertMatch, assertRejects, assertThrows } from "@std/assert";
 import {
   type Actor,
   createRuntime,
@@ -567,6 +567,25 @@ test("a ticket works once, and not after its minute", async () => {
   await new Promise((r) => setTimeout(r, 40));
   assertEquals(tickets.admit(second), undefined);
   assertEquals(tickets.admit("forged"), undefined);
+  tickets.close();
+});
+
+test("a person's key has its own tickets: counted and ended apart from its person's", () => {
+  const tickets = createTickets({ perMinute: 1 });
+  const ana: Actor = { kind: "person", id: "ana" };
+  const key: Actor = { ...ana, key: "k1", scope: { call: ["note.add"] } };
+  const hers = tickets.issue(ana);
+  // Her minute's ticket taken, the key still has its own.
+  const its = tickets.issue(key);
+  assertThrows(() => tickets.issue(ana), Error, "Too many");
+  // Revoking the key ends its tickets, not hers.
+  tickets.end(key);
+  assertEquals(tickets.admit(its), undefined);
+  assertEquals(tickets.admit(hers), ana);
+  // Signing her out ends hers, not a key's.
+  const other = tickets.issue({ ...ana, key: "k2" });
+  tickets.end(ana);
+  assertEquals(tickets.admit(other), { ...ana, key: "k2" });
   tickets.close();
 });
 

@@ -3,7 +3,8 @@
  * (plugins add their own), and these are the six the code makes or checks:
  *
  * - `person`: someone with an account, signed in or acting through their
- *   key. Made by identity (`credential.actor`).
+ *   key. Made by identity (`credential.actor`), and for a key by the api
+ *   plugin (`api_key.actor`: with its `key` and `scope`).
  * - `agent`: an agent working for someone (`for`). Made by agents.
  * - `contact`: someone outside the org, without an account, known through a
  *   WhatsApp number, a phone line, ChatGPT or a site's chat. Work can be for
@@ -15,7 +16,8 @@
  *   maintenance interface's routes, only; it is not `system`, so only the
  *   maintenance Actions let it in.
  * - `anonymous`: an HTTP request nobody is signed in to (`id: ""`). Made by
- *   the web host (`ANONYMOUS`); an Action's `allow` decides what it may do.
+ *   `runtime.fetch` when no plugin's `who` answers; an Action's `allow`
+ *   decides what it may do.
  *   It is an actor, not the absence of one: a missing actor is the system.
  *
  * Two names that look like kinds are not actors. `routine` is an origin: a
@@ -26,6 +28,14 @@
  * Everyone who needs the person behind an actor asks here.
  */
 import type { Actor } from "./store.ts";
+
+/**
+ * Who an actor is, for counting what they hold and ending them (browsers,
+ * tickets): a key of a person's (`actor.key`) is apart from them, so revoking
+ * it ends its own alone, and signing out ends none of its.
+ */
+export const holderOf = (actor: Actor): string =>
+  `${actor.kind}:${actor.id}${typeof actor.key === "string" ? `|key:${actor.key}` : ""}`;
 
 /** Whom work is for: the person or the contact found along `for`, then `via`, as they act. */
 export function principalOf(actor: Actor | undefined): Actor | undefined {

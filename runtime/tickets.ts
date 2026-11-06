@@ -10,8 +10,10 @@
  * until the minute's out), and `/connect` answers 429. Tickets past their
  * minute are dropped as they pass (see expiring.ts), never by looking
  * through them all. Ending an actor (`end`: signed out, erased) ends its
- * tickets not yet used.
+ * tickets not yet used. A person's key counts and ends apart from them
+ * (`holderOf`), as its browsers do.
  */
+import { holderOf } from "./actor.ts";
 import type { Actor } from "./store.ts";
 import { failure } from "./errors.ts";
 import { expiring } from "./expiring.ts";
@@ -39,7 +41,7 @@ export function createTickets(options: { ms?: number; perMinute?: number } = {})
   const theirs = expiring<string, string[]>(ms);
   return {
     issue(actor) {
-      const who = `${actor.kind}:${actor.id}`;
+      const who = holderOf(actor);
       const now = Date.now();
       const minute = counted.get(who) ?? { count: 0, since: now };
       if (minute.count >= perMinute) {
@@ -65,7 +67,7 @@ export function createTickets(options: { ms?: number; perMinute?: number } = {})
       return actor;
     },
     end(actor) {
-      const who = `${actor.kind}:${actor.id}`;
+      const who = holderOf(actor);
       for (const ticket of theirs.get(who) ?? []) issued.delete(ticket);
       theirs.delete(who);
     },

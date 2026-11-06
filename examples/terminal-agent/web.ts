@@ -1,7 +1,7 @@
 /**
  * The terminal agent's app, served to browsers: the same plugins as the
- * terminal (app.ts), the web host's server half, and the browser's code
- * (browser.tsx), bundled on start. Sign in by name on this machine (dev), or
+ * terminal (app.ts), the page (`webPage`), and the browser's code
+ * (browser.tsx), bundled on start, all served by `runtime.fetch`. Sign in by name on this machine (dev), or
  * with Google when GOOGLE_CLIENT_ID is set. It's Copilotz, the web host's
  * default look (its fonts and icons served by the host itself);
  * `BRAND=harbor` serves the same app as another brand (harbor.tsx: one theme
@@ -14,19 +14,11 @@
  *   [BRAND=harbor] deno task web [--port=8790] [--sqlite[=path]]
  */
 import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
-import { handler } from "@oxian/oxian-js/adapters/deno";
 import { createRuntime, definePlugin, type Plugins } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { devSignIn, googleSignIn } from "../../plugins/access/mod.ts";
-import { createTickets } from "../../hosts/web/tickets.ts";
-import {
-  type Asset,
-  type Code,
-  setClientAddress,
-  socket,
-  webServer,
-} from "../../hosts/web/server.ts";
+import { type Asset, type Code, webPage } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
 import { computerDownloads } from "../../plugins/compute/computers/resources/downloads.ts";
 import { VERSION } from "../../plugins/compute/computers/program/version.ts";
@@ -72,7 +64,6 @@ const downloads = await Deno.stat(release).then(() => true, () => false)
   ? [await computerDownloads({ dir: release.pathname })]
   : [];
 
-const tickets = createTickets();
 const runtime = await createRuntime({
   store: sqlite ? await sqliteStore({ path: sqlite }) : memoryStore(),
   plugins: [
@@ -88,10 +79,17 @@ const runtime = await createRuntime({
       resources: { computers: { url: `http://127.0.0.1:${port}` } },
     }),
     ...downloads,
+    webPage,
+    definePlugin({
+      name: "page",
+      resources: {
+        // The code is bundled once, on the page's first request.
+        page: { title: brand.title, code: bundle, assets },
+        theme: themeOf(brand.theme),
+      },
+    }),
   ],
   executors: 2,
-  transports: [socket],
-  admit: tickets.admit,
 });
 
 /**
@@ -124,18 +122,8 @@ async function bundle(): Promise<Code> {
   return { entry: entry.split("/").pop()!.replace(/\.tsx?$/, ".js"), files };
 }
 
-const code = await bundle();
-const serve = webServer({
-  runtime,
-  tickets,
-  code,
-  upgrade: handler(runtime.hypervisor),
-  title: brand.title,
-  theme: themeOf(brand.theme),
-  assets,
-});
-// This machine alone (dev sign-in is its own); each request says where it came from, as the socket did.
+// This machine alone (dev sign-in is its own); Deno hands the runtime each request's address.
 Deno.serve(
   { port, hostname: "127.0.0.1", onListen: () => console.log(`http://localhost:${port}`) },
-  (request, info) => serve(setClientAddress(request, info.remoteAddr.hostname)),
+  runtime.fetch,
 );

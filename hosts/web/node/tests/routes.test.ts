@@ -84,7 +84,7 @@ test("without a page: the app's routes, a route's socket, /health, and nothing e
   try {
     const hello = await fetch(`${base}/hooks/hello?from=meta`, { method: "POST", body: "{}" });
     assertEquals([hello.status, await hello.json()], [200, {
-      who: "visitor",
+      who: "anonymous",
       path: "/hooks/hello",
     }]);
     const health = await fetch(`${base}/health`);

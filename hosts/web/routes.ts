@@ -4,8 +4,8 @@
  *
  * - `{ path, action }`: the request becomes a call to that Action (its input
  *   an `HttpRequest`), as whoever the request is (the app's entrances say:
- *   the person its session signs in, a web line's visitor), or else a
- *   visitor (`{ kind: "visitor", id: "" }`): the Action's `allow` decides.
+ *   the person its session signs in, a web line's visitor), or else
+ *   anonymous (`{ kind: "anonymous", id: "" }`): the Action's `allow` decides.
  *   It answers with an `HttpAnswer`. Webhooks, OAuth callbacks, an API.
  * - `{ path, serve }`: a function that answers the request itself, here in
  *   the host's process: files as they are (downloads), or an API that must
@@ -148,7 +148,7 @@ export type HttpAnswer = {
 };
 
 /** Who calls when nobody's signed in. */
-export const VISITOR: Actor = { kind: "visitor", id: "" };
+export const ANONYMOUS: Actor = { kind: "anonymous", id: "" };
 
 /** Paths the web host answers itself. */
 const OWN = ["/app/", "/assets/", "/files/", "/oxian", "/connect", "/signin", "/signout"];
@@ -306,7 +306,7 @@ async function answered(
   if ("serve" in route) return await route.serve(request, served);
   const asked = await read(request, url);
   if (asked instanceof Response) return asked;
-  const actor = (await served.whom().catch(() => null)) ?? VISITOR;
+  const actor = (await served.whom().catch(() => null)) ?? ANONYMOUS;
   try {
     return answer(await runtime.call(route.action, asked, { actor }));
   } catch (error) {

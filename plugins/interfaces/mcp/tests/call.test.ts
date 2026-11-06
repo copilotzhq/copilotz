@@ -906,7 +906,7 @@ test("mcp.call: only the contact the MCP route makes for that line may call it",
         { kind: "contact", id: "c-123456789012" },
         { kind: "contact", id: "c-123456789012", mcp: "other" },
         { kind: "person", id: "ana" },
-        { kind: "visitor", id: "" },
+        { kind: "anonymous", id: "" },
       ]
     ) {
       await assertRejects(

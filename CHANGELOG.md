@@ -1,5 +1,17 @@
 ## Unreleased
 
+- **Web tools** (`webTools`, in `copilotz/plugins/agents`): agents search the web and read a page
+  without a computer. `web_search` `{ query, count?, language?, country? }` →
+  `{ title, url,
+  snippet }` results, through a new `search` adapter port (`serper` and `fake`; one
+  more adapter adds Brave or Google), and `read_page` `{ url, start? }` → the final URL, title, main
+  text and links, in parts, marked as data. Reading refuses non-http(s) URLs, private, loopback,
+  link-local and metadata addresses (the host resolved, checked again on every redirect), other
+  ports than 80 and 443 unless `webTools.ports` lists them, pages over 2 MB or 15 s, and non-text
+  types; a turn reads at most 8 pages. A search is a `search` use of the usage ledger (in the
+  `agents` category), priced from resources, asked of the `modelUse` listeners and the `spending`
+  check first. The models contract now exports `mayUse` and `used`, for uses outside model calls.
+
 ## 1.0.0-rc.26 — 2026-11-06
 
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the

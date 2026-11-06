@@ -623,3 +623,19 @@ test("the socket's writes: as the person's own, within the rules and the scope",
     await rt.close();
   }
 });
+
+test("REST: nobody holds a stream anonymously: following events, or a watch", async () => {
+  await setup(async ({ as }) => {
+    const followed = await as(null, "/api/events");
+    assertEquals([followed.status, followed.headers.get("www-authenticate")], [
+      401,
+      'Bearer realm="api"',
+    ]);
+    await followed.body?.cancel();
+    const watched = await as(null, "/api/collections/note", {
+      headers: { accept: "text/event-stream" },
+    });
+    assertEquals(watched.status, 401);
+    await watched.body?.cancel();
+  });
+});

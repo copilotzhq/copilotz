@@ -685,6 +685,14 @@ export function createApi(env: ApiEnv): Api {
       }
       const [kind = "", name, id, ...rest] = parts;
       if (rest.length) throw fault("not_found", `Nothing at ${url.pathname}: see GET /api/.`);
+      // A stream is held open: nobody holds one anonymously (events followed, a watch).
+      const followed = kind === "events" && !name && id === undefined;
+      if (actor.kind === "anonymous" && (followed || watching(request))) {
+        throw Object.assign(
+          fault("unauthorized", "Sign in, or call with a key, to follow what happens."),
+          { headers: { "www-authenticate": 'Bearer realm="api"' } },
+        );
+      }
       if (kind === "" && name === undefined) {
         if (request.method !== "GET") throw allowOnly("GET", "The reference");
         return json(await reference(actor));

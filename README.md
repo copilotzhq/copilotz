@@ -635,6 +635,9 @@ name, never by importing its code.
   the agent's tool steps and goes back to that model while its turn goes on.
   - **Several agents** take turns in parallel. With `send_message` an agent messages another agent
     or a person, and waits for the replies before it continues.
+  - **`@name` mentions** choose who a message goes to, but only when the name is someone: an agent,
+    or a person in the conversation. Any other `@word` (a social handle, say) is plain text, and the
+    message goes where it would without it: the conversation's agents, or the space's default.
   - **History by age:** an agent with `history: { maxAge: 4 * 3_600_000 }` (ms) is sent only the
     last four hours of a conversation, back from its newest message (summaries too, with `history`);
     what's older stays in the chat. The start moves in steps of a tenth of `maxAge`, so prompts keep
@@ -689,7 +692,8 @@ name, never by importing its code.
     an embedding, so recall works by meaning and by words.
   - **Always in mind:** core memories about whoever is in the conversation go in the stable system
     text; the other memories most relevant to what was just said come after the conversation, each
-    turn.
+    turn. If finding them fails (the embedder's provider refuses, or times out), the turn goes on
+    without them: the failure is logged and counted (`copilotz.memory.recall_failures`).
   - **Tools for every agent:** `remember` (which updates what it repeats instead of duplicating it),
     `recall` and `forget`.
   - **On its own:** with an `extractor` model, every few messages it writes down what's worth

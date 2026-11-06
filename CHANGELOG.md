@@ -1,5 +1,15 @@
 ## Unreleased
 
+- **A `@word` is a mention only when it names someone.** Chat took any `@word` as a mention, so a
+  message with a social handle ("my profile is @ana.marca") and no agent named reached no agent. Now
+  a mention counts only when it names an agent, or a person in the conversation; any other `@word`
+  is plain text, and the message goes where it would without it (the conversation's agents, or the
+  space's default).
+- **A failed recall never sinks a turn.** When memory recall fails at the start of a turn (the
+  embedder's provider refuses the key, or times out), the turn goes on without recalled memories.
+  The failure is logged (`memory: recall failed…`) and counted (`copilotz.memory.recall_failures`).
+  A failing `remember` is still a tool error the agent sees.
+
 ## 1.0.0-rc.26 — 2026-11-06
 
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the

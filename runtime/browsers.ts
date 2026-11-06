@@ -57,7 +57,7 @@ import { failure as refusal } from "./errors.ts";
 import { expiring } from "./expiring.ts";
 import { scaleOf } from "./caller.ts";
 import { CONNECTION_BUDGET } from "@oxian/oxian-js/http";
-import { decode, encode, type Failure, failure } from "./wire.ts";
+import { decode, encode, type Failure, failure, writeLine } from "./wire.ts";
 
 /** A browser connection's provider id, set at admission. */
 export const BROWSER = "core.browser";
@@ -396,7 +396,6 @@ export function createBrowsers(env: {
     }
     const { actor } = place;
     connections.get(workerId)?.close();
-    const encoder = new TextEncoder();
     let lines!: ReadableStreamDefaultController<Uint8Array>;
     let open = true;
     const body = new ReadableStream<Uint8Array>({
@@ -415,7 +414,7 @@ export function createBrowsers(env: {
         queueMicrotask(() => {
           const line = due;
           due = [];
-          if (open) lines.enqueue(encoder.encode(`${JSON.stringify(line)}\n`));
+          if (open) writeLine(lines, line);
         });
       },
       close: () => {

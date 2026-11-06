@@ -91,8 +91,8 @@ is plain base64 (no line breaks, no `data:` prefix): `chat.send` refuses anythin
   reason, such as an inactive subscription, no longer needs to borrow `credits`. The `spending`
   refusal is now public, so a model outside the app reads its message too. A web line's spent budget
   now shows its own words ("This chat has done all it can for today…"). Every other failure still
-  shows people the short line, with the details in the event.
-Moving in from another app. Nothing changes for an app that doesn't call these.
+  shows people the short line, with the details in the event. Moving in from another app. Nothing
+  changes for an app that doesn't call these.
 
 - **`chat.import`** (the system's: a migration) brings a conversation in as it was: its thread (the
   importer's id) in a space, with its title, and its messages with who said them (a person's id or

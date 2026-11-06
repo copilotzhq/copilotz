@@ -9,6 +9,7 @@ import type { ViewContext } from "../../../../../runtime/mod.ts";
 import type { Invitation } from "../../contract.ts";
 import { InvitationCard } from "./invitation.tsx";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 import { namesIn } from "../../shared/names.ts";
 
 export const invitedView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
@@ -18,7 +19,7 @@ export const invitedView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode 
   return (
     <>
       <style href="spaces-web" precedence="copilotz">{STYLE}</style>
-      <ul className="invitations" aria-label="Invitations">
+      <ul className="invitations" aria-label={say("invitations")}>
         {mine.map((i) => (
           <InvitationCard
             key={i._id}

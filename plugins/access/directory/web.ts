@@ -23,6 +23,7 @@
  * (see routes/orgs.ts and routes/console.ts).
  */
 import { useSyncExternalStore } from "react";
+import { say } from "./words.ts";
 
 export type Org = { id: string; name: string; kind: "personal" | "team"; suspended?: true };
 
@@ -149,7 +150,7 @@ export const asStaff = (orgs: Orgs): boolean => orgs.asStaff === true;
 
 /** What an org is called where it shows: everyone's own is "Personal". */
 export const orgName = (org: Pick<Org, "name" | "kind">): string =>
-  org.kind === "personal" ? "Personal" : org.name;
+  org.kind === "personal" ? say("personalOrg") : org.name;
 
 /** What a refusal's status means: not let (403), not done by this app (501), or not so (else). */
 const codeOf = (status: number) =>

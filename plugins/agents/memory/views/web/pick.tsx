@@ -11,6 +11,7 @@ import { type Agent, agentsShown } from "../../../chat/contract.ts";
 import type { Memory } from "../../collections/memory.ts";
 import { peopleOf } from "../../shared/scope.ts";
 import { moveStep } from "./move.ts";
+import { say } from "./words.ts";
 import { nameOf, namesIn, withNames } from "../../../../access/spaces/contract.ts";
 
 /** Whom a memory is about, as a line says it. */
@@ -21,10 +22,12 @@ const aboutOf = (
   names: Record<string, string> = {},
 ) => {
   const [kind, name] = about.split(/:(.*)/);
-  if (kind === "person") return name === me ? "About you" : `About ${nameOf(name, names)}`;
-  if (kind === "agent") return `About ${agents[name]?.name || name}`;
-  if (kind === "thread") return "About a chat";
-  return "About everyone";
+  if (kind === "person") {
+    return name === me ? say("aboutYou") : say("aboutPerson", { name: nameOf(name, names) });
+  }
+  if (kind === "agent") return say("aboutAgent", { name: agents[name]?.name || name });
+  if (kind === "thread") return say("aboutOneChat");
+  return say("aboutEveryone");
 };
 
 export const memoryPickView = (_: unknown, ctx: ViewContext<ReactNode>): PaletteGroup[] | null => {
@@ -40,7 +43,7 @@ export const memoryPickView = (_: unknown, ctx: ViewContext<ReactNode>): Palette
   if (!agents) return null;
   const names = namesIn(ctx, memories.flatMap(peopleOf));
   return [{
-    title: "Memories",
+    title: say("memories"),
     limit: 12,
     items: memories.map((m) => ({
       key: `memory:${m._id}`,

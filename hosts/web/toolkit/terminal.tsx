@@ -28,6 +28,7 @@ import { cx } from "./cx.ts";
 import { cells, edit, emptyLine, HISTORY, type Line } from "./line-editor.ts";
 import { Notice } from "./notice.tsx";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 import { Spinner } from "./spinner.tsx";
 import { terminalTheme } from "./terminal-theme.ts";
 import { loadXterm, useXterm, type Xterm } from "./xterm.ts";
@@ -278,7 +279,7 @@ function open(
 }
 
 export function Terminal(
-  { session, label = "Terminal", historyKey, autoFocus = true, className }: {
+  { session, label, historyKey, autoFocus = true, className }: {
     session: TerminalSession;
     /** What it is, said to screen readers. */
     label?: string;
@@ -301,7 +302,11 @@ export function Terminal(
     });
   }, [xterm, historyKey]);
   return (
-    <div className={cx("copilotz-terminal", className)} role="group" aria-label={label}>
+    <div
+      className={cx("copilotz-terminal", className)}
+      role="group"
+      aria-label={label ?? say("terminal")}
+    >
       {SHEET}
       {xterm?.sheet}
       <div ref={screen} className="copilotz-terminal-screen" />
@@ -310,16 +315,16 @@ export function Terminal(
           <Notice
             tone="destructive"
             className="copilotz-terminal-failed"
-            title="The terminal didn't load"
-            action={<Button size="sm" onClick={() => void loadXterm()}>Try again</Button>}
+            title={say("terminalFailedTitle")}
+            action={<Button size="sm" onClick={() => void loadXterm()}>{say("tryAgain")}</Button>}
           >
-            Check your connection, then try again.
+            {say("terminalFailed")}
           </Notice>
         )
         : (
           <div className="copilotz-terminal-wait" role="status">
             <Spinner size={15} />
-            Opening the terminal…
+            {say("terminalOpening")}
           </div>
         )}
     </div>

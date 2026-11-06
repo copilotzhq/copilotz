@@ -7,6 +7,7 @@ import { type ReactNode, useState } from "react";
 import { Badge, Button, Card, Icon, message, Time } from "../../../../../hosts/web/mod.ts";
 import type { Invitation } from "../../contract.ts";
 import { roleName, whoOf } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -23,9 +24,9 @@ export function Pending(
   if (!invitations.length) return null;
   const Heading = heading;
   return (
-    <section className="space-section" aria-label="Invited, not joined yet">
+    <section className="space-section" aria-label={say("invitedNotJoined")}>
       <Heading className="space-section-title">
-        Invited <span className="space-count">{invitations.length}</span>
+        {say("invitedHeading")} <span className="space-count">{invitations.length}</span>
       </Heading>
       <ul className="space-rows">
         {invitations.map((i) => (
@@ -64,11 +65,9 @@ function Row(
           <Badge variant="outline">{roleName(i.role)}</Badge>
         </p>
         <p className="space-row-what">
-          {error ?? (
-            <>
-              Invited by {by.id === me ? "you" : by.name} <Time at={i.at} long />
-            </>
-          )}
+          {error ?? (by.id === me
+            ? say.nodes("invitedByYou", { time: <Time at={i.at} long /> })
+            : say.nodes("invitedBy", { by: by.name, time: <Time at={i.at} long /> }))}
         </p>
       </div>
       <div className="space-row-end">
@@ -76,7 +75,7 @@ function Row(
           size="sm"
           variant="ghost"
           loading={busy}
-          aria-label={`Take back the invitation to ${i.email}`}
+          aria-label={say("takeBackTo", { email: i.email })}
           onClick={async () => {
             setBusy(true);
             setError(undefined);
@@ -88,7 +87,7 @@ function Row(
             }
           }}
         >
-          Take back
+          {say("takeBack")}
         </Button>
       </div>
     </Card>

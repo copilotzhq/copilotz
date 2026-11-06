@@ -5,7 +5,9 @@
  * yesterday, this week, this month, then by month.
  */
 import type { Thread } from "../../collections/thread.ts";
+import { formatDate } from "../../../../../hosts/web/words.ts";
 import { plain } from "./plain.ts";
+import { say } from "./words.ts";
 
 /** A chat as `thread.recent` lists it: how many messages, what was said first and last. */
 export type Listed = Thread & { messages: number; first?: string; last?: string };
@@ -14,7 +16,7 @@ const line = (text?: string) => plain(text) || undefined;
 
 /** What a chat is called in a list. */
 export const titleOf = (t: Listed): string =>
-  line(t.title) ?? line(t.first) ?? line(t.last) ?? "New chat";
+  line(t.title) ?? line(t.first) ?? line(t.last) ?? say("newChat");
 
 /** What was said last, when it says more than the title. */
 export const lastOf = (t: Listed): string | undefined => {
@@ -40,15 +42,15 @@ export function byDay(threads: Listed[], now = new Date()): Group[] {
   const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const labelOf = (at: string) => {
     const time = Date.parse(at);
-    if (Number.isNaN(time)) return "Earlier";
-    if (time >= midnight) return "Today";
-    if (time >= midnight - DAY) return "Yesterday";
-    if (time >= midnight - 6 * DAY) return "This week";
+    if (Number.isNaN(time)) return say("earlier");
+    if (time >= midnight) return say("today");
+    if (time >= midnight - DAY) return say("yesterday");
+    if (time >= midnight - 6 * DAY) return say("thisWeek");
     const date = new Date(time);
     if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) {
-      return "This month";
+      return say("thisMonth");
     }
-    return date.toLocaleDateString("en", {
+    return formatDate(date, {
       month: "long",
       ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
     });

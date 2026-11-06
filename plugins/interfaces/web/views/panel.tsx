@@ -16,6 +16,7 @@ import {
   ResizeHandle,
 } from "../../../../hosts/web/mod.ts";
 import { keysOf, type Panel, toggleLabel, WIDTH, widthOf } from "../shared/panel.ts";
+import { say } from "./words.ts";
 
 /** What a page shows in its panel: the View, the space it's of, what it's called. */
 export type Offered = Panel & { space: string };
@@ -85,7 +86,7 @@ export function SidePanel(
   return (
     <>
       <ResizeHandle
-        label="Panel width"
+        label={say("panelWidth")}
         value={state.width}
         min={WIDTH.min}
         max={WIDTH.max}
@@ -96,7 +97,7 @@ export function SidePanel(
       <aside
         id={id}
         className="copilotz-panel"
-        aria-label={panel.title ?? "Panel"}
+        aria-label={panel.title ?? say("panel")}
         // Its header keeps clear of the panel's button, at its top right.
         style={{
           "--copilotz-panel-width": `${state.width}px`,
@@ -118,14 +119,14 @@ export function PanelSheet(
       side="bottom"
       open={state.shown}
       onClose={state.close}
-      label={panel.title ?? "Panel"}
+      label={panel.title ?? say("panel")}
       className="copilotz-panel-sheet"
     >
       <div className="copilotz-panel-sheet-head">
         <span className="copilotz-panel-grab" aria-hidden="true" />
         <IconButton
           icon="close"
-          label="Close"
+          label={say("close")}
           className="copilotz-panel-close"
           onClick={state.close}
         />

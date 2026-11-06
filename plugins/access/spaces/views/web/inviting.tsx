@@ -17,6 +17,7 @@ import { Pending } from "./pending.tsx";
 import { STYLE } from "./style.ts";
 import { type Kind, kindsOf } from "./tabs.ts";
 import { spaceName } from "./who.ts";
+import { say } from "./words.ts";
 import { namesIn } from "../../shared/names.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
@@ -45,8 +46,10 @@ export const invitingView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
     return (
       <Notice tone="neutral" icon="lock">
         {personal
-          ? "Personal is yours alone. To work with others, make a shared space and invite them there."
-          : `Those who manage ${space ? spaceName(space) : "this space"} add people to it.`}
+          ? say("personalAlone")
+          : space
+          ? say("managersAdd", { name: spaceName(space) })
+          : say("managersAddThis")}
       </Notice>
     );
   }
@@ -85,7 +88,7 @@ function Inviting(
       {kinds.length > 1
         ? (
           <Tabs
-            label="Who to add"
+            label={say("whoToAdd")}
             value={shown.key}
             onChange={setKind}
             panel={`${id}-kind`}

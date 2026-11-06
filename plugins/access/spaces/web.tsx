@@ -43,6 +43,7 @@ import { spacePickView } from "./views/web/pick.tsx";
 import { settingsView } from "./views/web/settings.tsx";
 import { spaceView } from "./views/web/space.tsx";
 import { spacesView } from "./views/web/spaces.tsx";
+import { say } from "./views/web/words.ts";
 
 export const spacesWeb: Plugin = definePlugin({
   name: "spaces-web",
@@ -67,34 +68,61 @@ export const spacesWeb: Plugin = definePlugin({
     names: { people: { collection: PROFILE } },
     sidebar: {
       invitations: { view: "invitations", order: 3 },
-      spaces: { title: "Spaces", view: "web.spaces", order: 10 },
+      spaces: {
+        get title() {
+          return say("spacesGroup");
+        },
+        view: "web.spaces",
+        order: 10,
+      },
     },
     spaceTabs: {
       // Settings: the space itself ("General"), then its sections, in a menu beside them.
       settings: {
-        title: "Settings",
+        get title() {
+          return say("settings");
+        },
         view: "space.settings",
         icon: "settings",
         order: 90,
-        own: "General",
+        get own() {
+          return say("general");
+        },
         menu: "side",
       },
       members: {
-        title: "Members",
+        get title() {
+          return say("members");
+        },
         view: "space.members",
         icon: "users",
         under: "settings",
         order: 10,
       },
     },
-    panel: { view: "space.panel", on: ["thread"], title: "Space" },
+    panel: {
+      view: "space.panel",
+      on: ["thread"],
+      get title() {
+        return say("space");
+      },
+    },
     palette: { spaces: { view: "spaces.palette", order: 10 } },
     home: { invitations: { view: "invitations.home", order: 10 } },
     refusals: { not_here: { view: "space.not-here" } },
     orgSettings: {
-      about: { title: "About", view: "org.about", icon: "info", order: 10 },
+      about: {
+        get title() {
+          return say("aboutLabel");
+        },
+        view: "org.about",
+        icon: "info",
+        order: 10,
+      },
       members: {
-        title: "Members",
+        get title() {
+          return say("members");
+        },
         view: "org.members",
         icon: "users",
         order: 20,

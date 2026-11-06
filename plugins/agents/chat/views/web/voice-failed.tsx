@@ -6,6 +6,7 @@
  */
 import type { ReactNode } from "react";
 import { Button, Notice } from "../../../../../hosts/web/mod.ts";
+import { say } from "./words.ts";
 
 export function VoiceFailed(
   { why, recorded, busy, onRetry, onAudioOnly }: {
@@ -22,13 +23,13 @@ export function VoiceFailed(
       tone="destructive"
       role="alert"
       className="voice-failed"
-      title={`Couldn't transcribe ${recorded ? "your recording" : "the audio"}, so it wasn't sent`}
+      title={say(recorded ? "couldntTranscribeRecording" : "couldntTranscribeAudio")}
       action={
         <>
           <Button size="sm" variant="ghost" icon="waveform" onClick={onAudioOnly} disabled={busy}>
-            Send audio only
+            {say("sendAudioOnly")}
           </Button>
-          <Button size="sm" icon="retry" onClick={onRetry} disabled={busy}>Retry</Button>
+          <Button size="sm" icon="retry" onClick={onRetry} disabled={busy}>{say("retry")}</Button>
         </>
       }
     >

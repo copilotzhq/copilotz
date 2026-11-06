@@ -12,6 +12,7 @@ import type { Agent } from "../../../chat/contract.ts";
 import { AgentFields, type Draft } from "./agent-fields.tsx";
 import { agentPath, handleOf, type Options, shownAs, usualTools } from "./agents.ts";
 import { type Place, placeName } from "./places.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -85,7 +86,7 @@ export function NewAgent(
   return (
     <form
       className="agent-new"
-      aria-label="A new agent"
+      aria-label={say("newAgentForm")}
       onSubmit={async (event) => {
         event.preventDefault();
         if (!name || !draft.model || busy) return;
@@ -121,14 +122,14 @@ export function NewAgent(
             {onBack
               ? (
                 <Button size="sm" variant="ghost" icon="chevron-left" onClick={onBack}>
-                  Agents you know
+                  {say("agentsYouKnow")}
                 </Button>
               )
               : <span />}
             {app.length
               ? (
                 <label className="agent-new-from">
-                  <span>Start from</span>
+                  <span>{say("startFrom")}</span>
                   <Select
                     size="sm"
                     value={from}
@@ -138,7 +139,7 @@ export function NewAgent(
                       setDraft((now) => ({ ...(next ? like(next) : blank()), name: now.name }));
                     }}
                   >
-                    <option value="">Nothing: a blank agent</option>
+                    <option value="">{say("startBlank")}</option>
                     {app.map(([key, agent]) => (
                       <option key={key} value={key}>{shownAs(key, agent).name}</option>
                     ))}
@@ -158,9 +159,11 @@ export function NewAgent(
         autoFocus
       />
       <Field
-        label={`Works in ${where} as`}
-        hint={`${AGENT_ROLES.find((r) => r.value === role)?.lets}. It belongs to ${where}: ` +
-          "those who manage it change it."}
+        label={say("worksInAs", { place: where })}
+        hint={say("belongsHint", {
+          lets: AGENT_ROLES.find((r) => r.value === role)?.lets ?? "",
+          place: where,
+        })}
       >
         {(control) => (
           <Select
@@ -184,7 +187,7 @@ export function NewAgent(
           disabled={!name || !draft.model}
           aria-describedby={`${id}-said`}
         >
-          {name ? `Create ${name}` : "Create agent"}
+          {name ? say("createNamed", { name }) : say("createAgent")}
         </Button>
       </div>
     </form>
@@ -208,15 +211,15 @@ function Done(
         </span>
       </span>
       <div className="agent-made-text">
-        <h3>{made.name} works in {where} now</h3>
+        <h3>{say("worksNow", { name: made.name, place: where })}</h3>
         <p>
           {error ?? (made.role === "editor"
             ? (
-              <>
-                Ask <b className="agent-handle">@{made.id}</b> in any chat here.
-              </>
+              say.nodes("askHandle", {
+                handle: <b className="agent-handle">@{made.id}</b>,
+              })
             )
-            : "It reads what's here for chats where it's an editor; it doesn't answer here.")}
+            : say("readsOnly"))}
         </p>
         <div className="agent-made-actions">
           {made.role === "editor"
@@ -239,14 +242,16 @@ function Done(
                   }
                 }}
               >
-                {answers ? "Answers new chats" : "Make it answer new chats"}
+                {answers ? say("answersNewChats") : say("makeAnswer")}
               </Button>
             )
             : null}
           <Button size="sm" href={agentPath(made.id)} onClick={leaving}>
-            Open its page
+            {say("openPage")}
           </Button>
-          <Button size="sm" variant="ghost" icon="plus" onClick={again}>Make another</Button>
+          <Button size="sm" variant="ghost" icon="plus" onClick={again}>
+            {say("makeAnother")}
+          </Button>
         </div>
       </div>
     </div>

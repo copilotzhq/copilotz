@@ -15,6 +15,7 @@ import { cx } from "./cx.ts";
 import { IconButton } from "./icon-button.tsx";
 import { Input } from "./input.tsx";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 
 const SHEET = sheet(
   "inline-edit",
@@ -85,13 +86,13 @@ export function InlineEdit(
           <>
             <IconButton
               icon="check"
-              label="Save"
+              label={say("save")}
               size="sm"
               loading={busy}
               disabled={!text.trim()}
               onClick={() => void submit()}
             />
-            <IconButton icon="close" label="Cancel" size="sm" onClick={done} />
+            <IconButton icon="close" label={say("cancel")} size="sm" onClick={done} />
           </>
         }
       />

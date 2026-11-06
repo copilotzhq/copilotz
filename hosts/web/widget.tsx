@@ -39,6 +39,7 @@ import type { Observation, Plugins, Viewer } from "../../runtime/mod.ts";
 import { Part } from "./part.tsx";
 import { session } from "./session.ts";
 import { BASE } from "./style.ts";
+import { say } from "./host-words.ts";
 import { type DisplayMode, openLink, setSurface } from "./surface.ts";
 import { ThemeContext } from "./theme/context.ts";
 import { themeCss, themeOf } from "./theme/css.ts";
@@ -153,11 +154,11 @@ function bridgeOf() {
     inFrame,
     request: (method: string, params: Json, timeout = 30_000) =>
       new Promise<unknown>((resolve, reject) => {
-        if (!inFrame) return reject(new Error("No host"));
+        if (!inFrame) return reject(new Error(say("noHost")));
         const id = ++next;
         const timer = setTimeout(() => {
           pending.delete(id);
-          reject(Object.assign(new Error("The host didn't answer"), { code: "unavailable" }));
+          reject(Object.assign(new Error(say("hostSilent")), { code: "unavailable" }));
         }, timeout);
         pending.set(id, {
           resolve: (v) => (clearTimeout(timer), resolve(v)),
@@ -281,7 +282,7 @@ export async function widget(options: WidgetOptions): Promise<Client | undefined
     }
     const api = openai();
     if (!api?.callTool) {
-      throw Object.assign(new Error("This widget can't call its app here"), {
+      throw Object.assign(new Error(say("widgetCantCall")), {
         code: "unavailable",
       });
     }
@@ -306,14 +307,14 @@ export async function widget(options: WidgetOptions): Promise<Client | undefined
         renew(result);
         const answers = new Map(answersOf(result));
         const failed: Answer = {
-          error: { message: textOf(result) || "Couldn't read", code: "unavailable" },
+          error: { message: textOf(result) || say("couldntRead"), code: "unavailable" },
         };
         return reads.map(({ key }) => ({ key, ...(answers.get(key) ?? failed) }));
       },
       call: async (action: string, input: unknown) => {
         const tool = meta.tools?.[action];
         if (!tool) {
-          throw Object.assign(new Error(`${action} isn't offered in this widget`), {
+          throw Object.assign(new Error(say("notOffered", { action })), {
             code: "forbidden",
           });
         }

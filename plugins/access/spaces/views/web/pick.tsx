@@ -21,6 +21,7 @@ import { Avatar, type PaletteControl, type PaletteGroup } from "../../../../../h
 import type { Reached } from "../../contract.ts";
 import { newSpaceStep } from "./steps.ts";
 import { destinations, spaceName } from "./who.ts";
+import { say } from "./words.ts";
 
 export const spacePickView = (
   _: unknown,
@@ -44,15 +45,18 @@ export const spacePickView = (
   const known = there.some((s) => spaceName(s).toLowerCase() === typed.toLowerCase());
   return [
     {
-      title: "Spaces",
+      title: say("spacesGroup"),
       items: there.map((s) => {
         const personal = s.kind === "personal";
         return {
           key: `pick:${s._id}`,
           label: spaceName(s),
           ...(personal
-            ? { icon: "person" as const, description: "Just you", keywords: ["personal"] }
-            : { leading: <Avatar name={s.name} kind="space" size={26} />, description: "Shared" }),
+            ? { icon: "person" as const, description: say("justYou"), keywords: [say("keysPick")] }
+            : {
+              leading: <Avatar name={s.name} kind="space" size={26} />,
+              description: say("shared"),
+            }),
           run: (palette) => palette.pick(s),
         };
       }),
@@ -64,15 +68,15 @@ export const spacePickView = (
         typed && !known && typed.length <= 60
           ? {
             key: "pick:new",
-            label: `New space “${typed}”`,
+            label: say("newSpaceNamed", { name: typed }),
             icon: "plus" as const,
             run: (palette: PaletteControl) => made(typed, palette),
           }
           : {
             key: "pick:new",
-            label: "New space…",
+            label: say("newSpaceMore"),
             icon: "plus" as const,
-            keywords: ["create", "make"],
+            keywords: say("keysCreate").split(/\s+/).filter(Boolean),
             step: newSpaceStep(call, (space, palette) => palette.pick(space)),
           },
       ],

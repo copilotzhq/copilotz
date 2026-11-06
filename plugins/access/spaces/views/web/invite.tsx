@@ -10,6 +10,7 @@ import { type ReactNode, useId, useState } from "react";
 import { Button, Icon, Input, message, Select } from "../../../../../hosts/web/mod.ts";
 import type { Space } from "../../contract.ts";
 import { addressesOf, EMAIL, invitedNote, ROLES } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -57,7 +58,7 @@ export function InviteForm(
       }}
     >
       <div className="space-invite-row">
-        <label className="copilotz-sr" htmlFor={`${id}-email`}>Their email</label>
+        <label className="copilotz-sr" htmlFor={`${id}-email`}>{say("theirEmail")}</label>
         <Input
           id={`${id}-email`}
           type="text"
@@ -66,7 +67,7 @@ export function InviteForm(
           size={size}
           value={typed}
           maxLength={2000}
-          placeholder="name@example.com"
+          placeholder={say("emailPlaceholder")}
           autoComplete="off"
           autoCapitalize="off"
           spellCheck={false}
@@ -79,7 +80,7 @@ export function InviteForm(
             setError(undefined);
           }}
         />
-        <label className="copilotz-sr" htmlFor={`${id}-role`}>Their role</label>
+        <label className="copilotz-sr" htmlFor={`${id}-role`}>{say("theirRole")}</label>
         <Select
           id={`${id}-role`}
           size={size}
@@ -96,7 +97,7 @@ export function InviteForm(
           loading={busy}
           disabled={!ready}
         >
-          Invite
+          {say("invite")}
         </Button>
       </div>
       <p id={`${id}-note`} className="space-invite-note" aria-live="polite">
@@ -111,9 +112,9 @@ export function InviteForm(
           )
           : (
             <span>
-              {lets}. {emails.length > 1
-                ? `${emails.length} addresses.`
-                : "Several? Separate them with commas."}
+              {emails.length > 1
+                ? say("inviteHintMany", { lets: lets ?? "", count: emails.length })
+                : say("inviteHint", { lets: lets ?? "" })}
             </span>
           )}
       </p>

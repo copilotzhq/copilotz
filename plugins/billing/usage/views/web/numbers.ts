@@ -13,6 +13,8 @@
  */
 import type { Quantities } from "../../shared/rate.ts";
 import type { PriceTotals } from "../../shared/totals.ts";
+import { formatDate, formatNumber } from "../../../../../hosts/web/words.ts";
+import { say } from "./words.ts";
 
 /** A total as the page gets it: its price; for platform staff, its cost too. */
 export type Total = PriceTotals & {
@@ -30,26 +32,37 @@ const MINUS = "−";
  */
 export function usd(n: number, fine = false): string {
   if (n < 0) return `${MINUS}${usd(-n, fine)}`;
-  if (!n) return "$0";
+  if (!n) return dollars(0, 0, 0);
   if (n < 0.01) {
-    if (!fine) return "<$0.01";
-    return n < 0.0001 ? "<$0.0001" : `$${Number(n.toPrecision(2))}`;
+    if (!fine) return `<${dollars(0.01, 2, 2)}`;
+    return n < 0.0001 ? `<${dollars(0.0001, 0, 4)}` : dollars(Number(n.toPrecision(2)), 0, 6);
   }
-  if (n < 100) return `$${n.toFixed(2)}`;
-  if (n < 10_000) return `$${Math.round(n).toLocaleString("en-US")}`;
-  return `$${compact(n)}`;
+  if (n < 100) return dollars(n, 2, 2);
+  if (n < 10_000) return dollars(Math.round(n), 0, 0);
+  return dollars(n, 0, fewDigits(n), true);
 }
+
+/** US dollars in the page's language, with this many digits after the point (at least, at most). */
+const dollars = (n: number, min: number, max: number, short = false): string =>
+  formatNumber(n, {
+    style: "currency",
+    currency: "USD",
+    currencyDisplay: "narrowSymbol",
+    minimumFractionDigits: min,
+    maximumFractionDigits: max,
+    ...(short ? { notation: "compact" as const } : {}),
+  });
+
+/** The digits after the point a compact number keeps: one, none once it's past a hundred. */
+const fewDigits = (n: number): number => {
+  const abs = Math.abs(n);
+  return abs / (abs >= 1e9 ? 1e9 : abs >= 1e6 ? 1e6 : 1e3) >= 100 ? 0 : 1;
+};
 
 /** A count in few characters: 940, 12.9K, 4.2M. */
 export function compact(n: number): string {
-  const abs = Math.abs(n);
-  const [d, unit] = abs >= 1e9 ? [1e9, "B"] : abs >= 1e6 ? [1e6, "M"] : abs >= 1e3 ? [1e3, "K"] : [
-    1,
-    "",
-  ];
-  if (!unit) return Math.round(n).toLocaleString("en-US");
-  const scaled = n / d;
-  return `${scaled >= 100 ? Math.round(scaled) : Number(scaled.toFixed(1))}${unit}`;
+  if (Math.abs(n) < 1e3) return formatNumber(Math.round(n));
+  return formatNumber(n, { notation: "compact", maximumFractionDigits: fewDigits(n) });
 }
 
 /**
@@ -59,10 +72,10 @@ export function compact(n: number): string {
 export function percent(fraction: number | undefined): string {
   if (fraction === undefined || !Number.isFinite(fraction)) return "—";
   if (fraction < 0) return `${MINUS}${percent(-fraction)}`;
-  if (fraction === 0) return "0%";
-  if (fraction < 0.01) return "<1%";
-  if (fraction > 0.99 && fraction < 1) return ">99%";
-  return `${Math.round(fraction * 100)}%`;
+  if (fraction === 0) return formatNumber(0, { style: "percent" });
+  if (fraction < 0.01) return `<${formatNumber(0.01, { style: "percent" })}`;
+  if (fraction > 0.99 && fraction < 1) return `>${formatNumber(0.99, { style: "percent" })}`;
+  return formatNumber(fraction, { style: "percent", maximumFractionDigits: 0 });
 }
 
 /** The tokens a total counts: what went in and what came out. */
@@ -88,8 +101,8 @@ export const marginOf = (price: number, cost: number | undefined): number | unde
  * the cache was charged more than reading from it saved), how much more.
  */
 export function savedSaid(n: number | undefined): string {
-  if (!n) return "Nothing saved yet";
-  return n > 0 ? `${usd(n)} saved` : `${usd(-n)} more than without it`;
+  if (!n) return say("savedNothing");
+  return n > 0 ? say("saved", { amount: usd(n) }) : say("savedNegative", { amount: usd(-n) });
 }
 
 /** A model as people read it: its name, and its provider apart (`openai/gpt-6.1-sol`). */
@@ -183,7 +196,7 @@ export function monthBefore(month: string): string {
 
 /** A month in words: "November 2026"; "November" with `short`. */
 export const monthSaid = (month: string, short = false): string =>
-  new Date(`${month}-15T12:00:00Z`).toLocaleDateString("en-US", {
+  formatDate(new Date(`${month}-15T12:00:00Z`), {
     month: "long",
     ...(short ? {} : { year: "numeric" }),
     timeZone: "UTC",
@@ -229,7 +242,12 @@ export const change = (now: number, before: number): number | undefined =>
 
 /** A change, unsigned (an arrow says which way): a percentage, or how many times over once it's ten. */
 export const changeSaid = (delta: number): string =>
-  delta >= 9 ? `${Math.round(1 + delta)}×` : `${Math.abs(Math.round(delta * 100))}%`;
+  delta >= 9
+    ? `${formatNumber(Math.round(1 + delta))}×`
+    : formatNumber(Math.abs(Math.round(delta * 100)) / 100, {
+      style: "percent",
+      maximumFractionDigits: 0,
+    });
 
 /** A round top for a chart's scale: 1, 2 or 5 times a power of ten, at or over `n`. */
 export function niceMax(n: number): number {
@@ -243,27 +261,44 @@ export function niceMax(n: number): number {
 export type Dimension = "kind" | "space" | "person" | "agent" | "model";
 
 /** Each dimension, and the fields totals are grouped by for it. */
-export const DIMENSIONS: Record<Dimension, { label: string; by: string[] }> = {
-  kind: { label: "Kind", by: ["category"] },
-  space: { label: "Space", by: ["tags.space"] },
-  person: { label: "Person", by: ["tags.person"] },
+export const DIMENSIONS: Record<Dimension, { by: string[] }> = {
+  kind: { by: ["category"] },
+  space: { by: ["tags.space"] },
+  person: { by: ["tags.person"] },
   // An agent's, else (a model's without one) what it was for, else the kind.
-  agent: { label: "Agent", by: ["tags.agent", "category", "tags.purpose"] },
+  agent: { by: ["tags.agent", "category", "tags.purpose"] },
   // A model's, for agents; computers' and apps' as their kind.
-  model: { label: "Model", by: ["subject", "category"] },
+  model: { by: ["subject", "category"] },
 };
+
+/** A dimension by name ("Kind"), and as it reads in a sentence ("by kind"). */
+export const dimensionName = (d: Dimension): string => say(d);
+export const dimensionIn = (d: Dimension): string =>
+  say(
+    ({
+      kind: "byKind",
+      space: "bySpace",
+      person: "byPerson",
+      agent: "byAgent",
+      model: "byModel",
+    } as const)[d],
+  );
 
 /** What a conversation pays for without an agent: its summaries, memory notes, voice transcribed. */
 export const UPKEEP = ["history", "memory", "transcription"];
 
 /** A model use's purpose, in words. */
-export const purposeSaid = (purpose: string): string =>
-  ({
-    history: "Summaries",
-    memory: "Memory notes",
-    transcription: "Voice transcribed",
-    "agent.draft": "Drafting agents",
-  })[purpose] ?? agentName(purpose.replace(/\./g, " "));
+export const purposeSaid = (purpose: string): string => {
+  const known = {
+    history: "purposeHistory",
+    memory: "purposeMemory",
+    transcription: "purposeTranscription",
+    "agent.draft": "purposeDraft",
+  } as const;
+  return purpose in known
+    ? say(known[purpose as keyof typeof known])
+    : agentName(purpose.replace(/\./g, " "));
+};
 
 const NONE = { $exists: false };
 
@@ -364,19 +399,21 @@ export function columnsOf(
 export function lastsSaid(left: number, perDay: number): string | undefined {
   if (!(perDay > 0) || left <= 0) return undefined;
   const days = left / perDay;
-  if (days < 1) return "less than a day";
-  if (days < 1.5) return "about a day";
-  if (days < 14) return `about ${Math.round(days)} days`;
-  if (days < 60) return `about ${Math.round(days / 7)} weeks`;
-  if (days < 365) return `about ${Math.round(days / 30)} months`;
-  return "more than a year";
+  if (days < 1) return say("lastsLessThanDay");
+  if (days < 1.5) return say("lastsDay");
+  if (days < 14) return say("lastsDays", { count: Math.round(days) });
+  if (days < 60) return say("lastsWeeks", { count: Math.round(days / 7) });
+  if (days < 365) return say("lastsMonths", { count: Math.round(days / 30) });
+  return say("lastsYear");
 }
 
 /** How long, from seconds: "45 s", "14 min", "2h 10m". */
 export function durationSaid(seconds: number): string {
-  if (seconds < 60) return `${Math.max(0, Math.round(seconds))} s`;
+  if (seconds < 60) return say("seconds", { count: Math.max(0, Math.round(seconds)) });
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 60) return say("minutes", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+  return minutes % 60
+    ? say("hoursMinutes", { hours, minutes: minutes % 60 })
+    : say("hours", { hours });
 }

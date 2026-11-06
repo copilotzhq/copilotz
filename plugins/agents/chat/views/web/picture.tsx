@@ -6,6 +6,7 @@
 import { type ReactNode, useState } from "react";
 import { Dialog, IconButton } from "../../../../../hosts/web/mod.ts";
 import { Download } from "./download.tsx";
+import { say } from "./words.ts";
 
 export function Picture(
   { name, src, type, size }: { name: string; src: string; type: string; size: string },
@@ -18,7 +19,7 @@ export function Picture(
       <button
         type="button"
         className="file-picture"
-        aria-label={`Open ${name}`}
+        aria-label={say("open", { name })}
         onClick={() => setOpen(true)}
       >
         <img src={src} alt={name} loading="lazy" onError={() => setBroken(true)} />
@@ -30,11 +31,11 @@ export function Picture(
             <span>{name}</span>
             <IconButton
               icon="download"
-              label={`Download ${name}`}
+              label={say("download", { name })}
               href={`${src}?download=1`}
               download={name}
             />
-            <IconButton icon="close" label="Close" onClick={() => setOpen(false)} />
+            <IconButton icon="close" label={say("close")} onClick={() => setOpen(false)} />
           </figcaption>
         </figure>
       </Dialog>

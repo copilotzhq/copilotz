@@ -5,6 +5,7 @@
  * shared timer.
  */
 import { type ReactNode, useSyncExternalStore } from "react";
+import { formatDateTime } from "../words.ts";
 import { ago } from "./ago.ts";
 import { sheet } from "./sheet.tsx";
 
@@ -46,7 +47,7 @@ export function Time(
       <time
         className={`copilotz-time${className ? ` ${className}` : ""}`}
         dateTime={date.toISOString()}
-        title={date.toLocaleString()}
+        title={formatDateTime(date)}
       >
         {ago(date, Date.now(), long)}
       </time>

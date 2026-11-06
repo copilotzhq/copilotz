@@ -6,6 +6,7 @@
  */
 import { go, type PaletteStep } from "../../../../../hosts/web/mod.ts";
 import { shortened } from "./plain.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -21,9 +22,9 @@ export function moveStep(
   },
 ): PaletteStep {
   return {
-    title: `Move “${shortened(title)}” to…`,
-    placeholder: "Find a space",
-    note: "Its messages, files and subthreads go with it, for the people in that space to see.",
+    title: say("moveTitle", { title: shortened(title) }),
+    placeholder: say("findSpace"),
+    note: say("moveNote"),
     view: "space.pick",
     hints: from ? { from } : {},
     pick: async (space) => {

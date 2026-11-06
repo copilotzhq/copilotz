@@ -5,6 +5,7 @@
  * recalled as learned there.
  */
 import type { PaletteStep } from "../../../../../hosts/web/mod.ts";
+import { say } from "./words.ts";
 import type { Memory } from "../../collections/memory.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
@@ -15,9 +16,9 @@ export const gist = (text: string, most = 36) =>
 
 export function moveStep(memory: Pick<Memory, "_id" | "text" | "in">, call: Call): PaletteStep {
   return {
-    title: `Move “${gist(memory.text)}” to…`,
-    placeholder: "Find a space",
-    note: "Agents then recall it as learned there, for the people in that space.",
+    title: say("moveTitle", { memory: gist(memory.text) }),
+    placeholder: say("findSpace"),
+    note: say("moveNote"),
     view: "space.pick",
     hints: memory.in ? { from: memory.in } : {},
     pick: (space) =>

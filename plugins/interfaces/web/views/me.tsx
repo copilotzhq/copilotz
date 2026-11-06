@@ -17,6 +17,7 @@ import {
 } from "../../../../hosts/web/mod.ts";
 import type { UserMenuEntry } from "../shared/menu.ts";
 import { runs, type Standing } from "../shared/orgs.ts";
+import { say } from "./words.ts";
 
 export function Me(
   { name, email, menu = [], orgs }: {
@@ -37,13 +38,13 @@ export function Me(
     ...menu.map(({ label, icon, href }) => ({ label, href, ...(icon ? { icon } : {}) })),
     ...(orgs?.here
       ? [{
-        label: runs(orgs.standing) ? "Organization settings" : "About this organization",
+        label: runs(orgs.standing) ? say("orgSettings") : say("aboutOrg"),
         icon: "settings" as const,
         href: "/org",
       }]
       : []),
     ...(orgs?.staff
-      ? [{ label: "All orgs (console)", icon: "server" as const, href: "/console" }]
+      ? [{ label: say("allOrgsConsole"), icon: "server" as const, href: "/console" }]
       : []),
   ];
   const who = (
@@ -51,7 +52,9 @@ export function Me(
       <Avatar name={name} size={32} />
       <span className="copilotz-me-who">
         <span className="copilotz-me-name">{name}</span>
-        <span className="copilotz-me-note">{email && email !== name ? email : "Signed in"}</span>
+        <span className="copilotz-me-note">
+          {email && email !== name ? email : say("signedIn")}
+        </span>
       </span>
     </>
   );
@@ -59,16 +62,16 @@ export function Me(
     return (
       <div className="copilotz-me">
         {who}
-        <IconButton icon="signout" label="Sign out" loading={leaving} onClick={leave} />
+        <IconButton icon="signout" label={say("signOut")} loading={leaving} onClick={leave} />
       </div>
     );
   }
   return (
     <div className="copilotz-me copilotz-me-menu">
       <Menu
-        label="Your account"
+        label={say("yourAccount")}
         side="top"
-        items={[...own, "separator", { label: "Sign out", icon: "signout", onSelect: leave }]}
+        items={[...own, "separator", { label: say("signOut"), icon: "signout", onSelect: leave }]}
         trigger={(props) => (
           <button type="button" {...props} className="copilotz-me-button">
             {who}

@@ -2,6 +2,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { Icon } from "./icon.tsx";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 
 const SHEET = sheet(
   "copy-button",
@@ -18,8 +19,9 @@ const SHEET = sheet(
 `,
 );
 
-export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }): ReactNode {
+export function CopyButton({ text, label }: { text: string; label?: string }): ReactNode {
   const [copied, setCopied] = useState(false);
+  const name = label ?? say("copy");
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 1600);
@@ -31,12 +33,12 @@ export function CopyButton({ text, label = "Copy" }: { text: string; label?: str
       <button
         type="button"
         className="copilotz-copy"
-        aria-label={copied ? "Copied" : label}
-        title={copied ? "Copied" : label}
+        aria-label={copied ? say("copied") : name}
+        title={copied ? say("copied") : name}
         onClick={() => void navigator.clipboard?.writeText(text).then(() => setCopied(true))}
       >
         <Icon name={copied ? "check" : "copy"} size={15} />
-        <span aria-live="polite">{copied ? "Copied" : ""}</span>
+        <span aria-live="polite">{copied ? say("copied") : ""}</span>
       </button>
     </>
   );

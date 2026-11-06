@@ -11,6 +11,24 @@
  */
 export { go, signOut, web, type WebOptions, type Where, type Who } from "./host.tsx";
 export { appBase } from "./base.ts";
+// The words every front end says, by key: the app's `words` resource over the English.
+export {
+  type Blanks,
+  defineWords,
+  fill,
+  formatDate,
+  formatDateTime,
+  formatList,
+  formatNumber,
+  formatTime,
+  knownWords,
+  lang,
+  type Phrase,
+  type Say,
+  setWords,
+  type Words,
+  wordsOf,
+} from "./words.ts";
 export { message, node, Part } from "./part.tsx";
 // Where Views are drawn (the page, or a widget in an outside assistant), and what a widget asks of
 // its host: no-ops on the page.

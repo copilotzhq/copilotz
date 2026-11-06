@@ -1578,6 +1578,37 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   Google Fonts (convenient, but every visitor's browser tells Google its IP address: a GDPR concern)
   or from the app itself (`page.assets`: `{ "/assets/fonts/brand.css": bytes, … }`, served under
   `/assets/` only, by exact path, with known types, `nosniff` and caching).
+- **Words** (`hosts/web/words.ts`): every word the web front ends show (the shell, chat, spaces,
+  memory, team, usage, the command palette, the toolkit and the host's own notices) is English by
+  key, and an app changes any of them with a `words` resource on any plugin the page runs. Keys are
+  `area.key` (`chat.send`); the full list, with the English, is `hosts/web/WORDS.md`. Resources
+  merge in order like every resource (a later plugin's win; `null` takes an override back out), and
+  a key the app leaves out stays English, so an app that sets nothing looks as before.
+  - **Blanks** are `{name}`, filled where the phrase shows; one nothing fills stays as written.
+  - **Plurals** are an object by the language's plural categories (`one`, `few`, `many`, `other`…),
+    chosen by the `{count}` blank with the page's language (`Intl.PluralRules`).
+  - **Language:** dates, times, numbers and currency follow the page's `lang`
+    (`webPage({ lang:
+    "pt-BR" })`), not the browser's.
+  - A front end of your own says its words the same way: `const say = defineWords("acme", { … })`
+    (from `copilotz/web`), then `say("key", { name })`; `say.nodes` puts an element in a phrase.
+
+    ```ts
+    definePlugin({
+      name: "words",
+      resources: {
+        words: {
+          "chat.send": "Enviar",
+          "chat.retryingIn": "Conexão perdida, tentando em {seconds} s",
+          "chat.messageCount": { one: "{count} mensagem", other: "{count} mensagens" },
+        },
+      },
+    });
+    ```
+
+    Not in the table: what people and agents wrote, names from data, and text the server sends (an
+    Action's error message, a refusal's reason): those are the server's, and the app writes them
+    where it defines them.
 - **Live state is data:** a collection declared `durable: false` lives in the owner's memory, not
   the store, with no events. Chat's `live` collection is what agents are writing right now; it goes
   in the commit that writes the step or reply it became, so a screen never shows both, or neither.

@@ -7,6 +7,7 @@
  * agent's tools, an emoji to pick); and names in a sentence.
  */
 import { type Agent, SEND } from "../../../chat/contract.ts";
+import { say } from "./words.ts";
 
 /** What `agent.options` answers: what an agent can be made with. */
 export type Options = { tools: { name: string; description: string }[]; models: string[] };
@@ -68,6 +69,9 @@ export function usualTools(known: Record<string, Agent>, offered: string[]): str
 /** Emoji a new agent may be shown with, a few to pick from. */
 export const ICONS = ["✨", "🧭", "🔎", "✍️", "📊", "🧠", "🛠️", "🎨", "📅", "🧪", "📚", "🦉"];
 
-/** Names as a sentence says them: "a", "a and b", "a, b and c". */
+/** Names as a sentence says them: "a", "a and b", "a, b and c" (the app's words say how). */
 export const listed = (items: string[]): string =>
-  items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+  items.length < 2 ? items.join("") : say("listEnd", {
+    rest: items.slice(0, -1).join(say("listJoin")),
+    last: items.at(-1)!,
+  });

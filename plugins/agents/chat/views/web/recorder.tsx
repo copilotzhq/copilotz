@@ -19,6 +19,7 @@ import {
   Waveform,
 } from "../../../../../hosts/web/mod.ts";
 import { LIMIT, type Recording } from "./record.ts";
+import { say } from "./words.ts";
 
 /** In its last minute, a recording says how long it has left. */
 const SOON = 60_000;
@@ -48,28 +49,33 @@ export function Recorder(
       <div ref={box} className="voice-error" role="alert">
         <Icon name="mic-off" size={17} />
         <p>{state.error}</p>
-        <Button size="sm" icon="mic" onClick={onRestart} data-next>Try again</Button>
-        <IconButton icon="close" size="sm" label="Close" onClick={onDelete} />
+        <Button size="sm" icon="mic" onClick={onRestart} data-next>{say("tryAgain")}</Button>
+        <IconButton icon="close" size="sm" label={say("close")} onClick={onDelete} />
       </div>
     );
   }
 
   if (phase === "review" && state.take) {
     return (
-      <div ref={box} className="voice-take" role="group" aria-label="Your recording">
+      <div ref={box} className="voice-take" role="group" aria-label={say("yourRecording")}>
         <div className="voice-take-row">
           <Take take={state.take} />
           {busy ? null : (
             <span className="voice-take-actions">
-              <IconButton icon="retry" size="sm" label="Record again" onClick={onRestart} />
-              <IconButton icon="trash" size="sm" label="Delete recording" onClick={onDelete} />
+              <IconButton icon="retry" size="sm" label={say("recordAgain")} onClick={onRestart} />
+              <IconButton
+                icon="trash"
+                size="sm"
+                label={say("deleteRecording")}
+                onClick={onDelete}
+              />
             </span>
           )}
         </div>
         {state.limited
           ? (
             <p className="voice-take-note">
-              Recordings stop at {LIMIT / 60_000} minutes. Listen back, or send it.
+              {say("recordingsStopAt", { count: LIMIT / 60_000 })}
             </p>
           )
           : null}
@@ -80,24 +86,24 @@ export function Recorder(
   const left = LIMIT - state.elapsed;
   const recording = phase === "recording";
   return (
-    <div ref={box} className="voice-rec" role="group" aria-label="Recording a voice message">
+    <div ref={box} className="voice-rec" role="group" aria-label={say("recordingAria")}>
       <div className="voice-rec-meter">
         <span
           className={`voice-rec-dot${recording ? " voice-rec-dot-on" : ""}`}
           aria-hidden="true"
         />
         <span className="voice-rec-time">
-          <span role="timer" aria-label="Recorded">{clock(state.elapsed)}</span>
+          <span role="timer" aria-label={say("recorded")}>{clock(state.elapsed)}</span>
           {left <= SOON
             ? (
               <span className="voice-rec-limit voice-rec-limit-soon">
-                <span aria-hidden="true">·</span> {clock(left, true)} left
+                <span aria-hidden="true">·</span> {say("timeLeft", { time: clock(left, true) })}
               </span>
             )
             : (
               <span className="voice-rec-limit">
                 <span aria-hidden="true">/ {clock(LIMIT)}</span>
-                <span className="copilotz-sr">, of {LIMIT / 60_000} minutes at most</span>
+                <span className="copilotz-sr">{say("ofMinutes", { count: LIMIT / 60_000 })}</span>
               </span>
             )}
         </span>
@@ -105,13 +111,13 @@ export function Recorder(
           ? (
             <span className="voice-rec-starting">
               <Spinner size={13} />
-              Starting the microphone…
+              {say("startingMic")}
             </span>
           )
           : <Waveform live peaks={state.levels} className="voice-rec-wave" />}
       </div>
       <div className="voice-rec-actions">
-        <Button variant="ghost" size="sm" icon="trash" onClick={onDelete}>Cancel</Button>
+        <Button variant="ghost" size="sm" icon="trash" onClick={onDelete}>{say("cancel")}</Button>
         <span className="voice-rec-end">
           <Button
             size="sm"
@@ -121,11 +127,11 @@ export function Recorder(
             data-next
           >
             <Icon name="stop" size={11} filled />
-            Stop
+            {say("stop")}
           </Button>
           <IconButton
             icon="send"
-            label="Send now"
+            label={say("sendNow")}
             variant="primary"
             className="chat-send"
             onClick={onSend}
@@ -135,7 +141,7 @@ export function Recorder(
         </span>
       </div>
       <p className="copilotz-sr" aria-live="polite">
-        {phase === "starting" ? "Starting the microphone." : "Recording. Escape cancels."}
+        {phase === "starting" ? say("startingMicSr") : say("recordingSr")}
       </p>
     </div>
   );
@@ -155,7 +161,7 @@ function Take({ take }: { take: NonNullable<Recording["take"]> }): ReactNode {
       src={url}
       duration={take.duration}
       peaks={take.peaks}
-      label="Your recording"
+      label={say("yourRecording")}
       className="voice-take-player"
     />
   );

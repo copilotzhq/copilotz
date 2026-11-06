@@ -7,6 +7,7 @@
 import type { ReactNode } from "react";
 import { later, update, useUpdate } from "./install.ts";
 import { Button } from "./toolkit/button.tsx";
+import { say } from "./host-words.ts";
 import { Icon } from "./toolkit/icon.tsx";
 import { IconButton } from "./toolkit/icon-button.tsx";
 
@@ -37,11 +38,11 @@ export function UpdateReady(): ReactNode {
       <style href="copilotz-update" precedence="copilotz">{STYLE}</style>
       <Icon name="sparkles" size={18} />
       <p>
-        A new version of {app} is ready
-        <span>Reload to use it; nothing you've done is lost.</span>
+        {say("newVersion", { app })}
+        <span>{say("newVersionHint")}</span>
       </p>
-      <Button size="sm" variant="primary" onClick={update}>Reload</Button>
-      <IconButton icon="close" label="Later" size="sm" onClick={later} />
+      <Button size="sm" variant="primary" onClick={update}>{say("reload")}</Button>
+      <IconButton icon="close" label={say("later")} size="sm" onClick={later} />
     </div>
   );
 }

@@ -6,6 +6,7 @@
  */
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "../../../../../hosts/web/mod.ts";
+import { say } from "./words.ts";
 
 /** How close to the bottom still counts as there. */
 const NEAR = 80;
@@ -58,7 +59,7 @@ export function Transcript(
   return (
     <div className="chat-body">
       <div className="chat-transcript" ref={box} onScroll={scrolled}>
-        <div className="chat-log" ref={log} role="log" aria-label="Messages">
+        <div className="chat-log" ref={log} role="log" aria-label={say("messages")}>
           {children}
         </div>
       </div>
@@ -74,7 +75,7 @@ export function Transcript(
               bottom(true);
             }}
           >
-            {fresh ? "New messages" : "Jump to latest"}
+            {fresh ? say("newMessages") : say("jumpToLatest")}
           </Button>
         )
         : null}

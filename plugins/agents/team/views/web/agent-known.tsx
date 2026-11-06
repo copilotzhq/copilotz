@@ -11,6 +11,7 @@ import { AGENT_ROLES } from "../../../../access/spaces/contract.ts";
 import type { Agent } from "../../../chat/contract.ts";
 import { found, listed, shownAs } from "./agents.ts";
 import { type Place, placeName } from "./places.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -19,9 +20,9 @@ const FIND = 5;
 
 /** Where an agent comes from, in a few words. */
 export const belongs = (agent: Agent, places: Place[]) => {
-  if (!agent.in) return "One of the app's agents";
+  if (!agent.in) return say("oneOfApps");
   const home = places.find((p) => p._id === agent.in);
-  return home ? `Made in ${placeName(home)}` : "Made in another space";
+  return home ? say("madeIn", { place: placeName(home) }) : say("madeInOther");
 };
 
 export function KnownAgents(
@@ -61,14 +62,14 @@ export function KnownAgents(
         {agents.length > FIND
           ? (
             <>
-              <label className="copilotz-sr" htmlFor={`${id}-find`}>Find an agent</label>
+              <label className="copilotz-sr" htmlFor={`${id}-find`}>{say("findAgent")}</label>
               <Input
                 id={`${id}-find`}
                 type="search"
                 icon="search"
                 size="sm"
                 className="agent-known-find"
-                placeholder="Find an agent you know"
+                placeholder={say("findAgentKnown")}
                 autoComplete="off"
                 autoFocus
                 value={search}
@@ -76,9 +77,9 @@ export function KnownAgents(
               />
             </>
           )
-          : <p className="agent-known-intro">Agents you know, from the app and your spaces</p>}
+          : <p className="agent-known-intro">{say("knownIntro")}</p>}
         <label className="agent-known-role">
-          <span>Adds as</span>
+          <span>{say("addsAs")}</span>
           <Select size="sm" value={role} onChange={(event) => setRole(event.target.value)}>
             {AGENT_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
           </Select>
@@ -91,9 +92,9 @@ export function KnownAgents(
               <Icon name="plus" size={18} />
             </span>
             <span className="agent-known-text">
-              <span className="agent-known-name">Create a new agent</span>
+              <span className="agent-known-name">{say("createNewAgent")}</span>
               <span className="agent-known-what">
-                Say what it should do; it can write its own instructions.
+                {say("createNewAgentBody")}
               </span>
             </span>
             <Icon name="chevron" size={16} />
@@ -116,10 +117,10 @@ export function KnownAgents(
               icon="plus"
               loading={busy === a.id}
               disabled={!!busy && busy !== a.id}
-              aria-label={`Add ${a.name} to ${where}`}
+              aria-label={say("addAgentTo", { name: a.name, place: where })}
               onClick={() => void add(a.id, a.name)}
             >
-              Add
+              {say("add")}
             </Button>
           </li>
         ))}
@@ -128,8 +129,8 @@ export function KnownAgents(
         ? (
           <p className="agent-known-none">
             {agents.length
-              ? <>No agent you know is called “{search.trim()}”.</>
-              : `Every agent you know works in ${where} already.`}
+              ? say("noneCalled", { search: search.trim() })
+              : say("allWorkHere", { place: where })}
           </p>
         )
         : null}
@@ -140,7 +141,7 @@ export function KnownAgents(
           ? (
             <span className="agent-done">
               <Icon name="check" size={14} />
-              {listed(added)} {added.length === 1 ? "works" : "work"} in {where} now.
+              {say("worksNowNames", { names: listed(added), place: where, count: added.length })}
             </span>
           )
           : AGENT_ROLES.find((r) => r.value === role)?.lets}

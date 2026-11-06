@@ -1,5 +1,7 @@
 ## Unreleased
 
+## 1.0.0-rc.26 — 2026-11-06
+
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the
 `own` key it had alone. An app that names its hosts changes one line; one that doesn't changes
 nothing. The shape before is refused at start, saying what's expected.

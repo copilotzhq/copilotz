@@ -1,7 +1,8 @@
 /**
- * Orgs and who belongs: what the host asks the directory as people sign in,
+ * Orgs and who belongs: what the directory's routes ask as people sign in,
  * make orgs, switch between them and are let in. All are the system's: the
- * host has verified who's asking (their directory session) before it calls.
+ * routes have verified who's asking (their directory session) before they
+ * call. Which org one is, for every request, is a query (`org.info`).
  *
  * - `org.create`: a new org (everyone's personal one, or a team's), its
  *   maker in it as its owner, placed in the shared schema;
@@ -9,7 +10,8 @@
  * - `org.enter`: whether someone may go in (a member, or staff), and how:
  *   the role they join with the first time, and where the org lives;
  * - `org.leave`: someone no longer belongs (their org took them out);
- * - `org.suspend`, `org.rename`, `org.report` (its summary), `org.list`.
+ * - `org.suspend`, `org.rename`, `org.report` (its summary), `org.list`,
+ *   `org.place` (its rows moved), `org.delete`.
  */
 import { defineAction, failure } from "../../../../runtime/mod.ts";
 import type { Membership } from "../collections/membership.ts";
@@ -238,28 +240,6 @@ export const listOrgsAction = defineAction({
         at: o.at,
       })),
     };
-  },
-});
-
-export const getOrgAction = defineAction({
-  description: "An org as the host opens it: its name, kind, placement, and whether it's suspended",
-  input: {
-    type: "object",
-    properties: { org: { type: "string" } },
-    required: ["org"],
-    additionalProperties: false,
-  },
-  run: async (ctx, input) => {
-    const org = await ctx.db.collection<Org>("org").findOne({ _id: input.org });
-    return org
-      ? {
-        id: org._id,
-        name: org.name,
-        kind: org.kind,
-        placement: org.placement,
-        ...(org.suspended ? { suspended: true } : {}),
-      }
-      : null;
   },
 });
 

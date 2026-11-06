@@ -16,30 +16,32 @@ import {
   Avatar,
   Badge,
   Button,
-  type ConsoleOrg,
-  consoleOrgs,
   CopyButton,
-  deleteOrg,
   Dialog,
   EmptyState,
-  enterOrg,
-  exportOrgUrl,
   Field,
   go,
   Icon,
   Input,
   Menu,
   message,
-  moveOrg,
   Notice,
   Page,
   Skeleton,
   Tabs,
   Time,
   Title,
+} from "../../../../hosts/web/mod.ts";
+import {
+  type ConsoleOrg,
+  consoleOrgs,
+  deleteOrg,
+  enterOrg,
+  exportOrgUrl,
+  moveOrg,
   updateOrg,
   useOrgs,
-} from "../../../../hosts/web/mod.ts";
+} from "../../../access/directory/contract.ts";
 import { type ConsoleFilter, consoleList, consoleTotals, SCHEMA } from "../shared/orgs.ts";
 import { GiftCodes } from "./console-codes.tsx";
 

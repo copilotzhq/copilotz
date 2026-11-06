@@ -29,7 +29,7 @@ import { must, mustOwnOr } from "../../../access/spaces/contract.ts";
 
 const fail = (message: string, code = "invalid") => Object.assign(new Error(message), { code });
 
-/** The hosts an org claims, where many are served (the orgs host's `directory` resource). */
+/** The hosts an org claims, where many are served (the `directory` resource `member` gives an org). */
 type Hosts = {
   claimHost?(host: string, claim?: { target?: string }): Promise<void>;
   releaseHost?(host: string): Promise<void>;

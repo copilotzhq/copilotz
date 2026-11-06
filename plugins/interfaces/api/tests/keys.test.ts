@@ -24,7 +24,7 @@ import { chat } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
 import { api, type ApiKey, type KeyActor, roleOf } from "../mod.ts";
 import { presets } from "../resources/presets.ts";
-import { test } from "../../../../testing/mod.ts";
+import { test, testWho, ticketFor } from "../../../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -85,13 +85,15 @@ type Setup = {
   runtime: Runtime;
   /** A client connected as `actor`, as a browser or a script on the socket is. */
   as(actor: Actor): ReturnType<typeof connect>;
-  /** A key made by `by` in `space`, for `scope`: its secret and who calling with it is. */
+  /** A client connected with a key's secret, as a script is: `/connect` with it as a bearer. */
+  bearing(secret: string): ReturnType<typeof connect>;
+  /** A key made by `by` in `space`, for `scope`: its id, its secret and who calling with it is. */
   key(
     by: Actor,
     space: string,
     scope: Scope,
     name?: string,
-  ): Promise<{ id: string; actor: KeyActor }>;
+  ): Promise<{ id: string; secret: string; actor: KeyActor }>;
   /** `who` joins `space` with `role`, invited by `by`. */
   join(space: string, who: Actor, role: string, by: Actor): Promise<void>;
   /** A key's role in a space, as its membership says. */
@@ -100,16 +102,10 @@ type Setup = {
 
 async function setup(fn: (s: Setup) => Promise<void>) {
   const topic = `keys-test.${crypto.randomUUID()}`;
-  const tickets = new Map<string, Actor>();
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, api, app],
+    plugins: [models, chat, ...access, api, app, testWho],
     transports: [{ type: "in-process", config: { topic } }],
-    admit: (secret) => {
-      const actor = tickets.get(secret);
-      tickets.delete(secret);
-      return actor;
-    },
   });
   const clients: ReturnType<typeof connect>[] = [];
   try {
@@ -121,13 +117,24 @@ async function setup(fn: (s: Setup) => Promise<void>) {
       as: (actor) => {
         const client = connect({
           transport: { type: "in-process", config: { topic } },
-          // A ticket, as the host gives one: only while the key (if it's one) still works.
+          // A ticket from the runtime's /connect: only while the key (if it's one) still works.
           ticket: async () => {
             const key = typeof actor.key === "string" ? actor.key : undefined;
             if (key && !await runtime.query("api_key.get", { key })) throw new Error("Revoked");
-            const secret = crypto.randomUUID();
-            tickets.set(secret, actor);
-            return secret;
+            return await ticketFor(runtime, actor);
+          },
+          plugins: [],
+        });
+        clients.push(client);
+        return client;
+      },
+      bearing: (secret) => {
+        const client = connect({
+          transport: { type: "in-process", config: { topic } },
+          ticket: async () => {
+            const answered = await runtime.fetch(bearer("/connect", secret));
+            if (!answered.ok) throw new Error(`/connect answered ${answered.status}`);
+            return (await answered.json() as { ticket: string }).ticket;
           },
           plugins: [],
         });
@@ -141,7 +148,7 @@ async function setup(fn: (s: Setup) => Promise<void>) {
           scope,
         }, { actor: by });
         const actor = await runtime.query<KeyActor>("api_key.actor", { secret: made.key });
-        return { id: made.id, actor };
+        return { id: made.id, secret: made.key, actor };
       },
       join: async (space, who, role, by) => {
         const { invitation } = await runtime.call<{ invitation: string }>("invitation.send", {
@@ -160,6 +167,13 @@ async function setup(fn: (s: Setup) => Promise<void>) {
     await runtime.close();
   }
 }
+
+/** A POST to the runtime with a key's secret as its bearer, as a script sends it. */
+const bearer = (path: string, secret: string) =>
+  new Request(`http://localhost${path}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${secret}` },
+  });
 
 const code = (p: Promise<unknown>) =>
   p.then(() => "done", (e) => (e as { code?: string }).code ?? String(e));
@@ -341,5 +355,26 @@ test("revoking a key ends its connections at once; its person's stay", async () 
     await runtime.idle();
     assertEquals(runtime.stats().browsers, 1);
     assertEquals(await hers.call("note.write", { text: "again", in: team }), { ok: true });
+  });
+});
+
+test("the api plugin's who: a request's bearer key is the key's person, with its scope", async () => {
+  await setup(async ({ runtime, bearing, key, join }) => {
+    const team = await space(runtime, "Team", bob);
+    await join(team, ana, "editor", bob);
+    const made = await key(ana, team, { call: ["note.write"] });
+    // `/connect` with the key: a ticket for its person, as the key.
+    const answered = await runtime.fetch(bearer("/connect", made.secret));
+    assertEquals(answered.status, 200);
+    assertEquals((await answered.json()).actor, { kind: "person", id: "ana" });
+    // Its socket is the key's: what its scope lists, in its space, and nothing more.
+    const script = bearing(made.secret);
+    await script.ready;
+    assertEquals(await script.call("note.write", { text: "hi", in: team }), { ok: true });
+    assertEquals(await code(script.call("chat.send", { text: "x", in: team })), "forbidden");
+    // A secret that proves nothing is nobody; revoked, the key's secret too.
+    assertEquals((await runtime.fetch(bearer("/connect", "not-a-key"))).status, 401);
+    await runtime.call("api_key.revoke", { key: made.id }, { actor: ana });
+    assertEquals((await runtime.fetch(bearer("/connect", made.secret))).status, 401);
   });
 });

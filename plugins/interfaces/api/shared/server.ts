@@ -47,7 +47,10 @@ const unauthorized = () =>
   );
 
 /** Who calls with a request's key (its person, with its scope), asked now; null when none that works. */
-async function proven(request: Request, runtime: RouteContext["runtime"]): Promise<KeyActor | null> {
+async function proven(
+  request: Request,
+  runtime: RouteContext["runtime"],
+): Promise<KeyActor | null> {
   const secret = bearerOf(request);
   return secret ? await runtime.query<KeyActor | null>("api_key.actor", { secret }) : null;
 }

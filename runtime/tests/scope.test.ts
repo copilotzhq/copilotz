@@ -20,7 +20,7 @@ import {
 } from "../mod.ts";
 import { connect } from "../client.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
-import { test } from "../../testing/mod.ts";
+import { test, testWho, ticketFor } from "../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 /** A key of Ana's: it adds notes, counts them, reads them directly, and sees their count. */
@@ -104,26 +104,17 @@ async function setup(
   fn: (rt: Runtime, as: (actor: Actor) => ReturnType<typeof connect>) => Promise<void>,
 ) {
   const topic = `scope-test.${crypto.randomUUID()}`;
-  const tickets = new Map<string, Actor>();
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [notes],
+    plugins: [notes, testWho],
     transports: [{ type: "in-process", config: { topic } }],
-    admit: (secret) => {
-      const actor = tickets.get(secret);
-      tickets.delete(secret);
-      return actor;
-    },
   });
   const clients: ReturnType<typeof connect>[] = [];
   const as = (actor: Actor) => {
     const client = connect({
       transport: { type: "in-process", config: { topic } },
-      ticket: () => {
-        const secret = crypto.randomUUID();
-        tickets.set(secret, actor);
-        return Promise.resolve(secret);
-      },
+      // A ticket from the runtime's /connect, for whoever the test says (its scope too).
+      ticket: () => ticketFor(rt, actor),
       plugins: [front],
     });
     clients.push(client);

@@ -1,9 +1,10 @@
 /**
- * MongoDB semantics in JavaScript: filters, sorting and update operators. The
- * owner matches Processor filters with it and the in-memory adapter executes
- * queries with it; SQL adapters translate queries instead.
+ * MongoDB semantics in JavaScript: filters, sorting, projections and update
+ * operators. The owner matches Processor filters with it and projects what it
+ * reads; the in-memory adapter executes queries with it; SQL adapters
+ * translate queries instead.
  */
-import type { Doc, Filter, FindOptions, Update } from "./store.ts";
+import type { Doc, Filter, FindOptions, Projection, Update } from "./store.ts";
 import { invalid } from "./errors.ts";
 
 /**
@@ -68,6 +69,74 @@ function unset(doc: Record<string, unknown>, path: string) {
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * A projection a read may give, else `invalid`: each path 1 or 0 (`true` or
+ * `false`), none naming an operator or `__proto__`, none inside another, and
+ * all keeping fields or all leaving them out, but `_id`, which may go either
+ * way with either.
+ */
+export function checkProjection(projection: unknown): asserts projection is Projection {
+  if (!projection || typeof projection !== "object" || Array.isArray(projection)) {
+    throw invalid("A projection is an object: { field: 1 } keeps fields, { field: 0 } leaves out");
+  }
+  const kinds = new Set<boolean>();
+  for (const [path, on] of Object.entries(projection)) {
+    if (![0, 1, true, false].includes(on as number)) {
+      throw invalid(`A projection's "${path.slice(0, 80)}" is 1 or 0`);
+    }
+    if (!path.split(".").every(isFieldName)) {
+      throw invalid(
+        `A projection can't name "${path.slice(0, 80)}": no part of it may start with "$", ` +
+          `or be __proto__`,
+      );
+    }
+    if (path !== "_id") kinds.add(Boolean(on));
+  }
+  if (kinds.size > 1) {
+    throw invalid("A projection keeps fields or leaves them out, not both (but `_id`)");
+  }
+  // As MongoDB: a path and one inside it ("a" and "a.b") collide.
+  const paths = Object.keys(projection);
+  const inside = paths.find((path) => paths.some((other) => path.startsWith(`${other}.`)));
+  if (inside) throw invalid(`A projection names "${inside.slice(0, 80)}" and a path it's inside`);
+}
+
+/** `value` without the field at `path`, copied along the path: what it came from stays as it was. */
+function without(value: Record<string, unknown>, path: string): Record<string, unknown> {
+  const [key, ...rest] = path.split(".");
+  if (!Object.hasOwn(value, key)) return value;
+  const copy = { ...value };
+  if (!rest.length) delete copy[key];
+  else if (branch(value[key]) && !Array.isArray(value[key])) {
+    copy[key] = without(value[key] as Record<string, unknown>, rest.join("."));
+  }
+  return copy;
+}
+
+/**
+ * A document as a projection shows it, as MongoDB's `find` does: only the
+ * fields it keeps (`{ name: 1 }`, with `_id` unless `_id: 0`), or all but
+ * those it leaves out (`{ data: 0 }`). A dotted path goes into objects, not
+ * arrays' items, and ends at a blob reference as at a string. The document
+ * itself is never changed (the owner's cache holds it). Checked first
+ * (`checkProjection`).
+ */
+export function project(doc: Doc, projection: Projection): Doc {
+  const paths = Object.keys(projection).filter((path) => path !== "_id");
+  const id = projection._id === undefined || Boolean(projection._id);
+  if (paths.some((path) => projection[path])) {
+    const kept: Record<string, unknown> = id && Object.hasOwn(doc, "_id") ? { _id: doc._id } : {};
+    for (const path of paths) {
+      const value = get(doc, path);
+      if (value !== undefined) set(kept, path, value);
+    }
+    return kept as Doc;
+  }
+  let left: Record<string, unknown> = doc;
+  for (const path of id ? paths : [...paths, "_id"]) left = without(left, path);
+  return left as Doc;
+}
 
 const OPERATORS = new Set([
   "$eq",

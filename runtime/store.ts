@@ -23,7 +23,18 @@ export type FindOptions = {
   sort?: Record<string, 1 | -1>;
   limit?: number;
   skip?: number;
+  /**
+   * The fields to keep (`{ name: 1, size: 1 }`, `_id` too unless `_id: 0`)
+   * or to leave out (`{ data: 0 }`), as MongoDB's `find` takes them. The
+   * owner applies it as it reads, before it loads any large value: a field
+   * left out costs no blob read (a file's metadata, without its content).
+   * Stores are never given one.
+   */
+  projection?: Projection;
 };
+
+/** Which fields a read keeps (`{ field: 1 }`) or leaves out (`{ field: 0 }`): see `FindOptions`. */
+export type Projection = Record<string, 0 | 1 | boolean>;
 
 /** An immutable fact. `seq` is its position in the owner's log. */
 /**

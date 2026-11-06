@@ -513,9 +513,9 @@ test("every Action, query and event stays shut to contacts, but those opened to 
     ...Object.entries(registry.events).filter(([, def]) => def.allow?.(contact))
       .map(([type]) => type),
   ]).sort();
-  // `file.content` is a file as its reader reaches it: a contact, its own chat's. Meta's webhook
+  // `file.about` is a file as its reader reaches it: a contact, its own chat's. Meta's webhook
   // is WhatsApp's route, which calls `whatsapp.receive` as trusted code: no Action of it is open.
-  assertEquals(open, ["chat.send", "file.content"]);
+  assertEquals(open, ["chat.send", "file.about"]);
 });
 
 test("an agent says a fixed message to a contact's chat without a turn, once", async () => {
@@ -548,7 +548,7 @@ test("an agent says a fixed message to a contact's chat without a turn, once", a
       files: [{ name: "receipt.pdf", type: "application/pdf", data: btoa("%PDF-1.4 receipt") }],
     });
     const receipt = (id: string, actor: Actor) =>
-      runtime.query<{ name: string } | null>("file.content", { id }, { actor });
+      runtime.query<{ name: string } | null>("file.about", { id }, { actor });
     assertEquals((await receipt(files[0], carla))?.name, "receipt.pdf");
     assertEquals(await receipt(files[0], dani), null);
     // Said only by an agent that answers in the chat.

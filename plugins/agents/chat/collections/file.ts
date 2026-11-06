@@ -2,8 +2,19 @@
  * Files attached to messages. Their content (`data`, base64) is kept as a
  * blob, by the hash of what it holds: the same file attached twice is stored
  * once, and a store's blobs can live elsewhere (a directory, a bucket).
+ *
+ * Nothing answers a file whole: a query's answer comes from an executor in
+ * one piece, which is no way to move megabytes. `file.about` says what a
+ * file is, and `/files/<id>` (routes/files.ts) streams its content.
  */
 import { defineCollection, type Infer, peopleOrContacts } from "../../../../runtime/mod.ts";
+
+/**
+ * Base64 as `data` holds it: the alphabet and its padding, nothing else (no
+ * line breaks, no `data:` prefix), so any four characters from the start of
+ * a group decode on their own, and a file is served in parts.
+ */
+export const BASE64 = "^[A-Za-z0-9+/]*={0,2}$";
 
 const fileSchema = {
   type: "object",
@@ -14,7 +25,7 @@ const fileSchema = {
     /** Bytes. */
     size: { type: "integer" },
     /** The content, base64. */
-    data: { type: "string" },
+    data: { type: "string", pattern: BASE64 },
     /** A recording's length (ms) and its loudness over time (up to 64 values, 0–1), for its player. */
     voice: {
       type: "object",
@@ -43,18 +54,26 @@ export const file = defineCollection({
   schema: fileSchema,
   queries: {
     /**
-     * One file, content and all, as its reader reaches it: what the web serves
-     * at `/files/<id>`. A contact reaches those of its own chat (what was sent
-     * there), never a tool's.
+     * One file as its reader reaches it, all but its content (`data`): what
+     * `/files/<id>` checks before it streams that. A contact reaches those of
+     * its own chat (what was sent there), never a tool's. Left out as it's
+     * read, the content isn't even loaded.
      */
-    content: {
+    about: {
       allow: peopleOrContacts,
-      run: (files, params: { id: string }) => files.findOne({ _id: params.id }),
+      run: (files, params: { id: string }) =>
+        files.findOne({ _id: params.id }, { projection: { data: 0 } }),
     },
   },
 });
 
 export type File = Infer<typeof fileSchema> & { _id: string };
+
+/** A file as `file.about` answers it: everything but its content. */
+export type FileAbout = Pick<
+  File,
+  "_id" | "name" | "type" | "size" | "voice" | "transcript" | "thread" | "in" | "private" | "at"
+>;
 
 /** Media types read as text: what agents get the content of. */
 /** How much of a text file an agent is sent. */

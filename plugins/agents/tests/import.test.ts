@@ -118,14 +118,15 @@ for (const [name, make] of Object.entries(stores)) {
       }]);
       assert(read.every((m) => m.in === space && !m.turn));
       // Its files open for the space's members, as a person's do.
-      const poster = await runtime.query<File | null>("file.content", { id: "old-4:file.0" }, {
+      const poster = await runtime.query<File | null>("file.about", { id: "old-4:file.0" }, {
         actor: ana,
       });
-      assertEquals([poster?.data, poster?.in, poster?.at], [
+      assertEquals([poster?.in, poster?.at], [space, "2025-03-01T12:02:00.000Z"]);
+      const content = await runtime.bytes("file", { _id: "old-4:file.0" }, "data", { actor: ana });
+      assertEquals(
+        new TextDecoder().decode(await content!.read(0, content!.size)),
         b64("\x89PNG poster"),
-        space,
-        "2025-03-01T12:02:00.000Z",
-      ]);
+      );
       // Its thread: in the space, titled, to the space's default agent, with its summary.
       const [thread] = await runtime.query<(Thread & { last?: string })[]>("thread.recent", {
         in: space,
@@ -141,7 +142,7 @@ for (const [name, make] of Object.entries(stores)) {
         [],
       );
       assertEquals(
-        await runtime.query("file.content", { id: "old-4:file.0" }, { actor: bob }),
+        await runtime.query("file.about", { id: "old-4:file.0" }, { actor: bob }),
         null,
       );
     } finally {

@@ -9,7 +9,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { createRuntime, definePlugin, type Plugin } from "../../../../runtime/mod.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../../models/mod.ts";
-import { chat, type File, type Message, type Step, type Tool } from "../../chat/mod.ts";
+import { chat, type FileAbout, type Message, type Step, type Tool } from "../../chat/mod.ts";
 import { openapi, type OpenApiFile, type OpenApiSettings } from "../mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import { fake, json } from "./fake.ts";
@@ -163,8 +163,10 @@ test("files in a response are the conversation's files; the agent gets a referen
   assertEquals(again, { caption: "Again", image: ref });
   assert(map.image.file.startsWith(`${thread}:file.`));
   // Kept as files of the conversation, content and all.
-  const file = await runtime.query<File>("file.content", { id: map.image.file });
-  assertEquals([file.thread, file.type, file.size, file.data], [thread, "image/png", 8, PNG]);
+  const file = await runtime.query<FileAbout>("file.about", { id: map.image.file });
+  assertEquals([file.thread, file.type, file.size], [thread, "image/png", 8]);
+  const content = (await runtime.bytes("file", { _id: map.image.file }, "data"))!;
+  assertEquals(new TextDecoder().decode(await content.read(0, content.size)), PNG);
   // The model never saw the base64.
   assert(!JSON.stringify(calls.map((c) => c.messages)).includes(PNG));
   await runtime.close();

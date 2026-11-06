@@ -130,43 +130,43 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                                       |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                              |
 | `copilotz/testing`                     | one test API for Deno, Node and Bun (`test`, `tempDir`, `serve`, `testWho`, `ticketFor`…)                             |
-| Import                                 | What it has                                                                                                       |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, `runtimes`, `connect` (the client)…                 |
-| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference                                                                         |
-| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                                                  |
-| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`…      |
-| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                    |
-| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                              |
-| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                                   |
-| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account         |
-| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, image, the models.dev catalog                                           |
-| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`         |
-| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                   |
-| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                       |
-| `copilotz/plugins/access`              | `access`, `accounts`, `directory`, `email`, `googleSignIn`, `emailSignIn`, `devSignIn`                            |
-| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`, and the directory's browser half (`useOrgs`, `enterOrg`…)              |
-| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                  |
-| `copilotz/plugins/billing`             | `usage` (the ledger), `credits`, `stripe`, `stripeWebhook`                                                        |
-| `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                        |
-| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                   |
-| `copilotz/plugins/compute`             | `computers`: people's computers, where agents work                                                                |
-| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                    |
-| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                               |
-| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                     |
-| `copilotz/plugins/work`                | `boards` (kanban), `documents` (shared Markdown with versions and merges)                                         |
-| `copilotz/plugins/work/web`            | `boardsWeb`, `documentsWeb`                                                                                       |
-| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance` |
-| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                         |
-| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                         |
-| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`…)         |
-| `copilotz/web/server`                  | its server half: `webPage` (the page, as a plugin), `widgetsOf`                                                   |
-| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (`widget`, MCP Apps, ChatGPT)                     |
-| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                   |
-| `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)  |
-| `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                                   |
-| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                          |
-| `copilotz/testing`                     | one test API for Deno, Node and Bun (`test`, `tempDir`, `serve`, `testWho`, `ticketFor`…)                         |
+| Import                                 | What it has                                                                                                           |
+| -------------------------------------- | -----------------------------------------------------------------------------------------------------------------     |
+| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, `runtimes`, `connect` (the client)…                     |
+| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference                                                                             |
+| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                                                      |
+| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`…          |
+| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                        |
+| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                                  |
+| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                                       |
+| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account             |
+| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, image, the models.dev catalog                                               |
+| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`             |
+| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                       |
+| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                           |
+| `copilotz/plugins/access`              | `access`, `accounts`, `directory`, `email`, `googleSignIn`, `emailSignIn`, `devSignIn`                                |
+| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`, and the directory's browser half (`useOrgs`, `enterOrg`…)                  |
+| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                      |
+| `copilotz/plugins/billing`             | `usage` (the ledger), `credits`, `stripe`, `stripeWebhook`                                                            |
+| `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                            |
+| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                       |
+| `copilotz/plugins/compute`             | `computers`: people's computers, where agents work                                                                    |
+| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                        |
+| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                                   |
+| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                         |
+| `copilotz/plugins/work`                | `boards` (kanban), `documents` (shared Markdown with versions and merges)                                             |
+| `copilotz/plugins/work/web`            | `boardsWeb`, `documentsWeb`                                                                                           |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`     |
+| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                             |
+| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                             |
+| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`…)             |
+| `copilotz/web/server`                  | its server half: `webPage` (the page, as a plugin), `widgetsOf`                                                       |
+| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (`widget`, MCP Apps, ChatGPT)                         |
+| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                       |
+| `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)      |
+| `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                                       |
+| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                              |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun (`test`, `tempDir`, `serve`, `testWho`, `ticketFor`…)                             |
 
 The browser loads only `copilotz/web`, the `…/web` front ends and what they import; every other
 entry point is for the process that runs the runtime (or the terminal). The npm package is
@@ -788,10 +788,11 @@ name, never by importing its code.
     `runtime.query("thread.prompt", { thread, agent })` and `/prompt` show exactly what an agent
     gets.
   - **Files:** a message's files ride on it by name, type and size; their content is a `file`
-    document whose data the owner keeps as a blob. Agents read a text file's content, are shown
-    images and PDFs when their model reads them (the latest 8; the catalog says which models do, or
-    the model choice's `input: ["image"]`, and the others are told what they can't see), and see
-    anything else by name.
+    document whose data (plain base64) the owner keeps as a blob. `file.about` says what one is, as
+    its reader reaches it, without its content; `/files/<id>` streams the content, of any size, in
+    parts, with ranges. Agents read a text file's content, are shown images and PDFs when their
+    model reads them (the latest 8; the catalog says which models do, or the model choice's
+    `input: ["image"]`, and the others are told what they can't see), and see anything else by name.
   - **Audio:** `chat.send` transcribes audio before anything is sent (`chat.transcriber`, by default
     the `transcribe` model alias), and agents read the transcript. If it fails nothing is sent
     (`transcription_failed`); `transcribe: false` sends audio as it is. A voice message may say
@@ -1498,6 +1499,11 @@ The log records what happened, with no bookkeeping tables beside it:
   is `__proto__` (an aggregate's `$group` names no `$…` field either). A path ends at a reference as
   at a string. On read, only an exact reference (those three keys, a `sha256-<64 hex>` id) loads a
   blob; any other object is data. Blob stores take no other id.
+- **Large values, in parts.** Trusted host code (a route serving a file) reads one as bytes with
+  `runtime.bytes(collection, filter, field, { actor })`: the owner reads the document as that actor
+  does (under the rules; the system without one), and answers its `size` and `read(start, end)`,
+  from the document or its blob, never whole through any answer. The reference stays in the owner:
+  the caller gets bytes, nothing it could forge.
 
 ## Schedules
 
@@ -1569,7 +1575,10 @@ A runtime is one **owner** and its **executors**, composed with Oxian:
   retries).
 - **Executors** run plugin code (Actions, Processor deliveries and queries) as Oxian work. They hold
   no store: each storage call is one op they send to the owner, and live frames ride the job's
-  output stream back to it.
+  output stream back to it. Oxian takes a stream in chunks of at most 1 MiB, so a line longer than
+  that (a long history, a prompt with pictures) goes in parts; what's meant to be large (a file's
+  content) isn't put in an answer at all: host code reads it from the owner in parts
+  (`runtime.bytes`, see Blobs).
 - **Same code, any placement.** By default both share one process over Oxian's in-process transport.
   Executors in other processes or machines connect over Oxian's WebSocket transport and present the
   owner's executor key.
@@ -1620,7 +1629,9 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   port (`runtime/store.ts`).
 - **Collections speak MongoDB:** `ctx.db.collection("x").insertOne/find/updateOne(...)`, with the
   usual filter and update operators. The runtime translates each call into one store operation,
-  which the memory store runs in JavaScript and the SQL stores translate to SQL.
+  which the memory store runs in JavaScript and the SQL stores translate to SQL. `find` and
+  `findOne` take a `projection` (`{ name: 1 }` keeps fields, `{ data: 0 }` leaves them out), which
+  the owner applies before it loads any blob: a file's metadata costs no read of its content.
 - **Queries** are named reads declared on a collection
   (`queries: { history: (messages, params,
   ctx) => … }`). Clients call

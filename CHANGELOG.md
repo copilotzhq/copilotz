@@ -1,5 +1,35 @@
 ## Unreleased
 
+**Upgrading.** Chat's `file.content` query is `file.about`, and answers a file without its content
+(`data`). Host code that wants the content reads it as bytes, in parts:
+`runtime.bytes("file", { _id }, "data", { actor })`, or serves it at `/files/<id>`. A file's content
+is plain base64 (no line breaks, no `data:` prefix): `chat.send` refuses anything else.
+
+- **Files of any size are served** (`GET /files/<id>`): a picture or a recording whose base64 passed
+  1 MiB (about 750 KB) was answered as missing (404), so it showed broken. The route read the whole
+  file through a query, whose answer comes from an executor over Oxian in one chunk, and Oxian takes
+  at most 1 MiB a chunk. Now it reads what the file is (`file.about`, as whoever the request is),
+  then its content from the owner, as them again (`runtime.bytes`), and decodes it as the response
+  is read, 192 KiB at a time; a range (`206`) decodes only its part. Who reads a file is unchanged:
+  the request's actor, a signed link as the system, and a file out of reach is a 404 alike. A
+  failure that isn't about reach is now a 500, logged, not a 404.
+- **`runtime.bytes(collection, filter, field, { actor })`**: a large value's bytes for trusted host
+  code, read by the owner itself, under the rules as `actor` (the system without one), its `size`
+  and `read(start, end)`, from the document or its blob (loaded once, at the first part). The blob's
+  reference never leaves the owner.
+- **Projections:** `find` and `findOne` take `{ projection }`, as MongoDB's (`{ name: 1 }` keeps,
+  `{ data: 0 }` leaves out, `_id` either way; dotted paths into objects). The owner applies it
+  before it loads any blob: a field left out costs no blob read. Stores never see it.
+- **Answers past 1 MiB go in parts:** a job's output (a query's answer, an Action's result, a
+  View's) and what a browser is pushed are written in parts of at most 1 MiB, Oxian's bound on a
+  chunk. A long history, a prompt with pictures (`thread.prompt`, `/prompt`) or a large read a
+  browser watches failed whole before (the executor "lost", the browser's session closed).
+- **A message's files reach the prompt one read each:** `llm.message` read all of a message's files
+  in one answer of the owner's, which carries at most 16 MiB; pictures that together passed it
+  failed the turn.
+- **WhatsApp links a file without reading its content:** sending a chat's file by signed link reads
+  only whether its recipient may see it; Meta's fetch streams the content from `/files/<id>`.
+
 ## 1.0.0-rc.26 — 2026-11-06
 
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the

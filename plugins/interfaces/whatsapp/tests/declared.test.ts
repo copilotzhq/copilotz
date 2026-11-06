@@ -31,23 +31,21 @@ test("an app with only a declared line answers strangers, in a space of its own 
       agents: { booking: { instructions: "Sell tickets.", model: "e/booking" } },
       spaces: { line: { name: "Viação Azul", agents: ["booking"] } },
       whatsapp: {
-        graph: `${graph.url}/v23.0`,
-        lines: {
-          azul: {
-            in: "line",
-            phoneId: PHONE,
-            token: TOKEN,
-            secret: SECRET,
-            verify: "the-line-verify-token",
-            agent: "booking",
-            quiet: 0,
-          },
+        azul: {
+          in: "line",
+          phoneId: PHONE,
+          token: TOKEN,
+          secret: SECRET,
+          verify: "the-line-verify-token",
+          agent: "booking",
+          quiet: 0,
         },
       },
     },
     adapters: { llm: { e: echo } },
   });
-  const start = () => createRuntime({ store, plugins: [models, chat, ...access, whatsapp, app] });
+  const start = () =>
+    createRuntime({ store, fetch: graph.fetch, plugins: [models, chat, ...access, whatsapp, app] });
   let runtime: Runtime = await start();
   const write = async (body: string, id: string) => {
     const payload = JSON.stringify({

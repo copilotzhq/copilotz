@@ -54,7 +54,6 @@ const fakeFetch = ((url: string, init: RequestInit) => {
 const settings: StripeSettings = {
   url: "https://app.test",
   seller: "main",
-  fetch: fakeFetch,
   sellers: {
     main: {
       key: "rk_test_main",
@@ -84,6 +83,7 @@ async function setup(
   asked.length = 0;
   const rt = await createRuntime({
     store: await sqliteStore({ path: tempFile() }),
+    fetch: fakeFetch,
     plugins: [
       models,
       chat,
@@ -118,6 +118,7 @@ async function setup(
   await rt.call("org.join", { person: "bob" });
   const hook = stripeWebhook({
     settings,
+    fetch: fakeFetch,
     start: "free",
     runtime: (org) => Promise.resolve(org === "org-1" ? rt : undefined),
   });

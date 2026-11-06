@@ -107,7 +107,7 @@ export async function finish(ctx: Context, name: string, returned: Returned): Pr
   }
   if (!returned.code) throw invalid(`${provider.title} sent no sign-in code back: start again`);
 
-  const answer = await tokens(provider, {
+  const answer = await tokens(ctx.fetch, provider, {
     grant_type: "authorization_code",
     code: returned.code,
     redirect_uri: flow.redirect,

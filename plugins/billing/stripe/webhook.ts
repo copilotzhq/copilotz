@@ -19,6 +19,8 @@ const answer = (status: number, body: unknown = {}) =>
 
 export function stripeWebhook(options: {
   settings: StripeSettings;
+  /** What the dispute lookup calls Stripe with (default: the platform's `fetch`; a test's fake). */
+  fetch?: typeof fetch;
   /** An org's runtime, opened if it has to be. */
   runtime(org: string): Promise<Runtime | undefined>;
   /** The plan an org goes back to when its subscription ends. */
@@ -38,7 +40,7 @@ export function stripeWebhook(options: {
       if (event.type === "charge.dispute.created" || event.type === "charge.dispute.closed") {
         const dispute = event.data.object;
         const charge = await stripeCall(
-          { key: seller.key, fetch: options.settings.fetch },
+          { key: seller.key, fetch: options.fetch ?? fetch },
           "GET",
           `/v1/charges/${typeof dispute.charge === "string" ? dispute.charge : dispute.charge.id}`,
         );

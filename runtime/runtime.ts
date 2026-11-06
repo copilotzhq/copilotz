@@ -35,6 +35,8 @@ export async function createRuntime(
     metrics?: Metrics;
     /** What timers run on: the system's by default, `manualClock` in tests. */
     clock?: Clock;
+    /** What plugin code (`ctx.fetch`) calls outside services with: the platform's, or a test's fake. */
+    fetch?: typeof fetch;
     /**
      * Who a browser is, from what it presents when it connects (a one-time
      * ticket the host issued); undefined refuses it. Without it, no browsers.
@@ -67,6 +69,7 @@ export async function createRuntime(
     cache: options.cache,
     metrics: options.metrics,
     clock: options.clock,
+    fetch: options.fetch,
   });
   const executors = Array.from(
     { length: options.executors ?? 1 },
@@ -76,6 +79,7 @@ export async function createRuntime(
         transport,
         id: `executor-${i}`,
         metrics: options.metrics,
+        fetch: options.fetch,
         ...(others ? { key } : {}),
       }),
   );

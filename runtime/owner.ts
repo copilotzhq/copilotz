@@ -272,6 +272,8 @@ export async function createOwner(
     cache?: { documents?: number; queries?: number } | false;
     /** Where the owner records its metrics (jobs, ops, commits, events, lag, cache). */
     metrics?: Metrics;
+    /** What plugin code (`ctx.fetch`) calls outside services with (default: the platform's). */
+    fetch?: typeof fetch;
     /** What timers run on (the system's by default; `manualClock` in tests). */
     clock?: Clock;
     /**
@@ -291,7 +293,8 @@ export async function createOwner(
   registry.views[READ_VIEW] = { [WIRE]: readView as ViewDef };
   const declared = events(registry);
   const metrics = options.metrics ?? noMetrics;
-  await checked(registry, startup(registry, metrics));
+  const outside = options.fetch ?? globalThis.fetch.bind(globalThis);
+  await checked(registry, startup(registry, metrics, outside));
   const measure = {
     jobs: metrics.histogram("copilotz.job.duration", {
       unit: "ms",
@@ -702,11 +705,16 @@ export async function createOwner(
       // An actor's Views see what they reach, and what the rules read to
       // know it (memberships) is what they read too: they follow its changes.
       const rules = actor
-        ? reading(registry, (op) => {
-          track(op);
-          return answer(store, op as ReadOp);
-        }, () =>
-          crypto.randomUUID(), metrics)
+        ? reading(
+          registry,
+          (op) => {
+            track(op);
+            return answer(store, op as ReadOp);
+          },
+          () => crypto.randomUUID(),
+          metrics,
+          outside,
+        )
         : ruleReads;
       return reading(
         registry,
@@ -726,6 +734,7 @@ export async function createOwner(
           return _id;
         },
         metrics,
+        outside,
         actor,
       );
     },
@@ -836,6 +845,7 @@ export async function createOwner(
     (op) => answer(store, op as ReadOp),
     (_, doc) => typeof doc._id === "string" ? doc._id : crypto.randomUUID(),
     metrics,
+    outside,
   );
   /** An actor's rule on a collection, for an operation with this filter; none: unrestricted. */
   const rule = async (

@@ -90,7 +90,7 @@ export const checkoutAction = defineAction({
     };
     const call = (params: Record<string, unknown>) =>
       stripeCall<{ url: string }>(
-        { key: seller.key, fetch: set.fetch },
+        { key: seller.key, fetch: ctx.fetch },
         "POST",
         "/v1/checkout/sessions",
         {
@@ -176,7 +176,7 @@ export const portalAction = defineAction({
       throw failure("not_paying", "There's nothing to manage yet: nothing has been paid.");
     }
     const { url } = await stripeCall<{ url: string }>(
-      { key: chosen[1].key, fetch: set.fetch },
+      { key: chosen[1].key, fetch: ctx.fetch },
       "POST",
       "/v1/billing_portal/sessions",
       {
@@ -212,7 +212,7 @@ export const seatsAction = defineAction({
     );
     // Every seat waived: staff decide what happens to its subscription.
     if (!seats) return {};
-    const key = { key: seller.key, fetch: set.fetch };
+    const key = { key: seller.key, fetch: ctx.fetch };
     const subscription = await stripeCall<{
       items: { data: { id: string; quantity: number }[] };
     }>(key, "GET", `/v1/subscriptions/${plan.subscription}`);

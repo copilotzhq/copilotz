@@ -26,8 +26,6 @@ export type StripeSettings = {
   url: string;
   /** Real money: a test mode's customers and subscriptions don't carry over. */
   live?: boolean;
-  /** Instead of the network, in tests. */
-  fetch?: typeof fetch;
 };
 
 export const settingsOf = (ctx: { resources: Resources }): StripeSettings =>

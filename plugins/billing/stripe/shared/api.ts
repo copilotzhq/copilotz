@@ -26,7 +26,7 @@ export function encode(params: Params, prefix = ""): [string, string][] {
 }
 
 export async function stripeCall<R = Record<string, unknown>>(
-  options: { key: string; fetch?: typeof fetch; idempotency?: string },
+  options: { key: string; fetch: typeof fetch; idempotency?: string },
   method: "GET" | "POST",
   path: string,
   params: Params = {},
@@ -34,7 +34,7 @@ export async function stripeCall<R = Record<string, unknown>>(
   const pairs = encode(params);
   const body = new URLSearchParams(pairs).toString();
   const url = method === "GET" && body ? `${BASE}${path}?${body}` : `${BASE}${path}`;
-  const response = await (options.fetch ?? fetch)(url, {
+  const response = await options.fetch(url, {
     method,
     headers: {
       authorization: `Bearer ${options.key}`,

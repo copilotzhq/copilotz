@@ -1,6 +1,6 @@
 /**
  * `whatsapp.hook`: a connected number's webhook (`/hooks/whatsapp/<number>`,
- * the web host's `routes` resource), as Meta calls it; or a line the app
+ * the web host's `routes` resource), as Meta calls it; or a number the app
  * declares, at `/hooks/whatsapp/<name>` or the path it routes here.
  *
  * - `GET`, when the webhook is set up: Meta shows the number's verify token
@@ -24,7 +24,7 @@ import type { WhatsAppSecret } from "../collections/secret.ts";
 import { bytesOf, type HttpAnswer, httpRequest } from "../shared/http.ts";
 import { inboundOf, undeliveredOf } from "../shared/payload.ts";
 import { connected } from "../shared/number.ts";
-import { linesOf } from "../shared/settings.ts";
+import { numbersOf } from "../shared/settings.ts";
 import { same, signed } from "../shared/signature.ts";
 
 /** Where each number's webhook is. */
@@ -38,16 +38,21 @@ export const hookAction = defineAction({
   record: false,
   allow: () => true,
   run: async (ctx, request): Promise<HttpAnswer> => {
-    // A line the app declares, at the path it chose; else a number connected here, by its id.
-    const lines = linesOf(ctx);
+    // A number the app declares, at the path it chose; else a number connected here, by its id.
+    const declaredNumbers = numbersOf(ctx);
     const path = request.path.replace(/\/$/, "");
-    const declared = Object.entries(lines)
-      .find(([name, line]) => (line.path ?? `${HOOKS}${name}`).replace(/\/$/, "") === path)?.[0];
+    const declared = Object.entries(declaredNumbers)
+      .find(([name, number]) => (number.path ?? `${HOOKS}${name}`).replace(/\/$/, "") === path)
+      ?.[0];
     const id = declared ??
       (path.startsWith(HOOKS) ? decodeURIComponent(path.slice(HOOKS.length)) : "");
     const system = ctx.as();
     const secrets = system.db.collection<WhatsAppSecret>("whatsapp_secret");
-    const own = declared ? lines[declared] : id ? await secrets.findOne({ _id: id }) : null;
+    const own = declared
+      ? declaredNumbers[declared]
+      : id
+      ? await secrets.findOne({ _id: id })
+      : null;
     if (!own) return plain(404, "No such number");
 
     if (request.method === "GET") {
@@ -62,7 +67,7 @@ export const hookAction = defineAction({
       return plain(401, "Bad signature");
     }
 
-    // Signed by the Meta app: what it says is WhatsApp's. A declared line is kept as the app says.
+    // Signed by the Meta app: what it says is WhatsApp's. A declared number is kept as the app says.
     if (declared) await connected(ctx, declared);
     let payload: unknown;
     try {

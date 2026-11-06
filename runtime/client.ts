@@ -337,6 +337,7 @@ export function connect(
           throw invalid("A View here records nothing");
         },
         metrics: noMetrics,
+        fetch: refuse("calling outside services") as never,
         resources: registry.resources,
         adapters: registry.adapters,
         call: refuse("calling Actions") as never,

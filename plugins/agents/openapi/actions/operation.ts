@@ -52,7 +52,7 @@ async function send(ctx: Context, settings: Settings, plan: Plan, request: Built
   if (ctx.signal.aborted) cancel();
   else ctx.signal.addEventListener("abort", cancel, { once: true });
   try {
-    const response = await (settings.fetch ?? fetch)(request.url, {
+    const response = await ctx.fetch(request.url, {
       method: request.method,
       headers: request.headers,
       ...(request.body !== undefined ? { body: request.body } : {}),

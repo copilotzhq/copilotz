@@ -30,8 +30,12 @@ export const disconnectAction = defineAction({
     if (account.tokens) {
       const held = await unseal(settingsOf(ctx).key, _id, account.tokens).catch(() => undefined);
       // Its refresh token ends what it gave, at providers that follow RFC 7009; the access token too.
-      if (held?.refresh) await revoke(provider, held.refresh, "refresh_token").catch(() => {});
-      if (held?.access) await revoke(provider, held.access, "access_token").catch(() => {});
+      if (held?.refresh) {
+        await revoke(ctx.fetch, provider, held.refresh, "refresh_token").catch(() => {});
+      }
+      if (held?.access) {
+        await revoke(ctx.fetch, provider, held.access, "access_token").catch(() => {});
+      }
     }
     await ctx.transaction(async (tx) => {
       await tx.db.collection("account").deleteOne({ _id });

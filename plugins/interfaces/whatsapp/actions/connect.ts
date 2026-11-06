@@ -14,7 +14,7 @@ import { type Context, defineAction, failure, inPerson } from "../../../../runti
 import type { WhatsAppNumber } from "../collections/number.ts";
 import type { WhatsAppSecret } from "../collections/secret.ts";
 import { type Graph, numberInfo } from "../shared/graph.ts";
-import { settingsOf } from "../shared/settings.ts";
+import { GRAPH } from "../shared/settings.ts";
 import { HOOKS } from "./hook.ts";
 import { must } from "../../../access/spaces/contract.ts";
 
@@ -25,7 +25,7 @@ export async function mustManage(ctx: Context, space: string, what: string) {
 
 /** What Meta says the number is, with this token: or why it can't. */
 async function checked(ctx: Context, phoneId: string, token: string) {
-  const graph: Graph = { base: settingsOf(ctx).graph, phoneId, token };
+  const graph: Graph = { base: GRAPH, phoneId, token, fetch: ctx.fetch };
   try {
     return await numberInfo(graph);
   } catch (error) {

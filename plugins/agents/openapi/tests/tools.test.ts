@@ -23,7 +23,7 @@ const PNG = "iVBORw0KGgo="; // A PNG's first 8 bytes, as base64.
 
 async function start(
   script: Script,
-  settings: OpenApiSettings,
+  { fetch, ...settings }: OpenApiSettings & { fetch: typeof globalThis.fetch },
   { tools = ["trips_getTrip"], more = [] }: { tools?: string[]; more?: Plugin[] } = {},
 ) {
   const calls: { messages: LlmMessage[]; tools: string[]; offered: unknown[] }[] = [];
@@ -50,6 +50,7 @@ async function start(
   const store = memoryStore();
   const runtime = await createRuntime({
     store,
+    fetch,
     plugins: [models, chat, openapi({ name: "trips", spec }), app, ...more],
   });
   const ask = async (text: string) => {

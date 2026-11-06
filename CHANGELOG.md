@@ -534,6 +534,10 @@ again. Developer keys made before stop working: make them again (step 7). The st
   other `*Line` types. The `entrances`, `signIn` and `routes` resources; `createRuntime`'s `admit`;
   the actor's `within`; `whatsapp.hook` and `voice.hook`.
 
+- **Oxian 0.23.5:** the Node adapter keeps an error listener on each request and response for their
+  whole life, so a client leaving mid-response (a server-sent stream it stops) never reaches the
+  process as an unhandled error (it did under Bun).
+
 ## 1.0.0-rc.24 — 2026-11-06
 
 **Upgrading from rc.23** (two breaking renames; no aliases, no data moves):

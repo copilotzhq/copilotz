@@ -16,6 +16,8 @@
  * - With an extractor model (`memoryExtraction`, beside it), memories also
  *   arrive on their own: every few messages, it reads them and writes down
  *   what's worth keeping.
+ * - Memories move in from another app as they were (`memory.import`, the
+ *   system's): in a space, with whom each is about, who wrote it and when.
  *
  * Settings are the `memory` resource, which an app patches:
  *
@@ -27,6 +29,7 @@
  * and tools that chat gives its agents.
  */
 import { defineAction, definePlugin, failure, people, type Plugin } from "../../../runtime/mod.ts";
+import { importAction } from "./actions/import.ts";
 import { memoryCollection } from "./collections/memory.ts";
 import { memoryProgress } from "./collections/progress.ts";
 import { extractor } from "./processors/extract.ts";
@@ -72,6 +75,8 @@ export const memory: Plugin = definePlugin({
         return { moved: matchedCount > 0 };
       },
     }),
+    // Memories moving in from another app, as they were (the system's: a migration).
+    "memory.import": importAction,
   },
   // With the access plugin, a memory lives in a space (where it was learned): its members reach it.
   resources: { memory: { every: 8 }, context: contexts, tools, shared: { memory: {} } },

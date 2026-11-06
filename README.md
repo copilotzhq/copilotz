@@ -223,8 +223,10 @@ cookies. Webhooks send no `Origin`, and pass. Behind a front of the app's own (a
 the `caller` resource's `front` secret says which requests the front vouches for; the host it
 forwards (`x-forwarded-host`) is then the request's. Signing in by name (`devSignIn`) is for this
 machine only: the socket's address and the host must both be this machine's, with no header a proxy
-adds, and an app whose `links` origin is public doesn't start with it. Signing out (`POST /signout`)
-ends the session, disconnects its browsers and clears the cookie. On Node:
+adds, and an app whose `links` origin is public doesn't start with it. An email someone already has
+(a person who moved in from another app, under an id of its own) signs in as them, as they are.
+Signing out (`POST /signout`) ends the session, disconnects its browsers and clears the cookie. On
+Node:
 
 ```ts
 // server.ts
@@ -675,6 +677,13 @@ name, never by importing its code.
     (`resources.additions.<name> = { order?, agents? }` and an `addition:<name>` View there), each
     once per chat per key, recorded in `shown`; the model is told what went (`[then shown: …]`). A
     message tapped from a button carries `tap: { id, title, key }`, and agents read the id.
+  - **Moving in:** `chat.import` (the system's: a migration) brings a conversation from another app
+    as it was: its thread in a space with its title, and its messages, each with who said it, to
+    whom, what, its files (their `data`, or the `id` of a document holding one) and when (ISO 8601
+    with its zone). Nothing runs: no turn, no transcript. Ids are the importer's, so importing again
+    replaces what it made, and a long conversation comes in several calls; the thread's count, first
+    and latest are worked out from what it has. Processors that follow messages (history's
+    summaries) take imported ones as any.
 - **`history`** keeps chat history from outgrowing the prompt
   (`resources: { history: { summarizer: "openai/gpt-5.4-mini" } }`): every message stays whole, a
   cheap model writes a line for each and merges pairs up a binary tree, and an agent gets recent
@@ -694,6 +703,9 @@ name, never by importing its code.
     `recall` and `forget`.
   - **On its own:** with an `extractor` model, every few messages it writes down what's worth
     keeping (who people are, preferences, decisions), updating what it already knew.
+  - **Moving in:** `memory.import` (the system's) brings memories from another app as they were, in
+    a space: what each says, whom it's about, who wrote it and when, under the importer's ids
+    (importing again replaces them). Each is embedded as it's kept, so recall finds it by meaning.
 - **`team`**: agents people make in a space, beside the app's, each a member of the spaces it works
   in, with a page of its own on the web.
 - **`skills`**: know-how an agent reads only when a task calls for it (a SKILL.md: a name, when it's

@@ -1,5 +1,22 @@
 ## Unreleased
 
+Moving in from another app. Nothing changes for an app that doesn't call these.
+
+- **`chat.import`** (the system's: a migration) brings a conversation in as it was: its thread (the
+  importer's id) in a space, with its title, and its messages with who said them (a person's id or
+  an agent's name), to whom, what, their files (`data`, or the `id` of a document holding one:
+  chat's `file` by default) and when (ISO 8601 with a zone, kept to the millisecond). Nothing runs:
+  no turn, no transcript, nothing delivered. Importing again replaces what it made; a long
+  conversation comes in several calls, and the thread's summary (count, first, latest, when it last
+  moved) is worked out from every message it has. A thread already in another space is refused
+  (`chat.move` moves it). Unrecorded: the documents it writes are their own record.
+- **`memory.import`** (the system's) brings memories in as they were, in a space: text, whom each is
+  about, who wrote it, `core`, when it was learned and last changed, under the importer's ids. Each
+  is embedded as it's kept (with an embedder), so recall finds it by meaning.
+- **Dev sign-in reaches someone already there:** an email a person has (one who moved in under an id
+  of its own) signs in as them, and the id of someone there signs in as them too, both as they are
+  (their name isn't touched). Anyone else signs in as before.
+
 ## 1.0.0-rc.26 — 2026-11-06
 
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the

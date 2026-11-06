@@ -11,12 +11,14 @@ import {
   Avatar,
   Badge,
   Chip,
+  formatNumber,
   IconButton,
   Menu,
   openPalette,
   Title,
 } from "../../../../../hosts/web/mod.ts";
 import { moveStep } from "./move.ts";
+import { say } from "./words.ts";
 
 /** Someone in a chat, as it shows: an agent by its name and emoji; a person, with their picture. */
 export type Someone = { name: string; agent: boolean; icon?: string; picture?: string };
@@ -48,10 +50,10 @@ export function Header(
               icon={personal ? "person" : undefined}
               className="chat-space"
               href={`/space/${encodeURIComponent(space._id)}`}
-              title={`Open ${personal ? "Personal" : space.name}`}
+              title={say("openSpace", { space: personal ? say("personal") : space.name })}
             >
               {personal ? null : <Avatar name={space.name} kind="space" size={14} />}
-              {personal ? "Personal" : space.name}
+              {personal ? say("personal") : space.name}
             </Chip>
           )
           : null}
@@ -61,7 +63,7 @@ export function Header(
           <div
             className="chat-people"
             role="img"
-            aria-label={`In this chat: ${people.map((p) => p.name).join(", ")}`}
+            aria-label={say("inThisChat", { names: people.map((p) => p.name).join(", ") })}
           >
             {shown.map((p) => (
               <Avatar
@@ -75,23 +77,27 @@ export function Header(
               />
             ))}
             {people.length > shown.length
-              ? <Badge className="chat-people-more">+{people.length - shown.length}</Badge>
+              ? (
+                <Badge className="chat-people-more">
+                  +{formatNumber(people.length - shown.length)}
+                </Badge>
+              )
               : null}
           </div>
         )
         : null}
-      <IconButton icon="compose" label="New chat" href={fresh} className="chat-head-new" />
+      <IconButton icon="compose" label={say("newChat")} href={fresh} className="chat-head-new" />
       <Menu
-        label="This chat: more"
+        label={say("chatMore")}
         align="end"
         items={[
           {
-            label: "Move to another space…",
+            label: say("moveToSpace"),
             icon: "move",
             onSelect: () =>
               openPalette(moveStep({ thread, title, from: space?._id, call, open: true })),
           },
-          { label: "New chat", icon: "compose", href: fresh },
+          { label: say("newChat"), icon: "compose", href: fresh },
         ]}
       />
     </header>

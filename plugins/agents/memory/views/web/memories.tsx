@@ -16,6 +16,7 @@ import type { Memory } from "../../collections/memory.ts";
 import { peopleOf } from "../../shared/scope.ts";
 import { MemoryList, type Named } from "./list.tsx";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 import { namesIn } from "../../../../access/spaces/contract.ts";
 
 type Space = { _id: string; name: string; kind: string };
@@ -29,7 +30,7 @@ export const memoriesView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
   // The spaces the person reaches, read directly (the rules keep it to those).
   const spaces = space ? [] : ctx.db.collection<Space>("space").find({}).value ?? [];
   const named = Object.fromEntries(
-    spaces.map((p) => [p._id, p.kind === "personal" ? "Personal" : p.name]),
+    spaces.map((p) => [p._id, p.kind === "personal" ? say("personalSpace") : p.name]),
   );
   // The agents they're about or by, as each is named.
   const ids = (memories ?? []).flatMap((m) => [
@@ -73,8 +74,7 @@ export const memoriesView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
         {mode === "page" && memories?.length
           ? (
             <p className="mem-intro">
-              What agents learned in this space. <span className="mem-star">★</span>{" "}
-              Core memories are always in mind; the rest come up when they're relevant.
+              {say.nodes("spaceIntro", { star: <span className="mem-star">★</span> })}
             </p>
           )
           : null}
@@ -84,17 +84,16 @@ export const memoriesView = (item: { _id?: string }, ctx: ViewContext<ReactNode>
   }
   return (
     <Page
-      title="Memories"
+      title={say("memories")}
       density={mode === "panel" ? "panel" : "full"}
       description={
         <>
-          What agents remember across chats. <span className="mem-star">★</span>{" "}
-          Core memories are always in mind; the rest come up when they're relevant.
+          {say.nodes("pageIntro", { star: <span className="mem-star">★</span> })}
         </>
       }
     >
       {style}
-      <Title text="Memories" />
+      <Title text={say("memories")} />
       {list}
     </Page>
   );

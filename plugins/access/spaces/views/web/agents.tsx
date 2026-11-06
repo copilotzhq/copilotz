@@ -22,6 +22,7 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import type { Member, Reached } from "../../contract.ts";
 import { AGENT_ROLES, roleName, spaceName, whoOf } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -67,21 +68,18 @@ export function Agents(
     <section className="space-section" aria-labelledby="space-agents">
       <div className="space-section-head">
         <h3 id="space-agents" className="space-section-title">
-          Agents <span className="space-count">{members.length}</span>
+          {say("agents")} <span className="space-count">{members.length}</span>
         </h3>
         {manage && adds && !space.archived
           ? (
             <Button size="sm" variant="ghost" icon="plus" onClick={onAdd}>
-              Add an agent
+              {say("addAgent")}
             </Button>
           )
           : null}
       </div>
       <p className="space-section-about">
-        {personal
-          ? "They work here for you. One answers new chats; @name asks another."
-          : "They work for whoever asks them, and reach only what that person can. One answers " +
-            "new chats; @name asks another."}
+        {personal ? say("agentsAboutPersonal") : say("agentsAboutShared")}
       </p>
       {members.length ? above : null}
       {members.length
@@ -111,11 +109,11 @@ export function Agents(
         )
         : (
           <Card className="space-agents-none">
-            <p>No agent works here yet: chats here have no one to answer them.</p>
+            <p>{say("noAgents")}</p>
             {manage && !space.archived
               ? (
                 <Button size="sm" variant="primary" icon="plus" onClick={onAdd}>
-                  Add an agent
+                  {say("addAgent")}
                 </Button>
               )
               : null}
@@ -160,24 +158,24 @@ function AgentRow(
   const member = { space: space._id, member: { kind: "agent", id } };
   const what = agent?.description ||
     (agent?.in
-      ? home ? `Made in ${spaceName(home)}` : "Made in another space"
+      ? home ? say("madeIn", { space: spaceName(home) }) : say("madeElsewhere")
       : agent
-      ? "One of the app's agents"
-      : "An agent");
+      ? say("appAgent")
+      : say("anAgent"));
   const items: (MenuItem | "separator")[] = [
     ...(!answers && m.role === "editor"
       ? [{
-        label: "Make it answer new chats",
+        label: say("makeAnswer"),
         icon: "chat" as const,
         onSelect: () => void act("space.agent", { space: space._id, agent: id }),
       }]
       : []),
     edits
-      ? { label: `Edit ${name}`, icon: "pencil", href: pageOf(id, true) }
-      : { label: `View ${name}`, icon: "bot", href: pageOf(id) },
+      ? { label: say("edit", { name }), icon: "pencil", href: pageOf(id, true) }
+      : { label: say("view", { name }), icon: "bot", href: pageOf(id) },
     "separator",
     {
-      label: "Remove from this space",
+      label: say("removeFromSpace"),
       icon: "close",
       tone: "destructive",
       onSelect: () => void act("member.remove", member),
@@ -197,7 +195,7 @@ function AgentRow(
         <p className="space-row-name">
           <a className="space-row-link" href={pageOf(id)}>{name}</a>
           <span className="space-row-handle">@{id}</span>
-          {answers ? <Badge tone="primary">Answers new chats</Badge> : null}
+          {answers ? <Badge tone="primary">{say("answersNew")}</Badge> : null}
         </p>
         <p className="space-row-what">
           {error ? <span className="space-invite-error">{error}</span> : what}
@@ -212,7 +210,7 @@ function AgentRow(
                 size="sm"
                 value={m.role}
                 disabled={busy}
-                aria-label={`${name}'s role`}
+                aria-label={say("roleOf", { name })}
                 onChange={(event) =>
                   void act("member.set", { ...member, role: event.target.value })}
               >
@@ -221,7 +219,7 @@ function AgentRow(
                   ? null
                   : <option value={m.role}>{roleName(m.role)}</option>}
               </Select>
-              <Menu label={`${name}: more`} align="end" size="sm" items={items} />
+              <Menu label={say("moreOf", { name })} align="end" size="sm" items={items} />
             </>
           )
           : <Badge variant="outline">{roleName(m.role)}</Badge>}

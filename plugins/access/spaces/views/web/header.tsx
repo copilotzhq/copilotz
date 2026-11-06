@@ -24,6 +24,7 @@ import { InviteDialog } from "./invite-dialog.tsx";
 import { archiveStep, leaveStep } from "./steps.ts";
 import { spacePath } from "./tabs.ts";
 import { peopleIn, roleName, spaceName, whoOf } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -31,12 +32,13 @@ type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 const FACES = 5;
 
 /** Who works in a shared space, in words: "3 people and 2 agents work here." */
-const together = (people: number, agents: number) => {
-  const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  return agents
-    ? `${count(people, "person", "people")} and ${count(agents, "agent", "agents")} work here.`
-    : `${count(people, "person works", "people work")} here; no agent does yet.`;
-};
+const together = (people: number, agents: number) =>
+  agents
+    ? say("workBoth", {
+      people: say("peopleCount", { count: people }),
+      agents: say("agentsCount", { count: agents }),
+    })
+    : say("workPeopleOnly", { count: people });
 
 export function SpaceHeader(
   { space, members, manage, me, call, children, names = {} }: {
@@ -63,15 +65,15 @@ export function SpaceHeader(
   const acts: MenuItem[] = personal ? [] : [
     ...(manage
       ? [
-        { label: "Rename", icon: "pencil" as const, onSelect: () => setRenaming(true) },
+        { label: say("rename"), icon: "pencil" as const, onSelect: () => setRenaming(true) },
         archived
           ? {
-            label: "Restore",
+            label: say("restore"),
             icon: "restore" as const,
             onSelect: () => void call("space.archive", { space: space._id, archived: false }),
           }
           : {
-            label: "Archive…",
+            label: say("archiveMenu"),
             icon: "archive" as const,
             onSelect: () => openPalette(archiveStep(space, call)),
           },
@@ -79,7 +81,7 @@ export function SpaceHeader(
       : []),
     ...(role
       ? [{
-        label: "Leave…",
+        label: say("leaveMenu"),
         icon: "signout" as const,
         tone: "destructive" as const,
         onSelect: () => openPalette(leaveStep(space, call)),
@@ -89,7 +91,7 @@ export function SpaceHeader(
   const more: (MenuItem | "separator")[] = personal ? [] : [
     ...acts,
     ...(acts.length ? ["separator" as const] : []),
-    { label: "Settings", icon: "settings", href: spacePath(space._id, "settings") },
+    { label: say("settings"), icon: "settings", href: spacePath(space._id, "settings") },
   ];
   return (
     <Page
@@ -105,7 +107,7 @@ export function SpaceHeader(
       title={renaming
         ? (
           <InlineEdit
-            label="The space's name"
+            label={say("spaceNameLabel")}
             value={space.name}
             maxLength={60}
             size="lg"
@@ -120,7 +122,7 @@ export function SpaceHeader(
             ? (
               <IconButton
                 icon="pencil"
-                label="Rename the space"
+                label={say("renameSpace")}
                 size="sm"
                 className="space-rename"
                 onClick={() => setRenaming(true)}
@@ -128,16 +130,14 @@ export function SpaceHeader(
             )
             : null}
           {personal
-            ? <Badge>Just you</Badge>
+            ? <Badge>{say("justYou")}</Badge>
             : archived
-            ? <Badge tone="warning">Archived</Badge>
-            : <Badge tone="primary">Shared</Badge>}
+            ? <Badge tone="warning">{say("archived")}</Badge>
+            : <Badge tone="primary">{say("shared")}</Badge>}
           {!personal && role ? <Badge variant="outline">{roleName(role)}</Badge> : null}
         </>
       )}
-      description={personal
-        ? "Yours alone, with your agents. To work with others, make a shared space."
-        : together(people.length, agents)}
+      description={personal ? say("personalAbout") : together(people.length, agents)}
       actions={
         <>
           {!personal && people.length
@@ -145,7 +145,9 @@ export function SpaceHeader(
               <a
                 className="space-faces"
                 href={`/space/${encodeURIComponent(space._id)}?tab=members`}
-                aria-label={`Members: ${people.map((p) => whoOf(p.member, names).name).join(", ")}`}
+                aria-label={say("membersNamed", {
+                  names: people.map((p) => whoOf(p.member, names).name).join(", "),
+                })}
               >
                 {people.slice(0, FACES).map((p) => {
                   const { name } = whoOf(p.member, names);
@@ -165,11 +167,11 @@ export function SpaceHeader(
                   className="space-wide"
                   onClick={() => setInviting(true)}
                 >
-                  Invite
+                  {say("invite")}
                 </Button>
                 <IconButton
                   icon="invite"
-                  label="Invite someone"
+                  label={say("inviteSomeone")}
                   variant="outline"
                   className="space-narrow"
                   onClick={() => setInviting(true)}
@@ -178,16 +180,16 @@ export function SpaceHeader(
             )
             : null}
           <Button variant="primary" icon="compose" href={fresh} className="space-wide">
-            New chat
+            {say("newChat")}
           </Button>
           <IconButton
             icon="compose"
-            label="New chat here"
+            label={say("newChatHere")}
             variant="primary"
             href={fresh}
             className="space-narrow"
           />
-          {more.length ? <Menu label={`${name}: more`} items={more} align="end" /> : null}
+          {more.length ? <Menu label={say("moreOf", { name })} items={more} align="end" /> : null}
         </>
       }
     >

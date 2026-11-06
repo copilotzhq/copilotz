@@ -22,6 +22,7 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import { ICONS, type Options } from "./agents.ts";
 import { ModelPicker } from "./model-picker.tsx";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -64,22 +65,18 @@ export function AgentFields(
             </span>
           )}
         <Field
-          label="Name"
+          label={say("fieldName")}
           className="agent-form-name"
           hint={handle
-            ? (
-              <>
-                Called <b className="agent-handle">@{handle}</b> in chats
-              </>
-            )
-            : "What people call it: Maya is @maya in chats."}
+            ? say.nodes("calledIn", { handle: <b className="agent-handle">@{handle}</b> })
+            : say("nameHint")}
         >
           {(control) => (
             <Input
               {...control}
               value={value.name}
               maxLength={60}
-              placeholder="Maya"
+              placeholder={say("namePlaceholder")}
               autoComplete="off"
               autoFocus={autoFocus}
               disabled={disabled}
@@ -89,14 +86,14 @@ export function AgentFields(
         </Field>
       </div>
       <div className="agent-form-field" role="radiogroup" aria-labelledby={`${id}-icon`}>
-        <span id={`${id}-icon`} className="agent-form-label">Emoji</span>
+        <span id={`${id}-icon`} className="agent-form-label">{say("emoji")}</span>
         <div className="agent-icons">
           <button
             type="button"
             role="radio"
             aria-checked={!value.icon}
-            aria-label="None: its initial"
-            title="None: its initial"
+            aria-label={say("noEmoji")}
+            title={say("noEmoji")}
             className="agent-icon agent-icon-none"
             disabled={disabled}
             onClick={() => onChange({ icon: "" })}
@@ -119,8 +116,8 @@ export function AgentFields(
           <Input
             size="sm"
             className="agent-icon-own"
-            aria-label="Another emoji"
-            placeholder="Other"
+            aria-label={say("anotherEmoji")}
+            placeholder={say("otherEmoji")}
             value={own ? value.icon : ""}
             maxLength={16}
             autoComplete="off"
@@ -131,8 +128,8 @@ export function AgentFields(
         </div>
       </div>
       <Field
-        label="What should it do?"
-        hint="A line or two, for people, and for other agents deciding whom to ask."
+        label={say("fieldDoes")}
+        hint={say("doesHint")}
       >
         {(control) => (
           <Textarea
@@ -142,14 +139,14 @@ export function AgentFields(
             maxHeight={160}
             maxLength={500}
             value={value.description}
-            placeholder="Writes launch copy in our voice, and checks facts with the researcher."
+            placeholder={say("doesPlaceholder")}
             disabled={disabled}
             onChange={(event) => onChange({ description: event.target.value })}
           />
         )}
       </Field>
       <Instructions value={value} onChange={onChange} call={call} disabled={disabled} />
-      <Field label="Model" hint="What it thinks with.">
+      <Field label={say("model")} hint={say("modelHint")}>
         {(control) => (
           <ModelPicker
             id={control.id}
@@ -204,7 +201,7 @@ function Instructions(
   return (
     <div className="agent-form-field">
       <div className="agent-form-label-row">
-        <label className="agent-form-label" htmlFor={id}>Instructions</label>
+        <label className="agent-form-label" htmlFor={id}>{say("instructions")}</label>
         <Button
           size="sm"
           variant="ghost"
@@ -212,10 +209,10 @@ function Instructions(
           className="agent-draft"
           loading={drafting}
           disabled={!ready || disabled}
-          title={ready ? undefined : "Say its name and what it should do first"}
+          title={ready ? undefined : say("sayNameFirst")}
           onClick={() => void draft()}
         >
-          {value.instructions.trim() ? "Rewrite them for me" : "Write them for me"}
+          {value.instructions.trim() ? say("rewriteForMe") : say("writeForMe")}
         </Button>
       </div>
       <div className="agent-instructions" data-busy={drafting || undefined}>
@@ -230,7 +227,7 @@ function Instructions(
           disabled={disabled}
           aria-describedby={`${id}-note`}
           aria-busy={drafting || undefined}
-          placeholder={`You are ${name || "Maya"}. You…`}
+          placeholder={say("youArePlaceholder", { name: name || say("youAreDefaultName") })}
           onChange={(event) => {
             setBefore(undefined);
             onChange({ instructions: event.target.value });
@@ -241,7 +238,7 @@ function Instructions(
             <div className="agent-drafting" role="status">
               <span className="agent-drafting-say">
                 <Spinner size={13} />
-                Writing {name}'s instructions…
+                {say("writingFor", { name })}
               </span>
               {[92, 84, 96, 70, 88, 52].map((width, i) => (
                 <Skeleton key={i} height={11} width={`${width}%`} />
@@ -254,8 +251,7 @@ function Instructions(
         {error ? <span className="agent-error" role="alert">{error}</span> : before !== undefined
           ? (
             <>
-              Written for you from what it should do: read them through, and change what you like.
-              {" "}
+              {say("draftNote")}{" "}
               <Button
                 variant="link"
                 size="sm"
@@ -265,13 +261,13 @@ function Instructions(
                   setBefore(undefined);
                 }}
               >
-                Undo
+                {say("undo")}
               </Button>
             </>
           )
           : ready || value.instructions.trim()
-          ? "What it's told every time it works: who it is, what it does, and how it answers."
-          : "Say its name and what it should do, and it can write them for you."}
+          ? say("instructionsHint")
+          : say("instructionsEmptyHint")}
       </p>
     </div>
   );
@@ -295,7 +291,13 @@ function Tools(
     <div className="agent-form-field" role="group" aria-labelledby={`${id}-tools`}>
       <div className="agent-form-label-row">
         <span id={`${id}-tools`} className="agent-form-label">
-          Tools <span className="agent-form-count">{chosen.length} of {offered.length}</span>
+          {say.nodes("toolsLabel", {
+            count: (
+              <span className="agent-form-count">
+                {say("toolsOf", { chosen: chosen.length, offered: offered.length })}
+              </span>
+            ),
+          })}
         </span>
         <Button
           size="sm"
@@ -305,15 +307,19 @@ function Tools(
           aria-controls={`${id}-list`}
           onClick={() => setOpen(!open)}
         >
-          {open ? "Done" : "Choose"}
+          {open ? say("toolsChooseDone") : say("toolsChoose")}
         </Button>
       </div>
       {open
         ? (
           <div id={`${id}-list`} className="agent-tools">
             <div className="agent-tools-all">
-              <Button size="sm" variant="link" onClick={() => onChange(offered)}>All</Button>
-              <Button size="sm" variant="link" onClick={() => onChange([])}>None</Button>
+              <Button size="sm" variant="link" onClick={() => onChange(offered)}>
+                {say("toolsAll")}
+              </Button>
+              <Button size="sm" variant="link" onClick={() => onChange([])}>
+                {say("toolsNone")}
+              </Button>
             </div>
             <ul>
               {options.tools.map((t) => (
@@ -339,10 +345,12 @@ function Tools(
               ? (
                 <>
                   {chosen.slice(0, LINE).map((name) => <code key={name}>{name}</code>)}
-                  {chosen.length > LINE ? <span>+{chosen.length - LINE} more</span> : null}
+                  {chosen.length > LINE
+                    ? <span>{say("toolsMore", { count: chosen.length - LINE })}</span>
+                    : null}
                 </>
               )
-              : <span>None: it only talks.</span>}
+              : <span>{say("noTools")}</span>}
           </p>
         )}
     </div>

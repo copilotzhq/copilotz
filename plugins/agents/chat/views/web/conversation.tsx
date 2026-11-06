@@ -33,6 +33,7 @@ import { STYLE } from "./style.ts";
 import { Transcript } from "./transcript.tsx";
 import { waitingOn } from "./waiting.ts";
 import { byAgent, names } from "./who.ts";
+import { say } from "./words.ts";
 import { nameOf, namesIn, picturesIn } from "../../../../access/spaces/contract.ts";
 import { DELEGATED } from "../../shared/types.ts";
 
@@ -124,18 +125,18 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
   const words = (m: Message) => m.text || m.files?.find((f) => f.transcript)?.transcript;
   const own = said.filter((m) => m.thread === t._id && !m.private && words(m));
   const first = own.find((m) => !byAgent(m)) ?? own[0];
-  const title = plain(thread.title ?? (first && words(first))) || "New chat";
+  const title = plain(thread.title ?? (first && words(first))) || say("newChat");
   const last = said[said.length - 1];
   const addressed = thread.agents?.length
-    ? names(thread.agents.map((id) => who[id]?.name ?? id))
-    : "the agents";
+    ? say("messageAgents", { names: names(thread.agents.map((id) => who[id]?.name ?? id)) })
+    : say("messageTheAgents");
   // What other front ends show here, over where you type.
   const over = Object.values((ctx.resources.conversation ?? {}) as Record<string, ConversationView>)
     .filter((entry) => entry?.view)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
   return (
-    <section className="chat" aria-label="Conversation">
+    <section className="chat" aria-label={say("conversation")}>
       <style href="chat-web" precedence="copilotz">{STYLE}</style>
       <Header
         title={title.length > 90 ? `${title.slice(0, 88)}…` : title}
@@ -184,9 +185,9 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
         }}
         working={working.map((id) => who[id]?.name ?? id)}
         stop={() => ctx.call("chat.stop", { thread: t._id })}
-        placeholder={`Message ${addressed}`}
+        placeholder={addressed}
         agents={team ? mentionable(team) : undefined}
-        where={space ? space.kind === "personal" ? "Personal" : space.name : undefined}
+        where={space ? space.kind === "personal" ? say("personal") : space.name : undefined}
         refusals={ctx.resources.refusals as Record<string, RefusalView | null> | undefined}
         notes={ctx.resources.composerNotes as Record<string, ComposerNote | null> | undefined}
         place={{ thread: t._id, ...(thread.in ? { in: thread.in } : {}) }}

@@ -5,6 +5,7 @@
  */
 import { Avatar, type PaletteControl, type PaletteStep } from "../../../../../hosts/web/mod.ts";
 import { type Place, placeName } from "./places.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -19,15 +20,19 @@ export function spaceStep(
 ): PaletteStep {
   return {
     title,
-    placeholder: "Find a space",
+    placeholder: say("findSpace"),
     ...(note ? { note } : {}),
     items: () => [{
-      title: "Spaces you manage",
+      title: say("spacesYouManage"),
       items: places.map((place) => ({
         key: `agent-space:${place._id}`,
         label: placeName(place),
         ...(place.kind === "personal"
-          ? { icon: "person" as const, description: "Just you", keywords: ["personal"] }
+          ? {
+            icon: "person" as const,
+            description: say("justYou"),
+            keywords: [say("keywordPersonal")],
+          }
           : { leading: <Avatar name={place.name} kind="space" size={26} /> }),
         run: (palette: PaletteControl) => pick(place, palette),
       })),
@@ -40,16 +45,15 @@ export function deleteStep(
   { agent, name, call, after }: { agent: string; name: string; call: Call; after(): void },
 ): PaletteStep {
   return {
-    title: `Delete ${name}?`,
+    title: say("deleteTitle", { name }),
     confirm: true,
-    note: "It leaves every space it works in, and nobody can ask it anything again. " +
-      "Chats it was in stay as they are.",
+    note: say("deleteStepNote"),
     items: () => [{
       title: "",
       items: [
         {
           key: "agent:delete",
-          label: `Delete ${name}`,
+          label: say("deleteButton", { name }),
           icon: "trash",
           tone: "destructive",
           run: async () => {
@@ -57,7 +61,7 @@ export function deleteStep(
             after();
           },
         },
-        { key: "agent:keep", label: "Keep it", icon: "close", run: (p) => p.back() },
+        { key: "agent:keep", label: say("deleteStepKeep"), icon: "close", run: (p) => p.back() },
       ],
     }],
   };

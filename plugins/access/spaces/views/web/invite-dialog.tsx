@@ -8,16 +8,15 @@ import type { ReactNode } from "react";
 import { Button, Dialog, LazyView, Skeleton } from "../../../../../hosts/web/mod.ts";
 import type { Space } from "../../contract.ts";
 import { spaceName } from "./who.ts";
+import { say } from "./words.ts";
 
 /** What the dialog says it's for: its title, and what joining means. */
-export const inviteTitle = (name: string) => `Invite someone to ${name}`;
-export const INVITE_ABOUT =
-  "They'll see what's in it (its chats, memories and computers) and work with its agents.";
+export const inviteTitle = (name: string) => say("inviteTitle", { name });
+export const inviteAbout = () => say("inviteAbout");
 
 /** The same, opened to add an agent. */
-export const addAgentTitle = (name: string) => `Add an agent to ${name}`;
-export const AGENT_ABOUT =
-  "Agents work for whoever asks them, and reach only what that person can.";
+export const addAgentTitle = (name: string) => say("addAgentTitle", { name });
+export const addAgentAbout = () => say("addAgentAbout");
 
 export function InviteDialog(
   { open, onClose, space, tab }: {
@@ -35,8 +34,8 @@ export function InviteDialog(
       open={open}
       onClose={onClose}
       title={agents ? addAgentTitle(name) : inviteTitle(name)}
-      description={agents ? AGENT_ABOUT : INVITE_ABOUT}
-      footer={<Button onClick={onClose}>Done</Button>}
+      description={agents ? addAgentAbout() : inviteAbout()}
+      footer={<Button onClick={onClose}>{say("done")}</Button>}
     >
       {open
         ? (

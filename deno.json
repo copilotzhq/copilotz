@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "1.0.0-rc.25",
+  "version": "1.0.0-rc.26",
   "exports": {
     ".": "./runtime/mod.ts",
     "./stores/memory": "./stores/memory/mod.ts",
@@ -24,10 +24,13 @@
     "./plugins/compute/web": "./plugins/compute/web.tsx",
     "./plugins/compute/terminal": "./plugins/compute/computers/terminal.ts",
     "./plugins/compute/downloads": "./plugins/compute/computers/resources/downloads.ts",
+    "./plugins/work": "./plugins/work/mod.ts",
+    "./plugins/work/web": "./plugins/work/web.tsx",
     "./plugins/interfaces": "./plugins/interfaces/mod.ts",
     "./plugins/interfaces/web": "./plugins/interfaces/web.tsx",
     "./plugins/interfaces/terminal": "./plugins/interfaces/terminal/terminal.ts",
     "./web": "./hosts/web/mod.ts",
+    "./web/words": "./hosts/web/words.ts",
     "./web/server": "./hosts/web/server.ts",
     "./web/widget": "./hosts/web/widget.tsx",
     "./web/theme": "./hosts/web/theme/css.ts",
@@ -101,6 +104,7 @@
     "lineWidth": 100,
     "exclude": [
       "plugins/models/shared/catalog.json",
+      "hosts/web/WORDS.md",
       "package-lock.json"
     ]
   },

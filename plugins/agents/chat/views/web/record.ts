@@ -14,6 +14,7 @@
  * ```
  */
 import { resample } from "../../../../../hosts/web/mod.ts";
+import { say } from "./words.ts";
 
 /** A finished recording, ready to send. */
 export type Take = {
@@ -69,19 +70,15 @@ const SHORTEST = 500;
 const why = (error: unknown): Pick<Recording, "error" | "denied"> => {
   const name = (error as { name?: string } | undefined)?.name;
   if (name === "NotAllowedError" || name === "SecurityError") {
-    return {
-      error:
-        "Microphone access is blocked. Allow it for this site in your browser's settings, then try again.",
-      denied: true,
-    };
+    return { error: say("micBlocked"), denied: true };
   }
   if (name === "NotFoundError" || name === "OverconstrainedError") {
-    return { error: "No microphone was found. Connect one, then try again." };
+    return { error: say("micNotFound") };
   }
   if (name === "NotReadableError" || name === "AbortError") {
-    return { error: "The microphone is busy in another app. Close it there, then try again." };
+    return { error: say("micBusy") };
   }
-  return { error: "The microphone couldn't start." };
+  return { error: say("micCouldntStart") };
 };
 
 const extension = (type: string) =>
@@ -144,7 +141,7 @@ export function record(limit = LIMIT): Recorder {
     const type = (recorder?.mimeType || format || "audio/webm").split(";")[0].trim();
     const blob = new Blob(chunks, { type });
     if (!blob.size || duration < SHORTEST) {
-      set({ phase: "error", error: "That was too short to send. Hold on a moment longer." });
+      set({ phase: "error", error: say("tooShort") });
       return settle(undefined);
     }
     const take: Take = {
@@ -171,19 +168,19 @@ export function record(limit = LIMIT): Recorder {
     try {
       recorder = new MediaRecorder(granted, format ? { mimeType: format } : undefined);
     } catch {
-      return fail({ error: "This browser can't record audio." });
+      return fail({ error: say("cantRecord") });
     }
     recorder.ondataavailable = (event) => {
       if (event.data?.size) chunks.push(event.data);
     };
     recorder.onerror = () => {
-      if (!cancelled) fail({ error: "The recording stopped unexpectedly. Try again." });
+      if (!cancelled) fail({ error: say("recordingStopped") });
     };
     recorder.onstop = () => finish(format);
     try {
       recorder.start();
     } catch {
-      return fail({ error: "The microphone couldn't start." });
+      return fail({ error: say("micCouldntStart") });
     }
     started = performance.now();
     set({ phase: "recording" });
@@ -245,7 +242,7 @@ export function record(limit = LIMIT): Recorder {
 
   const media = globalThis.navigator?.mediaDevices;
   if (!media?.getUserMedia || typeof MediaRecorder === "undefined") {
-    fail({ error: "This browser can't record audio here." });
+    fail({ error: say("cantRecordHere") });
   } else {
     media.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },

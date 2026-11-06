@@ -26,6 +26,7 @@ import { orgName, useOrgs } from "../../../access/directory/contract.ts";
 import { chosenSection, type OrgSection, runs, sectionsOf, standingName } from "../shared/orgs.ts";
 import { useStanding } from "../shared/standing.ts";
 import { OrgFace } from "./orgs.tsx";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -47,9 +48,9 @@ function OrgPage({ given, tab, call }: { given: unknown; tab?: string; call: Cal
   if (orgs.status === "none") {
     return (
       <div className="copilotz-org-missing">
-        <Title text="Organization" />
-        <EmptyState icon="building" heading="h1" title="One organization here">
-          This app serves a single organization, so there's nothing to set here.
+        <Title text={say("organization")} />
+        <EmptyState icon="building" heading="h1" title={say("oneOrg")}>
+          {say("oneOrgAbout")}
         </EmptyState>
       </div>
     );
@@ -69,14 +70,14 @@ function OrgPage({ given, tab, call }: { given: unknown; tab?: string; call: Cal
   if (!here) {
     return (
       <div className="copilotz-org-missing">
-        <Title text="Organization" />
+        <Title text={say("organization")} />
         <EmptyState
           icon="building"
           heading="h1"
-          title="You're not in an organization"
-          action={<Button variant="primary" href="/">Go home</Button>}
+          title={say("notInOrg")}
+          action={<Button variant="primary" href="/">{say("goHome")}</Button>}
         >
-          Choose one from the switcher at the top of the sidebar.
+          {say("chooseOrg")}
         </EmptyState>
       </div>
     );
@@ -97,12 +98,12 @@ function OrgPage({ given, tab, call }: { given: unknown; tab?: string; call: Cal
       leading={<OrgFace org={here} person={orgs.value.person} size={44} />}
       badges={
         <>
-          <Badge variant="outline">{personal ? "Personal org" : "Team org"}</Badge>
+          <Badge variant="outline">{personal ? say("personalOrg") : say("teamOrg")}</Badge>
           {standing.staff
             ? (
               <Badge tone="warning">
                 <Icon name="shield" size={12} />
-                Staff access
+                {say("staffAccess")}
               </Badge>
             )
             : null}
@@ -112,22 +113,20 @@ function OrgPage({ given, tab, call }: { given: unknown; tab?: string; call: Cal
         </>
       }
       description={standing.staff
-        ? `You're here as platform staff: what you do is on ${here.name}'s record.`
+        ? say("orgAboutStaff", { name: here.name })
         : personal
-        ? "Your own organization: just you, and what you make alone."
+        ? say("orgAboutPersonal")
         : runs(standing)
-        ? `Who's in ${here.name}, what it uses, and what it's called.`
+        ? say("orgAboutRuns", { name: here.name })
         : standing.role === "guest"
-        ? `What ${here.name} is. As a guest, you work in the spaces you're invited to.`
-        : `What ${here.name} is, and who's in it.`}
+        ? say("orgAboutGuest", { name: here.name })
+        : say("orgAboutMember", { name: here.name })}
     >
-      <Title text={section ? `${name}: ${section.title}` : name} />
+      <Title text={section ? say("orgSection", { name, section: section.title }) : name} />
       {heldBack
         ? (
           <Notice tone="info" className="copilotz-org-held">
-            {heldBack}{" "}
-            is for this org's owners and admins. Ask one of them if you need something changed
-            there.
+            {say("heldBack", { section: heldBack })}
           </Notice>
         )
         : null}
@@ -135,7 +134,7 @@ function OrgPage({ given, tab, call }: { given: unknown; tab?: string; call: Cal
         ? (
           <>
             <Tabs
-              label={`${name}'s settings`}
+              label={say("orgSettingsOf", { name })}
               variant="line"
               className="copilotz-org-tabs"
               value={section?.key ?? ""}
@@ -179,8 +178,8 @@ function OrgPage({ given, tab, call }: { given: unknown; tab?: string; call: Cal
           </>
         )
         : (
-          <EmptyState icon="settings" title="Nothing to set here">
-            This app adds no sections to an organization's page.
+          <EmptyState icon="settings" title={say("nothingToSet")}>
+            {say("nothingToSetAbout")}
           </EmptyState>
         )}
     </Page>

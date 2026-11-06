@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { Button } from "../../../../../hosts/web/mod.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 export const newThreadView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
   const here = typeof ctx.hints.in === "string" ? ctx.hints.in : undefined;
@@ -15,7 +16,7 @@ export const newThreadView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNod
         href={here ? `/?in=${encodeURIComponent(here)}` : "/"}
         aria-current={ctx.hints.path === "/" ? "page" : undefined}
       >
-        New chat
+        {say("newChat")}
       </Button>
     </>
   );

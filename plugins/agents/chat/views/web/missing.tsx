@@ -1,23 +1,24 @@
 /** A chat that isn't there, or isn't yours to see: said plainly, with a way on. */
 import type { ReactNode } from "react";
 import { Button, EmptyState, Title } from "../../../../../hosts/web/mod.ts";
+import { say } from "./words.ts";
 
 export function Missing({ fresh }: { fresh: string }): ReactNode {
   return (
     <section className="chat chat-missing" aria-labelledby="chat-missing-title">
-      <Title text="Not found" />
+      <Title text={say("notFoundTitle")} />
       <EmptyState
         icon="lock"
         heading="h1"
         id="chat-missing-title"
-        title="This chat isn't here"
+        title={say("missingTitle")}
         action={
           <Button variant="primary" icon="compose" href={fresh}>
-            Start a new chat
+            {say("startNewChat")}
           </Button>
         }
       >
-        It may have moved, or it isn't shared with you. Someone in it can invite you to its space.
+        {say("missingBody")}
       </EmptyState>
     </section>
   );

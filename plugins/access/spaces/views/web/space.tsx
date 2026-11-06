@@ -29,6 +29,7 @@ import { STYLE } from "./style.ts";
 import { TabSections } from "./sections.tsx";
 import { chosen, sectionOf, spacePath, tabsOf } from "./tabs.ts";
 import { ownersOf, spaceName } from "./who.ts";
+import { say } from "./words.ts";
 import { namesIn } from "../../shared/names.ts";
 
 export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
@@ -55,15 +56,14 @@ export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
     return (
       <div className="space-missing">
         {style}
-        <Title text="Not your space" />
+        <Title text={say("notYourSpace")} />
         <EmptyState
           icon="lock"
           heading="h1"
-          title="You're not in this space"
-          action={<Button variant="primary" icon="compose" href="/">Go home</Button>}
+          title={say("notInSpace")}
+          action={<Button variant="primary" icon="compose" href="/">{say("goHome")}</Button>}
         >
-          It's for its members. Someone who manages it can invite you; your spaces are in the
-          sidebar.
+          {say("notInSpaceAbout")}
         </EmptyState>
       </div>
     );
@@ -99,7 +99,7 @@ export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
         ? (
           <>
             <Tabs
-              label={`${spaceName(space, ctx.viewer?.name, names)}'s tabs`}
+              label={say("tabsOf", { name: spaceName(space, ctx.viewer?.name, names) })}
               variant="line"
               className="space-tabs"
               value={tab?.key ?? ""}
@@ -141,8 +141,8 @@ export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
           </>
         )
         : (
-          <EmptyState icon="info" title="Nothing here yet" className="space-empty">
-            This app adds nothing to a space's page.
+          <EmptyState icon="info" title={say("nothingHere")} className="space-empty">
+            {say("nothingHereAbout")}
           </EmptyState>
         )}
     </SpaceHeader>
@@ -162,7 +162,7 @@ function Archived(
       tone="neutral"
       icon="archive"
       className="space-archived"
-      title={`${space.name} is archived`}
+      title={say("isArchived", { name: space.name })}
       action={manage
         ? (
           <Button
@@ -181,12 +181,12 @@ function Archived(
               }
             }}
           >
-            Restore
+            {say("restore")}
           </Button>
         )
         : null}
     >
-      {error ?? "It stays readable, as it was, and it's listed apart, under Archived."}
+      {error ?? say("archivedNote")}
     </Notice>
   );
 }

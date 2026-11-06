@@ -39,6 +39,7 @@ import { spaceStep } from "./agent-steps.tsx";
 import { agentPath, listed, type Options, shownAs } from "./agents.ts";
 import { managed, manages, type Place, placeName, placePath } from "./places.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -75,14 +76,14 @@ export const agentView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
     return (
       <div className="agent-missing">
         {style}
-        <Title text="No such agent" />
+        <Title text={say("noSuchAgentTitle")} />
         <EmptyState
           icon="bot"
           heading="h1"
-          title="No agent here by that name"
-          action={<Button variant="primary" icon="compose" href="/">Go home</Button>}
+          title={say("noSuchAgent")}
+          action={<Button variant="primary" icon="compose" href="/">{say("goHome")}</Button>}
         >
-          It may have been deleted, or it works only in spaces you're not in.
+          {say("noSuchAgentBody")}
         </EmptyState>
       </div>
     );
@@ -153,8 +154,8 @@ function AgentPage(
   };
   const addStep = () =>
     openPalette(spaceStep({
-      title: `Add ${name} to…`,
-      note: "It works there at once, as an editor: it answers chats there and adds to them.",
+      title: say("addToTitle", { name }),
+      note: say("addToNote"),
       places: elsewhere,
       pick: (place) =>
         call("member.set", {
@@ -165,13 +166,13 @@ function AgentPage(
     }));
   const fromStep = () =>
     openPalette(spaceStep({
-      title: `New agent like ${name}, in…`,
-      note: "It starts with its words, model and tools; it belongs to the space you pick.",
+      title: say("newLikeTitle", { name }),
+      note: say("newLikeNote"),
       places: mine,
       pick: (place, palette) =>
         palette.dialog({
-          title: `New agent in ${placeName(place)}`,
-          description: `Starting from ${name}.`,
+          title: say("newAgentIn", { place: placeName(place) }),
+          description: say("startingFrom", { name }),
           view: "agent.add",
           item: { _id: place._id },
           hints: { in: place._id, mode: "new", from: id },
@@ -180,7 +181,7 @@ function AgentPage(
   const more: (MenuItem | "separator")[] = [
     ...(here && seatHere?.role === "editor" && !answers && manages(here)
       ? [{
-        label: `Make it answer new chats in ${placeName(here)}`,
+        label: say("makeAnswerIn", { place: placeName(here) }),
         icon: "chat" as const,
         onSelect: () =>
           void call("space.agent", { space: here._id, agent: id }).catch((e) =>
@@ -189,16 +190,16 @@ function AgentPage(
       }]
       : []),
     ...(elsewhere.length
-      ? [{ label: "Add to a space…", icon: "plus" as const, onSelect: addStep }]
+      ? [{ label: say("addToSpaceMenu"), icon: "plus" as const, onSelect: addStep }]
       : []),
     ...(app && mine.length
-      ? [{ label: "Start a new agent from it…", icon: "sparkles" as const, onSelect: fromStep }]
+      ? [{ label: say("startFromIt"), icon: "sparkles" as const, onSelect: fromStep }]
       : []),
     ...(edits
       ? [
         "separator" as const,
         {
-          label: `Delete ${name}…`,
+          label: say("deleteMenu", { name }),
           icon: "trash" as const,
           tone: "destructive" as const,
           onSelect: () => setDeleting(true),
@@ -215,11 +216,12 @@ function AgentPage(
       badges={
         <>
           <Badge variant="outline" className="agent-page-handle">@{id}</Badge>
-          {app
-            ? <Badge>Part of the app</Badge>
-            : <Badge tone="primary">{home ? `Made in ${placeName(home)}` : "Made elsewhere"}
-            </Badge>}
-          {answers && here ? <Badge tone="success">Answers new chats here</Badge> : null}
+          {app ? <Badge>{say("partOfApp")}</Badge> : (
+            <Badge tone="primary">
+              {home ? say("madeIn", { place: placeName(home) }) : say("madeElsewhere")}
+            </Badge>
+          )}
+          {answers && here ? <Badge tone="success">{say("answersNewChatsHere")}</Badge> : null}
         </>
       }
       description={agent.description}
@@ -229,11 +231,11 @@ function AgentPage(
             ? (
               <>
                 <Button variant="primary" icon="chat" href={askAt(ask)} className="agent-wide">
-                  Ask {name}
+                  {say("askAgent", { name })}
                 </Button>
                 <IconButton
                   icon="chat"
-                  label={`Ask ${name}`}
+                  label={say("askAgent", { name })}
                   variant="primary"
                   href={askAt(ask)}
                   className="agent-narrow"
@@ -245,11 +247,11 @@ function AgentPage(
             ? (
               <>
                 <Button icon="pencil" className="agent-wide" onClick={() => setEditing(true)}>
-                  Edit
+                  {say("edit")}
                 </Button>
                 <IconButton
                   icon="pencil"
-                  label={`Edit ${name}`}
+                  label={say("editAgent", { name })}
                   variant="outline"
                   className="agent-narrow"
                   onClick={() => setEditing(true)}
@@ -257,7 +259,7 @@ function AgentPage(
               </>
             )
             : null}
-          {more.length ? <Menu label={`${name}: more`} align="end" items={more} /> : null}
+          {more.length ? <Menu label={say("moreMenu", { name })} align="end" items={more} /> : null}
         </>
       )}
     >
@@ -275,11 +277,14 @@ function AgentPage(
                   tone="neutral"
                   icon="lock"
                   action={mine.length
-                    ? <Button size="sm" icon="sparkles" onClick={fromStep}>Start from it</Button>
+                    ? (
+                      <Button size="sm" icon="sparkles" onClick={fromStep}>
+                        {say("startFromShort")}
+                      </Button>
+                    )
                     : null}
                 >
-                  Part of the app: it's set up in code, so it isn't changed here. To have one of
-                  your own like it, start a new agent from it.
+                  {say("appAgentNotice")}
                 </Notice>
               )
               : !edits
@@ -287,20 +292,22 @@ function AgentPage(
                 <p className="agent-page-note">
                   <Icon name="lock" size={14} />
                   {home
-                    ? `Those who manage ${placeName(home)} change it.`
-                    : "Those who manage the space it belongs to change it."}
+                    ? say("managersChangeIt", { place: placeName(home) })
+                    : say("managersChangeItElsewhere")}
                 </p>
               )
               : null}
             <section className="agent-section" aria-labelledby="agent-works">
               <div className="agent-section-head">
                 <h2 id="agent-works" className="agent-section-title">
-                  Works in <span className="agent-count">{working.length}</span>
+                  {say.nodes("worksIn", {
+                    count: <span className="agent-count">{working.length}</span>,
+                  })}
                 </h2>
                 {elsewhere.length
                   ? (
                     <Button size="sm" variant="ghost" icon="plus" onClick={addStep}>
-                      Add to a space
+                      {say("addToSpace")}
                     </Button>
                   )
                   : null}
@@ -320,10 +327,10 @@ function AgentPage(
                             : <Avatar name={place.name} kind="space" size={28} />}
                           <span className="agent-seat-name">{placeName(place)}</span>
                           {place.agent === id
-                            ? <Badge tone="primary">Answers new chats</Badge>
+                            ? <Badge tone="primary">{say("answersNewChats")}</Badge>
                             : null}
                           <Badge variant="outline">
-                            {seat.role === "viewer" ? "Viewer" : "Editor"}
+                            {seat.role === "viewer" ? say("roleViewer") : say("roleEditor")}
                           </Badge>
                           <Icon name="chevron" size={15} />
                         </a>
@@ -331,33 +338,37 @@ function AgentPage(
                     ))}
                   </ul>
                 )
-                : <p className="agent-none">It doesn't work in any of your spaces.</p>}
+                : <p className="agent-none">{say("worksNowhere")}</p>}
             </section>
             <section className="agent-section" aria-labelledby="agent-told">
-              <h2 id="agent-told" className="agent-section-title">Instructions</h2>
+              <h2 id="agent-told" className="agent-section-title">{say("instructions")}</h2>
               <Card className="agent-instructions-read">
                 <LongText text={agent.instructions} lines={12} />
               </Card>
             </section>
             <section className="agent-section" aria-labelledby="agent-uses">
-              <h2 id="agent-uses" className="agent-section-title">Model and tools</h2>
+              <h2 id="agent-uses" className="agent-section-title">{say("modelAndTools")}</h2>
               <DetailList
                 item={{}}
                 fields={[
                   {
                     field: "model",
-                    label: "Model",
+                    label: say("model"),
                     value: <code>{modelName(agent.model)}</code>,
                   },
                   ...(agent.effort
-                    ? [{ field: "effort", label: "Thinks", value: `${agent.effort} effort` }]
+                    ? [{
+                      field: "effort",
+                      label: say("thinks"),
+                      value: say("effort", { effort: agent.effort }),
+                    }]
                     : []),
                   {
                     field: "tools",
-                    label: "Tools",
+                    label: say("tools"),
                     value: agent.tools?.length
                       ? <ToolList tools={agent.tools} options={options} />
-                      : "None: it only talks.",
+                      : say("noTools"),
                   },
                 ]}
               />
@@ -409,7 +420,7 @@ function ToolList({ tools, options }: { tools: string[]; options: Options }): Re
             iconEnd={all ? undefined : "chevron-down"}
             onClick={() => setAll(!all)}
           >
-            {all ? "Show fewer" : `Show all ${tools.length}`}
+            {all ? say("showFewer") : say("showAll", { count: tools.length })}
           </Button>
         )
         : null}
@@ -422,7 +433,7 @@ const modelName = (model: Agent["model"]): string =>
   typeof model === "string"
     ? model
     : Array.isArray(model)
-    ? model.map(modelName).join(", then ")
+    ? model.map(modelName).join(say("modelsThenJoin"))
     : modelName(model.model);
 
 /** Changing it, in place: its fields, then Save (what changed only) or Cancel. */
@@ -451,7 +462,7 @@ function Edit(
   return (
     <form
       className="agent-edit"
-      aria-label={`Change ${was.name}`}
+      aria-label={say("changeAgent", { name: was.name })}
       onSubmit={async (event) => {
         event.preventDefault();
         if (!ready || busy) return;
@@ -482,9 +493,9 @@ function Edit(
         <p className="agent-form-note" aria-live="polite">
           {error
             ? <span className="agent-error" role="alert">{error}</span>
-            : `It keeps its name in chats, @${id}, whatever it's shown as.`}
+            : say("keepsHandle", { handle: id })}
         </p>
-        <Button onClick={done} disabled={busy}>Cancel</Button>
+        <Button onClick={done} disabled={busy}>{say("cancel")}</Button>
         <Button
           type="submit"
           variant="primary"
@@ -492,7 +503,7 @@ function Edit(
           loading={busy}
           disabled={!ready || !Object.keys(changed).length}
         >
-          Save changes
+          {say("saveChanges")}
         </Button>
       </div>
     </form>
@@ -531,10 +542,10 @@ function Delete(
       open={open}
       onClose={onClose}
       size="sm"
-      title={`Delete ${name}?`}
+      title={say("deleteTitle", { name })}
       footer={
         <>
-          <Button onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={onClose} disabled={busy}>{say("cancel")}</Button>
           <Button
             variant="destructive"
             icon="trash"
@@ -552,23 +563,22 @@ function Delete(
               }
             }}
           >
-            Delete {name}
+            {say("deleteButton", { name })}
           </Button>
         </>
       }
     >
       <ul className="agent-delete-means">
         <li>
-          <b>It leaves every space it works in</b>
-          {spaces.length ? <>, {listed(spaces)} among them.</> : "."}{" "}
-          Where it answered new chats, another agent there does.
+          {spaces.length
+            ? say.nodes("deleteLeavesNamed", {
+              bold: <b>{say("deleteLeavesBold")}</b>,
+              spaces: listed(spaces),
+            })
+            : say.nodes("deleteLeaves", { bold: <b>{say("deleteLeavesBold")}</b> })}
         </li>
-        <li>
-          <b>Nobody can ask it anything again,</b> and it can't be brought back.
-        </li>
-        <li>
-          <b>Chats it was in stay as they are,</b> with what it said.
-        </li>
+        <li>{say.nodes("deleteGone", { bold: <b>{say("deleteGoneBold")}</b> })}</li>
+        <li>{say.nodes("deleteChats", { bold: <b>{say("deleteChatsBold")}</b> })}</li>
       </ul>
       {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
     </Dialog>

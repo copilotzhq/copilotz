@@ -10,6 +10,7 @@
  * humanize("max_tokens"); // "Max tokens"
  * ```
  */
+import { say } from "./words.ts";
 
 /** Words that are initials. */
 const INITIALS: Record<string, string> = {
@@ -34,7 +35,7 @@ export function humanize(field: string): string {
   // "createdAt", "expiresOn": the time is what the row says, so the word goes.
   if (words.length > 1 && (words.at(-1) === "at" || words.at(-1) === "on")) words.pop();
   if (!words.length) return field;
-  if (words.length === 1 && words[0] === "at") return "When";
+  if (words.length === 1 && words[0] === "at") return say("when");
   const text = words.map((word) => INITIALS[word] ?? word).join(" ");
   return text[0].toUpperCase() + text.slice(1);
 }

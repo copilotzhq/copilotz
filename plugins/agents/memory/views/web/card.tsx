@@ -16,6 +16,7 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import type { Memory } from "../../collections/memory.ts";
 import { moveStep } from "./move.ts";
+import { say } from "./words.ts";
 import { nameOf, withNames } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
@@ -36,11 +37,11 @@ export function MemoryCard(
     <Card as="li" className={`mem-card${m.core ? " mem-core" : ""}`}>
       <span className="mem-menu">
         <Menu
-          label="This memory: more"
+          label={say("moreMenu")}
           align="end"
           size="sm"
           items={[{
-            label: "Move to another space…",
+            label: say("moveToSpace"),
             icon: "move",
             onSelect: () => openPalette(moveStep(m, call)),
           }]}
@@ -49,25 +50,29 @@ export function MemoryCard(
       <p className="mem-text">
         {m.core
           ? (
-            <span className="mem-star" title="Core: always in mind">
-              ★<span className="copilotz-sr">Core:</span>
+            <span className="mem-star" title={say("coreHint")}>
+              ★<span className="copilotz-sr">{say("coreSr")}</span>
             </span>
           )
           : null}
         {withNames(m.text, names)}
       </p>
       <footer>
-        <span>{m.by === "memory" ? "Noted from the chat" : `By ${by ?? nameOf(m.by, names)}`}</span>
+        <span>
+          {m.by === "memory"
+            ? say("notedFromChat")
+            : say("by", { name: by ?? nameOf(m.by, names) })}
+        </span>
         <span aria-hidden="true">·</span>
         <Time at={m.updated ?? m.at} />
         {m.updated
           ? m.was
             ? (
-              <Tooltip text={`Was: ${withNames(m.was, names)}`}>
-                <Badge tabIndex={0}>updated</Badge>
+              <Tooltip text={say("was", { text: withNames(m.was, names) })}>
+                <Badge tabIndex={0}>{say("updated")}</Badge>
               </Tooltip>
             )
-            : <Badge>updated</Badge>
+            : <Badge>{say("updated")}</Badge>
           : null}
         {space
           ? (
@@ -88,7 +93,7 @@ export function MemoryCard(
                 m.in ? `?in=${encodeURIComponent(m.in)}` : ""
               }`}
             >
-              Chat
+              {say("chat")}
             </Button>
           )
           : null}

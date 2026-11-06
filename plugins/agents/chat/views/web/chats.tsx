@@ -22,6 +22,7 @@ import {
 import { byDay, lastOf, type Listed, matches, titleOf } from "./listed.ts";
 import { moveStep } from "./move.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -75,11 +76,11 @@ function Chats(
       <EmptyState
         icon="chat"
         tone="primary"
-        title="No chats here yet"
+        title={say("noChatsTitle")}
         className="chats-empty"
-        action={<Button variant="primary" icon="compose" href={fresh}>New chat</Button>}
+        action={<Button variant="primary" icon="compose" href={fresh}>{say("newChat")}</Button>}
       >
-        Start one: its agents work with what's in this space, and whoever's in it can follow along.
+        {say("noChatsBody")}
       </EmptyState>
     );
   }
@@ -93,14 +94,14 @@ function Chats(
           type="search"
           size={compact ? "sm" : "md"}
           className="chats-search"
-          aria-label="Search chats"
-          placeholder={`Search ${threads.length} chat${threads.length === 1 ? "" : "s"}`}
+          aria-label={say("searchChatsLabel")}
+          placeholder={say("searchChats", { count: threads.length })}
           autoComplete="off"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
         {compact
-          ? <IconButton icon="compose" label="New chat here" variant="outline" href={fresh} />
+          ? <IconButton icon="compose" label={say("newChatHere")} variant="outline" href={fresh} />
           : null}
       </div>
       {groups.length
@@ -112,8 +113,10 @@ function Chats(
             </ul>
           </section>
         ))
-        : <p className="chats-none">No chats match “{search.trim()}”.</p>}
-      {full && !search ? <p className="chats-none">The latest {threads.length} are here.</p> : null}
+        : <p className="chats-none">{say("noChatsMatch", { search: search.trim() })}</p>}
+      {full && !search
+        ? <p className="chats-none">{say("latestAreHere", { count: threads.length })}</p>
+        : null}
     </div>
   );
 }
@@ -144,18 +147,18 @@ function Row(
           <Time at={t.at} />
           {compact ? null : (
             <span className="chats-row-count">
-              {t.messages} message{t.messages === 1 ? "" : "s"}
+              {say("messageCount", { count: t.messages })}
             </span>
           )}
         </span>
       </a>
       <span className="chats-row-menu">
         <Menu
-          label={`${title}: more`}
+          label={say("rowMore", { title })}
           align="end"
           size="sm"
           items={[{
-            label: "Move to another space…",
+            label: say("moveToSpace"),
             icon: "move",
             onSelect: () => openPalette(moveStep({ thread: t._id, title, from: t.in, call })),
           }]}

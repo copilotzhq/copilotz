@@ -8,6 +8,7 @@
  */
 import type { Member, Reached, Space } from "../../contract.ts";
 import { nameOf } from "../../shared/names.ts";
+import { say } from "./words.ts";
 
 /** Someone, as a space's name says them: their name, else an email's name part. */
 const short = (person: string, names: Record<string, string>) => {
@@ -28,8 +29,8 @@ export const spaceName = (
   space.kind !== "personal"
     ? space.name
     : viewer && space.owner && space.owner !== viewer
-    ? `${short(space.owner, names)}'s Personal`
-    : "Personal";
+    ? say("theirPersonal", { name: short(space.owner, names) })
+    : say("personal");
 
 /** Whose Personal spaces these are, but the viewer's: the people to name. */
 export const ownersOf = (spaces: Pick<Space, "kind" | "owner">[], viewer?: string): string[] =>
@@ -77,33 +78,66 @@ export function whoOf(key: string, names: Record<string, string> = {}): Who {
 
 /** The roles a space's members have, in the order they let more, with what each lets. */
 export const ROLES = [
-  { value: "viewer", label: "Viewer", lets: "Reads what's here" },
-  { value: "editor", label: "Editor", lets: "Reads, chats and adds things here" },
-  { value: "manager", label: "Manager", lets: "Also invites people, and renames the space" },
+  {
+    value: "viewer",
+    get label() {
+      return say("roleViewer");
+    },
+    get lets() {
+      return say("roleViewerLets");
+    },
+  },
+  {
+    value: "editor",
+    get label() {
+      return say("roleEditor");
+    },
+    get lets() {
+      return say("roleEditorLets");
+    },
+  },
+  {
+    value: "manager",
+    get label() {
+      return say("roleManager");
+    },
+    get lets() {
+      return say("roleManagerLets");
+    },
+  },
 ] as const;
 
 /**
  * The roles an agent works in (never manager), editor first, each with what
  * it lets: an editor answers chats there and adds to what's there; a viewer
- * only reads it, for chats where it's an editor.
+ * only reads it, for chats where it's an editor. Labels are read when shown,
+ * so they follow the app's words.
  */
 export const AGENT_ROLES = [
   {
     value: "editor",
-    label: "Editor",
-    lets: "Answers chats here, and adds notes, memories and files",
+    get label() {
+      return say("roleEditor");
+    },
+    get lets() {
+      return say("agentEditorLets");
+    },
   },
   {
     value: "viewer",
-    label: "Viewer",
-    lets: "Reads what's here for chats elsewhere; doesn't answer here",
+    get label() {
+      return say("roleViewer");
+    },
+    get lets() {
+      return say("agentViewerLets");
+    },
   },
 ] as const;
 
 /** A role with its article, as a sentence says it: "an editor", "a viewer". */
 export const aRole = (role: string) => {
   const name = roleName(role).toLowerCase();
-  return `${/^[aeiou]/.test(name) ? "an" : "a"} ${name}`;
+  return say(/^[aeiou]/.test(name) ? "anRole" : "aRole", { role: name });
 };
 
 /** What looks like an email address (the server says for sure). */
@@ -114,16 +148,18 @@ export const addressesOf = (typed: string) => typed.split(/[\s,;]+/).filter(Bool
 
 /** Several, as a sentence lists them: "a", "a and b", "a, b and c". */
 export const listed = (items: string[]) =>
-  items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+  items.length < 2
+    ? items.join("")
+    : items.length === 2
+    ? say("listPair", { first: items[0], second: items[1] })
+    : say("listMore", { rest: items.slice(0, -1).join(", "), last: items.at(-1)! });
 
 /**
  * What inviting did, in words that never say whether an address has an
  * account here: nobody knows that until they accept.
  */
 export const invitedNote = (emails: string[]) =>
-  `Invited ${listed(emails)}. ${
-    emails.length === 1 ? "They'll join once they accept." : "Each joins once they accept."
-  }`;
+  say(emails.length === 1 ? "invitedOne" : "invitedMany", { emails: listed(emails) });
 
 /** A role, as people say it. */
 export const roleName = (role: string) =>

@@ -17,6 +17,7 @@ import { cx } from "./cx.ts";
 import { IconButton } from "./icon-button.tsx";
 import { useModal } from "./modal.ts";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 
 const SHEET = sheet(
   "dialog",
@@ -89,7 +90,7 @@ export function Dialog(
               </div>
               <IconButton
                 icon="close"
-                label="Close"
+                label={say("close")}
                 size="sm"
                 onClick={() => ref.current?.close()}
               />

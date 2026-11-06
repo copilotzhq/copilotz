@@ -9,6 +9,7 @@ import { Avatar, Button, Card, go, Icon, message, Time } from "../../../../../ho
 import type { Invitation } from "../../contract.ts";
 import { spacePath } from "./tabs.ts";
 import { aRole, whoOf } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -45,7 +46,7 @@ export function InvitationCard(
         disabled={!!busy}
         onClick={() => void answer("accept")}
       >
-        {compact ? "Join" : `Join ${i.name}`}
+        {compact ? say("join") : say("joinNamed", { name: i.name })}
       </Button>
       <Button
         size="sm"
@@ -54,7 +55,7 @@ export function InvitationCard(
         disabled={!!busy}
         onClick={() => void answer("decline")}
       >
-        Decline
+        {say("decline")}
       </Button>
     </div>
   );
@@ -63,7 +64,7 @@ export function InvitationCard(
       as="li"
       padding="none"
       className={`invitation${compact ? " invitation-compact" : ""}`}
-      aria-label={`Invitation to ${i.name}`}
+      aria-label={say("invitationTo", { name: i.name })}
     >
       {compact
         ? (
@@ -74,31 +75,16 @@ export function InvitationCard(
         : <Avatar name={i.name} kind="space" size={40} className="invitation-space" />}
       <div className="invitation-text">
         <p className="invitation-title">
-          {compact
-            ? (
-              <>
-                Invited to <b>{i.name}</b>
-              </>
-            )
-            : (
-              <>
-                <b>{by}</b> invited you to <b>{i.name}</b>, as {aRole(i.role)}.
-              </>
-            )}
+          {compact ? say.nodes("invitedTo", { space: <b>{i.name}</b> }) : say.nodes("invitedYou", {
+            by: <b>{by}</b>,
+            space: <b>{i.name}</b>,
+            role: aRole(i.role),
+          })}
         </p>
         <p className="invitation-meta">
           {error ?? (compact
-            ? (
-              <>
-                By {by} · as {aRole(i.role)}
-              </>
-            )
-            : (
-              <>
-                Invited{" "}
-                <Time at={i.at} long />. Joining shows you its chats, memories and computers.
-              </>
-            ))}
+            ? say("byAs", { by, role: aRole(i.role) })
+            : say.nodes("invitedAt", { time: <Time at={i.at} long /> }))}
         </p>
         {compact ? buttons : null}
       </div>

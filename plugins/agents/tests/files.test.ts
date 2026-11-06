@@ -78,7 +78,7 @@ test("an agent's message with files: another plugin's document, or one given; ea
   const pictures = definePlugin({
     name: "pictures",
     collections: {
-      image: {
+      picture: {
         schema: {
           type: "object",
           properties: { type: { type: "string" }, data: { type: "string" } },
@@ -88,7 +88,7 @@ test("an agent's message with files: another plugin's document, or one given; ea
     actions: {
       "test.picture": defineAction({
         input: { type: "object" },
-        run: async (ctx, input) => (await ctx.db.collection("image").insertOne(input)).insertedId,
+        run: async (ctx, input) => (await ctx.db.collection("picture").insertOne(input)).insertedId,
       }),
     },
   });
@@ -107,7 +107,7 @@ test("an agent's message with files: another plugin's document, or one given; ea
       thread,
       from: "lead",
       files: [
-        { id: picture, collection: "image" },
+        { id: picture, collection: "picture" },
         { name: "brief.txt", type: "text/plain", data: b64("Round, blue.") },
       ],
     };
@@ -126,7 +126,7 @@ test("an agent's message with files: another plugin's document, or one given; ea
     ]);
     // A file of the chat, its content the picture's own blob: kept once.
     const [kept] = await store.find("file", { _id: `${id}:file.0` });
-    const [made] = await store.find("image", { _id: picture });
+    const [made] = await store.find("picture", { _id: picture });
     assert(isBlobRef(kept.data));
     assertEquals([kept.thread, (kept.data as { $blob: string }).$blob], [
       thread,
@@ -137,8 +137,8 @@ test("an agent's message with files: another plugin's document, or one given; ea
     assertStringIncludes(JSON.stringify(prompt.history), "[sent: image.png, brief.txt]");
     // Refused before anything's said: what isn't there to read, what isn't a file, saying nothing.
     const refused = await Promise.all([
-      { files: [{ id: "nope", collection: "image" }] },
-      { files: [{ id: picture, collection: "image", data: logo }] },
+      { files: [{ id: "nope", collection: "picture" }] },
+      { files: [{ id: picture, collection: "picture", data: logo }] },
       { files: [{ name: "x", type: "not a type", data: b64("x") }] },
       { files: [{ name: "x", type: "text/plain" }] },
       { text: " " },

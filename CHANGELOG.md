@@ -472,11 +472,15 @@ again. Developer keys made before stop working: make them again (step 7). The st
   them), within the caller's reach, schema-checked, and recorded as the caller's events.
   **Breaking:** plugins' records change through their Actions: their rules refuse direct writes for
   spaces, memberships, invitations and requests; identity's people and sessions; keys; contacts;
-  chat's messages and `live`; routines and their runs; the computers plugin's records; apps; cloud
-  computers; agents; accounts; WhatsApp's phones and numbers; and voice blocks. Still writable
-  directly, each under its rule: `thread`, `file`, `shown`, `memory`, `skill`, `skillFile`, and
-  apps' own collections. The events stream follows the rules: a change is sent when the reader's
-  rule matches the event's document.
+  chat's messages, `live`, threads, files and what was shown (`shown`); memories; skills and their
+  files; routines and their runs; the computers plugin's records; apps; cloud computers; agents;
+  accounts; WhatsApp's phones and numbers; and voice blocks. Still writable directly, each under its
+  rule: apps' own collections (an app guards its own the same way when its rules assume its
+  Actions). Following events or watching a read holds a request open: an anonymous caller gets 401.
+  The events stream follows the rules: a change is sent when the reader's rule matches the event's
+  document.
+- **Identity: only a session proves someone.** `credential.actor` asks for `kind: "session"`: a key
+  identity made before (`kind: "key"`, unscoped) proves nobody.
 - **The client** (`connect`, from `copilotz` and `copilotz/web`): `client.db.collection(name)`
   (`find` with `.toArray()`, `findOne`, `countDocuments`, `insertOne`, `updateOne`, `replaceOne`,
   `deleteOne`, `query`, `watch(filter, options?, onChange)`), `client.call(action, input, { id })`,

@@ -58,12 +58,13 @@ boundary: the runtime enforces, so agents can be naive and still safe.
   its writes, asked as the outsider's own (`direct`). A plugin whose records only its Actions may
   change refuses there: spaces, memberships, invitations and requests; people and sessions; keys;
   contacts; messages and what a turn is doing; routines; computers, desks, previews, apps and cloud
-  computers; agents; accounts; WhatsApp's phones and numbers; voice blocks. Still writable directly,
-  each under its rule: chats (`thread`), files, what was shown after an answer (`shown`), memories,
-  skills and their files, and apps' own collections. Filtering or sorting by a private field is
-  refused, over REST and the socket alike. An actor can carry what set it going (`origin`: a
-  routine), which only code can set. A message's `via` is only what people are shown: anyone can
-  claim it.
+  computers; chats (`thread`), messages, files and what was shown after an answer (`shown`);
+  memories; skills and their files; agents; accounts; WhatsApp's phones and numbers; voice blocks.
+  Still writable directly, each under its rule: apps' own collections (an app whose rules assume its
+  Actions refuses there too, as Compass's boards and documents do). Filtering or sorting by a
+  private field is refused, over REST and the socket alike. An actor can carry what set it going
+  (`origin`: a routine), which only code can set. A message's `via` is only what people are shown:
+  anyone can claim it.
 - **A space put away** (archived) is read and managed, not written in: reach says so.
 - **Leaving** follows the membership (`member.deleted`), however someone left: their computers'
   desks, their yeses and keys for that space end; out of the org, all of them and their own

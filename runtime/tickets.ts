@@ -1,34 +1,30 @@
 /**
- * Tickets: what a signed-in browser trades its session for, to connect. The
- * session stays in an httpOnly cookie its code never sees; a ticket works
- * once, for a minute, and the runtime's `admit` turns it into the person.
+ * Tickets: what a browser trades its credential for at `POST /connect`, to
+ * open the runtime's socket. The credential stays where it is (an httpOnly
+ * cookie the page's code never sees); a ticket works once, for a minute, and
+ * the owner admits the socket that shows it as whoever it was issued for.
  *
- * Each actor has `perMinute` tickets a minute (30 unless said), however many
- * tabs and reconnects that is: past it, `issue` refuses (a public `too_many`
- * failure, its `retryAfter` the seconds until the minute's out), and
- * `/connect` answers 429. Tickets past their minute are dropped as they pass
- * (see runtime/expiring.ts), never by looking through them all. Signing out
- * ends an actor's tickets not yet used (`end`).
- *
- * ```ts
- * const tickets = createTickets();
- * const runtime = await createRuntime({ store, plugins, admit: tickets.admit });
- * ```
+ * Each actor has `perMinute` tickets a minute (30 unless said: the runtime's
+ * `browsers.tickets`), however many tabs and reconnects that is: past it,
+ * `issue` refuses (a public `too_many` failure, its `retryAfter` the seconds
+ * until the minute's out), and `/connect` answers 429. Tickets past their
+ * minute are dropped as they pass (see expiring.ts), never by looking
+ * through them all. Ending an actor (`end`: signed out, erased) ends its
+ * tickets not yet used.
  */
-import type { Actor } from "../../runtime/mod.ts";
-import { failure } from "../../runtime/errors.ts";
-import { expiring } from "../../runtime/expiring.ts";
+import type { Actor } from "./store.ts";
+import { failure } from "./errors.ts";
+import { expiring } from "./expiring.ts";
 
 export type Tickets = {
   /** A ticket for this actor, for one connection; refused (`too_many`) past its minute's. */
   issue(actor: Actor): string;
   /** Who a ticket is for, once; undefined when it's unknown, used or old. */
   admit(ticket: string): Actor | undefined;
-  /**
-   * Their tickets not yet used are no one's (signed out): what was handed
-   * out before lets nobody in after.
-   */
-  end?(actor: Actor): void;
+  /** Their tickets not yet used are no one's: what was handed out before lets nobody in after. */
+  end(actor: Actor): void;
+  /** Drops every ticket, and stops their timers. */
+  close(): void;
 };
 
 const MINUTE = 60_000;
@@ -72,6 +68,11 @@ export function createTickets(options: { ms?: number; perMinute?: number } = {})
       const who = `${actor.kind}:${actor.id}`;
       for (const ticket of theirs.get(who) ?? []) issued.delete(ticket);
       theirs.delete(who);
+    },
+    close() {
+      issued.close();
+      counted.close();
+      theirs.close();
     },
   };
 }

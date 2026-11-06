@@ -186,6 +186,8 @@ export type BrowserLimits = {
   contacts?: number;
   /** Contacts' connections counted with other runtimes' on the same listener. */
   pool?: ContactsPool;
+  /** Each actor's tickets a minute, from `POST /connect` (30): its tabs and reconnects together. */
+  tickets?: number;
 };
 
 /** What's wrong with browser limits, if anything (checked as the runtime starts). */
@@ -200,6 +202,7 @@ export function limitsProblem(limits: BrowserLimits | undefined): string | undef
     ["network", limits.network],
     ["line", limits.line],
     ["contacts", limits.contacts],
+    ["tickets", limits.tickets],
   ];
   for (const [name, value] of counts) {
     if (value !== undefined && !(Number.isInteger(value) && (value as number) > 0)) {

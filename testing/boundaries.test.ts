@@ -45,6 +45,7 @@ const PRIMITIVES = [
   "events",
   "processors",
   "resources",
+  "routes",
   "shared",
   "views",
 ];

@@ -36,6 +36,8 @@ import {
   WIRE,
 } from "./browsers.ts";
 import { expiring } from "./expiring.ts";
+import { checkHttp, createFetch, SOCKET } from "./fetch.ts";
+import { createTickets } from "./tickets.ts";
 import { memoryStore } from "./memory.ts";
 import {
   type Hooks,
@@ -204,6 +206,13 @@ export type Owner = {
   /** The Oxian Hypervisor executors connect to; serve it to accept remote executors. */
   hypervisor: Hypervisor;
   /**
+   * Answers a request (see fetch.ts): plugins' routes, as whoever the
+   * request is, and the runtime's own paths, its socket (`/oxian`) and
+   * `POST /connect`. A host only calls it: `Deno.serve(runtime.fetch)`.
+   * `info` is what a listener gives beside the request (Deno's, Bun's server).
+   */
+  fetch(request: Request, info?: unknown): Promise<Response>;
+  /**
    * Plugins' workers, for trusted host code (a route streaming a request to a
    * computer): what `ctx.workers.dispatch` sends from an Action, with the
    * job's input as bytes (`body`, streamed) rather than JSON. Fails with code
@@ -274,11 +283,6 @@ export async function createOwner(
     metrics?: Metrics;
     /** What timers run on (the system's by default; `manualClock` in tests). */
     clock?: Clock;
-    /**
-     * Who a browser is, from what it presents when it connects (a one-time
-     * ticket the host issued): undefined refuses it. Without it, no browsers.
-     */
-    admit?(secret: string): Actor | undefined | Promise<Actor | undefined>;
     /** How much browsers may hold (see browsers.ts): contacts' caps, a pool shared with others. */
     browsers?: BrowserLimits;
   },
@@ -287,6 +291,16 @@ export async function createOwner(
   const limited = limitsProblem(options.browsers);
   if (limited) throw invalid(limited);
   const registry = merge(options.plugins);
+  checkHttp(registry);
+  // What browsers connect with: a one-time ticket, from `POST /connect` (see fetch.ts).
+  const tickets = createTickets(
+    options.browsers?.tickets !== undefined ? { perMinute: options.browsers.tickets } : {},
+  );
+  // The socket `runtime.fetch` accepts, `/oxian`, beside the transports the app gives.
+  const transports: Transport[] =
+    options.transports.some((t) => t.type === "websocket" && t.config.path === SOCKET)
+      ? options.transports
+      : [...options.transports, { type: "websocket", config: { path: SOCKET } }];
   // The View a browser's watched read is: one read, made as its person.
   registry.views[READ_VIEW] = { [WIRE]: readView as ViewDef };
   const declared = events(registry);
@@ -1170,8 +1184,8 @@ export async function createOwner(
     return { kind, id: String(who.id) };
   };
 
-  // Remote executors prove the shared key; a browser, a ticket the host's `admit` knows; a
-  // plugin's worker, what its kind's Action knows. Oxian fences their sessions.
+  // Remote executors prove the shared key; a browser, a ticket `/connect` issued; a plugin's
+  // worker, what its kind's Action knows. Oxian fences their sessions.
   let generation = 0;
   const admit: HypervisorOptions["admit"] = async (
     { identity, credential, workloads, capacity },
@@ -1206,9 +1220,7 @@ export async function createOwner(
       const since = browsers.ends();
       const actor = credential.kind === "resume"
         ? browsers.resumed(secret, identity.workerId)
-        : options.admit
-        ? await options.admit(secret)
-        : undefined;
+        : tickets.admit(secret);
       if (!actor) throw invalid("Unknown executor key.");
       browsers.room(actor, identity.workerId, since);
       // A browser: its person rides on the connection, and it takes no work but its session. Its
@@ -1285,12 +1297,9 @@ export async function createOwner(
 
   const ready = new Set<string>();
   const hypervisor = createHypervisor({
-    transports: options.transports,
-    // Its own admission whenever anyone but its in-process executors may connect.
-    ...(options.admit || Object.keys(registry.workers).length ||
-        options.transports.some((t) => t.type !== "in-process")
-      ? { admit }
-      : {}),
+    transports,
+    // Its own admission: anyone but its in-process executors may connect, over its socket.
+    admit,
     // A worker says it's ready as soon as it's welcomed (none starts anything first): one that
     // doesn't soon is closed, so a connection let in can't hold its place without being used.
     config: {
@@ -1359,6 +1368,8 @@ export async function createOwner(
       measure.executors.set(ready.size);
     },
   });
+  // The runtime as a fetch handler: its socket, `/connect`, and plugins' routes.
+  const http = createFetch({ registry, runtime: () => api, tickets, hypervisor });
   /**
    * A worker kind's Action hears one come or go, as the system; its failure
    * is only logged. Closing waits for what it's telling.
@@ -1402,11 +1413,14 @@ export async function createOwner(
       return { metadata: {}, body: handle.output };
     };
 
-  /** Ends an actor's browsers: see `Owner.disconnect`. */
-  const disconnect = (actor: Actor) =>
-    browsers.end(actor, (workerId) => {
+  /** Ends an actor's browsers, their tickets, and what `who` kept for them: see `Owner.disconnect`. */
+  const disconnect = (actor: Actor) => {
+    tickets.end(actor);
+    http.forget(actor);
+    return browsers.end(actor, (workerId) => {
       void hypervisor.drain(workerId, "ended").catch(() => {});
     });
+  };
   const browsers = createBrowsers({
     observers,
     ruled,
@@ -1901,6 +1915,7 @@ export async function createOwner(
       misses: cache?.stats().misses ?? 0,
     }),
     hypervisor,
+    fetch: (request, info) => http.fetch(request, info),
     async close(options = {}) {
       // What's running (deliveries, timer occurrences) gets a while to finish,
       // workers still there to serve it; nothing new starts.
@@ -1927,6 +1942,7 @@ export async function createOwner(
       // shutdown's drain doesn't wait them out.
       browsers.close();
       resumed.close();
+      tickets.close();
       await hypervisor.shutdown();
       // Processors' last positions are saved if they can be (a fenced owner can't): the store
       // closes either way, and a failure still reaches the caller.

@@ -29,6 +29,10 @@ export type {
 export type { Actor, Doc, Edge, Event, Executed, Inspected, Row, Store } from "./store.ts";
 export { type Maintenance, MAINTENANCE_SQL, redacted, type Written } from "./maintain.ts";
 export { personOf, principalOf } from "./actor.ts";
+export { clientAddress, loopbackAddress, setClientAddress } from "./address.ts";
+export { bodyOf, jsonOf } from "./body.ts";
+export { cookieSafe, type CookieSettings } from "./cookies.ts";
+export { loopback, nearby } from "./site.ts";
 export { keyOf, linksOf, type LinksSettings, secretsOf, signLink, verifyLink } from "./links.ts";
 export {
   type Caller,

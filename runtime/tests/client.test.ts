@@ -16,9 +16,10 @@ import {
   type ViewContext,
 } from "../mod.ts";
 import { connect } from "../client.ts";
+import { listen } from "../../hosts/web/node/serve.ts";
 import { lines } from "../wire.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
-import { host, test } from "../../testing/mod.ts";
+import { test, testWho, ticketFor } from "../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -139,27 +140,16 @@ async function setup(
   fn: (rt: Runtime, as: (actor: Actor) => ReturnType<typeof connect>) => Promise<void>,
 ) {
   const topic = `client-test.${crypto.randomUUID()}`;
-  const tickets = new Map<string, Actor>();
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [notes],
+    plugins: [notes, testWho],
     transports: [{ type: "in-process", config: { topic } }],
-    // A ticket works once.
-    admit: (secret) => {
-      const actor = tickets.get(secret);
-      tickets.delete(secret);
-      return actor;
-    },
   });
   const clients: ReturnType<typeof connect>[] = [];
   const as = (actor: Actor) => {
     const client = connect({
       transport: { type: "in-process", config: { topic } },
-      ticket: () => {
-        const secret = crypto.randomUUID();
-        tickets.set(secret, actor);
-        return Promise.resolve(secret);
-      },
+      ticket: () => ticketFor(rt, actor),
       plugins: [front],
     });
     clients.push(client);
@@ -257,24 +247,17 @@ test("the same read made twice at once is asked for, and answered, once", async 
 async function overSocket(
   fn: (rt: Runtime, client: ReturnType<typeof connect>, sockets: WebSocket[]) => Promise<void>,
 ) {
-  const tickets = new Map<string, Actor>();
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [notes],
-    transports: [{ type: "websocket", config: { path: "/browsers" } }],
-    admit: (secret) => {
-      const actor = tickets.get(secret);
-      tickets.delete(secret);
-      return actor;
-    },
+    plugins: [notes, testWho],
   });
-  const listener = await host(rt.hypervisor);
+  const listener = await listen(rt.fetch);
   const sockets: WebSocket[] = [];
   const client = connect({
     transport: {
       type: "websocket",
       config: {
-        url: `ws://127.0.0.1:${new URL(String(listener.url)).port}/browsers`,
+        url: `ws://127.0.0.1:${new URL(String(listener.url)).port}/oxian`,
         allowInsecureLoopback: true,
         socket: ({ url, protocol }) => {
           const socket = new WebSocket(url, protocol);
@@ -283,11 +266,7 @@ async function overSocket(
         },
       },
     },
-    ticket: () => {
-      const secret = crypto.randomUUID();
-      tickets.set(secret, ana);
-      return Promise.resolve(secret);
-    },
+    ticket: () => ticketFor(rt, ana),
     plugins: [front],
   });
   try {
@@ -404,9 +383,8 @@ test("a client without a valid ticket isn't let in", async () => {
   const topic = `client-test.${crypto.randomUUID()}`;
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [notes],
+    plugins: [notes, testWho],
     transports: [{ type: "in-process", config: { topic } }],
-    admit: () => undefined,
   });
   const client = connect({
     transport: { type: "in-process", config: { topic } },

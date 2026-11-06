@@ -9,8 +9,8 @@
  * settings at start: `resources: { links: { origin: "https://app.example",
  * secret: env.LINK_SECRET } }` (at least 32 bytes). Without them, nothing is
  * signed. The origin is signed too, so a link made for one app never opens
- * another, whatever their secrets. An app serving many orgs (`hosts/orgs`)
- * gives each org's runtime its own origin (`https://app.example/o/acme`):
+ * another, whatever their secrets. An app serving many orgs gives each
+ * org's runtime its own origin (`https://app.example/o/acme`):
  * with one origin for all, an org's links would open another's files.
  *
  * Nothing is signed with the secret itself: each use has a key of its own,

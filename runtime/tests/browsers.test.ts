@@ -22,7 +22,7 @@ import { failure } from "../errors.ts";
 import { connect } from "../client.ts";
 import { decode, encode } from "../wire.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
-import { test } from "../../testing/mod.ts";
+import { test, testWho, ticketFor } from "../../testing/mod.ts";
 
 /** Bytes as a stream, as a call's input or output comes. */
 const stream = (bytes: Uint8Array) =>
@@ -169,25 +169,15 @@ test("an actor's resume credentials: so many, the oldest dropped; all forgotten 
 
 test("the owner refuses an actor's seventeenth connection, and takes one when another goes", async () => {
   const topic = `browsers-test.${crypto.randomUUID()}`;
-  const tickets = new Map<string, Actor>();
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [definePlugin({ name: "nothing" })],
+    plugins: [definePlugin({ name: "nothing" }), testWho],
     transports: [{ type: "in-process", config: { topic } }],
-    admit: (secret) => {
-      const actor = tickets.get(secret);
-      tickets.delete(secret);
-      return actor;
-    },
   });
   const as = (actor: Actor) =>
     connect({
       transport: { type: "in-process", config: { topic } },
-      ticket: () => {
-        const secret = crypto.randomUUID();
-        tickets.set(secret, actor);
-        return Promise.resolve(secret);
-      },
+      ticket: () => ticketFor(rt, actor),
       plugins: [],
     });
   const clients = Array.from({ length: 16 }, () => as(ana));

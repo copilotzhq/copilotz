@@ -17,7 +17,9 @@ import type {
   ProcessorDef,
   ReadContext,
   Resources,
+  Route,
   Views,
+  Who,
   WorkerKind,
 } from "./define.ts";
 import type { ScheduleDef } from "./schedules.ts";
@@ -89,6 +91,12 @@ export type Registry = {
   labels?: Labels;
   /** Kinds of worker, by name. */
   workers: Record<string, WorkerKind>;
+  /** Plugins' routes, by pattern, each with the plugin that declares it (see runtime/routes.ts). */
+  routes: Record<string, { route: Route; plugin: string }>;
+  /** Plugins' `who`, in plugin order: the first that answers says who a request is. */
+  whos: { plugin: string; who: Who }[];
+  /** What each plugin builds on, by name (its `requires`). */
+  requires: Record<string, string[]>;
 };
 
 const plain = (value: unknown): value is Record<string, unknown> =>
@@ -114,8 +122,8 @@ export function patch(target: unknown, value: unknown): unknown {
  * Plugins merge in order. Collections, Actions and Processors are unique: two
  * of one name are a mistake. Everything else is configuration a later plugin
  * may change: resources and schedules patch entry by entry (see `patch`), and
- * a later View or adapter replaces an earlier one of its name; `null` removes
- * any of them. What each plugin `requires` must be there, except in a
+ * a later View, adapter or route replaces an earlier one of its name; `null`
+ * removes any of them. Each plugin's `who` is kept, in order. What each plugin `requires` must be there, except in a
  * client's (`elsewhere`), which loads front ends whose plugins live with the
  * owner. Each plugin's startup check runs later (`checked`).
  */
@@ -133,6 +141,9 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     checks: [],
     guards: [],
     workers: {},
+    routes: {},
+    whos: [],
+    requires: {},
   };
   const into = <T>(
     target: Record<string, T>,
@@ -183,6 +194,11 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     }
     into(registry.workers, plugin.workers, "worker kind");
     if (plugin.guard) registry.guards.push(plugin.guard);
+    if (plugin.who) registry.whos.push({ plugin: plugin.name, who: plugin.who });
+    for (const [key, route] of Object.entries(plugin.routes ?? {})) {
+      if (route === null) delete registry.routes[key];
+      else registry.routes[key] = { route, plugin: plugin.name };
+    }
     if (plugin.labels) registry.labels = plugin.labels;
     for (const [name, entry] of Object.entries(plugin.schedules ?? {})) {
       if (entry === null) delete registry.schedules[name];
@@ -218,6 +234,7 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     if (missing.length) throw invalid(`${plugin.name} needs ${missing.join(", ")}: add it too`);
   }
   registry.checks = plugins.flatMap((p) => p.check ? [{ name: p.name, check: p.check }] : []);
+  registry.requires = Object.fromEntries(plugins.map((p) => [p.name, p.requires ?? []]));
   return registry;
 }
 

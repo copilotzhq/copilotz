@@ -410,7 +410,7 @@ export async function widget(options: WidgetOptions): Promise<Client | undefined
 
   let shown: Observation | undefined;
   const show = () => {
-    const observed = client.observe("web", meta.view, meta.item, {
+    const observed = client.observe(meta.view, meta.item, {
       viewer: meta.viewer,
       hints: { ...meta.hints, mode, surface: "widget" },
       part: (part, key) => <Part key={key} part={part} />,

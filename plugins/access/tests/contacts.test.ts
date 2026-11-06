@@ -100,10 +100,8 @@ const probe = definePlugin({
     ["thread", "message", "file", "contact", "space", "member", "memory", "person", "credential"]
       .map((c) => [
         c,
-        {
-          test: (filter: Record<string, unknown> | undefined, ctx: ViewContext) =>
-            ctx.db.collection(c).find(filter ?? {}).value ?? [],
-        },
+        (filter: Record<string, unknown> | undefined, ctx: ViewContext) =>
+          ctx.db.collection(c).find(filter ?? {}).value ?? [],
       ]),
   ),
   actions: {
@@ -238,7 +236,7 @@ async function setup(fn: (s: Setup) => Promise<void>) {
       carlas,
       danis,
       read: async <T>(collection: string, actor: Actor, filter: Record<string, unknown> = {}) => {
-        const seen = runtime.observe<T[]>("test", collection, filter, { actor });
+        const seen = runtime.observe<T[]>(collection, filter, { actor });
         const output = await seen.ready;
         seen.close();
         return output.status === "ready" ? output.value : [];
@@ -402,7 +400,7 @@ test("the space's people reach every contact's chat; taking a contact out cuts i
     assertEquals(await runtime.query("thread.recent", { in: shop }, { actor: bob }), []);
 
     // Watching its chat, then taken out of it: what it sees goes.
-    const seen = runtime.observe<Thread[]>("test", "thread", {}, { actor: carla });
+    const seen = runtime.observe<Thread[]>("thread", {}, { actor: carla });
     assertEquals(((await seen.ready) as { value: Thread[] }).value.map((t) => t._id), [carlas]);
     await runtime.call("member.remove", {
       space: carlas,

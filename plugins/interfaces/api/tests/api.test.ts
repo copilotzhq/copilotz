@@ -82,10 +82,8 @@ const notes = definePlugin({
     }),
   },
   views: {
-    "note.count": {
-      llm: (_: unknown, ctx: ViewContext) =>
-        `${ctx.db.collection("note").countDocuments({}).value ?? 0} notes`,
-    },
+    "note.count": (_: unknown, ctx: ViewContext) =>
+      `${ctx.db.collection("note").countDocuments({}).value ?? 0} notes`,
   },
 });
 

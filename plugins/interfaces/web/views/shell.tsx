@@ -35,7 +35,12 @@ export const shellView = (
     .flatMap(([key, section]) => section ? [[key, section] as const] : [])
     .sort(([, a], [, b]) => (a.order ?? 0) - (b.order ?? 0));
   const asked = { ...hints, ...(where.query ? { query: where.query } : {}) };
-  const open = kind ? ctx.show(kind, id ? { _id: id } : {}, asked) : ctx.show("home", {}, asked);
+  // An address names its page: a View of that name, the web's own (`web.thread`), or the default.
+  const given = id ? { _id: id } : {};
+  const open = kind
+    ? ctx.show(kind, given, asked) ?? ctx.show(`web.${kind}`, given, asked) ??
+      ctx.show("web.default", given, { ...asked, of: kind })
+    : ctx.show("home", {}, asked);
   const panel = ctx.resources.panel as Panel | null | undefined;
   const viewer = ctx.viewer?.name ?? "";
   const label = ctx.viewer?.label;

@@ -2,7 +2,7 @@
  * What the terminal's pieces share: where a person is, what commands get,
  * and the styles text prints in.
  *
- * - **The screen** is the `shell` View (medium `terminal`): what's open,
+ * - **The screen** is the `terminal.shell` View: what's open,
  *   what commands printed, and where you type. Terminal Views return Ink
  *   elements (`<Text>`, `<Box>`), or plain text.
  * - **Scrollback**: what's done (messages, printed output) prints once, in

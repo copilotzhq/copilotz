@@ -74,6 +74,6 @@ export async function weightOf(ctx: Context, m: Message): Promise<number> {
   const own = m.private || m.told || m.state;
   const bare = m.files?.length ? { ...m, files: undefined } : m;
   const options = own ? { viewer: { kind: "agent", name: m.from } } : {};
-  const sent = await ctx.render("llm", "message", bare, options).catch(() => undefined);
+  const sent = await ctx.render("llm.message", bare, options).catch(() => undefined);
   return files + (Array.isArray(sent) ? weigh(sent as LlmMessage[]) : tokensOf(lineOf(m)));
 }

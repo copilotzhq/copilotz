@@ -82,7 +82,7 @@ export const reads = definePlugin({
       "contact",
     ].map((c) => [
       c,
-      { test: (_: unknown, ctx: ViewContext) => ctx.db.collection(c).find({}).value ?? [] },
+      (_: unknown, ctx: ViewContext) => ctx.db.collection(c).find({}).value ?? [],
     ]),
   ),
   actions: {
@@ -413,7 +413,7 @@ export async function setup(
         return answered;
       },
       read: async <T>(collection: string, actor: Actor) => {
-        const seen = runtime.observe<T[]>("test", collection, {}, { actor });
+        const seen = runtime.observe<T[]>(collection, {}, { actor });
         const output = await seen.ready;
         seen.close();
         return output.status === "ready" ? output.value : [];

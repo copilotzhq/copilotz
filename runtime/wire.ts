@@ -34,10 +34,9 @@ export type Job =
   /** `retry`: this event may have been handled before (a retried or recovered delivery). */
   | { kind: "process"; processor: string; event: Event; retry: boolean }
   | { kind: "query"; collection: string; query: string; params: unknown; actor?: Actor }
-  /** A View, rendered for a medium (see `Owner.render`). */
+  /** A View, rendered (see `Owner.render`). */
   | {
     kind: "render";
-    medium: string;
     view: string;
     item: unknown;
     viewer?: { name: string; kind?: string };

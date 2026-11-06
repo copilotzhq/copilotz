@@ -390,7 +390,7 @@ function countersOf(
 /** Whether the tool offers itself to this contact, in this chat (its `offer`, read as the contact). */
 async function offered(ctx: Context, line: Line, tool: string, thread: Thread): Promise<boolean> {
   const item: Offering = { tools: [tool], thread, agent: line.client };
-  const names = await ctx.render("mcp", "mcp:offered", item, {
+  const names = await ctx.render("mcp:offered", item, {
     viewer: { kind: "agent", name: line.client },
   });
   return Array.isArray(names) && names.includes(tool);
@@ -409,7 +409,7 @@ const toldOf = (error: unknown): string =>
  */
 async function shown(ctx: Context, line: Line, step: Step): Promise<string> {
   try {
-    const text = await ctx.render("llm", `tool:${step.name}`, step, {
+    const text = await ctx.render(`tool:${step.name}`, step, {
       viewer: { kind: "agent", name: line.client },
     });
     return typeof text === "string" ? text : SAID.hidden;

@@ -127,7 +127,7 @@ const turn = async (ctx: Context, event: Event) => {
     event.type === "turn.requested" && t.hops === 0 && step === 0 && !open &&
     current.latest !== t.trigger && await answered(ctx, t)
   ) return;
-  const composed = await ctx.render("llm", "thread", current, { viewer }) as Prompt;
+  const composed = await ctx.render("llm.thread", current, { viewer }) as Prompt;
   const instructions = composed.system.join("\n\n");
   // The conversation up to here repeats in the next calls: a cache point, before what's new each turn.
   const history = composed.history.map((m, i, all) =>

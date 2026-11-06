@@ -669,16 +669,14 @@ each("contexts add to the system or the turn, for every agent or the ones listed
     name: "notes",
     collections: { note: defineCollection({ schema: { type: "object" } }) },
     views: {
-      note: { llm: (n: { text: string }) => `- ${n.text}` },
-      "context:rules": { llm: () => "Answer in English." },
+      note: (n: { text: string }) => `- ${n.text}`,
+      "context:rules": () => "Answer in English.",
       // Reads data (synchronously) and shows it through another kind's View.
-      "context:notes": {
-        llm: (_thread: unknown, ctx: ViewContext) => {
-          const found = ctx.db.collection<{ text: string }>("note").find({});
-          return found.value?.map((n) => ctx.show("note", n)).join("\n");
-        },
+      "context:notes": (_thread: unknown, ctx: ViewContext) => {
+        const found = ctx.db.collection<{ text: string }>("note").find({});
+        return found.value?.map((n) => ctx.show("note", n)).join("\n");
       },
-      "context:secret": { llm: () => "only for b" },
+      "context:secret": () => "only for b",
     },
     resources: {
       context: {
@@ -757,8 +755,8 @@ each(
       definePlugin({
         name: "charter",
         views: {
-          "context:charter": { llm: () => "Say what you checked." },
-          "context:rules": { llm: () => "Answer in English." },
+          "context:charter": () => "Say what you checked.",
+          "context:rules": () => "Answer in English.",
         },
         resources: {
           context: {
@@ -796,7 +794,7 @@ each(
 each("a tool's View decides how its result reads, on the turn and after", async (make) => {
   const clip = definePlugin({
     name: "clip",
-    views: { "tool:note": { llm: (c: Step) => `noted (${c.output.length} chars)` } },
+    views: { "tool:note": (c: Step) => `noted (${c.output.length} chars)` },
   });
   let n = 0;
   const { runtime, calls, send } = await start(

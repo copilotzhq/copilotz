@@ -154,7 +154,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
           const follows = !!before && before.from === m.from && before.thread === m.thread &&
             !before.failed && before.via?.kind !== DELEGATED && m.via?.kind !== DELEGATED &&
             Date.parse(m.at) - Date.parse(before.at) < GROUP_MS;
-          return ctx.show("message", m, {
+          return ctx.show("web.message", m, {
             thread: t._id,
             who: shown,
             usual: thread.agents ?? [],
@@ -164,7 +164,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
             ...(queued.length ? { queued } : {}),
           });
         })}
-        {live.map((l) => ctx.show("live", l, { thread: t._id, who }))}
+        {live.map((l) => ctx.show("web.live", l, { thread: t._id, who }))}
       </Transcript>
       {over.length
         ? (

@@ -65,12 +65,10 @@ const app = definePlugin({
     }),
   },
   views: {
-    notes: {
-      test: (_: unknown, ctx: ViewContext) =>
-        (ctx.db.collection<Note>("note").find({}, { sort: { text: 1 } }).value ?? []).map((n) =>
-          n.text
-        ),
-    },
+    notes: (_: unknown, ctx: ViewContext) =>
+      (ctx.db.collection<Note>("note").find({}, { sort: { text: 1 } }).value ?? []).map((n) =>
+        n.text
+      ),
   },
 });
 
@@ -202,7 +200,7 @@ each("someone's Personal space is theirs alone; Views show what you reach", asyn
   await rt.call("note.add", { in: mine.space, text: "diary" }, { actor: ana });
   await rt.call("space.create", { id: "launch", name: "Launch" }, { actor: bob });
   await rt.call("note.add", { in: "launch", text: "plan" }, { actor: bob });
-  const notes = rt.observe<string[]>("test", "notes", {}, { actor: ana });
+  const notes = rt.observe<string[]>("notes", {}, { actor: ana });
   assertEquals(await notes.ready, { status: "ready", value: ["diary"] });
   // Let in, she sees more at once: what the rules read to know her reach, the View follows.
   await join(rt, "launch", ana, "viewer", bob);

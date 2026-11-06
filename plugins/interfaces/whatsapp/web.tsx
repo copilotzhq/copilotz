@@ -18,8 +18,8 @@ export const whatsappWeb: Plugin = definePlugin({
   name: "whatsapp-web",
   requires: ["whatsapp", "web-shell"],
   views: {
-    "whatsapp.space": { web: whatsappView },
-    "whatsapp.palette": { web: whatsappPaletteView },
+    "whatsapp.space": whatsappView,
+    "whatsapp.palette": whatsappPaletteView,
   },
   resources: {
     palette: { whatsapp: { view: "whatsapp.palette", order: 40 } },

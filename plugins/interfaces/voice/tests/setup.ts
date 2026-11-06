@@ -10,6 +10,7 @@ import {
   definePlugin,
   type Plugin,
   type Runtime,
+  type ViewContext,
 } from "../../../../runtime/mod.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
@@ -296,13 +297,13 @@ export async function setup(
       return Object.assign(relay, { id });
     },
     docs: async <T>(collection: string, actor?: Actor) => {
-      const seen = runtime.observe<T[]>("test", collection, {}, actor ? { actor } : {});
+      const seen = runtime.observe<T[]>(`test:${collection}`, {}, actor ? { actor } : {});
       const output = await seen.ready;
       seen.close();
       return output.status === "ready" ? output.value : [];
     },
     messages: async (thread) => {
-      const seen = runtime.observe<Message[]>("test", "message", { thread });
+      const seen = runtime.observe<Message[]>("test:message", { thread });
       const output = await seen.ready;
       seen.close();
       return output.status === "ready" ? output.value : [];
@@ -320,13 +321,11 @@ export const reads = definePlugin({
   name: "reads",
   views: Object.fromEntries(
     ["voice_call", "voice_phone", "voice_blocked", "contact", "thread", "message"].map((c) => [
-      c,
-      {
-        test: (item: { thread?: string }, ctx) =>
-          ctx.db.collection(c).find(item.thread ? { thread: item.thread } : {}, {
-            sort: { at: 1 },
-          }).value ?? [],
-      },
+      `test:${c}`,
+      (item: { thread?: string }, ctx: ViewContext) =>
+        ctx.db.collection(c).find(item.thread ? { thread: item.thread } : {}, {
+          sort: { at: 1 },
+        }).value ?? [],
     ]),
   ),
 });

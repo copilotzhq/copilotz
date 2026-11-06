@@ -21,9 +21,9 @@ export const tiersWeb: Plugin = definePlugin({
   name: "tiers-web",
   requires: ["web-shell", "spaces-web", "team-web"],
   views: {
-    "tiers.org": { web: tiersOrgView },
-    "tiers.space": { web: tiersSpaceView },
-    "tiers.agent": { web: tiersAgentView },
+    "tiers.org": tiersOrgView,
+    "tiers.space": tiersSpaceView,
+    "tiers.agent": tiersAgentView,
   },
   resources: {
     orgSettings: {

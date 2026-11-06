@@ -252,9 +252,9 @@ export const notesWeb: Plugin = definePlugin({
   name: "notes-web",
   requires: ["web-shell"],
   views: {
-    notes: { web: notesView },
-    "note.pick": { web: notePickView },
-    "notes.palette": { web: notesPaletteView },
+    notes: notesView,
+    "note.pick": notePickView,
+    "notes.palette": notesPaletteView,
   },
   resources: {
     spaceTabs: { notes: { title: "Notes", view: "notes", icon: "note", order: 50 } },

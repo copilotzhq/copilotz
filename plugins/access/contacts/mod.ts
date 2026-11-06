@@ -43,7 +43,7 @@ export const contacts: Plugin = definePlugin({
     "contact.chat": chatAction,
     "contact.forget": forgetAction,
   },
-  views: { "context:contact": { llm: contactView } },
+  views: { "context:contact": contactView },
   resources: {
     // A contact's record lives in its line's space; only trusted code changes it. A contact is a
     // member (of its chats, and of its own record): reading it labels nothing, as for an agent.

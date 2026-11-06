@@ -1,6 +1,6 @@
 /**
- * Any kind without a web View of its own, as a detail page: its document
- * (read from the kind's collection when the address gives only its id, as
+ * Any address without a web View of its own, as a detail page: its document
+ * (read from the collection named in `hints.of` when the address gives only its id, as
  * `/space/<id>` does), titled by its name, each field a row, labelled and
  * formatted as people read them, its id last. Nothing there, it says so. In
  * a side panel (`hints.mode: "panel"`), the same, tighter.
@@ -24,10 +24,11 @@ const NAMES = ["title", "name", "label", "subject"];
 
 export const defaultView = (item: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
   if (item === null || typeof item !== "object") return <span>{String(item ?? "")}</span>;
+  const of = String(ctx.hints.of ?? "");
   const given = item as Doc;
   const address = Object.keys(given).length === 1 && typeof given._id === "string";
   const doc = address
-    ? ctx.db.collection<Doc>(ctx.kind).findOne({ _id: given._id as string }).value
+    ? ctx.db.collection<Doc>(of).findOne({ _id: given._id as string }).value
     : given;
   if (doc === undefined) return null;
   const fields = Object.keys(doc ?? {}).filter((key) => key !== "_id");
@@ -46,7 +47,7 @@ export const defaultView = (item: unknown, ctx: ViewContext<ReactNode>): ReactNo
       </div>
     );
   }
-  const kind = humanize(ctx.kind);
+  const kind = humanize(of);
   const named = NAMES.find((key) => typeof doc[key] === "string" && doc[key]);
   const title = named ? String(doc[named]) : kind;
   return (

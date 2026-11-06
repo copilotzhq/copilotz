@@ -75,7 +75,7 @@ test("a person connects a computer and answers their agent at the terminal", asy
   let out = "";
   let computer: ReturnType<typeof fakeComputer> | undefined;
   const notice = async () => {
-    const shown = runtime.observe("terminal", "approvals", { person: "ana" }, { actor: ana });
+    const shown = runtime.observe("approvals", { person: "ana" }, { actor: ana });
     const { value } = await shown.ready as { value?: string };
     shown.close();
     return plain(value ?? "");

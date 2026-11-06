@@ -46,9 +46,9 @@ export const history: Plugin = definePlugin({
   requires: ["chat", "models"],
   collections: { summary, outline },
   views: {
-    history: { llm: historyView },
-    "history.since": { llm: sinceView },
-    summary: { llm: summaryView },
+    history: historyView,
+    "history.since": sinceView,
+    summary: summaryView,
   },
   resources: { tools: { zoom } },
   processors: { "history.compact": compactor, "history.erase": eraser },

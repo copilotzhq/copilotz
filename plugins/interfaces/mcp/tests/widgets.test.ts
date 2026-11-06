@@ -75,7 +75,7 @@ const cards = definePlugin({
       },
     }),
   },
-  views: { "tool:show_card": { llm: () => "A card is shown." } },
+  views: { "tool:show_card": () => "A card is shown." },
   resources: {
     tools: {
       show_card: tool({
@@ -98,13 +98,11 @@ const cards = definePlugin({
 const cardsWeb = definePlugin({
   name: "cards-web",
   views: {
-    "card.widget": {
-      web: (item: { name: string }, ctx: ViewContext) => {
-        const card = ctx.db.collection("card").query<{ text: string } | null>("mine", {
-          chat: ctx.hints.thread,
-        }).value;
-        return `${item.name}: ${card?.text ?? "…"} (${ctx.hints.mode})`;
-      },
+    "card.widget": (item: { name: string }, ctx: ViewContext) => {
+      const card = ctx.db.collection("card").query<{ text: string } | null>("mine", {
+        chat: ctx.hints.thread,
+      }).value;
+      return `${item.name}: ${card?.text ?? "…"} (${ctx.hints.mode})`;
     },
   },
 });

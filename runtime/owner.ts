@@ -33,7 +33,6 @@ import {
   READ_VIEW,
   readView,
   SESSION,
-  WIRE,
 } from "./browsers.ts";
 import { expiring } from "./expiring.ts";
 import { memoryStore } from "./memory.ts";
@@ -120,8 +119,8 @@ export type Description = {
   collections: Record<string, { schema: unknown }>;
   /** `record: false`: unrecorded, so nothing of its calls is in the log (a sign-in's). */
   actions: Record<string, { description?: string; input?: unknown; record?: false }>;
-  /** The media each kind has a View for. */
-  views: Record<string, string[]>;
+  /** The names of the Views plugins register. */
+  views: string[];
   resources: Resources;
 };
 
@@ -143,16 +142,14 @@ export type Owner = {
   /** Runs a collection's named query: `query("message.history", { thread })`. */
   query<R = unknown>(name: string, params?: unknown, options?: { actor?: Actor }): Promise<R>;
   /**
-   * Renders `item` through the View for `kind` in a medium (`"cli"`, `"llm"`…),
-   * or the medium's default View (kind `"*"`); undefined when there's neither.
+   * Renders `item` through the View named `name`; undefined when there is none.
    */
   render<R = unknown>(
-    medium: string,
-    kind: string,
+    name: string,
     item: unknown,
     options?: RenderOptions,
   ): Promise<R | undefined>;
-  /** What the plugins declare: collections' schemas, Actions, Views by kind, resources. */
+  /** What the plugins declare: collections' schemas, Actions, Views by name, resources. */
   describe(): Description;
   /**
    * Observes a View: its output now, and again whenever what it read
@@ -161,8 +158,7 @@ export type Owner = {
    * Actions from their handlers: what a terminal or a browser draws.
    */
   observe<R = unknown>(
-    medium: string,
-    kind: string,
+    name: string,
     item: unknown,
     options?: ObserveOptions,
   ): Observation<R>;
@@ -288,7 +284,7 @@ export async function createOwner(
   if (limited) throw invalid(limited);
   const registry = merge(options.plugins);
   // The View a browser's watched read is: one read, made as its person.
-  registry.views[READ_VIEW] = { [WIRE]: readView as ViewDef };
+  registry.views[READ_VIEW] = readView as ViewDef;
   const declared = events(registry);
   const metrics = options.metrics ?? noMetrics;
   await checked(registry, startup(registry, metrics));
@@ -1425,7 +1421,7 @@ export async function createOwner(
       : job.kind === "process"
       ? job.processor
       : job.kind === "render"
-      ? `${job.medium}:${job.view}`
+      ? job.view
       : `${job.collection}.${job.query}`;
     try {
       const result = await dispatch(job, signal);
@@ -1829,17 +1825,16 @@ export async function createOwner(
       const id = options.id ?? crypto.randomUUID();
       return begin(action, given, id, options.id !== undefined, undefined, actor) as never;
     },
-    async render(medium, kind, item, options = {}) {
+    async render(name, item, options = {}) {
       return await run({
         kind: "render",
-        medium,
-        view: kind,
+        view: name,
         item: json(item),
         ...(options.viewer ? { viewer: options.viewer } : {}),
         ...(options.hints ? { hints: json(options.hints) } : {}),
       }) as never;
     },
-    observe: (medium, kind, item, options) => observers.observe(medium, kind, item, options),
+    observe: (name, item, options) => observers.observe(name, item, options),
     emit,
     describe: () => ({
       collections: Object.fromEntries(
@@ -1852,9 +1847,7 @@ export async function createOwner(
           ...(def.record === false ? { record: false as const } : {}),
         }]),
       ),
-      views: Object.fromEntries(
-        Object.entries(registry.views).map(([kind, media]) => [kind, Object.keys(media)]),
-      ),
+      views: Object.keys(registry.views),
       resources: registry.resources,
     }),
     async query(name, params, options = {}) {

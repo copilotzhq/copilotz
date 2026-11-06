@@ -24,9 +24,9 @@ export const accountsWeb: Plugin = definePlugin({
   name: "accounts-web",
   requires: ["accounts", "web-shell"],
   views: {
-    accounts: { web: accountsView },
-    "accounts.palette": { web: accountsPaletteView },
-    "accounts.uses": { web: accountsUsesView },
+    accounts: accountsView,
+    "accounts.palette": accountsPaletteView,
+    "accounts.uses": accountsUsesView,
   },
   resources: {
     palette: { accounts: { view: "accounts.palette", order: 90 } },

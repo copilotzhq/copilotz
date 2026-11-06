@@ -502,7 +502,7 @@ each("an aggregate can't name a field $blob: no reference is made from strings",
     ];
     for (const pipeline of forging) {
       // As a browser reads: the wire's read View, as her.
-      const read = runtime.observe("wire", "core.read", {
+      const read = runtime.observe("core.read", {
         op: { op: "aggregate", collection: "note", pipeline },
       }, { actor: mallory });
       const out = await read.ready as { status: string; error?: { code?: string } };

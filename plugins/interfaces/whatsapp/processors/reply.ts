@@ -2,7 +2,7 @@
  * What agents say on WhatsApp goes out: a message an agent writes in a
  * WhatsApp conversation, to that conversation's person or contact (its
  * answer, a question it waits on them for, or what it says without a turn:
- * `chat.say`), as its `message` View in the `whatsapp` medium shows it: its
+ * `chat.say`), as its `whatsapp.message` View shows it: its
  * Markdown as WhatsApp formats it, a long one in several messages split
  * where a reader would pause. Their steps (private) and what agents say to
  * each other there stay in the app.
@@ -109,7 +109,7 @@ export const replyProcessor: ProcessorDef = {
     // A turn that failed tells a customer only that, in their line's language: never its error.
     const own = said.failed && chat.contact
       ? [{ type: "text", text: CUSTOMERS[on.number.language ?? "en"].turn } as WaPart]
-      : (await ctx.as(reader).render("whatsapp", "message", said, { viewer }) ?? []) as WaPart[];
+      : (await ctx.as(reader).render("whatsapp.message", said, { viewer }) ?? []) as WaPart[];
     const additions = isAnswer(said) ? await additionsAfter(ctx, said, viewer, reader) : [];
     const { sending, done } = await delivering(ctx, on, chat, said, reader);
 
@@ -169,7 +169,7 @@ export const undeliveredProcessor: ProcessorDef = {
     // The answer's text, if it went in the same message: with the fallback (or just before it).
     const lost = sent.find((s) => /^\d+$/.test(s._id.slice(s.message.length + 1)));
     const own = lost
-      ? (await ctx.as(whom.reader).render("whatsapp", "message", said, { viewer: whom.viewer }) ??
+      ? (await ctx.as(whom.reader).render("whatsapp.message", said, { viewer: whom.viewer }) ??
         []) as WaPart[]
       : [];
     const words = lost ? own[Number(lost._id.slice(said._id.length + 1))] : undefined;
@@ -210,7 +210,7 @@ async function additionsAfter(
   for (const [name] of entries) {
     let made: unknown;
     try {
-      made = await ctx.as(reader).render("whatsapp", `addition:${name}`, {
+      made = await ctx.as(reader).render(`addition:${name}`, {
         thread,
         answer: said,
       }, { viewer });

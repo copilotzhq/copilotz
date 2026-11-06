@@ -76,7 +76,7 @@ export function usable(
   const { views } = runtime.describe();
   const names = Object.keys(line.tools);
   const shown = names.filter((name) =>
-    line.tools[name].action !== undefined || views[`tool:${name}`]?.includes("llm")
+    line.tools[name].action !== undefined || views.includes(`tool:${name}`)
   );
   const left = names.filter((name) => !shown.includes(name));
   const seen = told.get(runtime) ?? new Set<string>();
@@ -84,7 +84,7 @@ export function usable(
   if (left.length && !seen.has(line.name)) {
     seen.add(line.name);
     console.error(
-      `mcp.${line.name}: not offered, without a tool:<name> View (llm): ${left.join(", ")}`,
+      `mcp.${line.name}: not offered, without a tool:<name> View: ${left.join(", ")}`,
     );
   }
   return shown;
@@ -138,7 +138,7 @@ async function standIn(
     thread: { _id: "", in: line.in, agents: [], at: "" },
     agent: line.client,
   };
-  const seen = runtime.observe<string[]>("mcp", "mcp:offered", item, {
+  const seen = runtime.observe<string[]>("mcp:offered", item, {
     actor,
     viewer: { kind: "agent", name: line.client },
   });

@@ -92,7 +92,7 @@
  *       tools: { search_trips: { annotations: { readOnly: true }, invoking: "Buscando…" } } } },
  *   },
  * }
- * views: { "tool:search_trips": { llm: tripsForModels } }   // each offered tool's, in a plugin
+ * views: { "tool:search_trips": tripsForModels }   // each offered tool's, in a plugin
  *
  * // With widgets: a tool drawn by a View, an Action only the widget calls, the template's domain.
  * tools: {
@@ -135,7 +135,7 @@ export const mcp: Plugin = definePlugin({
   // What's past goes: counters, receipts, openings.
   schedules: { "mcp.prune": { every: "10m", call: "mcp.prune", input: {} } },
   // Which tools a contact is offered, as each tool's `offer` says.
-  views: { "mcp:offered": { mcp: offeredView } },
+  views: { "mcp:offered": offeredView },
   // At start: every line the app declares has what it needs, and the secret its ids come from.
   check: (merged) => {
     const settings = settingsProblem(merged.resources);

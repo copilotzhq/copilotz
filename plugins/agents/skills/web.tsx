@@ -22,11 +22,11 @@ export const skillsWeb: Plugin = definePlugin({
   name: "skills-web",
   requires: ["web-shell"],
   views: {
-    skills: { web: skillsView },
-    skill: { web: skillView },
-    "skill.new": { web: newSkillView },
-    "skill.palette": { web: skillPaletteView },
-    "skill.step": { web: skillStepView },
+    skills: skillsView,
+    skill: skillView,
+    "skill.new": newSkillView,
+    "skill.palette": skillPaletteView,
+    "skill.step": skillStepView,
   },
   resources: {
     spaceTabs: {

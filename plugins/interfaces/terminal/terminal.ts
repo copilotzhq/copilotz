@@ -24,9 +24,9 @@ export const terminalShell: Plugin = definePlugin({
   name: "terminal-shell",
   requires: ["terminal"],
   views: {
-    shell: { terminal: shellView },
-    prompt: { terminal: promptView },
+    "terminal.shell": shellView,
+    prompt: promptView,
     // Anything else: its fields, one per line.
-    "*": { terminal: defaultView },
+    "terminal.default": defaultView,
   },
 });

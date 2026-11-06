@@ -9,6 +9,6 @@ import { totalsView } from "./views/terminal/totals.ts";
 export const usageTerminal: Plugin = definePlugin({
   name: "usage-terminal",
   requires: ["usage", "terminal-shell"],
-  views: { "usage.totals": { terminal: totalsView } },
+  views: { "usage.totals": totalsView },
   resources: { commands },
 });

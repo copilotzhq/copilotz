@@ -8,7 +8,7 @@ export const commands: Commands = {
     async run(_, term) {
       const kept = await term.runtime.query<Memory[]>("memory.list", {});
       if (!kept.length) return await term.print(dim("Nothing remembered yet."));
-      await term.show("memory", kept);
+      await term.show("terminal.memory", kept);
     },
   }),
 };

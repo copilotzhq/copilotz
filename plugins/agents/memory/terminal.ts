@@ -9,6 +9,6 @@ import { memoryLine } from "./views/terminal/memory.ts";
 export const memoryTerminal: Plugin = definePlugin({
   name: "memory-terminal",
   requires: ["memory", "terminal-shell"],
-  views: { memory: { terminal: memoryLine } },
+  views: { "terminal.memory": memoryLine },
   resources: { commands },
 });

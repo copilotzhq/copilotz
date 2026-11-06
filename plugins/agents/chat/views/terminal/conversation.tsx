@@ -26,10 +26,10 @@ export const conversationView = (t: { _id: string }, ctx: ViewContext<ReactNode>
       <Scrollback
         entries={(said.value ?? []).map((m) => ({
           key: m._id,
-          node: ctx.show("message", m, { thread: t._id }),
+          node: ctx.show("terminal.message", m, { thread: t._id }),
         }))}
       />
-      {(live.value ?? []).map((l) => ctx.show("live", l, { thread: t._id }))}
+      {(live.value ?? []).map((l) => ctx.show("terminal.live", l, { thread: t._id }))}
       {working.length ? <Spinner label={`${working.join(", ")} working…`} /> : <Text></Text>}
     </>
   );

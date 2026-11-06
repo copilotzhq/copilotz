@@ -48,7 +48,7 @@ async function open(
     if (!message) return `Error: no message ${id} here.`;
     // As the agent is sent it: text files' content and transcripts too (images and PDFs by name).
     const viewer = agent ? { viewer: { kind: "agent", name: agent } } : {};
-    const shown = await ctx.render("llm", "message", message, viewer).catch(() => undefined);
+    const shown = await ctx.render("llm.message", message, viewer).catch(() => undefined);
     const text = Array.isArray(shown)
       ? (shown as LlmMessage[]).map((m) => m.text ?? "").join("\n")
       : lineOf(message, await namesFor(ctx, [message.from, ...message.to]));

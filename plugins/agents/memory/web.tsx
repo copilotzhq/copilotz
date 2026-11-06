@@ -16,9 +16,9 @@ export const memoryWeb: Plugin = definePlugin({
   name: "memory-web",
   requires: ["memory", "web-shell"],
   views: {
-    memories: { web: memoriesView },
-    "memory.palette": { web: memoryPaletteView },
-    "memory.pick": { web: memoryPickView },
+    memories: memoriesView,
+    "memory.palette": memoryPaletteView,
+    "memory.pick": memoryPickView,
   },
   resources: {
     spaceTabs: {

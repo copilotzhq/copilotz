@@ -169,9 +169,7 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     into(registry.actions, plugin.actions, "action");
     into(registry.events, plugin.events, "event");
     into(registry.processors, plugin.processors, "processor");
-    for (const [kind, media] of Object.entries(plugin.views ?? {})) {
-      replace(registry.views[kind] ??= {}, media);
-    }
+    replace(registry.views, plugin.views ?? {});
     for (const [kind, entries] of Object.entries(plugin.resources ?? {})) {
       registry.resources[kind] = patch(registry.resources[kind], entries) as Record<
         string,

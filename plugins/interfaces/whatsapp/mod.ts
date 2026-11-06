@@ -30,10 +30,10 @@
  * - **What agents say there** to them goes back to the phone, as WhatsApp
  *   formats it, a long answer in several messages; "typing…" shows while
  *   they work, and nothing says "please wait".
- * - **WhatsApp is a medium:** a View for it (medium `whatsapp`) returns
+ * - **WhatsApp has Views of its own:** a `whatsapp.*` View returns
  *   parts, each one WhatsApp message, built with the toolkit in the contract
  *   (`text`, `buttons`, `list`, `carousel`, `image`, `document`), which
- *   checks Meta's limits. A message shows through its `message` View (this
+ *   checks Meta's limits. A message shows through its `whatsapp.message` View (this
  *   plugin's: its text). After an answer come the features' additions
  *   (chat's `additions` resource, an `addition:<name>` View here): each goes
  *   once per chat per key, the answer's text in the first one's body when
@@ -112,8 +112,8 @@ export const whatsapp: Plugin = definePlugin({
     "whatsapp.typing": typingProcessor,
     "whatsapp.forget": forgetProcessor,
   },
-  // WhatsApp as a medium: what a message is there (a feature's additions bring their own).
-  views: { message: { whatsapp: messageView } },
+  // WhatsApp's Views: what a message is there (a feature's additions bring their own).
+  views: { "whatsapp.message": messageView },
   guard: rules,
   // At start: links to what it sends (a secret too short is refused), and the app's own lines.
   check: (merged) => {

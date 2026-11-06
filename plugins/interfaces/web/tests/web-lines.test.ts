@@ -37,14 +37,12 @@ const ana: Actor = { kind: "person", id: "ana" };
 const kept = definePlugin({
   name: "kept",
   views: {
-    all: {
-      test: (asked: { c: string }, ctx) => ctx.db.collection(asked.c).find({}).value ?? [],
-    },
+    all: (asked: { c: string }, ctx) => ctx.db.collection(asked.c).find({}).value ?? [],
   },
 });
 
 async function all<T = Record<string, unknown>>(runtime: Runtime, c: string): Promise<T[]> {
-  const observed = runtime.observe<T[]>("test", "all", { c });
+  const observed = runtime.observe<T[]>("all", { c });
   try {
     const output = await observed.ready;
     if (output.status !== "ready") throw new Error(JSON.stringify(output));

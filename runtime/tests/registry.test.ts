@@ -35,7 +35,7 @@ test("a later plugin changes what it names in a resource and removes with null",
       },
     },
     adapters: { llm: { one: { generate: "lib" }, two: { generate: "lib" } } },
-    views: { message: { llm: () => "lib", react: () => "lib" } },
+    views: { "llm.message": () => "lib", "web.message": () => "lib" },
   });
   const app = definePlugin({
     name: "app",
@@ -48,7 +48,7 @@ test("a later plugin changes what it names in a resource and removes with null",
       cost: { "openai/gpt-6.1-sol": { input: 1.8 } },
     },
     adapters: { llm: { one: { generate: "app" }, two: null } },
-    views: { message: { react: null } },
+    views: { "web.message": null },
   });
   const registry = merge([lib, app]);
   assertEquals(registry.resources.agents, {
@@ -57,7 +57,7 @@ test("a later plugin changes what it names in a resource and removes with null",
   });
   assertEquals(registry.resources.cost, { "openai/gpt-6.1-sol": { input: 1.8 } });
   assertEquals(registry.adapters.llm, { one: { generate: "app" } });
-  assertEquals(Object.keys(registry.views.message), ["llm"]);
+  assertEquals(Object.keys(registry.views), ["llm.message"]);
   // The plugins' own declarations are left as they were.
   assertEquals((lib.resources!.agents.lead as { effort: string }).effort, "low");
 });

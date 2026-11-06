@@ -156,7 +156,7 @@ ${
         call: () => Promise.reject(invalid("A snapshot calls nothing")),
       },
     });
-    const seen = client.observe("web", asked.view, asked.item, {
+    const seen = client.observe(asked.view, asked.item, {
       viewer: asked.viewer,
       hints: asked.hints,
       part: () => null,

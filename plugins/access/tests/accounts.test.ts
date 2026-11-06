@@ -79,9 +79,8 @@ const peek = definePlugin({
     }),
   },
   views: {
-    "peek.accounts": {
-      test: (_: unknown, ctx: ViewContext) => ctx.db.collection("account").find({}).value ?? [],
-    },
+    "peek.accounts": (_: unknown, ctx: ViewContext) =>
+      ctx.db.collection("account").find({}).value ?? [],
   },
 });
 
@@ -192,7 +191,7 @@ test("connecting ChatGPT: a sign-in OpenAI takes, pasted back, and its person's 
       },
     );
     // What the page reads: the account, as its person sees it.
-    const [mine] = await s.rt.observe("test", "peek.accounts", {}, { actor: ana }).ready.then(
+    const [mine] = await s.rt.observe("peek.accounts", {}, { actor: ana }).ready.then(
       (o) => (o as { value: Account[] }).value,
     );
     assertEquals(mine.label, "ana@example.com");
@@ -606,9 +605,9 @@ for (const [name, make] of Object.entries(stores)) {
       );
       await connect(s, ana);
       await connect(s, bob);
-      const seen = await s.rt.observe("test", "peek.accounts", {}, { actor: ana }).ready;
-      const bobs = await s.rt.observe("test", "peek.accounts", {}, { actor: bob }).ready;
-      const agents = await s.rt.observe("test", "peek.accounts", {}, { actor: lead(ana) }).ready;
+      const seen = await s.rt.observe("peek.accounts", {}, { actor: ana }).ready;
+      const bobs = await s.rt.observe("peek.accounts", {}, { actor: bob }).ready;
+      const agents = await s.rt.observe("peek.accounts", {}, { actor: lead(ana) }).ready;
       const providers = await s.rt.query("account.providers", {}, { actor: ana });
       await s.rt.call("account.disconnect", { provider: "chatgpt" }, { actor: ana });
       const events = await s.store.events(0, 100_000);

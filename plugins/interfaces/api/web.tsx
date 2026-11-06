@@ -19,7 +19,7 @@ import { apiPaletteView } from "./views/web/palette.ts";
 export const apiWeb: Plugin = definePlugin({
   name: "api-web",
   requires: ["api", "web-shell"],
-  views: { "api.keys": { web: keysView }, "api.palette": { web: apiPaletteView } },
+  views: { "api.keys": keysView, "api.palette": apiPaletteView },
   resources: {
     spaceTabs: {
       api: { title: "API", view: "api.keys", icon: "terminal", under: "settings", order: 50 },

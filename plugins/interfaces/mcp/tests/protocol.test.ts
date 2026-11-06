@@ -214,7 +214,7 @@ test("a tool's mirrored input (x-mcp-header) must be in its header, as sent", as
         },
       },
     },
-    views: { "tool:zone": { llm: (call: { output: string }) => call.output } },
+    views: { "tool:zone": (call: { output: string }) => call.output },
   });
   await setup(async (s) => {
     const missing = await s.modern("tools/call", { name: "zone", arguments: { zone: "sp" } });
@@ -330,7 +330,7 @@ test("tools/list: a line's own hints over the tool's; no handle when the line gi
 test("an offer that throws: that tool isn't offered, the others are", async () => {
   const shaky = definePlugin({
     name: "shaky",
-    views: { "tool:shaky": { llm: (call: { output: string }) => call.output } },
+    views: { "tool:shaky": (call: { output: string }) => call.output },
     resources: {
       tools: {
         shaky: {

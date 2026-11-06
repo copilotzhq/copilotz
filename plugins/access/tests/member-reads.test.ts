@@ -18,11 +18,9 @@ const app = definePlugin({
     spaces: { shop: { name: "Shop", agents: ["guide"] } },
   },
   views: {
-    members: {
-      test: (f: Record<string, unknown>, ctx) =>
-        (ctx.db.collection<{ space: string }>("member").find(f).value ?? []).map((m) => m.space)
-          .sort(),
-    },
+    members: (f: Record<string, unknown>, ctx) =>
+      (ctx.db.collection<{ space: string }>("member").find(f).value ?? []).map((m) => m.space)
+        .sort(),
   },
 });
 
@@ -32,7 +30,7 @@ test("memberships by one's own key: a contact's all, a key within a space only t
     plugins: [models, chat, ...access, app],
   });
   const read = async (actor: Actor, f: Record<string, unknown>) => {
-    const observed = runtime.observe<string[]>("test", "members", f, { actor });
+    const observed = runtime.observe<string[]>("members", f, { actor });
     try {
       const out = await observed.ready;
       return out.status === "ready" ? out.value : out;

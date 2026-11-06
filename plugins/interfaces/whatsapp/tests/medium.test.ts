@@ -75,56 +75,48 @@ const booking = definePlugin({
   },
   views: {
     // Read from the chat, as whom it goes to reads it (as anyone else, there's no chat to read).
-    "addition:trips": {
-      whatsapp: (
-        { answer }: { answer: Message },
-        ctx: ViewContext,
-      ): Addition<WaPart> | undefined =>
-        said_(answer).includes("trips") &&
-          ctx.db.collection("thread").findOne({ _id: answer.thread }).value
-          ? {
-            key: "trips:santos",
-            parts: [carousel("Some trips to Santos", cards)],
-            fallback: [text("1. 10:30\n2. 12:00")],
-            note: "2 trips to Santos as a carousel",
-          }
-          : undefined,
-    },
+    "addition:trips": (
+      { answer }: { answer: Message },
+      ctx: ViewContext,
+    ): Addition<WaPart> | undefined =>
+      said_(answer).includes("trips") &&
+        ctx.db.collection("thread").findOne({ _id: answer.thread }).value
+        ? {
+          key: "trips:santos",
+          parts: [carousel("Some trips to Santos", cards)],
+          fallback: [text("1. 10:30\n2. 12:00")],
+          note: "2 trips to Santos as a carousel",
+        }
+        : undefined,
     // A seat map, as the picture over the buttons that choose one.
-    "addition:seats": {
-      whatsapp: ({ answer }: { answer: Message }) =>
-        said_(answer).includes("seat")
-          ? {
-            key: "seats:1",
-            parts: [
-              buttons("Window or aisle?", [{ id: "seat:12A", title: "12A, window" }, {
-                id: "seat:12B",
-                title: "12B, aisle",
-              }], { header: { link: "https://cards.example/seats.png" } }),
-            ],
-          }
-          : undefined,
-    },
+    "addition:seats": ({ answer }: { answer: Message }) =>
+      said_(answer).includes("seat")
+        ? {
+          key: "seats:1",
+          parts: [
+            buttons("Window or aisle?", [{ id: "seat:12A", title: "12A, window" }, {
+              id: "seat:12B",
+              title: "12B, aisle",
+            }], { header: { link: "https://cards.example/seats.png" } }),
+          ],
+        }
+        : undefined,
     // What the chats it reads say, as whom the answer goes to may read them.
-    "addition:peek": {
-      whatsapp: ({ answer }: { answer: Message }, ctx: ViewContext) => {
-        if (!said_(answer).includes("peek")) return undefined;
-        const chats = ctx.db.collection("thread").find({}).value;
-        return chats
-          ? { key: `peek:${answer._id}`, parts: [text(`${chats.length} chat`)] }
-          : undefined;
-      },
+    "addition:peek": ({ answer }: { answer: Message }, ctx: ViewContext) => {
+      if (!said_(answer).includes("peek")) return undefined;
+      const chats = ctx.db.collection("thread").find({}).value;
+      return chats
+        ? { key: `peek:${answer._id}`, parts: [text(`${chats.length} chat`)] }
+        : undefined;
     },
-    "addition:pay": {
-      whatsapp: ({ answer }: { answer: Message }) =>
-        said_(answer).includes("pay")
-          ? {
-            key: "pay",
-            parts: [buttons("Pay how?", [pix, { id: "pay:card", title: "Card" }])],
-            note: "PIX or card, as buttons",
-          }
-          : undefined,
-    },
+    "addition:pay": ({ answer }: { answer: Message }) =>
+      said_(answer).includes("pay")
+        ? {
+          key: "pay",
+          parts: [buttons("Pay how?", [pix, { id: "pay:card", title: "Card" }])],
+          note: "PIX or card, as buttons",
+        }
+        : undefined,
   },
 });
 
@@ -336,9 +328,7 @@ test("an app's own message View is how its messages show on WhatsApp", async () 
   const app = definePlugin({
     name: "styled",
     views: {
-      message: {
-        whatsapp: (m: Message, _ctx: ViewContext): WaPart[] => [text(`🚌 ${m.text}`)],
-      },
+      "whatsapp.message": (m: Message, _ctx: ViewContext): WaPart[] => [text(`🚌 ${m.text}`)],
     },
   });
   await setup(async (s) => {

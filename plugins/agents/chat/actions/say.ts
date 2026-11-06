@@ -3,7 +3,7 @@
  * it, no model call and no turn: a fixed message trusted code decides on (a
  * payment confirmed). It goes to `to` (people by id, contacts as
  * `contact:<id>`), else to whoever last wrote there who isn't an agent, and
- * out through the chat's medium (WhatsApp) like any of its answers. It's
+ * out through the chat's place (WhatsApp) like any of its answers. It's
  * said to people, never to agents, so it starts no turn, by an agent that
  * answers there. Its `id` comes from what caused it (a payment's): saying it
  * again in that chat sends nothing (the message is `<thread>:say:<id>`). Only

@@ -1,7 +1,7 @@
 /**
- * What's being said in a call (the `voice_call` View, medium `voice`),
+ * What's being said in a call (the `voice_call` View),
  * read as the line's agent working for its caller: what agents answered
- * them since the call began, in order, each as its `message` View here says
+ * them since the call began, in order, each as its `voice.message` View says
  * it; what an agent is writing right now (`live`); and whether the agent
  * ended the call (`end`). The call's socket (resources/relay.ts) observes
  * it, and says what's new as it comes, of the turns the caller's own words
@@ -58,7 +58,7 @@ export const callView = (
     { sort: { at: -1 }, limit: LATEST },
   ).value ?? [];
   const [writing] = ctx.db.collection<Live>("live").find({ thread: item.thread }).value ?? [];
-  const say = (m: Pick<Message, "text" | "from">) => String(ctx.show("message", m) ?? "");
+  const say = (m: Pick<Message, "text" | "from">) => String(ctx.show("voice.message", m) ?? "");
   // Words being written may be said only while they can't turn out to be a step's: its turn
   // offers no tools, and nothing broke (a retry's reason is the provider's).
   const sayable = (l: Live) => l.open === true && !l.calls?.length && !l.retry;

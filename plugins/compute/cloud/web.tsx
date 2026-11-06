@@ -23,8 +23,8 @@ export const cloudWeb: Plugin = definePlugin({
   name: "cloud-web",
   requires: ["cloud", "computers-web"],
   views: {
-    "cloud.computer": { web: cloudComputerView },
-    "cloud.new": { web: cloudNewView },
+    "cloud.computer": cloudComputerView,
+    "cloud.new": cloudNewView,
   },
   resources: {
     computerKinds: {

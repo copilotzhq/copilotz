@@ -3,7 +3,7 @@
  * printed, and composes what's open (through that kind's View), the
  * scrollback, what waits on you (the `notices` resource's Views) and where
  * you type. A plugin replaces any of these by registering its own View for
- * that kind.
+ * that name.
  */
 import { Box, Text } from "ink";
 import type { ReactNode } from "react";
@@ -26,16 +26,22 @@ export const shellView = (item: { person: string }, ctx: ViewContext<ReactNode>)
     .sort(([, a], [, b]) => (a.order ?? 0) - (b.order ?? 0))
     .map(([name, notice]) => [name, ctx.show(notice.view, { person: item.person })] as const)
     .filter(([, shown]) => shown !== undefined && shown !== null && shown !== "");
+  // What's open names its page: a View of that name, the terminal's own (`terminal.thread`), or the default.
+  const opened = (kind: string, item: unknown) =>
+    ctx.show(kind, item) ?? ctx.show(`terminal.${kind}`, item) ??
+      ctx.show("terminal.default", item);
   return (
     <>
       <Scrollback
         entries={banner ? [{ key: "banner", node: <Text dimColor>{banner}</Text> }] : []}
       />
-      {state.open ? ctx.show(state.open.kind, state.open.item) : null}
+      {state.open ? opened(state.open.kind, state.open.item) : null}
       <Scrollback
         entries={(printed.value ?? []).map((p) => ({
           key: p._id,
-          node: p.kind ? ctx.show(p.kind, p.item, p.hints) : p.text,
+          node: p.kind
+            ? ctx.show(p.kind, p.item, p.hints) ?? ctx.show("terminal.default", p.item)
+            : p.text,
         }))}
       />
       {notices.map(([name, shown]) => (

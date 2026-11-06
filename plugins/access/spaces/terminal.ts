@@ -10,6 +10,6 @@ import { spacesView } from "./views/terminal/spaces.ts";
 export const accessTerminal: Plugin = definePlugin({
   name: "spaces-terminal",
   requires: ["spaces", "terminal-shell"],
-  views: { spaces: { terminal: spacesView } },
+  views: { "terminal.spaces": spacesView },
   resources: { commands },
 });

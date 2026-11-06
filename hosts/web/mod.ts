@@ -11,6 +11,24 @@
  */
 export { go, signOut, web, type WebOptions, type Where, type Who } from "./host.tsx";
 export { appBase } from "./base.ts";
+// The words every front end says, by key: the app's `words` resource over the English.
+export {
+  type Blanks,
+  defineWords,
+  fill,
+  formatDate,
+  formatDateTime,
+  formatList,
+  formatNumber,
+  formatTime,
+  knownWords,
+  lang,
+  type Phrase,
+  type Say,
+  setWords,
+  type Words,
+  wordsOf,
+} from "./words.ts";
 export { message, node, Part } from "./part.tsx";
 // Where Views are drawn (the page, or a widget in an outside assistant), and what a widget asks of
 // its host: no-ops on the page.
@@ -36,6 +54,17 @@ export {
   type PaletteStep,
 } from "./palette/state.ts";
 export { DEFAULT_THEME, type Theme } from "./theme/default.ts";
+// What the sign-in page says, as the app's (its `signInPage` resource): every word, and the panel
+// beside the form.
+export {
+  COPILOTZ_ABOUT,
+  SIGN_IN_WORDS,
+  type SignInAbout,
+  type SignInPage,
+  signInPageOf,
+  type SignInPoint,
+  type SignInWords,
+} from "./signin-words.ts";
 export type { Drawing, Picture } from "./theme/picture.ts";
 
 // The toolkit: actions and fields.

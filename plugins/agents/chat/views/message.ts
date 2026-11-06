@@ -59,7 +59,7 @@ function shownAfter(m: Message, ctx: ViewContext): string {
  * was told then), others' as labelled input. So is what it handed between
  * spaces itself: that was other work, in another chat, not this turn's. A
  * choice tapped says what it was (`[tapped: trip:123]`); an answer, what went
- * out after it.
+ * out after it, and its own message the files it sent (`[sent: logo.png]`).
  */
 
 export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
@@ -91,7 +91,10 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
   // Its model's state goes back with it: thinking, signatures (only to the model that wrote them).
   const state = m.state ? { state: m.state as LlmState } : {};
   if (!m.toolCalls?.length) {
-    return [...told, { role: "assistant", text: `${m.text ?? ""}${then}`, ...state }];
+    // Files it sent (`chat.say`'s), as it's told them: `[sent: logo.png]`.
+    const sent = m.files?.length ? `[sent: ${m.files.map((f) => f.name).join(", ")}]` : "";
+    const said = [m.text, sent].filter(Boolean).join("\n");
+    return [...told, { role: "assistant", text: `${said}${then}`, ...state }];
   }
   const calls = m.toolCalls as Step[];
   return [

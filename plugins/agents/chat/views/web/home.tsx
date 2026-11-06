@@ -21,17 +21,15 @@ import { mentionable } from "./agents.ts";
 import { Composer } from "./composer.tsx";
 import { STYLE } from "./style.ts";
 import { greeted } from "./who.ts";
+import { say } from "./words.ts";
 
 type Space = { _id: string; name: string; kind: string };
 
-const greeting = (hour: number) =>
-  hour < 5
-    ? "Good evening"
-    : hour < 12
-    ? "Good morning"
-    : hour < 18
-    ? "Good afternoon"
-    : "Good evening";
+/** The greeting for the hour, with the person's name when there is one. */
+const greeting = (hour: number, name: string) => {
+  const part = hour < 5 ? "Evening" : hour < 12 ? "Morning" : hour < 18 ? "Afternoon" : "Evening";
+  return name ? say(`greeting${part}Named` as const, { name }) : say(`greeting${part}` as const);
+};
 
 export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
   const here = typeof ctx.hints.in === "string" ? ctx.hints.in : undefined;
@@ -52,10 +50,9 @@ export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
     return (
       <section className="chat chat-missing" aria-labelledby="chat-home-title">
         <style href="chat-web" precedence="copilotz">{STYLE}</style>
-        <Title text="Not your space" />
-        <EmptyState icon="lock" heading="h1" id="chat-home-title" title="You're not in this space">
-          Chats here are for its members. Pick one of your spaces to start one, or ask someone here
-          to invite you.
+        <Title text={say("notYourSpaceTitle")} />
+        <EmptyState icon="lock" heading="h1" id="chat-home-title" title={say("notInSpace")}>
+          {say("notInSpaceBody")}
         </EmptyState>
       </section>
     );
@@ -63,30 +60,23 @@ export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
   return (
     <section className="chat chat-home" aria-labelledby="chat-home-title">
       <style href="chat-web" precedence="copilotz">{STYLE}</style>
-      <Title text={shared ? space.name : "New chat"} />
+      <Title text={shared ? space.name : say("newChat")} />
       <div className="chat-home-body">
         {tops.length ? <div className="chat-home-top">{tops}</div> : null}
         <div className="chat-home-hero">
           <Logo size={56} />
           <h1 id="chat-home-title">
-            {greeting(new Date().getHours())}
-            {name ? `, ${name}` : ""}
+            {greeting(new Date().getHours(), name)}
           </h1>
           <p>
-            {shared
-              ? (
-                <>
-                  What are we working on in <b>{space.name}</b>?
-                </>
-              )
-              : "What can I help with?"}
+            {shared ? say.nodes("workingIn", { space: <b>{space.name}</b> }) : say("helpWith")}
           </p>
         </div>
         <Composer
           key={to}
           initial={to && team?.here.includes(to) ? `@${to} ` : undefined}
           agents={team ? mentionable(team) : undefined}
-          where={space ? space.kind === "personal" ? "Personal" : space.name : undefined}
+          where={space ? space.kind === "personal" ? say("personal") : space.name : undefined}
           refusals={ctx.resources.refusals as Record<string, RefusalView | null> | undefined}
           notes={ctx.resources.composerNotes as Record<string, ComposerNote | null> | undefined}
           place={here ? { in: here } : {}}
@@ -103,15 +93,13 @@ export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
               }`,
             );
           }}
-          placeholder="Ask anything; @name asks a particular agent"
+          placeholder={say("homePlaceholder")}
           suggestions={suggestions}
           note={space
             ? (
               <span className="chat-home-where">
                 <Icon name={shared ? "lock" : "person"} size={13} />
-                {shared
-                  ? `Starts in ${space.name}, for its members`
-                  : "Starts in Personal, just for you"}
+                {shared ? say("startsInSpace", { space: space.name }) : say("startsInPersonal")}
               </span>
             )
             : null}

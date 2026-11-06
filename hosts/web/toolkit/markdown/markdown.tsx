@@ -13,6 +13,7 @@ import { CopyButton } from "../copy-button.tsx";
 import { cx } from "../cx.ts";
 import { Formula } from "../formula.tsx";
 import { sheet } from "../sheet.tsx";
+import { say } from "../words.ts";
 import { type Block, blocks } from "./blocks.ts";
 import { type Span, spans } from "./spans.ts";
 
@@ -93,7 +94,7 @@ function block(b: Block, key: number): ReactNode {
         <figure key={key} className="copilotz-md-code">
           <figcaption>
             <span>{b.lang || "code"}</span>
-            {b.open ? null : <CopyButton text={b.text} label="Copy code" />}
+            {b.open ? null : <CopyButton text={b.text} label={say("copyCode")} />}
           </figcaption>
           <pre tabIndex={0}><code>{b.text}</code></pre>
         </figure>
@@ -104,7 +105,11 @@ function block(b: Block, key: number): ReactNode {
           ? <li key={i}>{item.blocks.map((x, j) => block(x, j))}</li>
           : (
             <li key={i} className="copilotz-md-task">
-              <Checkbox checked={item.done} disabled aria-label={item.done ? "Done" : "To do"} />
+              <Checkbox
+                checked={item.done}
+                disabled
+                aria-label={item.done ? say("done") : say("toDo")}
+              />
               <div>{item.blocks.map((x, j) => block(x, j))}</div>
             </li>
           )
@@ -121,7 +126,13 @@ function block(b: Block, key: number): ReactNode {
       return <hr key={key} />;
     case "table":
       return (
-        <div key={key} className="copilotz-md-table" role="region" aria-label="Table" tabIndex={0}>
+        <div
+          key={key}
+          className="copilotz-md-table"
+          role="region"
+          aria-label={say("table")}
+          tabIndex={0}
+        >
           <table>
             <thead>
               <tr>

@@ -24,6 +24,7 @@ import { STYLE } from "./style.ts";
 import { TabSections } from "./sections.tsx";
 import { chosen, sectionOf, type ShownTab, spacePath, tabsOf } from "./tabs.ts";
 import { ownersOf, spaceName } from "./who.ts";
+import { say } from "./words.ts";
 import { namesIn } from "../../shared/names.ts";
 
 export const spacePanelView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
@@ -45,7 +46,7 @@ export const spacePanelView = (item: { _id?: string }, ctx: ViewContext<ReactNod
     return (
       <div className="space-panel space-panel-missing">
         {style}
-        <p>This chat's space isn't one of yours.</p>
+        <p>{say("panelMissing")}</p>
       </div>
     );
   }
@@ -88,7 +89,7 @@ function SpacePanel(
   const personal = space.kind === "personal";
   const name = spaceName(space, viewer, names);
   return (
-    <section className="space-panel" aria-label={`${name}, beside this chat`}>
+    <section className="space-panel" aria-label={say("panelLabel", { name })}>
       <header className="space-panel-head">
         {personal
           ? (
@@ -99,11 +100,11 @@ function SpacePanel(
           : <Avatar name={space.name} kind="space" size={26} />}
         <div className="space-panel-titles">
           <h2>{name}</h2>
-          <span>{personal ? "Just you" : "Shared space"}</span>
+          <span>{personal ? say("justYou") : say("sharedSpace")}</span>
         </div>
         <IconButton
           icon="external"
-          label={`Open ${name}'s page`}
+          label={say("openPage", { name })}
           size="sm"
           href={spacePath(space._id, shown?.key, shown?.key === tab?.key)}
         />
@@ -111,7 +112,7 @@ function SpacePanel(
       {tabs.length > 1
         ? (
           <Tabs
-            label={`${name}'s tabs`}
+            label={say("tabsOf", { name })}
             className="space-panel-tabs"
             value={tab?.key ?? ""}
             panel={`${id}-tab`}

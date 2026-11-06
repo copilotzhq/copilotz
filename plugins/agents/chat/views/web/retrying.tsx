@@ -8,6 +8,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { Icon, Spinner, Tooltip } from "../../../../../hosts/web/mod.ts";
 import type { Live } from "../../collections/live.ts";
+import { say } from "./words.ts";
 
 export function Retrying({ retry }: { retry: NonNullable<Live["retry"]> }): ReactNode {
   const due = Date.parse(retry.at);
@@ -22,18 +23,26 @@ export function Retrying({ retry }: { retry: NonNullable<Live["retry"]> }): Reac
   const left = Math.max(1, Math.ceil((due - now) / 1000));
   return (
     <p className="live-retry">
-      <span className="copilotz-sr" role="status">Connection lost. Trying again.</span>
+      <span className="copilotz-sr" role="status">{say("connectionLostSr")}</span>
       {waiting
         ? <Icon name="refresh" size={13} className="live-retry-icon" />
         : <Spinner size={12} className="live-retry-icon" />}
       <span aria-hidden="true">
-        {waiting ? `Connection lost, retrying in ${left} s` : "Retrying…"}
+        {waiting ? say("retryingIn", { seconds: left }) : say("retrying")}
       </span>
       {retry.attempt > 1
-        ? <span className="live-retry-try" aria-hidden="true">retry {retry.attempt}</span>
+        ? (
+          <span className="live-retry-try" aria-hidden="true">
+            {say("retryNumber", { attempt: retry.attempt })}
+          </span>
+        )
         : null}
       <Tooltip text={retry.reason} describe={false}>
-        <span className="live-retry-why" tabIndex={0} aria-label={`Why: ${retry.reason}`}>
+        <span
+          className="live-retry-why"
+          tabIndex={0}
+          aria-label={say("why", { reason: retry.reason })}
+        >
           <Icon name="info" size={13} />
         </span>
       </Tooltip>

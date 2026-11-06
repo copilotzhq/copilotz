@@ -3,6 +3,7 @@
  * different), names in a sentence, and what home greets someone as.
  */
 import type { Message } from "../../collections/message.ts";
+import { say } from "./words.ts";
 
 /** An agent wrote it: its turn did (a reply, a step), or it's a hop from one (what it sent). */
 export const byAgent = (m: Message): boolean =>
@@ -10,7 +11,9 @@ export const byAgent = (m: Message): boolean =>
 
 /** Names as a sentence says them: "ana", "ana and bob", "ana, bob and cy". */
 export const names = (list: string[]): string =>
-  list.length < 2 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+  list.length < 2
+    ? list.join("")
+    : say("namesAnd", { rest: list.slice(0, -1).join(", "), last: list[list.length - 1] });
 
 /**
  * What home greets someone as: their first name, capitalised; signed in by

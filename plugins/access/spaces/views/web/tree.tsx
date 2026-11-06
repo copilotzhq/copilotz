@@ -26,7 +26,8 @@ import { nameOf } from "../../shared/names.ts";
 import { ORG } from "../../shared/reach.ts";
 import { NewSpace } from "./new-space.tsx";
 import { spacePath } from "./tabs.ts";
-import { spaceName, theirsAlone } from "./who.ts";
+import { listed, spaceName, theirsAlone } from "./who.ts";
+import { say } from "./words.ts";
 
 type Folds = Record<string, boolean>;
 
@@ -107,9 +108,9 @@ export function SpaceTree(
       {across.length
         ? (
           <Apart
-            title="Across the org"
+            title={say("acrossOrg")}
             icon="building"
-            hint="The org's other spaces: you reach them by running it, not as a member"
+            hint={say("acrossOrgHint")}
             spaces={across}
             open={folds[ACROSS] ?? across.some((s) => s._id === here)}
             fold={(open) => fold(ACROSS, open)}
@@ -123,7 +124,7 @@ export function SpaceTree(
       {archived.length
         ? (
           <Apart
-            title="Archived"
+            title={say("archived")}
             icon="archive"
             spaces={archived}
             open={folds[ARCHIVED] ?? archived.some((s) => s._id === here)}
@@ -181,7 +182,11 @@ function Apart(
       </NavItem>
       {open
         ? (
-          <ul id={id} className="spaces spaces-archived-list" aria-label={`${title}: spaces`}>
+          <ul
+            id={id}
+            className="spaces spaces-archived-list"
+            aria-label={say("spacesUnder", { title })}
+          >
             {spaces.map((s) => {
               const name = spaceName(s, viewer, names);
               return (
@@ -194,7 +199,7 @@ function Apart(
                       : s._id === here
                       ? "location"
                       : undefined}
-                    title={archived ? `${name} (archived)` : name}
+                    title={archived ? say("nameArchived", { name }) : name}
                     leading={theirsAlone(s, viewer)
                       ? <Avatar name={nameOf(s.owner ?? "", names)} size={20} />
                       : <Avatar name={s.name} kind="space" size={20} />}
@@ -227,15 +232,14 @@ function SpaceRow(
   const name = spaceName(space, viewer, names);
   const personal = space.kind === "personal";
   const id = useId();
-  const what = under.map((u) => u.title).filter(Boolean).join(" and ");
-  const verb = open ? "Hide" : "Show";
+  const what = listed(under.flatMap((u) => u.title ? [u.title] : []));
   return (
     <li className="spaces-item" data-open={open || undefined}>
       <div className="spaces-row">
         <NavItem
           href={spacePath(space._id)}
           current={page ? "page" : here ? "location" : undefined}
-          title={personal ? "Personal: just you and your agents" : space.name}
+          title={personal ? say("personalHint") : space.name}
           leading={personal
             ? (
               <span className="spaces-personal">
@@ -250,7 +254,9 @@ function SpaceRow(
           ? (
             <IconButton
               icon="chevron"
-              label={what ? `${verb} ${name}'s ${what}` : `${verb} what's in ${name}`}
+              label={what
+                ? say(open ? "hideWhat" : "showWhat", { name, what })
+                : say(open ? "hideIn" : "showIn", { name })}
               tooltip={false}
               size="sm"
               className="spaces-fold"

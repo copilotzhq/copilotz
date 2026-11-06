@@ -11,6 +11,7 @@ import { NavItem } from "../../../../../hosts/web/mod.ts";
 import type { Invitation } from "../../contract.ts";
 import { InvitationCard } from "./invitation.tsx";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 import { namesIn } from "../../shared/names.ts";
 
 /** At most this many show in the sidebar. */
@@ -24,7 +25,7 @@ export const invitationsView = (_: unknown, ctx: ViewContext<ReactNode>): ReactN
   return (
     <>
       <style href="spaces-web" precedence="copilotz">{STYLE}</style>
-      <ul className="invitations invitations-compact" aria-label="Invitations">
+      <ul className="invitations invitations-compact" aria-label={say("invitations")}>
         {mine.slice(0, SHOWN).map((i) => (
           <InvitationCard key={i._id} invitation={i} call={ctx.call} names={names} compact />
         ))}
@@ -32,7 +33,7 @@ export const invitationsView = (_: unknown, ctx: ViewContext<ReactNode>): ReactN
           ? (
             <li>
               <NavItem quiet href="/" icon="mail">
-                {mine.length - SHOWN} more invitation{mine.length - SHOWN === 1 ? "" : "s"}
+                {say("moreInvitations", { count: mine.length - SHOWN })}
               </NavItem>
             </li>
           )

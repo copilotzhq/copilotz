@@ -9,6 +9,7 @@ import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { Icon, NavItem, Skeleton, Time } from "../../../../../hosts/web/mod.ts";
 import { type Listed, titleOf } from "./listed.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 /** How many show under a space. */
 const SHOWN = 5;
@@ -32,12 +33,12 @@ export const recentView = (item: { _id?: string }, ctx: ViewContext<ReactNode>):
     return (
       <p className="chats-recent-none">
         {style}
-        No chats yet
+        {say("noChatsYet")}
       </p>
     );
   }
   return (
-    <ul className="chats-recent" aria-label="Latest chats">
+    <ul className="chats-recent" aria-label={say("latestChats")}>
       {style}
       {threads.map((t) => {
         const path = `/thread/${encodeURIComponent(t._id)}`;
@@ -60,7 +61,7 @@ export const recentView = (item: { _id?: string }, ctx: ViewContext<ReactNode>):
           href={`/space/${encodeURIComponent(space)}?tab=chats`}
           end={<Icon name="chevron" size={14} />}
         >
-          All chats
+          {say("allChats")}
         </NavItem>
       </li>
     </ul>

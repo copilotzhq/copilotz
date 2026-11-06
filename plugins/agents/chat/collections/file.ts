@@ -82,6 +82,12 @@ export const FILE_CHARS = 20_000;
 export const textual = (type: string): boolean =>
   type.startsWith("text/") || /json|xml|yaml|csv|javascript|typescript/.test(type);
 
+/** How large a file sent as base64 is, in bytes. */
+export const sizeOf = (data: string) => Math.floor(data.replace(/=+$/, "").length * 3 / 4);
+
+/** The most a file's content may be, as base64 (about 10 MB): people's and agents' alike. */
+export const FILE_DATA = 14_000_000;
+
 /** A base64 file's content as text. */
 export const text = (data: string) =>
   new TextDecoder().decode(Uint8Array.from(atob(data), (c) => c.charCodeAt(0)));

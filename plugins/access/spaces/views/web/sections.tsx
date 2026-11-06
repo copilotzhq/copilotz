@@ -14,6 +14,7 @@
 import type { ReactNode } from "react";
 import { Badge, Icon, NavItem, Tabs } from "../../../../../hosts/web/mod.ts";
 import type { ShownTab } from "./tabs.ts";
+import { say } from "./words.ts";
 
 export function TabSections(
   { tab, section, picked, menu, href, back, onPick, counts = {}, children }: {
@@ -39,7 +40,7 @@ export function TabSections(
     return (
       <div className="space-sections space-sections-top">
         <Tabs
-          label={`${tab.title}: its parts`}
+          label={say("partsOf", { title: tab.title })}
           className="space-sections-tabs"
           value={current.key}
           onChange={(key) => onPick?.(key)}

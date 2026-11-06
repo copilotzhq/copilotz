@@ -16,6 +16,7 @@ import type { Member, Reached } from "../../contract.ts";
 import type { Roster } from "./agents.tsx";
 import { STYLE } from "./style.ts";
 import { listed, spaceName } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -66,10 +67,10 @@ export const notHereView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode 
             role="alert"
             className="space-not-here"
             action={dismiss
-              ? <Button size="sm" variant="ghost" onClick={dismiss}>OK</Button>
+              ? <Button size="sm" variant="ghost" onClick={dismiss}>{say("ok")}</Button>
               : null}
           >
-            {said || "Nothing was sent: it named someone who doesn't answer here."}
+            {said || say("nothingSent")}
           </Notice>
         )}
     </>
@@ -87,7 +88,6 @@ function NotHere(
 ): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const one = away.length === 1;
   const who = listed(away.map((a) => a.name));
   const where = spaceName(space);
   const manage = space.can.includes("manage") && !space.archived;
@@ -123,9 +123,7 @@ function NotHere(
               <Avatar key={a.id} name={a.name} kind="agent" icon={a.icon} size={22} />
             ))}
           </span>
-          {reads
-            ? `${who} only ${one ? "reads" : "read"} ${where}`
-            : `${who} ${one ? "doesn't" : "don't"} work in ${where}`}
+          {say(reads ? "onlyReadsTitle" : "notWorkingTitle", { count: away.length, who, where })}
         </span>
       }
       action={manage
@@ -134,7 +132,7 @@ function NotHere(
             {dismiss
               ? (
                 <Button size="sm" variant="ghost" onClick={dismiss} disabled={busy}>
-                  Not now
+                  {say("notNow")}
                 </Button>
               )
               : null}
@@ -145,28 +143,23 @@ function NotHere(
               loading={busy}
               onClick={() => void add()}
             >
-              {reads
-                ? `Make ${one ? who : "them"} ${one ? "an editor" : "editors"} and send`
-                : `Add ${one ? who : "them"} and send`}
+              {say(reads ? "makeEditorsSend" : "addSend", { count: away.length, who })}
             </Button>
           </>
         )
         : dismiss
-        ? <Button size="sm" variant="ghost" onClick={dismiss}>OK</Button>
+        ? <Button size="sm" variant="ghost" onClick={dismiss}>{say("ok")}</Button>
         : null}
     >
       {error ??
-        (manage
-          ? reads
-            ? `Your message is waiting: as ${one ? "an editor" : "editors"}, ${
-              one ? "it answers" : "they answer"
-            } here too, and it goes as it is.`
-            : `Your message is waiting: add ${one ? "it" : "them"} to ${where}, as ${
-              one ? "an editor" : "editors"
-            }, and it goes as it is.`
-          : `Your message wasn't sent. Ask someone who manages ${where} to ${
-            reads ? `make ${one ? "it an editor" : "them editors"}` : `add ${one ? "it" : "them"}`
-          }, or send it without the @.`)}
+        say(
+          manage
+            ? reads ? "waitingReads" : "waitingAdd"
+            : reads
+            ? "askManagersEditor"
+            : "askManagersAdd",
+          { count: away.length, where },
+        )}
     </Notice>
   );
 }

@@ -34,10 +34,18 @@ import {
   peopleOrContacts,
 } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
-import { BASE64 } from "../collections/file.ts";
+import { BASE64, FILE_DATA, sizeOf } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
-import { agentsNamed, mentions, NO_ANSWER, now, rosterOf } from "../shared/agents.ts";
+import {
+  agentsNamed,
+  handles,
+  mentions,
+  NO_ANSWER,
+  now,
+  type Roster,
+  rosterOf,
+} from "../shared/agents.ts";
 import { delivery } from "../shared/delivery.ts";
 import { movedBy, startedWith } from "../shared/summary.ts";
 import { settingsOf } from "../shared/types.ts";
@@ -89,8 +97,34 @@ async function letIn(
   return said;
 }
 
-/** How large a file sent as base64 is, in bytes. */
-const sizeOf = (data: string) => Math.floor(data.replace(/=+$/, "").length * 3 / 4);
+/**
+ * The `@word`s in `text` that name someone who can be addressed: an agent
+ * (the app's, a source's, or one answering here), one of the thread's agents,
+ * or a person who has spoken in or been written to in the thread. Any other
+ * `@word` (a social handle, say) is plain text.
+ */
+async function mentionsIn(
+  ctx: Pick<Context, "resources" | "call" | "db">,
+  text: string,
+  thread: string,
+  roster: Roster,
+  members: string[],
+): Promise<string[]> {
+  const candidates = handles(text);
+  if (!candidates.length) return [];
+  const agents = await agentsNamed(ctx, candidates);
+  const known = new Set([...roster.here, ...members, ...Object.keys(agents)]);
+  const messages = ctx.db.collection<Message>("message");
+  const named: string[] = [];
+  for (const name of candidates) {
+    if (
+      known.has(name) || await messages.findOne({ thread, $or: [{ from: name }, { to: name }] })
+    ) {
+      named.push(name);
+    }
+  }
+  return mentions(text, named);
+}
 
 /** Who a message is from, pinned to whoever sends it: a person by id, a contact as `contact:<id>`. */
 const fromOf = (actor?: Actor) =>
@@ -122,7 +156,7 @@ export const sendAction = defineAction({
             name: { type: "string", minLength: 1 },
             // A media type, as the model is told it: `type/subtype`, with parameters at most.
             type: { type: "string", maxLength: MEDIA_TYPE_LENGTH, pattern: MEDIA_TYPE.source },
-            data: { type: "string", maxLength: 14_000_000, pattern: BASE64 },
+            data: { type: "string", maxLength: FILE_DATA, pattern: BASE64 },
             /** A recording's length (ms) and its loudness over time, for its player. */
             voice: {
               type: "object",
@@ -222,7 +256,7 @@ export const sendAction = defineAction({
     const where = existing ? existing.in : input.in;
     const roster = await rosterOf(ctx, where);
     const members = existing ? existing.agents ?? [] : roster.default;
-    const mentioned = contact ? [] : mentions(said);
+    const mentioned = contact ? [] : await mentionsIn(ctx, said, threadId, roster, members);
     const asked = (contact ? undefined : input.to) ??
       (mentioned.length ? mentioned : replied ? [replied.from] : members);
     // Agents answer only where they work: one named that doesn't is refused; one gone, left out.

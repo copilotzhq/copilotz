@@ -519,7 +519,7 @@ test("every Action, query and event stays shut to contacts, but those opened to 
 });
 
 test("an agent says a fixed message to a contact's chat without a turn, once", async () => {
-  await setup(async ({ runtime, carla, carlas }) => {
+  await setup(async ({ runtime, carla, dani, carlas }) => {
     await runtime.call("chat.send", { thread: carlas, text: "paid" }, { actor: carla });
     await runtime.idle();
     const calls = sent.length;
@@ -540,6 +540,17 @@ test("an agent says a fixed message to a contact's chat without a turn, once", a
     assertEquals(confirmed.map((m) => [m._id, m.from, m.to]), [
       [`${carlas}:say:pix-123:confirmed`, "lead", ["contact:c-carla-01"]],
     ]);
+    // With a file: one of the chat's, which its contact reads and no other contact does.
+    const { files } = await runtime.call<{ files: string[] }>("chat.say", {
+      id: "pix-123:receipt",
+      thread: carlas,
+      from: "lead",
+      files: [{ name: "receipt.pdf", type: "application/pdf", data: btoa("%PDF-1.4 receipt") }],
+    });
+    const receipt = (id: string, actor: Actor) =>
+      runtime.query<{ name: string } | null>("file.about", { id }, { actor });
+    assertEquals((await receipt(files[0], carla))?.name, "receipt.pdf");
+    assertEquals(await receipt(files[0], dani), null);
     // Said only by an agent that answers in the chat.
     assertEquals(
       await code(runtime.call("chat.say", { id: "y", thread: carlas, from: "ops", text: "hi" })),

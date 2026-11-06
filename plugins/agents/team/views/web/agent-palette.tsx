@@ -26,6 +26,7 @@ import type { Agent, Team } from "../../../chat/contract.ts";
 import { deleteStep, spaceStep } from "./agent-steps.tsx";
 import { agentPath, shownAs } from "./agents.ts";
 import { managed, manages, type Place, placeName, placePath } from "./places.ts";
+import { say } from "./words.ts";
 
 /** How many agents show with nothing typed, and while searching. */
 const SHOWN = { idle: 4, searching: 8 };
@@ -61,8 +62,10 @@ export const agentPaletteView = (
   // A new agent in a space: a dialog with its form.
   const make = (place: Place, palette: PaletteControl, from?: string) =>
     palette.dialog({
-      title: `New agent in ${placeName(place)}`,
-      ...(from ? { description: `Starting from ${shownAs(from, known[from]).name}.` } : {}),
+      title: say("newAgentIn", { place: placeName(place) }),
+      ...(from
+        ? { description: say("startingFrom", { name: shownAs(from, known[from]).name }) }
+        : {}),
       view: "agent.add",
       item: { _id: place._id },
       hints: { in: place._id, mode: "new", ...(from ? { from } : {}) },
@@ -79,21 +82,21 @@ export const agentPaletteView = (
     if (here && seatHere?.role === "editor" && manages(here) && here.agent !== open) {
       items.push({
         key: "agent:answers",
-        label: `Make ${name} answer new chats in ${placeName(here)}`,
+        label: say("makeNamedAnswerIn", { name, place: placeName(here) }),
         icon: "chat",
-        keywords: ["default", "answer", "new chats"],
+        keywords: [say("keywordDefault"), say("keywordAnswer"), say("keywordNewChats")],
         run: () => call("space.agent", { space: here._id, agent: open }),
       });
     }
     if (elsewhere.length) {
       items.push({
         key: "agent:add-to",
-        label: `Add ${name} to a space…`,
+        label: say("addNamedTo", { name }),
         icon: "plus",
-        keywords: ["member", "join", "work"],
+        keywords: [say("keywordMember"), say("keywordJoin"), say("keywordWork")],
         step: spaceStep({
-          title: `Add ${name} to…`,
-          note: "It works there at once, as an editor.",
+          title: say("addToTitle", { name }),
+          note: say("addNamedNote"),
           places: elsewhere,
           pick: (place) =>
             call("member.set", {
@@ -107,14 +110,14 @@ export const agentPaletteView = (
     if (home && manages(home)) {
       items.push({
         key: "agent:edit",
-        label: `Edit ${name}`,
+        label: say("editNamed", { name }),
         icon: "pencil",
-        keywords: ["change", "instructions", "rename"],
+        keywords: [say("keywordChange"), say("keywordInstructions"), say("keywordRename")],
         href: agentPath(open, true),
       });
       items.push({
         key: "agent:delete",
-        label: `Delete ${name}…`,
+        label: say("deleteMenu", { name }),
         icon: "trash",
         tone: "destructive",
         step: deleteStep({
@@ -128,30 +131,30 @@ export const agentPaletteView = (
     if (!agent.in && mine.length) {
       items.push({
         key: "agent:from",
-        label: `Start a new agent from ${name}…`,
+        label: say("startNewFrom", { name }),
         icon: "sparkles",
-        keywords: ["copy", "like", "create"],
+        keywords: [say("keywordCopy"), say("keywordLike"), say("keywordCreate")],
         step: spaceStep({
-          title: `New agent like ${name}, in…`,
+          title: say("newLikeTitle", { name }),
           places: mine,
           pick: (place, palette) => make(place, palette, open),
         }),
       });
     }
-    if (items.length) groups.push({ title: "This agent", order: 10, items });
+    if (items.length) groups.push({ title: say("paletteThisAgent"), order: 10, items });
   }
 
   if (here && manages(here) && !here.archived && !open) {
     const name = placeName(here);
     const items: PaletteItem[] = [{
       key: "agent:add",
-      label: `Add an agent to ${name}…`,
+      label: say("addAnAgentTo", { place: name }),
       icon: "bot",
-      keywords: ["member", "invite", "agent"],
+      keywords: [say("keywordMember"), say("keywordInvite"), say("keywordAgent")],
       run: (palette) =>
         palette.dialog({
-          title: `Add an agent to ${name}`,
-          description: "Agents work for whoever asks them, and reach only what that person can.",
+          title: say("addAnAgentTitle", { place: name }),
+          description: say("addAnAgentNote"),
           view: "agent.add",
           item: { _id: here._id },
           hints: { in: here._id },
@@ -163,15 +166,15 @@ export const agentPaletteView = (
         const { name: agent } = shownAs(id, roster.agents[id]);
         items.push({
           key: `agent:answers:${id}`,
-          label: `Make ${agent} answer new chats`,
+          label: say("makeNamedAnswer", { name: agent }),
           leading: leading(id, roster.agents[id]),
           description: name,
-          keywords: ["default", "answer", id],
+          keywords: [say("keywordDefault"), say("keywordAnswer"), id],
           run: () => call("space.agent", { space: here._id, agent: id }),
         });
       }
     }
-    groups.push({ title: "This space", order: 10, items });
+    groups.push({ title: say("paletteThisSpace"), order: 10, items });
   }
 
   // Agents to go to: those here first (who answers new chats first), then, searching, all met.
@@ -180,7 +183,7 @@ export const agentPaletteView = (
     ...(searching ? Object.keys(known).filter((id) => !roster.here.includes(id)) : []),
   ].filter((id) => id !== open);
   groups.push({
-    title: "Agents",
+    title: say("paletteAgents"),
     order: 25,
     limit: searching ? SHOWN.searching : SHOWN.idle,
     items: ids.map((id) => {
@@ -191,11 +194,11 @@ export const agentPaletteView = (
         label: name,
         leading: leading(id, agent),
         description: roster.default.includes(id)
-          ? "Answers new chats here"
+          ? say("answersNewChatsHere")
           : roster.here.includes(id)
-          ? `@${id} · works here`
+          ? say("worksHere", { id })
           : `@${id}`,
-        keywords: [id, agent?.description ?? "", "agent"].filter(Boolean),
+        keywords: [id, agent?.description ?? "", say("keywordAgent")].filter(Boolean),
         href: agentPath(id),
       };
     }),
@@ -204,26 +207,26 @@ export const agentPaletteView = (
   if (mine.length) {
     const inHere = here && manages(here) && !here.archived ? here : undefined;
     groups.push({
-      title: "Create",
+      title: say("paletteCreate"),
       order: 40,
       items: [
         inHere
           ? {
             key: "agent:new",
-            label: "New agent…",
+            label: say("newAgent"),
             icon: "bot",
-            description: `In ${placeName(inHere)}`,
-            keywords: ["create", "make", "agent"],
+            description: say("newAgentInHere", { place: placeName(inHere) }),
+            keywords: [say("keywordCreate"), say("keywordMake"), say("keywordAgent")],
             run: (palette) => make(inHere, palette),
           }
           : {
             key: "agent:new",
-            label: "New agent in…",
+            label: say("newAgentInStep"),
             icon: "bot",
-            keywords: ["create", "make", "agent"],
+            keywords: [say("keywordCreate"), say("keywordMake"), say("keywordAgent")],
             step: spaceStep({
-              title: "New agent in…",
-              note: "It belongs to the space you pick: those who manage it change it.",
+              title: say("newAgentInStep"),
+              note: say("newAgentInNote"),
               places: mine,
               pick: (place, palette) => make(place, palette),
             }),

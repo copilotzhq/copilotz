@@ -16,6 +16,7 @@ import {
   CopyButton,
   Icon,
   Input,
+  lang,
   message,
   Notice,
 } from "../../../../../hosts/web/mod.ts";
@@ -27,6 +28,7 @@ import {
   type Standing,
 } from "../../../../interfaces/web/contract.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 type Org = { id: string; name: string; kind: string };
@@ -52,24 +54,27 @@ function About({ org, standing, call }: { org: Org; standing: Standing; call: Ca
   const role = ORG_ROLES.find((r) => r.value === standing.role);
   return (
     <div className="space-settings org-about">
-      <Card as="section" padding="none" className="space-setting-list" aria-label="About">
+      <Card
+        as="section"
+        padding="none"
+        className="space-setting-list"
+        aria-label={say("aboutLabel")}
+      >
         <Setting
-          title="Name"
+          title={say("name")}
           text={personal
-            ? "Your personal org shows as Personal, to you."
+            ? say("orgNamePersonal")
             : owner
-            ? "What everyone in it sees it as: in the switcher, and when they're invited."
-            : "Its owners change its name."}
+            ? say("orgNameOwner")
+            : say("orgNameOthers")}
         >
           {personal
-            ? <Input value="Personal" disabled aria-label="The org's name" />
+            ? <Input value={say("personal")} disabled aria-label={say("orgNameLabel")} />
             : <Rename org={org} owner={owner} call={call} />}
         </Setting>
         <Setting
-          title="Your role"
-          text={standing.staff
-            ? "Platform staff: you reach all of it, and what you do here is on its record, as yours."
-            : role?.lets ?? ""}
+          title={say("yourRole")}
+          text={standing.staff ? say("staffRole") : role?.lets ?? ""}
         >
           <span className="org-about-role">
             {standing.role
@@ -81,7 +86,7 @@ function About({ org, standing, call }: { org: Org; standing: Standing; call: Ca
               : (
                 <Badge tone="warning">
                   <Icon name="shield" size={12} />
-                  Staff
+                  {say("staff")}
                 </Badge>
               )}
           </span>
@@ -89,22 +94,25 @@ function About({ org, standing, call }: { org: Org; standing: Standing; call: Ca
       </Card>
       {personal ? null : <WhoSees org={org} standing={standing} />}
       <Card as="section" className="space-setting-about" aria-labelledby="org-facts">
-        <h3 id="org-facts" className="space-section-title">Details</h3>
+        <h3 id="org-facts" className="space-section-title">{say("details")}</h3>
         <dl className="space-facts">
-          <dt>Kind</dt>
-          <dd>{personal ? "Personal: yours alone" : "Team"}</dd>
-          <dt>Roles</dt>
+          <dt>{say("kind")}</dt>
+          <dd>{personal ? say("kindPersonal") : say("kindTeam")}</dd>
+          <dt>{say("roles")}</dt>
           <dd className="org-about-roles">
             {ORG_ROLES.map((r) => (
               <span key={r.value}>
-                <b>{r.label}</b> {r.lets.charAt(0).toLowerCase() + r.lets.slice(1)}.
+                {say.nodes("orgRoleLine", {
+                  role: <b>{r.label}</b>,
+                  lets: r.lets.charAt(0).toLocaleLowerCase(lang()) + r.lets.slice(1),
+                })}
               </span>
             ))}
           </dd>
-          <dt>Id</dt>
+          <dt>{say("id")}</dt>
           <dd className="space-facts-id">
             <code>{org.id}</code>
-            <CopyButton text={org.id} label="Copy the org's id" />
+            <CopyButton text={org.id} label={say("copyOrgId")} />
           </dd>
         </dl>
       </Card>
@@ -120,25 +128,11 @@ function WhoSees({ org, standing }: { org: Org; standing: Standing }): ReactNode
       tone="neutral"
       icon="eye"
       className="org-about-sees"
-      title={them ? "What you can see" : "What owners and admins can see"}
+      title={them ? say("seesYou") : say("seesOwners")}
     >
       {them
-        ? (
-          <>
-            As {standing.role === "owner" ? "an owner" : "an admin"}, you reach everything in{" "}
-            {org.name}: every space, Personal ones included, with their conversations, agents,
-            computers and memories. It's there so you can help, and hand work over when someone
-            leaves. People's Personal spaces are still theirs.
-          </>
-        )
-        : (
-          <>
-            {org.name}'s owners and admins reach everything in it: every space, Personal ones
-            included, with their conversations, agents, computers and memories. It's there so they
-            can help, and hand work over when someone leaves. Platform staff can come in too; what
-            they do is on {org.name}'s record.
-          </>
-        )}
+        ? say(standing.role === "owner" ? "seesAsOwner" : "seesAsAdmin", { org: org.name })
+        : say("seesTheirs", { org: org.name })}
     </Notice>
   );
 }
@@ -187,7 +181,7 @@ function Rename({ org, owner, call }: { org: Org; owner: boolean; call: Call }):
           maxLength={80}
           disabled={!owner}
           autoComplete="off"
-          aria-label="The org's name"
+          aria-label={say("orgNameLabel")}
           invalid={!!said.error}
           onChange={(event) => {
             setName(event.target.value);
@@ -197,7 +191,7 @@ function Rename({ org, owner, call }: { org: Org; owner: boolean; call: Call }):
         {owner
           ? (
             <Button type="submit" variant="primary" loading={busy} disabled={!changed}>
-              Save
+              {say("save")}
             </Button>
           )
           : null}
@@ -208,7 +202,7 @@ function Rename({ org, owner, call }: { org: Org; owner: boolean; call: Call }):
         ? (
           <p className="space-setting-note space-invite-done" role="status">
             <Icon name="check" size={14} />
-            Saved. Everyone in it sees the new name.
+            {say("orgSaved")}
           </p>
         )
         : null}

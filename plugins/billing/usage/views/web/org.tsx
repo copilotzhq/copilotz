@@ -54,6 +54,8 @@ import {
   compact,
   daysIn,
   type Dimension,
+  dimensionIn,
+  dimensionName,
   DIMENSIONS,
   durationSaid,
   hitRate,
@@ -77,6 +79,8 @@ import {
   usd,
 } from "./numbers.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
+import { formatDate, formatNumber, formatTime } from "../../../../../hosts/web/mod.ts";
 import { nameOf as personName } from "../../../../access/spaces/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
@@ -86,7 +90,7 @@ type Named = Record<string, Record<string, { name: string; owner?: string }>>;
 type Filter = Record<string, unknown>;
 
 /** What `billing.state` answers that this page reads (the credits plugin's; absent without it). */
-type Billing = {
+export type Billing = {
   on: boolean;
   runs: boolean;
   balance?: number;
@@ -107,17 +111,17 @@ type Report = {
   costs: boolean;
 };
 
-type Activity = { items: ActivityItem[]; more: boolean; names: Named };
+export type Activity = { items: ActivityItem[]; more: boolean; names: Named };
 
 const FIRST = 20;
 const MORE = 30;
 
 /** Kinds in the order their colours keep, whatever each spent. */
 const KINDS = ["agents", "computers", "apps"];
-const KIND: Record<string, { name: string; icon: IconName }> = {
-  agents: { name: "Agents", icon: "bot" },
-  computers: { name: "Computers", icon: "computer" },
-  apps: { name: "Apps", icon: "globe" },
+const KIND: Record<string, { name: () => string; icon: IconName }> = {
+  agents: { name: () => say("kindAgents"), icon: "bot" },
+  computers: { name: () => say("kindComputers"), icon: "computer" },
+  apps: { name: () => say("kindApps"), icon: "globe" },
 };
 
 export const orgUsageView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
@@ -259,21 +263,23 @@ function Usage(
   }
   const nameOf = (person: string) =>
     !person
-      ? "Not tied to anyone"
+      ? say("notTiedToAnyone")
       : person === me
-      ? "You"
+      ? say("you")
       : people.get(person)?.name || people.get(person)?.email || personName(person);
   /** Whose face: their own name's, even when it says "You". */
   const faceOf = (person: string) => people.get(person)?.name || personName(person);
   const spaceOf = (space: string) => {
-    if (!space) return "Space not recorded";
+    if (!space) return say("spaceNotRecorded");
     const found = nameIn(names, "tags.space", space);
-    if (!found) return "A space you don't reach";
+    if (!found) return say("spaceNotReached");
     if (!found.owner) return found.name;
-    return found.owner === me ? "Your Personal space" : `${faceOf(found.owner)}'s Personal space`;
+    return found.owner === me
+      ? say("yourPersonalSpace")
+      : say("personalSpaceOf", { name: faceOf(found.owner) });
   };
   const modelName = (subject: string) => models.get(subject) ?? modelOf(subject).name;
-  const say: Sayers = { nameOf, faceOf, spaceOf, modelName, people, names };
+  const namer: Sayers = { nameOf, faceOf, spaceOf, modelName, people, names };
 
   const choose = (row: Row, label: string) =>
     setChips((had) => {
@@ -293,9 +299,9 @@ function Usage(
       <Notice
         tone="destructive"
         role="alert"
-        action={<Button size="sm" onClick={() => ask((n) => n + 1)}>Try again</Button>}
+        action={<Button size="sm" onClick={() => ask((n) => n + 1)}>{say("tryAgain")}</Button>}
       >
-        We couldn't read this org's usage just now. {error}
+        {say("readError", { error })}
       </Notice>
     );
   }
@@ -306,7 +312,7 @@ function Usage(
   const filters = (
     <div className="usage-filters">
       <Select
-        aria-label="Month"
+        aria-label={say("month")}
         className="usage-period"
         value={month}
         onChange={(event) => setMonth(event.target.value)}
@@ -314,7 +320,7 @@ function Usage(
         {choices.map((m) => (
           <option key={m} value={m}>
             {/* This month's spend is the headline's; past months say theirs (this year's, short). */}
-            {m === current ? "This month" : monthSaid(m, m.slice(0, 4) === current.slice(0, 4))}
+            {m === current ? say("thisMonth") : monthSaid(m, m.slice(0, 4) === current.slice(0, 4))}
             {m !== current && spentIn.get(m) ? ` · ${usd(spentIn.get(m)!)}` : ""}
           </option>
         ))}
@@ -322,20 +328,20 @@ function Usage(
       {manage && !personal
         ? (
           <Select
-            aria-label="Whose usage"
+            aria-label={say("whoseUsage")}
             className="usage-whose-pick"
             value={whose}
             onChange={(event) => setWhose(event.target.value as typeof whose)}
           >
-            <option value="all">Everyone</option>
-            <option value="mine">Just you</option>
+            <option value="all">{say("everyone")}</option>
+            <option value="mine">{say("justYou")}</option>
           </Select>
         )
         : null}
       <span className="usage-filters-gap" />
       <IconButton
         icon="refresh"
-        label="Read it again"
+        label={say("readAgain")}
         loading={loading && !!report}
         onClick={() => ask((n) => n + 1)}
       />
@@ -376,7 +382,7 @@ function Usage(
         ? (
           <p className="usage-whose">
             <Icon name="person" size={14} />
-            Your own usage. The org's owners and admins see everyone's.
+            {say("ownUsage")}
           </p>
         )
         : null}
@@ -395,16 +401,18 @@ function Usage(
       />
       {chips.length
         ? (
-          <div className="usage-chips" aria-label="Kept to">
-            <span className="usage-chips-label">Showing only</span>
+          <div className="usage-chips" aria-label={say("keptTo")}>
+            <span className="usage-chips-label">{say("showingOnly")}</span>
             {chips.map((chip) => (
               <span key={`${chip.dimension}:${chip.key}`} className="usage-chip">
-                <span className="usage-chip-what">{DIMENSIONS[chip.dimension].label}:</span>
+                <span className="usage-chip-what">
+                  {say("chipWhat", { what: dimensionName(chip.dimension) })}
+                </span>
                 <span className="usage-chip-name">{chip.label}</span>
                 <button
                   type="button"
                   className="usage-chip-x"
-                  aria-label={`Show all, not only ${chip.label}`}
+                  aria-label={say("showAllNotOnly", { name: chip.label })}
                   onClick={() => setChips(chips.filter((c) => c !== chip))}
                 >
                   <Icon name="close" size={12} />
@@ -414,7 +422,7 @@ function Usage(
             {chips.length > 1
               ? (
                 <Button size="sm" variant="ghost" onClick={() => setChips([])}>
-                  Show everything
+                  {say("showEverything")}
                 </Button>
               )
               : null}
@@ -434,7 +442,7 @@ function Usage(
             choose={choose}
             staff={staff}
             everyone={everyone}
-            say={say}
+            namer={namer}
           />
         )
         : (
@@ -442,12 +450,10 @@ function Usage(
             <EmptyState
               icon="chart"
               title={ongoing
-                ? "Nothing used this month yet"
-                : `Nothing used in ${monthSaid(month)}`}
+                ? say("nothingUsedThisMonth")
+                : say("nothingUsedIn", { month: monthSaid(month) })}
             >
-              {everyone
-                ? "As agents answer, computers run and apps serve in this org, what each was charged shows here, by kind, space, person, agent and model."
-                : "As agents answer and computers run for you, what each was charged shows here."}
+              {everyone ? say("emptyEveryone") : say("emptyOwn")}
             </EmptyState>
           </Card>
         )}
@@ -457,7 +463,7 @@ function Usage(
             activity={activity}
             everyone={everyone}
             staff={staff}
-            say={say}
+            namer={namer}
             more={() => setLimit((n) => n + MORE)}
             filtered={chips.length > 0}
           />
@@ -468,10 +474,7 @@ function Usage(
           <p className="usage-unpriced">
             <Icon name="info" size={14} />
             <span>
-              We don't know what {spent.unpriced.toLocaleString()}{" "}
-              {spent.unpriced === 1 ? "use" : "uses"}{" "}
-              cost: their models aren't in the price catalog, and the app sets no rate for them, so
-              the spend may leave them out.
+              {say("unpriced", { count: spent.unpriced, total: formatNumber(spent.unpriced) })}
             </span>
           </p>
         )
@@ -494,7 +497,7 @@ function nameIn(
 }
 
 /** How the page names things: people, spaces, models, and the tags `names` covers. */
-type Sayers = {
+export type Sayers = {
   nameOf(person: string): string;
   faceOf(person: string): string;
   spaceOf(space: string): string;
@@ -535,7 +538,7 @@ const ARROWS = { up: "↑", down: "↓", flat: "→" };
  * month before; what caching saved; the way to Billing. Staff, the cost and
  * the margin.
  */
-function Headline(
+export function Headline(
   { spent, before, month, ongoing, now, everyone, filtered, whole, staff, billing, manage }: {
     spent: Sum;
     before: number;
@@ -550,7 +553,14 @@ function Headline(
     manage: boolean;
   },
 ): ReactNode {
-  const when = ongoing ? "this month" : `in ${monthSaid(month)}`;
+  const spentSaid = say(
+    everyone
+      ? ongoing ? "spentThisMonth" : "spentIn"
+      : ongoing
+      ? "spentByYouThisMonth"
+      : "spentByYouIn",
+    { month: monthSaid(month) },
+  );
   const delta = change(spent.spend, before);
   const way = delta === undefined
     ? undefined
@@ -559,7 +569,7 @@ function Headline(
     : delta < -0.005
     ? "down"
     : "flat";
-  const against = ongoing ? "this point last month" : monthSaid(monthBefore(month));
+  const against = ongoing ? say("pointLastMonth") : monthSaid(monthBefore(month));
   // What's left, and how long it lasts: the budget's or the credits', whichever ends first.
   const charged = billing?.on && !billing.waived ? billing : undefined;
   const limit = charged?.month?.limit;
@@ -587,34 +597,39 @@ function Headline(
     ? (
       <span className="usage-left" data-tone="out">
         <Icon name="alert" size={13} />
-        {binding.what === "budget" ? "the budget is used up" : "out of credits"}
+        {binding.what === "budget" ? say("budgetUsedUp") : say("outOfCredits")}
       </span>
     )
     : (
       <span className="usage-left" data-tone={tone}>
-        {usd(binding.left)} {binding.what === "credits" ? "of credits left" : "left"}
-        {lasts
-          ? binding.what === "budget" && binding.left / perDay >= monthLeft
-            ? ", enough for the month at this pace"
-            : `, ${lasts} at this pace`
-          : null}
+        {binding.what === "credits"
+          ? say(lasts ? "creditsLeftLasts" : "creditsLeft", {
+            amount: usd(binding.left),
+            lasts: lasts ?? "",
+          })
+          : lasts && binding.left / perDay >= monthLeft
+          ? say("budgetLeftEnough", { amount: usd(binding.left) })
+          : say(lasts ? "budgetLeftLasts" : "budgetLeft", {
+            amount: usd(binding.left),
+            lasts: lasts ?? "",
+          })}
       </span>
     );
   return (
-    <section className="usage-head" aria-label="This month">
+    <section className="usage-head" aria-label={say("thisMonth")}>
       <p className="usage-headline">
-        <b className="usage-amount">{usd(spent.spend)}</b>{" "}
-        <span>
-          spent {!everyone ? "by you " : ""}
-          {when}
-        </span>
+        <b className="usage-amount">{usd(spent.spend)}</b> <span>{spentSaid}</span>
         {filtered && whole > 0
-          ? <span className="usage-dot">{percent(spent.spend / whole)} of all spend</span>
+          ? (
+            <span className="usage-dot">
+              {say("shareOfAll", { percent: percent(spent.spend / whole) })}
+            </span>
+          )
           : null}
         {limit !== undefined
           ? (
             <span className="usage-dot">
-              {percent(share)} of the {usd(limit)} budget
+              {say("shareOfBudget", { percent: percent(share), limit: usd(limit) })}
             </span>
           )
           : null}
@@ -626,11 +641,11 @@ function Headline(
             className="usage-meter-budget"
             data-tone={tone}
             role="meter"
-            aria-label="Spent this month, against the budget"
+            aria-label={say("meterLabel")}
             aria-valuemin={0}
             aria-valuemax={limit}
             aria-valuenow={Math.min(counted, limit)}
-            aria-valuetext={`${usd(counted)} of ${usd(limit)}`}
+            aria-valuetext={say("meterValue", { spent: usd(counted), limit: usd(limit) })}
           >
             <span style={{ width: `${Math.min(1, share ?? 0) * 100}%` }} />
             {ongoing
@@ -638,7 +653,7 @@ function Headline(
                 <i
                   className="usage-meter-now"
                   style={{ left: `${(elapsed / days) * 100}%` }}
-                  title="How far into the month we are"
+                  title={say("meterNow")}
                 />
               )
               : null}
@@ -649,21 +664,21 @@ function Headline(
         {way
           ? (
             <span className="usage-delta" data-way={way}>
-              {ARROWS[way]} {changeSaid(delta!)} <span>vs. {against}</span>
+              {ARROWS[way]} {changeSaid(delta!)} <span>{say("versus", { against })}</span>
             </span>
           )
           : spent.spend > 0
-          ? <span>Nothing {ongoing ? "by this point last month" : `in ${against}`}</span>
+          ? <span>{ongoing ? say("nothingByPoint") : say("nothingIn", { against })}</span>
           : null}
         {spent.saved > 0
-          ? <span className="usage-dot">caching saved {usd(spent.saved)}</span>
+          ? <span className="usage-dot">{say("cachingSaved", { amount: usd(spent.saved) })}</span>
           : spent.saved < 0
-          ? <span className="usage-dot">caching cost {usd(-spent.saved)} more than it saved</span>
+          ? <span className="usage-dot">{say("cachingCost", { amount: usd(-spent.saved) })}</span>
           : null}
         {manage && billing
           ? (
             <a className="usage-billing" href="/org?tab=billing">
-              Billing <span aria-hidden="true">→</span>
+              {say("billing")} <span aria-hidden="true">→</span>
             </a>
           )
           : null}
@@ -673,17 +688,18 @@ function Headline(
           <p className="usage-staff-line">
             <Badge tone="warning">
               <Icon name="shield" size={12} />
-              Staff only
+              {say("staffOnly")}
             </Badge>
-            <span>
-              Cost <b>{usd(spent.cost ?? 0)}</b>
+            <span>{say.nodes("costOf", { amount: <b>{usd(spent.cost ?? 0)}</b> })}</span>
+            <span className="usage-dot">
+              {say.nodes("marginOf", {
+                percent: <b>{percent(marginOf(spent.spend, spent.cost))}</b>,
+              })}
             </span>
             <span className="usage-dot">
-              <b>{percent(marginOf(spent.spend, spent.cost))}</b> margin
-            </span>
-            <span className="usage-dot">
-              {usd(Math.abs(spent.spend - (spent.cost ?? 0)))}{" "}
-              {spent.spend < (spent.cost ?? 0) ? "under" : "over"} cost
+              {say(spent.spend < (spent.cost ?? 0) ? "underCost" : "overCost", {
+                amount: usd(Math.abs(spent.spend - (spent.cost ?? 0))),
+              })}
             </span>
           </p>
         )
@@ -703,7 +719,7 @@ const SHOWN = 8;
  * The switch, the stacked chart and the ranked list: one dimension for
  * both. Choosing a row keeps the page to it.
  */
-function Breakdown(
+export function Breakdown(
   {
     rows,
     totals,
@@ -715,7 +731,7 @@ function Breakdown(
     choose,
     staff,
     everyone,
-    say,
+    namer,
   }: {
     rows: Row[];
     totals: Total[];
@@ -727,7 +743,7 @@ function Breakdown(
     choose(row: Row, label: string): void;
     staff: boolean;
     everyone: boolean;
-    say: Sayers;
+    namer: Sayers;
   },
 ): ReactNode {
   const [all, setAll] = useState(false);
@@ -745,10 +761,10 @@ function Breakdown(
   const series: Series[] = [
     ...ordered.slice(0, SERIES).map((r, i) => ({
       key: r.key,
-      name: label(dimension, r, say),
+      name: label(dimension, r, namer),
       color: colorOf(i),
     })),
-    ...(many ? [{ key: "*", name: "The rest", color: colorOf(SERIES) }] : []),
+    ...(many ? [{ key: "*", name: say("theRest"), color: colorOf(SERIES) }] : []),
   ];
   const at = new Map(series.map((s, i) => [s.key, i]));
   const days = useMemo(() => daysIn(month), [month]);
@@ -759,16 +775,19 @@ function Breakdown(
   const pick = chosen === undefined ? undefined : at.get(chosen) ?? (many ? SERIES : undefined);
   const dims = Object.entries(DIMENSIONS).filter(([d]) => everyone || d !== "person");
   const shown = all ? rows : rows.slice(0, SHOWN);
-  const per = DIMENSIONS[dimension].label.toLowerCase();
+  const per = dimensionIn(dimension);
   return (
     <Card as="section" className="usage-card usage-by" aria-labelledby="usage-by">
       <header className="usage-card-head usage-by-head">
-        <h3 id="usage-by">Spend by</h3>
+        <h3 id="usage-by">{say("spendBy")}</h3>
         <Tabs
-          label="Spend by"
+          label={say("spendBy")}
           value={dimension}
           onChange={setDimension}
-          tabs={dims.map(([value, d]) => ({ value: value as Dimension, label: d.label }))}
+          tabs={dims.map(([value]) => ({
+            value: value as Dimension,
+            label: dimensionName(value as Dimension),
+          }))}
         />
       </header>
       <StackedChart
@@ -776,11 +795,11 @@ function Breakdown(
         series={series}
         today={today}
         chosen={pick}
-        label={`Spend per day in ${monthSaid(month)}, by ${per}`}
+        label={say("chartLabel", { month: monthSaid(month), by: per })}
       />
-      <ul className="usage-rows" aria-label={`By ${per}: choose one to see only it`}>
+      <ul className="usage-rows" aria-label={say("rowsLabel", { by: per })}>
         {shown.map((row) => {
-          const name = label(dimension, row, say);
+          const name = label(dimension, row, namer);
           const on = row.key === chosen;
           const i = at.get(row.key) ?? (many ? SERIES : undefined);
           return (
@@ -791,15 +810,15 @@ function Breakdown(
                 aria-pressed={on}
                 data-back={chosen !== undefined && !on || undefined}
                 onClick={() => choose(row, name)}
-                title={on ? "Show all again" : `See only ${name}`}
+                title={on ? say("showAllAgain") : say("seeOnly", { name })}
               >
                 <i className="usage-swatch" style={{ background: colorOf(i) }} aria-hidden="true" />
-                {face(dimension, row, say)}
+                {face(dimension, row, namer)}
                 <span className="usage-row-text">
                   <span className="usage-row-name">
                     <span className="usage-row-label">{name}</span>
-                    {detailOf(dimension, row, say)
-                      ? <span className="usage-row-detail">{detailOf(dimension, row, say)}</span>
+                    {detailOf(dimension, row, namer)
+                      ? <span className="usage-row-detail">{detailOf(dimension, row, namer)}</span>
                       : null}
                   </span>
                   <span className="usage-row-meter" aria-hidden="true">
@@ -817,10 +836,12 @@ function Breakdown(
                     ? (
                       <span className="usage-row-staff">
                         <Icon name="shield" size={11} />
-                        Cost {usd(row.cost)}
                         {marginOf(row.spend, row.cost) !== undefined
-                          ? ` · ${percent(marginOf(row.spend, row.cost))} margin`
-                          : ""}
+                          ? say("rowCostMargin", {
+                            amount: usd(row.cost),
+                            percent: percent(marginOf(row.spend, row.cost)),
+                          })
+                          : say("rowCost", { amount: usd(row.cost) })}
                       </span>
                     )
                     : null}
@@ -837,7 +858,7 @@ function Breakdown(
       {rows.length > SHOWN
         ? (
           <Button size="sm" variant="ghost" className="usage-more" onClick={() => setAll(!all)}>
-            {all ? "Show fewer" : `Show all ${rows.length}`}
+            {all ? say("showFewer") : say("showAll", { count: rows.length })}
           </Button>
         )
         : null}
@@ -849,53 +870,53 @@ function Breakdown(
 function modelDetail(row: Row): string {
   const hit = hitRate(row.cached, row.input);
   return [
-    `${compact(row.tokens)} tokens`,
-    `${compact(row.uses)} ${row.uses === 1 ? "call" : "calls"}`,
-    hit !== undefined ? `${percent(hit)} of input from cache` : null,
-    row.saved > 0 ? `caching saved ${usd(row.saved)}` : null,
+    say("tokens", { tokens: compact(row.tokens) }),
+    say("calls", { count: row.uses, calls: compact(row.uses) }),
+    hit !== undefined ? say("fromInputCache", { percent: percent(hit) }) : null,
+    row.saved > 0 ? say("cachingSaved", { amount: usd(row.saved) }) : null,
   ].filter(Boolean).join(" · ");
 }
 
 /** A kind by name: Agents, Computers, Apps, or an app's own meter. */
-const kindName = (kind: string) => KIND[kind]?.name ?? agentName(kind);
+const kindName = (kind: string) => KIND[kind]?.name() ?? agentName(kind);
 
 /** A row's name in its dimension. */
-function label(dimension: Dimension, row: Row, say: Sayers): string {
+function label(dimension: Dimension, row: Row, namer: Sayers): string {
   const [what, ...rest] = row.key.split(":");
   const value = rest.join(":");
   switch (dimension) {
     case "kind":
       return kindName(row.key);
     case "space":
-      return say.spaceOf(row.key);
+      return namer.spaceOf(row.key);
     case "person":
-      return say.nameOf(row.key);
+      return namer.nameOf(row.key);
     case "agent":
       return what === "agent"
         ? agentName(value)
         : what === "upkeep"
-        ? "Conversation upkeep"
+        ? say("conversationUpkeep")
         : what === "purpose"
         ? purposeSaid(value)
         : what === "category"
         ? kindName(value)
-        : "Other model use";
+        : say("otherModelUse");
     case "model":
-      return what === "subject" ? say.modelName(value) : kindName(value);
+      return what === "subject" ? namer.modelName(value) : kindName(value);
   }
 }
 
 /** What a row is, said beside its name, where its name doesn't say it all. */
 function detailOf(dimension: Dimension, row: Row, _say: Sayers): string | undefined {
   const [what, ...rest] = row.key.split(":");
-  if (dimension === "agent" && what === "upkeep") return "summaries, memory notes, voice";
+  if (dimension === "agent" && what === "upkeep") return say("upkeepDetail");
   if (dimension === "model" && what === "subject") return modelOf(rest.join(":")).provider;
-  if (dimension === "space" && !row.key) return "used before spaces were recorded";
+  if (dimension === "space" && !row.key) return say("beforeSpaces");
   return undefined;
 }
 
 /** A row's face: a person's or agent's avatar, a space's, or its kind's icon. */
-function face(dimension: Dimension, row: Row, say: Sayers): ReactNode {
+function face(dimension: Dimension, row: Row, namer: Sayers): ReactNode {
   const [what, ...rest] = row.key.split(":");
   const value = rest.join(":");
   const icon = (name: IconName, className = "usage-face") => (
@@ -907,13 +928,15 @@ function face(dimension: Dimension, row: Row, say: Sayers): ReactNode {
     case "kind":
       return icon(KIND[row.key]?.icon ?? "tool");
     case "space":
-      return row.key ? <Avatar name={say.spaceOf(row.key)} kind="space" size={26} /> : icon("info");
+      return row.key
+        ? <Avatar name={namer.spaceOf(row.key)} kind="space" size={26} />
+        : icon("info");
     case "person":
       return row.key
         ? (
           <Avatar
-            name={say.faceOf(row.key)}
-            picture={say.people.get(row.key)?.picture}
+            name={namer.faceOf(row.key)}
+            picture={namer.people.get(row.key)?.picture}
             size={26}
           />
         )
@@ -939,9 +962,9 @@ export const paidBy = (
   tags: Record<string, string> | undefined,
 ): { label: string; title: string } | undefined =>
   tags?.paid === "own-key"
-    ? { label: "Your key", title: "Ran on your own key: no credits used" }
+    ? { label: say("yourKey"), title: say("yourKeyTitle") }
     : tags?.paid === "subscription"
-    ? { label: "Plan", title: "Ran on a connected plan: no credits used" }
+    ? { label: say("plan"), title: say("planTitle") }
     : undefined;
 
 /** What it was charged, as a list says it: who else paid, nothing known, or its price. */
@@ -960,11 +983,11 @@ function Price(
       {other
         ? <span className="usage-quiet" title={other.title}>{other.label}</span>
         : unpriced && !price
-        ? <span className="usage-quiet" title="No known cost">—</span>
+        ? <span className="usage-quiet" title={say("noKnownCost")}>—</span>
         : usd(price, true)}
       {staff && cost !== undefined
         ? (
-          <span className="usage-price-staff" title="Cost and margin: staff only">
+          <span className="usage-price-staff" title={say("staffCostMargin")}>
             {usd(cost, true)} · {percent(marginOf(price, cost))}
           </span>
         )
@@ -975,7 +998,7 @@ function Price(
 
 /** The time of a day, as the clock says it: "14:05". */
 const clock = (at: string, seconds = false) =>
-  new Date(at).toLocaleTimeString(undefined, {
+  formatTime(new Date(at), {
     hour: "2-digit",
     minute: "2-digit",
     ...(seconds ? { second: "2-digit" } : {}),
@@ -983,18 +1006,18 @@ const clock = (at: string, seconds = false) =>
 
 /** A day, short: "Nov 2". */
 const dayShort = (at: string) =>
-  new Date(at.length === 10 ? `${at}T12:00:00Z` : at).toLocaleDateString(undefined, {
+  formatDate(new Date(at.length === 10 ? `${at}T12:00:00Z` : at), {
     month: "short",
     day: "numeric",
   });
 
 /** What was done, newest first, kept to the same chips. */
-function ActivityCard(
-  { activity, everyone, staff, say, more, filtered }: {
+export function ActivityCard(
+  { activity, everyone, staff, namer, more, filtered }: {
     activity: Activity;
     everyone: boolean;
     staff: boolean;
-    say: Sayers;
+    namer: Sayers;
     more(): void;
     filtered: boolean;
   },
@@ -1007,25 +1030,31 @@ function ActivityCard(
       aria-labelledby="usage-activity"
     >
       <header className="usage-card-head usage-activity-head">
-        <h3 id="usage-activity">Activity</h3>
+        <h3 id="usage-activity">{say("activity")}</h3>
         <p>
-          {staff ? <Badge tone="warning">Cost and margin: staff only</Badge> : null}
-          {everyone ? "Everyone's" : "Yours"}, newest first{filtered ? ", as filtered" : ""}
+          {staff ? <Badge tone="warning">{say("staffCostMargin")}</Badge> : null}
+          {say(
+            everyone
+              ? filtered ? "activityEveryoneFiltered" : "activityEveryone"
+              : filtered
+              ? "activityYoursFiltered"
+              : "activityYours",
+          )}
         </p>
       </header>
       {activity.items.length
         ? (
           <ul className="usage-items">
             {activity.items.map((item) => (
-              <Item key={item.id} item={item} everyone={everyone} staff={staff} say={say} />
+              <Item key={item.id} item={item} everyone={everyone} staff={staff} namer={namer} />
             ))}
           </ul>
         )
-        : <p className="usage-none">Nothing here matches what's chosen.</p>}
+        : <p className="usage-none">{say("nothingMatches")}</p>}
       {activity.more
         ? (
           <Button size="sm" variant="ghost" className="usage-more usage-more-items" onClick={more}>
-            Show older
+            {say("showOlder")}
           </Button>
         )
         : null}
@@ -1035,23 +1064,23 @@ function ActivityCard(
 
 /** A thing done: its time, what it was in words, its details, what it was charged. */
 function Item(
-  { item, everyone, staff, say }: {
+  { item, everyone, staff, namer }: {
     item: ActivityItem;
     everyone: boolean;
     staff: boolean;
-    say: Sayers;
+    namer: Sayers;
   },
 ): ReactNode {
   const [open, setOpen] = useState(false);
   const t = item.tags;
-  const thread = t.thread ? nameIn(say.names, "tags.thread", t.thread)?.name : undefined;
-  const where = thread ? `“${thread}”` : "a conversation";
-  const machine = t.computer ? nameIn(say.names, "tags.computer", t.computer)?.name : undefined;
-  const computer = machine ? `“${machine}”` : "a computer";
+  const thread = t.thread ? nameIn(namer.names, "tags.thread", t.thread)?.name : undefined;
+  const where = thread ? say("quoted", { name: thread }) : say("aConversation");
+  const machine = t.computer ? nameIn(namer.names, "tags.computer", t.computer)?.name : undefined;
+  const computer = machine ? say("quoted", { name: machine }) : say("aComputer");
   const q = item.quantities;
   const tokens = (q.input ?? 0) + (q.output ?? 0);
-  const who = everyone && t.person ? say.nameOf(t.person) : undefined;
-  const space = t.space ? say.spaceOf(t.space) : undefined;
+  const who = everyone && t.person ? namer.nameOf(t.person) : undefined;
+  const space = t.space ? namer.spaceOf(t.space) : undefined;
   let icon: ReactNode;
   let title: ReactNode;
   let details: (string | undefined | null)[];
@@ -1059,11 +1088,11 @@ function Item(
     case "turn": {
       const hit = hitRate(q.cached ?? 0, q.input ?? 0);
       icon = <Avatar name={t.agent ?? "agent"} kind="agent" size={28} />;
-      title = <>{agentName(t.agent ?? "An agent")} in {where}</>;
+      title = say("turnTitle", { agent: t.agent ? agentName(t.agent) : say("anAgent"), where });
       details = [
-        item.subject ? say.modelName(item.subject) : null,
-        tokens ? `${compact(tokens)} tokens` : null,
-        hit ? `${percent(hit)} from cache` : null,
+        item.subject ? namer.modelName(item.subject) : null,
+        tokens ? say("tokens", { tokens: compact(tokens) }) : null,
+        hit ? say("fromCache", { percent: percent(hit) }) : null,
       ];
       break;
     }
@@ -1075,20 +1104,20 @@ function Item(
       );
       // A conversation's upkeep; else an agent's calls outside a turn, or what they were for.
       title = t.agent
-        ? <>{agentName(t.agent)} in {where}</>
+        ? say("turnTitle", { agent: agentName(t.agent), where })
         : t.thread
-        ? <>Upkeep of {where}</>
+        ? say("upkeepOf", { where })
         : t.purpose
         ? purposeSaid(t.purpose)
-        : "Model calls";
+        : say("modelCalls");
       details = [
         item.purposes?.length
           ? item.purposes.map((p, i) => i ? purposeSaid(p).toLowerCase() : purposeSaid(p)).join(
             ", ",
           )
           : null,
-        `${item.uses} ${item.uses === 1 ? "call" : "calls"}`,
-        tokens ? `${compact(tokens)} tokens` : null,
+        say("calls", { count: item.uses, calls: item.uses }),
+        tokens ? say("tokens", { tokens: compact(tokens) }) : null,
       ];
       break;
     }
@@ -1102,36 +1131,40 @@ function Item(
         </span>
       );
       if (size === "disk" || size === "snapshot") {
-        title = <>{size === "disk" ? "Disk" : "Snapshot"} of {computer}</>;
-        details = [`${compact(q.gbHours ?? 0)} GB-hours`, `on ${dayShort(item.first)}`];
+        title = say(size === "disk" ? "diskOf" : "snapshotOf", { computer });
+        details = [
+          say("gbHours", { amount: compact(q.gbHours ?? 0) }),
+          say("onDay", { day: dayShort(item.first) }),
+        ];
       } else {
-        title = (
-          <>
-            Computer {computer} <span className="usage-quiet">({agentName(size)})</span>
-          </>
-        );
+        title = say.nodes("computerTitle", {
+          computer,
+          size: <span className="usage-quiet">({agentName(size)})</span>,
+        });
         const woke = item.kind === "session" && t.session && !Number.isNaN(Date.parse(t.session))
           ? t.session
           : undefined;
         details = [
           durationSaid(q.seconds ?? 0),
-          woke ? `woke ${clock(woke)}, last ${clock(item.last)}` : `on ${dayShort(item.first)}`,
+          woke
+            ? say("woke", { from: clock(woke), last: clock(item.last) })
+            : say("onDay", { day: dayShort(item.first) }),
         ];
       }
       break;
     }
     case "app": {
-      const app = t.app ? nameIn(say.names, "tags.app", t.app)?.name : undefined;
+      const app = t.app ? nameIn(namer.names, "tags.app", t.app)?.name : undefined;
       icon = (
         <span className="usage-face">
           <Icon name="globe" size={14} />
         </span>
       );
-      title = <>App {app ? `“${app}”` : "an app"}</>;
+      title = say("appTitle", { app: app ? say("quoted", { name: app }) : say("anApp") });
       details = [
-        q.requests ? `${compact(q.requests)} requests` : null,
-        q.minutes ? `${compact(q.minutes)} build ${q.minutes === 1 ? "minute" : "minutes"}` : null,
-        `on ${dayShort(item.first)}`,
+        q.requests ? say("requests", { requests: compact(q.requests) }) : null,
+        q.minutes ? say("buildMinutes", { count: q.minutes, minutes: compact(q.minutes) }) : null,
+        say("onDay", { day: dayShort(item.first) }),
       ];
       break;
     }
@@ -1141,8 +1174,14 @@ function Item(
           <Icon name="tool" size={14} />
         </span>
       );
-      title = <>{agentName(item.meter ?? "")}: {modelOf(item.subject ?? "").name}</>;
-      details = [`${item.uses} ${item.uses === 1 ? "use" : "uses"}`, `on ${dayShort(item.first)}`];
+      title = say("meterTitle", {
+        meter: agentName(item.meter ?? ""),
+        model: modelOf(item.subject ?? "").name,
+      });
+      details = [
+        say("uses", { count: item.uses }),
+        say("onDay", { day: dayShort(item.first) }),
+      ];
     }
   }
   const calls = item.kind === "turn" ? item.calls ?? [] : [];
@@ -1170,9 +1209,7 @@ function Item(
           ? (
             <IconButton
               icon={open ? "chevron-down" : "chevron"}
-              label={open
-                ? "Hide its model calls"
-                : `Show its ${calls.length} model ${calls.length === 1 ? "call" : "calls"}`}
+              label={open ? say("hideModelCalls") : say("showModelCalls", { count: calls.length })}
               size="sm"
               aria-expanded={open}
               onClick={() => setOpen(!open)}
@@ -1180,32 +1217,32 @@ function Item(
           )
           : <span className="usage-item-pad" />}
       </div>
-      {open && calls.length ? <Calls calls={calls} staff={staff} say={say} /> : null}
+      {open && calls.length ? <Calls calls={calls} staff={staff} namer={namer} /> : null}
     </li>
   );
 }
 
 /** A turn's model calls: when, which model, its tokens and cache, what each was charged. */
-function Calls(
-  { calls, staff, say }: { calls: ActivityCall[]; staff: boolean; say: Sayers },
+export function Calls(
+  { calls, staff, namer }: { calls: ActivityCall[]; staff: boolean; namer: Sayers },
 ): ReactNode {
   return (
     <div className="usage-wide usage-calls-box">
       <table className="usage-table usage-calls">
         <thead>
           <tr>
-            <th scope="col">Time</th>
-            <th scope="col">Model</th>
-            <th scope="col" className="usage-num">In</th>
-            <th scope="col" className="usage-num">From cache</th>
-            <th scope="col" className="usage-num">Out</th>
-            <th scope="col" className="usage-num">Spend</th>
+            <th scope="col">{say("time")}</th>
+            <th scope="col">{say("model")}</th>
+            <th scope="col" className="usage-num">{say("inColumn")}</th>
+            <th scope="col" className="usage-num">{say("fromCacheColumn")}</th>
+            <th scope="col" className="usage-num">{say("outColumn")}</th>
+            <th scope="col" className="usage-num">{say("spend")}</th>
             {staff
               ? (
                 <th scope="col" className="usage-num usage-staff-col">
                   <span className="usage-staff-th">
                     <Icon name="shield" size={11} />
-                    Cost
+                    {say("costColumn")}
                   </span>
                 </th>
               )
@@ -1221,7 +1258,7 @@ function Calls(
                 <td className="usage-quiet">{clock(c.at, true)}</td>
                 <td>
                   <span className="usage-model">
-                    {say.modelName(c.subject)}
+                    {namer.modelName(c.subject)}
                     {c.meter !== "llm" ? <span className="usage-quiet">{c.meter}</span> : null}
                   </span>
                 </td>

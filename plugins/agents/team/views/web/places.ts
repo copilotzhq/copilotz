@@ -1,3 +1,5 @@
+import { say } from "./words.ts";
+
 /**
  * Spaces as chat's web front end reads them (the spaces plugin's
  * `space.reached`, by name): what each is called (yours is "Personal"),
@@ -18,7 +20,7 @@ export type Place = {
 
 /** What a space is called where it shows: yours is "Personal". */
 export const placeName = (place: Pick<Place, "name" | "kind">) =>
-  place.kind === "personal" ? "Personal" : place.name;
+  place.kind === "personal" ? say("personalSpace") : place.name;
 
 /** Whether the person manages it. */
 export const manages = (place?: Pick<Place, "can"> | null) => !!place?.can?.includes("manage");

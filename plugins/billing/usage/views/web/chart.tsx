@@ -19,7 +19,9 @@ import {
   useState,
 } from "react";
 import { Button } from "../../../../../hosts/web/mod.ts";
+import { formatDate } from "../../../../../hosts/web/mod.ts";
 import { type Column, niceMax, usd } from "./numbers.ts";
+import { say } from "./words.ts";
 
 const PAD = { top: 14, right: 6, bottom: 28, left: 46 };
 /** The gap between a column's segments, in the card's colour. */
@@ -37,7 +39,7 @@ function rounded(x: number, y: number, width: number, height: number): string {
 }
 
 export const longDay = (day: string): string =>
-  new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, {
+  formatDate(new Date(`${day}T12:00:00Z`), {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -45,7 +47,7 @@ export const longDay = (day: string): string =>
   });
 
 const shortDay = (day: string) =>
-  new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, {
+  formatDate(new Date(`${day}T12:00:00Z`), {
     month: "short",
     day: "numeric",
     timeZone: "UTC",
@@ -153,7 +155,7 @@ export function StackedChart(
               width={width}
               height={height}
               role="group"
-              aria-label={`${label}: arrow keys move between days`}
+              aria-label={say("chartKeys", { label })}
               aria-describedby={`${id}-now`}
               tabIndex={0}
               onKeyDown={keys}
@@ -230,7 +232,7 @@ export function StackedChart(
             >
               <span className="usage-tip-day">{longDay(shown.day)}</span>
               <span className="usage-tip-value">
-                {today !== undefined && shown.day > today ? "Still to come" : usd(shown.spend)}
+                {today !== undefined && shown.day > today ? say("stillToCome") : usd(shown.spend)}
               </span>
               {named(shown).slice(0, 6).map(({ v, i }) => (
                 <span key={i} className="usage-tip-row">
@@ -244,9 +246,12 @@ export function StackedChart(
           : null}
         <span id={`${id}-now`} className="usage-sr" aria-live="polite">
           {shown
-            ? `${longDay(shown.day)}: ${usd(shown.spend)}${
-              named(shown).map(({ v, i }) => `, ${series[i]?.name} ${usd(v)}`).join("")
-            }`
+            ? [
+              say("dayAnnounced", { day: longDay(shown.day), spend: usd(shown.spend) }),
+              ...named(shown).map(({ v, i }) =>
+                say("seriesAnnounced", { name: series[i]?.name ?? "", amount: usd(v) })
+              ),
+            ].join(", ")
             : ""}
         </span>
       </div>
@@ -258,7 +263,7 @@ export function StackedChart(
           aria-controls={`${id}-table`}
           onClick={() => setTable(!table)}
         >
-          {table ? "Hide the numbers" : "Show the numbers"}
+          {table ? say("hideNumbers") : say("showNumbers")}
         </Button>
       </div>
       {table
@@ -268,8 +273,8 @@ export function StackedChart(
               <caption className="usage-sr">{label}</caption>
               <thead>
                 <tr>
-                  <th scope="col">Day</th>
-                  <th scope="col" className="usage-num">Spend</th>
+                  <th scope="col">{say("day")}</th>
+                  <th scope="col" className="usage-num">{say("spend")}</th>
                   {series.map((s) => <th key={s.key} scope="col" className="usage-num">{s.name}
                   </th>)}
                 </tr>

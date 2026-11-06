@@ -18,7 +18,7 @@ import { access } from "../../../access/mod.ts";
 import { createTickets } from "../../../../hosts/web/tickets.ts";
 import { webServer } from "../../../../hosts/web/server.ts";
 import { voice } from "../mod.ts";
-import type { VoiceLine } from "../shared/settings.ts";
+import type { DeclaredVoiceNumber } from "../shared/settings.ts";
 import { sign } from "../shared/signature.ts";
 import { type RelaySocket, serveRelay } from "../resources/relay.ts";
 
@@ -173,7 +173,7 @@ export const VERIFIED = { StirVerstat: "TN-Validation-Passed-A" };
 
 export async function setup(
   fn: (s: Setup) => Promise<void>,
-  options: { line?: Partial<VoiceLine>; plugins?: Plugin[] } = {},
+  options: { line?: Partial<DeclaredVoiceNumber>; plugins?: Plugin[] } = {},
 ) {
   const app = definePlugin({
     name: "app",
@@ -195,16 +195,14 @@ export async function setup(
       },
       spaces: { line: { name: "Help line", agents: ["phone"] } },
       voice: {
-        lines: {
-          help: {
-            in: "line",
-            account: ACCOUNT,
-            token: TOKEN,
-            origin: ORIGIN,
-            agent: "phone",
-            language: "pt-BR",
-            ...options.line,
-          },
+        help: {
+          in: "line",
+          account: ACCOUNT,
+          token: TOKEN,
+          origin: ORIGIN,
+          agent: "phone",
+          language: "pt-BR",
+          ...options.line,
         },
       },
     },

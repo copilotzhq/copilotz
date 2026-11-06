@@ -18,6 +18,7 @@
  * (`stopping`), and waits on what tests watch for (`until`, `within`).
  */
 import {
+  type CallerSettings,
   createRuntime,
   definePlugin,
   failure,
@@ -34,7 +35,7 @@ import { access } from "../../../access/mod.ts";
 import { createTickets } from "../../../../hosts/web/tickets.ts";
 import { webServer, type Widgets } from "../../../../hosts/web/server.ts";
 import { mcp } from "../mod.ts";
-import type { McpLine, McpSettings } from "../shared/settings.ts";
+import type { DeclaredServer } from "../shared/settings.ts";
 
 export const SECRET = "a-secret-for-signing-links-in-tests-0123456789";
 export const MODERN = "2026-07-28";
@@ -286,7 +287,7 @@ export const app = definePlugin({
 });
 
 /** The line every test calls, unless it says otherwise. */
-export const LINE: McpLine = {
+export const LINE: DeclaredServer = {
   in: "line",
   client: "ChatGPT",
   title: "Viação Azul",
@@ -314,7 +315,7 @@ export const LINE: McpLine = {
 export const OFFERED = Object.keys(LINE.tools).filter((name) => name !== "staff" && name !== "raw");
 
 /** How the app knows who calls: its front says, with its secret. */
-export const CALLER: McpSettings["caller"] = { header: "cf-connecting-ip", front: FRONT };
+export const CALLER: CallerSettings = { header: "cf-connecting-ip", front: FRONT };
 
 /** Reads every document of the collections the tests look at, as the system. */
 export const reads = definePlugin({
@@ -452,9 +453,10 @@ let ids = 0;
 export async function setup(
   fn: (s: Setup) => Promise<void>,
   options: {
-    line?: Partial<McpLine>;
-    lines?: Record<string, McpLine>;
-    settings?: Omit<McpSettings, "lines">;
+    line?: Partial<DeclaredServer>;
+    lines?: Record<string, DeclaredServer>;
+    /** How the app knows who calls (the `caller` resource). */
+    caller?: CallerSettings;
     plugins?: Plugin[];
     /** One store for several runtimes in turn (an owner restarted). */
     store?: Store;
@@ -480,11 +482,8 @@ export async function setup(
       definePlugin({
         name: "lines",
         resources: {
-          mcp: {
-            caller: CALLER,
-            ...options.settings,
-            lines: options.lines ?? { chatgpt: { ...LINE, ...options.line } },
-          },
+          caller: options.caller ?? CALLER,
+          mcp: options.lines ?? { chatgpt: { ...LINE, ...options.line } },
         },
       }),
       ...options.plugins ?? [],

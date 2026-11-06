@@ -5,7 +5,7 @@
  * gap. A withheld number (Twilio's placeholders, with or without "+") or
  * one that isn't a number is a new contact each call. What's kept of a
  * caller goes when their contact or chat is erased, and calls' records after
- * the plugin's `keep` days. A line whose agent doesn't answer in its space
+ * their number's `keep` days. A line whose agent doesn't answer in its space
  * fails the call, with a short line.
  */
 import { assert, assertEquals } from "@std/assert";
@@ -140,7 +140,7 @@ test("erasing a contact, or its chat, takes what was kept of the caller with it"
   });
 });
 
-test("calls' records go after the plugin's keep days, once they're over; a call on stays", async () => {
+test("calls' records go after their number's keep days, once they're over; a call on stays", async () => {
   await setup(async (s) => {
     (await s.call({ from: CARLA, form: VERIFIED })).hangUp();
     await over(s);
@@ -153,6 +153,23 @@ test("calls' records go after the plugin's keep days, once they're over; a call 
     assertEquals((await s.docs<VoiceCall>("voice_call")).map((c) => c._id), [on._id]);
     live.hangUp();
   });
+});
+
+test("a number keeps its calls' records its own days", async () => {
+  await setup(async (s) => {
+    (await s.call()).hangUp();
+    await over(s);
+    const [old] = await s.docs<VoiceCall>("voice_call");
+    await s.runtime.call("test.age", { call: old._id, ms: 3 * 86_400_000 });
+    assertEquals(await s.runtime.call("voice.prune", {}), { pruned: 0 });
+  }, { line: { keep: 5 } });
+  await setup(async (s) => {
+    (await s.call()).hangUp();
+    await over(s);
+    const [old] = await s.docs<VoiceCall>("voice_call");
+    await s.runtime.call("test.age", { call: old._id, ms: 3 * 86_400_000 });
+    assertEquals(await s.runtime.call("voice.prune", {}), { pruned: 1 });
+  }, { line: { keep: 1 } });
 });
 
 test("two calls from one number, both starting at once, never share a chat", async () => {

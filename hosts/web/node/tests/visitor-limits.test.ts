@@ -45,10 +45,8 @@ const app = definePlugin({
     agents: { guide: { instructions: "x", model: "script/main" } },
     spaces: { visitors: { name: "Website", agents: ["guide"] } },
     web: {
-      lines: {
-        site: { in: "visitors", agent: "guide" },
-        voice: { in: "visitors", agent: "guide", files: {}, transcribe: true },
-      },
+      site: { in: "visitors", agent: "guide" },
+      voice: { in: "visitors", agent: "guide", files: {}, transcribe: true },
     },
     links: { origin: "http://127.0.0.1", secret: "the-app-secret-for-tests-0123456789" },
   },

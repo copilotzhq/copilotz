@@ -329,7 +329,7 @@ test("a call's relay is over: Twilio says why, and is told to hang up", async ()
   });
 });
 
-test("a line's settings are checked at start", async () => {
+test("a number's settings are checked at start", async () => {
   const start = (line: Record<string, unknown>, keep?: number) =>
     createRuntime({
       store: memoryStore(),
@@ -342,10 +342,14 @@ test("a line's settings are checked at start", async () => {
           name: "app",
           resources: {
             voice: {
-              lines: {
-                help: { in: "line", account: ACCOUNT, token: TOKEN, origin: ORIGIN, ...line },
+              help: {
+                in: "line",
+                account: ACCOUNT,
+                token: TOKEN,
+                origin: ORIGIN,
+                ...line,
+                ...(keep !== undefined ? { keep } : {}),
               },
-              ...(keep !== undefined ? { keep } : {}),
             },
           },
         }),
@@ -364,7 +368,7 @@ test("a line's settings are checked at start", async () => {
     await assertRejects(() => start(line), Error, said);
   }
   // Calls' records are kept a day at least: what's going on is never so old.
-  await assertRejects(() => start({}, 0.5), Error, "voice.keep is days, 1 or more");
+  await assertRejects(() => start({}, 0.5), Error, "voice.help its keep is days, 1 or more");
   await (await start({})).close();
   await (await start({}, 1)).close();
 });

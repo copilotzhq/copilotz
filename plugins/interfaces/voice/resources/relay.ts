@@ -50,7 +50,7 @@
 import type { Actor, Runtime } from "../../../../runtime/mod.ts";
 import type { Admitted, Started } from "../actions/call.ts";
 import type { Saying } from "../views/call.ts";
-import { GOODBYE_MS, HOOKS, lastsMs, type Line, lineOf } from "../shared/settings.ts";
+import { declaredOf, GOODBYE_MS, HOOKS, lastsMs, type VoiceNumber } from "../shared/settings.ts";
 import { signed } from "../shared/signature.ts";
 
 /** A route's socket, as far as a call uses it (the web host's `RouteSocket`). */
@@ -84,7 +84,7 @@ export async function serveRelay(request: Request, host?: RelayHost): Promise<Re
     // A malformed name names no line.
   }
   const line = what === "relay" && !more.length && named
-    ? lineOf({ resources: host.runtime.describe().resources }, named)
+    ? declaredOf({ resources: host.runtime.describe().resources }, named)
     : undefined;
   if (!line) return plain(404, "No such line");
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
@@ -163,7 +163,7 @@ export function talk(
   runtime: RelayHost["runtime"],
   socket: RelaySocket,
   call: Admitted,
-  line: Line,
+  line: VoiceNumber,
 ): void {
   const { texts, limits } = line;
   let started: Promise<Started> | undefined;

@@ -30,7 +30,7 @@
 import { defineAction, failure, networksOf, scaleOf } from "../../../../runtime/mod.ts";
 import type { Visitor } from "../collections/visitor.ts";
 import { contactOf, newSecret, tagsOf, type Visit, visitOf } from "../shared/secret.ts";
-import { keyringOf, lineOf } from "../shared/lines.ts";
+import { keyringOf, siteOf } from "../shared/lines.ts";
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -66,7 +66,7 @@ export const arriveAction = defineAction({
     const rates = system.db.collection<{ until: number; count?: number }>("contact_rate");
     const admitted = async (visit: Visit, secret: string) => {
       const contact = await contactOf(ring!, visit);
-      const line = lineOf(ctx, visit.line)!;
+      const line = siteOf(ctx, visit.line)!;
       const left = (visit.issued + line.days * DAY - now) / DAY;
       return {
         actor: { kind: "contact", id: contact, web: line.name, from: visit.tags },
@@ -77,14 +77,14 @@ export const arriveAction = defineAction({
 
     // Back with its secret, not yet spoken, by the same line: the same visitor, while it lasts.
     const back = ring && input.secret ? await visitOf(ring, input.secret) : undefined;
-    const backLine = back?.line === input.line ? lineOf(ctx, back.line) : undefined;
+    const backLine = back?.line === input.line ? siteOf(ctx, back.line) : undefined;
     if (back && backLine && back.issued + backLine.days * DAY > now + 60_000) {
       const known = await system.db.collection<Visitor>("contact_visitor")
         .findOne({ _id: await contactOf(ring!, back) });
       if (!known) return await admitted(back, input.secret!);
     }
 
-    const line = lineOf(ctx, input.line);
+    const line = siteOf(ctx, input.line);
     if (!line || !ring) throw failure("not_found", SAID.none, { public: true });
     const tags = input.address ? await tagsOf(ring, line.name, networksOf(input.address)) : [];
     if (tags.length) {

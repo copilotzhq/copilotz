@@ -29,7 +29,7 @@ const probe = defineAction({
 });
 
 async function start(
-  { fetch, ...settings }: OpenApiSettings & { fetch: typeof globalThis.fetch },
+  { fetch, ...settings }: OpenApiSettings & { fetch?: typeof globalThis.fetch },
   more: Plugin[] = [],
 ) {
   const app = definePlugin({

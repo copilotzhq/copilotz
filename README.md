@@ -141,7 +141,7 @@ workspace, a public site where visitors chat with an agent, or a WhatsApp app wi
 | -------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------- |
 | Routes: webhooks, APIs, sockets of their own | the `routes` resource                                                                    | —                                  |
 | The page and its code                        | `code`: the app's front ends, its shell among them, bundled                              | no page: the routes, and `/health` |
-| Who a browser is                             | the `entrances` resource: identity's session (a person), web lines (a visitor)           | nobody                             |
+| Who a browser is                             | the `entrances` resource: identity's session (a person), web sites (a visitor)           | nobody                             |
 | Browsers connecting                          | `tickets`, for whoever an entrance says a request is                                     | no browser connects                |
 | Signing in (`POST /signin/<name>`)           | the `signIn` resource: `googleSignIn` (`google`), `devSignIn` (`dev`, this machine only) | none                               |
 
@@ -223,13 +223,13 @@ a runtime of its own, opened when first used. Node takes a socket before any han
 
 ### Visitors
 
-A public site where anyone chats with the app's agent, signed in or not: the contacts plugin's web
-lines (`resources.web.lines.<name>`), with the app's secret (`links`), which visitors' cookies are
-signed with. A page that asks to come in by one (`web({ arrive: { line } })`) and isn't anyone yet
-becomes a visitor, its browser keeping a signed secret in an httpOnly, `SameSite=Strict` cookie
-(`__Host-visitor` wherever it's Secure) that is the same visitor for the line's `days` (30). Coming
+A public site where anyone chats with the app's agent, signed in or not: the web interface's sites
+(`resources.web.<name>`), with the app's secret (`links`), which visitors' cookies are signed with.
+A page that asks to come in by one (`web({ arrive: { line } })`) and isn't anyone yet becomes a
+visitor, its browser keeping a signed secret in an httpOnly, `SameSite=Strict` cookie
+(`__Host-visitor` wherever it's Secure) that is the same visitor for the site's `days` (30). Coming
 in makes and keeps nothing: the visitor's first message (`chat.send`, naming no chat) makes it a
-contact in the line's space, with a chat of its own, answered by the line's agent. Someone signed in
+contact in the site's space, with a chat of its own, answered by the site's agent. Someone signed in
 comes in as themselves. A visitor reaches what any contact does: their chat, what's said and filed
 there (`/files/<id>` too), never the agent's private steps (its tools' calls, with what each
 returned, nor a step's words before it's known to be an answer), and nothing else. Its page reads
@@ -245,34 +245,32 @@ IPv6 /64, its /56 (4) and its /48 (8), so one routed /48 is one site, not 65,536
 | `ipVisitorsPerHour`       | 20       | new visitors from one address, and as many first messages             |
 | `perMinute`, `perDay`     | 10, 200  | one visitor's messages                                                |
 | `ipPerMinute`, `ipPerDay` | 30, 1000 | messages from the visitors one address brought                        |
-| `linePerMinute`           | 300      | the line's messages, all its visitors                                 |
+| `linePerMinute`           | 300      | the site's messages, all its visitors                                 |
 | `newcomersPerMinute`      | 200      | of those, newcomers' (not spoken before the minute): the rest is kept |
-| `visitorsPerHour`         | 600      | new visitors who speak (contacts made), on the line                   |
+| `visitorsPerHour`         | 600      | new visitors who speak (contacts made), on the site                   |
 
-The caller's address is the one the app's front says (`caller`, as MCP's lines take it), else the
-one its socket came from (`serve` and `listen` know it; a listener of your own says it with
-`setClientAddress`); with neither, nobody's let in, and when every visitor comes from one private
-address (a proxy's) the host says so. A line may also have a `budget`: what its visitors' turns may
-be charged a day, in the usage ledger's prices (with the usage plugin); past it, they wait for
-tomorrow. And a `challenge`: an Action of the app's that checks what the page answered coming in (a
-CAPTCHA's token: `web({ arrive: { line: "site", challenge: token } })`), asked before a newcomer's
-let in. A message says 4,096 characters at most; files only on a line that takes them
+The caller's address is the one the app's front says (the `caller` resource, as MCP's servers take
+it), else the one its socket came from (`serve` and `listen` know it; a listener of your own says it
+with `setClientAddress`); with neither, nobody's let in, and when every visitor comes from one
+private address (a proxy's) the host says so. A site may also have a `budget`: what its visitors'
+turns may be charged a day, in the usage ledger's prices (with the usage plugin); past it, they wait
+for tomorrow. And a `challenge`: an Action of the app's that checks what the page answered coming in
+(a CAPTCHA's token: `web({ arrive: { line: "site", challenge: token } })`), asked before a
+newcomer's let in. A message says 4,096 characters at most; files only on a site that takes them
 (`files: { count, bytes }`, 1 of 5 MB unless said), and audio is transcribed (a model's call) only
 with `transcribe: true`. A visitor holds two connections, 32 reads on each, and is told a failure's
 words only when they're for anyone. Erasing the contact (`contact.forget`) ends its cookie and its
-connections at once, and so does removing its line; what's past (counters, records, a contact whose
+connections at once, and so does removing its site; what's past (counters, records, a contact whose
 first message never went in) is collected every ten minutes. To change the app's secret, give the
 old one as `links.previous` for a while: visitors and links it signed are still good. With the orgs
-host, a line names its org (`org`), and its page is the org's, at `/o/<org>/`.
+host, each org's runtime gets its own entries, and its page is the org's, at `/o/<org>/`.
 
 ```ts
 resources: {
   agents: { guide: { instructions: "Answer questions about the timetable.", model: "main" } },
   spaces: { visitors: { name: "Website", agents: ["guide"] } },
-  web: {
-    caller: { header: "cf-connecting-ip", front: env.FRONT_SECRET },
-    lines: { site: { in: "visitors", agent: "guide" } },
-  },
+  caller: { header: "cf-connecting-ip", front: env.FRONT_SECRET },
+  web: { site: { in: "visitors", agent: "guide" } },
   links: { origin: "https://example.com", secret: env.LINKS_SECRET },
 }
 ```
@@ -540,8 +538,8 @@ name, never by importing its code.
   the line's space and is shared with it on its own: it reaches that chat, what's said and filed
   there, and nothing else; the space's people reach it as any chat there, and the agent working for
   the contact reaches exactly that chat, never its agents' private steps. Agents are told whom
-  they're talking with. Its web lines (`web.lines`) let a browser that isn't anyone in as a visitor,
-  a contact once it speaks (see "Visitors").
+  they're talking with. Its web sites (`web.<name>`) let a browser that isn't anyone in as a
+  visitor, a contact once it speaks (see "Visitors").
 - **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client); the
   web host's page shows its button.
 - **`devSignIn`**: sign-in by name or email, from this machine only, for trying an app out.
@@ -624,41 +622,42 @@ filled by the front ends through resources).
   the same message when there's room, a fallback when Meta refuses one; taps come back with their
   ids. Pictures and files go as public links, signed links to the app's routes or files (the `links`
   resource, `{ origin, secret }`; the runtime's `signLink`, `verifyLink`), or uploads. Opened to
-  anyone (`whatsapp.set`, or declared in the app's settings: `whatsapp.lines`), a number is a
-  customer line: a stranger who writes is a contact, in a chat of their own in the number's space,
+  anyone (`whatsapp.set`, or declared in the app's settings: `whatsapp.<name>`), a number is open to
+  customers: a stranger who writes is a contact, in a chat of their own in the number's space,
   answered by its agent, and a chat quiet for the number's `gap` (12 hours) is over: their next
   message starts a new one.
 - **`voice`**: people call the app's phone number and talk to its agents, through Twilio's
   ConversationRelay (Twilio hears them and speaks; the app gets and sends text). The app declares
-  its lines (`voice.lines`: the space, Twilio's account and auth token, the app's public address,
+  its numbers (`voice.<name>`: the space, Twilio's account and auth token, the app's public address,
   the agent, language, voice, greeting and limits); Twilio's webhook is checked against its
-  signature, a call is taken within its caller's limits and the line's (calls at once, a day: else
-  busy, nothing spent) and opens the line's socket with a one-time ticket. A caller is a contact in
-  a chat of their own, the same one when they call back only if Twilio verified their number; what
-  the agent writes for them is said as it writes it (a medium for Views: `voice`), a caller speaking
-  over it cuts it there (the agent is told what was heard), a failed or slow answer says a short
-  line in the line's language, and silence, a call too long or too many prompts, or the agent's
-  `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that takes a
-  route's socket (`serve`).
-- **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A line the app
-  declares (`mcp.lines.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
+  signature, a call is taken within its caller's limits and the number's (calls at once, a day: else
+  busy, nothing spent) and opens the number's socket with a one-time ticket. A caller is a contact
+  in a chat of their own, the same one when they call back only if Twilio verified their number;
+  what the agent writes for them is said as it writes it (a medium for Views: `voice`), a caller
+  speaking over it cuts it there (the agent is told what was heard), a failed or slow answer says a
+  short sentence in the number's language, and silence, a call too long or too many prompts, or the
+  agent's `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that
+  takes a route's socket (`serve`).
+- **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A server the
+  app declares (`mcp.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
   each is shown, who calls, its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP,
   JSON-RPC 2.0, no session, MCP 2026-07-28 and the versions with a handshake. Each conversation
   (ChatGPT's `openai/session`, or a `chat` handle the app gives a client that names none) is a
-  contact in a chat of its own in the line's space, its ids an HMAC with the `links` secret. A call
-  runs the tool through chat's runner as that contact, is written there as a step, and answers what
-  the app's agents read of it (only public errors say their words); a request sent again to a tool
-  that changes things is answered from the first, and the line's limits (calls at once, a minute,
-  new conversations an hour, by conversation, user, caller's address and in all) refuse the rest.
-  **Widgets** (MCP Apps, ChatGPT's Apps SDK): a tool's calls shown through a web View of the app's
-  (`tools.<name>.widget`), drawn inside the assistant by the widget host (`copilotz/web/widget`) in
-  a template the web host makes (`webServer({ widgets: widgetsOf({ code, plugins }) })`), seeded
-  with what the View reads, answered on the server as the conversation's contact (its first paint
-  asks nothing). What only widgets call (`visibility: ["app"]`, or an Action: `{ action }`, a
-  person's tap or form) is refused without the widget's grant, which only results' `_meta` carry
-  (never what the model reads); the widget's reads go through the line's `copilotz_read`, queries
-  only. One View serves the web and the widget: `surface()`, `display(mode)`, `remind(text)`… from
-  `copilotz/web` are no-ops on the page, and the display mode is the View's `hints.mode`.
+  contact in a chat of its own in the server's space, its ids an HMAC with the `links` secret. A
+  call runs the tool through chat's runner as that contact, is written there as a step, and answers
+  what the app's agents read of it (only public errors say their words); a request sent again to a
+  tool that changes things is answered from the first, and the server's limits (calls at once, a
+  minute, new conversations an hour, by conversation, user, caller's address and in all) refuse the
+  rest. **Widgets** (MCP Apps, ChatGPT's Apps SDK): a tool's calls shown through a web View of the
+  app's (`tools.<name>.widget`), drawn inside the assistant by the widget host
+  (`copilotz/web/widget`) in a template the web host makes
+  (`webServer({ widgets: widgetsOf({ code, plugins }) })`), seeded with what the View reads,
+  answered on the server as the conversation's contact (its first paint asks nothing). What only
+  widgets call (`visibility: ["app"]`, or an Action: `{ action }`, a person's tap or form) is
+  refused without the widget's grant, which only results' `_meta` carry (never what the model
+  reads); the widget's reads go through the line's `copilotz_read`, queries only. One View serves
+  the web and the widget: `surface()`, `display(mode)`, `remind(text)`… from `copilotz/web` are
+  no-ops on the page, and the display mode is the View's `hints.mode`.
 - **`maintenance`**: HTTP for an app's operators when they can't reach its database, with one key:
   read SQL, the collections' operations through the owner, raw SQL writes inside it, blobs by id
   (see [Maintenance](#maintenance)).
@@ -1192,7 +1191,7 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   (`hosts/terminal`: `terminal({ runtime, me })`) draws it with Ink: a reply being written grows in
   place, as its own part.
 - **The web** (see [design/views.md](design/views.md), "The web") runs Views in the browser. The
-  page's cookie (a person's session, a web line's visitor: the `entrances` plugins declare) trades
+  page's cookie (a person's session, a web site's visitor: the `entrances` plugins declare) trades
   for a one-time ticket (`/connect`), and it connects to the owner over Oxian as an untrusted worker
   bound to that actor (`web({ plugins, root })` in the browser,
   `webServer({ runtime, tickets, code,

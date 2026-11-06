@@ -6,7 +6,7 @@
  * `web({ arrive: { line } })`), is let in as a visitor (`contact.arrive`):
  * one back with its secret, who hasn't spoken yet, as who it was; a newcomer
  * within the line's limits by address. The address is the app's front's
- * word for it (`web.caller`), else the socket's, as the web host's listener
+ * word for it (the `caller` resource), else the socket's, as the web host's listener
  * saw it; with neither, nobody is let in (the limits by address would hold
  * nothing). Its cookie comes only with the app's own pages' requests
  * (`SameSite=Strict`), and is this host's alone (`__Host-visitor` wherever
@@ -15,13 +15,14 @@
  */
 import {
   callerFrom,
+  callerOf,
   countedOf,
   failure,
   privateAddress,
   type Resources,
   type Runtime,
 } from "../../../../runtime/mod.ts";
-import { lineOf, settingsOf } from "../shared/lines.ts";
+import { siteOf } from "../shared/lines.ts";
 
 /** What the web host hands an entrance letting someone in (its `Door`). */
 type Door = {
@@ -47,16 +48,16 @@ function tellPrivate(runtime: object, address: string) {
   if (told.has(runtime) || !privateAddress(address)) return;
   told.add(runtime);
   console.warn(
-    `web.lines: visitors come from ${address}, a private address: a proxy or a load ` +
+    `web: visitors come from ${address}, a private address: a proxy or a load ` +
       "balancer's before the app, not theirs. Every visitor is then counted as one caller, " +
       "so the limits by address hold for everyone together. Say how the app's front names " +
-      "callers (web.caller), unless this is a machine of your own.",
+      "callers (the caller resource), unless this is a machine of your own.",
   );
 }
 
 /** What a visitor is counted by: refused, or an address (none: exempt from limits by address). */
 function countedBy(request: Request, door: Door, resources: Resources): { address?: string } {
-  const caller = settingsOf({ resources }).caller;
+  const caller = callerOf({ resources });
   if (caller) {
     // Around the app's front, straight to the app: refused, when the front vouches for callers.
     const said = callerFrom(request, caller);
@@ -69,8 +70,8 @@ function countedBy(request: Request, door: Door, resources: Resources): { addres
   if (!address) {
     throw failure(
       "unavailable",
-      "web.lines: no way to tell visitors apart, so none is let in: say how the app's front " +
-        "names callers (web.caller), or serve with a listener that gives the socket's address " +
+      "web: no way to tell visitors apart, so none is let in: say how the app's front " +
+        "names callers (the caller resource), or serve with a listener that gives the socket's address " +
         "(copilotz/web/node's serve or listen; with one of your own, setClientAddress)",
     );
   }
@@ -87,7 +88,7 @@ async function arrive(request: Request, door: Door) {
   const line = door.asked.line;
   if (typeof line !== "string") return null;
   const resources: Resources = door.runtime.describe().resources;
-  if (!lineOf({ resources }, line)) return null;
+  if (!siteOf({ resources }, line)) return null;
   const { address } = countedBy(request, door, resources);
   const answer = door.asked.challenge;
   const { actor, secret, days } = await door.runtime.call<Arrived>("contact.arrive", {

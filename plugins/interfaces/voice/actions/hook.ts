@@ -26,7 +26,7 @@
  */
 import { type Context, defineAction, type Infer } from "../../../../runtime/mod.ts";
 import type { VoiceCall } from "../collections/call.ts";
-import { HOOKS, type Line, lineOf } from "../shared/settings.ts";
+import { declaredOf, HOOKS, type VoiceNumber } from "../shared/settings.ts";
 import { signed } from "../shared/signature.ts";
 import { blockedKey, callerKey, VERIFIED } from "../shared/caller.ts";
 import type { VoiceBlock } from "../collections/blocked.ts";
@@ -74,7 +74,7 @@ export const hookAction = defineAction({
   run: async (ctx, request): Promise<HttpAnswer> => {
     const [name = "", what = "", ...more] = request.path.slice(HOOKS.length).split("/");
     const line = request.path.startsWith(HOOKS) && !more.length
-      ? lineOf(ctx, decoded(name))
+      ? declaredOf(ctx, decoded(name))
       : undefined;
     if (!line || !["", "over"].includes(what)) return plain(404, "No such line");
     if (request.method !== "POST") return plain(405, "POST");
@@ -120,7 +120,7 @@ async function blockedNow(ctx: Context, line: string, from: string, now: number)
  * Twilio rejects it as busy. A day's calls are those that went on (a call
  * never answered costs nothing); calls at once, those holding a place.
  */
-async function taken(ctx: Context, line: Line, id: string, form: URLSearchParams) {
+async function taken(ctx: Context, line: VoiceNumber, id: string, form: URLSearchParams) {
   const secret = randomText(24);
   const ticket = `${id}.${secret}`;
   const hash = await sha256(secret);

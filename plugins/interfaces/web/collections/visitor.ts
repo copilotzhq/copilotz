@@ -15,7 +15,7 @@
  */
 import { type Actor, defineCollection, type Infer } from "../../../../runtime/mod.ts";
 import { contactOf, visitOf } from "../shared/secret.ts";
-import { keyringOf, lineOf } from "../shared/lines.ts";
+import { keyringOf, siteOf } from "../shared/lines.ts";
 
 const visitorSchema = {
   type: "object",
@@ -52,7 +52,7 @@ export const visitor = defineCollection({
     actor: async (visitors, params: { secret?: unknown }, ctx): Promise<Actor | null> => {
       const ring = keyringOf(ctx);
       const visit = ring ? await visitOf(ring, params?.secret) : undefined;
-      const line = visit ? lineOf(ctx, visit.line) : undefined;
+      const line = visit ? siteOf(ctx, visit.line) : undefined;
       if (!visit || !line || visit.issued + line.days * 86_400_000 < Date.now()) return null;
       const contact = await contactOf(ring!, visit);
       const found = await visitors.findOne({ _id: contact }) as Visitor | null;

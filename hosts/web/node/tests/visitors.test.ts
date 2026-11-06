@@ -82,18 +82,16 @@ const app = definePlugin({
     },
     spaces: { visitors: { name: "Website", agents: ["guide"] } },
     web: {
-      lines: {
-        site: { in: "visitors", agent: "guide" },
-        slow: { in: "visitors", agent: "guide", limits: { perMinute: 4 } },
-        voice: {
-          in: "visitors",
-          agent: "guide",
-          files: { count: 2, bytes: 1_000 },
-          transcribe: true,
-        },
-        // Files, with no word on transcribing: audio goes as it is.
-        notes: { in: "visitors", agent: "guide", files: {} },
+      site: { in: "visitors", agent: "guide" },
+      slow: { in: "visitors", agent: "guide", limits: { perMinute: 4 } },
+      voice: {
+        in: "visitors",
+        agent: "guide",
+        files: { count: 2, bytes: 1_000 },
+        transcribe: true,
       },
+      // Files, with no word on transcribing: audio goes as it is.
+      notes: { in: "visitors", agent: "guide", files: {} },
     },
     links: { origin: "http://127.0.0.1", secret: "the-app-secret-for-tests-0123456789" },
   },

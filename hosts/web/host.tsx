@@ -28,7 +28,8 @@ import type { Observation, Plugins } from "../../runtime/mod.ts";
 import { registerWorker } from "./install.ts";
 import { Part } from "./part.tsx";
 import { session } from "./session.ts";
-import { SignIn } from "./signin.tsx";
+import { SignIn, type Ways } from "./signin.tsx";
+import { inviteOf } from "./signin-email.tsx";
 import { BASE } from "./style.ts";
 import { ThemeContext } from "./theme/context.ts";
 import { fontsOf, fromGoogle, preloadsOf, themeCss, themeOf } from "./theme/css.ts";
@@ -137,10 +138,11 @@ async function nameOf(): Promise<string | undefined> {
 
 /**
  * The ways to sign in the app has, by what its routes answer: Google's, with
- * its client id (`GET /google`), and dev sign-in, on this machine
+ * its client id (`GET /google`), email's, with whether people make accounts
+ * (`GET /signin/email`), and dev sign-in, on this machine
  * (`GET /signin/dev`). One that isn't there answers 404.
  */
-async function waysToSignIn(): Promise<{ google?: { clientId: string }; dev?: true }> {
+async function waysToSignIn(): Promise<Ways> {
   const asked = async (path: string) => {
     const response = await fetch(path, { headers: { accept: "application/json" } }).catch(() =>
       undefined
@@ -148,10 +150,15 @@ async function waysToSignIn(): Promise<{ google?: { clientId: string }; dev?: tr
     const json = response?.ok && response.headers.get("content-type")?.includes("json");
     return json ? await response!.json().catch(() => undefined) : undefined;
   };
-  const [google, dev] = await Promise.all([asked("/google"), asked("/signin/dev")]);
+  const [google, email, dev] = await Promise.all([
+    asked("/google"),
+    asked("/signin/email"),
+    asked("/signin/dev"),
+  ]);
   const clientId = (google as { clientId?: unknown } | undefined)?.clientId;
   return {
     ...(typeof clientId === "string" && clientId ? { google: { clientId } } : {}),
+    ...(email ? { email: { signUp: (email as { signUp?: unknown }).signUp !== false } } : {}),
     ...(dev ? { dev: true as const } : {}),
   };
 }
@@ -182,6 +189,16 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   draw(null);
   // Installable, and told when a new version is ready (see pwa.ts).
   registerWorker();
+  // Opened by an invitation's link (email sign-in's): its person chooses a password first,
+  // whoever this browser was.
+  const invite = options.arrive ? undefined : inviteOf(location.hash);
+  if (invite) {
+    const ways = await waysToSignIn();
+    if (ways.email) {
+      draw(<SignIn signIn={ways} invite={invite} />);
+      return undefined;
+    }
+  }
   if (options.arrive) await arriving(options.arrive);
   // Their name, asked while the ticket is: a person's, as they signed in.
   const named = options.arrive ? Promise.resolve(undefined) : nameOf();

@@ -1,8 +1,10 @@
 /**
  * Signing in, before anyone is connected, the ways the app's routes offer:
  * with Google (`google`: its button, for the client id `GET /google` gives;
- * the button posts its token to `/signin/google`), or by name on this
- * machine (`dev`: `/signin/dev`). Either sets the session cookie;
+ * the button posts its token to `/signin/google`), with an email and a
+ * password (`email`: `/signin/email…`, its screens in signin-email.tsx:
+ * making an account, its code, a new password, an invitation's link), or by
+ * name on this machine (`dev`: `/signin/dev`). Each sets the session cookie;
  * the page then starts over, connected, where the server lands them (with
  * many orgs, the one they were in last; their own the first time), with a
  * word on where they're going while it does. Beside the form, what the app
@@ -19,9 +21,10 @@ import { Input } from "./toolkit/input.tsx";
 import { Logo } from "./toolkit/logo.tsx";
 import { Notice } from "./toolkit/notice.tsx";
 import { Spinner } from "./toolkit/spinner.tsx";
+import { EmailSignIn, post, type SignedIn } from "./signin-email.tsx";
 
 /** The ways to sign in the app's routes offer, each with what its button needs. */
-type Ways = { google?: { clientId: string }; dev?: true };
+export type Ways = { google?: { clientId: string }; email?: { signUp: boolean }; dev?: true };
 
 declare const google: {
   accounts: {
@@ -77,6 +80,30 @@ const STYLE = `
 .copilotz-signin form { display: grid; gap: 16px; }
 .copilotz-signin form .copilotz-button { width: 100%; }
 .copilotz-signin-error { margin-top: 16px; }
+.copilotz-signin form .copilotz-signin-error { margin-top: 0; }
+.copilotz-signin-card h2:focus { outline: none; }
+.copilotz-signin-badge { display: grid; place-items: center; width: 44px; height: 44px; margin: 2px 0 16px;
+  border-radius: var(--radius-xl); background: var(--primary-soft); color: var(--primary-text);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--primary) 18%, transparent); }
+.copilotz-signin .copilotz-signin-back { margin: -6px 0 18px; font-size: 13.5px; color: var(--muted-foreground); }
+.copilotz-signin .copilotz-signin-back:hover:not(:disabled) { color: var(--foreground); }
+.copilotz-signin-stack { display: grid; gap: 8px; }
+.copilotz-signin form .copilotz-signin-aside { width: auto; justify-self: end; font-size: 13px; }
+.copilotz-signin-switch { margin: 20px 0 0; text-align: center; font-size: 13.5px; color: var(--muted-foreground); }
+.copilotz-signin-switch .copilotz-button { font-size: 13.5px; vertical-align: baseline; }
+.copilotz-signin-hint { display: inline-flex; align-items: center; gap: 5px; }
+.copilotz-signin-ok { color: var(--success-text); }
+.copilotz-signin-caps { color: var(--warning-text); }
+.copilotz-signin-code > input { font-family: var(--font-mono); font-size: 24px; font-weight: 600;
+  letter-spacing: .42em; text-align: center; font-variant-numeric: tabular-nums; padding-left: .42em; }
+.copilotz-signin-code > input::placeholder { color: var(--muted-foreground); opacity: .35; }
+.copilotz-signin-actions { display: grid; margin-top: 16px; }
+.copilotz-signin-lede b { color: var(--foreground); font-weight: 600; overflow-wrap: anywhere; }
+.copilotz-signin-dev { display: grid; gap: 14px; justify-items: center; margin-top: 18px; padding-top: 18px;
+  border-top: 1px solid var(--border); }
+.copilotz-signin-dev form { width: 100%; }
+.copilotz-signin-dev .copilotz-signin-note { margin: 0; padding: 0; border: 0; justify-self: stretch; }
+.copilotz-signin-dev > .copilotz-button { font-size: 13.5px; }
 .copilotz-signin-note { display: flex; gap: 8px; align-items: flex-start; margin: 22px 0 0; padding-top: 16px;
   border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted-foreground); }
 .copilotz-signin-going { display: grid; justify-items: center; gap: 10px; padding: 26px 0 10px; text-align: center; }
@@ -97,20 +124,6 @@ const STYLE = `
     box-shadow: var(--shadow-md); }
 }
 `;
-
-const post = async <T,>(path: string, body: unknown): Promise<T> => {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const answer = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(answer.error ?? response.statusText);
-  return answer as T;
-};
-
-/** What signing in answers: who, and (with many orgs) the org they land in. */
-type SignedIn = { person: string; org?: { name: string; kind: "personal" | "team" } };
 
 /** A name the server takes for signing in by name, or an email (a person with that email). */
 const NAME = /^[a-z0-9._-]{1,40}$|^[a-z0-9._+-]{1,64}@[a-z0-9.-]{1,64}$/;
@@ -138,12 +151,15 @@ const POINTS: { icon: IconName; title: string; text: string }[] = [
   },
 ];
 
-export function SignIn({ signIn }: { signIn: Ways }): ReactNode {
-  const config = { google: signIn.google ?? null, dev: !!signIn.dev };
+export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): ReactNode {
+  const config = { google: signIn.google ?? null, email: signIn.email ?? null, dev: !!signIn.dev };
   const [name, setName] = useState("");
-  const [error, setError] = useState<string>();
+  // What went wrong with Google's button, or signing in by name: said beside it.
+  const [error, setError] = useState<{ text: string; from: "google" | "dev" }>();
   const [busy, setBusy] = useState(false);
   const [going, setGoing] = useState<SignedIn["org"] | null>();
+  // With email sign-in, signing in by name is one click away, under it.
+  const [byName, setByName] = useState(!config.email);
   const button = useRef<HTMLDivElement>(null);
   const typed = name.trim().toLowerCase();
   const invalid = typed !== "" && !NAME.test(typed);
@@ -164,7 +180,7 @@ export function SignIn({ signIn }: { signIn: Ways }): ReactNode {
         callback: ({ credential }) =>
           void post<SignedIn>("/signin/google", { idToken: credential }).then(
             landed,
-            (e) => setError(e.message),
+            (e) => setError({ text: e.message, from: "google" }),
           ),
       });
       const dark = matchMedia("(prefers-color-scheme: dark)").matches;
@@ -186,10 +202,83 @@ export function SignIn({ signIn }: { signIn: Ways }): ReactNode {
     try {
       landed(await post<SignedIn>("/signin/dev", { name: typed }));
     } catch (e) {
-      setError((e as Error).message);
+      setError({ text: (e as Error).message, from: "dev" });
       setBusy(false);
     }
   };
+
+  const lede = config.email
+    ? config.google ? "With Google, or with your email." : "With your email and password."
+    : config.google && config.dev
+    ? "With Google, or by name on this machine."
+    : config.google
+    ? "With your Google account."
+    : "By name, on this machine.";
+
+  const googleButton = config.google
+    ? (
+      <>
+        <div ref={button} className="copilotz-signin-google" />
+        {config.email || config.dev ? <div className="copilotz-signin-or">or</div> : null}
+      </>
+    )
+    : null;
+
+  const devForm = config.dev
+    ? (
+      <form onSubmit={dev} noValidate>
+        <Field
+          label="Your name or email"
+          hint="Anyone you name here is a person in this app; with an email, invitations to it reach you."
+          error={invalid
+            ? "Use letters, digits, dots, dashes or underscores, or an email."
+            : undefined}
+        >
+          {(control) => (
+            <Input
+              {...control}
+              size="lg"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. ana, or ana@example.com"
+              autoComplete={config.email ? "off" : "username"}
+              autoCapitalize="none"
+              spellCheck={false}
+              maxLength={129}
+              autoFocus
+            />
+          )}
+        </Field>
+        <Button
+          type="submit"
+          variant={config.email ? "outline" : "primary"}
+          size="lg"
+          loading={busy}
+          disabled={!typed || invalid}
+        >
+          {busy ? "Signing in…" : config.email ? "Sign in by name" : "Continue"}
+        </Button>
+      </form>
+    )
+    : null;
+
+  const errorNotice = (from?: "google" | "dev") =>
+    error && (!from || error.from === from)
+      ? (
+        <Notice tone="destructive" role="alert" className="copilotz-signin-error">
+          {error.text}
+        </Notice>
+      )
+      : null;
+
+  const devNote = config.dev
+    ? (
+      <p className="copilotz-signin-note">
+        <Icon name="lock" size={15} />
+        Signing in by name works on this machine only, for trying things out.
+      </p>
+    )
+    : null;
 
   return (
     <div className="copilotz-signin-page">
@@ -229,73 +318,49 @@ export function SignIn({ signIn }: { signIn: Ways }): ReactNode {
                 </p>
               </div>
             )
+            : config.email
+            ? (
+              <EmailSignIn
+                signUp={config.email.signUp}
+                invite={invite}
+                lede={lede}
+                above={
+                  <>
+                    {googleButton}
+                    {errorNotice("google")}
+                  </>
+                }
+                below={config.dev
+                  ? (
+                    <div className="copilotz-signin-dev">
+                      {byName ? devForm : (
+                        <Button
+                          variant="link"
+                          icon="terminal"
+                          onClick={() => setByName(true)}
+                        >
+                          Sign in by name instead
+                        </Button>
+                      )}
+                      {errorNotice("dev")}
+                      {devNote}
+                    </div>
+                  )
+                  : null}
+                landed={landed}
+              />
+            )
             : (
               <>
                 <h2>Sign in</h2>
-                <p className="copilotz-signin-lede">
-                  {config.google && config.dev
-                    ? "With Google, or by name on this machine."
-                    : config.google
-                    ? "With your Google account."
-                    : "By name, on this machine."}
-                </p>
-                {config.google ? <div ref={button} className="copilotz-signin-google" /> : null}
-                {config.google && config.dev ? <div className="copilotz-signin-or">or</div> : null}
-                {config.dev
-                  ? (
-                    <form onSubmit={dev} noValidate>
-                      <Field
-                        label="Your name or email"
-                        hint="Anyone you name here is a person in this app; with an email, invitations to it reach you."
-                        error={invalid
-                          ? "Use letters, digits, dots, dashes or underscores, or an email."
-                          : undefined}
-                      >
-                        {(control) => (
-                          <Input
-                            {...control}
-                            size="lg"
-                            value={name}
-                            onChange={(e) => setName(e.target.value)}
-                            placeholder="e.g. ana, or ana@example.com"
-                            autoComplete="username"
-                            autoCapitalize="none"
-                            spellCheck={false}
-                            maxLength={129}
-                            autoFocus
-                          />
-                        )}
-                      </Field>
-                      <Button
-                        type="submit"
-                        variant="primary"
-                        size="lg"
-                        loading={busy}
-                        disabled={!typed || invalid}
-                      >
-                        {busy ? "Signing in…" : "Continue"}
-                      </Button>
-                    </form>
-                  )
-                  : null}
+                <p className="copilotz-signin-lede">{lede}</p>
+                {googleButton}
+                {devForm}
                 {!config.google && !config.dev
                   ? <p className="copilotz-signin-lede">No way to sign in is configured.</p>
                   : null}
-                {error
-                  ? (
-                    <Notice tone="destructive" role="alert" className="copilotz-signin-error">
-                      {error}
-                    </Notice>
-                  )
-                  : null}
-                {config.dev
-                  ? (
-                    <p className="copilotz-signin-note">
-                      <Icon name="lock" size={15} />
-                      Signing in by name works on this machine only, for trying things out.
-                    </p>
-                  )
-                  : null}
+                {errorNotice()}
+                {devNote}
               </>
             )}
         </Card>

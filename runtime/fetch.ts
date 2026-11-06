@@ -19,20 +19,23 @@
  * - **`POST /connect`** (internal: the page's client): a one-time ticket for
  *   whoever the request is, `{ ticket, actor }`; 401 for anonymous, 429
  *   (with `retry-after`) past an actor's tickets a minute.
+ * - **The REST API** (`/api/`, see api.ts), as whoever the request is.
  * - **Plugins' routes** (see routes.ts), as whoever the request is.
  * - `GET /health`, when no route takes it: `ok`. Anything else is a 404.
  *
  * **Who** a request is comes from plugins' `who`, asked in plugin order: the
- * first that answers wins; with none, `{ kind: "anonymous", id: "" }`. What
- * they query is kept a few seconds per query and params (`WHO_MS`), so a
- * page's burst of requests asks once; ending an actor (`disconnect`) drops
- * what's kept for them at once, and their tickets.
+ * first that answers wins; with none, `{ kind: "anonymous", id: "" }`. None
+ * answers the system: nobody outside is. What they query is kept a few
+ * seconds per query and params (`WHO_MS`), so a page's burst of requests
+ * asks once (a stream asking again at its ping asks anew); ending an actor
+ * (`disconnect`) drops what's kept for them at once, and their tickets.
  *
  * Something a route throws is answered by its code (`failure`: `invalid`
  * 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `too_many` 429,
  * else 500, logged), with its words only when they're for anyone (`public`).
  */
 import type { Hypervisor, HypervisorRequestDecision } from "@oxian/oxian-js";
+import type { Api } from "./api.ts";
 import { upgradeWebSocket } from "@oxian/oxian-js/http";
 import { adaptWebSocket } from "@oxian/oxian-js/transport";
 import { carry, clientAddress, setClientAddress } from "./address.ts";
@@ -52,6 +55,8 @@ const ANONYMOUS: Actor = Object.freeze({ kind: "anonymous", id: "" });
 export const SOCKET = "/oxian";
 /** Where the page's client trades its cookie for a ticket. */
 const CONNECT = "/connect";
+/** Where the REST API is (see api.ts). */
+export const API = "/api";
 
 /** How long what a `who` queried is kept (ms), and how many answers at most. */
 const WHO_MS = 5_000;
@@ -252,14 +257,16 @@ export function checkHttp(registry: Registry): void {
 
 /**
  * The runtime's fetch handler, from its registry, the owner's API (`runtime`,
- * given once it's made), its tickets and its Hypervisor. `forget` drops what
- * `who` kept for an actor (the owner's `disconnect` calls it).
+ * given once it's made), its tickets, its Hypervisor and its REST API.
+ * `forget` drops what `who` kept for an actor (the owner's `disconnect`
+ * calls it).
  */
 export function createFetch(deps: {
   registry: Registry;
   runtime: () => Owner;
   tickets: Tickets;
   hypervisor: Hypervisor;
+  api: Api;
 }): {
   fetch(request: Request, info?: ListenerInfo): Promise<Response>;
   forget(actor: Actor): void;
@@ -303,18 +310,26 @@ export function createFetch(deps: {
     }
   };
 
-  /** Who a request is: the first plugin's `who` that answers, else anonymous. */
-  const whoOf = async (request: Request, site: URL): Promise<Actor> => {
+  /**
+   * Who a request is: the first plugin's `who` that answers, else anonymous.
+   * `fresh`: what they query is asked anew, not kept.
+   */
+  const whoOf = async (request: Request, site: URL, fresh = false): Promise<Actor> => {
     if (!registry.whos.length) return ANONYMOUS;
     const ctx = {
       resources,
-      query: query as <R>(name: string, params?: unknown) => Promise<R>,
+      query:
+        (fresh
+          ? (name: string, params?: unknown) => deps.runtime().query(name, params)
+          : query) as <R>(name: string, params?: unknown) => Promise<R>,
+      call: <R>(action: string, input?: unknown) => deps.runtime().call<R>(action, input),
       cookies: cookieReader(request, site, resources),
     };
     for (const { plugin, who } of registry.whos) {
       const actor = await who(request, ctx);
       if (actor === null || actor === undefined) continue;
       if (!actorish(actor)) throw new Error(`${plugin}: its who answered no actor`);
+      if (actor.kind === "system") throw new Error(`${plugin}: its who answered the system`);
       return actor;
     }
     return ANONYMOUS;
@@ -379,6 +394,17 @@ export function createFetch(deps: {
     }
   };
 
+  /** `/api/`: the REST API, as whoever the request is (asked again, anew, as a stream goes on). */
+  const rest = async (request: Request, site: URL): Promise<Response> => {
+    let actor: Actor;
+    try {
+      actor = await whoOf(request, site);
+    } catch (error) {
+      return refused(error, "Couldn't tell who you are");
+    }
+    return await deps.api.answer(request, actor, () => whoOf(request, site, true));
+  };
+
   /** The socket: the Hypervisor admits it (a ticket, the key, a worker's secret), then it's accepted. */
   const socket = async (request: Request, url: URL, native: boolean): Promise<Response> => {
     let asked = request;
@@ -412,6 +438,7 @@ export function createFetch(deps: {
       return json({ error: "Not from this app's page" }, { status: 403 });
     }
     if (path === CONNECT) return await connect(inner, site);
+    if (path === API || path.startsWith(`${API}/`)) return await rest(inner, site);
     const found = matchRoute(table, at, { hosts: false });
     if (found) return await answer(found, inner, site);
     if ((request.method === "GET" || request.method === "HEAD") && path === "/health") {

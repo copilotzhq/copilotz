@@ -1,10 +1,34 @@
 /**
- * A client: the runtime as one person, somewhere else (a browser). It joins
- * the owner over Oxian as an untrusted worker bound to that person (see
- * design/views.md, "The web"), and runs Views here, with `observe` as the
- * owner does: their reads go over the connection, one batch per pass, and are
- * watched there; a read's new result, pushed, runs again the parts that read
- * it. Handlers' calls and events go to the owner, as the person.
+ * A client: the runtime as one person, somewhere else (a browser, a
+ * script). It joins the owner over Oxian as an untrusted worker bound to
+ * that person (see design/views.md, "The web"), and runs Views here, with
+ * `observe` as the owner does: their reads go over the connection, one batch
+ * per pass, and are watched there; a read's new result, pushed, runs again
+ * the parts that read it. Handlers' calls and events go to the owner, as the
+ * person.
+ *
+ * **Its collections** (`client.db.collection(name)`) are spelled as plugin
+ * code's (`ctx.db.collection(name)`): `find` (with `.toArray()`), `findOne`,
+ * `countDocuments`, `insertOne`, `updateOne`, `replaceOne`, `deleteOne`, a
+ * named `query`, and `watch(filter, options?, onChange)`, which shows the
+ * rows now and after each commit that changes them, until stopped. Each is
+ * the person's own operation, as the owner admits one from outside (see
+ * `admitted`, owner.ts: only where a rule speaks for the collection, never
+ * private fields); an update with no operator sets the fields it gives.
+ *
+ * **One script, either transport:** `connect(url, { key })` connects over
+ * the socket, with a ticket from `POST /connect` (the key as its
+ * `Authorization`; none, the browser's cookie); `connect(url, { key, over:
+ * "http" })`, over the REST API (`/api/`, see rest.ts), where a watch is a
+ * server-sent stream. The rest of the script is the same:
+ *
+ * ```ts
+ * const app = await connect("https://mobizap.app", { key: env.MOBIZAP_KEY });
+ * const open = await app.db.collection("booking").find({ status: "open" }).toArray();
+ * await app.db.collection("booking").updateOne({ _id: "42" }, { $set: { note: "janela" } });
+ * await app.call("booking.cancel", { id: "42" });
+ * const stop = app.db.collection("booking").watch({ status: "open" }, (rows) => show(rows));
+ * ```
  *
  * Or over a link of its host's (`link`): reads asked and Actions called by
  * whatever carries them (an outside assistant's widget bridge, a server
@@ -27,12 +51,22 @@ import {
   type Remote,
   SESSION,
   UNWATCH,
+  WRITE,
 } from "./browsers.ts";
-import { collection } from "./collection.ts";
+import {
+  collection,
+  type Cursor,
+  cursor,
+  type DeleteResult,
+  type UpdateResult,
+  type WithId,
+} from "./collection.ts";
 import type { Plugins, ReadContext } from "./define.ts";
+import type { Filter, FindOptions, Update } from "./store.ts";
+import { restLink } from "./rest.ts";
 import { noMetrics } from "./metrics.ts";
 import { createObservers, type Observers } from "./observe.ts";
-import { isRead, type Op } from "./ops.ts";
+import { isRead, type Op, type WriteOp } from "./ops.ts";
 import { canonical, invalid, merge } from "./registry.ts";
 import { decode, encode, lines } from "./wire.ts";
 
@@ -46,8 +80,43 @@ export type ClientTransport = Parameters<typeof createWorker>[0]["transport"];
 export type ClientLink = {
   /** Answers a batch of reads, by the key each was asked under. */
   read(reads: { key: string; read: Remote }[]): Promise<({ key: string } & Answer)[]>;
-  call(action: string, input: unknown): Promise<unknown>;
+  /** Calls an Action; with `id`, the caller's own id for the call (done once). */
+  call(action: string, input: unknown, options?: { id?: string }): Promise<unknown>;
   emit?(type: string, data: Record<string, unknown>): Promise<void>;
+  /** A write to a collection, as the person, answered as MongoDB does (`insertedId`…). */
+  write?(op: WriteOp): Promise<unknown>;
+  /** A read watched: its answer now, and each new one, until the function it returns is called. */
+  watch?(read: Remote, listener: (answer: Answer) => void): () => void;
+};
+
+/** What a watch is told: the rows now; failing, none, and why. */
+export type Watcher<T> = (rows: WithId<T>[], error?: Error & { code?: string }) => void;
+
+/**
+ * A collection, from outside: spelled as plugin code's `ctx.db.collection`,
+ * each operation the person's own (see the module's header).
+ */
+export type ClientCollection<T = Record<string, unknown>> = {
+  find(filter?: Filter, options?: FindOptions): Cursor<T>;
+  findOne(filter?: Filter, options?: FindOptions): Promise<WithId<T> | null>;
+  countDocuments(filter?: Filter): Promise<number>;
+  insertOne(doc: T & { _id?: string }): Promise<{ acknowledged: true; insertedId: string }>;
+  /** `update` is an update document (`$set`, `$inc`…), or the fields to set. */
+  updateOne(
+    filter: Filter,
+    update: Update | Partial<T>,
+    options?: { upsert?: boolean },
+  ): Promise<UpdateResult>;
+  replaceOne(filter: Filter, doc: T, options?: { upsert?: boolean }): Promise<UpdateResult>;
+  deleteOne(filter: Filter): Promise<DeleteResult>;
+  /** Runs one of the collection's named queries. */
+  query<R = unknown>(name: string, params?: unknown): Promise<R>;
+  /**
+   * The rows `find(filter, options)` finds, now and after each commit that
+   * changes them: `onChange` hears each. It returns how to stop.
+   */
+  watch(filter: Filter, onChange: Watcher<T>): () => void;
+  watch(filter: Filter, options: FindOptions, onChange: Watcher<T>): () => void;
 };
 
 /** Reads' answers by their keys: what a client knows (a snapshot), or is seeded with. */
@@ -56,8 +125,13 @@ export type Known = [key: string, answer: Answer][];
 export type Client = {
   /** Observes a View here, as the person: its reads come from the owner, and follow its changes. */
   observe: Observers["observe"];
-  /** Calls an Action on the owner, as the person. */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  /** Collections, as the person reads and writes them (see the module's header). */
+  db: { collection<T = Record<string, unknown>>(name: string): ClientCollection<T> };
+  /**
+   * Calls an Action on the owner, as the person. With `id` (theirs alone),
+   * sent again it answers what the first did, without doing it twice.
+   */
+  call<R = unknown>(action: string, input?: unknown, options?: { id?: string }): Promise<R>;
   /** Emits a declared event on the owner, as the person (what the event allows). */
   emit(type: string, data?: Record<string, unknown>): Promise<void>;
   /** Resolves when no part is running here. */
@@ -88,25 +162,98 @@ const keyOf = (read: Remote) => canonical(read);
 /** Reads watched elsewhere are collections of their own to `observe`. */
 const WATCHED = "@";
 
-export function connect(
-  options:
-    & {
-      /** Its front ends: the Views it draws, and their resources. */
-      plugins: Plugins;
-      /** Answers already known, by read key (a snapshot): the first pass reads none of them. */
-      known?: Known;
+/** How a client connects: over Oxian (with a ticket for each connection), or over a link. */
+export type ClientOptions =
+  & {
+    /** Its front ends: the Views it draws, and their resources. */
+    plugins: Plugins;
+    /** Answers already known, by read key (a snapshot): the first pass reads none of them. */
+    known?: Known;
+  }
+  & (
+    | {
+      transport: ClientTransport;
+      /** What it shows to connect: a one-time ticket from its host, asked for each new connection. */
+      ticket(): Promise<string>;
+      id?: string;
+      link?: undefined;
     }
-    & (
-      | {
-        transport: ClientTransport;
-        /** What it shows to connect: a one-time ticket from its host, asked for each new connection. */
-        ticket(): Promise<string>;
-        id?: string;
-        link?: undefined;
+    | { link: ClientLink; transport?: undefined }
+  );
+
+/** How a script connects to an app by its address (see `connect`). */
+export type RemoteOptions = {
+  /** A developer key (`Authorization: Bearer`); none: the browser's cookie, from the app's page. */
+  key?: string;
+  /** Over the socket (by default), or over HTTP: the REST API, a watch a server-sent stream. */
+  over?: "socket" | "http";
+  /** Its front ends, to `observe` Views here (none by default). */
+  plugins?: Plugins;
+  /** What it calls the app with: the platform's `fetch` unless said (a runtime's own, in tests). */
+  fetch?: typeof fetch;
+};
+
+/**
+ * Connects to an app at `url` (`https://mobizap.app`, or an org's
+ * `https://compass.app/o/acme`) as whoever `key` is (none: the browser's
+ * cookie): over its socket, once it's connected; or over HTTP (`over:
+ * "http"`), at once.
+ */
+export function connect(url: string, options?: RemoteOptions): Promise<Client>;
+/** A client over Oxian's `transport` (with a `ticket` for each connection), or over a `link`. */
+export function connect(options: ClientOptions): Client;
+export function connect(
+  first: string | ClientOptions,
+  remote: RemoteOptions = {},
+): Client | Promise<Client> {
+  if (typeof first !== "string") return open(first);
+  const base = first.replace(/\/+$/, "");
+  if (!/^https?:\/\//.test(base)) {
+    return Promise.reject(invalid("connect takes the app's http(s) address"));
+  }
+  const plugins = remote.plugins ?? [];
+  if (remote.over === "http") {
+    return Promise.resolve(
+      open({ link: restLink(base, { key: remote.key, fetch: remote.fetch }), plugins }),
+    );
+  }
+  if (remote.over !== undefined && remote.over !== "socket") {
+    return Promise.reject(invalid('connect is over "socket" or "http"'));
+  }
+  const send = remote.fetch ?? globalThis.fetch.bind(globalThis);
+  const client = open({
+    transport: {
+      type: "websocket",
+      config: { url: `${base.replace(/^http/, "ws")}/oxian`, allowInsecureLoopback: true },
+    },
+    // A one-time ticket for each connection, for whoever the key (or the cookie) is.
+    ticket: async () => {
+      const response = await send(`${base}/connect`, {
+        method: "POST",
+        headers: remote.key ? { authorization: `Bearer ${remote.key}` } : {},
+        credentials: "same-origin",
+      });
+      const said = await response.json().catch(() => ({})) as {
+        ticket?: string;
+        error?: string | { message?: string; code?: string };
+      };
+      if (!response.ok || typeof said.ticket !== "string") {
+        const message = typeof said.error === "string" ? said.error : said.error?.message;
+        throw Object.assign(new Error(message ?? `/connect answered ${response.status}`), {
+          code: response.status === 401 ? "unauthorized" : "unavailable",
+        });
       }
-      | { link: ClientLink; transport?: undefined }
-    ),
-): Client {
+      return said.ticket;
+    },
+    plugins,
+  });
+  return client.ready.then(() => client, async (error) => {
+    await client.close().catch(() => {});
+    throw error;
+  });
+}
+
+function open(options: ClientOptions): Client {
   const registry = merge(options.plugins, { elsewhere: true });
 
   /** What the owner said each watched read came to. */
@@ -120,6 +267,20 @@ export function connect(
    * once its slowest read is, so what's pushed before the answer is newer than it.
    */
   const racing = new Map<string, Answer | undefined>();
+  /**
+   * Reads watched for the collections' `watch` (not Views'), by their own
+   * keys: what each was, and who hears its answers. A new connection asks
+   * for them again.
+   */
+  const direct = new Map<
+    string,
+    {
+      read: Remote;
+      hear(answer: Answer): void;
+      /** Pushed while it was being asked for: its answer, when it comes, is older. */
+      pushed?: boolean;
+    }
+  >();
   /** Connections the owner has opened to this client (its session streams). */
   let sessions = 0;
   let batch: { key: string; read: Remote; done: PromiseWithResolvers<Answer> }[] = [];
@@ -143,13 +304,21 @@ export function connect(
         // shown is asked for again.
         [SESSION]: async ({ input }) => {
           const session = ++sessions;
-          if (session > 1) void rewatch();
+          if (session > 1) {
+            void rewatch();
+            for (const [key, { read }] of direct) void watchOver(key, read);
+          }
           // A line: what one commit changed, shown at once.
           for await (const line of lines<Push[]>(input)) {
             // A newer connection has asked for everything again: this one's news is older.
             if (session !== sessions) break;
             const changed: string[] = [];
             for (const { key, ...now } of line) {
+              const watched = direct.get(key);
+              if (watched) {
+                watched.pushed = true;
+                watched.hear(now as Answer);
+              }
               if (racing.has(key)) racing.set(key, now as Answer);
               if (!known.has(key)) continue;
               known.set(key, now as Answer);
@@ -226,7 +395,14 @@ export function connect(
       case READ:
         return await link.read(body.reads as { key: string; read: Remote }[]) as R;
       case CALL:
-        return await link.call(body.action as string, body.input) as R;
+        return await link.call(
+          body.action as string,
+          body.input,
+          typeof body.id === "string" ? { id: body.id } : {},
+        ) as R;
+      case WRITE:
+        if (!link.write) throw invalid("This client's link writes nothing");
+        return await link.write(body.op as WriteOp) as R;
       case EMIT:
         if (!link.emit) throw invalid("This client's link emits no events");
         return await link.emit(body.type as string, body.data as Record<string, unknown>) as R;
@@ -234,6 +410,125 @@ export function connect(
         // Nothing is watched over a link: there's nothing to stop watching.
         return undefined as R;
     }
+  };
+
+  /** One read, answered once: asked, then no longer watched. */
+  const once = async (read: Remote): Promise<unknown> => {
+    const key = `once:${crypto.randomUUID()}`;
+    const [answer] = await ask<({ key: string } & Answer)[]>(READ, { reads: [{ key, read }] });
+    if (!options.link) void ask(UNWATCH, { keys: [key] }).catch(() => {});
+    if (!answer) throw new Error("No answer");
+    if ("error" in answer) throw Object.assign(new Error(answer.error.message), answer.error);
+    return answer.value;
+  };
+
+  /** Asks over Oxian for a read watched by its own key: its answer, then what's pushed. */
+  const watchOver = async (key: string, read: Remote) => {
+    const watched = direct.get(key);
+    if (watched) watched.pushed = false;
+    try {
+      const [answer] = await viaOxian<({ key: string } & Answer)[]>(READ, {
+        reads: [{ key, read }],
+      });
+      // What was pushed meanwhile is newer than this answer.
+      if (answer && !direct.get(key)?.pushed) {
+        const { key: _, ...said } = answer;
+        direct.get(key)?.hear(said as Answer);
+      }
+    } catch (error) {
+      const { message, code } = error as { message?: string; code?: string };
+      direct.get(key)?.hear({
+        error: { message: message ?? String(error), ...(code ? { code } : {}) },
+      });
+    }
+  };
+
+  /** A read watched (not a View's): `hear` gets its answer now and each new one, until stopped. */
+  const watchRead = (read: Remote, hear: (answer: Answer) => void): () => void => {
+    if (options.link) {
+      if (!options.link.watch) {
+        queueMicrotask(() => hear({ error: { message: "This client's link watches nothing" } }));
+        return () => {};
+      }
+      return options.link.watch(read, hear);
+    }
+    const key = `watch:${crypto.randomUUID()}`;
+    let last: string | undefined;
+    direct.set(key, {
+      read,
+      // The same answer again (a new connection's) isn't news.
+      hear: (answer) => {
+        const text = canonical(answer);
+        if (text === last) return;
+        last = text;
+        hear(answer);
+      },
+    });
+    void watchOver(key, read);
+    return () => {
+      if (!direct.delete(key)) return;
+      void ask(UNWATCH, { keys: [key] }).catch(() => {});
+    };
+  };
+
+  /** A collection, as the person reads and writes it from here. */
+  const collectionOf = <T>(name: string): ClientCollection<T> => {
+    const write = (op: WriteOp) => ask<unknown>(WRITE, { op });
+    const watch = (
+      filter: Filter,
+      second: FindOptions | Watcher<T>,
+      third?: Watcher<T>,
+    ): () => void => {
+      const [findOptions, onChange] = typeof second === "function"
+        ? [{}, second]
+        : [second ?? {}, third!];
+      if (typeof onChange !== "function") throw invalid("watch takes what hears its rows");
+      return watchRead(
+        { op: { op: "find", collection: name, filter: filter ?? {}, options: findOptions } },
+        (answer) =>
+          "error" in answer
+            ? onChange([], Object.assign(new Error(answer.error.message), answer.error))
+            : onChange((answer.value ?? []) as WithId<T>[]),
+      );
+    };
+    return {
+      find: (filter = {}, findOptions = {}) =>
+        cursor<T>(
+          (final) => once({ op: { op: "find", collection: name, filter, options: final } }),
+          findOptions,
+        ),
+      findOne: (filter = {}, findOptions = {}) =>
+        once({ op: { op: "findOne", collection: name, filter, options: findOptions } }) as Promise<
+          WithId<T> | null
+        >,
+      countDocuments: (filter = {}) =>
+        once({ op: { op: "count", collection: name, filter } }) as Promise<number>,
+      insertOne: (doc) =>
+        write({ op: "insert", collection: name, docs: [doc as never] }) as Promise<
+          { acknowledged: true; insertedId: string }
+        >,
+      updateOne: (filter, update, { upsert } = {}) =>
+        write({
+          op: "update",
+          collection: name,
+          filter,
+          update: update as Update,
+          options: upsert ? { upsert } : {},
+        }) as Promise<UpdateResult>,
+      replaceOne: (filter, doc, { upsert } = {}) =>
+        write({
+          op: "replace",
+          collection: name,
+          filter,
+          doc: doc as never,
+          options: upsert ? { upsert } : {},
+        }) as Promise<UpdateResult>,
+      deleteOne: (filter) =>
+        write({ op: "delete", collection: name, filter, options: {} }) as Promise<DeleteResult>,
+      query: <R>(query: string, params?: unknown) =>
+        once({ collection: name, query, params: params ?? null }) as Promise<R>,
+      watch: watch as ClientCollection<T>["watch"],
+    };
   };
 
   /** Asks for reads; each comes to what it was pushed meanwhile, or else to its answer. */
@@ -369,7 +664,9 @@ export function connect(
 
   return {
     observe: observers.observe,
-    call: (action, input) => ask(CALL, { action, input: input ?? {} }),
+    db: { collection: collectionOf },
+    call: (action, input, { id } = {}) =>
+      ask(CALL, { action, input: input ?? {}, ...(id !== undefined ? { id } : {}) }),
     emit: (type, data) => ask(EMIT, { type, data: data ?? {} }),
     idle: observers.idle,
     known: () =>
@@ -385,6 +682,7 @@ export function connect(
     ready: worker ? worker.ready.then(() => {}) : Promise.resolve(),
     close: () => {
       closed = true;
+      direct.clear();
       return worker ? worker.stop() : Promise.resolve();
     },
   };

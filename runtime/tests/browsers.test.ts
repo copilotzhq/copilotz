@@ -48,7 +48,8 @@ test("a browser back on a new connection keeps it when the old one is noticed go
         throw new Error("no reads here");
       },
     },
-    ruled: () => Promise.resolve(true),
+    admitted: () => Promise.resolve(),
+    write: () => Promise.resolve(null),
     askable: () => true,
     call: () => Promise.resolve(null),
     emit: () => Promise.resolve(),
@@ -83,7 +84,7 @@ const bob: Actor = { kind: "person", id: "bob" };
 /** Browsers whose reads each answer what they asked for, at once. */
 const reading = (
   limits: BrowserLimits,
-  env: Partial<Pick<Parameters<typeof createBrowsers>[0], "ruled" | "call">> = {},
+  env: Partial<Pick<Parameters<typeof createBrowsers>[0], "admitted" | "write" | "call">> = {},
 ) => {
   const browsers = createBrowsers({
     observers: {
@@ -94,7 +95,8 @@ const reading = (
           close: () => {},
         }) as never,
     },
-    ruled: () => Promise.resolve(true),
+    admitted: () => Promise.resolve(),
+    write: () => Promise.resolve(null),
     askable: () => true,
     call: () => Promise.resolve(null),
     emit: () => Promise.resolve(),
@@ -272,10 +274,11 @@ test("contacts together: so many from a network (as many times as it counts), on
 test("a contact reads directly only with find, findOne or count, as the rules let it; told only what's public", async () => {
   const asked: unknown[] = [];
   const { browsers, answered } = reading({}, {
-    ruled: (_actor, _collection, filter) => {
+    admitted: (_actor, op) => {
+      const filter = "filter" in op ? op.filter : undefined;
       asked.push(filter);
       if (!filter?.thread) return Promise.reject(failure("forbidden", "Name a chat of yours"));
-      return Promise.resolve(true);
+      return Promise.resolve();
     },
     call: (action) =>
       Promise.reject(

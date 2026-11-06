@@ -1,9 +1,9 @@
 /**
  * "Try it": what a key can do, as curl commands to paste in a terminal.
- * Sending a message when it may (`chat.send`), else its first Action; its
- * first query; and following what happens. With the secret when it's just
- * been made (shown once), else a variable to put it in. And what a key may
- * use, in a few words.
+ * Sending a message when it may (`chat.send`, in the key's space), else its
+ * first Action; its first query; and following what happens. With the
+ * secret when it's just been made (shown once), else a variable to put it
+ * in. And what a key may use, in a few words.
  */
 import type { Scope } from "../../../../../runtime/mod.ts";
 import type { CodePart } from "../../../../../hosts/web/mod.ts";
@@ -19,10 +19,15 @@ export const KINDS = ["call", "query", "view", "read", "write"] as const;
 /** Quoted for a POSIX shell, in single quotes. */
 const quoted = (text: string) => `'${text.replaceAll("'", `'"'"'`)}'`;
 
-/** What an Action is sent, to try it: a message for chat, nothing for the rest. */
-const sample = (action: string) => action === "chat.send" ? { text: "Hello from my code" } : {};
+/** What an Action is sent, to try it: a message for chat (in the key's space), nothing for the rest. */
+const sample = (action: string, space?: string) =>
+  action === "chat.send" ? { text: "Hello from my code", ...(space ? { in: space } : {}) } : {};
 
-export function snippets(origin: string, scope: Scope, secret?: string): Snippet[] {
+export function snippets(
+  origin: string,
+  scope: Scope,
+  { secret, space }: { secret?: string; space?: string } = {},
+): Snippet[] {
   const key = secret ?? `$${VARIABLE}`;
   const auth = `-H "Authorization: Bearer ${key}"`;
   const made: { title: string; lines: string[] }[] = [];
@@ -35,7 +40,7 @@ export function snippets(origin: string, scope: Scope, secret?: string): Snippet
         `curl -X POST ${origin}/api/actions/${action} \\`,
         `  ${auth} \\`,
         `  -H "Content-Type: application/json" \\`,
-        `  -d ${quoted(JSON.stringify(sample(action)))}`,
+        `  -d ${quoted(JSON.stringify(sample(action, space)))}`,
       ],
     });
   }

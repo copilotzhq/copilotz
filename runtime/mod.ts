@@ -10,6 +10,16 @@ export {
 } from "./owner.ts";
 export { createExecutor, type Executor } from "./executor.ts";
 export {
+  type Client,
+  type ClientCollection,
+  type ClientLink,
+  type ClientOptions,
+  connect,
+  type Known,
+  type RemoteOptions,
+  type Watcher,
+} from "./client.ts";
+export {
   type BrowserLimits,
   CONTACT_READ,
   type ContactsPool,

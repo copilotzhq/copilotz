@@ -1,7 +1,7 @@
 /**
- * The developer API: code calls the app with a key, over HTTP under `/api/`
- * (see shared/server.ts): it calls Actions and runs queries by name, reads
- * Views, and follows what happens, as server-sent events.
+ * Developer keys: what code calls the app with, as someone, over the
+ * runtime's REST API (`/api/`) or its socket (see runtime/api.ts and
+ * runtime/client.ts): `Authorization: Bearer <key>`.
  *
  * - **Keys** (`api_key`): a person makes one in a space they're in
  *   (`api_key.create`), for what it may use there (its `scope`: Actions,
@@ -9,7 +9,7 @@
  *   revokes it (`api_key.revoke`); each says when it was last used. A key is
  *   a member of its space (`key:<id>`), an editor when it may call or write,
  *   else a viewer, and shows among the space's members, where its managers
- *   revoke it too.
+ *   revoke it too. Keys change only through these Actions, never directly.
  * - **A key acts as its person, in its space only:** every call it makes is
  *   theirs (`kind: "person"`, so `people` lets it in and `inPerson` keeps it
  *   out), reaching what both its membership and its person reach (the access
@@ -17,14 +17,13 @@
  *   never inside them: an Action it may call does its work as usual.
  *   Everything it causes says which key (`actor.key`): the log tells it apart.
  * - **Who calls with a key** is the plugin's `who`: a request's
- *   `Authorization: Bearer <key>` is the key's person, with its scope.
- * - **The HTTP** is the plugin's route at `/api/*`, which is given the
- *   runtime: Actions by call id, the reference from `describe()`, events as
- *   they commit.
+ *   `Authorization: Bearer <key>` is the key's person, with its scope, on
+ *   every way in (the REST API, `/connect` for the socket).
  *
  * ```ts
  * plugins: [models, chat, ...access, api]            // the server
  * await web({ plugins: [webShell, chatWeb, spacesWeb, apiWeb], root }) // the browser
+ * const app = await connect("https://app.example", { key }) // a script (runtime/client.ts)
  * ```
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
@@ -33,11 +32,9 @@ import { revokeAction, usedAction } from "./actions/revoke.ts";
 import { apiKey } from "./collections/key.ts";
 import { keyWho } from "./shared/actor.ts";
 import { rules } from "./shared/rules.ts";
-import { serveApi } from "./shared/server.ts";
 import { leftProcessor } from "./processors/left.ts";
 
 export * from "./contract.ts";
-export { serveApi } from "./shared/server.ts";
 
 export const api: Plugin = definePlugin({
   name: "api",
@@ -55,7 +52,6 @@ export const api: Plugin = definePlugin({
     // A key's record lives in its space: read where the space is, changed by its managers.
     shared: { api_key: { write: "manage" } },
   },
-  routes: { "/api/*": serveApi },
   who: keyWho,
 });
 

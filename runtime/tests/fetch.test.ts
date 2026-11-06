@@ -41,18 +41,21 @@ test("routes match the more specific first, a catch-all last, whatever order the
       name: "a",
       routes: {
         "/*": echo("all"),
-        "/api/*": echo("api"),
+        "/hooks/*": echo("hooks"),
         "/mcp/*": echo("mcp-any"),
         "/mcp/:name": echo("mcp-one"),
       },
     }),
-    definePlugin({ name: "b", routes: { "/api/views": echo("views"), "/google": echo("google") } }),
+    definePlugin({
+      name: "b",
+      routes: { "/hooks/voice": echo("voice"), "/google": echo("google") },
+    }),
   ]);
   try {
     const name = async (path: string) =>
       (await (await get(rt, `http://localhost${path}`)).json()).name;
-    assertEquals(await name("/api/views"), "views");
-    assertEquals(await name("/api/actions/x"), "api");
+    assertEquals(await name("/hooks/voice"), "voice");
+    assertEquals(await name("/hooks/whatsapp/x"), "hooks");
     assertEquals(await name("/mcp/chatgpt"), "mcp-one");
     assertEquals(await name("/mcp/chatgpt/sse"), "mcp-any");
     assertEquals(await name("/google"), "google");
@@ -88,6 +91,14 @@ test("a route can't take the runtime's own paths, nor be anything but a pattern"
     Error,
     "the runtime's own path",
   );
+  // The REST API is the runtime's, all of it.
+  for (const path of ["/api", "/api/*", "/api/views/:name"]) {
+    await assertRejects(
+      () => runtimeWith([definePlugin({ name: "a", routes: { [path]: echo("x") } })]),
+      Error,
+      "the runtime's own path",
+    );
+  }
   await assertRejects(
     () => runtimeWith([definePlugin({ name: "a", routes: { "hooks": echo("x") } })]),
     Error,

@@ -2,7 +2,7 @@
  * `api_key.revoke`: its person, or a manager of its space, revokes a key (by
  * its id, as `api_key.mine` and the space's members list it): its secret
  * proves nobody from then on, its membership goes, and its connections
- * close. `api_key.used`: the API notes when a key was last used (the
+ * close. `api_key.used`: its `who` notes when a key was last used (the
  * system's).
  */
 import { defineAction, forbidden, inPerson } from "../../../../runtime/mod.ts";

@@ -6,7 +6,11 @@
  * - **Admission:** the host's `admit` turns what a browser presents (a
  *   one-time ticket) into its person; the person rides on the connection.
  * - **What it asks** (calls of its own, outside any job): reads, which are
- *   watched from then on; Actions; declared events; reads it no longer needs.
+ *   watched from then on; writes to a collection, as its own (see
+ *   `admitted` and `writeOutside`, owner.ts: only where a rule speaks for
+ *   the collection's writes, never its private fields, within its reach);
+ *   Actions, with its own call id when it gives one; declared events; reads
+ *   it no longer needs.
  * - **What it's told:** a read's new result once a commit changes it, over
  *   one session stream per connection. A read is watched by observing a View
  *   that makes it, as the person: what the rules read to know their reach is
@@ -46,8 +50,8 @@ import type { JsonObject, WorkInput } from "@oxian/oxian-js";
 import { holderOf } from "./actor.ts";
 import type { ViewContext } from "./define.ts";
 import type { Observers, Output } from "./observe.ts";
-import type { ReadOp } from "./ops.ts";
-import type { Actor, Filter } from "./store.ts";
+import type { ReadOp, WriteOp } from "./ops.ts";
+import type { Actor } from "./store.ts";
 import { failure as refusal } from "./errors.ts";
 import { expiring } from "./expiring.ts";
 import { scaleOf } from "./caller.ts";
@@ -56,9 +60,10 @@ import { decode, encode, type Failure, failure } from "./wire.ts";
 
 /** A browser connection's provider id, set at admission. */
 export const BROWSER = "core.browser";
-/** What a browser asks: reads (watched), reads no longer needed, Actions, events. */
+/** What a browser asks: reads (watched), reads no longer needed, writes, Actions, events. */
 export const READ = "core.read";
 export const UNWATCH = "core.unwatch";
+export const WRITE = "core.write";
 export const CALL = "core.call";
 export const EMIT = "core.emit";
 /**
@@ -231,10 +236,6 @@ const poolsOf = (actor: Actor): string[] => {
   ];
 };
 
-/** A read's filter, where it names one (find, findOne, count). */
-const filterOf = (remote: Remote): Filter | undefined =>
-  "op" in remote && "filter" in remote.op ? remote.op.filter as Filter : undefined;
-
 /** What a read says beyond its collection: its filter and options, or a query's params. */
 const sizeOf = (remote: Remote): number =>
   JSON.stringify(
@@ -266,15 +267,18 @@ type Connection = {
 export function createBrowsers(env: {
   observers: Pick<Observers, "observe">;
   /**
-   * Whether a rule speaks for an actor's reads of a collection: a browser
-   * reads nothing else directly. Asked with the read's filter (`direct`, for
-   * the rules): one that won't be watched as asked is refused (thrown), as is
-   * one the actor's scope doesn't list.
+   * Refuses (thrown) an actor's own read or write of a collection, directly,
+   * unless a rule speaks for it (asked with its filter, `direct`, for the
+   * rules: one that won't be watched as asked is refused), its scope lists
+   * it, and it names no private field.
    */
-  ruled(actor: Actor, collection: string, filter?: Filter): Promise<boolean>;
+  admitted(actor: Actor, op: ReadOp | WriteOp): Promise<void>;
+  /** An actor's own write to a collection, as theirs: admitted, within their reach. */
+  write(actor: Actor, op: WriteOp): Promise<unknown>;
   /** Whether a query lets an actor run it (its `allow`, and the actor's scope). */
   askable(actor: Actor, collection: string, query: string, params: unknown): boolean;
-  call(action: string, input: unknown, actor: Actor): Promise<unknown>;
+  /** Calls an Action as an actor; with `id`, the caller's own id for it (theirs alone). */
+  call(action: string, input: unknown, actor: Actor, id?: string): Promise<unknown>;
   emit(type: string, data: Record<string, unknown>, actor: Actor): Promise<void>;
   dispatch(input: WorkInput): Promise<unknown>;
   limits?: BrowserLimits;
@@ -502,20 +506,12 @@ export function createBrowsers(env: {
                   "count, naming what of its own it reads",
               );
             }
-            let ruled: boolean;
             try {
-              ruled = await env.ruled(actor, read.op.collection, filterOf(read));
+              await env.admitted(actor, read.op);
             } catch (error) {
               return { key, error: { ...toldTo(actor, error), code: "forbidden" } };
             }
-            if (!ruled) {
-              return refused(
-                key,
-                `No rule lets a browser read "${read.op.collection}" directly: ` +
-                  "read it through one of its queries",
-              );
-            }
-          }
+          } else return refused(key, `A browser can't read ${read.op.op}`);
           return { key, ...await watch(connection, key, read) };
         }));
       }
@@ -525,8 +521,15 @@ export function createBrowsers(env: {
           connection.watches.delete(key);
         }
         return null;
+      case WRITE:
+        return await env.write(connection.actor, body.op as WriteOp);
       case CALL:
-        return await env.call(String(body.action), body.input ?? {}, connection.actor);
+        return await env.call(
+          String(body.action),
+          body.input ?? {},
+          connection.actor,
+          typeof body.id === "string" ? body.id : undefined,
+        );
       case EMIT:
         await env.emit(
           String(body.type),
@@ -652,7 +655,7 @@ export function createBrowsers(env: {
       context: { workload: string; definition: { providerId: string; workerId: string } },
     ) => {
       if (context.definition.providerId !== BROWSER) return undefined;
-      if (![READ, UNWATCH, CALL, EMIT].includes(context.workload)) return undefined;
+      if (![READ, UNWATCH, WRITE, CALL, EMIT].includes(context.workload)) return undefined;
       return async ({ input }: { input: ReadableStream<Uint8Array> }) => {
         const connection = connections.get(context.definition.workerId);
         try {

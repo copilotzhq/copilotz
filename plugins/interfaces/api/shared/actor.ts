@@ -9,11 +9,18 @@
  *
  * The plugin's `who` (`keyWho`) says it: a request's `Authorization: Bearer
  * <key>` is its key's actor (`api_key.actor`), on any of the runtime's ways in
- * (the API's route, `/connect` for the socket).
+ * (its REST API, `/connect` for the socket, plugins' routes). Each use is
+ * noted on the key (`used`), at most once a minute.
  */
-import type { Actor, Scope, Who } from "../../../../runtime/mod.ts";
+import type { Actor, Resources, Scope, Who } from "../../../../runtime/mod.ts";
 
 export type KeyActor = { kind: "person"; id: string; key: string; scope: Scope };
+
+/** A key's last use is noted at most this often. */
+const USED_EVERY_MS = 60_000;
+
+/** When each key's use was last noted, by runtime (its resources): at most once a minute each. */
+const noted = new WeakMap<Resources, Map<string, number>>();
 
 /** Whether an actor calls with a key: a person's, by its id. */
 export const isKey = (actor: Actor | undefined): boolean =>
@@ -30,7 +37,24 @@ export function bearerOf(request: Request): string | undefined {
 }
 
 /** Who a request is by its key: the key's person, with its key and scope; nothing without one. */
-export const keyWho: Who = (request, { query }) => {
+export const keyWho: Who = async (request, { query, call, resources }) => {
   const secret = bearerOf(request);
-  return secret ? query<KeyActor | null>("api_key.actor", { secret }) : null;
+  if (!secret) return null;
+  const actor = await query<KeyActor | null>("api_key.actor", { secret });
+  if (actor) used(resources, call, actor.key);
+  return actor;
 };
+
+/** Notes a key's use, at most once a minute, without waiting for it. */
+function used(
+  resources: Resources,
+  call: (action: string, input?: unknown) => Promise<unknown>,
+  key: string,
+) {
+  let last = noted.get(resources);
+  if (!last) noted.set(resources, last = new Map());
+  const now = Date.now();
+  if (now - (last.get(key) ?? 0) < USED_EVERY_MS) return;
+  last.set(key, now);
+  void call("api_key.used", { key, at: new Date(now).toISOString() }).catch(() => {});
+}

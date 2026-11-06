@@ -134,7 +134,7 @@ function Keys(
             reads the conversations, and follows replies as they're written.
           </EmptyState>
         )}
-      {compact ? null : <TryIt scope={tried} />}
+      {compact ? null : <TryIt scope={tried} space={space._id} />}
       <CreateDialog
         open={making}
         onClose={() => setMaking(false)}
@@ -265,7 +265,7 @@ export function Revoke(
 }
 
 /** Trying a key with curl, the key in a variable. */
-function TryIt({ scope }: { scope: Scope }): ReactNode {
+function TryIt({ scope, space }: { scope: Scope; space: string }): ReactNode {
   const origin = appBase();
   return (
     <section className="api-try" aria-labelledby="api-try-title">
@@ -274,7 +274,7 @@ function TryIt({ scope }: { scope: Scope }): ReactNode {
         With a key in <code>${VARIABLE}</code>, from a terminal:
       </p>
       <div className="api-try-list">
-        {snippets(origin, scope).map((s) => (
+        {snippets(origin, scope, { space }).map((s) => (
           <CodeBlock key={s.title} title={s.title} code={s.code} copy={s.text} />
         ))}
       </div>

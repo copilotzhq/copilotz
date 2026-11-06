@@ -1,9 +1,10 @@
 /**
  * Web lines (`resources.web.lines.<name>`, declared in the app's settings, with the app's secret,
  * `links`): a front door for browsers that aren't anyone, as WhatsApp's, the phone's and MCP's
- * lines are for theirs. A page that comes in by one (`web({ arrive: { line } })`, `POST /connect`
- * `{ line }`) is a visitor, its browser keeping a secret in an httpOnly cookie (the web host's
- * `visitor` entrance) that is the same visitor while it lasts (`days`, 30). Coming in makes and
+ * lines are for theirs. A page that comes in by one (`web({ arrive: { name } })`, which posts to
+ * `/web/<name>`, this plugin's route) is a visitor, its browser keeping a secret in an httpOnly
+ * cookie (`visitor`, which this plugin's `who` reads) that is the same visitor while it lasts
+ * (`days`, 30). Coming in makes and
  * keeps nothing: the secret is signed. Its first message makes it a contact (the contacts
  * plugin's) in the line's space, with a chat of its own answered by the line's agent
  * (`contact.sending`, chat's `contactSend` hook). New visitors an hour are limited by the caller's
@@ -30,7 +31,7 @@
  * }
  * ```
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { type Actor, definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { arriveAction } from "./actions/arrive.ts";
 import { pruneAction } from "./actions/prune.ts";
 import { sendingAction } from "./actions/sending.ts";
@@ -38,7 +39,7 @@ import { budgetAction, spentAction } from "./actions/spent.ts";
 import { rate } from "./collections/rate.ts";
 import { visitor } from "./collections/visitor.ts";
 import { forgetProcessor } from "./processors/forget.ts";
-import { visitorEntrance } from "./resources/entrance.ts";
+import { arriveRoute, VISITOR_COOKIE } from "./routes/arrive.ts";
 import { visitorsSpend } from "./resources/spend.ts";
 import { settingsProblem } from "./shared/lines.ts";
 
@@ -68,10 +69,16 @@ export const webLines: Plugin = definePlugin({
     const problem = settingsProblem(merged.resources, merged.actions);
     if (problem) throw new Error(problem);
   },
+  // A browser is the visitor its cookie's secret is (`contact_visitor.actor`): with this plugin
+  // after identity, asked after people's sessions.
+  who: (_request, { cookies, query }) => {
+    const secret = cookies.get(VISITOR_COOKIE);
+    return secret ? query<Actor | null>("contact_visitor.actor", { secret }) : null;
+  },
+  // A browser coming in by a web line: let in, its cookie set.
+  routes: { "/web/:name": arriveRoute },
   resources: {
     web: {},
-    // A browser that's a visitor of a web line, asked after people's sessions.
-    entrances: { visitor: visitorEntrance },
     // What a contact sends goes in through here first: a web visitor's limits, and its own chat.
     contactSend: { web: { action: "contact.sending" } },
     // What a web line's visitors' turns cost, for its budget.

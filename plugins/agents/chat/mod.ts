@@ -78,6 +78,7 @@ import { sendAction } from "./actions/send.ts";
 import { shownAction } from "./actions/shown.ts";
 import { stopAction } from "./actions/stop.ts";
 import { file } from "./collections/file.ts";
+import { serveFile } from "./routes/files.ts";
 import { intent } from "./collections/intent.ts";
 import { live } from "./collections/live.ts";
 import { message } from "./collections/message.ts";
@@ -168,6 +169,8 @@ export const chat: Plugin = definePlugin({
     "chat.turn": turnProcessor,
     "chat.failed": failedProcessor,
   },
+  // Files people sent, as whoever asks reaches them (or by a link signed for one).
+  routes: { "/files/*": serveFile },
 });
 
 export default chat;

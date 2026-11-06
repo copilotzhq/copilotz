@@ -1,5 +1,18 @@
 ## Unreleased
 
+- **An agent's message with files.** `chat.say` takes `files`, and `text` may be left out when there
+  are files. Trusted code, such as a tool during a turn, can now post what it made without writing
+  chat's collections itself. Each file is one of these:
+  - `{ id, collection? }`: a document the caller reads that holds a file as `type` and `data`.
+    That's chat's own `file` by default, or another plugin's, such as the models plugin's `image`.
+  - `{ name, type, data }`: the file given as it is.
+
+  Each becomes a file of the chat, with its `thread` and space. People and contacts read it there as
+  they read people's files, and it meets the same limits: ten at most, about 10 MB each, and a media
+  type. Its content is the same blob, so a picture kept elsewhere isn't stored twice. The answer
+  adds the files' ids: `{ message, files }`. Saying it again sends nothing, files included. An
+  agent's own message tells it next time what it sent: `[sent: logo.png]`.
+
 ## 1.0.0-rc.26 — 2026-11-06
 
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the

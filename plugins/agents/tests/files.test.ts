@@ -5,7 +5,7 @@
  * audio says (transcribed as it's sent), and see the rest by name.
  */
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import { createRuntime, definePlugin, type Store } from "../../../runtime/mod.ts";
+import { createRuntime, defineAction, definePlugin, type Store } from "../../../runtime/mod.ts";
 import { isBlobRef } from "../../../runtime/blobs.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
@@ -71,6 +71,85 @@ for (const [name, make] of Object.entries(stores)) {
     }
   });
 }
+
+test("an agent's message with files: another plugin's document, or one given; each a file of the chat", async () => {
+  const store = memoryStore();
+  // A plugin keeping pictures as the models plugin keeps those it makes: `type` and `data`.
+  const pictures = definePlugin({
+    name: "pictures",
+    collections: {
+      image: {
+        schema: {
+          type: "object",
+          properties: { type: { type: "string" }, data: { type: "string" } },
+        },
+      },
+    },
+    actions: {
+      "test.picture": defineAction({
+        input: { type: "object" },
+        run: async (ctx, input) => (await ctx.db.collection("image").insertOne(input)).insertedId,
+      }),
+    },
+  });
+  const runtime = await createRuntime({ store, plugins: [models, chat, app, pictures] });
+  const code = (p: Promise<unknown>) => p.then(() => "said", (e) => e.code);
+  try {
+    const { thread } = await runtime.call<{ thread: string }>("chat.send", {
+      from: "ana",
+      text: "Make me a logo",
+    });
+    await runtime.idle();
+    const logo = b64("\x89PNG" + "pixels".repeat(5_000)); // ~40 KB: a blob
+    const picture = await runtime.call<string>("test.picture", { type: "image/png", data: logo });
+    const say = {
+      id: "logo-1",
+      thread,
+      from: "lead",
+      files: [
+        { id: picture, collection: "image" },
+        { name: "brief.txt", type: "text/plain", data: b64("Round, blue.") },
+      ],
+    };
+    const said = await runtime.call("chat.say", say);
+    const id = `${thread}:say:logo-1`;
+    assertEquals(said, { message: id, files: [`${id}:file.0`, `${id}:file.1`] });
+    // Said again: nothing new.
+    assertEquals(await runtime.call("chat.say", say), said);
+    const history = await runtime.query<Message[]>("message.history", { thread });
+    const posted = history.filter((m) => m.from === "lead" && m.files);
+    assertEquals(posted.length, 1);
+    assertEquals([posted[0].text, posted[0].to], ["", ["ana"]]);
+    assertEquals(posted[0].files!.map((f) => [f.id, f.name, f.type, f.size]), [
+      [`${id}:file.0`, "image.png", "image/png", 30_005],
+      [`${id}:file.1`, "brief.txt", "text/plain", 12],
+    ]);
+    // A file of the chat, its content the picture's own blob: kept once.
+    const [kept] = await store.find("file", { _id: `${id}:file.0` });
+    const [made] = await store.find("image", { _id: picture });
+    assert(isBlobRef(kept.data));
+    assertEquals([kept.thread, (kept.data as { $blob: string }).$blob], [
+      thread,
+      (made.data as { $blob: string }).$blob,
+    ]);
+    // Its next turn, the agent knows what it sent.
+    const prompt = await runtime.query<Prompt>("thread.prompt", { thread, agent: "lead" });
+    assertStringIncludes(JSON.stringify(prompt.history), "[sent: image.png, brief.txt]");
+    // Refused before anything's said: what isn't there to read, what isn't a file, saying nothing.
+    const refused = await Promise.all([
+      { files: [{ id: "nope", collection: "image" }] },
+      { files: [{ id: picture, collection: "image", data: logo }] },
+      { files: [{ name: "x", type: "not a type", data: b64("x") }] },
+      { files: [{ name: "x", type: "text/plain" }] },
+      { text: " " },
+    ].map((rest, i) =>
+      code(runtime.call("chat.say", { id: `bad-${i}`, thread, from: "lead", ...rest }))
+    ));
+    assertEquals(refused, ["not_found", "invalid", "invalid", "invalid", "invalid"]);
+  } finally {
+    await runtime.close();
+  }
+});
 
 test("blobs can live in a bucket, over HTTP", async () => {
   const bucket = new Map<string, { data: Uint8Array; type: string }>();

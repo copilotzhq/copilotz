@@ -20,6 +20,22 @@
   refusal is now public, so a model outside the app reads its message too. A web line's spent budget
   now shows its own words ("This chat has done all it can for today…"). Every other failure still
   shows people the short line, with the details in the event.
+Moving in from another app. Nothing changes for an app that doesn't call these.
+
+- **`chat.import`** (the system's: a migration) brings a conversation in as it was: its thread (the
+  importer's id) in a space, with its title, and its messages with who said them (a person's id or
+  an agent's name), to whom, what, their files (`data`, or the `id` of a document holding one:
+  chat's `file` by default) and when (ISO 8601 with a zone, kept to the millisecond). Nothing runs:
+  no turn, no transcript, nothing delivered. Importing again replaces what it made; a long
+  conversation comes in several calls, and the thread's summary (count, first, latest, when it last
+  moved) is worked out from every message it has. A thread already in another space is refused
+  (`chat.move` moves it). Unrecorded: the documents it writes are their own record.
+- **`memory.import`** (the system's) brings memories in as they were, in a space: text, whom each is
+  about, who wrote it, `core`, when it was learned and last changed, under the importer's ids. Each
+  is embedded as it's kept (with an embedder), so recall finds it by meaning.
+- **Dev sign-in reaches someone already there:** an email a person has (one who moved in under an id
+  of its own) signs in as them, and the id of someone there signs in as them too, both as they are
+  (their name isn't touched). Anyone else signs in as before.
 
 ## 1.0.0-rc.26 — 2026-11-06
 
@@ -38,6 +54,27 @@ resources: { hosts: { "app.example.com": true, "*.run.app": true } }
   `{ own: [...] }`, like every other resource: a later plugin adds a host, or takes one away with
   `null`, without restating the rest. What it does is unchanged: with the app's hosts named, any
   other host is answered only by routes that take it. `HostsSettings` is `Record<string, true>`.
+- **Image generation** in `models`: `image.generate`
+  `{ model, prompt, references?, count?, aspectRatio?, size?, tags? }` answers
+  `{ images: [{ id, type, size }], text, usage }`. The images are kept in the `image` collection, a
+  document each, with the content as a blob, and the answer names them by id. A reference is an
+  image made here (`{ id }`), a document the caller may read that holds a file as `type` and `data`
+  (`{ id, collection: "file" }`, read as the caller), or inline data (`{ data, type }`, or a data
+  URL). Models are chosen as `llm`'s are: an alias, settings around one, or a list tried in order.
+  Adapters go under `adapters.image`: `gemini` (`generateContent` with `responseModalities`; `count`
+  images are that many calls, made together), `openai` (`/images/generations`, or `/images/edits`
+  with references), and `fake` (`"fake/image"`).
+  - **Metered like every model call.** The org's own key comes first. `modelUse` listeners and the
+    `spending` check go before the call. Its tokens are told to the ledger after, with meter
+    `image`, priced from the catalog as `llm`'s are, and counted under agents. The provider's
+    `silence` and `retry` apply.
+  - **Refusals are final.** A model whose safety rules say no fails `image_refused`, and no other
+    model is asked. One that makes nothing fails `no_image` once the list is spent. Both are public
+    messages: an agent's tool tells its model why.
+  - **Recorded, unlike the other ports' Actions.** It writes what it made, so a job that runs again
+    finds the call done and doesn't pay twice. `models.check` takes `port: "image"`.
+  - `keyed` and `mayRun` (the org's own key, and the spending check) moved from the llm port to
+    `shared/use.ts`, so every port that spends asks the same way. Nothing changes for `llm`.
 
 ## 1.0.0-rc.25 — 2026-11-06
 

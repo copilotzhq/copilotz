@@ -13,6 +13,15 @@ import usage from "../../../billing/usage/mod.ts";
 import { chat, type Message, type Step } from "../../chat/mod.ts";
 import { webTools, type WebToolsSettings } from "../mod.ts";
 import { blocked } from "../shared/address.ts";
+import {
+  acceptLanguage,
+  isChallenge,
+  parse,
+  pick,
+  profiles,
+  regionOf,
+  unwrap,
+} from "../adapters/duckduckgo.ts";
 import { test } from "../../../../testing/mod.ts";
 
 type Call = { name: string; input: Record<string, unknown> };
@@ -64,7 +73,11 @@ async function start(
           tools: ["web_search", "read_page"],
         },
       },
-      webTools: { search: { apiKey: "k-secret" }, resolve, ...settings },
+      webTools: {
+        resolve,
+        ...settings,
+        search: { adapter: "serper", apiKey: "k-secret", ...settings.search },
+      },
       cost: { serper: { queries: 0.001, per: 1 } },
       ...extra,
     },
@@ -388,5 +401,130 @@ test("a turn reads only so many pages", async () => {
   const { outputs } = await ask();
   assertEquals(outputs.map((o) => o.includes("ok")), [true, true, false]);
   assertStringIncludes(outputs[2], "at most 2 pages");
+  await runtime.close();
+});
+
+const DDG = `
+  <div class="result">
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Falpha%3Fx%3D1&amp;rut=abc">
+      Alpha &amp; Beta
+    </a>
+    <a class="result__snippet">First <b>snippet</b>&hellip;</a>
+  </div>
+  <div class="result">
+    <a class="result__a" href="https://example.org/direct">Second</a>
+    <a class="result__snippet">Another result</a>
+  </div>`;
+const CHALLENGE = '<form id="challenge-form"></form>';
+
+test("DuckDuckGo's page is parsed into results, redirects unwrapped", () => {
+  assertEquals(parse(DDG, 10), [
+    {
+      title: "Alpha & Beta",
+      url: "https://example.com/alpha?x=1",
+      snippet: "First snippet \u2026",
+    },
+    { title: "Second", url: "https://example.org/direct", snippet: "Another result" },
+  ]);
+  assertEquals(parse(DDG, 1).length, 1);
+  assertEquals(
+    unwrap("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs"),
+    "https://example.com/docs",
+  );
+});
+
+test("a bot challenge is told only when no results are on the page", () => {
+  assertEquals(isChallenge(CHALLENGE), true);
+  assertEquals(
+    isChallenge(`${CHALLENGE}<a class="result__a" href="https://example.com">R</a>`),
+    false,
+  );
+});
+
+test("browser headers are coherent, and language and country shape region and Accept-Language", () => {
+  const chrome = profiles.find((p) => p.name === "chrome-windows")!;
+  assertEquals(chrome.headers["Sec-CH-UA-Platform"], '"Windows"');
+  assertEquals(chrome.headers["Sec-CH-UA-Mobile"], "?0");
+  assertEquals(acceptLanguage(chrome), "en-US,en;q=0.9");
+  assertEquals(acceptLanguage(chrome, "pt", "br"), "pt-BR,pt;q=0.9,en-US;q=0.7,en;q=0.6");
+  assertEquals(regionOf("pt_BR", "br"), "br-pt");
+  assertEquals(regionOf("pt"), undefined);
+  assertEquals(pick(profiles.slice(1).map((p) => p.name)).name, profiles[0].name);
+});
+
+test("web_search works with no key: DuckDuckGo by default, the region sent, free in the ledger", async () => {
+  const { runtime, seen, ask } = await start(
+    [[{ name: "web_search", input: { query: "bondes", language: "pt", country: "br" } }]],
+    () => new Response(DDG),
+    { search: { adapter: "duckduckgo", apiKey: undefined } },
+  );
+  const { outputs } = await ask();
+  assertEquals(JSON.parse(outputs[0]).results.length, 2);
+  const url = new URL(seen[0].url);
+  assertEquals([url.host, url.searchParams.get("q"), url.searchParams.get("kl")], [
+    "html.duckduckgo.com",
+    "bondes",
+    "br-pt",
+  ]);
+  const headers = new Headers(seen[0].init.headers);
+  assertEquals(headers.get("accept-language"), "pt-BR,pt;q=0.9,en-US;q=0.7,en;q=0.6");
+  const [totals] = await runtime.query<{ uses: number; cost: number; price: number }[]>(
+    "usage.totals",
+    {
+      filter: { meter: "search" },
+    },
+  );
+  assertEquals([totals.uses, totals.cost], [1, 0]);
+  await runtime.close();
+});
+
+test("a challenge is tried again with other headers, then a public error the agent reads", async () => {
+  let n = 0;
+  const retried = await start(
+    [[{ name: "web_search", input: { query: "x" } }]],
+    () => new Response(++n === 1 ? CHALLENGE : DDG),
+    { search: { adapter: "duckduckgo" } },
+  );
+  assertEquals(JSON.parse((await retried.ask()).outputs[0]).results.length, 2);
+  const agents = retried.seen.map((s) => new Headers(s.init.headers).get("user-agent"));
+  assert(agents[0] !== agents[1]);
+  await retried.runtime.close();
+
+  for (const page of [CHALLENGE, "<html><body>nothing</body></html>"]) {
+    const { runtime, seen, ask } = await start(
+      [[{ name: "web_search", input: { query: "x" } }]],
+      () => new Response(page),
+      { search: { adapter: "duckduckgo" } },
+    );
+    const { outputs, messages } = await ask();
+    assertStringIncludes(
+      outputs[0],
+      "Search is unavailable right now; try read_page on a known site.",
+    );
+    // A challenge is asked again with other headers; an empty page is not.
+    assertEquals(seen.length, page === CHALLENGE ? 3 : 1);
+    assertEquals(messages.at(-1)!.failed ?? false, false);
+    await runtime.close();
+  }
+});
+
+test("a search that found nothing says so: no results, no error", async () => {
+  const { runtime, ask } = await start(
+    [[{ name: "web_search", input: { query: "zzzz" } }]],
+    () => new Response('<div class="no-results">No results.</div>'),
+    { search: { adapter: "duckduckgo" } },
+  );
+  assertEquals(JSON.parse((await ask()).outputs[0]).results, []);
+  await runtime.close();
+});
+
+test("the default adapter is DuckDuckGo", async () => {
+  const { runtime, seen, ask } = await start(
+    [[{ name: "web_search", input: { query: "x" } }]],
+    () => new Response(DDG),
+    { search: { adapter: undefined } },
+  );
+  await ask();
+  assertEquals(new URL(seen[0].url).host, "html.duckduckgo.com");
   await runtime.close();
 });

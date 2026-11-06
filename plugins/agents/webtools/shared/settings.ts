@@ -9,7 +9,7 @@ export function settingsOf(ctx: Pick<Context, "resources">) {
   const s = (ctx.resources.webTools ?? {}) as WebToolsSettings;
   return {
     search: {
-      adapter: s.search?.adapter ?? "serper",
+      adapter: s.search?.adapter ?? "duckduckgo",
       apiKey: s.search?.apiKey,
       endpoint: s.search?.endpoint,
       options: s.search?.options,

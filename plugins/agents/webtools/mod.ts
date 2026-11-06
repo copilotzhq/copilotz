@@ -5,10 +5,13 @@
  *
  * - **`web_search`** `{ query, count?, language?, country? }` → `{ results:
  *   [{ title, url, snippet }] }`. Search is the `search` adapter port
- *   (`webTools.search.adapter`): `serper` (Serper.dev, the default; its key
- *   is `webTools.search.apiKey`, called through `ctx.fetch`) and `fake`
- *   (offline). Another engine (Brave, Google) is one more adapter under
- *   `adapters.search`.
+ *   (`webTools.search.adapter`): `duckduckgo` (the default: DuckDuckGo's
+ *   HTML page, no key, no cost, asked as a browser would; a bot challenge
+ *   or an empty page is a public error telling the agent search is
+ *   unavailable, and `language` with `country` set its region), `serper`
+ *   (Serper.dev, optional; its key is `webTools.search.apiKey`) and `fake`
+ *   (offline), all through `ctx.fetch`. Another engine (Brave, Google) is
+ *   one more adapter under `adapters.search`.
  * - **`read_page`** `{ url, start? }` → the page's final URL (after
  *   redirects), title, main text (without scripts, styles or navigation) and
  *   links, up to `pageChars` characters; a longer page says the `start` to
@@ -28,17 +31,18 @@
  * an app that must be sure puts the runtime behind an egress filter.
  *
  * **Metered.** A search is a `search` use of the ledger (an `agents`
- * category meter), subject the adapter's (`serper`), one `queries`; the
+ * category meter), subject the adapter's, one `queries`; the
  * `modelUse` listeners and the `spending` check are asked before it, as
  * before a model call, and a refusal is final and stops the turn with its reason, as for a model.
- * Price it from resources: `cost: { serper: { queries: 0.001, per: 1 } }`.
+ * Priced from resources: DuckDuckGo's is 0 unless the app sets it; Serper's is
+ * the app's to set: `cost: { serper: { queries: 0.001, per: 1 } }`.
  * Reading a page is free, and limited.
  *
  * ```ts
  * plugins: [models, chat, usage, webTools, definePlugin({
  *   name: "app",
  *   resources: {
- *     webTools: { search: { apiKey: Deno.env.get("SERPER_KEY") } },
+ *     webTools: { search: { adapter: "serper", apiKey: Deno.env.get("SERPER_KEY") } },
  *     cost: { serper: { queries: 0.001, per: 1 } },
  *     agents: { scout: { instructions, model, tools: ["web_search", "read_page"] } },
  *   },
@@ -47,6 +51,7 @@
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { fake } from "./adapters/fake.ts";
+import { duckduckgo } from "./adapters/duckduckgo.ts";
 import { serper } from "./adapters/serper.ts";
 import { read_page, web_search } from "./resources/tools.ts";
 import { settingsOf } from "./shared/settings.ts";
@@ -56,8 +61,12 @@ export * from "./contract.ts";
 export const webTools: Plugin = definePlugin({
   name: "webTools",
   requires: ["chat"],
-  resources: { tools: { web_search, read_page } },
-  adapters: { search: { serper, fake } },
+  resources: {
+    tools: { web_search, read_page },
+    // A DuckDuckGo search is free; an app that pays something for it sets it here.
+    cost: { duckduckgo: { queries: 0, per: 1 } },
+  },
+  adapters: { search: { duckduckgo, serper, fake } },
   check(merged) {
     const { adapter } = settingsOf(merged).search;
     if (!merged.adapters.search?.[adapter]) {

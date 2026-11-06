@@ -725,13 +725,15 @@ name, never by importing its code.
   `{ title, url, snippet }`) and `read_page` `{ url, start? }` (the final URL, title, main text
   without scripts, styles or navigation, and links; long pages come in parts, `start` reads on; the
   text is marked as data, never instructions). Search is the `search` adapter port
-  (`resources.webTools.search`: `adapter`, `apiKey`): `serper` by default, `fake` offline, and Brave
-  or Google are one more adapter. Reading is safe by design: http(s) only, through `ctx.fetch`, no
+  (`resources.webTools.search`: `adapter`, `apiKey`): `duckduckgo` by default (its HTML page: no
+  key, no cost; a bot challenge or an empty page is a public "search is unavailable" error the agent
+  reads; `language` with `country` set its region), `serper` optional, `fake` offline, and Brave or
+  Google are one more adapter. Reading is safe by design: http(s) only, through `ctx.fetch`, no
   cookies, an honest user agent; the host is resolved and loopback, private, link-local (the
   metadata address) and reserved addresses refused, again on every redirect (4 at most); ports other
   than 80 and 443 only if `ports` lists them; 15 s, 2 MB, HTML or text (no PDF); 8 pages per turn. A
-  search is a `search` use in the usage ledger, priced from resources, and asks `modelUse` listeners
-  and the `spending` check first, like a model call; reading is free.
+  search is a `search` use in the usage ledger, priced from resources (DuckDuckGo's is 0), and asks
+  `modelUse` listeners and the `spending` check first, like a model call; reading is free.
 
   ```ts
   plugins: [
@@ -742,7 +744,7 @@ name, never by importing its code.
     definePlugin({
       name: "app",
       resources: {
-        webTools: { search: { apiKey: env.SERPER_KEY } },
+        webTools: { search: { adapter: "serper", apiKey: env.SERPER_KEY } }, // none for DuckDuckGo
         cost: { serper: { queries: 0.001, per: 1 } }, // what a search costs the app
         agents: { scout: { instructions, model, tools: ["web_search", "read_page"] } },
       },

@@ -38,9 +38,9 @@ export type Resolve = (host: string) => Promise<string[]>;
 /** `resources.webTools`: an app patches it like any resource. */
 export type WebToolsSettings = {
   search?: {
-    /** The search adapter (`"serper"`; `"fake"` offline). */
+    /** The search adapter (`"duckduckgo"`, the default; `"serper"`; `"fake"` offline). */
     adapter?: string;
-    /** The engine's key. */
+    /** The engine's key (Serper's). */
     apiKey?: string;
     /** Another address for the engine, when it isn't the adapter's own. */
     endpoint?: string;

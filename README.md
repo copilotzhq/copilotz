@@ -324,6 +324,50 @@ A runtime that declares the `socket` transport (remote executors) still takes it
 another listener; a route's socket needs Oxian's (`copilotz/web/node`'s). The example is
 `examples/web-node/routes.ts`.
 
+### From a script: the REST API and the client
+
+The runtime answers `/api/` itself, for whoever plugins' `who` say a request is (a developer key's
+person, with its scope; a session from the app's own page; anonymous where `allow`s let it), with
+everything checked as it is over the socket: each Action's and query's `allow`, the caller's
+`scope`, and the rules.
+
+```
+GET    /api/collections/<name>?filter=<json>&sort=<json>&limit=&skip=   find (&count=true: how many)
+GET    /api/collections/<name>/<id>                                      findOne
+POST   /api/collections/<name>                                           insert
+PATCH  /api/collections/<name>/<id>    an update document, or the fields to set ($set)
+PUT    /api/collections/<name>/<id>    replace           DELETE /api/collections/<name>/<id>
+POST   /api/actions/<name>             call (Idempotency-Key: the call's id, the caller's own)
+GET    /api/queries/<c>.<q>?params=<json>, or POST with the params as the body
+GET    /api/views/<name>?item=<json>   a View, rendered by the runtime
+POST   /api/events/<type>              emit (a scoped caller emits nothing)
+GET    /api/events                     what happens, of what the caller reaches
+GET    /api/                           the reference: what this caller may use
+any GET with Accept: text/event-stream: the result, then each new result after a commit
+```
+
+A collection reaches an outsider only where a rule speaks for it (for writes, a rule asked about
+writes, `direct`), never `sys.*`; private fields are never returned, filtered by or written; every
+write is the caller's own, kept within their reach by the owner's guard, checked by the schema, and
+recorded as its events. Plugins' collections that only their Actions may change say so in their
+rules (spaces and memberships, sessions, keys, messages, routines, computers…). Errors are
+`{ error: { code, message } }` with the status their code says.
+
+The client (`connect`, from `copilotz`) is spelled like plugin code's `ctx.db.collection`, over the
+socket or over HTTP; only how `app` is made differs:
+
+```ts
+import { connect } from "copilotz";
+
+const app = await connect("https://mobizap.app", { key: env.MOBIZAP_KEY }); // the socket
+// const app = await connect("https://mobizap.app", { key: env.MOBIZAP_KEY, over: "http" });
+
+const open = await app.db.collection("booking").find({ status: "open" }).toArray();
+await app.db.collection("booking").updateOne({ _id: "42" }, { $set: { note: "janela" } });
+await app.call("booking.cancel", { id: "42" });
+const stop = app.db.collection("booking").watch({ status: "open" }, (rows) => show(rows));
+```
+
 ## Installing a computer
 
 People's computers run the computer program (`plugins/compute/computers/program/`), a single
@@ -612,9 +656,9 @@ person is, what their commands printed) and its shell (`terminalShell`), and the
 (`webShell`: the sidebar, the main area by address, the side panel and the command palette, each
 filled by the front ends through resources).
 
-- **`api`**: the developer API. A person makes a key in a space, for the Actions, queries and Views
-  it may use there; code then calls them over HTTP under `/api/`, and follows what happens as
-  server-sent events, as that person, in that space only.
+- **`api`**: developer keys. A person makes a key in a space, for the Actions, queries, Views and
+  collections it may use there (its scope; every key has one); code then calls the runtime's REST
+  API (`/api/`) or its socket with it, as that person, in that space only.
 - **`whatsapp`**: people talk to their agents from WhatsApp, through Meta's Cloud API. A space's
   managers connect a number; a person links their phone with a code; what they send becomes their
   messages, and what agents say to them goes back, a long answer in several messages. It has Views

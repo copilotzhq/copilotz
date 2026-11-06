@@ -209,7 +209,11 @@ Agreed 2026-10-28.
 - **Reads keep to what the person may:** a browser reads a collection directly only when a rule
   speaks for it (`find` on `message`, as its person); anything else goes through a query that lets
   the person (`allow`), whose own reads keep to the rules.
-- **Writes are Actions** (`chat.send`…) for now; direct writes under the rules later.
+- **Writes** are Actions (`chat.send`…), or direct, under the rules (2026-11-06): a browser's (or a
+  script's) own insert, update, replace or delete of a collection a rule speaks for its writes of
+  (`direct`), never a private field, within its reach (the owner's guard), recorded as its events.
+  Over the socket (`core.write`) or the REST API (`/api/collections/…`), alike; the client spells
+  them as plugin code does (`client.db.collection(x).updateOne(…)`).
 - **Navigation is links:** Views render `<a href>`; the web host follows them (no reload) and
   observes the shell with the new path. A handler that must move on (a new conversation) calls the
   host's `go(path)`.

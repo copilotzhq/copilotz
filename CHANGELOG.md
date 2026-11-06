@@ -17,6 +17,31 @@
    `DeclaredServer`, `WebLine` `DeclaredSite`; `McpCaller` is gone (`CallerSettings`). Webhook paths
    don't change.
 
+- **The REST API is the runtime's own** (`/api/`, answered by `runtime.fetch` for whoever `who`
+  says, a key, a session from the app's own page, or anonymous): collections
+  (`GET /api/collections/<name>?filter=…`, `…/<id>`; `POST`, `PATCH`, `PUT`, `DELETE`), Actions by
+  the caller's own call id (`Idempotency-Key`), queries (`GET ?params=` or `POST`), Views, emits
+  (`POST /api/events/<type>`), the events stream, and the reference (`GET /api/`); any GET with
+  `Accept: text/event-stream` is a watch. Direct writes from outside: only where a rule speaks for
+  the collection's writes (`direct`), never `sys.*` nor a private field (not filtered by, either),
+  within reach, schema-checked, recorded as the caller's events. **Breaking:** no plugin route may
+  take `/api` or anything under it; the api plugin's `serveApi`, its `api_key.see` and `api_key.get`
+  queries are gone; `GET /api/views/…?follow=1` is `Accept: text/event-stream`, and `?id=` is
+  `?item=`; the reference says `actor` (no `key` record); an Action that takes a space gets no
+  default from a key: name `in`. A credential that proves nobody is a 401, and so is a refusal to
+  anonymous.
+- **The client's collections, over either transport:** `client.db.collection(name)` (`find` with
+  `.toArray()`, `findOne`, `countDocuments`, `insertOne`, `updateOne`, `replaceOne`, `deleteOne`,
+  `query`, `watch(filter, options?, onChange)`), `client.call(action, input, { id })`, and
+  `connect(url, { key, over: "socket" | "http" })` for scripts (exported from `copilotz`), beside
+  the page's `connect({ transport, ticket, plugins })`. The socket gains a write (`core.write`), and
+  a call's own id. `WhoContext` gains `call` (the api plugin notes a key's last use there).
+- **Breaking: plugins' records change through their Actions.** Their rules refuse direct writes from
+  outside (`direct`) for spaces' own records, identity's people and sessions, keys, contacts, chat's
+  messages and `live`, routines and their runs, the computers plugin's records, apps, cloud
+  computers, agents, accounts, WhatsApp's phones and numbers, and voice blocks.
+- **Breaking: identity makes no keys.** `key.create`, `key.revoke` and `credential.keys` are gone,
+  and a credential is a session: every key is the api plugin's, with a scope.
 - **Breaking: developer keys are members of their space, with a scope.** A key's actor is
   `{ kind: "person", id, key, scope }` (`within` is gone): `people` still lets it in and `inPerson`
   keeps it out. It's a member of its space (`key:<id>`), an editor when its scope calls or writes,

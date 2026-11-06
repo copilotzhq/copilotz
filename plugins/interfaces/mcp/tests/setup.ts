@@ -446,6 +446,27 @@ export type Setup = {
 
 let ids = 0;
 
+/** Limits counted by the clock's minute or hour (each window starts on the minute). */
+const WINDOWED = [
+  "perMinute",
+  "linePerMinute",
+  "ipPerMinute",
+  "chatsPerHour",
+  "userChatsPerHour",
+  "ipChatsPerHour",
+];
+
+/**
+ * Waits out the last seconds of a minute, for a test of limits counted by
+ * the clock's minute (or hour): calls it makes in one breath could fall
+ * either side of the minute's end, and be counted in two windows.
+ */
+async function clearOfMinute(limits: Record<string, unknown> | undefined): Promise<void> {
+  if (!limits || !WINDOWED.some((name) => name in limits)) return;
+  const left = 60_000 - (Date.now() % 60_000);
+  if (left < 5_000) await new Promise((resolve) => setTimeout(resolve, left + 20));
+}
+
 export async function setup(
   fn: (s: Setup) => Promise<void>,
   options: {
@@ -460,6 +481,7 @@ export async function setup(
     widgets?: Widgets;
   } = {},
 ) {
+  await clearOfMinute(options.line?.limits as Record<string, unknown> | undefined);
   for (const key of Object.keys(runs)) delete runs[key];
   state.paid = false;
   charges.length = 0;

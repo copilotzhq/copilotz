@@ -1,5 +1,14 @@
 ## Unreleased
 
+- **Boards and documents are Copilotz's** (`copilotz/plugins/work`, front ends in
+  `copilotz/plugins/work/web`). `boards` is kanban in a space (boards with ordered columns, cards
+  dragged between them, owners, labels, due dates; Actions `board.*` and `card.*`; agents' tools
+  `list_boards`, `read_board`, `create_board`, `create_card`, `update_card`, `move_card`).
+  `documents` is shared Markdown in a space (every save a version, saves merged line by line or
+  refused as a `conflict`, restoring, presence; Actions `document.*`; agents' tools
+  `list_documents`, `read_document`, `write_document`, `append_document`, `edit_document`). Each has
+  its web front end (`boardsWeb`, `documentsWeb`). The empty Board tab's line about agents is the
+  app's: `resources.boardsText.agentHint`.
 - **A `@word` is a mention only when it names someone.** Chat took any `@word` as a mention, so a
   message with a social handle ("my profile is @ana.marca") and no agent named reached no agent. Now
   a mention counts only when it names an agent, or a person in the conversation; any other `@word`

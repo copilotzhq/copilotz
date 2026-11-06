@@ -154,6 +154,8 @@ The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@co
 | `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                    |
 | `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                               |
 | `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                     |
+| `copilotz/plugins/work`                | `boards` (kanban), `documents` (shared Markdown with versions and merges)                                         |
+| `copilotz/plugins/work/web`            | `boardsWeb`, `documentsWeb`                                                                                       |
 | `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance` |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                         |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                         |
@@ -942,6 +944,20 @@ shared into another space, every member's agents use it too (it runs their comma
 that machine: share one you mean to). Commands, jobs and writes wait for a yes, from the person the
 agent works for (or, if its owner says so, from the owner).
 
+**`work/`**: **`boards`** and **`documents`**, what a space's people and agents make together. Both
+live in spaces (read where the space is read, changed where it's written), change only through their
+Actions, and give agents tools wherever a conversation is in a space. Boards are kanban: columns in
+order (a new one starts with Backlog, To do, Doing, Blocked, In review and Done), cards dragged
+within and across them, owners, labels and due dates; the tools are `list_boards`, `read_board`,
+`create_board`, `create_card`, `update_card` and `move_card`. Documents are Markdown where every
+save is a version (who, what, when), a save that started from an old version is merged line by line
+or refused as a `conflict` for the person to settle, an old version comes back as a new one, and who
+has one open is live; the tools are `list_documents`, `read_document`, `write_document`,
+`append_document` and `edit_document`. Their front ends (`boardsWeb`, `documentsWeb`) add a Board
+and a Documents tab to a space, a page for each, palette entries and cards for the tools' calls in a
+chat. The app words the one line about agents on an empty Board tab
+(`boardsText: { agentHint: "…" }`, a resource).
+
 **`interfaces/`**: how people reach the runtime. The terminal's data (`terminalPlugin`: where each
 person is, what their commands printed) and its shell (`terminalShell`), and the web shell
 (`webShell`: the sidebar, the main area by address, the side panel and the command palette, each
@@ -1627,6 +1643,7 @@ plugins/        the features, by theme
   access/       spaces (members, reach, rules), identity, Google sign-in, connected accounts, the
                 directory of orgs
   compute/      computers: desks per space, agents' tools, approvals; program/, the computer program
+  work/         boards (kanban) and documents (versioned Markdown), with their front ends
   interfaces/   terminal (where each person is, the shell View), web (the web shell), the developer
                 API, WhatsApp, voice (phone calls), MCP and maintenance; features'
                 own front ends live with them (chat/terminal.ts, chat/web.tsx…), gathered by theme

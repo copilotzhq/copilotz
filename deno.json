@@ -24,6 +24,8 @@
     "./plugins/compute/web": "./plugins/compute/web.tsx",
     "./plugins/compute/terminal": "./plugins/compute/computers/terminal.ts",
     "./plugins/compute/downloads": "./plugins/compute/computers/resources/downloads.ts",
+    "./plugins/work": "./plugins/work/mod.ts",
+    "./plugins/work/web": "./plugins/work/web.tsx",
     "./plugins/interfaces": "./plugins/interfaces/mod.ts",
     "./plugins/interfaces/web": "./plugins/interfaces/web.tsx",
     "./plugins/interfaces/terminal": "./plugins/interfaces/terminal/terminal.ts",

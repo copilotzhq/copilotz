@@ -1,8 +1,9 @@
 /**
  * When a call breaks: which failures pass (the network, a stream gone
  * silent, a provider timing out or busy), how long to wait before trying
- * again (longer each time), and a stream that counts as broken once it
- * sends nothing for a while, whatever its adapter does with the signal.
+ * again (longer each time), and a stream (or a single answer) that counts
+ * as broken once it sends nothing for a while, whatever its adapter does
+ * with the signal.
  */
 
 /** How long a model may send nothing before its connection counts as dropped (2 minutes). */
@@ -70,5 +71,28 @@ export async function* quietly<T>(
     }
   } finally {
     void it.return?.()?.catch?.(() => {});
+  }
+}
+
+/**
+ * One answer (not a stream), failing as stalled once it hasn't come in `ms`:
+ * it aborts `quiet` (which the adapter's request listens to) and stops
+ * waiting either way.
+ */
+export async function awaited<T>(answer: Promise<T>, ms: number, quiet: AbortController) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const silent = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = stalled(ms);
+      quiet.abort(error);
+      reject(error);
+    }, ms);
+  });
+  // The request, aborted, fails too: nobody is waiting for it then.
+  answer.catch(() => {});
+  try {
+    return await Promise.race([answer, silent]);
+  } finally {
+    clearTimeout(timer);
   }
 }

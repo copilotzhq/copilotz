@@ -35,6 +35,28 @@ const orgSchema = {
   required: ["name", "kind", "by", "placement", "at"],
 } as const;
 
-export const org = defineCollection({ schema: orgSchema, indexes: [["by"]] });
+export const org = defineCollection({
+  schema: orgSchema,
+  indexes: [["by"]],
+  queries: {
+    /**
+     * An org as the directory opens it (its name, kind, placement, and
+     * whether it's suspended), or null. The system's: the directory's routes
+     * ask it for every request they forward, and the app, to open an org.
+     */
+    info: async (orgs, params: { org: string }) => {
+      const found = await orgs.findOne({ _id: String(params.org ?? "") });
+      return found
+        ? {
+          id: found._id,
+          name: found.name,
+          kind: found.kind,
+          placement: found.placement,
+          ...(found.suspended ? { suspended: true } : {}),
+        }
+        : null;
+    },
+  },
+});
 
 export type Org = Infer<typeof orgSchema> & { _id: string };

@@ -12,7 +12,6 @@
  */
 import { type ReactNode, useId, useState } from "react";
 import {
-  asStaff,
   Avatar,
   Icon,
   IconButton,
@@ -20,8 +19,8 @@ import {
   kept,
   LazyView,
   NavItem,
-  useOrgs,
 } from "../../../../../hosts/web/mod.ts";
+import { asStaff, useOrgs } from "../../../directory/contract.ts";
 import type { Member, Reached, SpaceSidebar } from "../../contract.ts";
 import { nameOf } from "../../shared/names.ts";
 import { ORG } from "../../shared/reach.ts";

@@ -12,6 +12,9 @@
  *   site.ts), and under the app's base (`resources.page.base`: `/o/<org>/x`
  *   is `/x`). Routes are given the request as that.
  * - **Routes with a host** (a preview's): every request to a host they take.
+ *   With the app's own hosts named (`resources.hosts.own`, see site.ts), a
+ *   request to any other host is theirs alone (a 404 when none takes it),
+ *   and the app's own hosts are never theirs.
  * - **The socket** (`/oxian`, and `<base>/oxian`): Oxian's worker protocol,
  *   for browsers (with a ticket), remote executors (with the key) and
  *   plugins' workers. The runtime accepts it itself (see `accept`).
@@ -45,7 +48,7 @@ import type { Actor } from "./store.ts";
 import type { Owner } from "./owner.ts";
 import { canonical, type Registry } from "./registry.ts";
 import { matchRoute, routeTable } from "./routes.ts";
-import { crossSite, siteOf } from "./site.ts";
+import { crossSite, hostsProblem, ownHost, siteOf } from "./site.ts";
 import type { Tickets } from "./tickets.ts";
 
 /** Who a request is when no plugin says. */
@@ -133,6 +136,14 @@ const fromDeno = (info: any): info is { remoteAddr: { hostname?: unknown } } =>
   typeof (globalThis as any).Deno?.upgradeWebSocket === "function" &&
   !!info && typeof info === "object" && typeof info.remoteAddr === "object" && "completed" in info;
 
+/**
+ * The request `Deno.serve` gave, which Deno alone can upgrade, by each
+ * request made from it: the site's, under the base, and so a socket another
+ * runtime's route forwarded here (`other.fetch(request)`) is still Deno's to
+ * accept.
+ */
+const upgradable = new WeakMap<Request, Request>();
+
 /** The peer a listener saw, from what it gave beside the request: Deno's `info`, Bun's server. */
 // deno-lint-ignore no-explicit-any
 function peerOf(request: Request, info: any): string | undefined {
@@ -148,7 +159,8 @@ function peerOf(request: Request, info: any): string | undefined {
 
 /**
  * Accepts the socket an upgrade decision admitted, wherever the runtime runs:
- * - `Deno.serve(runtime.fetch)`: Deno's own upgrade of the request it gave;
+ * - `Deno.serve(runtime.fetch)`: Deno's own upgrade of the request it gave,
+ *   whichever runtime it was forwarded to (`upgradable`);
  * - workerd: a `WebSocketPair`;
  * - any of Oxian's listeners (`listen` from `copilotz/web/node`, on Node,
  *   Bun or Deno) and a runtime forwarding to this one: Oxian's route
@@ -243,15 +255,16 @@ export const upgradeOf = (
 /**
  * What's wrong with how plugins and settings shape the runtime's HTTP, thrown:
  * a route that isn't a pattern or takes the runtime's own paths, a bad
- * `page.base`, a bad `cookies` resource, a `links` secret too short to sign
- * with (rather than failing each link). The owner checks it before it
- * starts anything.
+ * `page.base`, a bad `cookies` or `hosts` resource, a `links` secret too
+ * short to sign with (rather than failing each link). The owner checks it
+ * before it starts anything.
  */
 export function checkHttp(registry: Registry): void {
   routeTable(registry.routes);
   baseOf(registry.resources.page);
   linksOf(registry.resources);
-  const problem = cookiesProblem(registry.resources.cookies);
+  const problem = cookiesProblem(registry.resources.cookies) ??
+    hostsProblem(registry.resources.hosts);
   if (problem) throw new Error(problem);
 }
 
@@ -280,8 +293,10 @@ export function createFetch(deps: {
   /** Which plugin set each cookie name first, and who may set it too (see cookies.ts). */
   const owners = {
     owners: new Map<string, string>(),
-    related: (a: string, b: string) =>
-      !!registry.requires[a]?.includes(b) || !!registry.requires[b]?.includes(a),
+    related: (a: string, b: string) => {
+      const [of, by] = [registry.requires[a] ?? [], registry.requires[b] ?? []];
+      return of.includes(b) || by.includes(a) || of.some((name) => by.includes(name));
+    },
   };
 
   /** What `who` queried, by query and params, while it lasts. */
@@ -352,6 +367,8 @@ export function createFetch(deps: {
       redirect: request.redirect,
       duplex: "half",
     } as RequestInit);
+    const original = upgradable.get(request);
+    if (original) upgradable.set(made, original);
     return carry(made, request);
   };
 
@@ -406,7 +423,8 @@ export function createFetch(deps: {
   };
 
   /** The socket: the Hypervisor admits it (a ticket, the key, a worker's secret), then it's accepted. */
-  const socket = async (request: Request, url: URL, native: boolean): Promise<Response> => {
+  const socket = async (request: Request, url: URL): Promise<Response> => {
+    const native = upgradable.get(request);
     let asked = request;
     if (url.pathname !== SOCKET) {
       const at = new URL(url);
@@ -415,13 +433,14 @@ export function createFetch(deps: {
     }
     const decision = hypervisor.prepare(asked);
     if (decision.kind === "response") return await decision.response;
-    return accept(request, decision, native);
+    return accept(native ?? request, decision, native !== undefined);
   };
 
   const fetch = async (request: Request, info?: ListenerInfo): Promise<Response> => {
     const url = new URL(request.url);
     const peer = clientAddress(request) === undefined ? peerOf(request, info) : undefined;
     if (peer) setClientAddress(request, peer);
+    if (fromDeno(info)) upgradable.set(request, request);
     let site: URL;
     try {
       site = siteOf(request, typeof front() === "string" ? front() as string : undefined);
@@ -431,9 +450,14 @@ export function createFetch(deps: {
     const path = within(url.pathname);
     const inner = innerOf(request, url, site, path);
     const at = inner === request ? url : new URL(inner.url);
-    const byHost = matchRoute(table, at, { hosts: true });
-    if (byHost) return await answer(byHost, inner, site);
-    if (path === SOCKET) return await socket(request, url, fromDeno(info));
+    // The app's own hosts are never a host route's; any other is host routes' alone.
+    const own = ownHost(resources.hosts, site.host);
+    if (own !== true) {
+      const byHost = matchRoute(table, at, { hosts: true, others: own === false });
+      if (byHost) return await answer(byHost, inner, site);
+      if (own === false) return plain(404, "Not found");
+    }
+    if (path === SOCKET) return await socket(request, url);
     if (crossSite(request, site)) {
       return json({ error: "Not from this app's page" }, { status: 403 });
     }

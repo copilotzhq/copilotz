@@ -15,7 +15,14 @@ import { webPage } from "../server.ts";
 import { manifestOf, precacheOf, versionOf, workerOf } from "../pwa.ts";
 import { themeOf } from "../theme/css.ts";
 import { coverage, iconPng, outlines, rgbaOf } from "../theme/png.ts";
-import { asStaff, currentOrg, loadOrgs, orgName, type Orgs, refreshOrgs } from "../orgs.ts";
+import {
+  asStaff,
+  currentOrg,
+  loadOrgs,
+  orgName,
+  type Orgs,
+  refreshOrgs,
+} from "../../../plugins/access/directory/web.ts";
 
 const brand = definePlugin({
   name: "brand",

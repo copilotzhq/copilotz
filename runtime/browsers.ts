@@ -34,7 +34,7 @@
  *   its tags: as many times that as the network counts, `scaleOf`), 300 on
  *   each web line (`actor.web`), 400 in all: well under what a listener
  *   holds (`LISTENER`, Oxian's), so people always find room. Runtimes on one
- *   listener (the orgs host's orgs) count their contacts together too, with
+ *   listener (a directory's orgs) count their contacts together too, with
  *   one `contactsPool()` given to each. People's connections never count
  *   against those. A contact reads a collection directly only with `find`,
  *   `findOne` or `count`, its filter and options (or a query's params) 2 KB
@@ -153,7 +153,7 @@ const answer = (output: Output, actor: Actor): Answer =>
 
 /**
  * The most WebSockets one listener holds (Oxian's Node adapter's budget):
- * people, contacts, routes' sockets and, on the orgs host, every org's.
+ * people, contacts, routes' sockets and, behind a directory, every org's.
  */
 export const LISTENER: number = CONNECTION_BUDGET;
 
@@ -162,7 +162,7 @@ export const CONTACT_READ = 2_048;
 
 /**
  * Contacts' connections counted across runtimes that share a listener (the
- * orgs host's orgs), as many as `most` (400 unless said): `contactsPool()`,
+ * a directory's orgs), as many as `most` (400 unless said): `contactsPool()`,
  * given to each runtime (`browsers: { pool }`).
  */
 export type ContactsPool = { readonly held: Set<object>; readonly most: number };

@@ -44,7 +44,7 @@ const mac = async (secret: string, parts: unknown[]): Promise<string> =>
 /** What names a conversation: ChatGPT's session (and user), or a handle the app gave. */
 export type Key = { session: string; subject?: string } | { handle: string };
 
-/** Where a line is: its name, and the org it's for (with the orgs host). */
+/** Where a line is: its name, and the org it's for (behind a directory). */
 export type Scope = { line: string; org?: string };
 
 /** The contact a conversation is, and its chat. */

@@ -15,13 +15,18 @@
  *   knowing nothing of why.
  * - **One plugin's each:** a name is the first plugin's to set or clear it;
  *   another may only when one of the two builds on the other (`requires`),
- *   as Google's sign-in sets identity's session. Anything else is refused:
- *   a mistake in a plugin's code, so it throws, and the request is a 500.
+ *   as Google's sign-in sets identity's session, or both build on the same
+ *   one (Google's and dev sign-in's, and the directory's sign-out, all set
+ *   or clear identity's). Anything else is refused: a mistake in a plugin's
+ *   code, so it throws, and the request is a 500.
  * - **Attributes:** always `HttpOnly`; `SameSite=Lax` unless the plugin asks
  *   for `Strict` (a site visitor's, which only the app's own pages send).
  *   Clearing a cookie goes by the same name and attributes.
- * - **Values:** cookie-safe secrets of 16 to 512 characters, anything else
- *   refused; a cookie holding anything else reads as none.
+ * - **Values:** up to 512 cookie-safe characters (letters, digits and
+ *   `._~+/=-`), anything else refused; a cookie holding anything else reads
+ *   as none. A credential's secret is its plugin's to make long (identity's
+ *   sessions are); a value that's no secret (which org a browser is in) may
+ *   be short.
  * - **Never kept:** a response that sets or clears one is `no-store`.
  */
 import type { Cookies, Resources } from "./define.ts";
@@ -36,11 +41,11 @@ export type CookieSettings = { names?: Record<string, string>; suffix?: string }
 /** A cookie's name, before or after renaming: letters, digits, `-` and `_`. */
 const NAME = /^[A-Za-z0-9_-]{1,64}$/;
 /** What a cookie's value may be: plain characters, so it never ends the header. */
-const SECRET = /^[A-Za-z0-9._~+/=-]{16,512}$/;
+const VALUE = /^[A-Za-z0-9._~+/=-]{1,512}$/;
 
-/** Whether a secret is one a cookie can keep as it is. */
-export const cookieSafe = (secret: unknown): secret is string =>
-  typeof secret === "string" && SECRET.test(secret);
+/** Whether a value is one a cookie can keep as it is. */
+export const cookieSafe = (value: unknown): value is string =>
+  typeof value === "string" && VALUE.test(value);
 
 /** How long a cookie lasts, unless the plugin says: 30 days. */
 const DAYS = 30;
@@ -93,8 +98,8 @@ const header = (
 
 /**
  * Which plugin set or cleared each name first, for a runtime, and whether two
- * plugins are related (one `requires` the other): only a related plugin may
- * set another's.
+ * plugins are related (one `requires` the other, or both the same one): only
+ * a related plugin may set another's.
  */
 export type CookieOwners = {
   owners: Map<string, string>;
@@ -135,7 +140,7 @@ export function cookiesFor(
     },
     set: (name, secret, options = {}) => {
       if (!cookieSafe(secret)) {
-        throw wrong(`Cookie "${name}": its value is 16 to 512 cookie-safe characters`);
+        throw wrong(`Cookie "${name}": its value is 1 to 512 cookie-safe characters`);
       }
       const days = options.days ?? DAYS;
       if (typeof days !== "number" || !(days > 0)) {

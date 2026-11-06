@@ -1,7 +1,8 @@
 /**
- * Hosts orgs claim (see collections/org-host.ts), as the orgs host asks for
- * an org's runtime (its `directory` resource's `claimHost`, `releaseHost`).
- * The system's: the host has checked the host isn't the app's own.
+ * Hosts orgs claim (see collections/org-host.ts), as an org's runtime asks
+ * (its `directory` resource's `claimHost`, `releaseHost`: see
+ * shared/member.ts). The system's: `member` has checked the host isn't the
+ * app's own.
  *
  * - `host.claim` `{ org, host, target? }`: the host is the org's (again:
  *   its target changes); refused when it's another org's;

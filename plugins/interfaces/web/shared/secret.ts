@@ -47,7 +47,7 @@ const same = (a: string, b: string) => {
 
 /**
  * Where a secret is good: the app's secrets (its own first, then the one
- * before it), and the org it's for (with the orgs host).
+ * before it), and the org it's for (behind a directory).
  */
 export type Keyring = { secrets: string[]; org?: string };
 

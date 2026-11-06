@@ -10,32 +10,34 @@
  */
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import {
-  answerOrgInvite,
-  arrived,
   Avatar,
   Badge,
   Button,
-  createOrg,
   Dialog,
-  enterOrg,
   Field,
   Icon,
   Input,
   message,
   Notice,
-  type Org,
-  type OrgInvite,
-  orgName,
-  type Orgs,
   type PaletteGroup,
   type PaletteItem,
   type PaletteStep,
   Popover,
   Spinner,
-  type Switching,
   Time,
-  useSwitching,
 } from "../../../../hosts/web/mod.ts";
+import {
+  answerOrgInvite,
+  arrived,
+  createOrg,
+  enterOrg,
+  type Org,
+  type OrgInvite,
+  orgName,
+  type Orgs,
+  type Switching,
+  useSwitching,
+} from "../../../access/directory/contract.ts";
 import { orgRoleName, runs, type Standing, standingName } from "../shared/orgs.ts";
 
 /** An org's face: yours (Personal) is you; a team's, its initials. */

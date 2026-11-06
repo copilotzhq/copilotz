@@ -5,7 +5,7 @@
  * nothing routes there yet), claimed again with its target once it's live
  * (the front then sends the host straight to its service), and released
  * when it's removed. An org's runtime reaches the directory through the
- * orgs host's `directory` resource; a single runtime (development) has
+ * `directory` resource (`directory.member`); a single runtime (development) has
  * none, claims nothing, and its own records keep labels apart.
  *
  * `claimHost` refuses (`forbidden`) another org's host, and the app's own.

@@ -10,7 +10,8 @@
  */
 import { type ReactNode, useEffect, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
-import { Button, IconButton, Notice, useOrgs } from "../../../../../hosts/web/mod.ts";
+import { Button, IconButton, Notice } from "../../../../../hosts/web/mod.ts";
+import { useOrgs } from "../../../../access/directory/contract.ts";
 import { type Notice as Said, noticeKey, noticeSaid } from "./numbers.ts";
 import { STYLE } from "./style.ts";
 

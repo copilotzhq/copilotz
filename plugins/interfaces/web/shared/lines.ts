@@ -154,7 +154,7 @@ export const sitesOf = (ctx: { resources: Resources }): WebSettings =>
     Object.entries((ctx.resources.web ?? {}) as WebSettings).filter(([, site]) => site),
   );
 
-/** The org this runtime is, with the orgs host. */
+/** The org this runtime is, behind a directory. */
 const orgOf = (ctx: { resources: Resources }) =>
   (ctx.resources.org as { id?: string } | undefined)?.id;
 

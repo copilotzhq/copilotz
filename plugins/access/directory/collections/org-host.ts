@@ -1,8 +1,9 @@
 /**
  * Hosts orgs claimed (`abc123-preview.copilotz.app`, an app's own): the
- * orgs host serves a request to one with that org's routes, and the app's
- * front sends it straight to `target` when there's one (an app running
- * elsewhere: its Cloud Run URL). A host is one org's at a time.
+ * directory hands a request to one to that org's routes by host (see
+ * routes/forward.ts), and the app's front sends it straight to `target`
+ * when there's one (an app running elsewhere: its Cloud Run URL). A host is
+ * one org's at a time.
  */
 import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
 

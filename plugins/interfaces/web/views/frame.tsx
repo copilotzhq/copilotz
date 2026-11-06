@@ -25,7 +25,6 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
-  asStaff,
   Button,
   closePalette,
   Drawer,
@@ -37,8 +36,8 @@ import {
   Palette,
   type PaletteGroup,
   signOut,
-  useOrgs,
 } from "../../../../hosts/web/mod.ts";
+import { asStaff, useOrgs } from "../../../access/directory/contract.ts";
 import { apple, opens, type PaletteSource, shortcutOf } from "../shared/palette.ts";
 import { toggleLabel } from "../shared/panel.ts";
 import type { UserMenuEntry } from "../shared/menu.ts";

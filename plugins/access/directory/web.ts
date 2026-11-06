@@ -1,22 +1,26 @@
 /**
- * Orgs, for the browser: what the server says of the orgs the signed-in
- * person belongs to, when it serves many behind one address (the directory's),
- * and going between them. A server that serves one org has none of this, and
- * `useOrgs()` says so (`none`): the shell then shows no switcher.
+ * The directory's web part, for the browser: what the directory's routes say
+ * of the orgs the signed-in person belongs to, when the app serves many
+ * behind one address, and going between them. An app that serves one org
+ * has none of this, and `useOrgs()` says so (`none`): the shell then shows
+ * no switcher. Other plugins' front ends (the shell's switcher, the org
+ * page, staff's console) import it through the directory's contract.ts.
  *
  * - `useOrgs()`: who's signed in, the org they're in, their orgs (the last
  *   entered first), the invitations waiting for them, and whether they're
  *   platform staff; `refreshOrgs()` asks again (after renaming one).
  * - `enterOrg`, `createOrg`, `answerOrgInvite`: each goes into an org (the
- *   server swaps the session), and the page starts over at that org's home,
- *   after a short transition (`useSwitching()`, which the shell shows).
+ *   directory hands the person to it, which sets its session), and the page
+ *   starts over at that org's home, after a short transition
+ *   (`useSwitching()`, which the shell shows).
  * - Staff's console: `consoleOrgs()`, `updateOrg(id, { suspended?, name? })`,
  *   `moveOrg(id, schema)`, `exportOrgUrl(id)` (its rows, as SQL, to save)
  *   and `deleteOrg(id, name)` (its exact name confirms it). An app that
  *   doesn't do one says so (`unsupported`). Gift codes: `giftCodes()`,
  *   `createGiftCode(...)` (the code itself, this once) and `revokeGiftCode(id)`.
  *
- * It's the page's own HTTP, same origin, with the cookies the server set.
+ * It's the page's own HTTP, same origin, with the cookies the directory set
+ * (see routes/orgs.ts and routes/console.ts).
  */
 import { useSyncExternalStore } from "react";
 

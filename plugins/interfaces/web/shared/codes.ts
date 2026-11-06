@@ -2,7 +2,7 @@
  * Gift codes in staff's console, as words: where each stands, and what a person
  * types turned into what's asked for. Pure.
  */
-import type { GiftCode } from "../../../../hosts/web/mod.ts";
+import type { GiftCode } from "../../../access/directory/contract.ts";
 
 export type CodeStatus = "waiting" | "claimed" | "revoked" | "expired";
 

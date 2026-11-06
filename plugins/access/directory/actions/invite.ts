@@ -1,6 +1,6 @@
 /**
- * Invitations to orgs, by email: the org's admins send them (through the
- * host, which asks the directory), the person with that verified email sees
+ * Invitations to orgs, by email: the org's admins send them (their org's
+ * runtime asks the directory, see shared/member.ts), the person with that verified email sees
  * theirs when they sign in, and accepting one makes them belong, with the
  * invitation's role for their first entering. All are the system's.
  */

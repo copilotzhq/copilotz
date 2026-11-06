@@ -36,6 +36,10 @@
  *   of trips after the answer that found them), each once per chat per key,
  *   recorded in `shown` (`chat.shown`), and told to the model after that
  *   answer (`[then shown: …]`). A choice tapped comes with its id (`tap`).
+ * - A conversation moves in from another app as it was (`chat.import`,
+ *   the system's): its thread in a space, its title, and its messages with
+ *   who said them, their files and when, under the importer's ids, so
+ *   importing again replaces what it made. Nothing runs.
  * - Threads record where they came from (`parent`). A fork (a subthread) sees
  *   its parent's conversation up to the message it started at, through every
  *   level, without copying it; a new thread starts from its first message.
@@ -70,6 +74,7 @@
 import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
 import { eraseAction } from "./actions/erase.ts";
 import { forkAction } from "./actions/fork.ts";
+import { importAction } from "./actions/import.ts";
 import { moveAction } from "./actions/move.ts";
 import { openAction } from "./actions/open.ts";
 import { quietAction } from "./actions/quiet.ts";
@@ -138,6 +143,7 @@ export const chat: Plugin = definePlugin({
     "chat.fork": forkAction,
     "chat.stop": stopAction,
     "chat.move": moveAction,
+    "chat.import": importAction,
   },
   events: { "turn.requested": turnRequested },
   resources: {

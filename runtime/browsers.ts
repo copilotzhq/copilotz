@@ -3,8 +3,9 @@
  * an untrusted worker bound to its person. Every read, call and emit it makes
  * is that person's, under the rules, without secret fields.
  *
- * - **Admission:** the host's `admit` turns what a browser presents (a
- *   one-time ticket) into its person; the person rides on the connection.
+ * - **Admission:** the runtime's tickets (`POST /connect`, see tickets.ts
+ *   and fetch.ts) turn what a browser presents (a one-time ticket) into its
+ *   actor; the actor rides on the connection.
  * - **What it asks** (calls of its own, outside any job): reads, which are
  *   watched from then on; writes to a collection, as its own (see
  *   `admitted` and `writeOutside`, owner.ts: only where a rule speaks for

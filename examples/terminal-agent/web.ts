@@ -13,7 +13,7 @@
  *
  *   [BRAND=harbor] deno task web [--port=8790] [--sqlite[=path]]
  */
-import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
+import { parseArgs } from "@std/cli/parse-args";
 import { createRuntime, definePlugin, type Plugins } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";

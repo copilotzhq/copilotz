@@ -3,7 +3,7 @@
  *
  * - `spaces`: spaces, members, reach, and the rules every collection that
  *   shares its documents keeps to;
- * - `identity`: people, sessions and keys, and who a secret proves;
+ * - `identity`: people and their sessions, and who a secret proves;
  * - `contacts`: people outside the org who talk to its agents (a WhatsApp
  *   customer), each in chats shared with them alone;
  * - `googleSignIn`: sign-in with a Google ID token (the `google` resource

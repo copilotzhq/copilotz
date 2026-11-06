@@ -90,7 +90,7 @@ export type DeclaredSite = {
    * An Action of the app's that a newcomer must pass to be let in (a
    * CAPTCHA's check: Turnstile's, hCaptcha's): asked as the system with
    * `{ line, answer }`, where `answer` is what the page sent coming in
-   * (`web({ arrive: { line, challenge } })`'s `challenge`), it answers true
+   * (`web({ arrive: { name, challenge } })`'s `challenge`), it answers true
    * to let them in. One back with its cookie isn't asked again.
    */
   challenge?: string;

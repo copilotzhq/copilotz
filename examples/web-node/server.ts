@@ -11,7 +11,7 @@
  *
  * An app on the npm package writes the same with its names: `copilotz`,
  * `copilotz/stores/memory`, `copilotz/web/server`
- * and `copilotz/web/node` (see the README, "Serve it on Node").
+ * and `copilotz/web/node` (see the README, "Serve it on the web").
  */
 import { mkdirSync } from "node:fs";
 import process from "node:process";

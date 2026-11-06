@@ -1,7 +1,7 @@
 /**
  * A connected number's webhook (`/hooks/whatsapp/<number>`), as Meta calls
  * it; or a number the app declares, at `/hooks/whatsapp/<name>` or the path
- * the app routes here (`routes: { "/webhooks/meta": whatsappHook }`).
+ * the app routes here (`routes: { "/webhooks/meta": hookRoute }`).
  *
  * - `GET`, when the webhook is set up: Meta shows the number's verify token
  *   and a challenge, which goes back as it came.

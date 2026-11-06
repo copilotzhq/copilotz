@@ -24,7 +24,7 @@
  *   deno task chat --sqlite        persist to .data/copilotz.sqlite (or --sqlite=path)
  *   deno task chat --postgres=URL  persist to PostgreSQL (schema "copilotz")
  */
-import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
+import { parseArgs } from "@std/cli/parse-args";
 import { serve } from "@oxian/oxian-js/adapters/deno";
 import { createMetrics, createRuntime, definePlugin, type Event } from "../../runtime/mod.ts";
 import { otlp, text } from "../../exporters/mod.ts";

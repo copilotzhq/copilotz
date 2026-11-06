@@ -8,7 +8,7 @@
  * The owner keeps its executor key in .data/executor.key; executors on this
  * machine read it from there (or from COPILOTZ_EXECUTOR_KEY). Start them in any order.
  */
-import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
+import { parseArgs } from "@std/cli/parse-args";
 import { createExecutor } from "../../runtime/mod.ts";
 import { EXECUTORS, KEY_FILE, plugins } from "./app.ts";
 

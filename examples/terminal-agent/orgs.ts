@@ -15,7 +15,7 @@
  * Sign in by name on this machine (`ana@example.com`), or with Google when
  * GOOGLE_CLIENT_ID is set.
  */
-import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
+import { parseArgs } from "@std/cli/parse-args";
 import {
   createRuntime,
   definePlugin,

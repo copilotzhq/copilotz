@@ -24,8 +24,8 @@ deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 
 On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.24"`),
 and the imports below are the same everywhere. Some pieces need a package of their own, installed
-beside it: `esbuild` to bundle the web host on Node, `@electric-sql/pglite` for PostgreSQL in the
-process, and `@types/react` for the front ends' types.
+beside it: `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for
+PostgreSQL in the process, and `@types/react` for the front ends' types.
 
 ## A first app
 
@@ -60,7 +60,7 @@ await runtime.close();
 `node app.ts` (or `bun app.ts`, `deno run -A app.ts`) prints the question and the agent's answer.
 Swap `memoryStore()` for `sqliteStore({ path })` or `postgresStore({ url })` to keep it, add
 `history` and `memory` to the plugins for long conversations and recall across them, `access` for
-people and spaces, and serve it to browsers with the web host (below).
+people and spaces, and serve it with `runtime.fetch` (below).
 
 ## The primitives
 
@@ -83,6 +83,11 @@ The runtime knows only these, and plugins are made of them:
 - **Adapters:** implementations of a port, by name: a model provider's protocol (`openai`,
   `anthropic`…), an embeddings or transcription service.
 
+Outside, the runtime speaks web standards: `runtime.fetch` answers HTTP (`Request` in, `Response`
+out), a plugin's **routes** are plain functions on that (a webhook, a sign-in), and its **`who`**
+says which actor a request is, from a credential it knows (a session's cookie, a key). Routes deal
+with HTTP; Actions do the work.
+
 Plugins reach each other only through the runtime, by name: Actions, resource kinds and declared
 events. Time is a caller too: schedules call Actions (see Schedules).
 
@@ -90,43 +95,41 @@ events. Time is a caller too: schedules call Actions (see Schedules).
 
 The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`):
 
-| Import                                 | What it has                                                                                                      |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineCollection`, `defineAction`…                                |
-| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference                                                                        |
-| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                                                 |
-| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`…     |
-| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                   |
-| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                             |
-| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                                  |
-| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account        |
-| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                                 |
-| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`        |
-| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                  |
-| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                      |
-| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `accounts`, `directory`, `googleSignIn`                             |
-| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`                                                                        |
-| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                 |
-| `copilotz/plugins/billing`             | `usage`: the ledger                                                                                              |
-| `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                       |
-| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                  |
-| `copilotz/plugins/compute`             | `computers`: people's computers, where agents work                                                               |
-| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                   |
-| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                              |
-| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                    |
-| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `maintenance`                         |
-| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                        |
-| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                        |
-| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`…)        |
-| `copilotz/web/server`                  | its server half: `webServer`, `socket`, `widgetsOf`; the `Entrance`, `SignIn` and `Route` shapes plugins declare |
-| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (`widget`, MCP Apps, ChatGPT)                    |
-| `copilotz/web/tickets`                 | `createTickets`: sessions traded for one-time tickets                                                            |
-| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                  |
-| `copilotz/web/node`                    | `bundle` (the browser's code, with esbuild), `serve` (the one host), `listen` (HTTP, sockets)                    |
-| `copilotz/orgs`                        | `orgsHost`: many orgs behind one address, each a runtime of its own                                              |
-| `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                                  |
-| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                         |
-| `copilotz/testing`                     | one test API for Deno, Node and Bun (`test`, `tempDir`, `serve`…)                                                |
+| Import                                 | What it has                                                                                                       |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, `runtimes`, `connect` (the client)…                 |
+| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference                                                                         |
+| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                                                  |
+| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`…      |
+| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                    |
+| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                              |
+| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                                   |
+| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account         |
+| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                                  |
+| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`         |
+| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                   |
+| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                       |
+| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `accounts`, `directory`, `googleSignIn`, `devSignIn`                 |
+| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`, and the directory's browser half (`useOrgs`, `enterOrg`…)              |
+| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                  |
+| `copilotz/plugins/billing`             | `usage` (the ledger), `credits`, `stripe`, `stripeWebhook`                                                        |
+| `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                        |
+| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                   |
+| `copilotz/plugins/compute`             | `computers`: people's computers, where agents work                                                                |
+| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                    |
+| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                               |
+| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                     |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance` |
+| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                         |
+| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                         |
+| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`…)         |
+| `copilotz/web/server`                  | its server half: `webPage` (the page, as a plugin), `widgetsOf`                                                   |
+| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (`widget`, MCP Apps, ChatGPT)                     |
+| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                   |
+| `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)  |
+| `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                                   |
+| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                          |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun (`test`, `tempDir`, `serve`, `testWho`, `ticketFor`…)                         |
 
 The browser loads only `copilotz/web`, the `…/web` front ends and what they import; every other
 entry point is for the process that runs the runtime (or the terminal). The npm package is
@@ -134,60 +137,132 @@ JavaScript with its types beside it, so an app's bundler takes the front ends as
 
 ## Serve it on the web
 
-One host serves every app: `serve` (on Node, Bun and Deno; `webServer` beneath it is a fetch handler
-for any runtime). What it does comes from the app's plugins, so the same call serves a signed-in
-workspace, a public site where visitors chat with an agent, or a WhatsApp app with no page at all:
+The runtime answers HTTP itself. `runtime.fetch(request)` is a fetch handler: a function from a
+web-standard `Request` to a `Response`, for every request the app gets. A host only listens and
+calls it, and knows no plugin:
 
-| Part                                         | Comes from                                                                               | Without it                         |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------- |
-| Routes: webhooks, APIs, sockets of their own | the `routes` resource                                                                    | —                                  |
-| The page and its code                        | `code`: the app's front ends, its shell among them, bundled                              | no page: the routes, and `/health` |
-| Who a browser is                             | the `entrances` resource: identity's session (a person), web sites (a visitor)           | nobody                             |
-| Browsers connecting                          | `tickets`, for whoever an entrance says a request is                                     | no browser connects                |
-| Signing in (`POST /signin/<name>`)           | the `signIn` resource: `googleSignIn` (`google`), `devSignIn` (`dev`, this machine only) | none                               |
+```ts
+Deno.serve({ port: 8080 }, runtime.fetch); // Deno
+const server = await listen(runtime.fetch, { port: 8080 }); // Node and Bun: copilotz/web/node
+export default { fetch: runtime.fetch }; // workerd (Cloudflare Workers)
+```
 
-The host keeps every cookie: httpOnly, so the page's code never sees a session's secret, and
-`Secure` anywhere but over plain http to this machine or one on its network (a private address, a
-`.local` name), the session's named `__Host-session` there, so no other host under the domain (a
-preview's) can set one. A page connects by trading its cookie for a one-time ticket (`/connect`,
-which answers only the app's own page: its `Origin`), then talks to the owner over Oxian as an
-untrusted worker bound to that actor, under the access rules. Signing in by name (`devSignIn`) is
-for this machine only: the socket's address and the host must both be this machine's, with no header
-a proxy adds, and an app whose `links` origin is public doesn't start with it. Signing out ends the
-browsers connected as whoever it was. On Node:
+What it answers comes from the app's plugins, so the same call serves a signed-in workspace, a
+public site where visitors chat with an agent, or a WhatsApp app with no page at all:
+
+| Part                                                       | Comes from                                                                  |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `POST /connect`, the socket (`/oxian`), `/api/`, `/health` | the runtime itself                                                          |
+| Webhooks, APIs, sockets of their own                       | plugins' `routes`                                                           |
+| Who a request is (if nobody says, it's anonymous)          | plugins' `who`: identity's sessions, the api plugin's keys, site visitors   |
+| The page and its code (without it, there's no page)        | the page plugin (`webPage`) and the `page` resource                         |
+| Signing in and out (without them, nobody signs in)         | `googleSignIn`, `devSignIn` (this machine only), identity's `POST /signout` |
+
+**Routes** are plain functions on a plugin, by URL pattern (a `URLPattern` pathname, a web
+standard). Routes deal with HTTP; Actions do the work, given plain data:
+
+```ts
+import { defineAction, definePlugin, type Route } from "copilotz";
+
+const ping: Route = async (request, { runtime }) => {
+  if (request.method !== "POST") return new Response("Only POST", { status: 405 });
+  return Response.json(await runtime.call("relay.ping", { body: await request.text() }));
+};
+
+const relay = definePlugin({
+  name: "relay",
+  actions: {
+    "relay.ping": defineAction({
+      input: { type: "object", properties: { body: { type: "string" } } },
+      run: (_ctx, input) => ({ pong: input.body ?? null }),
+    }),
+  },
+  routes: { "/hooks/ping": ping },
+});
+```
+
+A route gets the request as the browser sent it, on the site it asked for, with the app's base taken
+off its path (`page.base`: under an org's `/o/acme`, `/o/acme/x` is `/x`), and
+`{ runtime, actor, params, cookies }`: the runtime as trusted code (what it calls runs as the
+system, or as the `actor` it names), who the request is, the pattern's parameters
+(`/hooks/whatsapp/:name` gives `params.name`), and its cookies. What a route throws is answered by
+its code (`invalid` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `too_many` 429,
+anything else 500). The more specific pattern is matched first and `/*` last; a later plugin's route
+replaces an earlier one of the same pattern, and `null` removes it. A key that's a whole URL pattern
+with a host (`*://*-preview.*:*/*`) takes every request to the hosts it matches. No route may take
+`/connect`, `/oxian` or anything under `/api`.
+
+**Who** a request is comes from plugins' `who`: a function from the request to an actor, or nothing
+for the next plugin to say. The runtime asks each in plugin order, once per request (what they query
+is kept five seconds); if none answers, the request is anonymous (`{ kind: "anonymous", id: "" }`).
+Apps don't write one: identity, the api plugin and the site chat do. Identity's is the whole of it:
+
+```ts
+who: (_request, { cookies, query }) => {
+  const secret = cookies.get("session");
+  return secret ? query("credential.actor", { secret }) : null;
+},
+```
+
+**Cookies** are the runtime's to name. A route sets and clears its credential's cookie through
+`ctx.cookies` (`get(name)`, `set(name, secret, { days, sameSite })`, `clear(name)`), and no plugin
+writes `Set-Cookie`. Every cookie is httpOnly, on the whole site (`Path=/`, never a `Domain`), and
+`Secure` and named `__Host-<name>` anywhere but over plain http to this machine or one on its
+network (a private address, a `.local` name), so no other host under the domain (a preview's) can
+set one in its place. It's `SameSite=Lax` unless the plugin asks for `Strict` (a visitor's), and a
+response that sets one is never cached. The app renames cookies with a `cookies` resource
+(`{ names: { session: "dir" }, suffix: "_acme" }`), which is how runtimes that share a host keep
+theirs apart.
+
+**A page connects** by trading its cookie for a one-time ticket (`POST /connect`), then talks to the
+owner over its socket (`/oxian`) as an untrusted worker bound to that actor, under the access rules.
+**Requests from other sites are refused:** one that may change something (anything but GET, HEAD and
+OPTIONS), sent by another site's page (its `Origin` or `Sec-Fetch-Site` says so), without an
+`Authorization` header, is a 403, so another site can't sign its visitors in or act with their
+cookies. Webhooks send no `Origin`, and pass. Behind a front of the app's own (a Cloudflare worker),
+the `caller` resource's `front` secret says which requests the front vouches for; the host it
+forwards (`x-forwarded-host`) is then the request's. Signing in by name (`devSignIn`) is for this
+machine only: the socket's address and the host must both be this machine's, with no header a proxy
+adds, and an app whose `links` origin is public doesn't start with it. Signing out (`POST /signout`)
+ends the session, disconnects its browsers and clears the cookie. On Node:
 
 ```ts
 // server.ts
-import { createRuntime } from "copilotz";
+import process from "node:process";
+import { createRuntime, definePlugin } from "copilotz";
 import { memoryStore } from "copilotz/stores/memory";
 import { devSignIn } from "copilotz/plugins/access";
-import { socket } from "copilotz/web/server";
-import { createTickets } from "copilotz/web/tickets";
+import { webPage } from "copilotz/web/server";
 import { themeOf } from "copilotz/web/theme";
-import { bundle, serve } from "copilotz/web/node";
+import { bundle, listen } from "copilotz/web/node";
 import { plugins } from "./app.ts"; // models, chat, access, … and the app's own
 
 // This machine alone, unless HOST says (0.0.0.0: everyone's).
 const hostname = process.env.HOST ?? "127.0.0.1";
-const tickets = createTickets();
 const runtime = await createRuntime({
   store: memoryStore(),
-  // Sign in by name: only while it listens on this machine alone.
-  plugins: [...plugins, ...(hostname === "127.0.0.1" ? [devSignIn] : [])],
-  transports: [socket], // browsers connect to the owner here
-  admit: tickets.admit,
+  plugins: [
+    ...plugins,
+    // Sign in by name: only while it listens on this machine alone.
+    ...(hostname === "127.0.0.1" ? [devSignIn] : []),
+    webPage,
+    definePlugin({
+      name: "page",
+      resources: {
+        // The browser's code, bundled once, on the page's first request.
+        page: { title: "Notes", code: () => bundle(new URL("./browser.tsx", import.meta.url)) },
+        theme: themeOf([]), // Copilotz's look; a brand passes its theme plugins
+      },
+    }),
+  ],
 });
-const server = await serve({
-  runtime,
-  tickets,
-  code: await bundle(new URL("./browser.tsx", import.meta.url)),
-  theme: themeOf([]), // Copilotz's look; a brand passes its theme plugins
-  hostname,
-  port: 8080,
-});
+const server = await listen(runtime.fetch, { hostname, port: 8080 });
 console.log(`${server.url}`);
 // A deploy's SIGTERM: stop listening, give running turns a while, close the runtime.
-process.once("SIGTERM", () => server.close({ drain: 8_000 }));
+process.once("SIGTERM", async () => {
+  await server.shutdown();
+  await runtime.close({ drain: 8_000 });
+});
 ```
 
 ```tsx
@@ -206,35 +281,99 @@ await web({
 });
 ```
 
-`bundle` splits the code where it imports lazily (math, a terminal), and `serve` takes browsers'
-sockets through Oxian's Node adapter, and says where each request came from; Bun and Deno run it
-too. On Deno, `Deno.serve` serves `webServer({ …, upgrade: handler(runtime.hypervisor) })` with
-Oxian's Deno adapter, each request given the address it came from first
-(`setClientAddress(request, info.remoteAddr.hostname)`: without it, no request is this machine's),
-and `deno bundle` makes the code (`examples/terminal-agent/web.ts`). The whole example is in
-`examples/web-node/` (`node examples/web-node/server.ts`). Google sign-in is `googleSignIn` with the
-`google` resource's `clientId`: the page shows its button.
+The page plugin serves the code under `/app/` (split where it imports lazily: math, a terminal), the
+app's own files under `/assets/` (`page.assets`), the manifest and service worker, and the page for
+any other GET a browser navigates to. Its `page` resource is
+`{ code, title?, lang?, assets?, base? }`; `code` is the bundle, or a function that bundles it once,
+so remote executors never hold it. `listen` serves any fetch handler with Node's HTTP server through
+Oxian's Node adapter, sockets included, and tells the runtime the address each request came from
+(`clientAddress`); Bun runs it too. On Deno, `Deno.serve({ hostname, port }, runtime.fetch)` is the
+whole host, and `deno bundle` makes the code (`examples/terminal-agent/web.ts`). The Node example is
+in `examples/web-node/` (`node examples/web-node/server.ts`). Google sign-in is `googleSignIn` with
+the `google` resource's `clientId`: the page shows its button.
 
-Many orgs behind one address (`copilotz/orgs`, see [design/tenancy.md](design/tenancy.md)): a
-directory signs people in (its plugins declare how, as above) and knows their orgs, and each org is
-a runtime of its own, opened when first used. Node takes a socket before any handler runs, so
-`listen` serves the orgs host and hands each socket to the runtime of the org its request is for:
-`listen({ fetch: host.serve, hypervisor: (request) => host.openRuntime(request)?.hypervisor })`
-(`examples/web-node/orgs.ts`).
+Tests need no listener: `await runtime.fetch(new Request("http://localhost/hooks/ping", init))`. To
+connect a client in the process as someone, add `testWho` (from `copilotz/testing`) to the plugins,
+and take its tickets from `/connect` with `ticketFor(runtime, actor)`.
+
+### Many orgs behind one address
+
+The directory (`directory`, see [design/tenancy.md](design/tenancy.md)) is a runtime of its own: it
+signs people in and knows their orgs. Each org is a runtime of its own too, opened when first used
+and closed when idle, by a pool of runtimes (`runtimes`, from `copilotz`). The directory's `fetch`
+is the whole app: its routes answer its own paths (`/orgs`, signing in and out, staff's console) and
+forward everything else, untouched and sockets included, to the org's `runtime.fetch`: by address
+(`/o/<org>/…`), by the browser's `org` cookie, or by a host the org claimed. URLs and cookie names
+are the same as with one runtime, kept apart per org by `directory.member`:
+
+```ts
+import { createRuntime, definePlugin, type Runtime, runtimes } from "copilotz";
+import { memoryStore } from "copilotz/stores/memory";
+import { devSignIn, directory, identity, type OrgInfo } from "copilotz/plugins/access";
+import { webPage } from "copilotz/web/server";
+import { themeOf } from "copilotz/web/theme";
+import { bundle, listen } from "copilotz/web/node";
+import { plugins, storeOf } from "./app.ts"; // the app's plugins, and where an org's rows live
+
+// The page, the same for the lobby and every org (each at its own address).
+const code = await bundle(new URL("./browser.tsx", import.meta.url));
+const page = [
+  webPage,
+  definePlugin({ name: "page", resources: { page: { code }, theme: themeOf([]) } }),
+];
+
+// Each org's runtime, opened on its first use, closed after 30 minutes nobody used it.
+const orgs = runtimes(async (id) => {
+  const org = await dir.query<OrgInfo | null>("org.info", { org: id });
+  if (!org) return undefined;
+  return await createRuntime({
+    store: await storeOf(org),
+    plugins: [...plugins, ...page, directory.member(dir, org)],
+  });
+});
+
+// What someone signed in nowhere gets: the sign-in page.
+const lobby = await createRuntime({ store: memoryStore(), plugins: page });
+
+const dir: Runtime = await createRuntime({
+  store: memoryStore(),
+  plugins: [
+    identity,
+    directory,
+    devSignIn,
+    definePlugin({
+      name: "directory-settings",
+      resources: { directory: { orgs, lobby, staff: ["you@example.com"] } },
+    }),
+  ],
+});
+const server = await listen(dir.fetch, { port: 8080 }); // or Deno.serve(dir.fetch)
+```
+
+Each org's runtime gets from `directory.member` which org it is (`resources.org`), where it's served
+(`page.base`: `/o/<org>`), its cookies' names (`s_<org>` for its session, `<name>_<org>` for the
+rest), and the directory's hooks (invitations, leaving, renaming). Name the app's own hosts
+(`hosts: { own: ["app.example.com"] }`) and any other host is an org's claimed one, answered by its
+host routes alone. Whatever has one address for every org lives in the directory's runtime: Stripe's
+webhook (`stripeWebhook`, with the `stripe` resource's `orgs`), the cloud pool's socket. The whole
+example is `examples/web-node/orgs.ts` (in memory), and `examples/terminal-agent/orgs.ts` on Deno
+(each org a tenant of one Postgres schema, with staff's operations).
 
 ### Visitors
 
-A public site where anyone chats with the app's agent, signed in or not: the web interface's sites
-(`resources.web.<name>`), with the app's secret (`links`), which visitors' cookies are signed with.
-A page that asks to come in by one (`web({ arrive: { line } })`) and isn't anyone yet becomes a
-visitor, its browser keeping a signed secret in an httpOnly, `SameSite=Strict` cookie
-(`__Host-visitor` wherever it's Secure) that is the same visitor for the site's `days` (30). Coming
-in makes and keeps nothing: the visitor's first message (`chat.send`, naming no chat) makes it a
-contact in the site's space, with a chat of its own, answered by the site's agent. Someone signed in
-comes in as themselves. A visitor reaches what any contact does: their chat, what's said and filed
-there (`/files/<id>` too), never the agent's private steps (its tools' calls, with what each
-returned, nor a step's words before it's known to be an answer), and nothing else. Its page reads
-what it names of its own (its chat's messages by `thread`; its chats by its memberships, `member`
+A public site where anyone chats with the app's agent, signed in or not: the web interface's site
+chats (`webLines`, from `copilotz/plugins/interfaces`, each declared as `resources.web.<name>`),
+with the app's secret (`links`), which visitors' cookies are signed with. A page that asks to come
+in by one (`web({ arrive: { name } })`) and isn't anyone yet posts to the site chat's route
+(`POST /web/<name>`) before it connects, and becomes a visitor: its browser keeps a signed secret in
+an httpOnly, `SameSite=Strict` cookie (`__Host-visitor` wherever it's Secure), which the site chat's
+`who` reads, and it is the same visitor for the site's `days` (30). Coming in makes and keeps
+nothing: the visitor's first message (`chat.send`, naming no chat) makes it a contact in the site's
+space, with a chat of its own, answered by the site's agent. Someone signed in comes in as
+themselves. A visitor reaches what any contact does: their chat, what's said and filed there
+(`/files/<id>` too), never the agent's private steps (its tools' calls, with what each returned, nor
+a step's words before it's known to be an answer), and nothing else. Its page reads what it names of
+its own (its chat's messages by `thread`; its chats by its memberships, `member`
 `{ member: "contact:<id>" }`): a read that names none is refused, never watched.
 
 Its limits, each refused plainly (429) and only for that caller. Those by address hold for each
@@ -251,20 +390,22 @@ IPv6 /64, its /56 (4) and its /48 (8), so one routed /48 is one site, not 65,536
 | `visitorsPerHour`         | 600      | new visitors who speak (contacts made), on the site                   |
 
 The caller's address is the one the app's front says (the `caller` resource, as MCP's servers take
-it), else the one its socket came from (`serve` and `listen` know it; a listener of your own says it
-with `setClientAddress`); with neither, nobody's let in, and when every visitor comes from one
-private address (a proxy's) the host says so. A site may also have a `budget`: what its visitors'
-turns may be charged a day, in the usage ledger's prices (with the usage plugin); past it, they wait
-for tomorrow. And a `challenge`: an Action of the app's that checks what the page answered coming in
-(a CAPTCHA's token: `web({ arrive: { line: "site", challenge: token } })`), asked before a
-newcomer's let in. A message says 4,096 characters at most; files only on a site that takes them
-(`files: { count, bytes }`, 1 of 5 MB unless said), and audio is transcribed (a model's call) only
-with `transcribe: true`. A visitor holds two connections, 32 reads on each, and is told a failure's
-words only when they're for anyone. Erasing the contact (`contact.forget`) ends its cookie and its
-connections at once, and so does removing its site; what's past (counters, records, a contact whose
-first message never went in) is collected every ten minutes. To change the app's secret, give the
-old one as `links.previous` for a while: visitors and links it signed are still good. With the orgs
-host, each org's runtime gets its own entries, and its page is the org's, at `/o/<org>/`.
+it), else the one its socket came from (`Deno.serve` and `listen` give it; a listener of your own
+says it with `setClientAddress`, from `copilotz`); with neither, nobody's let in, and when every
+visitor comes from one private address (a proxy's) the runtime warns once. A site may also have a
+`budget`: what its visitors' turns may be charged a day, in the usage ledger's prices (with the
+usage plugin); past it, they wait for tomorrow. And a `challenge`: an Action of the app's that
+checks what the page answered coming in (a CAPTCHA's token:
+`web({ arrive: { name: "site", challenge: token } })`), asked before a newcomer's let in. A message
+says 4,096 characters at most; files only on a site that takes them (`files: { count, bytes }`, 1 of
+5 MB unless said), and audio is transcribed (a model's call) only with `transcribe: true`. A visitor
+holds two connections, 32 reads on each, and is told a failure's words only when they're for anyone.
+Erasing the contact (`contact.forget`) ends its cookie and its connections at once, and so does
+removing its site; what's past (counters, records, a contact whose first message never went in) is
+collected every ten minutes. To change the app's secret, give the old one as `links.previous` for a
+while: visitors and links it signed are still good. With many orgs, each org's runtime declares its
+own sites; a visitor's page is at the org's address (`/o/<org>/`, and it comes in at
+`/o/<org>/web/<name>`), and its cookie is the org's (`visitor_<org>`).
 
 ```ts
 resources: {
@@ -279,50 +420,50 @@ resources: {
 ```tsx
 // The app's own shell for visitors (a chat window): it sends with `chat.send`, naming no chat at
 // first, and reads its chat's messages (by `thread`).
-await web({ root, plugins: [siteShell, chatWeb], arrive: { line: "site" } });
+await web({ root, plugins: [siteShell, chatWeb], arrive: { name: "site" } });
 ```
 
 ### Without the web app
 
-An app people use on WhatsApp or on the phone needs no page: `serve` without `code` (or `tickets`)
-serves its plugins' routes alone (`routes` resources: Meta's webhook, Twilio's), `GET /health` for
-whatever watches it, and 404 for anything else, whatever else its plugins declare. Nobody signs in
-there: a route's Action is called as anonymous (`{ kind: "anonymous", id: "" }`), and its `allow`
-decides (a webhook checks the request's signature, then acts for the person it's from with
-`ctx.as`). Deno and Bun run it too.
+An app people use on WhatsApp or on the phone needs no page: leave the page plugin out, and
+`runtime.fetch` answers its plugins' routes (Meta's webhook, Twilio's), the runtime's own paths,
+`GET /health` for whatever watches it, and 404 for anything else. Nobody signs in there: a webhook's
+request is anonymous, so its route checks the request's signature, then calls its Actions as trusted
+code (the system), which act for the person it's from with `ctx.as`. Deno and Bun run it too.
 
 ```ts
+import process from "node:process";
 import { createRuntime } from "copilotz";
-import { serve } from "copilotz/web/node";
+import { listen } from "copilotz/web/node";
 
 const runtime = await createRuntime({ store, plugins });
-const server = await serve({ runtime, hostname: "0.0.0.0", port: 8080 });
-process.once("SIGTERM", () => server.close({ drain: 8_000 }));
+const server = await listen(runtime.fetch, { hostname: "0.0.0.0", port: 8080 });
+process.once("SIGTERM", async () => {
+  await server.shutdown();
+  await runtime.close({ drain: 8_000 });
+});
 ```
 
-A `serve` route may take a WebSocket of its own (a voice call's relay): `host.upgrade()` accepts the
-request's upgrade, and the route answers with the response it gives. It can refuse first (`403`,
-before any handshake). The socket is a browser's `WebSocket` as far as `onmessage`, `send` and
-`close` go; the listener (`serve`) takes it.
+A route may take a WebSocket of its own (a voice call's relay) with Oxian's `upgradeWebSocket`,
+answering with the response it gives; it can refuse first (`403`, before any handshake). The socket
+is a browser's `WebSocket` as far as `onmessage`, `send` and `close` go; `listen` and
+`Deno.serve(runtime.fetch)` complete the upgrade.
 
 ```ts
+import { upgradeWebSocket } from "@oxian/oxian-js/http"; // on npm, "oxianjs/http"
+
 routes: {
-  relay: {
-    path: "/voice/relay",
-    serve: (request, host) => {
-      if (!signed(request)) return new Response("Forbidden", { status: 403 });
-      const { socket, response } = host.upgrade();
-      socket.onmessage = async (event) => socket.send(await answer(host.runtime, event.data));
-      return response;
-    },
+  "/voice/relay": (request, { runtime }) => {
+    if (!signed(request)) return new Response("Forbidden", { status: 403 });
+    const { socket, response } = upgradeWebSocket(request);
+    socket.onmessage = async (event) => socket.send(await answer(runtime, event.data));
+    return response;
   },
 },
 ```
 
-A runtime that declares the `socket` transport (remote executors) still takes its sockets at
-`/oxian`. `webServer({ runtime })` (`copilotz/web/server`) is the same as a fetch handler, for
-another listener; a route's socket needs Oxian's (`copilotz/web/node`'s). The example is
-`examples/web-node/routes.ts`.
+Remote executors connect to the runtime's own socket (`/oxian`) with its key, through the same
+`runtime.fetch`. The example is `examples/web-node/routes.ts`.
 
 ### From a script: the REST API and the client
 
@@ -351,7 +492,10 @@ writes, `direct`), never `sys.*`; private fields are never returned, filtered by
 write is the caller's own, kept within their reach by the owner's guard, checked by the schema, and
 recorded as its events. Plugins' collections that only their Actions may change say so in their
 rules (spaces and memberships, sessions, keys, messages, routines, computers…). Errors are
-`{ error: { code, message } }` with the status their code says.
+`{ error: { code, message } }` with the status their code says; a credential that proves nobody is a
+401. A key must name its space (`in`) where an Action takes one. A browser on another site may call
+the API with a key (it's a header no page sends by itself); with a session's cookie, only the app's
+own page can.
 
 The client (`connect`, from `copilotz`) is spelled like plugin code's `ctx.db.collection`, over the
 socket or over HTTP; only how `app` is made differs:
@@ -367,6 +511,14 @@ await app.db.collection("booking").updateOne({ _id: "42" }, { $set: { note: "jan
 await app.call("booking.cancel", { id: "42" });
 const stop = app.db.collection("booking").watch({ status: "open" }, (rows) => show(rows));
 ```
+
+`connect(url, { key, over })` takes an org's address too (`https://compass.app/o/acme`). Over the
+socket, it asks `/connect` for a ticket with the key as its `Authorization`, and each line is a
+frame, with watches pushed; over HTTP, each line is a request, and a watch is a server-sent stream.
+Its collections have `find` (then `.toArray()`), `findOne`, `countDocuments`, `insertOne`,
+`updateOne`, `replaceOne`, `deleteOne`, a named `query` and `watch(filter, options?, onChange)`, and
+`app.call(action, input, { id })` gives a call an id of its own (sent again, it answers what the
+first did).
 
 ## Installing a computer
 
@@ -440,16 +592,16 @@ plugins: [
 ```
 
 Inside a theme, each plugin is laid out by primitive: `collections/`, `actions/`, `events/`,
-`processors/`, `views/`, `resources/`, `adapters/`, one file per declaration, with `shared/` for
-what several use; its `mod.ts` only assembles them. Its front ends are its own (`web.tsx`,
-`terminal.ts`), loaded only where they draw, and the theme gathers them (`plugins/agents/web.tsx`).
-Tests sit next to their theme (`plugins/<theme>/tests/`).
+`processors/`, `views/`, `resources/`, `adapters/`, `routes/`, one file per declaration, with
+`shared/` for what several use; its `mod.ts` only assembles them. Its front ends are its own
+(`web.tsx`, `terminal.ts`), loaded only where they draw, and the theme gathers them
+(`plugins/agents/web.tsx`). Tests sit next to their theme (`plugins/<theme>/tests/`).
 
 **A plugin reaches another only through the runtime, by name**, in three ways:
 
 - **ask it to do something:** its Actions (`ctx.call("llm.stream", …)`);
 - **plug into it:** the resource kinds it reads (chat's `tools` and `context`, models' `modelUse`,
-  the terminal's `commands`, the web host's `routes`);
+  the terminal's `commands`, the web shell's `palette`);
 - **hear what it announces:** its declared events, with Processors (`message.created`,
   `turn.requested`).
 
@@ -577,24 +729,32 @@ name, never by importing its code.
   one never says whether the address has an account. Agents are members too, each working only where
   it's one; a new space has the app's default agents. An answer drawn from a space not everyone in
   the conversation can see shows only to those who see both, marked, until someone shares it.
-- **`identity`**: people, sessions and keys, and who a secret proves.
+- **`identity`**: people and their sessions, and who a session's secret proves: its `who` reads the
+  session cookie (`credential.actor`); `POST /signout` ends the session, and `GET /me` says whom the
+  page shows. Sign-in plugins set the cookie with its contract's `signedIn`.
 - **`contacts`**: people outside the org who talk to its agents (a WhatsApp customer). A contact is
   its own kind of actor (`{ kind: "contact", id }`), never a person: every Action and query stays
   shut to it unless it says otherwise (`peopleOrContacts`, as `chat.send` does). Its chat lives in
   the line's space and is shared with it on its own: it reaches that chat, what's said and filed
   there, and nothing else; the space's people reach it as any chat there, and the agent working for
   the contact reaches exactly that chat, never its agents' private steps. Agents are told whom
-  they're talking with. Its web sites (`web.<name>`) let a browser that isn't anyone in as a
-  visitor, a contact once it speaks (see "Visitors").
-- **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client); the
-  web host's page shows its button.
-- **`devSignIn`**: sign-in by name or email, from this machine only, for trying an app out.
+  they're talking with. The web interface's site chats (`webLines`, `web.<name>`) let a browser that
+  isn't anyone in as a visitor, a contact once it speaks (see "Visitors").
+- **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client). Its
+  routes: `POST /signin/google`, which Google's button posts its token to, sets the session's
+  cookie; `GET /google` gives the page the client id for its button.
+- **`devSignIn`**: sign-in by name or email, from this machine only, for trying an app out
+  (`/signin/dev`).
 - **`accounts`**: outside accounts a person connects once, for their agents to use: first their
   ChatGPT plan, as a model provider, instead of the app's API key. Tokens are a private field only
-  the plugin's Actions read, renewed before they run out.
-- **`directory`**: for an app serving many orgs (`copilotz/orgs`, see
+  the plugin's Actions read, renewed before they run out. The provider sends the person back to its
+  route (`GET /accounts/callback/<provider>`), which calls `account.callback` with plain data
+  (`{ provider, code, state }`) as the session's person.
+- **`directory`**: for an app serving many orgs (see "Many orgs behind one address" and
   [design/tenancy.md](design/tenancy.md)): who signs in, which orgs each belongs to, invitations to
-  orgs, where each org lives, and platform staff. It runs in a runtime of its own.
+  orgs, where each org lives, and platform staff. It runs in a runtime of its own, whose routes
+  forward each request to its org's runtime; `directory.member(dir, org)` is what each org's runtime
+  gets of it.
 
 **`billing/`**: what was used, what it cost, what to charge.
 
@@ -658,20 +818,23 @@ filled by the front ends through resources).
 
 - **`api`**: developer keys. A person makes a key in a space, for the Actions, queries, Views and
   collections it may use there (its scope; every key has one); code then calls the runtime's REST
-  API (`/api/`) or its socket with it, as that person, in that space only.
+  API (`/api/`) or its socket with it (`Authorization: Bearer <key>`, which the plugin's `who`
+  reads), as that person, in that space only. A key is a member of its space (`key:<id>`), where its
+  managers see and revoke it.
 - **`whatsapp`**: people talk to their agents from WhatsApp, through Meta's Cloud API. A space's
   managers connect a number; a person links their phone with a code; what they send becomes their
-  messages, and what agents say to them goes back, a long answer in several messages. It has Views
-  of its own (`whatsapp.message`, parts built with its toolkit: text, buttons, a list, a carousel,
-  an image, a document, each checked against Meta's limits): after an answer, features show more
-  (`additions`: a carousel of trips, buttons to pay), once per chat per key, the answer's text in
-  the same message when there's room, a fallback when Meta refuses one; taps come back with their
-  ids. Pictures and files go as public links, signed links to the app's routes or files (the `links`
-  resource, `{ origin, secret }`; the runtime's `signLink`, `verifyLink`), or uploads. Opened to
-  anyone (`whatsapp.set`, or declared in the app's settings: `whatsapp.<name>`), a number is open to
-  customers: a stranger who writes is a contact, in a chat of their own in the number's space,
-  answered by its agent, and a chat quiet for the number's `gap` (12 hours) is over: their next
-  message starts a new one.
+  messages, and what agents say to them goes back, a long answer in several messages. Meta's webhook
+  is its route, `/hooks/whatsapp/<name>`: it checks the signature, then hands the delivery to
+  `whatsapp.receive` as plain data. It has Views of its own (`whatsapp.message`, parts built with
+  its toolkit: text, buttons, a list, a carousel, an image, a document, each checked against Meta's
+  limits): after an answer, features show more (`additions`: a carousel of trips, buttons to pay),
+  once per chat per key, the answer's text in the same message when there's room, a fallback when
+  Meta refuses one; taps come back with their ids. Pictures and files go as public links, signed
+  links to the app's routes or files (the `links` resource, `{ origin, secret }`; the runtime's
+  `signLink`, `verifyLink`), or uploads. Opened to anyone (`whatsapp.set`, or declared in the app's
+  settings: `whatsapp.<name>`), a number is open to customers: a stranger who writes is a contact,
+  in a chat of their own in the number's space, answered by its agent, and a chat quiet for the
+  number's `gap` (12 hours) is over: their next message starts a new one.
 - **`voice`**: people call the app's phone number and talk to its agents, through Twilio's
   ConversationRelay (Twilio hears them and speaks; the app gets and sends text). The app declares
   its numbers (`voice.<name>`: the space, Twilio's account and auth token, the app's public address,
@@ -682,8 +845,9 @@ filled by the front ends through resources).
   what the agent writes for them is said as it writes it (`voice.message`, a View), a caller
   speaking over it cuts it there (the agent is told what was heard), a failed or slow answer says a
   short sentence in the number's language, and silence, a call too long or too many prompts, or the
-  agent's `end_call` end it. Managers block a caller (`voice.block`). Its socket needs a host that
-  takes a route's socket (`serve`).
+  agent's `end_call` end it. Managers block a caller (`voice.block`). Its routes are Twilio's
+  webhook (`/hooks/voice/<name>`) and the call's socket (`/hooks/voice/<name>/relay`), which
+  `listen` and `Deno.serve(runtime.fetch)` carry.
 - **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A server the
   app declares (`mcp.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
   each is shown, who calls, its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP,
@@ -696,10 +860,10 @@ filled by the front ends through resources).
   minute, new conversations an hour, by conversation, user, caller's address and in all) refuse the
   rest. **Widgets** (MCP Apps, ChatGPT's Apps SDK): a tool's calls shown through a web View of the
   app's (`tools.<name>.widget`), drawn inside the assistant by the widget host
-  (`copilotz/web/widget`) in a template the web host makes
-  (`webServer({ widgets: widgetsOf({ code, plugins }) })`), seeded with what the View reads,
-  answered on the server as the conversation's contact (its first paint asks nothing). What only
-  widgets call (`visibility: ["app"]`, or an Action: `{ action }`, a person's tap or form) is
+  (`copilotz/web/widget`) in a template made from the app's `widgets` resource
+  (`widgets: widgetsOf({ code, plugins })`, from `copilotz/web/server`), seeded with what the View
+  reads, answered on the server as the conversation's contact (its first paint asks nothing). What
+  only widgets call (`visibility: ["app"]`, or an Action: `{ action }`, a person's tap or form) is
   refused without the widget's grant, which only results' `_meta` carry (never what the model
   reads); the widget's reads go through the line's `copilotz_read`, queries only. One View serves
   the web and the widget: `surface()`, `display(mode)`, `remind(text)`… from `copilotz/web` are
@@ -860,9 +1024,10 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
   (`maintenance: { connections }`): another answers busy (503).
 - **Where:** SQL needs a SQL store. On a PostgreSQL server only as a role of its own (below) or,
   told so, as the store's own role (below that), never in a schema other tenants share; PGlite, in
-  the app's process, runs it as its one session where it reaches no other schema. An orgs host's
-  orgs don't get the plugin at all (one key would reach every org). Operations, named queries and
-  blobs work everywhere, the memory store too, and need no role.
+  the app's process, runs it as its one session where it reaches no other schema. An org's runtime
+  behind a directory (one with `directory.member`, which says which org it is) doesn't serve it at
+  all: one key would reach every org. Operations, named queries and blobs work everywhere, the
+  memory store too, and need no role.
 
 ### A role of its own
 
@@ -989,6 +1154,7 @@ deno task bench [--rtt=1.74] [--remote] [--sqlite | --postgres=URL]   # overhead
 deno task web [--sqlite]                      # the same app in a browser: http://localhost:8790
 BRAND=harbor deno task web                    # …rebranded by one theme resource (/gallery: the toolkit)
 node examples/web-node/server.ts              # a web app on Node: http://localhost:8080
+node examples/web-node/orgs.ts                # many orgs behind one address, on Node
 ```
 
 You are a person to the runtime (`--as=ana`; `/as bob` hands the terminal to someone else): your
@@ -1185,8 +1351,9 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
 
 - **Library code uses web standards only:** fetch, streams, Web Crypto, `URL`, `AbortSignal`. What
   differs by runtime sits behind the runtime's ports: stores (`stores/`), blobs (`stores/blobs/`),
-  and the transport and listener (Oxian, whose apps are fetch handlers and whose Hypervisor takes
-  fetch-style upgrades; `copilotz/web/node` is the listener on Node).
+  and the transport and listener (Oxian, whose Hypervisor takes fetch-style upgrades). The runtime
+  is a fetch handler itself (`runtime.fetch`): `Deno.serve` serves it as it is, workerd too, and
+  `copilotz/web/node`'s `listen` is the listener on Node and Bun.
 - **Stores pick what the runtime has:** SQLite opens `node:sqlite` on Node and Deno, `bun:sqlite` on
   Bun, or any database with the same small API (`sqliteStore({ path, open })`, such as a Durable
   Object's); Postgres runs on Ominipg (a server, or PGlite); file blobs use `node:fs`.
@@ -1202,7 +1369,8 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
 
 - **The runtime knows only primitives:** plugins (`definePlugin`); Collections (JSON Schema, with
   named queries), Actions, Processors and Views; opaque Resources (named declarations by kind) and
-  Adapters (port implementations). It never knows what a plugin is for.
+  Adapters (port implementations); and, for HTTP, routes and `who`. It never knows what a plugin is
+  for.
 - **Plugins merge in order.** Collections, Actions and Processors are unique. Resources are
   configuration: a later plugin patches an earlier one's entries (JSON Merge Patch: objects merge,
   `null` removes, the rest replaces). A later View or adapter replaces an earlier one of its name.
@@ -1240,29 +1408,29 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   terminal's own history) and where you type (commands complete as you type). The host
   (`hosts/terminal`: `terminal({ runtime, me })`) draws it with Ink: a reply being written grows in
   place, as its own part.
+- **HTTP is the runtime's:** `runtime.fetch` answers every request: its own paths (`POST /connect`,
+  the socket at `/oxian`, the REST API at `/api/`) and plugins' `routes`, plain functions by URL
+  pattern (a webhook, a sign-in, an OAuth callback, a download, a socket of their own), each as
+  whoever plugins' `who` say the request is. Hosts only listen (`Deno.serve(runtime.fetch)`,
+  `listen(runtime.fetch)`); cookies are named and set by the runtime, through `ctx.cookies`.
 - **The web** (see [design/views.md](design/views.md), "The web") runs Views in the browser. The
-  page's cookie (a person's session, a web site's visitor: the `entrances` plugins declare) trades
-  for a one-time ticket (`/connect`), and it connects to the owner over Oxian as an untrusted worker
-  bound to that actor (`web({ plugins, root })` in the browser,
-  `webServer({ runtime, tickets, code,
-  upgrade })` beside the runtime, which declares the `socket`
-  transport). A browser reads a collection directly only when a rule speaks for it; anything else,
-  through queries that let its person. Writes are Actions. Plugins answer their own HTTP through the
-  `routes` resource (a webhook, an OAuth callback, an API, a download, a socket of their own), and
-  files people sent are served at `/files/<id>` to whoever may read them, with ranges.
+  page's cookie (a person's session, a site visitor's) trades for a one-time ticket
+  (`POST /connect`), and it connects to the owner over Oxian as an untrusted worker bound to that
+  actor (`web({ plugins, root })` in the browser; the page plugin, `webPage`, serves the page). A
+  browser reads a collection directly only when a rule speaks for it; anything else, through queries
+  that let its person. Writes are Actions, or direct where a rule speaks for the collection's
+  writes. Files people sent are chat's route, `/files/<id>`, for whoever may read them, with ranges.
 - **The design system** (`design/views.md`, "The design system"): the web host owns a token
   vocabulary (shadcn's names) and its defaults, which are Copilotz's look (navy, the logo's cyan and
   blue, Manrope and Space Grotesk, its logo and icon), and an app rebrands with a `theme` resource
   (`{ radius, font, logo, light: { primary }, dark }`), merged like any resource and applied from
-  the first paint on (`webServer({ theme })` puts it in the page). Front ends compose the host's
-  toolkit (`Button`, `Menu`, `Dialog`, `Markdown`, `Logo`, `Page`, `DetailList`…), and their own CSS
-  is only layout, on the theme's variables (`testing/styles.test.ts` fails otherwise). The default
-  fonts are the host's own, served under `/assets/copilotz/` with no configuration; a theme's own
-  come from Google Fonts (convenient, but every visitor's browser tells Google its IP address: a
-  GDPR concern) or from the app itself
-  (`webServer({ assets: { "/assets/fonts/brand.css": bytes,
-  … } })`, served under `/assets/` only,
-  by exact path, with known types, `nosniff` and caching).
+  the first paint on (the page plugin puts it in the page). Front ends compose the host's toolkit
+  (`Button`, `Menu`, `Dialog`, `Markdown`, `Logo`, `Page`, `DetailList`…), and their own CSS is only
+  layout, on the theme's variables (`testing/styles.test.ts` fails otherwise). The default fonts are
+  the host's own, served under `/assets/copilotz/` with no configuration; a theme's own come from
+  Google Fonts (convenient, but every visitor's browser tells Google its IP address: a GDPR concern)
+  or from the app itself (`page.assets`: `{ "/assets/fonts/brand.css": bytes, … }`, served under
+  `/assets/` only, by exact path, with known types, `nosniff` and caching).
 - **Live state is data:** a collection declared `durable: false` lives in the owner's memory, not
   the store, with no events. Chat's `live` collection is what agents are writing right now; it goes
   in the commit that writes the step or reply it became, so a screen never shows both, or neither.
@@ -1313,7 +1481,9 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
 
 ```
 runtime/        the engine and its ports (Store, Blobs, Exporter, Transport, Clock): define, owner,
-                executor, ops, wire, collection, mongo, the in-memory store; tests/
+                executor, ops, wire, collection, mongo, the in-memory store; its HTTP (fetch,
+                routes, cookies, site, tickets, api for the REST API, rest and client for scripts);
+                runtimes (the pool); tests/
 stores/         where the runtime keeps things: the Store port's implementations (memory, sql/
                 sqlite and postgres with a shared translation, the latency wrapper) and Blobs'
                 (blobs/files, blobs/http, blobs/gcs); tests/ (conformance)
@@ -1329,11 +1499,11 @@ plugins/        the features, by theme
   interfaces/   terminal (where each person is, the shell View), web (the web shell), the developer
                 API, WhatsApp, voice (phone calls), MCP and maintenance; features'
                 own front ends live with them (chat/terminal.ts, chat/web.tsx…), gathered by theme
-hosts/          the media the app is used through: terminal (the Ink host and its toolkit); web
-                (the React host in the browser: theme/, the tokens and their defaults, Copilotz's
-                look and logo, and its fonts and icon, as data the server serves; toolkit/, the
-                components; its server half: sign-in, tickets, the socket, the app's assets; and
-                node/, serving it on Node); orgs (many orgs behind one address, a runtime each)
+hosts/          the places the app is used in: terminal (the Ink host and its toolkit); web (the
+                React host in the browser: theme/, the tokens and their defaults, Copilotz's look
+                and logo, and its fonts and icon, as data the server serves; toolkit/, the
+                components; the sign-in page; its server half, the page as a plugin and the app's
+                assets; and node/, listening and bundling on Node)
 testing/        one test API for Deno, Node and Bun; the layers' import rules (boundaries.test.ts);
                 plugins' CSS keeps to the theme (styles.test.ts)
 design/         agreed designs
@@ -1341,8 +1511,9 @@ scripts/        catalog (refreshes the models.dev snapshot); npm/ (builds the np
                 smoke-tests it installed)
 examples/       terminal-agent (an app: its plugins and resources, run in the terminal host, or in a
                 browser: web.ts serves it on Deno, harbor.tsx and brands.ts the same app as another
-                brand, gallery.tsx the logo, type and toolkit); web-node (a web app on Node, and
-                orgs.ts, many orgs behind one address)
+                brand, gallery.tsx the logo, type and toolkit, orgs.ts many orgs on Postgres);
+                web-node (a web app on Node, routes.ts an app of routes alone, and orgs.ts, many
+                orgs behind one address)
 ```
 
 Each layer imports only what it may (`testing/boundaries.test.ts` fails otherwise): the runtime

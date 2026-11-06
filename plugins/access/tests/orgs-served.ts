@@ -49,7 +49,7 @@ export async function served(options: {
 } = {}): Promise<Served> {
   const opened: [string, string][] = [];
   const stores = new Map<string, Store>();
-    const orgs = runtimes(async (id) => {
+  const orgs = runtimes(async (id) => {
     const org = await dir.query<OrgInfo | null>("org.info", { org: id });
     if (!org) return undefined;
     opened.push([org.id, org.placement.schema]);

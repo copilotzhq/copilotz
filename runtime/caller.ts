@@ -26,7 +26,7 @@
  * it's believed. A header anyone may send is believed only from the front:
  *
  * - `front`: the front's secret, which it sends in `x-copilotz-front` (the
- *   web host's own front header). A request without it came around the
+ *   header the runtime trusts its front by, see site.ts). A request without it came around the
  *   front, straight to the app: it's refused.
  * - `hops`: for a list the app's own proxies append to (`x-forwarded-for`:
  *   Cloud Run's appends the address it saw), the entry that many from the
@@ -55,7 +55,7 @@ export type CallerSettings = { header: string; front?: string; hops?: number };
 export const callerOf = (ctx: { resources: Record<string, unknown> }): CallerSettings | undefined =>
   ctx.resources.caller as CallerSettings | undefined;
 
-/** The header the web host's front carries its secret in. */
+/** The header the app's front carries its secret in (as site.ts reads it). */
 const FRONT = "x-copilotz-front";
 
 /** Headers that hold a list of addresses, each proxy appending its own: they need `hops`. */

@@ -2,8 +2,9 @@
  * Identity: who people are and what proves it. People sign in with a
  * method (a plugin, such as Google's), which makes a session. (Code acting
  * as someone calls with a developer key, the api plugin's: every key has a
- * scope.) Hosts ask who a secret proves once per connection, and act as
- * that:
+ * scope.) Who a secret proves is `credential.actor`: this plugin's `who`
+ * asks it for a request's session cookie (the runtime keeps the answer a
+ * few seconds), and trusted code may ask it too, then act as that:
  *
  * ```ts
  * const actor = await runtime.query("credential.actor", { secret });  // null: nobody

@@ -48,7 +48,7 @@ type Settings = {
   timeout: number;
   bytes: number;
   log: (line: MaintenanceLog) => void;
-  /** An orgs host's org: maintenance doesn't serve one (one key would reach every org). */
+  /** An org's runtime (`resources.org`): not served (one key would reach every org). */
   org: boolean;
 };
 
@@ -329,7 +329,7 @@ const within = (value: unknown, bytes: number) => {
 export const serveMaintenance: Route = async (request, { runtime }) => {
   try {
     const settings = settingsOf(runtime.describe().resources);
-    // No key, or an orgs host's org: as unauthorized as a wrong key, so nothing says it's here.
+    // No key, or an org's runtime: as unauthorized as a wrong key, so nothing says it's here.
     const given = bearer(request);
     const key = given && settings.keys.length && !settings.org
       ? await keyOf(given, settings.keys)

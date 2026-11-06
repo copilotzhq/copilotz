@@ -1,61 +1,532 @@
 ## Unreleased
 
-**Upgrading from rc.24** (settings shapes; nothing else needs doing):
+**Upgrading from rc.24.** The runtime now answers HTTP itself. `runtime.fetch(request)` is a fetch
+handler (a function from a web-standard `Request` to a `Response`) that every host calls; plugins
+declare their HTTP as `routes` (plain functions by URL pattern) and say who a request is with `who`
+(a function from a request to an actor, or nothing); the runtime names and sets every cookie; the
+page is a plugin (`webPage`); and many orgs are the directory's routes, forwarding each request to
+its org's runtime. Every URL, webhook path and cookie name stays as it was, so nobody signs in
+again. Developer keys made before stop working: make them again (step 7). The steps, in order:
 
-1. **`ctx.fetch`:** plugin code calls outside services through `ctx.fetch` (the platform's `fetch`,
-   or the one `createRuntime({ fetch })` gives, as `clock` is replaced in tests). Gone: the
-   `whatsapp.graph` setting, Stripe's `settings.fetch` (`stripeWebhook` takes `fetch` instead),
-   `googleKeys(fetcher)` and openapi's `fetch` setting: tests pass a fake `fetch` to
-   `createRuntime`.
-2. **Flat settings:** each interface plugin's resource is a map of what the app declares, by name,
-   with no `lines` key: `whatsapp: { vendas: { in, phoneId, … } }`, `voice: { central: { … } }`,
-   `mcp: { chatgpt: { … } }`, `web: { site: { … } }`. `web.caller` and `mcp.caller` are one `caller`
-   resource; `caller.exempt` is the MCP server's own `exempt`; `voice.keep` is each number's `keep`;
-   `mcp.atOnce`, `whatsapp.codeMinutes` and `whatsapp.maxFileMb` are gone (limits per server;
-   constants); a declared entry's `org` is gone (each org's runtime gets its own entries). Types:
-   `WhatsAppLine` is `DeclaredNumber`, `VoiceLine` `DeclaredVoiceNumber`, `McpLine`
-   `DeclaredServer`, `WebLine` `DeclaredSite`; `McpCaller` is gone (`CallerSettings`). Webhook paths
-   don't change.
+1. **Composition: the page is a plugin, and the runtime takes no browser options.** Drop
+   `transports: [socket]` and `admit: tickets.admit`: the runtime keeps its own one-time tickets and
+   takes its own socket at `/oxian`. Add `webPage` (from `copilotz/web/server`) with a `page`
+   resource. What `serve` and `webServer` took as options are resources now: `code`, `title`,
+   `lang`, `assets` and `base` go in `page`; `theme` in `theme`; `front: { secret }` is the `caller`
+   resource's `front` (beside its `header`); `widgets` go in `widgets`. `code` may be a function
+   that bundles once, on the page's first request.
 
+   ```ts
+   // rc.24
+   const tickets = createTickets(); // copilotz/web/tickets
+   const runtime = await createRuntime({
+     store,
+     plugins: [...plugins, devSignIn],
+     transports: [socket], // copilotz/web/server
+     admit: tickets.admit,
+   });
+
+   // now
+   const runtime = await createRuntime({
+     store,
+     plugins: [
+       ...plugins,
+       devSignIn,
+       webPage,
+       definePlugin({
+         name: "page",
+         resources: {
+           page: { title: "Notes", code: () => bundle(new URL("./browser.tsx", import.meta.url)) },
+           theme: themeOf([]),
+         },
+       }),
+     ],
+   });
+   ```
+
+2. **Serving: a listener calls `runtime.fetch`.** On Node and Bun, `listen(runtime.fetch, options)`
+   from `copilotz/web/node` replaces `serve({ runtime, tickets, code, … })`. It answers a
+   `Listener`, whose `shutdown()` stops listening, and you close the runtime yourself
+   (`runtime.close({ drain })`). On Deno, `Deno.serve(runtime.fetch)` replaces serving
+   `webServer({ …, upgrade })` with Oxian's Deno handler, and needs no `setClientAddress`: the
+   runtime reads the socket's address from what `Deno.serve` hands it. On workerd,
+   `export default { fetch: runtime.fetch }`. Bun's own `Bun.serve({ fetch: runtime.fetch })` serves
+   requests but not the runtime's socket, so use `listen` there.
+
+   ```ts
+   // rc.24
+   const server = await serve({ runtime, tickets, code, theme, port: 8080 });
+   process.once("SIGTERM", () => server.close({ drain: 8_000 }));
+
+   // now
+   const server = await listen(runtime.fetch, { port: 8080 });
+   process.once("SIGTERM", async () => {
+     await server.shutdown();
+     await runtime.close({ drain: 8_000 });
+   });
+   ```
+
+3. **Settings: flat named entries, one `caller`, and `ctx.fetch`.** Each interface plugin's resource
+   is a map of what the app declares, by name, with no `lines` key. `web.caller` and `mcp.caller`
+   are one `caller` resource. `caller.exempt` is the MCP server's own `exempt`, `voice.keep` each
+   number's `keep`, and `mcp.atOnce` each server's `limits.atOnce`; `whatsapp.codeMinutes` and
+   `whatsapp.maxFileMb` are constants now, and a declared entry's `org` is gone (each org's runtime
+   declares its own). Types: `WhatsAppLine` is `DeclaredNumber`, `VoiceLine` `DeclaredVoiceNumber`,
+   `McpLine` `DeclaredServer`, `WebLine` `DeclaredSite`, and `McpCaller` `CallerSettings`. Plugin
+   code calls outside services through `ctx.fetch` (step 10), so the `whatsapp.graph` setting,
+   Stripe's `settings.fetch`, `googleKeys(fetcher)`'s argument and openapi's `fetch` setting are
+   gone.
+
+   ```ts
+   // rc.24
+   resources: {
+     web: {
+       caller: { header: "cf-connecting-ip", front },
+       lines: { site: { in: "visitors", agent: "guide" } },
+     },
+     whatsapp: {
+       lines: { vendas: { in: "customers", phoneId, token, secret, verify, agent: "mobi" } },
+     },
+     mcp: { atOnce: 4, lines: { chatgpt: { in: "customers", tools } } },
+   }
+
+   // now
+   resources: {
+     caller: { header: "cf-connecting-ip", front },
+     web: { site: { in: "visitors", agent: "guide" } },
+     whatsapp: { vendas: { in: "customers", phoneId, token, secret, verify, agent: "mobi" } },
+     mcp: { chatgpt: { in: "customers", tools } },
+   }
+   ```
+
+4. **Routes: plain functions on a plugin.** The `routes` resource goes, with its three shapes
+   (`{ path, action }`, `{ path, serve }`, `{ host, serve }`), `methods`, `HttpRequest`,
+   `HttpAnswer` and `Served`. A plugin's `routes` field maps a `URLPattern` pathname to a `Route`:
+   `(request, { runtime, actor, params, cookies }) => Response`. A path that took everything under
+   it (`"/hooks/"`) is `"/hooks/*"`; a host route is a whole URL pattern (`"*://*-preview.*:*/*"`);
+   a route checks its own method. `host.runtime` is `ctx.runtime`, `await host.whom()` is
+   `ctx.actor`, `host.host` is the request's own URL (already the site the browser asked for),
+   `host.upgrade()` is Oxian's `upgradeWebSocket(request)`, and `host.widgets` is the `widgets`
+   resource. A route calls Actions as trusted code, as the system unless it names an actor
+   (`runtime.call(name, input, { actor })`): an Action that took an `HttpRequest` behind
+   `{ path, action }` takes plain data now, and one only a route calls needs no `allow`.
+
+   ```ts
+   // rc.24
+   resources: {
+     routes: {
+       ping: {
+         path: "/hooks/ping",
+         methods: ["POST"],
+         serve: async (request, host) =>
+           Response.json(await host.runtime.call("relay.ping", { body: await request.text() })),
+       },
+     },
+   },
+
+   // now
+   routes: {
+     "/hooks/ping": async (request, { runtime }) => {
+       if (request.method !== "POST") return new Response("Only POST", { status: 405 });
+       return Response.json(await runtime.call("relay.ping", { body: await request.text() }));
+     },
+   },
+   ```
+
+5. **Sign-in: plugins' routes, `who`, and the runtime's cookies.** The `entrances` and `signIn`
+   resources go. Apps on `googleSignIn` and `devSignIn` change nothing: their routes are
+   `POST /signin/google` (with `GET /google` for the button's client id) and `/signin/dev`, which
+   the page already used. A sign-in method of your own is a plugin built on identity whose route
+   calls its Action and answers with identity's `signedIn` (from `copilotz/plugins/access`), which
+   sets the session's cookie. A credential of your own (an entrance's `cookie` and `query`) is a
+   plugin's `who`, and its cookie is set and cleared with `ctx.cookies`: no plugin writes
+   `Set-Cookie`. Identity's `POST /signout` ends the session, disconnects its browsers and clears
+   its cookie; its `GET /me` says whom the page shows.
+
+   ```ts
+   // rc.24
+   resources: {
+     signIn: { mine: { action: "mine.sign-in" } },
+     entrances: { badge: { cookie: "badge", query: "badge.actor" } },
+   },
+
+   // now
+   definePlugin({
+     name: "mine-sign-in",
+     requires: ["identity"],
+     actions: { "mine.sign-in": signInAction }, // answers { person, session }, as before
+     routes: {
+       "/signin/mine": async (request, { runtime, cookies }) =>
+         signedIn(cookies, await runtime.call("mine.sign-in", await request.json())),
+     },
+     who: (_request, { cookies, query }) => {
+       const secret = cookies.get("badge");
+       return secret ? query("badge.actor", { secret }) : null;
+     },
+   });
+   ```
+
+6. **The site chat: its own route.** `web({ arrive: { line } })` is `web({ arrive: { name } })`. The
+   page posts to the site chat's route, `POST /web/<name>` (with `{ challenge }` when it has one),
+   before it connects, and `/connect` takes no JSON. `contact.arrive` loses its `secret` input. The
+   cookie (`visitor`) and the limits are the same.
+
+   ```tsx
+   // rc.24
+   await web({ root, plugins: [siteShell, chatWeb], arrive: { line: "site", challenge: token } });
+
+   // now
+   await web({ root, plugins: [siteShell, chatWeb], arrive: { name: "site", challenge: token } });
+   ```
+
+7. **Keys: members of their space, with a scope.** Every key is the api plugin's, and every key has
+   a scope: `api_key.create` takes `scope` (`call`, `query`, `view`, `read`, `write`) in place of
+   `actions`, `queries` and `views`, and `apiPresets` are `{ title, description, scope }`. An Action
+   that takes a space gets no default from a key: the key names `in`. Identity's unscoped keys
+   (`key.create`, `key.revoke`, `credential.keys`) are gone. Keys made before stop working: make
+   them again.
+
+   ```ts
+   // rc.24
+   await runtime.call("api_key.create", {
+     in: space,
+     name: "Bot",
+     actions: ["chat.send"],
+     queries: ["thread.recent"],
+   }, { actor });
+
+   // now
+   await runtime.call("api_key.create", {
+     in: space,
+     name: "Bot",
+     scope: { call: ["chat.send"], query: ["thread.recent"] },
+   }, { actor });
+   ```
+
+8. **REST and the client.** `/api/` is the runtime's own now (the api plugin's `serveApi` is gone),
+   answered for whoever `who` says: a key, a session from the app's own page, or anonymous. Its
+   paths are unchanged, with more beside them (below). A View over `/api/` asked with `?follow=1` is
+   asked with `Accept: text/event-stream`, and `?id=` is `?item=` (the item, as JSON). A script
+   connects with the client instead of hand-made requests, over the socket or over HTTP, and its
+   collections are spelled as plugin code's.
+
+   ```ts
+   // rc.24
+   const headers = { authorization: `Bearer ${key}`, "content-type": "application/json" };
+   await fetch(`${app}/api/actions/booking.cancel`, {
+     method: "POST",
+     headers,
+     body: '{"id":"42"}',
+   });
+   await fetch(`${app}/api/views/booking.panel?id=42&follow=1`, { headers });
+
+   // now
+   const client = await connect(app, { key }); // the socket; { key, over: "http" } for the REST API
+   await client.call("booking.cancel", { id: "42" });
+   const stop = client.db.collection("booking").watch({ _id: "42" }, (rows) => show(rows));
+   // by hand: GET /api/views/booking.panel?item={"_id":"42"}, with Accept: text/event-stream
+   ```
+
+9. **Many orgs: the directory's routes.** `orgsHost` (`copilotz/orgs`) goes. The directory's runtime
+   is the app's `fetch`, and its plugin's routes forward each request, untouched and sockets
+   included, to its org's runtime. Its `directory` resource takes the orgs' runtimes as a pool
+   (`orgs`: `runtimes(open)`, from `copilotz`) and a `lobby` for someone signed in nowhere (a
+   runtime with the page), beside `staff` and `operations`; `hosts` is the `hosts` resource's `own`.
+   Each org's runtime gets `directory.member(dir, org)`, in place of what `open` was given
+   (`plugins`, `admit`, `transports`) and of `here(org)`. `listen(dir.fetch)` carries sockets too:
+   no `hypervisor` picker. `org.get` is the `org.info` query, and front ends import the orgs'
+   browser half (`useOrgs`, `enterOrg`…) from `copilotz/plugins/access/web`. Stripe's webhook is the
+   `stripeWebhook` plugin, in the directory's runtime with the pool as the `stripe` resource's
+   `orgs` (below).
+
+   ```ts
+   // rc.24
+   const host = orgsHost({
+     directory: await createRuntime({ store, plugins: [identity, directory, devSignIn] }),
+     open: async (org, given) =>
+       await createRuntime({
+         store: storeOf(org),
+         plugins: [...plugins, ...given.plugins],
+         transports: given.transports,
+         admit: given.admit,
+         browsers: given.browsers,
+       }),
+     upgrade: () => new Response("Connect again", { status: 503 }),
+     code,
+     theme,
+   });
+   await listen({ fetch: host.serve, hypervisor: (r) => host.openRuntime(r)?.hypervisor, port });
+
+   // now
+   const orgs = runtimes(async (id) => {
+     const org = await dir.query<OrgInfo | null>("org.info", { org: id });
+     if (!org) return undefined;
+     return await createRuntime({
+       store: await storeOf(org),
+       plugins: [...plugins, ...page, directory.member(dir, org)], // page: webPage and its resource
+       browsers: { pool: visitors }, // const visitors = contactsPool()
+     });
+   });
+   const lobby = await createRuntime({ store: memoryStore(), plugins: page });
+   const dir: Runtime = await createRuntime({
+     store,
+     plugins: [
+       identity,
+       directory,
+       devSignIn,
+       definePlugin({
+         name: "directory-settings",
+         resources: { directory: { orgs, lobby } },
+       }),
+     ],
+   });
+   await listen(dir.fetch, { port });
+   ```
+
+10. **Tests: `testWho`, `ticketFor`, `runtime.fetch` and `createRuntime({ fetch })`.** A test that
+    made browsers with `createRuntime({ admit })` adds `testWho` (from `copilotz/testing`: a `who`
+    that believes the `x-test-actor` header, for tests alone) and takes each ticket from the
+    runtime's `/connect` with `ticketFor(runtime, actor)`. HTTP needs no listener:
+    `await runtime.fetch(new Request(url, init))`. A fake outside service (Meta's Graph API, Stripe,
+    Google's keys) is the `fetch` the runtime gives plugin code, as `clock` is replaced.
+
+    ```ts
+    // rc.24
+    const tickets = new Map<string, Actor>();
+    const runtime = await createRuntime({
+      store,
+      plugins: [
+        ...plugins,
+        definePlugin({ name: "t", resources: { whatsapp: { graph: fake.url } } }),
+      ],
+      transports: [transport],
+      admit: (secret) => tickets.get(secret),
+    });
+    const ticket = () => {
+      const secret = crypto.randomUUID();
+      tickets.set(secret, ana);
+      return Promise.resolve(secret);
+    };
+
+    // now
+    const runtime = await createRuntime({
+      store,
+      plugins: [...plugins, testWho],
+      transports: [transport],
+      fetch: fakeMeta,
+    });
+    const ticket = () => ticketFor(runtime, ana);
+    const hook = await runtime.fetch(new Request("http://localhost/hooks/whatsapp/vendas", init));
+    ```
+
+**What changes, and what goes:**
+
+- **`runtime.fetch(request, info?)`** answers every request: a route with a host first (a host it
+  takes is that route's alone); the socket (`/oxian`, and `<base>/oxian`); then requests from other
+  sites are refused; `POST /connect`; the REST API (`/api/`); plugins' routes; `GET /health` when no
+  route takes it (`ok`); else a 404. What a listener passes beside the request (Deno's `info`, Bun's
+  server) says the socket's address. Another runtime's route may forward a request to it
+  (`other.fetch(request)`), sockets included: a socket `Deno.serve` gave stays Deno's to accept. The
+  runtime accepts its own socket: Deno's upgrade under `Deno.serve`, a `WebSocketPair` on workerd
+  (not tested yet), else Oxian's route upgrade, whose decision `listen` takes directly (Oxian
+  0.23.4's asynchronous `prepare`).
+- **The site** is decided once, before anything else: the address the browser asked for, on the host
+  the app's front says when the request carries the front's secret (`x-copilotz-front`, the `caller`
+  resource's `front`; then `x-forwarded-host`), and under the app's base (`resources.page.base`: a
+  route sees `/o/acme/x` as `/x`). Routes are matched, and cookies named and secured, by it. Without
+  the secret, forwarded headers are ignored.
+- **Requests from other sites are refused** (403), in one rule in place of the web host's
+  `fromPage`: a request that may change something (anything but GET, HEAD and OPTIONS), whose
+  `Sec-Fetch-Site` isn't `same-origin` (or `none`) or whose `Origin` isn't the site's own, unless it
+  carries `Authorization`. It holds for every route, not only `/connect`; a sibling host under the
+  same domain is another site; webhooks send no `Origin`, and pass. So an MCP server's `origins`
+  lets a browser's call through only with `Authorization`.
+- **`resources.hosts`** (`{ own: ["app.example.com", "*.run.app"] }`): the app's own hosts. With
+  them named, a request to any other host is answered only by routes that take its host (a 404 when
+  none does), never by the runtime's paths, its socket or `/connect`; and the app's own hosts are
+  never a host route's. A host route for every host (`*`) takes only hosts that aren't the app's
+  own: with none named, none.
+- **`who`** (`Plugin.who`, the `Who` and `WhoContext` types): asked in plugin order, once per
+  request and when `/connect` issues a ticket; the first answer wins, and none is anonymous
+  (`{ kind: "anonymous", id: "" }`). A `who` can't answer the system. What it queries is kept five
+  seconds per query and params, and dropped when the actor is disconnected. `WhoContext` has
+  `resources`, `query` and `call` (as the system: the api plugin notes a key's last use) and
+  `cookies.get`. A request with both a session cookie and a key is whoever the first plugin in order
+  says (usually the cookie). A store's failure while asking is a 500, never anonymous.
+- **Routes** (`Plugin.routes`, the `Route` and `RouteContext` types): matched more specific first,
+  segment by segment (a literal before a parameter before a wildcard, deeper before shallower), `/*`
+  last, and among patterns alike in plugin order; a later plugin's route replaces an earlier one of
+  the same pattern, and `null` removes it. A route that isn't a pattern, or takes `/connect`,
+  `/oxian`, `/api` or anything under `/api/`, stops the runtime from starting. What a route throws
+  answers by its code: `invalid` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404,
+  `too_many` 429 (with `retry-after`), anything else 500 (logged), its words only when they're
+  public.
+- **Cookies** (`ctx.cookies`, the `Cookies` type): `get(name)`,
+  `set(name, secret, { days, sameSite })` and `clear(name, { sameSite })`, by the plain name; the
+  runtime puts them on the route's response. Every cookie is httpOnly, `Path=/`, with no `Domain`;
+  `Secure` and named `__Host-<name>` anywhere but plain http to this machine or one on its network;
+  `SameSite=Lax` (30 days) unless said. A value is 1 to 512 cookie-safe characters (letters, digits
+  and `._~+/=-`): a short one is fine where it's no secret; a cookie holding anything else reads as
+  none. A response that sets or clears one is `no-store`. A name is the first plugin's to set;
+  another may only when one builds on the other (`requires`), or both on the same one (Google's and
+  dev sign-in's, and the directory's sign-out, all set identity's session); anything else is a
+  plugin's mistake, and a 500. The `cookies` resource (`{ names, suffix }`, the `CookieSettings`
+  type) renames them: `names` maps a name to the one it goes by, and `suffix` follows every other.
+- **Cookies the web host kept, and no longer does:** a leftover plain `session` cookie beside
+  `__Host-session` is no longer cleared (it's ignored); a cookie that proves no one (forged, ended)
+  is no longer cleared, and reads as nobody; `POST /signout` clears identity's `session` only (a
+  site visitor's cookie stays).
+- **Tickets are the runtime's** (`runtime/tickets.ts`): one works once, for a minute; an actor has
+  30 a minute (`browsers.tickets`), past which `/connect` is a 429 with `retry-after`. Disconnecting
+  an actor ends its tickets not yet used; a person's key has its own, apart from its person's.
+  `createRuntime`'s `admit` is gone, and the runtime always has a key for remote executors (a new
+  one each start, unless given).
+- **`POST /connect`** (POST only: else 405) answers `{ ticket, actor: { kind, id } }` (no `name`:
+  the page asks `GET /me`), 401 for anonymous, and reads no body: arriving at a site chat is
+  `POST /web/<name>`.
+- **Checked at start:** routes' patterns, `page.base` (a path with no trailing slash), the `cookies`
+  and `hosts` resources, and the `links` secret (too short to sign with stops the start, rather than
+  failing each link).
+- **New in `copilotz`:** `runtimes` and `Runtimes`; `connect` and the client's types
+  (`ClientCollection`, `RemoteOptions`, `Watcher`…); `inScope` and `Scope`; `clientAddress`,
+  `setClientAddress` and `loopbackAddress` (were in `copilotz/web/server`); `bodyOf` and `jsonOf`;
+  `cookieSafe` and `CookieSettings`; `hostMatches`, `HostsSettings`, `ownHost`, `vouched`,
+  `loopback` and `nearby`; `callerOf` and `exemptProblem`; and the `Route`, `RouteContext`, `Who`,
+  `WhoContext` and `Cookies` types.
+- **`runtimes(open, { idleMs })`:** runtimes by id, each opened on its first `get`, the same one
+  after (a failed opening is tried again), closed once idle (no browsers, nothing pending, 30
+  minutes unless said) and opened again on its next use; `peek(id)` and `entries()` never open one;
+  `close(id)` closes one now, and a `get` meanwhile opens another only once it has closed, so one id
+  never has two writers; `close()` closes them all.
+- **`listen(fetch, { hostname, port, signal })`** (was `listen({ fetch, hypervisor, … })`) serves
+  any fetch handler on Node, Bun and Deno through Oxian's Node adapter, sockets included, and
+  answers a `Listener` (`url`, `finished`, `shutdown()`). `serve`, `ServeOptions` and `Server` are
+  gone.
+- **The page plugin** (`webPage`, `copilotz/web/server`): `/app/*` (the code; the entry `no-cache`,
+  chunks kept a year), `/assets/*`, `/manifest.webmanifest`, `/sw.js`, and `/*` for GET navigations
+  only (`Sec-Fetch-Mode: navigate`, or an `Accept` with HTML, `*/*` or none): a script's `fetch`
+  there is a 404, not the page. Its `/*` takes `GET /health` too, so the runtime's `ok` answers only
+  an app without a page (with a page, `/health` was the page before as well). It refuses to start
+  without `page.code`. The page tells its code the base (`appBase()`), and its `/connect` and socket
+  follow it.
+- **The page in the browser:** `web()` posts to `/web/<name>` first when it arrives as a visitor
+  (`arrive: { name, challenge? }`), asks identity's `GET /me` for the person's name while it takes
+  its ticket, and finds the ways to sign in by asking `GET /google` and `GET /signin/dev`.
+- **Sign-in and sign-out are plugins' routes:** identity's `POST /signout` (ends the session,
+  disconnects whoever it was, clears the cookie) and `GET /me` (401 for anyone but a person), and
+  its contract's `signedIn` (sets the session's cookie, `SameSite=Lax` so an OAuth redirect back
+  carries it, and answers `{ person }`); Google's `POST /signin/google` (`{ idToken }`) and
+  `GET /google` (the first client id, cached five minutes); dev sign-in's `/signin/dev` (GET says
+  it's there, POST `{ name }` signs in), from this machine only, as before. Nothing refuses to start
+  with a recorded sign-in Action any more (the web host did): keep yours `record: false`, since its
+  answer is the session's secret. `credential.revoke` (taking someone out of an org) disconnects
+  their browsers and drops what `who` kept for them, so their next request is nobody at once.
+- **Webhooks and other plugins' HTTP are routes; their URLs are unchanged:**
+  - WhatsApp: `/hooks/whatsapp/*` does Meta's handshake and checks the signature, then calls
+    `whatsapp.receive` with `{ number, payload }`; `whatsapp.number` finds a number by its path.
+    Both are the system's (no `allow`); `whatsapp.hook` is gone. `hookRoute` is exported, for a
+    number's own path.
+  - Voice: `/hooks/voice/<name>` and `/hooks/voice/<name>/over` check Twilio's signature and call
+    `voice.ring` and `voice.hangup` (`voice.hook` is gone); `/hooks/voice/<name>/relay` takes the
+    call's socket with Oxian's `upgradeWebSocket`.
+  - MCP: `/mcp/*`, finding the app's widgets in the `widgets` resource (was
+    `webServer({ widgets })`).
+  - Maintenance: `/maintenance/*`; an org's runtime (`resources.org`) still never serves it.
+  - Chat: `GET /files/<id>` is chat's route (was the web host's), read as whoever the request is, or
+    by a link signed for the file.
+  - Connected accounts: `GET /accounts/callback/<provider>` calls `account.callback` with
+    `{ provider, code, state, error? }` as the session's person, and sends them back to Connected
+    accounts.
+  - Computers: previews are one route for every host shaped like a preview's
+    (`*://*-preview.*:*/*`), answering only for the app's `previews.domain`, with the grant at
+    `/__copilotz/previews/grant`; a release's downloads (`computerDownloads({ dir })`) are
+    `/computer/download/*`.
+  - Stripe: `stripeWebhook` is a plugin (was a function the app routed to by hand),
+    `POST /__stripe/<seller>`: it checks the signature on the raw text, reads the event as facts
+    (`stripe.fact`, asking Stripe for a dispute's charge through `ctx.fetch`), and hands them to the
+    org's runtime as `billing.apply` under the event's id. Which runtime is the org's: the `stripe`
+    resource's `orgs` (the directory's pool), or without them this runtime, when the event is for
+    its org. The plan an org goes back to is the `billing` resource's `start` ("free" unless said),
+    not a `start` option. What can be tried again answers 500; what never can, 200.
+  - The cloud pool: its VMs' socket (`/__pool/oxian`) is `cloudPool`'s route, answered by its
+    runtime's own socket.
+- **The site chat:** `POST /web/<name>` limits newcomers by address, runs the site's challenge,
+  calls `contact.arrive` and sets the visitor cookie (`SameSite=Strict`); the site chat's `who`
+  reads it. `contact_visitor.actor` now answers a visitor that hasn't spoken yet too.
+- **`ctx.fetch`** (`Context.fetch`, `ReadContext.fetch`): what plugin code calls outside services
+  with, in Actions, Processors and queries, remote executors included; the platform's `fetch` unless
+  `createRuntime({ fetch })` gives another. Adapters stay for real ports (model providers).
 - **The REST API is the runtime's own** (`/api/`, answered by `runtime.fetch` for whoever `who`
-  says, a key, a session from the app's own page, or anonymous): collections
-  (`GET /api/collections/<name>?filter=…`, `…/<id>`; `POST`, `PATCH`, `PUT`, `DELETE`), Actions by
-  the caller's own call id (`Idempotency-Key`), queries (`GET ?params=` or `POST`), Views, emits
-  (`POST /api/events/<type>`), the events stream, and the reference (`GET /api/`); any GET with
-  `Accept: text/event-stream` is a watch. Direct writes from outside: only where a rule speaks for
-  the collection's writes (`direct`), never `sys.*` nor a private field (not filtered by, either),
-  within reach, schema-checked, recorded as the caller's events. **Breaking:** no plugin route may
-  take `/api` or anything under it; the api plugin's `serveApi`, its `api_key.see` and `api_key.get`
-  queries are gone; `GET /api/views/…?follow=1` is `Accept: text/event-stream`, and `?id=` is
-  `?item=`; the reference says `actor` (no `key` record); an Action that takes a space gets no
-  default from a key: name `in`. A credential that proves nobody is a 401, and so is a refusal to
-  anonymous.
-- **The client's collections, over either transport:** `client.db.collection(name)` (`find` with
-  `.toArray()`, `findOne`, `countDocuments`, `insertOne`, `updateOne`, `replaceOne`, `deleteOne`,
-  `query`, `watch(filter, options?, onChange)`), `client.call(action, input, { id })`, and
-  `connect(url, { key, over: "socket" | "http" })` for scripts (exported from `copilotz`), beside
-  the page's `connect({ transport, ticket, plugins })`. The socket gains a write (`core.write`), and
-  a call's own id. `WhoContext` gains `call` (the api plugin notes a key's last use there).
-- **Breaking: plugins' records change through their Actions.** Their rules refuse direct writes from
-  outside (`direct`) for spaces' own records, identity's people and sessions, keys, contacts, chat's
-  messages and `live`, routines and their runs, the computers plugin's records, apps, cloud
-  computers, agents, accounts, WhatsApp's phones and numbers, and voice blocks.
-- **Breaking: identity makes no keys.** `key.create`, `key.revoke` and `credential.keys` are gone,
-  and a credential is a session: every key is the api plugin's, with a scope.
-- **Breaking: developer keys are members of their space, with a scope.** A key's actor is
+  says): collections (`GET /api/collections/<name>?filter=…`, `…/<id>`; `POST`, `PATCH`, `PUT`,
+  `DELETE`), Actions by the caller's own call id (`Idempotency-Key`), queries (`GET ?params=` or
+  `POST`), Views, emits (`POST /api/events/<type>`), the events stream, and the reference
+  (`GET /api/`); any GET with `Accept: text/event-stream` is a watch. A credential that proves
+  nobody is a 401, and so is a refusal to anonymous. Any origin may call it with a key; with a
+  session's cookie, only the app's own page. Streams end at once when their actor is disconnected,
+  and at each ping (every 20 s, on the runtime's clock) when `who` says someone else. The api
+  plugin's `serveApi`, `Served`, its own HTTP, events and reference, and its `api_key.see` and
+  `api_key.get` queries are gone; the reference says `actor` (no `key` record).
+- **Direct writes from outside** (REST, and the socket's new `core.write`): only where a rule speaks
+  for the collection's writes (`Guard`'s operation gains `direct`), never `sys.*`, never a private
+  field (nor a filter, sort or update that names one, over the socket too; a replacement keeps
+  them), within the caller's reach, schema-checked, and recorded as the caller's events.
+  **Breaking:** plugins' records change through their Actions: their rules refuse direct writes for
+  spaces, memberships, invitations and requests; identity's people and sessions; keys; contacts;
+  chat's messages and `live`; routines and their runs; the computers plugin's records; apps; cloud
+  computers; agents; accounts; WhatsApp's phones and numbers; and voice blocks. Still writable
+  directly, each under its rule: `thread`, `file`, `shown`, `memory`, `skill`, `skillFile`, and
+  apps' own collections. The events stream follows the rules: a change is sent when the reader's
+  rule matches the event's document.
+- **The client** (`connect`, from `copilotz` and `copilotz/web`): `client.db.collection(name)`
+  (`find` with `.toArray()`, `findOne`, `countDocuments`, `insertOne`, `updateOne`, `replaceOne`,
+  `deleteOne`, `query`, `watch(filter, options?, onChange)`), `client.call(action, input, { id })`,
+  and `connect(url, { key, over: "socket" | "http", plugins?, fetch? })` for scripts, beside the
+  page's `connect({ transport, ticket, plugins })`. The socket gains a call's own id.
+- **Developer keys** are members of their space, with a scope. A key's actor is
   `{ kind: "person", id, key, scope }` (`within` is gone): `people` still lets it in and `inPerson`
   keeps it out. It's a member of its space (`key:<id>`), an editor when its scope calls or writes,
-  else a viewer, and reaches what both its membership and its person reach, with no org role (an
-  admin's key reaches only its space). Its `scope` (`call`, `query`, `view`, `read`, `write`: exact
-  names, no wildcards) is checked by the runtime (`inScope`) where a call from outside comes in:
-  calls, queries, Views rendered for it, direct reads; a scoped actor emits nothing. Never inside a
-  job: an Action it may call writes as usual. `api_key` records keep `scope` and `role` (no
-  `actions`, `queries`, `views`), their id is the start of the secret's hash (`hash` is private),
-  and they live in their space (`shared`): its members see them in the Members tab, its managers
-  revoke them. `api_key.actor` answers the actor; `api_key.revoke` (its person, or a manager) ends
-  the key, its membership and its connections (`ctx.disconnect` of a key ends only its own).
-  `apiPresets` are `{ title, description, scope }`. Spaces add `spaceMembers` (a section of the
-  Members tab). Keys made before stop working: make them again.
+  else a viewer, never more than its person may be there, and reaches what both its membership and
+  its person reach, with no org role (an admin's key reaches only its space). Its `scope` (exact
+  names, no wildcards) is checked by the runtime (`inScope`) only where a call from outside comes
+  in: calls, queries, Views rendered for it, direct reads and writes; a scoped actor emits nothing.
+  Never inside a job: an Action it may call writes as usual. `api_key` records keep `scope` and
+  `role`; their id is the start of the secret's hash (`hash` is private); they live in their space
+  (`shared`), where its members see them in the Members tab and its managers revoke them.
+  `api_key.actor` answers the actor; `api_key.revoke` (its person, or a manager) ends the key, its
+  membership and its connections, and so does its person leaving the space or the org;
+  `ctx.disconnect` of a key ends only its own. Spaces add `spaceMembers` (a section of the Members
+  tab). A key's default space is gone: the runtime knows no spaces, and REST and the socket must
+  behave the same.
+- **Identity makes no keys:** `key.create`, `key.revoke` and `credential.keys` are gone, and a
+  credential is a session. People and sessions change only through identity's Actions.
+- **Many orgs, by forwarding** (see design/tenancy.md): the directory's routes forward `/o/<org>/…`
+  to that org (404 for none, 403 when suspended), `/*` to the org the browser is in (a page asked
+  for without a session there goes in first, to the org they were in, else their last, else their
+  own, made now, then 302s back), and a host an org claimed to that org's host routes; anything else
+  for someone signed in nowhere is the lobby's (without one, a 401). Entering an org (`POST /orgs`,
+  `/orgs/enter`, `/orgs/invites/answer`, and a page's way in) is `org.enter`, then a signed handoff,
+  a minute long and never out of the process, to the org's own `POST /enter`, which keeps who they
+  are, joins them the first time, starts its session and sets its cookie (`s_<org>`). The
+  directory's own: `GET /orgs`, `POST /signout` out of every org it holds a session for (each ended
+  where its org is open; signing out never opens one), staff's `/console/orgs…` and
+  `/console/codes…`, and the front's `/__copilotz/hosts/resolve` on any host. `directory.member`
+  gives each org's runtime `resources.org` (id, name, kind, address), `page.base`, its cookies'
+  names (`{ names: { session: "s_<org>" }, suffix: "_<org>" }`), the app's own hosts, the
+  directory's hooks (invitations, leaving, renaming, claiming and releasing hosts, gift codes) and
+  its `/enter`. The directory's session is still `__Host-dir` (the directory plugin's `cookies`
+  resource), and which org a browser is in, `__Host-org`. `org.info` (a query, in place of the
+  `org.get` Action) is kept 10 seconds, hosts' claims a minute, each forgotten at once when the
+  directory changes it. The orgs host's tests are ported (`plugins/access/tests/orgs*.test.ts`).
+- **Removed entry points and exports:** `copilotz/web/tickets` (`createTickets`) and `copilotz/orgs`
+  (`orgsHost`). From `copilotz/web/server`: `webServer`, `WebServerOptions`, `socket`, `Entrance`,
+  `SignIn`, `Arrived`, `Door`, `Whom`, `whomOf`, `cookieOf`, `hostCookie`, `setCookie`, `siteOf`,
+  `ANONYMOUS` (write `{ kind: "anonymous", id: "" }`), `Front`, `hostOf`, `HttpRequest`,
+  `HttpAnswer`, `httpRequest`, `Route` (now the runtime's, a function), `RouteSocket` and `Served`;
+  `clientAddress`, `setClientAddress` and `hostMatches` moved to `copilotz`. From `copilotz/web`:
+  the orgs' browser half (now `copilotz/plugins/access/web`). From `copilotz/web/node`: `serve`,
+  `ServeOptions` and `Server`. From `copilotz/plugins/interfaces`: `serveApi`, `WebLine` and the
+  other `*Line` types. The `entrances`, `signIn` and `routes` resources; `createRuntime`'s `admit`;
+  the actor's `within`; `whatsapp.hook` and `voice.hook`.
 
 ## 1.0.0-rc.24 — 2026-11-06
 

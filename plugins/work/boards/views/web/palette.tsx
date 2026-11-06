@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * What boards offer in the command palette (kind `boards.palette`, the web
  * shell's `palette` resource), for where the person is and what's typed:

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Dragging cards with pointer events, so a mouse, a pen and a finger all
  * work, with no library. A mouse drag starts once the pointer moves a few

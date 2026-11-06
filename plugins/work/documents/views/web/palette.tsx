@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * What documents offer in the command palette (kind `document.palette`, the
  * web shell's `palette` resource), for where the person is and what's typed:

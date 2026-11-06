@@ -61,7 +61,7 @@ export type Place =
   | { at: "top" | "bottom" };
 
 /** A board's page; `space`, where the person is working (the sidebar marks it). */
-export const boardPath = (board: string, space?: string, card?: string) => {
+export const boardPath = (board: string, space?: string, card?: string): string => {
   const query = [
     ...(space ? [`in=${encodeURIComponent(space)}`] : []),
     ...(card ? [`card=${encodeURIComponent(card)}`] : []),

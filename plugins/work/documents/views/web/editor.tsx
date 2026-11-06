@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * The writing surface: Markdown as it's written, in a field as tall as what
  * it holds (the page scrolls, as a document does), a small toolbar over it

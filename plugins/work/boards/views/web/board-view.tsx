@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A board, drawn: its filters, then its columns side by side (stacked in a
  * side panel), each with its cards in order. Cards drag within and across

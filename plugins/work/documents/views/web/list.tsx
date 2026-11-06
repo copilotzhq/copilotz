@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A space's documents (kind `documents`: its Documents tab, item `{ _id }`,
  * the space): each one's title, how it opens, who changed it last and when,

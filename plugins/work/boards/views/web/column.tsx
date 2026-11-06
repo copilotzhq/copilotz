@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A board's column: its stage mark, its name (renamed in place by editors),
  * how many cards it has (and how many show, when filtered), its menu (add a

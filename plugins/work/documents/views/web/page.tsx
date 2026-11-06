@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A document's page (kind `document`, at `/document/<id>`): the title in
  * place, then the writing surface (editor.tsx: Write, Preview or Split),

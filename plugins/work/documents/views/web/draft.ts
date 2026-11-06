@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * What someone wrote and hasn't saved, kept in this browser per person and
  * document, so a closed tab or a lost connection loses nothing: the text and

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A card's details, over the board: a dialog, or a sheet from the bottom on
  * a phone. Its title (changed in place), its column, owner (the space's

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A board's page (kind `board`, at `/board/<id>`; `?card=<id>` opens a
  * card): its name (renamed in place), its space, what it's for, its menu,

@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * Choosing on a board, in popovers: whom a card goes to (the space's people
  * and agents, found as you type), its labels (the board's, or a new one),

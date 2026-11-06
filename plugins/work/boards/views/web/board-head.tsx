@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A board's head, as its page and a space's tab show it: its name, renamed
  * in place by editors; its description, written in place; its menu (rename,

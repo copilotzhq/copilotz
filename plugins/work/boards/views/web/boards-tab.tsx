@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 /**
  * A space's boards (kind `boards.tab`: spaces' Board tab, item `{ _id }`,
  * hints `{ in, mode }`). With none, what a board is for, and one made in a

@@ -13,6 +13,14 @@
   adds the files' ids: `{ message, files }`. Saying it again sends nothing, files included. An
   agent's own message tells it next time what it sent: `[sent: logo.png]`.
 
+- **A refusal says why.** A turn that fails with a refusal written for people answers in that
+  refusal's own words, where only the codes `credits` and `budget` did before. That covers any
+  failure made public, including the `spending` check's refusal whatever its `why`: an app's own
+  reason, such as an inactive subscription, no longer needs to borrow `credits`. The `spending`
+  refusal is now public, so a model outside the app reads its message too. A web line's spent budget
+  now shows its own words ("This chat has done all it can for today…"). Every other failure still
+  shows people the short line, with the details in the event.
+
 ## 1.0.0-rc.26 — 2026-11-06
 
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the

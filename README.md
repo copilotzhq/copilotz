@@ -688,6 +688,10 @@ name, never by importing its code.
       files: images.map(({ id }) => ({ id, collection: "image" })),
     }); // → { message, files: [ids of the chat's files] }
     ```
+  - **A turn that fails** still answers, so whoever waits on it resumes. People read a short line
+    (`<agent> failed: something went wrong…`), and what went wrong stays in the `processor.failed`
+    event. A refusal written for people answers in its own words: any failure made public, such as
+    the `spending` check's refusal (its `message`, whatever its `why`) or a web line's budget.
   - **After an answer:** a place that can (WhatsApp) shows features' additions
     (`resources.additions.<name> = { order?, agents? }` and an `addition:<name>` View there), each
     once per chat per key, recorded in `shown`; the model is told what went (`[then shown: …]`). A

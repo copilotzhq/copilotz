@@ -149,7 +149,9 @@ async function keyed(ctx: Reach, m: Resolved): Promise<Resolved> {
  * Whether what's about to run may spend (the `spending` resource: whoever
  * keeps an org's limits), which isn't asked for a model the app doesn't pay for
  * (the org's own key, a person's subscription). Saying no is final:
- * trying again won't help.
+ * trying again won't help. Its words are for whoever asked (the check wrote
+ * them for people: "out of credits", "your subscription isn't active"), so
+ * the refusal is public: a failed turn says them in its chat.
  */
 async function mayRun(ctx: Reach, m: Resolved, request: Generate): Promise<void> {
   // Whoever listens to model use may refuse it first (a web line's budget, spent): a model
@@ -169,7 +171,9 @@ async function mayRun(ctx: Reach, m: Resolved, request: Generate): Promise<void>
   );
   if (verdict.ok) return;
   throw Object.assign(
-    failure(verdict.why ?? "spending", verdict.message ?? "This org can't spend right now."),
+    failure(verdict.why ?? "spending", verdict.message ?? "This org can't spend right now.", {
+      public: true,
+    }),
     { final: true },
   );
 }

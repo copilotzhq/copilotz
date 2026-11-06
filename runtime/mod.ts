@@ -2,6 +2,7 @@ export * from "./define.ts";
 export { createRuntime, type Runtime } from "./runtime.ts";
 export { type Runtimes, runtimes } from "./runtimes.ts";
 export {
+  type Bytes,
   createOwner,
   type Description,
   type Feed,
@@ -37,7 +38,17 @@ export type {
   WithId,
   WriteOptions,
 } from "./collection.ts";
-export type { Actor, Doc, Edge, Event, Executed, Inspected, Row, Store } from "./store.ts";
+export type {
+  Actor,
+  Doc,
+  Edge,
+  Event,
+  Executed,
+  Inspected,
+  Projection,
+  Row,
+  Store,
+} from "./store.ts";
 export { type Maintenance, MAINTENANCE_SQL, redacted, type Written } from "./maintain.ts";
 export { inScope, personOf, principalOf, type Scope } from "./actor.ts";
 export { clientAddress, loopbackAddress, setClientAddress } from "./address.ts";

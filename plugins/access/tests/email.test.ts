@@ -3,7 +3,7 @@
  * faked (`createRuntime({ fetch })`): making an account with a code, signing
  * in (refused until the address is confirmed, a new code sent), a new
  * password by a code, invitations by link from trusted code, and people
- * moving in with the hashes another app kept (Co-Cr.ia's, verified exactly
+ * moving in with the hashes another app kept (an app moving from Copilotz 0.x, verified exactly
  * as stored, made stronger at their first sign-in). Every refusal says the
  * same for an address nobody has; codes are spent by wrong tries and time;
  * a stranger can't choose someone's password by signing up first; messages,
@@ -494,16 +494,16 @@ test("an invitation: trusted code gets the person at once, and a link that works
     const invited = await rt.call<{ person: string; new: boolean; sent: boolean }>("email.invite", {
       email: "Ana@Example.com",
       name: "Ana",
-      person: "01HZYCOCRIA",
+      person: "01HZEXAMPLE1",
     });
-    assertEquals(invited, { person: "01HZYCOCRIA", new: true, sent: true });
+    assertEquals(invited, { person: "01HZEXAMPLE1", new: true, sent: true });
     const message = resend.sent.at(-1)!;
     assertEquals(message.body.subject, "Set your password for app.example.com");
     const token = /#email-invite=([A-Za-z0-9_-]+)/.exec(message.body.text)![1];
     assert(message.body.text.includes(`https://app.example.com/#email-invite=${token}`));
     assert(message.body.html?.includes(`href="https://app.example.com/#email-invite=${token}"`));
     // Who it is shows at once: their email, their name.
-    assertEquals(await rt.query("person.profile", { person: "01HZYCOCRIA" }), {
+    assertEquals(await rt.query("person.profile", { person: "01HZEXAMPLE1" }), {
       name: "Ana",
       email: "ana@example.com",
     });
@@ -519,8 +519,8 @@ test("an invitation: trusted code gets the person at once, and a link that works
     const short = await ask(rt, "/signin/email/accept", { token, password: "short" });
     assertEquals(short.status, 400);
     const accepted = await ask(rt, "/signin/email/accept", { token, password: "correct horse" });
-    assertEquals([accepted.status, accepted.said.person], [200, "01HZYCOCRIA"]);
-    assertEquals(await whoIs(rt, accepted.cookie!), { kind: "person", id: "01HZYCOCRIA" });
+    assertEquals([accepted.status, accepted.said.person], [200, "01HZEXAMPLE1"]);
+    assertEquals(await whoIs(rt, accepted.cookie!), { kind: "person", id: "01HZEXAMPLE1" });
     // Used once.
     const again = await ask(rt, "/signin/email/accept", { token, password: "correct horse" });
     assertEquals([again.status, again.said.code], [400, "invalid"]);
@@ -528,12 +528,12 @@ test("an invitation: trusted code gets the person at once, and a link that works
     assertEquals(
       (await ask(rt, "/signin/email", { email: "ana@example.com", password: "correct horse" })).said
         .person,
-      "01HZYCOCRIA",
+      "01HZEXAMPLE1",
     );
     // Invited again with a password: the same person, nothing sent.
     const sent = resend.sent.length;
     assertEquals(await rt.call("email.invite", { email: "ana@example.com" }), {
-      person: "01HZYCOCRIA",
+      person: "01HZEXAMPLE1",
       new: false,
       sent: false,
     });
@@ -587,7 +587,7 @@ test("someone invited who signs up or resets instead is the same person", async 
   }
 });
 
-/** Hashes Co-Cr.ia keeps (computed apart, with Python's hashlib): PBKDF2-SHA256, 100,000, hex. */
+/** Hashes as Copilotz 0.x apps kept them (computed apart, with Python's hashlib): PBKDF2-SHA256, 100,000, hex. */
 const LEGACY = {
   plain: {
     password: "senha-forte-123",
@@ -644,26 +644,26 @@ test("moving in: production's hashes kept as they are sign in, and are hashed ag
       })
     );
     const imported = await rt.call("email.import", {
-      person: "01HCOCRIA01",
+      person: "01HEXAMPLE01",
       email: "Ana@Example.com",
       hash: LEGACY.plain.hash,
       name: "Ana",
       at: "2025-03-01T12:00:00.000Z",
     });
-    assertEquals(imported, { person: "01HCOCRIA01", new: true });
+    assertEquals(imported, { person: "01HEXAMPLE01", new: true });
     await rt.call("email.import", {
-      person: "01HCOCRIA02",
+      person: "01HEXAMPLE02",
       email: "bia@example.com",
       hash: LEGACY.unicode.hash,
     });
     // Run again: the same, updated; someone else's address, refused; not a hash, refused.
     assertEquals(
       await rt.call("email.import", {
-        person: "01HCOCRIA01",
+        person: "01HEXAMPLE01",
         email: "ana@example.com",
         hash: LEGACY.plain.hash,
       }),
-      { person: "01HCOCRIA01", new: false },
+      { person: "01HEXAMPLE01", new: false },
     );
     await assertRejects(
       () =>
@@ -685,13 +685,13 @@ test("moving in: production's hashes kept as they are sign in, and are hashed ag
       email: "ana@example.com",
       password: LEGACY.plain.password,
     });
-    assertEquals([ana.status, ana.said.person], [200, "01HCOCRIA01"]);
+    assertEquals([ana.status, ana.said.person], [200, "01HEXAMPLE01"]);
     const bia = await ask(rt, "/signin/email", {
       email: "bia@example.com",
       password: LEGACY.unicode.password,
     });
-    assertEquals(bia.said.person, "01HCOCRIA02");
-    assertEquals(await rt.query("person.profile", { person: "01HCOCRIA01" }), {
+    assertEquals(bia.said.person, "01HEXAMPLE02");
+    assertEquals(await rt.query("person.profile", { person: "01HEXAMPLE01" }), {
       name: "Ana",
       email: "ana@example.com",
     });

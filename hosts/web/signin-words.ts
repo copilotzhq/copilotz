@@ -2,7 +2,7 @@
  * What the sign-in page says, as the app's: the `signInPage` resource of the
  * page's plugins (those `web({ plugins })` runs), merged over these defaults
  * in order, as the theme is. Its `words` patch one by one, by key: an app
- * gives its language (Co-Cr.ia's pt-BR) or changes one phrase. Its `about`,
+ * gives its language (pt-BR, say) or changes one phrase. Its `about`,
  * the panel beside the form (a headline, its quieter end, and a few points),
  * is given whole: an app that gives one never shows Copilotz's pitch beside
  * its own, and `null` leaves the form alone. The logo over it is the

@@ -30,17 +30,17 @@ test("an app's own words and pitch: nothing of Copilotz's English or pitch shows
   // Every word, marked as the app's.
   const words = Object.fromEntries(Object.keys(SIGN_IN_WORDS).map((key) => [key, `«${key}»`]));
   const app = definePlugin({
-    name: "cocria",
+    name: "example",
     resources: {
       signInPage: {
         words,
         about: {
-          headline: "Seu conteúdo no Instagram,",
-          quiet: "com estratégia.",
+          headline: "Seus projetos,",
+          quiet: "sempre em dia.",
           points: [{
             icon: "sparkles",
-            title: "Estrategista",
-            text: "Seu perfil, em nove passos.",
+            title: "Agentes que ajudam",
+            text: "Respostas em segundos.",
           }],
         },
       },
@@ -49,11 +49,11 @@ test("an app's own words and pitch: nothing of Copilotz's English or pitch shows
   for (const ways of [ALL, { dev: true as const }, {}]) {
     const page = <SignIn signIn={ways} page={signInPageOf([app])} />;
     const shown = `${text(page)} ${attributes(page).join(" ")}`;
-    assertStringIncludes(shown, "Seu conteúdo no Instagram, com estratégia.");
-    assertStringIncludes(shown, "Estrategista Seu perfil, em nove passos.");
+    assertStringIncludes(shown, "Seus projetos, sempre em dia.");
+    assertStringIncludes(shown, "Agentes que ajudam Respostas em segundos.");
     // What's left once the app's own is taken out: only its name (the page's title).
     const left = shown.replace(/«\w+»/g, "").replace(
-      /Seu conteúdo no Instagram,|com estratégia\.|Estrategista|Seu perfil, em nove passos\./g,
+      /Seus projetos,|sempre em dia\.|Agentes que ajudam|Respostas em segundos\./g,
       "",
     )
       .replace(/Copilotz|000000/g, "").replace(/[\s.,…]/g, "");
@@ -63,7 +63,7 @@ test("an app's own words and pitch: nothing of Copilotz's English or pitch shows
 
 test("an app's words in pt-BR, its pitch gone or its own; one that says nothing, Copilotz's", () => {
   const ptBR = definePlugin({
-    name: "cocria",
+    name: "example",
     resources: {
       signInPage: {
         about: null,

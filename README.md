@@ -333,9 +333,9 @@ const brand = definePlugin({
     theme: { light: { primary: "#0F172A" }, logo: { mark: myMark } },
     signInPage: {
       about: {
-        headline: "Seu Instagram,",
-        quiet: "com estratégia de verdade.",
-        points: [{ icon: "sparkles", title: "Estrategista e Criadora", text: "Duas agentes…" }],
+        headline: "Seus projetos,",
+        quiet: "sempre em dia.",
+        points: [{ icon: "sparkles", title: "Agentes que ajudam", text: "Respostas em segundos." }],
       },
       words: {
         signIn: "Entrar",
@@ -349,8 +349,8 @@ const brand = definePlugin({
   },
 });
 await web({ root, plugins: [webShell, chatWeb, spacesWeb, brand] });
-// server: page: { title: "CO-CR.IA", lang: "pt-BR", code }, theme: themeOf([brand]),
-//         emailSignIn: { app: "CO-CR.IA", messages: { verify: { subject: "{code} é o seu código" } } }
+// server: page: { title: "Exemplo", lang: "pt-BR", code }, theme: themeOf([brand]),
+//         emailSignIn: { app: "Exemplo", messages: { verify: { subject: "{code} é o seu código" } } }
 ```
 
 Tests need no listener: `await runtime.fetch(new Request("http://localhost/hooks/ping", init))`. To

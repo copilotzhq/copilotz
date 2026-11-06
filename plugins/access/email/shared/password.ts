@@ -4,7 +4,7 @@
  *
  * - **Legacy** (`"<saltHex>:<hashHex>"`): a 16-byte salt and a 32-byte hash
  *   in lowercase hex, 100,000 iterations, the password as raw UTF-8. What
- *   apps on Copilotz 0.x kept (Co-Cr.ia's people bring theirs as they are).
+ *   apps on Copilotz 0.x kept (an app moving from 0.x brings its people's as they are).
  * - **Ours** (`pbkdf2-sha256$<stages>x<iterations>$<salt>$<hash>`, base64url):
  *   PBKDF2 in stages, each salted with the salt and the stage before it
  *   (`K1 = PBKDF2(P, salt, n)`, `Ki = PBKDF2(P, salt ‖ Ki-1, n)`), the last

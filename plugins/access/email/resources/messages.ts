@@ -1,6 +1,6 @@
 /**
  * What email sign-in says by email, in English: the `emailSignIn` resource's
- * `messages`, which an app replaces word for word (Co-Cr.ia's are pt-BR). The
+ * `messages`, which an app replaces word for word (in pt-BR, say). The
  * blanks (`{app}`, `{code}`, `{link}`…) are filled as each goes; in the
  * HTML, escaped. The HTML is one plain card, inline-styled, as mail apps
  * want it.

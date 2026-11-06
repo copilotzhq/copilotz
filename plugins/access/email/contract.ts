@@ -36,7 +36,7 @@ export type EmailSettings = {
    * origin is public: a code in a log is a way in).
    */
   adapter: string;
-  /** Who messages are from: `"Co-Cr.ia <noreply@example.com>"`. */
+  /** Who messages are from: `"Example <noreply@example.com>"`. */
   from?: string;
   /** Where replies go, when not to `from`. */
   replyTo?: string;

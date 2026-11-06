@@ -50,15 +50,13 @@ const app = definePlugin({
 const kept = definePlugin({
   name: "kept",
   views: {
-    all: {
-      test: (collection: string, ctx: ViewContext) =>
-        ctx.db.collection(collection).find({}).value ?? [],
-    },
+    all: (collection: string, ctx: ViewContext) =>
+      ctx.db.collection(collection).find({}).value ?? [],
   },
 });
 
 async function all<T>(runtime: Runtime, collection: string): Promise<T[]> {
-  const observed = runtime.observe<T[]>("test", "all", collection);
+  const observed = runtime.observe<T[]>("all", collection);
   try {
     const output = await observed.ready;
     if (output.status !== "ready") throw new Error(JSON.stringify(output));

@@ -1,12 +1,12 @@
 /**
- * A chat message on the phone (the `message` View, medium `voice`): its
+ * A chat message on the phone (the `voice.message` View): its
  * words as they're said aloud. Agents write Markdown, so its marks go (bold,
  * headings, bullets, code), a link says its words, a web address its site,
  * and pictographs (emoji) go; a line that ends without a stop gets one, so
  * the voice pauses there. Files aren't said. It also says what an agent is
  * writing, as it writes (`{ text }`): each word comes out the same once
  * it's whole, so what's said of it never changes. An app says its messages
- * otherwise with a `message` View of its own in this medium (the last
+ * otherwise with a `voice.message` View of its own (the last
  * plugin's wins), keeping to that.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";

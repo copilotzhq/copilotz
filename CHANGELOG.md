@@ -1,5 +1,46 @@
 ## Unreleased
 
+## 1.0.0-rc.24 — 2026-11-06
+
+**Upgrading from rc.23** (two breaking renames; no aliases, no data moves):
+
+1. **Views are found by name alone; the medium is gone.** Flatten `views`:
+   `{ "booking.panel": { web: BookingPanel } }` becomes `{ "booking.panel": BookingPanel }` (`Views`
+   is `Record<string, View>`). `render(medium, name, item, options)` and
+   `observe(medium, name, item, options)` lose their first argument:
+   `ctx.render("llm", "thread", t)` is `ctx.render("llm.thread", t)`,
+   `client.observe("web", "booking.panel", item)` is `client.observe("booking.panel", item)`.
+   `ViewContext` loses `medium`, and its `kind` is now `name`. `ctx.show(name, item)` shows exactly
+   the View it names: there is no inheritance by place. The `"*"` fallback is gone; the hosts ask
+   for their own default (`web.default`, `terminal.default`) when a name has no View.
+   `runtime.describe().views` is the list of names. `GET /api/views/<name>` takes the name
+   (`llm.thread`) and no longer reads `?medium=`; API keys that list a View by `thread` or `message`
+   list `llm.thread` or `llm.message`. An MCP widget's `_meta` names the View without a medium.
+   Where the same thing is shown in several places the name takes the place as a prefix; seven kinds
+   were renamed:
+   | Was                       | Is                                                                                          |
+   | ------------------------- | ------------------------------------------------------------------------------------------- |
+   | `message`                 | `llm.message`, `web.message`, `terminal.message`, `whatsapp.message`, `voice.message`       |
+   | `thread`                  | `llm.thread`, `web.thread`, `terminal.thread`                                               |
+   | `memory`                  | `llm.memory`, `terminal.memory`                                                             |
+   | `live`, `shell`, `spaces` | `web.live`, `web.shell`, `web.spaces`; `terminal.live`, `terminal.shell`, `terminal.spaces` |
+   | `*`                       | `web.default`, `terminal.default`                                                           |
+
+   Every other name stays (`tool:<name>`, `context:<name>`, `addition:<name>`, `mcp:offered`, and
+   the rest). The last plugin to register a name still wins, so an app replaces WhatsApp's message
+   with its own `whatsapp.message`. A page's address still names its View as before
+   (`/thread/<id>`): the web shell looks for that name, then `web.<name>`, then `web.default` (hint
+   `of` names the address's kind); the terminal's `open` does the same with `terminal.`.
+2. **The anonymous actor is `anonymous`, not `visitor`:** a request nobody is signed in to is
+   `{ kind: "anonymous", id: "" }` (`VISITOR` is `ANONYMOUS` in `copilotz/web/server`). Rules that
+   named `visitor` name `anonymous` (identity's `callback` allows `person` or `anonymous`). The
+   `visitor` entrance and its cookie keep their names. `runtime/actor.ts` now lists all six kinds
+   (person, agent, contact, system, maintenance, anonymous); `routine` is an origin and `space` a
+   kind of member, not actors.
+
+- **Oxian 0.23.4:** its adapters await an asynchronous `prepare`, so a front serving several
+  runtimes behind one listener can open the right one before deciding a socket upgrade.
+
 ## 1.0.0-rc.23 — 2026-11-05
 
 **Upgrading from rc.22** (three renames and one host change; nothing else needs doing):

@@ -128,22 +128,18 @@ const plugin = definePlugin({
     },
   },
   views: {
-    notes: {
-      test: (_: unknown, ctx: ViewContext) =>
-        (ctx.db.collection<Note>("note").find({}, { sort: { text: 1 } }).value ?? []).map((n) =>
-          n.text
-        ),
-    },
+    notes: (_: unknown, ctx: ViewContext) =>
+      (ctx.db.collection<Note>("note").find({}, { sort: { text: 1 } }).value ?? []).map((n) =>
+        n.text
+      ),
     // A View knows whom it renders as, wherever it's drawn.
-    whoami: { test: (_: unknown, ctx: ViewContext) => ctx.actor?.id ?? "system" },
+    whoami: (_: unknown, ctx: ViewContext) => ctx.actor?.id ?? "system",
     // How many of these texts, of what the reader reaches: an aggregate with its own $match.
-    tally: {
-      test: (texts: string[], ctx: ViewContext) =>
-        ctx.db.collection("note").aggregate([
-          { $match: { text: { $in: texts } } },
-          { $group: { _id: null, n: { $count: {} } } },
-        ]).value,
-    },
+    tally: (texts: string[], ctx: ViewContext) =>
+      ctx.db.collection("note").aggregate([
+        { $match: { text: { $in: texts } } },
+        { $group: { _id: null, n: { $count: {} } } },
+      ]).value,
   },
   // Each person reaches their own notes.
   guard: (actor, { collection }) => collection === "note" ? { owner: actor.id } : undefined,
@@ -203,7 +199,7 @@ each(
     await rt.call("note.add", { text: "a2" }, { actor: ana });
     await rt.call("note.add", { text: "b1" }, { actor: bob });
     const tally = async (actor: Actor) => {
-      const seen = rt.observe("test", "tally", ["a1", "b1"], { actor });
+      const seen = rt.observe("tally", ["a1", "b1"], { actor });
       try {
         return await seen.ready;
       } finally {
@@ -281,7 +277,7 @@ each("a timer an actor sets runs as them", async (rt, store) => {
 each("an actor's observed View shows what they reach", async (rt) => {
   await rt.call("note.add", { text: "a1" }, { actor: ana });
   await rt.call("note.add", { text: "b1" }, { actor: bob });
-  const notes = rt.observe<string[]>("test", "notes", {}, { actor: ana });
+  const notes = rt.observe<string[]>("notes", {}, { actor: ana });
   assertEquals(await notes.ready, { status: "ready", value: ["a1"] });
   await rt.call("note.add", { text: "b2" }, { actor: bob });
   await rt.call("note.add", { text: "a2" }, { actor: ana });
@@ -294,8 +290,8 @@ each("an actor's observed View shows what they reach", async (rt) => {
 each("queries and Views know who reads", async (rt) => {
   assertEquals(await rt.query("note.asker", {}, { actor: ana }), "ana");
   assertEquals(await rt.query("note.asker", {}), "system");
-  const seen = rt.observe<string>("test", "whoami", {}, { actor: bob });
+  const seen = rt.observe<string>("whoami", {}, { actor: bob });
   assertEquals(await seen.ready, { status: "ready", value: "bob" });
   seen.close();
-  assertEquals(await rt.render("test", "whoami", {}), "system");
+  assertEquals(await rt.render("whoami", {}), "system");
 });

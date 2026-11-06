@@ -91,47 +91,31 @@ const front = definePlugin({
   name: "notes-test",
   requires: ["notes"],
   views: {
-    notes: {
-      test: (_: unknown, ctx: ViewContext) => {
-        const all = ctx.db.collection<Note>("note").find({}, { sort: { text: 1 } }).value ?? [];
-        const count = ctx.db.collection("note").query<number>("count").value;
-        return { texts: all.map((n) => n.text), secrets: all.map((n) => n.secret ?? null), count };
-      },
+    notes: (_: unknown, ctx: ViewContext) => {
+      const all = ctx.db.collection<Note>("note").find({}, { sort: { text: 1 } }).value ?? [];
+      const count = ctx.db.collection("note").query<number>("count").value;
+      return { texts: all.map((n) => n.text), secrets: all.map((n) => n.secret ?? null), count };
     },
-    tally: { test: (_: unknown, ctx: ViewContext) => ctx.db.collection("tally").find({}).value },
-    total: {
-      test: (_: unknown, ctx: ViewContext) => ctx.db.collection("tally").query("total").value,
-    },
-    all: {
-      test: (_: unknown, ctx: ViewContext) => ctx.db.collection("tally").query("all").value,
-    },
+    tally: (_: unknown, ctx: ViewContext) => ctx.db.collection("tally").find({}).value,
+    total: (_: unknown, ctx: ViewContext) => ctx.db.collection("tally").query("total").value,
+    all: (_: unknown, ctx: ViewContext) => ctx.db.collection("tally").query("all").value,
     // Two parts making the same read in one pass (a sidebar and a page reading the spaces).
-    pair: {
-      test: (_: unknown, ctx: ViewContext) => [
-        ctx.show("counted", { _id: "left" }),
-        ctx.show("counted", { _id: "right" }),
-      ],
-    },
-    counted: {
-      test: (_: unknown, ctx: ViewContext) =>
-        ctx.db.collection("note").query<number>("count").value,
-    },
+    pair: (_: unknown, ctx: ViewContext) => [
+      ctx.show("counted", { _id: "left" }),
+      ctx.show("counted", { _id: "right" }),
+    ],
+    counted: (_: unknown, ctx: ViewContext) =>
+      ctx.db.collection("note").query<number>("count").value,
     // Reads asked for in one batch, the second holding back the answer to both.
-    racing: {
-      test: (_: unknown, ctx: ViewContext) => [
-        ctx.show("texts", { _id: "texts" }),
-        ctx.show("slow", { _id: "slow" }),
-      ],
-    },
-    texts: {
-      test: (_: unknown, ctx: ViewContext) =>
-        (ctx.db.collection<Note>("note").find({}, { sort: { text: 1 } }).value ?? []).map((n) =>
-          n.text
-        ),
-    },
-    slow: {
-      test: (_: unknown, ctx: ViewContext) => ctx.db.collection("tally").query("slow").value,
-    },
+    racing: (_: unknown, ctx: ViewContext) => [
+      ctx.show("texts", { _id: "texts" }),
+      ctx.show("slow", { _id: "slow" }),
+    ],
+    texts: (_: unknown, ctx: ViewContext) =>
+      (ctx.db.collection<Note>("note").find({}, { sort: { text: 1 } }).value ?? []).map((n) =>
+        n.text
+      ),
+    slow: (_: unknown, ctx: ViewContext) => ctx.db.collection("tally").query("slow").value,
   },
 });
 
@@ -185,7 +169,6 @@ test("a client sees what its person reaches, as it changes", async () => {
     const client = as(ana);
     await client.ready;
     const view = client.observe<{ texts: string[]; secrets: unknown[]; count: number }>(
-      "test",
       "notes",
       {},
     );
@@ -214,15 +197,15 @@ test("a client reads directly only what a rule speaks for; anything else, throug
   await setup(async (_rt, as) => {
     const client = as(ana);
     await client.ready;
-    const direct = client.observe("test", "tally", {});
+    const direct = client.observe("tally", {});
     const failed = await direct.ready;
     assertEquals(failed.status, "failed");
     assert(
       String((failed as { error: Error }).error.message).includes("No rule lets a browser read"),
     );
-    const total = client.observe("test", "total", {});
+    const total = client.observe("total", {});
     assertEquals(await total.ready, { status: "ready", value: 0 });
-    const all = client.observe("test", "all", {});
+    const all = client.observe("all", {});
     const refused = await all.ready;
     assertEquals(refused.status, "failed");
     assert(String((refused as { error: Error }).error.message).includes('may not run "tally.all"'));
@@ -237,7 +220,7 @@ test("the same read made twice at once is asked for, and answered, once", async 
     const client = as(ana);
     await client.ready;
     const parts: Observed[] = [];
-    const view = client.observe("test", "pair", {}, {
+    const view = client.observe("pair", {}, {
       part: (part) => (parts.push(part), part),
     });
     const ready = await Promise.race([
@@ -302,7 +285,7 @@ async function overSocket(
 
 test("a client that loses its connection sees what changed meanwhile, and what changes after", async () => {
   await overSocket(async (rt, client, sockets) => {
-    const view = client.observe<{ texts: string[] }>("test", "notes", {});
+    const view = client.observe<{ texts: string[] }>("notes", {});
     await view.ready;
     const texts = () => (view.get() as { value?: { texts: string[] } }).value?.texts ?? [];
     // The connection drops; a note is added meanwhile.
@@ -326,7 +309,7 @@ test("what's pushed while a read's batch is answered isn't lost to the older ans
       const client = as(ana);
       await client.ready;
       const parts: Observed[] = [];
-      const view = client.observe("test", "racing", {}, {
+      const view = client.observe("racing", {}, {
         part: (part) => (parts.push(part), part),
       });
       await new Promise((r) => setTimeout(r, 100));
@@ -348,7 +331,7 @@ test("what's pushed while a read's batch is answered isn't lost to the older ans
 test("what's pushed while a new connection asks again isn't lost to the older answer", async () => {
   await overSocket(async (rt, client, sockets) => {
     const parts: Observed[] = [];
-    const view = client.observe("test", "racing", {}, {
+    const view = client.observe("racing", {}, {
       part: (part) => (parts.push(part), part),
     });
     await view.ready;
@@ -428,10 +411,8 @@ test("over a link: seeded answers ask nothing; refresh asks again; updates redra
   const front = definePlugin({
     name: "front",
     views: {
-      tally: {
-        web: (_: unknown, ctx: ViewContext) =>
-          `${ctx.db.collection("tally").query<number>("total").value ?? "…"} notes`,
-      },
+      tally: (_: unknown, ctx: ViewContext) =>
+        `${ctx.db.collection("tally").query<number>("total").value ?? "…"} notes`,
     },
   });
   const link = {
@@ -446,7 +427,7 @@ test("over a link: seeded answers ask nothing; refresh asks again; updates redra
   };
   // First, a client with nothing known: it asks, and what it knows is its snapshot.
   const first = connect({ plugins: [front], link });
-  const seen = first.observe("web", "tally", {});
+  const seen = first.observe("tally", {});
   assertEquals(((await seen.ready) as { value: string }).value, "3 notes");
   await first.idle();
   const snapshot = first.known();
@@ -458,7 +439,7 @@ test("over a link: seeded answers ask nothing; refresh asks again; updates redra
 
   // Seeded with it, a client's first paint asks nothing.
   const client = connect({ plugins: [front], link, known: snapshot });
-  const shown = client.observe("web", "tally", {});
+  const shown = client.observe("tally", {});
   assertEquals(((await shown.ready) as { value: string }).value, "3 notes");
   await client.idle();
   assertEquals(asked.length, 1);

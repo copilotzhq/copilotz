@@ -1,5 +1,5 @@
 /**
- * WhatsApp as a medium: what a `whatsapp` View returns is a list of parts,
+ * WhatsApp's parts: what a `whatsapp.*` View returns is a list of parts,
  * each one WhatsApp message (text, buttons, a list, a carousel, an image, a
  * document), built with these functions. Each checks Meta's limits and
  * throws `invalid`, saying what's wrong: nothing is cut short silently, as

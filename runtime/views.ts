@@ -16,16 +16,11 @@ import type {
   RenderOptions,
   ViewCollection,
   ViewContext,
-  ViewDef,
   Views,
 } from "./define.ts";
 
 /** A View that keeps reading new things after this many passes is a bug, not slow data. */
 export const PASSES = 25;
-
-/** The View for a kind in a medium: its own, else the medium's default (kind `"*"`). */
-export const viewOf = (views: Views, kind: string, medium: string): ViewDef | undefined =>
-  views[kind]?.[medium] ?? views["*"]?.[medium];
 
 /** A run of a View: its reads by what they ask, and those still loading in this pass. */
 export type Pass = { slots: Map<string, Slot>; pending: Promise<void>[] };
@@ -95,36 +90,35 @@ const once = () =>
 
 /** A Render over `views`, loading data through `reads` (a read-only context). */
 export function presenter(views: Views, reads: () => ReadContext): Render {
-  return async (medium, kind, item, options: RenderOptions = {}) => {
-    const view = viewOf(views, kind, medium);
+  return async (name, item, options: RenderOptions = {}) => {
+    const view = views[name];
     if (!view) return undefined;
     const source = reads();
     const pass: Pass = { slots: new Map(), pending: [] };
     const db = viewCollections(source, pass);
 
-    const context = (kind: string, hints: Record<string, unknown>): ViewContext => ({
+    const context = (name: string, hints: Record<string, unknown>): ViewContext => ({
       db,
       resources: source.resources,
-      medium,
-      kind,
+      name,
       ...(options.viewer ? { viewer: options.viewer } : {}),
       ...(source.actor ? { actor: source.actor } : {}),
       hints,
-      show: (kind, item, hints = {}) => viewOf(views, kind, medium)?.(item, context(kind, hints)),
+      show: (name, item, hints = {}) => views[name]?.(item, context(name, hints)),
       call: once,
       emit: once,
     });
 
     for (let round = 1;; round++) {
       pass.pending = [];
-      const output = view(item, context(kind, options.hints ?? {}));
+      const output = view(item, context(name, options.hints ?? {}));
       if (!pass.pending.length) {
         const failed = failure(pass);
         if (failed) throw failed.error;
         return output;
       }
       if (round === PASSES) {
-        throw invalid(`The ${medium} View for "${kind}" kept making new reads.`);
+        throw invalid(`The View "${name}" kept making new reads.`);
       }
       await Promise.all(pass.pending);
     }

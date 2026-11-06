@@ -237,9 +237,9 @@ export type ContextEntry = { place: "system" | "turn"; agents?: string[]; instru
 
 /**
  * An `additions` resource: what a feature shows after an agent's final
- * answer, in a medium that can (WhatsApp: a carousel of trips after the
- * answer that found them). Its content is a View, `addition:<name>`, in that
- * medium, given `{ thread, answer }`: it returns an `Addition`, several, or
+ * answer, in a place that can (WhatsApp: a carousel of trips after the
+ * answer that found them). Its content is a View, `addition:<name>`, which
+ * that place looks up, given `{ thread, answer }`: it returns an `Addition`, several, or
  * nothing. Lowest `order` first; only after the answers of `agents`, when it
  * names them.
  */
@@ -247,8 +247,8 @@ export type AdditionEntry = { order?: number; agents?: string[] };
 
 /**
  * What an `addition:<name>` View returns: the parts to show (each in the
- * medium's own terms), once per chat per `key` (at most 120 of `[\w:.-]`:
- * `trips:9f2a`), what goes instead when the medium refuses a part
+ * place's own terms), once per chat per `key` (at most 120 of `[\w:.-]`:
+ * `trips:9f2a`), what goes instead when the place refuses a part
  * (`fallback`: the trips as a text list), and a line the model is told after
  * that answer (`note`: "6 trips as a carousel").
  */

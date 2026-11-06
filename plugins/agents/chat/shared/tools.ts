@@ -57,6 +57,6 @@ export async function toolText(
   call: Step,
   viewer: Viewer,
 ): Promise<string> {
-  const shown = await ctx.render("llm", `tool:${call.name}`, call, { viewer });
+  const shown = await ctx.render(`tool:${call.name}`, call, { viewer });
   return typeof shown === "string" ? shown : call.output;
 }

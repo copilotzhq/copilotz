@@ -36,8 +36,7 @@ const shown = (pending: Approval[], hints: Record<string, unknown>) => {
     resources: {
       agents: { east: { name: "East", instructions: "" }, south: { name: "South" } },
     },
-    medium: "web",
-    kind: "computer.asks",
+    name: "computer.asks",
     hints,
     show: () => null,
     call: () => Promise.resolve({} as never),

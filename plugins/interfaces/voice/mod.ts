@@ -34,8 +34,8 @@
  *   tool, offered to the agent answering a call while it goes on). A call
  *   that ends stops its agent's turn. Each call is a small record
  *   (`voice_call`): when, how long, why it ended.
- * - **The phone is a medium:** what an agent writes is said through its
- *   `message` View (medium `voice`: the words, without Markdown), which an
+ * - **The phone has Views of its own:** what an agent writes is said through
+ *   its `voice.message` View (the words, without Markdown), which an
  *   app may replace; the caller's chat is read as theirs, so only what they
  *   may read is said, and only of the turns their own words started.
  *
@@ -87,10 +87,10 @@ export const voice: Plugin = definePlugin({
   // What's kept of calls goes after `keep` days.
   schedules: { "voice.prune": { cron: "40 3 * * *", call: "voice.prune", input: {} } },
   views: {
-    // The phone as a medium: what a message is, said aloud; what's being said in a call.
-    message: { voice: messageView },
-    voice_call: { voice: callView },
-    "context:voice": { llm: contextView },
+    // The phone's Views: what a message is, said aloud; what's being said in a call.
+    "voice.message": messageView,
+    voice_call: callView,
+    "context:voice": contextView,
   },
   // At start: every line the app declares has what it needs.
   check: (merged) => {

@@ -7,7 +7,7 @@
 import { principalOf, type ViewContext } from "../../../../runtime/mod.ts";
 import type { Contact } from "../collections/contact.ts";
 
-/** How each medium's contacts talk, as an agent is told it. */
+/** How each kind of contact talks, as an agent is told it. */
 const FROM: Record<string, string> = {
   whatsapp: "writing on WhatsApp",
   voice: "on a phone call: they hear what you write, read aloud. The number they call from " +

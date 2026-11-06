@@ -2,7 +2,7 @@
  * The WhatsApp plugin's contract: what other plugins and apps may import:
  * the shapes of a connected number, a linked phone and a WhatsApp
  * conversation, and of the plugin's settings (the `whatsapp` resource); and
- * the medium's toolkit, for `whatsapp` Views: the parts a View returns,
+ * WhatsApp's toolkit, for `whatsapp.*` Views: the parts a View returns,
  * each one WhatsApp message, built and checked against Meta's limits
  * (`text`, `buttons`, `list`, `carousel`, `image`, `document`; `clip` cuts a
  * title on purpose).

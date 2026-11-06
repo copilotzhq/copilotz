@@ -443,7 +443,7 @@ export function talk(
       const { thread, since } = on;
       // Read as the line's agent working for the caller: only what both may read, and of that,
       // what a contact would (answers, not steps), the View keeps to.
-      seeing = runtime.observe<Saying>("voice", "voice_call", {
+      seeing = runtime.observe<Saying>("voice_call", {
         _id: call._id,
         thread,
         contact: on.contact,

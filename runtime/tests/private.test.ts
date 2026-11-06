@@ -73,9 +73,7 @@ const plugin = definePlugin({
     }),
   },
   views: {
-    accounts: {
-      test: (_: unknown, ctx: ViewContext) => ctx.db.collection("account").find({}).value ?? [],
-    },
+    accounts: (_: unknown, ctx: ViewContext) => ctx.db.collection("account").find({}).value ?? [],
   },
 });
 
@@ -91,7 +89,7 @@ for (const [name, make] of Object.entries(stores)) {
       await rt.call("account.add", {});
       const seen = { _id: "a1", name: "mail", owner: { id: "ana" } };
       assertEquals(await rt.query("account.all", {}, { actor: ana }), [seen]);
-      const accounts = rt.observe("test", "accounts", {}, { actor: ana });
+      const accounts = rt.observe("accounts", {}, { actor: ana });
       assertEquals(await accounts.ready, { status: "ready", value: [seen] });
       accounts.close();
       assertEquals(await rt.call("account.use", {}, { actor: ana }), { used: 7, secret: 6 });

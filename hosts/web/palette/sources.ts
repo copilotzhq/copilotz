@@ -46,7 +46,7 @@ export function useOutputs(sources: Source[]): { values: unknown[]; loading: boo
       const slot = slots.current.get(id) ?? slots.current.set(id, {}).get(id)!;
       if (slot.key === key || slot.next?.key === key) return;
       slot.next?.observation.close();
-      const observation = client.observe("web", source.kind, source.item ?? {}, {
+      const observation = client.observe(source.kind, source.item ?? {}, {
         ...(viewer ? { viewer } : {}),
         hints: source.hints ?? {},
       });

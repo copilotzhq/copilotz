@@ -123,7 +123,7 @@ test("a route's Action answers the request, as a visitor when nobody's signed in
       }),
     );
     assertEquals(answered.status, 201);
-    assertEquals(answered.headers.get("x-who"), "visitor");
+    assertEquals(answered.headers.get("x-who"), "anonymous");
     assertEquals(await answered.json(), {
       method: "POST",
       path: "/hooks/echo",
@@ -266,7 +266,7 @@ test("without the web app: the routes, /health unless a route takes it, and 404"
       return [answered.status, await answered.text()];
     };
     const echoed = await serve(new Request("http://localhost/hooks/echo", { method: "POST" }));
-    assertEquals([echoed.status, echoed.headers.get("x-who")], [201, "visitor"]);
+    assertEquals([echoed.status, echoed.headers.get("x-who")], [201, "anonymous"]);
     await echoed.body?.cancel();
     assertEquals(await text("http://localhost/download/a.zip"), [200, "file /download/a.zip"]);
     assertEquals(await text("http://localhost/health"), [200, "ok"]);

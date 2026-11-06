@@ -1,7 +1,7 @@
 /**
  * What went out after agents' answers, beyond what they wrote (additions: a
  * carousel of trips, buttons to pay): each addition once per chat per key
- * (`<thread>:<key>`), with the answer it followed, the medium it went by, a
+ * (`<thread>:<key>`), with the answer it followed, the place it went by (`medium`), a
  * line for the model (`note`), and whether its fallback went instead
  * (`fallback`: Meta refused the carousel, its text list went). A ledger: no
  * events, and writing one again changes nothing, so a retried delivery

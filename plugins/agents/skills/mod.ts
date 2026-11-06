@@ -47,7 +47,7 @@ export const skills: Plugin = definePlugin({
     "skill.update": updateAction,
     "skill.delete": deleteAction,
   },
-  views: { "context:skills": { llm: skillsContext } },
+  views: { "context:skills": skillsContext },
   resources: {
     // In the stable system text: the skills an agent has, by name.
     context: { skills: { place: "system" } },

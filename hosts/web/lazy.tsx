@@ -31,7 +31,7 @@ export function LazyView(
   useEffect(() => {
     const { client, viewer } = session;
     if (!client) return;
-    const next = client.observe("web", kind, item, {
+    const next = client.observe(kind, item, {
       ...(viewer ? { viewer } : {}),
       hints,
       part: (part, key) => <Part key={key} part={part} />,

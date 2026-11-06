@@ -102,55 +102,41 @@ const plugin = definePlugin({
   },
   views: {
     // A board: its notes, each a part, and the drafts in progress.
-    board: {
-      test: (_: unknown, ctx: ViewContext): Board => {
-        ran("board");
-        const notes = ctx.db.collection<Note>("note").find({}, { sort: { _id: 1 } });
-        const drafts = ctx.db.collection<Draft>("draft").find({}, { sort: { _id: 1 } });
-        return {
-          notes: (notes.value ?? []).map((n) => ctx.show("note", n)),
-          drafts: (drafts.value ?? []).map((d) => d.text),
-          add: (text: string) => ctx.call("note.add", { text, id: text }),
-        };
-      },
+    board: (_: unknown, ctx: ViewContext): Board => {
+      ran("board");
+      const notes = ctx.db.collection<Note>("note").find({}, { sort: { _id: 1 } });
+      const drafts = ctx.db.collection<Draft>("draft").find({}, { sort: { _id: 1 } });
+      return {
+        notes: (notes.value ?? []).map((n) => ctx.show("note", n)),
+        drafts: (drafts.value ?? []).map((d) => d.text),
+        add: (text: string) => ctx.call("note.add", { text, id: text }),
+      };
     },
     // A note and its likes, which only it reads.
-    note: {
-      test: (n: Note, ctx: ViewContext) => {
-        ran(`note:${n._id}`);
-        const likes = ctx.db.collection("like").countDocuments({ note: n._id });
-        return `${n.text} (${likes.value ?? 0})`;
-      },
+    note: (n: Note, ctx: ViewContext) => {
+      ran(`note:${n._id}`);
+      const likes = ctx.db.collection("like").countDocuments({ note: n._id });
+      return `${n.text} (${likes.value ?? 0})`;
     },
     // How many documents of a collection match, the filter's `$or` looked into each time.
-    matching: {
-      test: (asked: { c: string; f: Record<string, unknown> }, ctx: ViewContext) =>
-        (ctx.db.collection(asked.c).find({ $or: lookedInto, ...asked.f }).value ?? []).length,
-    },
+    matching: (asked: { c: string; f: Record<string, unknown> }, ctx: ViewContext) =>
+      (ctx.db.collection(asked.c).find({ $or: lookedInto, ...asked.f }).value ?? []).length,
     // The drafts alone; the notes alone, slowly.
-    drafts: {
-      test: (_: unknown, ctx: ViewContext) =>
-        (ctx.db.collection<Draft>("draft").find({}).value ?? []).map((d) => d.text),
+    drafts: (_: unknown, ctx: ViewContext) =>
+      (ctx.db.collection<Draft>("draft").find({}).value ?? []).map((d) => d.text),
+    "slow notes": (_: unknown, ctx: ViewContext) =>
+      (ctx.db.collection<Note>("note").query<Note[]>("slow", {}).value ?? []).map((n) => n.text),
+    broken: () => {
+      throw new Error("no luck");
     },
-    "slow notes": {
-      test: (_: unknown, ctx: ViewContext) =>
-        (ctx.db.collection<Note>("note").query<Note[]>("slow", {}).value ?? []).map((n) => n.text),
-    },
-    broken: {
-      test: () => {
-        throw new Error("no luck");
-      },
-    },
-    shelf: {
-      test: (_: unknown, ctx: ViewContext) => [
-        ctx.show("broken", {}),
-        ctx.show("note", { _id: "n0", text: "fine" }),
-      ],
-    },
+    shelf: (_: unknown, ctx: ViewContext) => [
+      ctx.show("broken", {}),
+      ctx.show("note", { _id: "n0", text: "fine" }),
+    ],
   },
 });
 
-/** A part as this medium places it: a box holding the part. */
+/** A part as the observer places it: a box holding the part. */
 const parts = { part: (part: Observed) => ({ part }) };
 
 /** What an output shows, as plain data: parts by their own outputs, all the way down. */
@@ -215,8 +201,8 @@ const each = (name: string, fn: (runtime: Runtime, store: Store) => Promise<void
 
 each("what one commit changes shows at once: never both, nor neither", async (rt) => {
   await rt.call("draft.set", { id: "d1", note: "n1", text: "hello" });
-  const drafts = rt.observe<string[]>("test", "drafts", {});
-  const notes = rt.observe<string[]>("test", "slow notes", {});
+  const drafts = rt.observe<string[]>("drafts", {});
+  const notes = rt.observe<string[]>("slow notes", {});
   await Promise.all([drafts.ready, notes.ready]);
   // What both show, each time either tells something new.
   const seen: string[] = [];
@@ -237,7 +223,7 @@ each("what one commit changes shows at once: never both, nor neither", async (rt
 
 each("a View's output comes again when what it read changes; a part runs alone", async (rt) => {
   await rt.call("note.add", { id: "a", text: "a" });
-  const board = rt.observe<Board>("test", "board", {}, parts);
+  const board = rt.observe<Board>("board", {}, parts);
   assertEquals(shown(await board.ready), { notes: ["a (0)"], drafts: [] });
 
   // A like only "a"'s part reads: that part runs again, in one pass (what
@@ -262,7 +248,7 @@ each("a View's output comes again when what it read changes; a part runs alone",
 each(
   "a collection kept in memory: live state, swapped for what it became at once",
   async (rt, store) => {
-    const board = rt.observe<Board>("test", "board", {}, parts);
+    const board = rt.observe<Board>("board", {}, parts);
     await board.ready;
     await rt.call("draft.set", { id: "d", note: "n", text: "half writ" });
     await until(board, (s) => (s as Board).drafts[0] === "half writ");
@@ -289,7 +275,7 @@ each(
 );
 
 each("a part that fails shows why, and its parent still shows", async (rt) => {
-  const shelf = rt.observe("test", "shelf", {}, parts);
+  const shelf = rt.observe("shelf", {}, parts);
   const out = await shelf.ready;
   assert(out.status === "ready");
   const [broken, fine] = out.value as { part: Observed }[];
@@ -302,7 +288,7 @@ each("a part that fails shows why, and its parent still shows", async (rt) => {
 
 each("without parts, shown Views render inline, and the whole runs again", async (rt) => {
   await rt.call("note.add", { id: "a", text: "a" });
-  const board = rt.observe<Board>("test", "board", {});
+  const board = rt.observe<Board>("board", {});
   assertEquals(shown(await board.ready), { notes: ["a (0)"], drafts: [] });
   const boards = count("board");
   await rt.call("like.add", { note: "a" });
@@ -313,7 +299,7 @@ each("without parts, shown Views render inline, and the whole runs again", async
 
 each("closed, an observation runs no more", async (rt) => {
   await rt.call("note.add", { id: "a", text: "a" });
-  const board = rt.observe<Board>("test", "board", {}, parts);
+  const board = rt.observe<Board>("board", {}, parts);
   await board.ready;
   board.close();
   const [boards, notes] = [count("board"), count("note:a")];
@@ -326,12 +312,12 @@ each("closed, an observation runs no more", async (rt) => {
 each(
   "a read naming what it reads (a field equal to strings) is matched only against changes to those",
   async (rt) => {
-    const likes = rt.observe<number>("test", "matching", { c: "like", f: { note: "a" } });
-    const either = rt.observe<number>("test", "matching", {
+    const likes = rt.observe<number>("matching", { c: "like", f: { note: "a" } });
+    const either = rt.observe<number>("matching", {
       c: "like",
       f: { note: { $in: ["b", "c"] } },
     });
-    const tagged = rt.observe<number>("test", "matching", { c: "tagged", f: { tags: "x" } });
+    const tagged = rt.observe<number>("matching", { c: "tagged", f: { tags: "x" } });
     assertEquals([shown(await likes.ready), shown(await either.ready), shown(await tagged.ready)], [
       0,
       0,

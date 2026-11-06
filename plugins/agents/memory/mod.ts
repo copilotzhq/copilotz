@@ -43,7 +43,7 @@ export const memory: Plugin = definePlugin({
   name: "memory",
   requires: ["chat"],
   collections: { memory: memoryCollection, memoryProgress },
-  views: { memory: { llm: memoryView }, ...contextViews },
+  views: { "llm.memory": memoryView, ...contextViews },
   actions: {
     // Moved as the person: they must reach it, and may write where it goes (the spaces' rules).
     "memory.move": defineAction({

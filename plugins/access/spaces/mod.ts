@@ -166,8 +166,8 @@ export const spaces: Plugin = definePlugin({
   // Where a conversation is, in agents' prompts (with the chat plugin), and
   // each turn, where else they can read for their person.
   views: {
-    "context:where": { llm: whereView },
-    "context:elsewhere": { llm: elsewhereView },
+    "context:where": whereView,
+    "context:elsewhere": elsewhereView,
   },
   resources: {
     context: { where: { place: "system" }, elsewhere: { place: "turn" } },

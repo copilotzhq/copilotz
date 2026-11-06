@@ -182,7 +182,7 @@ async function session(
   // Where they work: kept, unless they've moved elsewhere already.
   const state = await runtime.query<ShellState>("shell.mine", { person: me });
   if (space && !state.space) await runtime.call("shell.set", { person: me, space });
-  const screen = runtime.observe("terminal", "shell", { person: me }, {
+  const screen = runtime.observe("terminal.shell", { person: me }, {
     ...as,
     viewer: { name: me, kind: "person" },
     // What was printed before they sat down is already on the screen.

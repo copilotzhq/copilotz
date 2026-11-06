@@ -170,7 +170,7 @@ async function connect(serve: Setup["serve"], asked: Asked = {}) {
 
 /** What a View of the app's says, as the system reads it. */
 async function read<T>(runtime: Runtime, view: string, item: unknown = {}): Promise<T> {
-  const seen = runtime.observe<T>("test", view, item);
+  const seen = runtime.observe<T>(view, item);
   try {
     const output = await seen.ready;
     if (output.status !== "ready") throw new Error(`${view}: ${output.status}`);
@@ -184,28 +184,22 @@ async function read<T>(runtime: Runtime, view: string, item: unknown = {}): Prom
 const keptContacts = definePlugin({
   name: "kept",
   views: {
-    "all-contacts": {
-      test: (_: unknown, ctx) =>
-        (ctx.db.collection<{ _id: string; in: string; via: string }>("contact").find({}).value ??
-          []).map((c) => `${c._id} ${c.in} ${c.via}`),
-    },
-    "chats-of": {
-      test: (contact: string, ctx) =>
-        (ctx.db.collection<{ space: string }>("member").find({
-          member: `contact:${contact}`,
-          on: "thread",
-        }).value ?? []).map((m) => m.space.slice("thread:".length)),
-    },
-    kept: {
-      test: (_: unknown, ctx) => ({
-        contacts: (ctx.db.collection("contact").find({}).value ?? []).length,
-        threads: (ctx.db.collection("thread").find({}).value ?? []).length,
-        members: (ctx.db.collection<{ member: string }>("member").find({}).value ?? [])
-          .filter((m) => m.member.startsWith("contact:")).length,
-        visitors: (ctx.db.collection("contact_visitor").find({}).value ?? []).length,
-      }),
-    },
-    rates: { test: (_: unknown, ctx) => ctx.db.collection("contact_rate").find({}).value ?? [] },
+    "all-contacts": (_: unknown, ctx) =>
+      (ctx.db.collection<{ _id: string; in: string; via: string }>("contact").find({}).value ??
+        []).map((c) => `${c._id} ${c.in} ${c.via}`),
+    "chats-of": (contact: string, ctx) =>
+      (ctx.db.collection<{ space: string }>("member").find({
+        member: `contact:${contact}`,
+        on: "thread",
+      }).value ?? []).map((m) => m.space.slice("thread:".length)),
+    kept: (_: unknown, ctx) => ({
+      contacts: (ctx.db.collection("contact").find({}).value ?? []).length,
+      threads: (ctx.db.collection("thread").find({}).value ?? []).length,
+      members: (ctx.db.collection<{ member: string }>("member").find({}).value ?? [])
+        .filter((m) => m.member.startsWith("contact:")).length,
+      visitors: (ctx.db.collection("contact_visitor").find({}).value ?? []).length,
+    }),
+    rates: (_: unknown, ctx) => ctx.db.collection("contact_rate").find({}).value ?? [],
   },
 });
 
@@ -370,7 +364,7 @@ test("a forged cookie is no one: never the visitor it imitates, and cleared; an 
       const route = await serve(
         new Request(`${PAGE}/who`, { method: "POST", headers: { cookie: `visitor=${forged}` } }),
       );
-      assertEquals((await route.json()).kind, "visitor");
+      assertEquals((await route.json()).kind, "anonymous");
     }
     assertEquals(line, "shop");
     // The one cookie that's her is her.
@@ -712,7 +706,7 @@ test("an app without a page or tickets serves its routes alone, whatever its plu
       assertEquals(await plain(method, path, body), [404, "Not found", null], `${method} ${path}`);
     }
     assertEquals(await plain("GET", "/health"), [200, "ok", null]);
-    assertEquals(await plain("POST", "/who"), [200, '{"kind":"visitor","id":""}', null]);
+    assertEquals(await plain("POST", "/who"), [200, '{"kind":"anonymous","id":""}', null]);
     assertEquals(await count(runtime), 0);
   } finally {
     await runtime.close();

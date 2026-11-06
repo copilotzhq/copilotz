@@ -1,6 +1,5 @@
 /**
- * Which of a line's tools a contact is offered (`mcp:offered`, medium
- * `mcp`), as a tool decides it for an agent: a tool whose `offer` is a
+ * Which of a line's tools a contact is offered (`mcp:offered`), as a tool decides it for an agent: a tool whose `offer` is a
  * function is asked, with the client as the agent, the conversation's chat,
  * and reads as the contact (who it'd run as); one that says no isn't
  * listed, and isn't run. Any other `offer` (every agent, some agents) is

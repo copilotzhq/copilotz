@@ -57,7 +57,7 @@ export const thread = defineCollection({
       run: async (threads, params: { thread: string; agent: string }, ctx) => {
         const thread = await threads.findOne({ _id: params.thread });
         return thread
-          ? await ctx.render("llm", "thread", thread, {
+          ? await ctx.render("llm.thread", thread, {
             viewer: { kind: "agent", name: params.agent },
           })
           : null;

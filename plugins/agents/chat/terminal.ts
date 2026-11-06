@@ -20,12 +20,12 @@ export const chatTerminal: Plugin = definePlugin({
   name: "chat-terminal",
   requires: ["chat", "terminal-shell"],
   views: {
-    thread: { terminal: conversationView },
-    message: { terminal: messageLine },
-    author: { terminal: authorView },
-    live: { terminal: liveView },
-    threads: { terminal: threadsView },
-    "agent.prompt": { terminal: agentPromptView },
+    "terminal.thread": conversationView,
+    "terminal.message": messageLine,
+    author: authorView,
+    "terminal.live": liveView,
+    threads: threadsView,
+    "agent.prompt": agentPromptView,
   },
   resources: { commands },
 });

@@ -1,10 +1,10 @@
 /**
- * A chat message on WhatsApp (the `message` View, medium `whatsapp`): its
+ * A chat message on WhatsApp (the `whatsapp.message` View): its
  * Markdown as WhatsApp formats it, in parts of at most 4096 characters split
  * where a reader would pause, then its files: pictures (jpeg or png, up to
  * 5 MB) as images, anything else as documents. A short text goes as the
  * first file's caption: one message, not two. An app shows its messages
- * otherwise with a `message` View of its own in this medium (the last
+ * otherwise with a `whatsapp.message` View of its own (the last
  * plugin's wins).
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";

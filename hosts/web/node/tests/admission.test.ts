@@ -39,10 +39,8 @@ const app = definePlugin({
   adapters: { llm: { script: { async *generate() {} } } },
   // Every space, as the system reads them.
   views: {
-    spaces: {
-      test: (_: unknown, ctx: ViewContext) =>
-        (ctx.db.collection<{ _id: string }>("space").find({}).value ?? []).map((s) => s._id),
-    },
+    spaces: (_: unknown, ctx: ViewContext) =>
+      (ctx.db.collection<{ _id: string }>("space").find({}).value ?? []).map((s) => s._id),
   },
 });
 
@@ -437,7 +435,7 @@ test("a connection let in before its person signs out is never ready, nor a tick
         2_000,
       );
       assert(made !== "ok");
-      const spaces = runtime.observe<string[]>("test", "spaces", {});
+      const spaces = runtime.observe<string[]>("spaces", {});
       const seen = await spaces.ready;
       spaces.close();
       assert(seen.status === "ready" && !seen.value.includes("after"));

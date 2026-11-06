@@ -10,6 +10,6 @@ import { approvalsView } from "./views/terminal/approvals.ts";
 export const computersTerminal: Plugin = definePlugin({
   name: "computers-terminal",
   requires: ["computers", "terminal-shell"],
-  views: { approvals: { terminal: approvalsView } },
+  views: { approvals: approvalsView },
   resources: { commands, notices: { approvals: { view: "approvals" } } },
 });

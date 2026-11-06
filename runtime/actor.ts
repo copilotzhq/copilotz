@@ -1,12 +1,29 @@
 /**
- * Who an actor's work is for. An actor is someone (a person, a key's person,
- * a contact), an agent working for someone (`for`), or trusted code acting
- * for whoever called it (`via`, set by `ctx.as`). Everyone who needs the person
- * behind an actor asks here.
+ * Who an actor's work is for. An actor is `{ kind, id, … }`; the kind is open
+ * (plugins add their own), and these are the six the code makes or checks:
  *
- * A contact is someone outside the org who talks to an app's agents (a
- * WhatsApp customer): `{ kind: "contact", id }`. Work can be for them, but
- * they are never a person: nothing that checks a person sees one.
+ * - `person`: someone with an account, signed in or acting through their
+ *   key. Made by identity (`credential.actor`).
+ * - `agent`: an agent working for someone (`for`). Made by agents.
+ * - `contact`: someone outside the org, without an account, known through a
+ *   WhatsApp number, a phone line, ChatGPT or a site's chat. Work can be for
+ *   them, but they are never a person: nothing that checks a person sees
+ *   one. Made by contacts (`contact.start`).
+ * - `system`: trusted code acting for whoever called it (`via`). Made by the
+ *   runtime (`ctx.as()`). It passes every rule.
+ * - `maintenance`: the maintenance key, support's SQL. Made by the
+ *   maintenance interface's routes, only; it is not `system`, so only the
+ *   maintenance Actions let it in.
+ * - `anonymous`: an HTTP request nobody is signed in to (`id: ""`). Made by
+ *   the web host (`ANONYMOUS`); an Action's `allow` decides what it may do.
+ *   It is an actor, not the absence of one: a missing actor is the system.
+ *
+ * Two names that look like kinds are not actors. `routine` is an origin: a
+ * routine runs as the person who set it up (`origin: { kind: "routine", … }`).
+ * `space` is a kind of member (a space that is a member of another), and a
+ * starting point for `reachOf`; it never acts.
+ *
+ * Everyone who needs the person behind an actor asks here.
  */
 import type { Actor } from "./store.ts";
 

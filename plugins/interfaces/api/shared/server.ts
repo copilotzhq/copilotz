@@ -9,8 +9,8 @@
  *   again answers what the first did, without doing it twice. Answers what
  *   the Action returned.
  * - `POST /api/queries/<collection>.<query>`: runs a query, the body its params.
- * - `GET /api/views/<kind>?item=<json>` (or `?id=`): what a View shows,
- *   `llm` by default (`?medium=`); `?follow=1` keeps sending it as it changes.
+ * - `GET /api/views/<name>?item=<json>` (or `?id=`): what a View shows
+ *   (`llm.thread`); `?follow=1` keeps sending it as it changes.
  * - `GET /api/events`: what the key may see, as it happens (see events.ts).
  * - `GET /api/`: the key's reference (each Action's description and input
  *   schema, its queries and Views). From the app's own page, signed in, the
@@ -162,10 +162,9 @@ function used(runtime: Served["runtime"], { key }: Proven) {
 async function viewOf(
   runtime: Served["runtime"],
   url: URL,
-  kind: string,
+  name: string,
   actor: Proven["actor"],
 ): Promise<Response> {
-  const medium = url.searchParams.get("medium") || "llm";
   let item: unknown = {};
   const given = url.searchParams.get("item");
   if (given !== null) {
@@ -175,7 +174,7 @@ async function viewOf(
       throw fault("invalid", "`item` is JSON.");
     }
   } else if (url.searchParams.has("id")) item = { _id: url.searchParams.get("id") };
-  const observed = runtime.observe(medium, kind, item, {
+  const observed = runtime.observe(name, item, {
     actor,
     viewer: { name: actor.id, kind: "person" },
   });

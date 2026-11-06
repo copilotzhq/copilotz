@@ -47,22 +47,20 @@ const app = definePlugin({
   adapters: { llm: { slow } },
   views: {
     // A conversation as a screen shows it: what was said, then what's being written.
-    watch: {
-      test: (item: { thread: string }, ctx: ViewContext): Shown => {
-        const said = ctx.db.collection<Message>("message").find({ thread: item.thread }, {
-          sort: { at: 1 },
-        });
-        const live = ctx.db.collection<Live>("live").find({ thread: item.thread });
-        return {
-          said: (said.value ?? []).map((m) =>
-            m.toolCalls ? `${m.from} used ${m.toolCalls.length}` : `${m.from}: ${m.text}`
-          ),
-          live: (live.value ?? []).map((l) => ({
-            text: l.text,
-            calls: l.calls.map((c) => `${c.name}${c.output ? ` → ${c.output}` : ""}`),
-          })),
-        };
-      },
+    watch: (item: { thread: string }, ctx: ViewContext): Shown => {
+      const said = ctx.db.collection<Message>("message").find({ thread: item.thread }, {
+        sort: { at: 1 },
+      });
+      const live = ctx.db.collection<Live>("live").find({ thread: item.thread });
+      return {
+        said: (said.value ?? []).map((m) =>
+          m.toolCalls ? `${m.from} used ${m.toolCalls.length}` : `${m.from}: ${m.text}`
+        ),
+        live: (live.value ?? []).map((l) => ({
+          text: l.text,
+          calls: l.calls.map((c) => `${c.name}${c.output ? ` → ${c.output}` : ""}`),
+        })),
+      };
     },
   },
 });
@@ -74,7 +72,7 @@ for (const [name, make] of Object.entries(stores)) {
     const runtime = await createRuntime({ store: await make(), plugins: [models, chat, app] });
     try {
       const thread = crypto.randomUUID();
-      const watch = runtime.observe<Shown>("test", "watch", { thread });
+      const watch = runtime.observe<Shown>("watch", { thread });
       await watch.ready;
       const seen: Shown[] = [];
       watch.subscribe(() => {

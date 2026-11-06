@@ -33,7 +33,7 @@ export const commands: Commands = {
       await term.set({ listed: spaces.map((s) => s._id) });
       if (!spaces.length) return await term.print(dim("No spaces yet; /space <name> makes one."));
       const { space } = await term.state();
-      await term.show("spaces", { spaces, ...(space ? { here: space } : {}) });
+      await term.show("terminal.spaces", { spaces, ...(space ? { here: space } : {}) });
       await term.print(dim("/work <n> works in one; new conversations go there."));
     },
   }),

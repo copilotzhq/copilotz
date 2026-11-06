@@ -28,40 +28,42 @@ const message = defineCollection({
   the system's. Plugin code runs any query, as whom it acts for; its reads keep to the rules either
   way.
 
-## Views: data presented to a medium
+## Views: data presented
 
 ```ts
 views: {
-  note:    { llm: (n) => `- ${n.text}`, react: (n, ctx) => <Card>{n.text}</Card> },
-  message: { llm: (m, ctx) => m.from === ctx.viewer.name ? { role: "assistant", … } : { role: "user", … } },
-  thread:  { llm: agentPrompt },
+  note:           (n) => `- ${n.text}`,
+  "web.note":     (n, ctx) => <Card>{n.text}</Card>,
+  "llm.message":  (m, ctx) => m.from === ctx.viewer.name ? { role: "assistant", … } : { role: "user", … },
+  "llm.thread":   agentPrompt,
 }
 ```
 
-- **Kind, then medium.** A kind is a collection's name, `tool:<name>`, or a named datum (`thread`,
-  `participants`). A medium is `llm` now, `react` with the web runtime. The runtime treats both as
-  names; only plugins give them meaning.
-- **Composition.** `ctx.show(kind, item, hints?)` renders whatever View is registered for that kind,
-  in the current medium, or returns undefined when there is none.
+- **A name.** A View is found by its name alone: a collection's name, `tool:<name>`, or a named
+  datum (`participants`). The name says what it shows; where the same thing is shown in several
+  places it takes the place as a prefix (`llm.message`, `web.message`, `terminal.message`). The
+  runtime treats names as plain strings; only plugins give them meaning.
+- **Composition.** `ctx.show(name, item, hints?)` renders exactly the View registered under that
+  name, or returns undefined when there is none. There is no inheritance and no fallback: a host
+  asks for its own default (`web.default`, `terminal.default`) when a name has no View.
 - **Viewer.** `ctx.viewer` is who looks (an agent, a person). Views render relative to it: your own
   messages are the assistant's turns; for a person, your bubbles are on the right.
 - **Hints.** `ctx.hints` carries what the caller asked for (`mode`: a density, such as `panel` or a
   summary line). Open-ended.
-- **The last plugin wins** for a kind and medium, so the app always has the last word. No resolver,
-  no preference resources.
+- **The last plugin wins** for a name, so the app always has the last word. No resolver, no
+  preference resources.
 - **Synchronous reads.** Inside a View, reads return `{ value, status }` at once. The runtime runs
   the View again once pending reads arrive, until nothing is pending. Observed, the same function
   runs again when what it read changes, which is how a screen stays live. One authoring style for
-  every medium.
+  every place.
 - **Read-only while it renders.** A View reads, shows other Views and uses resources. Its handlers
   (a key, a click, in what it returns) call Actions (`ctx.call`) or emit events (`ctx.emit`), as any
   client does.
 
 ## The agent prompt is a View
 
-The chat plugin's `thread` View in the `llm` medium is the prompt layout. It returns the agent's
-tools and three zones, ordered for the prompt cache (tools, then system, then messages, in every
-provider):
+The chat plugin's `llm.thread` View is the prompt layout. It returns the agent's tools and three
+zones, ordered for the prompt cache (tools, then system, then messages, in every provider):
 
 | Zone    | Where                      | What                                                                                       |
 | ------- | -------------------------- | ------------------------------------------------------------------------------------------ |
@@ -122,39 +124,40 @@ agents.
 ## Views are a plugin's front end
 
 Agreed 2026-10-27. A plugin is a self-contained feature, and its Views are that feature's front end:
-placed under a shell for a medium (the terminal now, the browser later), the plugins' Views render
+placed under a shell for a place (the terminal now, the browser later), the plugins' Views render
 the whole app, calling the plugins' Actions and reading their collections.
 
-Three parts make a medium work, and the words for them:
+Three parts make a place work, and the words for them:
 
-- **A feature's front end** for the medium: its Views and commands there, in its own folder
+- **A feature's front end** for the place: its Views and commands there, in its own folder
   (`chat/terminal.ts`). A plugin.
-- **The shell:** the medium's root View, which composes what's open, the scrollback and where you
-  type (`terminal-shell`, the `shell` View). A plugin too: Views are run and observed by the
-  runtime.
-- **The host:** the program that runs the app in that medium: it observes the shell for the person
-  using it, draws it with the medium's framework (Ink), and turns what they do into calls
+- **The shell:** the place's root View, which composes what's open, the scrollback and where you
+  type (`terminal-shell`, the `terminal.shell` View). A plugin too: Views are run and observed by
+  the runtime.
+- **The host:** the program that runs the app in that place: it observes the shell for the person
+  using it, draws it with the place's framework (Ink), and turns what they do into calls
   (`hosts/terminal`: `terminal({ runtime, me })`). Outside the runtime, through its public API only;
-  it knows plugins by name (the `shell` View, `shell.set`, the `commands` resource), never by code.
-  Features' front ends use the host's toolkit (`command`, `Scrollback`, `dim`) as they'd use Ink.
+  it knows plugins by name (the `terminal.shell` View, `shell.set`, the `commands` resource), never
+  by code. Features' front ends use the host's toolkit (`command`, `Scrollback`, `dim`) as they'd
+  use Ink.
 
-- **One View per medium, in the medium's own terms.** A `terminal` View returns Ink elements
-  (`<Text>`, `<Box>`), or plain text; a web View will return React elements; an `llm` View returns
+- **One View per place, in the place's own terms.** A `terminal.*` View returns Ink elements
+  (`<Text>`, `<Box>`), or plain text; a `web.*` View returns React elements; an `llm.*` View returns
   text. No neutral vocabulary to learn, and no rendering of our own: the framework draws, diffs and
-  lays out. What media share is everything below the View: collections, queries, Actions,
+  lays out. What places share is everything below the View: collections, queries, Actions,
   Processors. So Views stay thin, and logic goes in queries (chat's `message.conversation`).
-- **Typed per medium:** `ViewContext<Shown>` says what `ctx.show` returns there
+- **Typed per place:** `ViewContext<Shown>` says what `ctx.show` returns there
   (`ViewContext<ReactNode>` for a terminal View).
-- **A front end per feature, per medium,** in the feature's own folder: `chat/terminal.ts`
+- **A front end per feature, per place,** in the feature's own folder: `chat/terminal.ts`
   (`chatTerminal`), `memory/terminal.ts`, `usage/terminal.ts`: their terminal Views and commands.
   Only the process that draws adds them; `chat` stays free of UI code, so executors and workers
   never load a UI framework.
-- **Observed.** `runtime.observe(medium, kind, item, { viewer, hints, part })` returns a View's
-  output now and again whenever a commit changes a document it read (the filter it read with is
-  matched against what changed). Each View it shows is a **part** that runs again on its own, and
-  keeps its output when shown again unchanged; the medium's `part` says how one goes into its
-  parent's output (in Ink, a component over `useSyncExternalStore`). A part run again first asks
-  again what it read last time, so it takes one pass. `runtime.idle()` waits for observed Views.
+- **Observed.** `runtime.observe(name, item, { viewer, hints, part })` returns a View's output now
+  and again whenever a commit changes a document it read (the filter it read with is matched against
+  what changed). Each View it shows is a **part** that runs again on its own, and keeps its output
+  when shown again unchanged; the observer's `part` says how one goes into its parent's output (in
+  Ink, a component over `useSyncExternalStore`). A part run again first asks again what it read last
+  time, so it takes one pass. `runtime.idle()` waits for observed Views.
 - **Actions directly; Processors for reactions.** Handlers call Actions, as on the server; a
   Processor is for something several plugins react to.
 - **Live state is data.** A collection with `durable: false` lives in the owner's memory: no store,
@@ -168,8 +171,9 @@ Three parts make a medium work, and the words for them:
 - **Data** (`terminalPlugin`, every process): `shell`, one document per person: what's `open` (a
   kind and its item, such as `{ kind: "thread", item: { _id } }`) and what was `listed`, changed by
   `shell.set`; `output`, what commands printed (`durable: false`), added by `shell.print`.
-- **The shell** (`terminalShell`, the drawing process): the root `shell` View composes what's open
-  through its kind's View, the scrollback and the composer; `"*"` shows anything field by field.
+- **The shell** (`terminalShell`, the drawing process): the root `terminal.shell` View composes
+  what's open through its kind's View, the scrollback and the composer; `"*"` shows anything field
+  by field.
 - **The host** (`hosts/terminal`): `terminal({ runtime, me })` observes `shell` for that person and
   renders it with Ink; lines typed, piped or given run as commands; `/as` hands it to someone else.
 - **Scrollback:** what's done (messages, printed output) prints once, in the order it first shows,

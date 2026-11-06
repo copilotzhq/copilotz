@@ -42,12 +42,10 @@ const app = definePlugin({
   },
   adapters: { llm: { m: model } },
   views: {
-    writing: {
-      test: (item: { thread: string }, ctx: ViewContext) =>
-        (ctx.db.collection<Live>("live").find({ thread: item.thread }).value ?? []).map((l) =>
-          l.text
-        ),
-    },
+    writing: (item: { thread: string }, ctx: ViewContext) =>
+      (ctx.db.collection<Live>("live").find({ thread: item.thread }).value ?? []).map((l) =>
+        l.text
+      ),
   },
 });
 
@@ -58,7 +56,7 @@ for (const [name, make] of Object.entries(stores)) {
     const runtime = await createRuntime({ store: await make(), plugins: [models, chat, app] });
     try {
       const thread = crypto.randomUUID();
-      const writing = runtime.observe<string[]>("test", "writing", { thread });
+      const writing = runtime.observe<string[]>("writing", { thread });
       const started = new Promise<void>((resolve) =>
         writing.subscribe(() => {
           const out = writing.get();

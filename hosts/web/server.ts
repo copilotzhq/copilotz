@@ -43,7 +43,7 @@
  *   audio; `?download=1` saves it (see `files.ts`).
  * - Plugins' own paths, their `routes` resource: a webhook, an OAuth callback,
  *   an API, a download, a socket of their own (see `routes.ts`), called as
- *   whoever the request is, else a visitor. A request to a host a route takes
+ *   whoever the request is, else anonymous. A request to a host a route takes
  *   (a preview's) is that route's alone, whatever its path: never the page,
  *   the code or the socket.
  * - `GET /manifest.webmanifest` and `GET /sw.js`: the app, installable: its
@@ -192,6 +192,7 @@ export {
   whomOf,
 } from "./entrances.ts";
 export {
+  ANONYMOUS,
   type Front,
   hostMatches,
   hostOf,
@@ -201,7 +202,6 @@ export {
   type Route,
   type RouteSocket,
   type Served,
-  VISITOR,
 } from "./routes.ts";
 
 /**

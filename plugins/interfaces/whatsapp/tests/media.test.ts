@@ -48,28 +48,24 @@ const cards = definePlugin({
     }),
   },
   views: {
-    "addition:card": {
-      whatsapp: ({ answer }: { answer: Message }) =>
-        answer.text?.includes("card")
-          ? { key: "card:123", parts: [image({ route: "trip-card", params: { trip: "123" } })] }
-          : undefined,
-    },
-    "addition:trips": {
-      whatsapp: ({ answer }: { answer: Message }) =>
-        answer.text?.includes("trips")
-          ? {
-            key: "trips:1",
-            parts: [carousel(
-              "Some trips",
-              ["f1", "f2"].map((file, i) => ({
-                image: { file },
-                buttons: [{ id: `trip:${i}`, title: `Trip ${i}` }],
-              })),
-            )],
-            fallback: [text("1. 10:30\n2. 12:00")],
-          }
-          : undefined,
-    },
+    "addition:card": ({ answer }: { answer: Message }) =>
+      answer.text?.includes("card")
+        ? { key: "card:123", parts: [image({ route: "trip-card", params: { trip: "123" } })] }
+        : undefined,
+    "addition:trips": ({ answer }: { answer: Message }) =>
+      answer.text?.includes("trips")
+        ? {
+          key: "trips:1",
+          parts: [carousel(
+            "Some trips",
+            ["f1", "f2"].map((file, i) => ({
+              image: { file },
+              buttons: [{ id: `trip:${i}`, title: `Trip ${i}` }],
+            })),
+          )],
+          fallback: [text("1. 10:30\n2. 12:00")],
+        }
+        : undefined,
   },
 });
 
@@ -121,16 +117,14 @@ const shows = definePlugin({
     }),
   },
   views: {
-    "addition:picture": {
-      whatsapp: ({ answer }: { answer: Message & { picture?: string } }) =>
-        answer.picture
-          ? {
-            key: `picture:${answer.picture}`,
-            parts: [image({ file: answer.picture })],
-            fallback: [text("(the picture isn't yours to see)")],
-          }
-          : undefined,
-    },
+    "addition:picture": ({ answer }: { answer: Message & { picture?: string } }) =>
+      answer.picture
+        ? {
+          key: `picture:${answer.picture}`,
+          parts: [image({ file: answer.picture })],
+          fallback: [text("(the picture isn't yours to see)")],
+        }
+        : undefined,
   },
 });
 

@@ -87,7 +87,7 @@ const reading = (
 ) => {
   const browsers = createBrowsers({
     observers: {
-      observe: (_medium, _view, remote) =>
+      observe: (_view, remote) =>
         ({
           subscribe: (listener: () => void) => (queueMicrotask(listener), () => {}),
           get: () => ({ status: "ready" as const, value: remote }),

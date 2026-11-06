@@ -120,10 +120,8 @@ const notes = definePlugin({
     "notes.heard": { on: "maintenance.sql", run: (_, event) => void heard.push(event) },
   },
   views: {
-    note: {
-      test: (id: string, ctx: ViewContext) =>
-        ctx.db.collection<{ text: string }>("note").findOne({ _id: id }).value?.text,
-    },
+    note: (id: string, ctx: ViewContext) =>
+      ctx.db.collection<{ text: string }>("note").findOne({ _id: id }).value?.text,
   },
 });
 
@@ -159,7 +157,7 @@ for (const [name, make] of Object.entries(databases)) {
       await runtime.call("note.add", { id: "n1", text: "typo", n: 1 });
       // Read through the owner: now it's cached.
       assertEquals((await one(runtime, "n1"))?.text, "typo");
-      const view = runtime.observe<string>("test", "note", "n1");
+      const view = runtime.observe<string>("note", "n1");
       await view.ready;
 
       const done = await runtime.maintenance.write(q.text, {

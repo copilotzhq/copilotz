@@ -3,14 +3,14 @@
  *
  * Each View it shows (`ctx.show`) is a part of its own: a part runs again on
  * its own when a commit changes a document it read, so a reply being written
- * re-runs its line, not the screen. A medium says how a part goes into its
+ * re-runs its line, not the screen. The observer says how a part goes into its
  * parent's output (`part`): for a UI framework, a component that redraws
  * when the part's output changes. Without one, shown Views render inline and
  * the whole re-runs.
  *
  * A part shown again with the same item and hints keeps its output. Parts
- * are known by their kind and their item's `_id` (or their place among that
- * kind's parts), so a list keeps its parts across runs.
+ * are known by their name and their item's `_id` (or their place among that
+ * name's parts), so a list keeps its parts across runs.
  *
  * What one commit changes shows at once: the parts it makes run again tell
  * their new output together, once the last of them has it (a reply written
@@ -22,7 +22,7 @@ import { invalid } from "./registry.ts";
 import type { ReadContext, ViewContext, Viewer, Views } from "./define.ts";
 import type { Op } from "./ops.ts";
 import type { Actor, Change, Filter } from "./store.ts";
-import { failure, type Pass, PASSES, reread, viewCollections, viewOf } from "./views.ts";
+import { failure, type Pass, PASSES, reread, viewCollections } from "./views.ts";
 
 /** A View's output, while it loads, once it's ready, or why it failed. */
 export type Output<R = unknown> =
@@ -48,14 +48,13 @@ export type ObserveOptions = {
   /** Whose reads: the View shows what they reach, and its handlers act as them. */
   actor?: Actor;
   hints?: Record<string, unknown>;
-  /** What `ctx.show` returns in this medium: the shown View as a part, with its key. */
+  /** What `ctx.show` returns: the shown View as a part, with its key. */
   part?: (part: Observed, key: string) => unknown;
 };
 
 export type Observers = {
   observe<R = unknown>(
-    medium: string,
-    kind: string,
+    name: string,
     item: unknown,
     options?: ObserveOptions,
   ): Observation<R>;
@@ -85,8 +84,7 @@ type Wave = {
 };
 
 type Part = {
-  medium: string;
-  kind: string;
+  name: string;
   item: unknown;
   hints: Record<string, unknown>;
   viewer?: Viewer;
@@ -113,7 +111,7 @@ type Part = {
 type Run = Pass & {
   source: ReadContext;
   deps: Dep[];
-  /** Shown in the latest pass, by key; how many of each kind so far. */
+  /** Shown in the latest pass, by key; how many of each name so far. */
   used: Map<string, Part>;
   counts: Map<string, number>;
   /** Parts this run is running too (new, or shown with something new), by key. */
@@ -242,8 +240,7 @@ export function createObservers(env: {
   };
 
   const part = (
-    medium: string,
-    kind: string,
+    name: string,
     item: unknown,
     hints: Record<string, unknown>,
     viewer?: Viewer,
@@ -251,8 +248,7 @@ export function createObservers(env: {
     actor?: Actor,
   ): Part => {
     const p: Part = {
-      medium,
-      kind,
+      name,
       item,
       hints,
       ...(viewer ? { viewer } : {}),
@@ -298,17 +294,16 @@ export function createObservers(env: {
     p: Part,
     run: Run,
     db: ViewContext["db"],
-    kind: string,
+    name: string,
     hints: Record<string, unknown>,
   ): ViewContext => ({
     db,
     resources: run.source.resources,
-    medium: p.medium,
-    kind,
+    name,
     ...(p.viewer ? { viewer: p.viewer } : {}),
     ...(p.actor ? { actor: p.actor } : {}),
     hints,
-    show: (kind, item, hints = {}) => show(p, run, db, kind, item, hints),
+    show: (name, item, hints = {}) => show(p, run, db, name, item, hints),
     call: (action, input) => env.call(action, input, p.actor),
     emit: (type, data) => env.emit(type, data, p.actor),
   });
@@ -318,9 +313,9 @@ export function createObservers(env: {
     run.pending = [];
     run.used = new Map();
     run.counts = new Map();
-    const view = viewOf(env.views, p.kind, p.medium);
+    const view = env.views[p.name];
     if (!view) return undefined;
-    return view(item, context(p, run, viewCollections(run.source, run), p.kind, hints));
+    return view(item, context(p, run, viewCollections(run.source, run), p.name, hints));
   };
 
   /** `ctx.show` in a part: inline, or the shown View as a part of the parent's, kept across runs. */
@@ -328,20 +323,21 @@ export function createObservers(env: {
     parent: Part,
     run: Run,
     db: ViewContext["db"],
-    kind: string,
+    name: string,
     item: unknown,
     hints: Record<string, unknown>,
   ): unknown => {
+    if (!env.views[name]) return undefined;
     if (!parent.place) {
-      return viewOf(env.views, kind, parent.medium)?.(item, context(parent, run, db, kind, hints));
+      return env.views[name]?.(item, context(parent, run, db, name, hints));
     }
-    const n = run.counts.get(kind) ?? 0;
-    run.counts.set(kind, n + 1);
-    let key = `${kind}:${idOf(item) ?? n}`;
+    const n = run.counts.get(name) ?? 0;
+    run.counts.set(name, n + 1);
+    let key = `${name}:${idOf(item) ?? n}`;
     if (run.used.has(key)) key += `#${n}`;
     let nested = run.nested.get(key);
     const child = nested?.part ?? parent.children.get(key) ??
-      part(parent.medium, kind, item, hints, parent.viewer, parent.place, parent.actor);
+      part(name, item, hints, parent.viewer, parent.place, parent.actor);
     const changed = nested || child.snapshot.status === "loading" || !same(child.item, item) ||
       !same(child.hints, hints);
     if (changed && !nested && child.slots?.size) {
@@ -494,7 +490,7 @@ export function createObservers(env: {
           }
           if (!run.pending.length) break;
           if (round === PASSES) {
-            error = invalid(`The ${p.medium} View for "${p.kind}" kept making new reads.`);
+            error = invalid(`The View "${p.name}" kept making new reads.`);
             break;
           }
           await Promise.all(run.pending);
@@ -514,10 +510,9 @@ export function createObservers(env: {
   };
 
   return {
-    observe(medium, kind, item, options = {}) {
+    observe(name, item, options = {}) {
       const root = part(
-        medium,
-        kind,
+        name,
         item,
         options.hints ?? {},
         options.viewer,

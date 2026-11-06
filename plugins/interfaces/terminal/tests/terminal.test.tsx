@@ -85,7 +85,7 @@ test("a plugin's terminal View replaces another's: here, who wrote a message", a
   const loud = definePlugin({
     name: "loud",
     views: {
-      author: { terminal: (m: { from: string }) => <Text>{`${m.from.toUpperCase()}: `}</Text> },
+      author: (m: { from: string }) => <Text>{`${m.from.toUpperCase()}: `}</Text>,
     },
   });
   const { printed } = await run(["hi"], [loud]);

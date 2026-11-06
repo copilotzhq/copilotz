@@ -24,11 +24,11 @@ export const routinesWeb: Plugin = definePlugin({
   name: "routines-web",
   requires: ["web-shell"],
   views: {
-    routines: { web: routinesView },
-    routine: { web: routineView },
-    "routine.new": { web: newRoutineView },
-    "routine.palette": { web: routinePaletteView },
-    "routine.step": { web: routineStepView },
+    routines: routinesView,
+    routine: routineView,
+    "routine.new": newRoutineView,
+    "routine.palette": routinePaletteView,
+    "routine.step": routineStepView,
   },
   resources: {
     spaceTabs: { routines: { title: "Routines", view: "routines", icon: "refresh", order: 50 } },

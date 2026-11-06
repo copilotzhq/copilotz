@@ -91,11 +91,9 @@ test("a retried turn gets the call it already made back, and doesn't call the AP
   const flaky = definePlugin({
     name: "flaky",
     views: {
-      "tool:trips_createTrip": {
-        llm: (step: Step) => {
-          if (++shown === 1) throw new Error("lost the turn");
-          return step.output;
-        },
+      "tool:trips_createTrip": (step: Step) => {
+        if (++shown === 1) throw new Error("lost the turn");
+        return step.output;
       },
     },
   });

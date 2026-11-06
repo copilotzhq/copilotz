@@ -197,7 +197,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
       ...(space ? { space } : {}),
       ...(query ? { query } : {}),
     };
-    const shell = client.observe("web", "shell", where, {
+    const shell = client.observe("web.shell", where, {
       viewer,
       part: (part, key) => <Part key={key} part={part} />,
     });

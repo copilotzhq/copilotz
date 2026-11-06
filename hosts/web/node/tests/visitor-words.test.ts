@@ -107,15 +107,11 @@ const app = definePlugin({
 const page = definePlugin({
   name: "page",
   views: {
-    live: {
-      test: (thread: string, ctx: ViewContext) =>
-        ctx.db.collection("live").find({ thread }).value ?? [],
-    },
-    said: {
-      test: (thread: string, ctx: ViewContext) =>
-        (ctx.db.collection<{ text?: string }>("message").find({ thread }).value ?? [])
-          .map((m) => m.text ?? ""),
-    },
+    live: (thread: string, ctx: ViewContext) =>
+      ctx.db.collection("live").find({ thread }).value ?? [],
+    said: (thread: string, ctx: ViewContext) =>
+      (ctx.db.collection<{ text?: string }>("message").find({ thread }).value ?? [])
+        .map((m) => m.text ?? ""),
   },
 });
 
@@ -202,7 +198,7 @@ test("a visitor sees its agent at work, never a step's words, its calls, nor why
       breakOnce = true;
       const { thread } = await client.call<{ thread: string }>("chat.send", { text: "rooms?" });
       const shown = await watched(
-        () => client.observe<LiveDoc[]>("test", "live", thread),
+        () => client.observe<LiveDoc[]>("live", thread),
         answered(runtime, thread),
       );
       const docs = shown.flat();
@@ -216,7 +212,7 @@ test("a visitor sees its agent at work, never a step's words, its calls, nor why
       assert(!words.includes("org-ACME1234"), "no provider's words");
       assertEquals(docs.filter((d) => d.calls?.length || d.retry).length, 0);
       // Its answer comes as the agent's message.
-      const said = client.observe<string[]>("test", "said", thread);
+      const said = client.observe<string[]>("said", thread);
       try {
         const output = await said.ready;
         assert(output.status === "ready" && output.value.includes("We have rooms."));
@@ -235,7 +231,7 @@ test("an agent with no tools only answers: a visitor sees its words as they're w
     try {
       const { thread } = await client.call<{ thread: string }>("chat.send", { text: "hi" });
       const shown = await watched(
-        () => client.observe<LiveDoc[]>("test", "live", thread),
+        () => client.observe<LiveDoc[]>("live", thread),
         answered(runtime, thread),
       );
       const texts = shown.flat().map((d) => d.text);
@@ -253,7 +249,7 @@ test("an agent whose only tools go beside an answer (aside) only answers too: it
     try {
       const { thread } = await client.call<{ thread: string }>("chat.send", { text: "hi" });
       const shown = await watched(
-        () => client.observe<LiveDoc[]>("test", "live", thread),
+        () => client.observe<LiveDoc[]>("live", thread),
         answered(runtime, thread),
       );
       assert(shown.flat().some((d) => d.text.startsWith("Hello there")), "its words, as they came");
@@ -273,7 +269,7 @@ test("a person's own turn with tools streams its words to them, as before", asyn
       { actor: ana },
     );
     const shown = await watched(
-      () => runtime.observe<LiveDoc[]>("test", "live", thread, { actor: ana }),
+      () => runtime.observe<LiveDoc[]>("live", thread, { actor: ana }),
       answered(runtime, thread),
     );
     const texts = shown.flat().map((d) => d.text);

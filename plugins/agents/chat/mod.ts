@@ -32,7 +32,7 @@
  *   has an agent say a fixed message in one without a turn (`chat.say`: a
  *   payment confirmed), and erases one with everything in it (`chat.erase`:
  *   someone's data, gone).
- * - After an agent's answer, a medium may show more (additions: a carousel
+ * - After an agent's answer, the place it goes to may show more (additions: a carousel
  *   of trips after the answer that found them), each once per chat per key,
  *   recorded in `shown` (`chat.shown`), and told to the model after that
  *   answer (`[then shown: …]`). A choice tapped comes with its id (`tap`).
@@ -65,7 +65,7 @@
  *   files }` in (each file's name, type and size); it refuses, or answers
  *   `{ thread?, transcribe?: false }` (see actions/send.ts);
  * - `additions`: { order?, agents? }, each with an `addition:<name>` View in
- *   the medium that shows it, given `{ thread, answer }` (see `Addition`).
+ *   the place that shows it, given `{ thread, answer }` (see `Addition`).
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { eraseAction } from "./actions/erase.ts";
@@ -102,11 +102,11 @@ export const chat: Plugin = definePlugin({
   requires: ["models"],
   collections: { thread, message, wait, live, file, intent, shown },
   views: {
-    thread: { llm: prompt },
-    participants: { llm: participants },
-    context: { llm: contextView },
-    history: { llm: historyView },
-    message: { llm: messageView },
+    "llm.thread": prompt,
+    participants: participants,
+    context: contextView,
+    history: historyView,
+    "llm.message": messageView,
   },
   // Every agent's model can be called as configured (the models plugin says); a window by age
   // is in ms.

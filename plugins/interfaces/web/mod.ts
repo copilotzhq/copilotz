@@ -46,7 +46,7 @@
  *
  * ```ts
  * resources: {
- *   sidebar: { spaces: { title: "Spaces", view: "spaces" } },
+ *   sidebar: { spaces: { title: "Spaces", view: "web.spaces" } },
  *   panel: { view: "space.panel", on: ["thread"], title: "Space" },
  *   palette: { spaces: { view: "spaces.palette", order: 10 } },
  *   orgSettings: { members: { title: "Members", view: "org.members", icon: "users", order: 20 } },
@@ -69,10 +69,10 @@ export type { UserMenuEntry } from "./shared/menu.ts";
 export const webShell: Plugin = definePlugin({
   name: "web-shell",
   views: {
-    shell: { web: shellView },
-    org: { web: orgView },
-    console: { web: consoleView },
-    "*": { web: defaultView },
+    "web.shell": shellView,
+    org: orgView,
+    console: consoleView,
+    "web.default": defaultView,
   },
 });
 

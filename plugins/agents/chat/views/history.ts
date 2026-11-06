@@ -14,5 +14,5 @@ export function historyView(
   { messages }: { thread: Thread; messages: Message[]; from?: string },
   ctx: ViewContext,
 ): LlmMessage[] {
-  return messages.flatMap((m) => (ctx.show("message", m) ?? []) as LlmMessage[]);
+  return messages.flatMap((m) => (ctx.show("llm.message", m) ?? []) as LlmMessage[]);
 }

@@ -25,6 +25,7 @@ import {
   principalOf,
   type Runtime,
   type Store,
+  type ViewContext,
 } from "../../../../runtime/mod.ts";
 import type { Transaction } from "../../../../runtime/store.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
@@ -99,14 +100,12 @@ export const app = definePlugin({
   },
   views: {
     // As the app's agents read a search: a line, not the data.
-    "tool:search": {
-      llm: (call: { output: string }) => {
-        const { trips } = JSON.parse(call.output) as { trips: string[] };
-        return `${trips.length} trips: ${trips.join(", ")}`;
-      },
+    "tool:search": (call: { output: string }) => {
+      const { trips } = JSON.parse(call.output) as { trips: string[] };
+      return `${trips.length} trips: ${trips.join(", ")}`;
     },
     ...Object.fromEntries(
-      SHOWN.map((name) => [`tool:${name}`, { llm: (call: { output: string }) => call.output }]),
+      SHOWN.map((name) => [`tool:${name}`, (call: { output: string }) => call.output]),
     ),
   },
   resources: {
@@ -333,12 +332,10 @@ export const reads = definePlugin({
     ]
       .map((c) => [
         c,
-        {
-          test: (item: { thread?: string }, ctx) =>
-            ctx.db.collection(c).find(item.thread ? { thread: item.thread } : {}, {
-              sort: { at: 1 },
-            }).value ?? [],
-        },
+        (item: { thread?: string }, ctx: ViewContext) =>
+          ctx.db.collection(c).find(item.thread ? { thread: item.thread } : {}, {
+            sort: { at: 1 },
+          }).value ?? [],
       ]),
   ),
 });
@@ -579,7 +576,7 @@ export async function setup(
         ...(o.headers ? { headers: o.headers } : {}),
       }),
     docs: async <T>(collection: string, thread?: string) => {
-      const seen = runtime.observe<T[]>("test", collection, thread ? { thread } : {});
+      const seen = runtime.observe<T[]>(collection, thread ? { thread } : {});
       const output = await seen.ready;
       seen.close();
       return output.status === "ready" ? output.value : [];

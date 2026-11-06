@@ -70,10 +70,8 @@ const asker = definePlugin({
     }),
   },
   views: {
-    loud: {
-      test: (word: string, ctx: ViewContext) =>
-        ctx.db.collection("shout").query<string>("loud", { word }).value,
-    },
+    loud: (word: string, ctx: ViewContext) =>
+      ctx.db.collection("shout").query<string>("loud", { word }).value,
   },
 });
 
@@ -90,7 +88,7 @@ test("queries and Views call unrecorded Actions, read-only", async () => {
   const rt = await createRuntime({ store: memoryStore(), plugins: [words, asker] });
   try {
     assertEquals(await rt.query("shout.loud", { word: "hey" }), "HEY");
-    const loud = rt.observe<string>("test", "loud", "hey");
+    const loud = rt.observe<string>("loud", "hey");
     assertEquals(await loud.ready, { status: "ready", value: "HEY" });
     loud.close();
     await assertRejects(() => rt.query("shout.keeps"), Error, "read-only");

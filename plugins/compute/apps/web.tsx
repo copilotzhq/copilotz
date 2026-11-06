@@ -22,9 +22,9 @@ export const appsWeb: Plugin = definePlugin({
   name: "apps-web",
   requires: ["apps", "computers-web", "spaces-web"],
   views: {
-    "app.publish": { web: appPublishView },
-    "app.space": { web: appsSpaceView },
-    "app.env-apply": { web: appEnvApplyView },
+    "app.publish": appPublishView,
+    "app.space": appsSpaceView,
+    "app.env-apply": appEnvApplyView,
   },
   resources: {
     jobActions: { publish: { view: "app.publish", order: 10 } },

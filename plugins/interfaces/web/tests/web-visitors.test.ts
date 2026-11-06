@@ -70,7 +70,7 @@ async function lineFor(store: Store, days: number) {
   const kept = definePlugin({
     name: "kept",
     views: {
-      all: { test: (asked: { c: string }, ctx) => ctx.db.collection(asked.c).find({}).value ?? [] },
+      all: (asked: { c: string }, ctx) => ctx.db.collection(asked.c).find({}).value ?? [],
     },
   });
   const runtime = await createRuntime({
@@ -93,7 +93,6 @@ async function lineFor(store: Store, days: number) {
     ));
   const records = async (): Promise<{ _id: string; ended?: boolean; expires: string }[]> => {
     const observed = runtime.observe<{ _id: string; ended?: boolean; expires: string }[]>(
-      "test",
       "all",
       { c: "contact_visitor" },
     );

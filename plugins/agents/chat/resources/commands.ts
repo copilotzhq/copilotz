@@ -203,7 +203,10 @@ export const commands: Commands = {
       });
       let n = 0;
       for (const m of messages) {
-        await term.show("message", m, { thread: here, ...(m.toolCalls ? {} : { n: ++n }) });
+        await term.show("terminal.message", m, {
+          thread: here,
+          ...(m.toolCalls ? {} : { n: ++n }),
+        });
       }
     },
   }),

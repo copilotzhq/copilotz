@@ -33,7 +33,7 @@ export const callbackAction = defineAction({
     },
     required: ["path", "query"],
   },
-  allow: (actor) => actor.kind === "person" || actor.kind === "visitor",
+  allow: (actor) => actor.kind === "person" || actor.kind === "anonymous",
   run: async (ctx, input) => {
     const name = named(input.path.slice(CALLBACK.length).split("/")[0] ?? "");
     const back = (said: Record<string, string>) => ({

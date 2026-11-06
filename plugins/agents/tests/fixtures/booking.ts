@@ -74,11 +74,9 @@ export function booking(options: Booking = {}) {
       },
     },
     views: {
-      "tool:book": {
-        llm: (step: Step) => {
-          if (options.failView?.()) throw new Error("the view failed after the tool ran");
-          return step.output;
-        },
+      "tool:book": (step: Step) => {
+        if (options.failView?.()) throw new Error("the view failed after the tool ran");
+        return step.output;
       },
     },
     adapters: { llm: { booking: model } },

@@ -681,5 +681,5 @@ function Gallery(): ReactNode {
 
 export const gallery: Plugin = definePlugin({
   name: "gallery",
-  views: { gallery: { web: () => <Gallery /> } },
+  views: { gallery: () => <Gallery /> },
 });

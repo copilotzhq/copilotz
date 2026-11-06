@@ -15,8 +15,8 @@ export const creditsWeb: Plugin = definePlugin({
   name: "credits-web",
   requires: ["web-shell"],
   views: {
-    "billing.org": { web: orgBillingView },
-    "billing.composer": { web: composerNoteView },
+    "billing.org": orgBillingView,
+    "billing.composer": composerNoteView,
   },
   resources: {
     orgSettings: {

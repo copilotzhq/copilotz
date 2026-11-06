@@ -110,25 +110,17 @@ const page = definePlugin({
   name: "page",
   views: {
     // Its chats: where it's a member, by its own key (a contact reads nothing it doesn't name).
-    chats: {
-      test: (who: Actor, ctx: ViewContext) =>
-        (ctx.db.collection<{ space: string; on?: string }>("member")
-          .find({ member: `${who.kind}:${who.id}` }).value ?? [])
-          .filter((m) => m.on === "thread").map((m) => m.space.slice("thread:".length)),
-    },
-    messages: {
-      test: (filter: Record<string, unknown>, ctx: ViewContext) =>
-        ctx.db.collection("message").find(filter).value ?? [],
-    },
-    live: {
-      test: (thread: string, ctx: ViewContext) =>
-        ctx.db.collection("live").find({ thread }).value ?? [],
-    },
-    said: {
-      test: (thread: string, ctx: ViewContext) =>
-        (ctx.db.collection<{ text?: string }>("message").find({ thread }).value ?? [])
-          .map((m) => m.text ?? ""),
-    },
+    chats: (who: Actor, ctx: ViewContext) =>
+      (ctx.db.collection<{ space: string; on?: string }>("member")
+        .find({ member: `${who.kind}:${who.id}` }).value ?? [])
+        .filter((m) => m.on === "thread").map((m) => m.space.slice("thread:".length)),
+    messages: (filter: Record<string, unknown>, ctx: ViewContext) =>
+      ctx.db.collection("message").find(filter).value ?? [],
+    live: (thread: string, ctx: ViewContext) =>
+      ctx.db.collection("live").find({ thread }).value ?? [],
+    said: (thread: string, ctx: ViewContext) =>
+      (ctx.db.collection<{ text?: string }>("message").find({ thread }).value ?? [])
+        .map((m) => m.text ?? ""),
   },
 });
 
@@ -160,7 +152,7 @@ const browser = (server: Server, ticket: string): Client =>
 
 /** What a View says, once ready. */
 async function seen<T>(client: Client, view: string, item: unknown = {}): Promise<T> {
-  const observed = client.observe<T>("test", view, item);
+  const observed = client.observe<T>(view, item);
   try {
     const output = await observed.ready;
     if (output.status !== "ready") throw new Error(`${view}: ${JSON.stringify(output)}`);
@@ -182,14 +174,10 @@ async function until(check: () => Promise<boolean>, what: string, ms = 3_000) {
 const kept = definePlugin({
   name: "kept",
   views: {
-    all: {
-      test: (collection: string, ctx: ViewContext) =>
-        ctx.db.collection(collection).find({}).value ?? [],
-    },
-    "live-all": {
-      test: (thread: string, ctx: ViewContext) =>
-        ctx.db.collection("live").find({ thread }).value ?? [],
-    },
+    all: (collection: string, ctx: ViewContext) =>
+      ctx.db.collection(collection).find({}).value ?? [],
+    "live-all": (thread: string, ctx: ViewContext) =>
+      ctx.db.collection("live").find({ thread }).value ?? [],
   },
 });
 
@@ -216,7 +204,7 @@ async function setup(fn: (server: Server, runtime: Runtime) => Promise<void>) {
 /** What the system reads: how many of each the app keeps. */
 async function counts(runtime: Runtime) {
   const of = async (collection: string) => {
-    const observed = runtime.observe<unknown[]>("test", "all", collection);
+    const observed = runtime.observe<unknown[]>("all", collection);
     try {
       const output = await observed.ready;
       return output.status === "ready" ? output.value.length : -1;
@@ -364,7 +352,7 @@ test("a visitor reads what's said, never its agent's private steps, nor a tool c
 
 /** What's being written in a thread, as the system reads it. */
 async function liveOf(runtime: Runtime, thread: string) {
-  const observed = runtime.observe<{ calls: unknown[] }[]>("test", "live-all", thread);
+  const observed = runtime.observe<{ calls: unknown[] }[]>("live-all", thread);
   try {
     const output = await observed.ready;
     return output.status === "ready" ? output.value : [];

@@ -91,7 +91,7 @@ export type Context = {
    * code never ends another org's browsers.
    */
   disconnect(actor: Actor): Promise<number>;
-  /** Renders `item` through the View registered for its kind and the medium (see Views). */
+  /** Renders `item` through the View registered under a name (see Views). */
   render: Render;
   /**
    * Appends a document to a records collection, and returns its `_id`. It
@@ -162,14 +162,15 @@ export type Merged = {
 };
 
 /**
- * Views present data to a medium. A plugin registers them by kind (a
- * collection's name, `tool:<name>`, a named datum) and medium (`llm`,
- * `web`…). The runtime gives neither name a meaning; for a kind
- * and medium, the last plugin's View wins.
+ * Views present data. A plugin registers each under a name, which says what
+ * it shows: a collection's name, `tool:<name>`, a named datum; a place
+ * prefixes it where the same thing is shown in several (`llm.message`,
+ * `web.message`). The runtime gives names no meaning; for a name, the last
+ * plugin's View wins.
  */
-export type Views = Record<string, Record<string, ViewDef>>;
+export type Views = Record<string, ViewDef>;
 
-/** A View: an item, for a medium. Its context says what showing another View returns there. */
+/** A View: an item in, what it presents out. Its context says what showing another View returns. */
 // deno-lint-ignore no-explicit-any
 export type ViewDef = (item: any, ctx: ViewContext<any>) => unknown;
 
@@ -182,10 +183,9 @@ export type Viewer = { name: string; kind?: string; label?: string };
 
 export type RenderOptions = { viewer?: Viewer; hints?: Record<string, unknown> };
 
-/** Renders through the View for a kind and medium; undefined when there is none. */
+/** Renders through the View with this name; undefined when there is none. */
 export type Render = (
-  medium: string,
-  kind: string,
+  name: string,
   item: unknown,
   options?: RenderOptions,
 ) => Promise<unknown>;
@@ -208,25 +208,23 @@ export type ViewCollection<T> = {
   query<R = unknown>(name: string, params?: unknown): Read<R>;
 };
 
-/** What a View gets. `Shown` is what showing another View returns in its medium (text, an element). */
+/** What a View gets. `Shown` is what showing another View returns (text, an element). */
 export type ViewContext<Shown = unknown> = {
   db: { collection<T = Record<string, unknown>>(name: string): ViewCollection<T> };
   resources: Resources;
-  /** The medium being rendered. */
-  medium: string;
-  /** The kind being rendered: a medium's default View (kind `"*"`) renders any kind. */
-  kind: string;
+  /** The name of the View being rendered. */
+  name: string;
   viewer?: Viewer;
   /** Who it renders as; what they don't reach, the rules keep out already. */
   actor?: Actor;
   /** What the caller asked for (`mode`: a density, …). Open-ended. */
   hints: Record<string, unknown>;
   /**
-   * Renders `item` through its kind's View in this medium; undefined when
-   * there is none. Observed, the shown View is a part of its own: it runs
+   * Renders `item` through the View named `name`, and exactly that one;
+   * undefined when there is none. Observed, the shown View is a part of its own: it runs
    * again on its own when what it read changes (see `Owner.observe`).
    */
-  show(kind: string, item: unknown, hints?: Record<string, unknown>): Shown;
+  show(name: string, item: unknown, hints?: Record<string, unknown>): Shown;
   /**
    * Calls an Action, from a handler in what the View returns (a key, a
    * click). A View being observed can; one rendered once has no handlers.
@@ -423,7 +421,7 @@ export type Plugin = {
   events?: Record<string, EventDef>;
   processors?: Record<string, ProcessorDef>;
   /** `null` removes an earlier plugin's View. */
-  views?: Record<string, Record<string, ViewDef | null>>;
+  views?: Record<string, ViewDef | null>;
   resources?: Resources;
   adapters?: Adapters;
   /**

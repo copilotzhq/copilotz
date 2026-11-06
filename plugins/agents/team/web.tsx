@@ -28,10 +28,10 @@ export const teamWeb: Plugin = definePlugin({
   name: "team-web",
   requires: ["team", "web-shell"],
   views: {
-    agent: { web: agentView },
-    "agent.add": { web: agentAddView },
-    "agent.palette": { web: agentPaletteView },
-    "model.pick": { web: modelPickView },
+    agent: agentView,
+    "agent.add": agentAddView,
+    "agent.palette": agentPaletteView,
+    "model.pick": modelPickView,
   },
   resources: {
     spaceInvite: {

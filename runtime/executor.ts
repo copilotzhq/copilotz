@@ -502,7 +502,7 @@ export function createExecutor(
               job.record,
               request.actor,
             ),
-        )(request.medium, request.view, request.item, {
+        )(request.view, request.item, {
           ...(request.viewer ? { viewer: request.viewer } : {}),
           ...(request.hints ? { hints: request.hints } : {}),
         });

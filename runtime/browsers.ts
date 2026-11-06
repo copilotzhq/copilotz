@@ -68,7 +68,6 @@ export const EMIT = "core.emit";
 export const SESSION = "core.session";
 /** The View that makes one read, observed per watched read. */
 export const READ_VIEW = "core.read";
-export const WIRE = "wire";
 
 /** A read a browser's View made: an op, or one of a collection's named queries. */
 export type Remote = { op: ReadOp } | { collection: string; query: string; params?: unknown };
@@ -442,7 +441,7 @@ export function createBrowsers(env: {
     const first = Promise.withResolvers<Answer>();
     // Asked again: the new watch replaces the old, whose first answer, if still due, is the new one's.
     connection.watches.get(key)?.close(first.promise);
-    const observation = env.observers.observe(WIRE, READ_VIEW, remote, { actor: connection.actor });
+    const observation = env.observers.observe(READ_VIEW, remote, { actor: connection.actor });
     let last: string | undefined;
     const off = observation.subscribe(() => {
       const output = observation.get();

@@ -23,7 +23,7 @@ export function historyView(
   ctx: ViewContext,
 ): LlmMessage[] {
   const whole = (list: Message[]) =>
-    list.flatMap((m) => (ctx.show("message", m) ?? []) as LlmMessage[]);
+    list.flatMap((m) => (ctx.show("llm.message", m) ?? []) as LlmMessage[]);
   if (!thread.outlined) return whole(messages);
   const state = ctx.db.collection<Outline>("outline").findOne({ _id: thread._id });
   if (state.status !== "ready" || !state.value?.boundary) return whole(messages);

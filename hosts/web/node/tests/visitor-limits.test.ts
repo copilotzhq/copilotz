@@ -70,25 +70,17 @@ const page = definePlugin({
   name: "page",
   views: {
     // Every live document but one: a read that names nothing, run again on every change.
-    wide: {
-      test: (i: number, ctx: ViewContext) =>
-        (ctx.db.collection("live").find({ _id: { $ne: `x${i}` } }).value ?? []).length,
-    },
+    wide: (i: number, ctx: ViewContext) =>
+      (ctx.db.collection("live").find({ _id: { $ne: `x${i}` } }).value ?? []).length,
     // What's being written in its own chat, but one: as narrow as a visitor's reads are.
-    mine: {
-      test: (asked: { thread: string; i: number }, ctx: ViewContext) =>
-        (ctx.db.collection("live").find({ thread: asked.thread, _id: { $ne: `x${asked.i}` } })
-          .value ?? []).length,
-    },
-    count: {
-      test: (_: unknown, ctx: ViewContext) =>
-        ctx.db.collection("live").aggregate([{ $group: { _id: null, n: { $count: {} } } }]).value,
-    },
+    mine: (asked: { thread: string; i: number }, ctx: ViewContext) =>
+      (ctx.db.collection("live").find({ thread: asked.thread, _id: { $ne: `x${asked.i}` } })
+        .value ?? []).length,
+    count: (_: unknown, ctx: ViewContext) =>
+      ctx.db.collection("live").aggregate([{ $group: { _id: null, n: { $count: {} } } }]).value,
     // Any read, as asked.
-    any: {
-      test: (asked: { c: string; f: Record<string, unknown> }, ctx: ViewContext) =>
-        ctx.db.collection(asked.c).find(asked.f).value,
-    },
+    any: (asked: { c: string; f: Record<string, unknown> }, ctx: ViewContext) =>
+      ctx.db.collection(asked.c).find(asked.f).value,
   },
 });
 
@@ -174,12 +166,12 @@ test("a visitor at its limits leaves a member's turn as fast: two sockets, 32 re
       await runtime.idle();
       // A read that names no chat of its own isn't watched; nor is an aggregate.
       await assertRejects(
-        () => one.observe("test", "wide", 0).ready.then(failed),
+        () => one.observe("wide", 0).ready.then(failed),
         Error,
         "forbidden",
       );
       await assertRejects(
-        () => one.observe("test", "count", 0).ready.then(failed),
+        () => one.observe("count", 0).ready.then(failed),
         Error,
         "forbidden",
       );
@@ -195,12 +187,12 @@ test("a visitor at its limits leaves a member's turn as fast: two sockets, 32 re
       for (const c of [one, two]) {
         const reads = Array.from(
           { length: 32 },
-          () => c.observe("test", "mine", { thread, i: i++ }),
+          () => c.observe("mine", { thread, i: i++ }),
         );
         await Promise.all(reads.map((r) => r.ready.then(failed)));
       }
       await assertRejects(
-        () => one.observe("test", "mine", { thread, i: i++ }).ready.then(failed),
+        () => one.observe("mine", { thread, i: i++ }).ready.then(failed),
         Error,
         "watches 32 reads",
       );
@@ -282,7 +274,7 @@ test("a visitor reads spaces and memberships naming its own: its memberships by 
       const { thread } = await client.call<{ thread: string }>("chat.send", { text: "hi" });
       await runtime.idle();
       const read = (c: string, f: Record<string, unknown>) =>
-        client.observe("test", "any", { c, f }).ready.then(failed);
+        client.observe("any", { c, f }).ready.then(failed);
       // Its own memberships, by its key: where its chats are.
       const mine = (await read("member", { member: `contact:${actor.id}` })) as unknown as {
         value: { space: string }[];
@@ -317,7 +309,7 @@ test("a visitor's read names so much at most: 32 of its own, 2 KB said", async (
       const { thread } = await client.call<{ thread: string }>("chat.send", { text: "hi" });
       await runtime.idle();
       const read = (f: Record<string, unknown>) =>
-        client.observe("test", "any", { c: "live", f }).ready.then(failed);
+        client.observe("any", { c: "live", f }).ready.then(failed);
       await read({ thread: { $in: Array(32).fill(thread) } });
       // Before: each watched, every change in the runtime matched against 20,000 names.
       await assertRejects(

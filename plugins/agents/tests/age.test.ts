@@ -59,7 +59,7 @@ async function start(options: { history?: boolean; rules?: boolean } = {}) {
         : {}),
       ...(options.rules ? { context: { rules: { place: "turn" } } } : {}),
     },
-    ...(options.rules ? { views: { "context:rules": { llm: () => "be brief" } } } : {}),
+    ...(options.rules ? { views: { "context:rules": () => "be brief" } } : {}),
     adapters: { llm: { script } },
     actions: {
       "test.seed": defineAction({

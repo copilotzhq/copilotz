@@ -15,7 +15,7 @@ import { orgUsageView } from "./views/web/org.tsx";
 export const usageWeb: Plugin = definePlugin({
   name: "usage-web",
   requires: ["web-shell"],
-  views: { "usage.org": { web: orgUsageView } },
+  views: { "usage.org": orgUsageView },
   resources: {
     orgSettings: { usage: { title: "Usage", view: "usage.org", icon: "chart", order: 30 } },
   },

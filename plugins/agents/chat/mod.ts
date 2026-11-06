@@ -67,7 +67,7 @@
  * - `additions`: { order?, agents? }, each with an `addition:<name>` View in
  *   the place that shows it, given `{ thread, answer }` (see `Addition`).
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
 import { eraseAction } from "./actions/erase.ts";
 import { forkAction } from "./actions/fork.ts";
 import { moveAction } from "./actions/move.ts";
@@ -78,6 +78,7 @@ import { sendAction } from "./actions/send.ts";
 import { shownAction } from "./actions/shown.ts";
 import { stopAction } from "./actions/stop.ts";
 import { file } from "./collections/file.ts";
+import { serveFile } from "./routes/files.ts";
 import { intent } from "./collections/intent.ts";
 import { live } from "./collections/live.ts";
 import { message } from "./collections/message.ts";
@@ -96,6 +97,9 @@ import { prompt } from "./views/prompt.ts";
 
 export * from "./contract.ts";
 export { lineage } from "./shared/lineage.ts";
+
+/** Chat's collections, changed only through its Actions. */
+const CHAT_RECORDS = ["message", "live", "thread", "file", "shown"];
 
 export const chat: Plugin = definePlugin({
   name: "chat",
@@ -168,6 +172,18 @@ export const chat: Plugin = definePlugin({
     "chat.turn": turnProcessor,
     "chat.failed": failedProcessor,
   },
+  // Chat's records change through its Actions, never written directly from outside: what's said
+  // (who said it), what a turn is doing, a conversation's state, its files, what was shown.
+  guard: (_actor, { collection, access, direct }) => {
+    if (direct && access === "write" && CHAT_RECORDS.includes(collection)) {
+      throw failure("forbidden", `"${collection}" changes through chat's Actions (chat.send…).`, {
+        public: true,
+      });
+    }
+    return undefined;
+  },
+  // Files people sent, as whoever asks reaches them (or by a link signed for one).
+  routes: { "/files/*": serveFile },
 });
 
 export default chat;

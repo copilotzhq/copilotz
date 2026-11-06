@@ -4,7 +4,8 @@
  * goes out.
  *
  * - **A public https link** goes as it is.
- * - **One of the app's routes** (`{ route, params }`: a picture it draws on
+ * - **One of the app's routes** (`{ route, params }`: the route's pathname, as
+ *   its plugin declares it, such as "/media/card"; a picture it draws on
  *   demand, a trip's card) goes as a link signed for an hour, its params in
  *   it; the route checks it with the runtime's `verifyLink`.
  * - **A chat's file** (`{ file }`), one its recipient may read, goes as a
@@ -27,8 +28,6 @@ import type { File } from "../../../agents/chat/contract.ts";
 import { type Graph, type Sendable, uploadMedia } from "./graph.ts";
 import type { WaMedia } from "./parts.ts";
 
-type Routes = Record<string, { path?: string } | null>;
-
 export async function sendable(
   ctx: Context,
   graph: Graph,
@@ -40,8 +39,10 @@ export async function sendable(
   if ("link" in media) return { link: media.link };
   const links = linksOf(ctx.resources);
   if ("route" in media) {
-    const path = ((ctx.resources.routes ?? {}) as Routes)[media.route]?.path;
-    if (!path) throw invalid(`WhatsApp: no route "${media.route}" to link to.`);
+    const path = media.route;
+    if (!path.startsWith("/")) {
+      throw invalid(`WhatsApp: the route "${path}" is a pathname, such as "/media/card".`);
+    }
     if (!links) throw invalid("WhatsApp: a route's link needs the app's `links` resource.");
     return { link: await signLink(links, path, media.params) };
   }

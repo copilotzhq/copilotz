@@ -7,7 +7,8 @@
  * someone out (never its last manager), let in or turn down who asked to
  * join, and add agents (the invite surface, at Agents). Other front ends add
  * to its agents (`spaceAgents`): above them, and on each agent's row (tiers:
- * the space's models). A Personal space is
+ * the space's models); and sections of their own below them
+ * (`spaceMembers`: developer keys). A Personal space is
  * just you and your agents, and says how to work with others; an archived
  * one invites no one.
  */
@@ -25,7 +26,14 @@ import {
   Skeleton,
   Time,
 } from "../../../../../hosts/web/mod.ts";
-import type { Invitation, Member, Reached, Request, SpaceAgents } from "../../contract.ts";
+import type {
+  Invitation,
+  Member,
+  Reached,
+  Request,
+  SpaceAgents,
+  SpaceMembers,
+} from "../../contract.ts";
 import { Agents, type Roster } from "./agents.tsx";
 import { InviteDialog } from "./invite-dialog.tsx";
 import { InviteForm } from "./invite.tsx";
@@ -87,6 +95,15 @@ export const membersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
   const above = extras.flatMap(([key, extra]) =>
     extra.view ? [<Fragment key={key}>{ctx.show(extra.view, { _id: id }, hints)}</Fragment>] : []
   );
+  // Members of other kinds, as the front ends that know them show them (`spaceMembers`: keys).
+  const sections = Object.entries(
+    (ctx.resources.spaceMembers ?? {}) as Record<string, SpaceMembers>,
+  )
+    .filter(([, section]) => section?.view)
+    .sort(([a, x], [b, y]) => (x.order ?? 0) - (y.order ?? 0) || a.localeCompare(b))
+    .map(([key, section]) => (
+      <Fragment key={key}>{ctx.show(section.view, { _id: id }, hints)}</Fragment>
+    ));
   const lines = Object.fromEntries(
     byKind(members).agents.map((m) => {
       const agent = whoOf(m.member).id;
@@ -110,6 +127,7 @@ export const membersView = (item: { _id?: string }, ctx: ViewContext<ReactNode>)
         roster={roster}
         above={above}
         lines={lines}
+        sections={sections}
         adds={adds}
         requests={requests}
         invitations={invitations}
@@ -131,6 +149,7 @@ function Members(
     roster,
     above,
     lines,
+    sections,
     adds,
     requests,
     invitations,
@@ -147,6 +166,8 @@ function Members(
     /** What other front ends show above its agents, and on each agent's row. */
     above: ReactNode[];
     lines: Record<string, ReactNode[]>;
+    /** What other front ends show of members of their own kinds (`spaceMembers`). */
+    sections: ReactNode[];
     adds: boolean;
     requests: Request[];
     invitations: Invitation[];
@@ -227,6 +248,7 @@ function Members(
         onAdd={() => setAdding(true)}
         call={call}
       />
+      {sections}
       {spaces.length
         ? (
           <section className="space-section" aria-labelledby="space-drawing">

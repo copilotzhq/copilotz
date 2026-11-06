@@ -36,6 +36,7 @@ import {
   type Computer,
   computers,
   type Desk,
+  POOL_SOCKET,
   type PoolVm,
   remotePool,
 } from "../mod.ts";
@@ -853,4 +854,17 @@ test("an agent names an asleep cloud computer when the default is a person's: it
       await laptop.worker.stop().catch(() => {});
     }
   });
+});
+
+test("the pools' VMs connect at their own path, the pool runtime's socket (a directory's)", async () => {
+  const pool = await createRuntime({ store: memoryStore(), plugins: [cloudPool] });
+  try {
+    assertEquals(POOL_SOCKET, "/__pool/oxian");
+    // Its socket, as the runtime's own answers a request that isn't an upgrade: never a 404.
+    const asked = await pool.fetch(new Request(`http://app.test${POOL_SOCKET}`));
+    assertEquals(asked.status, 426);
+    await asked.body?.cancel();
+  } finally {
+    await pool.close();
+  }
 });

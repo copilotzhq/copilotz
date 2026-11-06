@@ -10,6 +10,7 @@ import {
   createRuntime,
   definePlugin,
   type Runtime,
+  setClientAddress,
   type Store,
 } from "../../../../runtime/mod.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
@@ -18,8 +19,6 @@ import { chat } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
 import { webLines } from "../lines.ts";
 import { test } from "../../../../testing/mod.ts";
-import { createTickets } from "../../../../hosts/web/tickets.ts";
-import { setClientAddress, webServer } from "../../../../hosts/web/server.ts";
 import { newSecret, visitOf } from "../shared/secret.ts";
 
 const PAGE = "https://book.example.com";
@@ -56,15 +55,14 @@ test("a visitor's secret made later than now is nobody's; within a few minutes' 
   }
 });
 
-/** The visitors' line `site`, kept `days`, on this store: a runtime and its web host. */
+/** The visitors' line `site`, kept `days`, on this store: a runtime and the arrivals to it. */
 async function lineFor(store: Store, days: number) {
-  const tickets = createTickets({ perMinute: 100_000 });
   const app = definePlugin({
     name: "app",
     resources: {
       agents: { guide: { instructions: "Help.", model: "fake/echo" } },
       links: LINKS,
-      web: { lines: { site: { in: "shop", agent: "guide", days } } },
+      web: { site: { in: "shop", agent: "guide", days } },
     },
   });
   const kept = definePlugin({
@@ -77,17 +75,16 @@ async function lineFor(store: Store, days: number) {
     store,
     plugins: [models, chat, ...access, webLines, app, kept],
   });
-  const serve = webServer({ runtime, tickets, code: { entry: "app.js", files: { "app.js": "" } } });
   const arrive = (cookie?: string) =>
-    serve(setClientAddress(
-      new Request(`${PAGE}/connect`, {
+    runtime.fetch(setClientAddress(
+      new Request(`${PAGE}/web/site`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           origin: PAGE,
           ...(cookie ? { cookie } : {}),
         },
-        body: JSON.stringify({ line: "site" }),
+        body: "{}",
       }),
       "198.51.100.20",
     ));
@@ -103,7 +100,9 @@ async function lineFor(store: Store, days: number) {
       observed.close();
     }
   };
-  return { runtime, tickets, arrive, records };
+  const who = (cookie: string) =>
+    runtime.query<Actor | null>("contact_visitor.actor", { secret: cookie.split("=")[1] });
+  return { runtime, arrive, who, records };
 }
 
 test("an erased visitor stays no one past its record's first time, once its line's days are raised", async () => {
@@ -117,7 +116,7 @@ test("an erased visitor stays no one past its record's first time, once its line
     await before.runtime.call("space.create", { id: "shop", name: "Shop" }, { actor: ana });
     const first = await before.arrive();
     const cookie = first.headers.get("set-cookie")!.split(";")[0];
-    const actor = before.tickets.admit((await first.json()).ticket)!;
+    const actor = (await before.who(cookie))!;
     await before.runtime.call("chat.send", { text: "hello" }, { actor });
     await before.runtime.idle();
     await before.runtime.call("contact.forget", { contact: actor.id, chats: true }, { actor: ana });
@@ -130,13 +129,11 @@ test("an erased visitor stays no one past its record's first time, once its line
     await after.runtime.call("contact.prune", {});
     const [record] = await after.records();
     assertEquals([record?._id, record?.ended], [actor.id, true]);
+    // Its cookie is no one; arriving with it makes someone new, with a cookie of its own.
+    assertEquals(await after.who(cookie), null);
     const back = await after.arrive(cookie);
-    const { actor: came } = await back.json();
-    assertNotEquals(came.id, actor.id);
-    assertEquals(
-      await after.runtime.query("contact_visitor.actor", { secret: cookie.split("=")[1] }),
-      null,
-    );
+    const came = await after.who(back.headers.getSetCookie()[0].split(";")[0]);
+    assertNotEquals(came?.id, actor.id);
   } finally {
     Date.now = realNow;
     await open?.close();

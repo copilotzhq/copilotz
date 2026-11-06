@@ -60,15 +60,92 @@ membership and the org's own people line up without a mapping.
 
 ## Signing in and entering an org
 
-- **Sign in once,** at the directory. To enter an org, the directory checks the account belongs to
-  it and the org starts its own session for that person. Sessions stay inside the org, as everything
-  else does.
-- **Between processes,** that hand-over is a one-time ticket. In one process it's a call.
+- **Sign in once,** at the directory, with its sign-in routes (`/signin/google`, `/signin/dev`): its
+  session is identity's, in the `dir` cookie.
+- **Entering an org is signing in to it.** The directory checks the account belongs to the org
+  (`org.enter`), then hands the browser over with a signed handoff: a minute long, and never out of
+  the process. The org's own `POST /enter` (at `/o/<org>/enter`, which only a handoff opens) keeps
+  what the directory verified about the person (`person.set`), joins them the first time, starts its
+  own session (`session.start`) and sets its own cookie (`s_<org>`). Sessions stay inside the org,
+  as everything else does.
 - **The org switcher** lists the account's orgs, and creates new ones. Entering another org swaps
-  the session the browser holds; each org's session is kept, so switching back is instant.
-- **Addressing:** one host serves every org, which is chosen by session (the switcher), so the app
-  works on a single address such as a Cloud Run URL. A subdomain or custom domain per org can be
-  added later, as another way to pick the org.
+  which org the browser is in (the `org` cookie); each org's session is kept, so switching back is
+  instant.
+- **Addressing:** one host serves every org, so the app works on a single address such as a Cloud
+  Run URL. A browser's page goes to the org it's in (its `org` cookie); everything else that names
+  an org goes by its address, `/o/<org>/…` (a key, a webhook, a computer, and the page's own
+  `/connect` and socket). An org may also claim a host of its own (a preview's, an app's), which
+  then reaches only that org's routes by host.
+
+## One address: the directory's routes
+
+Built 2026-11-06, in place of the orgs host (`copilotz/orgs`, gone). The directory is an ordinary
+runtime whose `fetch` is the whole app's (`Deno.serve(dir.fetch)`, or `listen(dir.fetch)` on Node).
+Its plugin's routes answer what's the directory's, and hand everything else, untouched (its path,
+its body, its socket), to the org's own `runtime.fetch`, which answers it by the org's own `who`:
+
+- **`/o/<org>/…`:** that org, by its address: 404 for no such org, 403 for a suspended one.
+- **`/*`** (matched last): the org the browser is in (`org`), with its session there. A page asked
+  for without one (signed in at the directory but in no org yet, its session there gone, the org no
+  longer theirs or suspended) goes in first: the org they were in, else their last, else their own,
+  made now; then the same page again (a 302). Anything else for someone signed in nowhere is the
+  lobby's (`directory.lobby`: the sign-in page, a runtime with the page plugin).
+- **A host an org claimed** (a route for every host but the app's own, which `hosts.own` names):
+  that org's host routes alone; `GET /__copilotz/hosts/resolve?host=` says whose a host is, for the
+  app's front.
+- **Its own:** `GET /orgs` and `POST /orgs` (the account's orgs, a new one), `POST /orgs/enter`,
+  `POST /orgs/invites/answer`, `POST /signout` out of every org it holds a session for (each ends
+  where its org is open; signing out never opens one), and staff's `/console/orgs…` and
+  `/console/codes…`.
+
+**Each org's runtime** is the app's plugins plus `directory.member(dir, org)`, which gives it:
+
+- which org it is (`resources.org`: its id, name, kind and address) and where it's served
+  (`page.base`: `/o/<org>`, so its page, its `/connect` and its socket work at its address);
+- its cookies' names (below);
+- the app's own hosts (`hosts.own`), so a host it claimed reaches only its host routes;
+- how it reaches the directory (`resources.directory`): invitations, leaving, renaming, claiming a
+  host, gift codes; and its `/enter`.
+
+**Which org a request is for** is a query (`org.info`), kept 10 seconds; hosts' claims are kept a
+minute; each is forgotten at once when the directory changes it.
+
+**What else lives in the directory's runtime:** whatever has one address for every org. Stripe's
+webhook (`stripeWebhook`, `POST /__stripe/<seller>`) checks the signature, then hands each fact to
+its org's runtime as `billing.apply` (the `stripe` resource's `orgs`); the pools' cloud computers
+connect at the cloud pool's route. Visitors on every org's site chats are counted together with one
+`contactsPool()` given to each org's runtime.
+
+### Cookies per org
+
+Every cookie keeps the name it had before forwarding, so nobody signs in again. The runtime knows
+nothing of orgs: each runtime's `cookies` resource renames what its plugins set.
+
+| Cookie                               | Name                  | Set by                                                  |
+| ------------------------------------ | --------------------- | ------------------------------------------------------- |
+| the directory's session              | `__Host-dir`          | the directory plugin: `{ names: { session: "dir" } }`   |
+| which org the browser is in          | `__Host-org`          | the directory                                           |
+| an org's session                     | `__Host-s_<org>`      | `directory.member`: `{ names: { session: "s_<org>" } }` |
+| an org's other cookies (a visitor's) | `__Host-<name>_<org>` | `directory.member`: `{ suffix: "_<org>" }`              |
+
+(`__Host-` wherever the cookie is Secure: over plain http to this machine, the plain name.)
+
+### The pool
+
+`runtimes(open, { idleMs })` (the runtime's) keeps the orgs' runtimes: the app says how to open one
+(`open(id)`: the org's store and plugins, `directory.member` among them; undefined for no such org),
+and gives the pool to the directory (`directory: { orgs }`).
+
+- `get(id)` opens it on its first use, and hands the same one after; a failed opening is tried again
+  on the next `get`.
+- One with no browsers and nothing pending for `idleMs` since its last use (30 minutes unless said)
+  closes, and opens again on its next use.
+- `close(id)` closes one now (staff moving its rows); a `get` meanwhile opens another only once it
+  has closed, so an org's store never has two writers. `close()` closes them all, for good.
+
+**Sockets** are forwarded like any request. On Node, Oxian's listener waits for the runtime's answer
+before it decides an upgrade (Oxian 0.23.4), so the org's runtime can be opened first; under
+`Deno.serve`, a socket Deno handed the directory is still Deno's to accept in the org's runtime.
 
 ## Roles
 
@@ -96,8 +173,10 @@ acts only as its jobs. This is in place, and it's what makes org-run workers pos
 
 ## Many orgs per process
 
-- A process hosts many orgs. Each org's writer starts on its first request and stops when idle.
-- A request finds its org through the session, then the directory's placement.
+- A process hosts many orgs. Each org's writer starts on its first request and stops when idle (the
+  pool, above).
+- A request finds its org by its address, the browser's `org` cookie or a host the org claimed; the
+  directory's placement says where its rows are.
 - Each org's writer is held by one process at a time and fenced by the org's epoch, so a process
   that takes over an org can't be overlapped by the one before.
 - **The first deployment** runs one process holding every org's writer, with the web and executors

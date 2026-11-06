@@ -34,7 +34,7 @@ export { GAP, type WhatsAppNumber } from "./collections/number.ts";
 export type { WhatsAppPhone } from "./collections/phone.ts";
 export type { WhatsAppCode } from "./collections/code.ts";
 export type { WhatsAppThread } from "./collections/thread.ts";
-export type { WhatsAppLine, WhatsAppSettings } from "./shared/settings.ts";
+export type { DeclaredNumber, WhatsAppSettings } from "./shared/settings.ts";
 export {
   buttons,
   type Card,

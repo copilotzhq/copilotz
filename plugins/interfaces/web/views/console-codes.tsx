@@ -10,21 +10,23 @@ import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import {
   Badge,
   Button,
-  type ConsoleOrg,
   CopyButton,
-  createGiftCode,
   Dialog,
   EmptyState,
   Field,
-  type GiftCode,
-  giftCodes,
   Input,
   message,
   Notice,
-  revokeGiftCode,
   Skeleton,
   Time,
 } from "../../../../hosts/web/mod.ts";
+import {
+  type ConsoleOrg,
+  createGiftCode,
+  type GiftCode,
+  giftCodes,
+  revokeGiftCode,
+} from "../../../access/directory/contract.ts";
 import { codeStatus, dayOf, dollarsOf, newCodeOf, STATUS } from "../shared/codes.ts";
 
 const STYLE = `

@@ -13,7 +13,7 @@
  * `--remote` runs the executor in another process, over Oxian's WebSocket transport.
  * `--ledger` adds the usage plugin, so every model call is also recorded.
  */
-import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
+import { parseArgs } from "@std/cli/parse-args";
 import { serve } from "@oxian/oxian-js/adapters/deno";
 import { createExecutor, createRuntime, definePlugin } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";

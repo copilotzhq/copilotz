@@ -1,15 +1,15 @@
 /**
- * The web lines (the `web` resource): browsers that
- * aren't anyone, coming in as visitors. Each line the app declares, by
- * name, is a front door for them: the space their chats live in, who
- * answers, how long a visitor stays the same one, what they may send and
- * its limits. How the app knows who's calling (`caller`) is the runtime's
- * `CallerSettings`, as MCP's lines take it. `lineOf` gives a line with every
- * default filled in; `problemOf` says what's wrong with one, at start.
+ * The web sites (the `web` resource, a flat map by name): browsers that
+ * aren't anyone, coming in as visitors. Each site the app declares is a
+ * front door for them: the space their chats live in, who answers, how
+ * long a visitor stays the same one, what they may send and its limits.
+ * How the app knows who's calling is the runtime's `caller` resource
+ * (`CallerSettings`), as MCP's servers take it. `siteOf` gives a site with
+ * every default filled in; `problemOf` says what's wrong with one, at start.
  */
 import {
+  callerOf,
   callerProblem,
-  type CallerSettings,
   linksOf,
   type Resources,
   secretsOf,
@@ -17,7 +17,7 @@ import {
 import type { Keyring } from "./secret.ts";
 
 /**
- * What a line takes before it says no: see `LIMITS`. Those by address hold
+ * What a site takes before it says no: see `LIMITS`. Those by address hold
  * for each network a visitor came from (`networksOf`): its address (IPv4) or
  * /64 (IPv6) as they say, and wider ones, as many callers' worth as each
  * counts (`SCALE`: an IPv4 /24 eight; an IPv6 /56 four, a /48 eight).
@@ -29,7 +29,7 @@ export type WebLimits = {
    * over days can't all start at once).
    */
   ipVisitorsPerHour: number;
-  /** New visitors who speak an hour, on the line: contacts made, at their first message. */
+  /** New visitors who speak an hour, on the site: contacts made, at their first message. */
   visitorsPerHour: number;
   /** Messages one visitor sends a minute, and a day. */
   perMinute: number;
@@ -37,7 +37,7 @@ export type WebLimits = {
   /** Messages a minute and a day from one address: every visitor that came in from it. */
   ipPerMinute: number;
   ipPerDay: number;
-  /** Messages a minute on the line, all its visitors together. */
+  /** Messages a minute on the site, all its visitors together. */
   linePerMinute: number;
   /**
    * Of those, what visitors who hadn't spoken before this minute may send:
@@ -47,7 +47,7 @@ export type WebLimits = {
   newcomersPerMinute: number;
 };
 
-/** Files a visitor may send with a message, when the line takes any: how many, and how large. */
+/** Files a visitor may send with a message, when the site takes any: how many, and how large. */
 export type WebFiles = {
   /** Files with one message (1 unless said). */
   count?: number;
@@ -55,16 +55,16 @@ export type WebFiles = {
   bytes?: number;
 };
 
-/** A web line the app declares: a front door for anyone with a browser. */
-export type WebLine = {
+/** A site the app declares: a front door for anyone with a browser. */
+export type DeclaredSite = {
   /**
    * The space its visitors' chats live in: one the app declares too (the
-   * spaces plugin's `spaces` resource) is made and kept with the line.
+   * spaces plugin's `spaces` resource) is made and kept with the site.
    */
   in: string;
   /** Who answers its visitors (an agent's name); else whoever answers new chats in the space. */
   agent?: string;
-  /** What its visitors' chats are called, as the space's people see them (the line's name). */
+  /** What its visitors' chats are called, as the space's people see them (the site's name). */
   title?: string;
   /** How long a visitor stays the same one (their browser's cookie), in days: 30. */
   days?: number;
@@ -90,35 +90,31 @@ export type WebLine = {
    * An Action of the app's that a newcomer must pass to be let in (a
    * CAPTCHA's check: Turnstile's, hCaptcha's): asked as the system with
    * `{ line, answer }`, where `answer` is what the page sent coming in
-   * (`web({ arrive: { line, challenge } })`'s `challenge`), it answers true
+   * (`web({ arrive: { name, challenge } })`'s `challenge`), it answers true
    * to let them in. One back with its cookie isn't asked again.
    */
   challenge?: string;
-  /** With the orgs host, the org it's for (its id): no other org has it. */
-  org?: string;
-};
-
-export type WebSettings = {
-  lines?: Record<string, WebLine>;
-  /**
-   * How the app knows who's calling, for the limits by address, when a
-   * front before it says (as MCP's lines take it). Without it, a visitor is
-   * counted by the address its socket came from, as the web host's listener
-   * saw it; with neither, nobody is let in.
-   */
-  caller?: CallerSettings;
 };
 
 /**
- * What a line takes, unless it says. From one address: 20 new visitors an
+ * The `web` resource: the declared sites, by name. For the limits by
+ * address, the app's `caller` resource says how it knows who's calling
+ * when a front before it says; without it, a visitor is counted by the
+ * address its socket came from, as the web host's listener saw it; with
+ * neither, nobody is let in.
+ */
+export type WebSettings = Record<string, DeclaredSite>;
+
+/**
+ * What a site takes, unless it says. From one address: 20 new visitors an
  * hour (a household, an office behind one address), and 30 messages a
  * minute, 1,000 a day; its wider networks as many times that as they count
  * (an IPv6 /48: 160 new visitors an hour, 240 messages a minute). From one
- * visitor: 10 messages a minute, 200 a day. On the line: 600 new visitors
+ * visitor: 10 messages a minute, 200 a day. On the site: 600 new visitors
  * who speak an hour, and 300 messages a minute, of which newcomers (those
  * who hadn't spoken before the minute) send 200 at most. Only visitors let
  * in count as new: one coming back with their cookie is no new one; and only
- * those who speak are contacts, counted on the line.
+ * those who speak are contacts, counted on the site.
  */
 export const LIMITS: WebLimits = {
   ipVisitorsPerHour: 20,
@@ -131,20 +127,20 @@ export const LIMITS: WebLimits = {
   newcomersPerMinute: 200,
 };
 
-/** What a line taking files takes, unless it says: one a message, of 5 MB. */
+/** What a site taking files takes, unless it says: one a message, of 5 MB. */
 export const FILES: Required<WebFiles> = { count: 1, bytes: 5_000_000 };
 
-/** The most files a line may take with one message, and the largest each may be. */
+/** The most files a site may take with one message, and the largest each may be. */
 const MOST_FILES: Required<WebFiles> = { count: 10, bytes: 10_000_000 };
 
-/** How long a visitor stays the same one, unless the line says: 30 days. */
+/** How long a visitor stays the same one, unless the site says: 30 days. */
 export const DAYS = 30;
 
-/** The longest a line may keep a visitor the same one, as long as browsers keep a cookie. */
+/** The longest a site may keep a visitor the same one, as long as browsers keep a cookie. */
 export const MOST_DAYS = 400;
 
-/** A line as the plugin uses it: its settings, its name, and every default filled in. */
-export type Line = Omit<WebLine, "limits" | "days" | "files"> & {
+/** A site as the plugin uses it: its settings, its name, and every default filled in. */
+export type Site = Omit<DeclaredSite, "limits" | "days" | "files"> & {
   name: string;
   days: number;
   limits: WebLimits;
@@ -152,30 +148,20 @@ export type Line = Omit<WebLine, "limits" | "days" | "files"> & {
   files?: Required<WebFiles>;
 };
 
-export const settingsOf = (ctx: { resources: Resources }): WebSettings =>
-  (ctx.resources.web ?? {}) as WebSettings;
-
-/**
- * The app's own lines, by name, here: with the orgs host (each org's runtime
- * knows its org, `resources.org`), only those that name this org; a line
- * naming none is the single-org app's.
- */
-export const linesOf = (ctx: { resources: Resources }): Record<string, WebLine> => {
-  const all = settingsOf(ctx).lines ?? {};
-  const org = orgOf(ctx);
-  return Object.fromEntries(
-    Object.entries(all).filter(([, line]) => line && (org ? line.org === org : !line.org)),
+/** The sites the app declares, by name. */
+export const sitesOf = (ctx: { resources: Resources }): WebSettings =>
+  Object.fromEntries(
+    Object.entries((ctx.resources.web ?? {}) as WebSettings).filter(([, site]) => site),
   );
-};
 
-/** The org this runtime is, with the orgs host. */
+/** The org this runtime is, behind a directory. */
 const orgOf = (ctx: { resources: Resources }) =>
   (ctx.resources.org as { id?: string } | undefined)?.id;
 
-/** The line `name`, ready to use; undefined when the app declares none by that name here. */
-export function lineOf(ctx: { resources: Resources }, name: string): Line | undefined {
-  const lines = linesOf(ctx);
-  const line = Object.hasOwn(lines, name) ? lines[name] : undefined;
+/** The site `name`, ready to use; undefined when the app declares none by that name. */
+export function siteOf(ctx: { resources: Resources }, name: string): Site | undefined {
+  const sites = sitesOf(ctx);
+  const line = Object.hasOwn(sites, name) ? sites[name] : undefined;
   if (!line) return undefined;
   const { files, ...rest } = line;
   return {
@@ -190,7 +176,7 @@ export function lineOf(ctx: { resources: Resources }, name: string): Line | unde
 /**
  * What visitors' secrets are signed with here: the app's secret (and the
  * one before it, `links.previous`, while it's given), and the org. Undefined
- * without the app's secret (an app with no web lines): no secret is anyone
+ * without the app's secret (an app with no web sites): no secret is anyone
  * then.
  */
 export function keyringOf(ctx: { resources: Resources }): Keyring | undefined {
@@ -200,8 +186,12 @@ export function keyringOf(ctx: { resources: Resources }): Keyring | undefined {
   return { secrets: secretsOf(links), ...(org ? { org } : {}) };
 }
 
-/** What's wrong with a line's settings, if anything (checked when the app starts). */
-export function problemOf(name: string, line: WebLine, resources: Resources): string | undefined {
+/** What's wrong with a site's settings, if anything (checked when the app starts). */
+export function problemOf(
+  name: string,
+  line: DeclaredSite,
+  resources: Resources,
+): string | undefined {
   if (!/^[\w-]{1,60}$/.test(name)) return "its name is letters, digits, - and _";
   if (typeof line?.in !== "string" || !line.in) return "needs its in (the space its chats live in)";
   if (line.agent !== undefined) {
@@ -250,29 +240,29 @@ export function problemOf(name: string, line: WebLine, resources: Resources): st
 }
 
 /**
- * What's wrong with the web lines' settings, if anything (checked when the
- * app starts), given the app's Actions: a line's challenge is one, and a
+ * What's wrong with the web sites' settings, if anything (checked when the
+ * app starts), given the app's Actions: a site's challenge is one, and a
  * budget needs the usage plugin's prices (`usage.quote`).
  */
 export function settingsProblem(
   resources: Resources,
   actions: Readonly<Record<string, unknown>> = {},
 ): string | undefined {
-  const caller = callerProblem(settingsOf({ resources }).caller);
-  if (caller) return `web.${caller}`;
-  const lines = Object.entries(linesOf({ resources }));
-  for (const [name, line] of lines) {
+  const caller = callerProblem(callerOf({ resources }));
+  if (caller) return caller;
+  const sites = Object.entries(sitesOf({ resources }));
+  for (const [name, line] of sites) {
     const problem = problemOf(name, line, resources) ??
       (line.challenge && !Object.hasOwn(actions, line.challenge)
         ? `its challenge "${line.challenge}" isn't one of the app's Actions`
         : line.budget && !Object.hasOwn(actions, "usage.quote")
         ? "its budget needs the usage plugin, which prices what visitors' turns use"
         : undefined);
-    if (problem) return `web.lines.${name} ${problem}`;
+    if (problem) return `web.${name} ${problem}`;
   }
   // Visitors' secrets are signed with the app's secret: nothing is kept when a page comes in.
-  if (lines.length && !linksOf(resources)) {
-    return "web.lines need the app's secret, which visitors' cookies are signed with: " +
+  if (sites.length && !linksOf(resources)) {
+    return "web sites need the app's secret, which visitors' cookies are signed with: " +
       "the links resource ({ origin, secret })";
   }
   return undefined;

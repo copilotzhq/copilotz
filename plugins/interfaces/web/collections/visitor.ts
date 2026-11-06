@@ -4,8 +4,8 @@
  * chat, the tags of the networks it first came from (HMACs: never the
  * address), until when, and whether it's been erased (`ended`: its cookie is
  * no one from then, though it says who it was). Only the system reads or
- * writes them: the web host asks who a cookie's secret is (`actor`), and
- * nobody else, a contact included, sees one.
+ * writes them: the web lines' `who` asks who a cookie's secret is
+ * (`actor`), and nobody else, a contact included, sees one.
  *
  * A browser that came in and said nothing yet has no record: its secret
  * stands on its own (see shared/secret.ts), and its contact, chat and record
@@ -15,7 +15,7 @@
  */
 import { type Actor, defineCollection, type Infer } from "../../../../runtime/mod.ts";
 import { contactOf, visitOf } from "../shared/secret.ts";
-import { keyringOf, lineOf } from "../shared/lines.ts";
+import { keyringOf, siteOf } from "../shared/lines.ts";
 
 const visitorSchema = {
   type: "object",
@@ -41,22 +41,22 @@ export const visitor = defineCollection({
   indexes: [["expires"], ["spoke"]],
   queries: {
     /**
-     * Who a visitor's secret is: the contact it is, once it's spoken, while
-     * the secret lasts, its line is still the app's, and the contact is still
-     * there (erased, it's no one at once), with its line (`web`) and its
-     * networks' tags (`from`), what its messages and connections count by. A browser that hasn't spoken is no
-     * one here: the web host lets it back in as who it was (`contact.arrive`,
-     * given its secret). The system's alone: the web host asks, once per
-     * connection.
+     * Who a visitor's secret is, while it lasts and its line is still the
+     * app's, with its line (`web`) and its networks' tags (`from`), what its
+     * messages and connections count by. One that hasn't spoken yet (no
+     * record) is who its secret says: nothing is kept for it. Once it's
+     * spoken, the contact it is, while that's still there (erased, it's no
+     * one at once). The system's alone: the web lines' `who` asks.
      */
     actor: async (visitors, params: { secret?: unknown }, ctx): Promise<Actor | null> => {
       const ring = keyringOf(ctx);
       const visit = ring ? await visitOf(ring, params?.secret) : undefined;
-      const line = visit ? lineOf(ctx, visit.line) : undefined;
+      const line = visit ? siteOf(ctx, visit.line) : undefined;
       if (!visit || !line || visit.issued + line.days * 86_400_000 < Date.now()) return null;
       const contact = await contactOf(ring!, visit);
       const found = await visitors.findOne({ _id: contact }) as Visitor | null;
-      if (!found || found.ended || found.line !== line.name) return null;
+      if (!found) return { kind: "contact", id: contact, web: line.name, from: visit.tags };
+      if (found.ended || found.line !== line.name) return null;
       const there = await ctx.db.collection("contact").findOne({ _id: contact });
       return there ? { kind: "contact", id: contact, web: line.name, from: found.tags } : null;
     },

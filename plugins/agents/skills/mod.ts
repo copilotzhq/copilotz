@@ -24,7 +24,7 @@
  * plugins: [models, chat, ...access, skills, app]
  * ```
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
 import { createAction } from "./actions/create.ts";
 import { deleteAction } from "./actions/delete.ts";
 import { updateAction } from "./actions/update.ts";
@@ -41,6 +41,15 @@ export { planning } from "./resources/planning.ts";
 export const skills: Plugin = definePlugin({
   name: "skills",
   requires: ["chat"],
+  // Its records change through its Actions, never written directly from outside.
+  guard: (_actor, { collection, access, direct }) => {
+    if (direct && access === "write" && ["skill", "skillFile"].includes(collection)) {
+      throw failure("forbidden", `"${collection}" changes through the skills plugin's Actions.`, {
+        public: true,
+      });
+    }
+    return undefined;
+  },
   collections: { skill, skillFile },
   actions: {
     "skill.create": createAction,

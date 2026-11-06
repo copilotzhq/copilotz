@@ -73,10 +73,13 @@ export function createExecutor(
     key?: string;
     /** Where plugin code (`ctx.metrics`) and this executor record metrics. */
     metrics?: Metrics;
+    /** What plugin code (`ctx.fetch`) calls outside services with (default: the platform's). */
+    fetch?: typeof fetch;
   },
 ): Executor {
   const registry = merge(options.plugins);
   const metrics = options.metrics ?? noMetrics;
+  const outside = options.fetch ?? globalThis.fetch.bind(globalThis);
   const roundTrips = metrics.histogram("copilotz.op.roundtrip", {
     unit: "ms",
     description: "Requests to the owner, as executors waited for them",
@@ -226,10 +229,20 @@ export function createExecutor(
       unschedule: async (timer) => Number(await run({ op: "unschedule", timer })) > 0,
       cancel: async (target) => Boolean(await run({ op: "cancel", ...target } as Op)),
       disconnect: async (actor) =>
-        Number(await run({ op: "disconnect", actor: { kind: actor.kind, id: actor.id } })),
+        Number(
+          await run({
+            op: "disconnect",
+            actor: {
+              kind: actor.kind,
+              id: actor.id,
+              ...(typeof actor.key === "string" ? { key: actor.key } : {}),
+            },
+          }),
+        ),
       render: presenter(registry.views, () => reading(run, job.record, actor)),
       record: job.record,
       metrics,
+      fetch: outside,
       resources: registry.resources,
       adapters: registry.adapters,
       workers: working(job),
@@ -437,9 +450,9 @@ export function createExecutor(
   };
 
   const reading = (run: Run, record: Context["record"], actor?: Actor): ReadContext =>
-    readingOver(registry, run, record, metrics, actor);
+    readingOver(registry, run, record, metrics, outside, actor);
   const querying = (run: Run, record: Context["record"], actor?: Actor): Query =>
-    queryingOver(registry, run, record, metrics, actor);
+    queryingOver(registry, run, record, metrics, outside, actor);
 
   const execute = (job: Reach, request: Job): unknown => {
     switch (request.kind) {

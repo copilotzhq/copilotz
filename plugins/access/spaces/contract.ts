@@ -15,7 +15,7 @@
  *
  * On the web, a space is a page (`/space/<id>`): a header, then tabs. Other
  * front ends add to it, to the sidebar, and to who can be added to a space,
- * through three resource kinds:
+ * through these resource kinds:
  *
  * - `spaceTabs`: a tab on a space's page, and in its side panel beside a
  *   chat. Its View gets item `{ _id }` (the space's id) and hints
@@ -40,6 +40,10 @@
  *   tab): a View above them (`view`: item `{ _id }`, the space), and one on
  *   each agent's row (`row`: item `{ _id }`, the agent), both with hints
  *   `{ in, manage, mode }` (`manage`: whether the person manages the space).
+ * - `spaceMembers`: a section of a space's Members tab, below its agents,
+ *   for members of a kind this plugin doesn't show itself (developer keys,
+ *   `key:<id>`): a View with item `{ _id }` (the space) and the same hints;
+ *   nothing when it has nothing to show.
  *
  * ```ts
  * resources: {
@@ -50,6 +54,7 @@
  *   spaceSidebar: { chats: { view: "chats.recent", title: "chats" } },
  *   spaceInvite: { agents: { title: "Agents", view: "agent.add", personal: true } },
  *   spaceAgents: { tiers: { view: "tiers.space", row: "tiers.agent" } },
+ *   spaceMembers: { keys: { view: "api.members" } },
  * }
  * ```
  */
@@ -115,6 +120,13 @@ export type SpaceSidebar = {
  * `{ _id }`, the agent), with hints `{ in, manage, mode: "page" | "panel" }`.
  */
 export type SpaceAgents = { view?: string; row?: string; order?: number };
+
+/**
+ * A `spaceMembers` resource: a section of a space's Members tab, below its
+ * agents (item `{ _id }`, the space; hints `{ in, manage, mode }`), for
+ * members of a kind the spaces plugin doesn't show (`key:<id>`).
+ */
+export type SpaceMembers = { view: string; order?: number };
 
 /** A `spaceInvite` resource: a kind of member added to a space, a tab of its invite surface. */
 export type SpaceInvite = {

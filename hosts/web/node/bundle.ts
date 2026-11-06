@@ -1,7 +1,7 @@
 /**
  * The browser's code, bundled on Node with esbuild: the page's entry (the app's
  * `web({ root, plugins })`) and everything it imports, the web host and the
- * front ends included, as `webServer` serves it (`Code`). Split where the code
+ * front ends included, as `webPage` serves it (`Code`). Split where the code
  * imports lazily (math, a terminal), so a page loads those only when it shows
  * them, as `deno bundle --code-splitting` does on Deno.
  *

@@ -1,20 +1,17 @@
 /**
- * Credentials: what a connection shows to be someone. A session (from a
- * sign-in) or a key (made by a person, for code acting as them). Only a
- * hash of each secret is kept: the secret is shown once, when it's made.
- * Deleting one revokes it.
+ * Credentials: what a connection shows to be someone: a session, from a
+ * sign-in. Only a hash of each secret is kept: the secret is shown once,
+ * when it's made. Deleting one revokes it.
  */
-import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
 
 const credentialSchema = {
   type: "object",
   properties: {
-    kind: { type: "string", enum: ["session", "key"] },
+    kind: { type: "string", enum: ["session"] },
     /** Whom it proves. */
     person: { type: "string" },
-    /** A key's name, so its person knows it again. */
-    name: { type: "string" },
-    /** The first characters of its secret, to tell keys apart. */
+    /** The first characters of its secret, to tell sessions apart. */
     hint: { type: "string" },
     expires: { type: "string" },
     /** A session of platform staff's, who reach the whole org. */
@@ -28,25 +25,12 @@ export const credential = defineCollection({
   schema: credentialSchema,
   indexes: [["person"]],
   queries: {
-    /**
-     * Who a secret proves, if anyone: a person (`key` says which of their
-     * keys). Hosts ask once per connection.
-     */
+    /** Who a secret proves, if anyone: a person. Identity's `who` asks it for a session cookie. */
     actor: async (credentials, params: { secret: string }) => {
-      const found = await credentials.findOne({ _id: await hash(params.secret) });
+      // A session only: a key identity made before (`kind: "key"`, unscoped) proves nobody now.
+      const found = await credentials.findOne({ _id: await hash(params.secret), kind: "session" });
       if (!found || (found.expires && found.expires < new Date().toISOString())) return null;
-      return {
-        kind: "person",
-        id: found.person,
-        ...(found.kind === "key" ? { key: found._id.slice(0, 12) } : {}),
-        ...(found.staff ? { staff: true } : {}),
-      };
-    },
-    /** A person's keys, without their secrets. */
-    keys: {
-      allow: people,
-      run: (credentials, params: { person: string }) =>
-        credentials.find({ person: params.person, kind: "key" }, { sort: { at: 1 } }),
+      return { kind: "person", id: found.person, ...(found.staff ? { staff: true } : {}) };
     },
   },
 });

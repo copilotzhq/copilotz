@@ -41,7 +41,7 @@ const numberSchema = {
     quiet: { type: "number" },
     /** What customers are told in, when their message can't go on: `en`, `pt`. */
     language: { type: "string", enum: ["en", "pt"] },
-    /** The app's own line (its settings' `lines`): kept as they say, changed only there. */
+    /** The app's own line (its settings'): kept as they say, changed only there. */
     declared: { type: "boolean" },
     at: { type: "string" },
   },

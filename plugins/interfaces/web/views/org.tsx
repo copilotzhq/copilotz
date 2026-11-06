@@ -17,13 +17,12 @@ import {
   Icon,
   LazyView,
   Notice,
-  orgName,
   Page,
   Skeleton,
   Tabs,
   Title,
-  useOrgs,
 } from "../../../../hosts/web/mod.ts";
+import { orgName, useOrgs } from "../../../access/directory/contract.ts";
 import { chosenSection, type OrgSection, runs, sectionsOf, standingName } from "../shared/orgs.ts";
 import { useStanding } from "../shared/standing.ts";
 import { OrgFace } from "./orgs.tsx";

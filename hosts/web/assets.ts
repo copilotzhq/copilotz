@@ -1,18 +1,21 @@
 /**
- * The app's own files, as the web server serves them (`webServer({ assets })`):
- * a brand's fonts and their stylesheet, its images. The app says what they
- * are, by the path each is served at, and reads them as its platform does
- * (`Deno.readFile`, `fs.readFile`, a bundler's import): the server only
- * answers requests, so it runs wherever `Request` and `Response` do.
+ * The app's own files, as the page serves them (`webPage`, its `page`
+ * resource's `assets`): a brand's fonts and their stylesheet, its images.
+ * The app says what they are, by the path each is served at, and reads them
+ * as its platform does (`Deno.readFile`, `fs.readFile`, a bundler's import):
+ * the page only answers requests, so it runs wherever `Request` and
+ * `Response` do.
  *
  * ```ts
- * webServer({
- *   …,
- *   assets: {
- *     "/assets/fonts/brand.css": await Deno.readFile("fonts/brand.css"),
- *     "/assets/fonts/inter-v13-latin.woff2": () => Deno.readFile("fonts/inter-v13-latin.woff2"),
+ * resources: {
+ *   page: {
+ *     code,
+ *     assets: {
+ *       "/assets/fonts/brand.css": await Deno.readFile("fonts/brand.css"),
+ *       "/assets/fonts/inter-v13-latin.woff2": () => Deno.readFile("fonts/inter-v13-latin.woff2"),
+ *     },
  *   },
- * });
+ * }
  * ```
  *
  * - **Under `/assets/` only,** so they never stand in for the app's routes or
@@ -104,7 +107,7 @@ export function assetServer(
       const kind = TYPES.get(PATH.exec(path)?.[1] ?? "");
       if (!kind) {
         throw new Error(
-          `webServer: can't serve "${path}": an asset's path is under ${ASSETS}, plain names ` +
+          `webPage: can't serve "${path}": an asset's path is under ${ASSETS}, plain names ` +
             `between slashes, ending .${[...TYPES.keys()].join(", .")}`,
         );
       }
@@ -149,7 +152,7 @@ export function assetServer(
         });
       },
       (error) => {
-        console.error(`webServer: couldn't read ${sent}:`, error);
+        console.error(`webPage: couldn't read ${sent}:`, error);
         return new Response("Couldn't read this file", {
           status: 500,
           headers: { "content-type": "text/plain; charset=utf-8", ...SAFE },

@@ -17,8 +17,6 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, type Thread } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
-import { createTickets } from "../../../../hosts/web/tickets.ts";
-import { webServer } from "../../../../hosts/web/server.ts";
 import { serve as listen } from "../../../../testing/mod.ts";
 import { whatsapp } from "../mod.ts";
 import { sign } from "../shared/signature.ts";
@@ -265,6 +263,11 @@ export async function fakeGraph() {
   return {
     url: server.url,
     close: server.close,
+    /** The `fetch` to give the runtime: Meta's Graph address answers from this fake. */
+    fetch: ((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      return fetch(url.replace("https://graph.facebook.com/v23.0", `${server.url}/v23.0`), init);
+    }) as typeof fetch,
     requests,
     /** The texts sent to a phone, in order. */
     texts: (to: string) =>
@@ -324,7 +327,6 @@ export async function setup(
         lead: { instructions: "Hi.", model: "e/lead", default: true, tools: ["send_message"] },
         desk: { instructions: "Sell.", model: "e/desk" },
       },
-      whatsapp: { graph: `${graph.url}/v23.0` },
     },
     adapters: { llm: { e: options.llm ?? echo } },
   });
@@ -332,18 +334,11 @@ export async function setup(
   const start = () =>
     createRuntime({
       store,
+      fetch: graph.fetch,
       plugins: [models, chat, ...access, whatsapp, reads, app, ...options.plugins ?? []],
       ...(options.clock ? { clock: options.clock } : {}),
     });
   let runtime = await start();
-  const serving = () =>
-    webServer({
-      runtime,
-      tickets: createTickets(),
-      code: { entry: "app.js", files: { "app.js": "" } },
-      upgrade: () => new Response(null, { status: 299 }),
-    });
-  let serve = serving();
   try {
     const { space: personal } = await runtime.call<{ space: string }>("space.personal", {}, {
       actor: ana,
@@ -362,11 +357,10 @@ export async function setup(
         return runtime;
       },
       graph,
-      serve: (request) => serve(request),
+      serve: (request) => runtime.fetch(request),
       restart: async () => {
         await runtime.close();
         runtime = await start();
-        serve = serving();
       },
       launch,
       personal,
@@ -399,7 +393,7 @@ export async function setup(
           }],
         });
         const bytes = new TextEncoder().encode(body);
-        const answered = await serve(
+        const answered = await runtime.fetch(
           new Request(`http://localhost/hooks/whatsapp/${number}`, {
             method: "POST",
             headers: {

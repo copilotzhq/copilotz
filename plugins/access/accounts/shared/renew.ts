@@ -73,7 +73,10 @@ async function once(ctx: Context, account: AccountDoc, provider: AccountProvider
   }
   let answer;
   try {
-    answer = await tokens(provider, { grant_type: "refresh_token", refresh_token: held.refresh });
+    answer = await tokens(ctx.fetch, provider, {
+      grant_type: "refresh_token",
+      refresh_token: held.refresh,
+    });
   } catch (error) {
     if (codeOf(error) !== "account_refused") throw error;
     // Renewed elsewhere with the same refresh token first: its tokens stand.

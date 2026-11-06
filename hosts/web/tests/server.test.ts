@@ -1,55 +1,63 @@
 /**
- * The web host's server half: signing in sets an httpOnly cookie the page's
- * code never sees; the cookie trades for a ticket that admits once, so many a
- * minute; signing out ends the session; none of it is cached. Signing in by
- * name is for this machine only, by the socket's address and the host. What
- * goes wrong says only what's for anyone. Given
- * the app's theme, the page carries it for its first paint, with its icons,
- * its colour and its fonts (fetched, not waited on). The app's own files are
- * served under /assets/ only, by exact path, typed and cached; the host's
- * own (Copilotz's fonts and icons) under /assets/copilotz/, with no
- * configuration, and nothing from Google.
+ * The web host's server half, through `runtime.fetch`: the page (the
+ * `webPage` plugin, from the app's `page` and `theme` resources) and its
+ * files; signing in sets an httpOnly cookie the page's code never sees; the
+ * cookie trades for a ticket that admits once, so many a minute; signing out
+ * ends the session; none of it is cached. Signing in by name is for this
+ * machine only, by the socket's address and the host. What goes wrong says
+ * only what's for anyone. Given the app's theme, the page carries it for its
+ * first paint, with its icons, its colour and its fonts (fetched, not waited
+ * on). The app's own files are served under /assets/ only, by exact path,
+ * typed and cached; the host's own (Copilotz's fonts and icons) under
+ * /assets/copilotz/, with no configuration, and nothing from Google.
  */
-import { assert, assertEquals, assertMatch, assertThrows } from "@std/assert";
-import { type Actor, createRuntime, definePlugin, type Runtime } from "../../../runtime/mod.ts";
+import { assert, assertEquals, assertMatch, assertRejects, assertThrows } from "@std/assert";
+import {
+  type Actor,
+  createRuntime,
+  definePlugin,
+  type Plugin,
+  type Runtime,
+  setClientAddress,
+} from "../../../runtime/mod.ts";
+import { createTickets } from "../../../runtime/tickets.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { access, devSignIn, identity } from "../../../plugins/access/mod.ts";
 import { chat } from "../../../plugins/agents/chat/mod.ts";
 import models from "../../../plugins/models/mod.ts";
 import { test } from "../../../testing/mod.ts";
-import { createTickets, type Tickets } from "../tickets.ts";
-import { setClientAddress, socket, webServer, type WebServerOptions } from "../server.ts";
+import { type PageSettings, webPage } from "../server.ts";
 import { themeOf } from "../theme/css.ts";
 import type { Theme } from "../theme/default.ts";
 
+const CODE = {
+  entry: "app.js",
+  files: { "app.js": "import('./math-AB12.js')", "math-AB12.js": "export const m = 1;" },
+};
+
+/** The app's settings: the page it serves, and its theme. */
+const settings = (page: Partial<PageSettings> = {}, theme?: Theme): Plugin =>
+  definePlugin({
+    name: "settings",
+    resources: { page: { code: CODE, title: "Test", ...page }, ...(theme ? { theme } : {}) },
+  });
+
 async function setup(
-  fn: (
-    serve: (request: Request) => Promise<Response>,
-    tickets: Tickets,
-    rt: Runtime,
-  ) => Promise<void>,
-  options: { dev?: boolean; theme?: Theme; assets?: WebServerOptions["assets"] } = {},
+  fn: (serve: (request: Request) => Promise<Response>, rt: Runtime) => Promise<void>,
+  options: { dev?: boolean; theme?: Theme; assets?: PageSettings["assets"] } = {},
 ) {
-  const tickets = createTickets();
   // Signing in by name is a plugin's (dev sign-in), as any way to sign in is.
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [identity, ...(options.dev ?? true ? [devSignIn] : [])],
+    plugins: [
+      identity,
+      ...(options.dev ?? true ? [devSignIn] : []),
+      webPage,
+      settings(options.assets ? { assets: options.assets } : {}, options.theme),
+    ],
   });
   try {
-    const serve = webServer({
-      runtime: rt,
-      tickets,
-      code: () => ({
-        entry: "app.js",
-        files: { "app.js": "import('./math-AB12.js')", "math-AB12.js": "export const m = 1;" },
-      }),
-      upgrade: () => new Response("upgraded", { status: 299 }),
-      title: "Test",
-      ...(options.theme ? { theme: options.theme } : {}),
-      ...(options.assets ? { assets: options.assets } : {}),
-    });
-    await fn(serve, tickets, rt);
+    await fn((request) => rt.fetch(request), rt);
   } finally {
     await rt.close();
   }
@@ -72,14 +80,14 @@ const post = (url: string, body?: unknown, cookie?: string, address = "127.0.0.1
 /** The cookie a response sets, as a browser sends it back. */
 const sent = (response: Response) => response.headers.get("set-cookie")!.split(";")[0];
 
-test("a page, its code, and the socket", async () => {
+test("a page, its code, and what is not a page", async () => {
   await setup(async (serve) => {
     const page = await serve(new Request("http://localhost:8790/thread/t1"));
     assertEquals(page.headers.get("content-type"), "text/html; charset=utf-8");
     const html = await page.text();
     assertMatch(html, /<title>Test<\/title>/);
-    // The ways to sign in the app's plugins declare, for the page's sign-in.
-    assertMatch(html, /"signIn":\{"dev":\{\}\}/);
+    // Nothing in its config but where the app is, when it isn't the root.
+    assertMatch(html, /<script id="copilotz-config" type="application\/json">\{\}<\/script>/);
     assertMatch(html, /<script type="module" src="\/app\/app\.js">/);
     // The entry is asked for again each time; a chunk, named by its content, is kept.
     const entry = await serve(new Request("http://localhost:8790/app/app.js"));
@@ -91,11 +99,78 @@ test("a page, its code, and the socket", async () => {
     assertEquals(chunk.headers.get("cache-control"), "public, max-age=31536000, immutable");
     assertEquals((await serve(new Request("http://localhost:8790/app/other.js"))).status, 404);
     assertEquals((await serve(new Request("http://localhost:8790/app/toString"))).status, 404);
-    assertEquals(
-      (await serve(new Request(`http://localhost:8790${socket.config.path}`))).status,
-      299,
+    // The page is for a browser navigating; a script's fetch, a POST, or another file is a 404.
+    const json = await serve(
+      new Request("http://localhost:8790/thread/t1", { headers: { accept: "application/json" } }),
     );
+    assertEquals([json.status, await json.json()], [404, { error: "Not found" }]);
+    const fetched = await serve(
+      new Request("http://localhost:8790/thread/t1", {
+        headers: { "sec-fetch-mode": "cors", accept: "text/html" },
+      }),
+    );
+    assertEquals(fetched.status, 404);
+    await fetched.body?.cancel();
+    const navigated = await serve(
+      new Request("http://localhost:8790/thread/t1", {
+        headers: { "sec-fetch-mode": "navigate", accept: "text/html,*/*;q=0.8" },
+      }),
+    );
+    assertEquals(navigated.headers.get("content-type"), "text/html; charset=utf-8");
+    await navigated.body?.cancel();
+    const posted = await serve(new Request("http://localhost:8790/thread/t1", { method: "POST" }));
+    assertEquals(posted.status, 404);
+    await posted.body?.cancel();
+    const manifest = await serve(new Request("http://localhost:8790/manifest.webmanifest"));
+    assertEquals(manifest.headers.get("content-type"), "application/manifest+json; charset=utf-8");
+    assertEquals((await manifest.json()).name, "Test");
+    const worker = await serve(new Request("http://localhost:8790/sw.js"));
+    assertEquals(worker.headers.get("service-worker-allowed"), "/");
+    await worker.body?.cancel();
   });
+});
+
+test("an app under a base: the page tells its code, and answers there", async () => {
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [webPage, settings({ base: "/o/acme" })],
+  });
+  try {
+    const page = await rt.fetch(new Request("http://localhost:8790/o/acme/thread/t1"));
+    assertMatch(
+      await page.text(),
+      /<script id="copilotz-config" type="application\/json">\{"base":"\/o\/acme"\}<\/script>/,
+    );
+    const entry = await rt.fetch(new Request("http://localhost:8790/o/acme/app/app.js"));
+    assertEquals(await entry.text(), "import('./math-AB12.js')");
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a page needs code of its own, and files of a known name, or the server won't start", async () => {
+  const starting = (page: Record<string, unknown> | undefined, message: string) =>
+    assertRejects(
+      async () => {
+        const rt = await createRuntime({
+          store: memoryStore(),
+          plugins: [
+            webPage,
+            definePlugin({ name: "settings", ...(page ? { resources: { page } } : {}) }),
+          ],
+        });
+        await rt.close();
+      },
+      Error,
+      message,
+    );
+  await starting(undefined, "set page.code");
+  await starting({ title: "x" }, "set page.code");
+  await starting({ code: "app.js" }, "bundled code");
+  await starting(
+    { code: CODE, assets: { "/assets/copilotz/x.css": "a {}" } },
+    "the web host's own",
+  );
 });
 
 test("on phones the page is an app's: it spans the screen, and pinching still zooms", async () => {
@@ -315,13 +390,15 @@ test("under /assets/, what isn't one of the app's files is a 404, never the page
       new Request("http://localhost:8790/assets/fonts/brand.css", { method: "POST" }),
       "not a GET",
     );
-    // Traversal, as a server hands it over: never out of /assets/, never the code.
-    await notFound(sentAs("http://localhost:8790/assets/../app/app.js"), "..");
-    await notFound(sentAs("http://localhost:8790/assets/%2e%2e/app/app.js"), "%2e%2e");
-    await notFound(sentAs("http://localhost:8790/assets/%2E%2E/app/app.js"), "%2E%2E");
+    // Traversal, as a server hands it over: never read as a file under /assets/. (Where
+    // `..` takes the path out of /assets/, the URL itself is another path: the code's.)
     await notFound(sentAs("http://localhost:8790/assets/fonts/../fonts/brand.css"), "../ back in");
     await notFound(sentAs("http://localhost:8790/assets/./fonts/brand.css"), "./");
     await notFound(sentAs("http://localhost:8790/x/../assets/fonts/brand.css"), "into /assets/");
+    for (const out of ["/assets/../app/app.js", "/assets/%2e%2e/app/app.js"]) {
+      const code = await serve(sentAs(`http://localhost:8790${out}`));
+      assertEquals(await code.text(), "import('./math-AB12.js')", out);
+    }
     // Outside /assets/, the app as ever.
     assertEquals(
       await (await serve(new Request("http://localhost:8790/app/app.js"))).text(),
@@ -370,42 +447,36 @@ test("assets are read once, on first request; a failure is tried again", async (
 });
 
 test("an asset is a plain path under /assets/ of a known type, or the server won't start", async () => {
-  const rt = await createRuntime({ store: memoryStore(), plugins: [identity] });
-  const serving = (path: string) => () =>
-    webServer({
-      runtime: rt,
-      tickets: createTickets(),
-      code: { entry: "app.js", files: { "app.js": "" } },
-      upgrade: () => new Response(),
-      assets: { [path]: "x" },
+  const serving = (path: string) => async () => {
+    const rt = await createRuntime({
+      store: memoryStore(),
+      plugins: [webPage, settings({ assets: { [path]: "x" } })],
     });
-  try {
-    for (
-      const path of [
-        "/app.js",
-        "/fonts/brand.css",
-        "/assets/../app.css",
-        "/assets/./brand.css",
-        "/assets//brand.css",
-        "/assets/.hidden.css",
-        "/assets/fonts%2fbrand.css",
-        "/assets/brand.css/",
-        "assets/brand.css",
-        "/assets/page.html",
-        "/assets/app.js",
-        "/assets/brand",
-        "/assets/BRAND.CSS",
-        "/assets/copilotz/fonts.css",
-        "/assets/copilotz/brand.css",
-      ]
-    ) assertThrows(serving(path), Error, "can't serve", path);
-  } finally {
     await rt.close();
-  }
+  };
+  for (
+    const path of [
+      "/app.js",
+      "/fonts/brand.css",
+      "/assets/../app.css",
+      "/assets/./brand.css",
+      "/assets//brand.css",
+      "/assets/.hidden.css",
+      "/assets/fonts%2fbrand.css",
+      "/assets/brand.css/",
+      "assets/brand.css",
+      "/assets/page.html",
+      "/assets/app.js",
+      "/assets/brand",
+      "/assets/BRAND.CSS",
+      "/assets/copilotz/fonts.css",
+      "/assets/copilotz/brand.css",
+    ]
+  ) await assertRejects(serving(path), Error, "", path);
 });
 
 test("signing in sets a session cookie, traded for a ticket that admits once", async () => {
-  await setup(async (serve, tickets) => {
+  await setup(async (serve) => {
     assertEquals((await serve(post("http://localhost:8790/connect"))).status, 401);
     const signed = await serve(post("http://localhost:8790/signin/dev", { name: "Ana" }));
     assertEquals(await signed.json(), { person: "ana" });
@@ -415,10 +486,16 @@ test("signing in sets a session cookie, traded for a ticket that admits once", a
     assertEquals(signed.headers.get("cache-control"), "no-store");
     const connect = await serve(post("http://localhost:8790/connect", undefined, sent(signed)));
     assertEquals(connect.headers.get("cache-control"), "no-store");
-    const { ticket, actor, name } = await connect.json();
-    assertEquals([actor, name], [{ kind: "person", id: "ana" }, "ana"]);
-    assertEquals(tickets.admit(ticket), { kind: "person", id: "ana" } satisfies Actor);
-    assertEquals(tickets.admit(ticket), undefined);
+    // The ticket and who it is for; the name is identity's `GET /me`.
+    const answered = await connect.json();
+    assertEquals(Object.keys(answered).sort(), ["actor", "ticket"]);
+    assertEquals(answered.actor, { kind: "person", id: "ana" });
+    assertMatch(answered.ticket, /^[0-9a-f]{64}$/);
+    const me = await serve(
+      new Request("http://localhost:8790/me", { headers: { cookie: sent(signed) } }),
+    );
+    assertEquals((await me.json()).person, "ana");
+    assertEquals((await serve(new Request("http://localhost:8790/me"))).status, 401);
   });
 });
 
@@ -490,10 +567,29 @@ test("a ticket works once, and not after its minute", async () => {
   await new Promise((r) => setTimeout(r, 40));
   assertEquals(tickets.admit(second), undefined);
   assertEquals(tickets.admit("forged"), undefined);
+  tickets.close();
+});
+
+test("a person's key has its own tickets: counted and ended apart from its person's", () => {
+  const tickets = createTickets({ perMinute: 1 });
+  const ana: Actor = { kind: "person", id: "ana" };
+  const key: Actor = { ...ana, key: "k1", scope: { call: ["note.add"] } };
+  const hers = tickets.issue(ana);
+  // Her minute's ticket taken, the key still has its own.
+  const its = tickets.issue(key);
+  assertThrows(() => tickets.issue(ana), Error, "Too many");
+  // Revoking the key ends its tickets, not hers.
+  tickets.end(key);
+  assertEquals(tickets.admit(its), undefined);
+  assertEquals(tickets.admit(hers), ana);
+  // Signing her out ends hers, not a key's.
+  const other = tickets.issue({ ...ana, key: "k2" });
+  tickets.end(ana);
+  assertEquals(tickets.admit(other), { ...ana, key: "k2" });
+  tickets.close();
 });
 
 test("a file someone sent: theirs to fetch, in parts, inline or saved; nobody else's", async () => {
-  const tickets = createTickets();
   const app = definePlugin({
     name: "app",
     resources: {
@@ -505,16 +601,10 @@ test("a file someone sent: theirs to fetch, in parts, inline or saved; nobody el
     store: memoryStore(),
     plugins: [models, chat, ...access, devSignIn, app],
   });
-  const serve = webServer({
-    runtime: rt,
-    tickets,
-    code: { entry: "app.js", files: { "app.js": "" } },
-    upgrade: () => new Response(null, { status: 400 }),
-  });
   const signIn = async (name: string) =>
-    sent(await serve(post("http://localhost:8790/signin/dev", { name })));
+    sent(await rt.fetch(post("http://localhost:8790/signin/dev", { name })));
   const get = (path: string, cookie?: string, headers: Record<string, string> = {}) =>
-    serve(
+    rt.fetch(
       new Request(`http://localhost:8790${path}`, {
         headers: { ...(cookie ? { cookie } : {}), ...headers },
       }),
@@ -573,7 +663,7 @@ test("a file someone sent: theirs to fetch, in parts, inline or saved; nobody el
 });
 
 test("a person has 30 tickets a minute; past them, /connect says when to come back", async () => {
-  await setup(async (serve, _tickets, rt) => {
+  await setup(async (serve, rt) => {
     const ana = sent(await serve(post("http://localhost:8790/signin/dev", { name: "ana" })));
     const connect = (cookie: string) =>
       serve(post("http://localhost:8790/connect", undefined, cookie));
@@ -609,21 +699,32 @@ test("tickets are counted per actor and minute, and dropped as they pass, unswep
   assert(tickets.admit(tickets.issue({ kind: "person", id: "bob" })));
   await new Promise((r) => setTimeout(r, 40));
   assertEquals(kept.map((t) => tickets.admit(t)), [undefined, undefined]);
+  tickets.close();
 });
 
 test("what goes wrong says only what's for anyone: its status by its code", async () => {
-  const rt = await createRuntime({ store: memoryStore(), plugins: [identity, devSignIn] });
   const logged = console.error;
   console.error = () => {};
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      identity,
+      devSignIn,
+      webPage,
+      definePlugin({
+        name: "settings",
+        resources: {
+          page: {
+            code: () => {
+              throw new Error("the bundler's path: /home/app/secret");
+            },
+          },
+        },
+      }),
+    ],
+  });
   try {
-    const serve = webServer({
-      runtime: rt,
-      tickets: createTickets(),
-      code: () => {
-        throw new Error("the bundler's path: /home/app/secret");
-      },
-    });
-    const page = await serve(new Request("http://localhost:8790/"));
+    const page = await rt.fetch(new Request("http://localhost:8790/"));
     assertEquals([page.status, await page.json()], [500, { error: "Something went wrong" }]);
     assertEquals(page.headers.get("cache-control"), "no-store");
   } finally {
@@ -632,89 +733,41 @@ test("what goes wrong says only what's for anyone: its status by its code", asyn
   }
 });
 
-test("a way to sign in whose Action is recorded stops the start: its session would be in the log", async () => {
-  const rt = await createRuntime({
-    store: memoryStore(),
-    plugins: [
-      identity,
-      definePlugin({
-        name: "careless",
-        actions: {
-          "careless.sign-in": {
-            input: { type: "object" },
-            run: () => ({ person: "ana", session: "ses_0123456789abcdef" }),
-          },
-        },
-        resources: { signIn: { careless: { action: "careless.sign-in" } } },
-      }),
-    ],
-  });
-  try {
-    assertThrows(
-      () => webServer({ runtime: rt, tickets: createTickets() }),
-      Error,
-      'signIn.careless: "careless.sign-in" is recorded',
-    );
-  } finally {
-    await rt.close();
-  }
-});
-
 test("a session cookie another host under the domain set isn't anyone, on https", async () => {
-  // A guest entrance, asked after the session (as a web line's visitors are).
-  const guest = definePlugin({
-    name: "guest",
-    collections: {
-      guest: {
-        schema: { type: "object" },
-        queries: {
-          actor: (_c, { secret }: { secret: string }) =>
-            secret === "guest-0123456789abcdef" ? { kind: "contact", id: "g1" } : null,
-        },
-      },
-    },
-    resources: {
-      entrances: {
-        guest: { cookie: "guest", query: "guest.actor", order: 100, hostOnly: true },
-      },
-    },
-  });
-  const rt = await createRuntime({ store: memoryStore(), plugins: [identity, guest] });
+  const rt = await createRuntime({ store: memoryStore(), plugins: [identity] });
   try {
-    const serve = webServer({ runtime: rt, tickets: createTickets() });
     const { session } = await rt.call<{ session: string }>("session.start", { person: "mallory" });
     const connect = async (cookie: string) => {
-      const answer = await serve(post("https://app.example/connect", undefined, cookie));
+      const answer = await rt.fetch(post("https://app.example/connect", undefined, cookie));
       return answer.status === 200 ? (await answer.json()).actor : answer.status;
     };
-    // A preview's page script sets `session=…; domain=example` in the guest's browser.
-    assertEquals(await connect(`__Host-guest=guest-0123456789abcdef; session=${session}`), {
-      kind: "contact",
-      id: "g1",
-    });
+    // A preview's page script sets `session=…; domain=example` in the browser: the plain name
+    // isn't read where cookies are `__Host-`.
     assertEquals(await connect(`session=${session}`), 401);
-    // What it held under the plain name was ended there, and cleared: it's no one anywhere now.
-    assertEquals(await rt.query("credential.actor", { secret: session }), null);
     // The host's own cookie, which only it can set, is who it says.
-    const own =
-      (await rt.call<{ session: string }>("session.start", { person: "mallory" })).session;
-    assertEquals(await connect(`__Host-session=${own}`), { kind: "person", id: "mallory" });
+    assertEquals(await connect(`__Host-session=${session}`), { kind: "person", id: "mallory" });
+    // Over plain http to this machine, the plain name is the host's.
+    const here = await rt.fetch(
+      post("http://localhost:8790/connect", undefined, `session=${session}`),
+    );
+    assertEquals((await here.json()).actor, { kind: "person", id: "mallory" });
   } finally {
     await rt.close();
   }
 });
 
 test("the page says its language: English unless the app says (lang)", async () => {
-  const runtime = await createRuntime({ store: memoryStore(), plugins: [] });
-  try {
-    const code = { entry: "app.js", files: { "app.js": "" } };
-    const english = await webServer({ runtime, code })(new Request("http://localhost/"));
-    assert((await english.text()).includes('<html lang="en">'));
-    const portuguese = await webServer({ runtime, code, lang: "pt-BR" })(
-      new Request("http://localhost/"),
-    );
-    assert((await portuguese.text()).includes('<html lang="pt-BR">'));
-  } finally {
-    await runtime.close();
-  }
+  const pageIn = async (lang?: string) => {
+    const rt = await createRuntime({
+      store: memoryStore(),
+      plugins: [webPage, settings(lang ? { lang } : {})],
+    });
+    try {
+      return await (await rt.fetch(new Request("http://localhost/"))).text();
+    } finally {
+      await rt.close();
+    }
+  };
+  assert((await pageIn()).includes('<html lang="en">'));
+  assert((await pageIn("pt-BR")).includes('<html lang="pt-BR">'));
 });

@@ -26,7 +26,7 @@
  *   cached              0.33 / 0.40                  0.33 / 0.33               0.32 / 0.33
  *   uncached            0.42 / 0.53                  0.40 / 0.39               0.43 / 0.43
  */
-import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
+import { parseArgs } from "@std/cli/parse-args";
 import {
   type Actor,
   createRuntime,

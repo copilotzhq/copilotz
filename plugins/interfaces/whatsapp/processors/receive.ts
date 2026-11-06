@@ -50,7 +50,7 @@ import {
 import { fetchMedia, markRead } from "../shared/graph.ts";
 import { type Connected, connected, send } from "../shared/number.ts";
 import { mediaOf, tapOf, type WaMessage, wordsOf } from "../shared/payload.ts";
-import { settingsOf } from "../shared/settings.ts";
+import { MAX_FILE_BYTES } from "../shared/settings.ts";
 import { may } from "../../../access/spaces/contract.ts";
 import { CONTACT } from "../../../access/contacts/contract.ts";
 import { GAP, QUIET } from "../collections/number.ts";
@@ -344,7 +344,7 @@ async function broughtBy(
   const files: { name: string; type: string; data: string }[] = [];
   if (media) {
     try {
-      const got = await fetchMedia(on.graph, media.id, settingsOf(ctx).maxFileBytes);
+      const got = await fetchMedia(on.graph, media.id, MAX_FILE_BYTES);
       files.push({ name: media.name, type: got.type || media.type, data: got.data });
     } catch (error) {
       if ((error as { code?: string }).code !== "too_large") throw error;

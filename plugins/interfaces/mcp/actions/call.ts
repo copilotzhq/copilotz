@@ -76,7 +76,7 @@ import type { Step, Thread, Tool } from "../../../agents/chat/contract.ts";
 import { runTool } from "../../../agents/chat/contract.ts";
 import { RERUN_MS, RESEND_MS } from "../collections/receipt.ts";
 import { sameCallOf, threadOf } from "../shared/keys.ts";
-import { appOnly, hintsOf, type Line, lineOf, READ } from "../shared/settings.ts";
+import { appOnly, hintsOf, READ, type Server, serverOf } from "../shared/settings.ts";
 import type { Offering } from "../views/offered.ts";
 
 /**
@@ -168,7 +168,7 @@ export const callAction = defineAction({
     actor.mcp === (input as { line?: unknown })?.line,
   run: async (ctx, input): Promise<Called> => {
     if (input.app) return await admitted(ctx, input);
-    const line = lineOf(ctx, input.line);
+    const line = serverOf(ctx, input.line);
     const links = linksOf(ctx.resources);
     const contact = ctx.actor?.id;
     const tools = (ctx.resources.tools ?? {}) as Record<string, Tool>;
@@ -314,7 +314,7 @@ async function admitted(
   ctx: Context,
   input: { line: string; tool: string; address?: string; user?: string; thread?: string },
 ): Promise<Called> {
-  const line = lineOf(ctx, input.line);
+  const line = serverOf(ctx, input.line);
   const links = linksOf(ctx.resources);
   const contact = ctx.actor?.id;
   const entry = line && Object.hasOwn(line.tools, input.tool) ? line.tools[input.tool] : undefined;
@@ -359,7 +359,7 @@ async function admitted(
 
 /** The counters a call goes by, each its window's: calls this minute, new conversations this hour. */
 function countersOf(
-  line: Line,
+  line: Server,
   thread: string,
   { user, address }: { user?: string; address?: string },
   now: number,
@@ -388,7 +388,7 @@ function countersOf(
 }
 
 /** Whether the tool offers itself to this contact, in this chat (its `offer`, read as the contact). */
-async function offered(ctx: Context, line: Line, tool: string, thread: Thread): Promise<boolean> {
+async function offered(ctx: Context, line: Server, tool: string, thread: Thread): Promise<boolean> {
   const item: Offering = { tools: [tool], thread, agent: line.client };
   const names = await ctx.render("mcp:offered", item, {
     viewer: { kind: "agent", name: line.client },
@@ -407,7 +407,7 @@ const toldOf = (error: unknown): string =>
  * its tool's View, never the output as it is; a View that fails, or says
  * nothing, hides it.
  */
-async function shown(ctx: Context, line: Line, step: Step): Promise<string> {
+async function shown(ctx: Context, line: Server, step: Step): Promise<string> {
   try {
     const text = await ctx.render(`tool:${step.name}`, step, {
       viewer: { kind: "agent", name: line.client },
@@ -420,7 +420,7 @@ async function shown(ctx: Context, line: Line, step: Step): Promise<string> {
 }
 
 /** A call answered lately, answered again: what it said, kept, else shown again from its step. */
-async function again(ctx: Context, line: Line, receipt: Receipt) {
+async function again(ctx: Context, line: Server, receipt: Receipt) {
   if (receipt.text !== undefined) {
     return { text: receipt.text, ...(receipt.failed ? { isError: true as const } : {}) };
   }
@@ -440,7 +440,7 @@ async function again(ctx: Context, line: Line, receipt: Receipt) {
  * try, and a first call cut short before the share (an owner restarted)
  * is asked again and does the rest.
  */
-async function opened(ctx: Context, line: Line, contact: string, thread: string) {
+async function opened(ctx: Context, line: Server, contact: string, thread: string) {
   const system = ctx.as();
   const open = async () => {
     await system.call("space.keep", { id: line.in });

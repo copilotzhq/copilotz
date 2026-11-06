@@ -68,32 +68,6 @@ async function start(store = memoryStore()): Promise<Runtime> {
   });
 }
 
-test("a key proves its person until it's revoked; others don't see it", async () => {
-  const rt = await start();
-  try {
-    const { key } = await rt.call<{ key: string }>("key.create", { name: "ci" }, { actor: ana });
-    assert(key.startsWith("key_"));
-    const actor = await rt.query<Actor>("credential.actor", { secret: key });
-    assertEquals([actor.kind, actor.id, typeof actor.key], ["person", "ana", "string"]);
-    // A key can't make keys.
-    await assertRejects(() => rt.call("key.create", { name: "more" }, { actor }), Error, "may not");
-    // Ana sees her key's name, not its secret; Bob sees none of hers.
-    const mine = await rt.query<{ name: string }[]>("credential.keys", { person: "ana" }, {
-      actor: ana,
-    });
-    assertEquals(mine.map((k) => k.name), ["ci"]);
-    assert(!JSON.stringify(mine).includes(key));
-    assertEquals(await rt.query("credential.keys", { person: "ana" }, { actor: bob }), []);
-    // Revoked, it proves nobody.
-    assertEquals(await rt.call("key.revoke", { name: "ci" }, { actor: bob }), { revoked: 0 });
-    assertEquals(await rt.call("key.revoke", { name: "ci" }, { actor: ana }), { revoked: 1 });
-    assertEquals(await rt.query("credential.actor", { secret: key }), null);
-    assertEquals(await rt.query("credential.actor", { secret: "key_nonsense" }), null);
-  } finally {
-    await rt.close();
-  }
-});
-
 test("a session proves its person until it ends or expires", async () => {
   const rt = await start();
   try {
@@ -155,18 +129,27 @@ test("Google sign-in refuses tokens for another app, expired, unverified, forged
   }
 });
 
-test("a session's or a key's secret never lands in the log", async () => {
+test("a session's secret never lands in the log", async () => {
   const store = memoryStore();
   const rt = await createRuntime({ store, plugins: [...access] });
   try {
     const { session } = await rt.call<{ session: string }>("session.start", { person: "ana" });
     const ana = (await rt.query("credential.actor", { secret: session })) as Actor;
-    const { key } = await rt.call<{ key: string }>("key.create", { name: "ci" }, { actor: ana });
     // Ending a session shows its secret too.
     await rt.call("session.end", { secret: session }, { actor: ana });
     await rt.idle();
     const logged = JSON.stringify(await store.events(0, 1000));
-    assertEquals([logged.includes(session), logged.includes(key)], [false, false]);
+    assertEquals(logged.includes(session), false);
+  } finally {
+    await rt.close();
+  }
+});
+
+test("keys are the api plugin's alone, each with a scope: identity makes none", async () => {
+  const rt = await start();
+  try {
+    const actions = Object.keys(rt.describe().actions);
+    assertEquals(actions.filter((name) => name.startsWith("key.")), []);
   } finally {
     await rt.close();
   }

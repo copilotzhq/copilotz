@@ -1,21 +1,22 @@
 /**
- * The MCP plugin's settings (the `mcp` resource): the lines the app
- * declares, by name, and how it knows who's calling. Each line is an MCP
- * server at `/mcp/<name>` that a model outside (ChatGPT, Claude, any MCP
- * client) calls the app's tools through: which tools, how they're shown,
- * the space its conversations' chats live in, and its limits. `lineOf`
- * gives a line with every default filled in, as the plugin uses it;
- * `problemOf` says what's wrong with one, at start.
+ * The MCP plugin's settings (the `mcp` resource): the servers the app
+ * declares, by name, as a flat map (how it knows who's calling is the
+ * runtime's `caller` resource). Each is an MCP server at `/mcp/<name>` that
+ * a model outside (ChatGPT, Claude, any MCP client) calls the app's tools
+ * through: which tools, how they're shown, the space its conversations'
+ * chats live in, and its limits. `serverOf` gives a server with every
+ * default filled in, as the plugin uses it; `problemOf` says what's wrong
+ * with one, at start.
  */
-import { callerProblem, type CallerSettings, type Resources } from "../../../../runtime/mod.ts";
+import { callerOf, callerProblem, exemptProblem, type Resources } from "../../../../runtime/mod.ts";
 import { agentsOf, SEND, type Tool, type ToolAnnotations } from "../../../agents/chat/contract.ts";
 
 /** Who may call an entry: the model, the app's own widget (MCP Apps' `ui.visibility`). */
 export type Visibility = "model" | "app";
 
 /**
- * How one of the app's tools is offered on a line: what only MCP needs. Or, with `action`, one
- * of the app's Actions offered to the line's widgets alone: what a person does by hand in a
+ * How one of the app's tools is offered on a server: what only MCP needs. Or, with `action`, one
+ * of the app's Actions offered to the server's widgets alone: what a person does by hand in a
  * widget (a form sent, a tap), never the model's to call.
  */
 export type McpTool = {
@@ -51,7 +52,7 @@ export type McpTool = {
 };
 
 /**
- * A line's widgets: how the template the app's widget Views are drawn in is offered (MCP Apps'
+ * A server's widgets: how the template the app's widget Views are drawn in is offered (MCP Apps'
  * resource `_meta.ui`, and ChatGPT's aliases).
  */
 export type McpWidgets = {
@@ -67,12 +68,12 @@ export type McpWidgets = {
   description?: string;
 };
 
-/** What a line takes before it says no: see `LIMITS`. */
+/** What a server takes before it says no: see `LIMITS`. */
 export type McpLimits = {
   /** Bytes a request's body may be. */
   body: number;
   /**
-   * Calls running at once on the line, and from one caller's address, and in
+   * Calls running at once on the server, and from one caller's address, and in
    * one conversation: past any, the server is busy.
    */
   atOnce: number;
@@ -87,15 +88,15 @@ export type McpLimits = {
   timeout: number;
   stop: number;
   /**
-   * Calls going on past the timeout, on the line and started from one address: past them, a
+   * Calls going on past the timeout, on the server and started from one address: past them, a
    * call that reaches the timeout is stopped, so cheap requests can't hold places for slow tools.
    */
   lateAtOnce: number;
   addressLateAtOnce: number;
-  /** Calls one conversation may make a minute, and all of the line's conversations together. */
+  /** Calls one conversation may make a minute, and all of the server's conversations together. */
   perMinute: number;
   linePerMinute: number;
-  /** New conversations the line takes an hour, and one user starts there (ChatGPT's `openai/subject`). */
+  /** New conversations the server takes an hour, and one user starts there (ChatGPT's `openai/subject`). */
   chatsPerHour: number;
   userChatsPerHour: number;
   /** Calls a minute, and new conversations an hour, from one caller's address (see `McpCaller`). */
@@ -105,8 +106,8 @@ export type McpLimits = {
   result: number;
 };
 
-/** A line the app declares: an MCP server open to anyone, at `/mcp/<name>`. */
-export type McpLine = {
+/** A server the app declares: an MCP server open to anyone, at `/mcp/<name>`. */
+export type DeclaredServer = {
   /** The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or not). */
   in: string;
   /**
@@ -122,53 +123,43 @@ export type McpLine = {
   instructions?: string;
   /**
    * Who calls (`ChatGPT`), as its chats show it: the sender of their steps,
-   * and their title. The line's name unless said.
+   * and their title. The server's name unless said.
    */
   client?: string;
   /**
    * A client that names no conversation (no `openai/session`, which ChatGPT
    * sends) gets a handle to name it with (`chat`, on every tool), so its
    * calls go on in one chat. Off, a call that names no conversation is
-   * refused. On unless said; a line only ChatGPT uses turns it off, so its
+   * refused. On unless said; a server only ChatGPT uses turns it off, so its
    * model isn't shown the field, and nobody else gets a chat there.
    */
   handles?: boolean;
   /** The browser origins it answers (`Origin`): none unless said (no browser calls MCP). */
   origins?: string[];
   /**
-   * Its widgets (with the web host's `widgets`, `widgetsOf`): the template's options. A line
+   * Its widgets (with the app's `widgets` resource, `widgetsOf`): the template's options. A server
    * whose tools name a `widget`, or that offers Actions, offers widgets, and the widgets' read
    * tool (`READ`: what a widget reads that its snapshot didn't have).
    */
   widgets?: McpWidgets;
   limits?: Partial<McpLimits>;
-  /** With the orgs host, the org it's for (its id): no other org has it. */
-  org?: string;
-};
-
-/**
- * Where a caller's address is, when the app's front says it, and why it's
- * believed: the runtime's `CallerSettings` (see runtime/caller.ts, and what
- * to verify on each deployment there). Without it, no limit goes by address.
- */
-export type McpCaller = CallerSettings;
-
-export type McpSettings = {
-  lines?: Record<string, McpLine>;
-  caller?: McpCaller;
   /**
-   * Calls running at once in this runtime (an org's, under the orgs host),
-   * all its lines together (4): past them, it's busy.
+   * Callers whose address is in these CIDR ranges (a shared proxy's: OpenAI's egress, every
+   * ChatGPT user's calls behind a few addresses) aren't limited by address; the server's other
+   * limits still hold. Only an address read through the app's `caller` resource counts.
    */
-  atOnce?: number;
+  exempt?: string[];
 };
 
+/** The `mcp` resource: the declared servers, by name. */
+export type McpSettings = Record<string, DeclaredServer>;
+
 /**
- * What a line takes, unless it says: a request of 64 KiB (a tool's input
+ * What a server takes, unless it says: a request of 64 KiB (a tool's input
  * is small); 4 calls at once, 2 from one address and 2 in one conversation
  * (4: what an executor takes at once today, its connection's queue the
  * limit); 20 seconds' wait for an answer, and a minute for a call in all,
- * with 2 going on past the wait on the line, 1 from one address; 30 calls a minute from one
+ * with 2 going on past the wait on the server, 1 from one address; 30 calls a minute from one
  * conversation, 600 from all; 600 new conversations an hour, 30 from one
  * user; from one address, 60 calls a minute and 20 new conversations an
  * hour; answers of 100,000 characters.
@@ -191,14 +182,11 @@ export const LIMITS: McpLimits = {
   result: 100_000,
 };
 
-/** Calls at once in a runtime, unless the `mcp` resource says (`atOnce`). */
-export const AT_ONCE = 4;
-
 /** The longest ChatGPT shows a call's status line. */
 const STATUS = 64;
 
-/** A line as the plugin uses it: its settings, its name, and every default filled in. */
-export type Line = Omit<McpLine, "tools" | "limits"> & {
+/** A server as the plugin uses it: its settings, its name, and every default filled in. */
+export type Server = Omit<DeclaredServer, "tools" | "limits"> & {
   name: string;
   client: string;
   handles: boolean;
@@ -208,7 +196,7 @@ export type Line = Omit<McpLine, "tools" | "limits"> & {
   limits: McpLimits;
 };
 
-/** Where every line is: `/mcp/<name>`. */
+/** Where every server is: `/mcp/<name>`. */
 export const PATH = "/mcp/";
 
 /** The widgets' own tool: what a widget reads as the conversation's contact (queries only). */
@@ -221,37 +209,24 @@ export const visibilityOf = (entry: McpTool): Visibility[] =>
 /** Whether only the widgets call an entry (never the model). */
 export const appOnly = (entry: McpTool): boolean => !visibilityOf(entry).includes("model");
 
-/** Whether a line offers widgets: a tool shown through one, or an Action they call. */
-export const hasWidgets = (line: Pick<Line, "tools">): boolean =>
+/** Whether a server offers widgets: a tool shown through one, or an Action they call. */
+export const hasWidgets = (line: Pick<Server, "tools">): boolean =>
   Object.values(line.tools).some((entry) => entry.widget || entry.action);
 
-const settingsOf = (ctx: { resources: Resources }) => (ctx.resources.mcp ?? {}) as McpSettings;
-
-/** How the app knows who's calling, and how many calls a process takes at once. */
-export const callerOf = (ctx: { resources: Resources }) => settingsOf(ctx).caller;
-export const atOnceOf = (ctx: { resources: Resources }) => settingsOf(ctx).atOnce ?? AT_ONCE;
-
-/**
- * The app's own lines, by name, here: with the orgs host (each org's runtime
- * knows its org, `resources.org`), only those that name this org; a line
- * naming none is the single-org app's.
- */
-export const linesOf = (ctx: { resources: Resources }): Record<string, McpLine> => {
-  const all = settingsOf(ctx).lines ?? {};
-  const org = (ctx.resources.org as { id?: string } | undefined)?.id;
-  return Object.fromEntries(
-    Object.entries(all).filter(([, line]) => line && (org ? line.org === org : !line.org)),
+/** The servers the app declares, by name. */
+export const serversOf = (ctx: { resources: Resources }): McpSettings =>
+  Object.fromEntries(
+    Object.entries((ctx.resources.mcp ?? {}) as McpSettings).filter(([, server]) => server),
   );
-};
 
-/** The names of the tools a line lists. */
-const listedBy = (line: McpLine) =>
+/** The names of the tools a server lists. */
+const listedBy = (line: DeclaredServer) =>
   Object.keys(line.tools ?? {}).filter((name) => line.tools[name] !== null);
 
-/** The line `name`, ready to use; undefined when the app declares none by that name. */
-export function lineOf(ctx: { resources: Resources }, name: string): Line | undefined {
-  const lines = linesOf(ctx);
-  const line = Object.hasOwn(lines, name) ? lines[name] : undefined;
+/** The server `name`, ready to use; undefined when the app declares none by that name. */
+export function serverOf(ctx: { resources: Resources }, name: string): Server | undefined {
+  const servers = serversOf(ctx);
+  const line = Object.hasOwn(servers, name) ? servers[name] : undefined;
   if (!line) return undefined;
   return {
     ...line,
@@ -264,8 +239,8 @@ export function lineOf(ctx: { resources: Resources }, name: string): Line | unde
   };
 }
 
-/** A tool's hints as a line offers it: the tool's own, then the line's over them. */
-export const hintsOf = (line: Line, name: string, tool: Tool): ToolAnnotations => ({
+/** A tool's hints as a server offers it: the tool's own, then the server's over them. */
+export const hintsOf = (line: Server, name: string, tool: Tool): ToolAnnotations => ({
   ...tool.annotations,
   ...line.tools[name]?.annotations,
 });
@@ -274,12 +249,12 @@ export const hintsOf = (line: Line, name: string, tool: Tool): ToolAnnotations =
 const NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 
 /**
- * What's wrong with a line's settings, if anything (checked when the app starts): `actions`
+ * What's wrong with a server's settings, if anything (checked when the app starts): `actions`
  * are the app's Actions' names, which an entry's `action` must be one of.
  */
 export function problemOf(
   name: string,
-  line: McpLine,
+  line: DeclaredServer,
   resources: Resources,
   actions: readonly string[] = [],
 ): string | undefined {
@@ -350,6 +325,8 @@ export function problemOf(
     if (!(key in LIMITS)) return `limits.${key} isn't a limit`;
     if (typeof value !== "number" || !(value > 0)) return `limits.${key} is a number over 0`;
   }
+  const exempt = exemptProblem(line.exempt);
+  if (exempt) return exempt;
   for (const origin of line.origins ?? []) {
     if (!originOk(origin)) return `"${origin}" isn't an origin (https://example.com)`;
   }
@@ -363,14 +340,9 @@ export function problemOf(
   return undefined;
 }
 
-/** What's wrong with how the app knows who's calling, and how many calls it takes at once. */
-export function settingsProblem(resources: Resources): string | undefined {
-  const { caller, atOnce } = settingsOf({ resources });
-  if (atOnce !== undefined && !(Number.isInteger(atOnce) && atOnce > 0)) {
-    return "atOnce is a whole number over 0";
-  }
-  return callerProblem(caller);
-}
+/** What's wrong with how the app knows who's calling, if anything. */
+export const settingsProblem = (resources: Resources): string | undefined =>
+  callerProblem(callerOf({ resources }));
 
 /** Whether `text` is an origin as browsers send it: a scheme and a host, nothing more. */
 export function originOk(text: string): boolean {

@@ -18,8 +18,7 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import { identity } from "../../../../plugins/access/identity/mod.ts";
 import { devSignIn } from "../../../../plugins/access/dev/mod.ts";
 import { test } from "../../../../testing/mod.ts";
-import { createTickets } from "../../tickets.ts";
-import { serve } from "../mod.ts";
+import { listen } from "../serve.ts";
 
 /**
  * A proxy on this machine, forwarding to `upstream` over loopback: `Host`
@@ -59,13 +58,8 @@ const signIn = async (origin: string) => {
 };
 
 test("a proxy on this machine that says whom it forwards for signs nobody in by name", async () => {
-  const tickets = createTickets();
-  const runtime = await createRuntime({
-    store: memoryStore(),
-    plugins: [identity, devSignIn],
-    admit: tickets.admit,
-  });
-  const app = await serve({ runtime, tickets, code: { entry: "app.js", files: { "app.js": "" } } });
+  const runtime = await createRuntime({ store: memoryStore(), plugins: [identity, devSignIn] });
+  const app = await listen(runtime.fetch);
   const proxies: { close(): Promise<void> }[] = [];
   try {
     // Straight from this machine, to this machine: signed in.
@@ -88,7 +82,8 @@ test("a proxy on this machine that says whom it forwards for signs nobody in by 
     }
   } finally {
     await Promise.all(proxies.map((p) => p.close()));
-    await app.close();
+    await app.shutdown();
+    await runtime.close();
   }
 });
 

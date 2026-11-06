@@ -1,5 +1,6 @@
 export * from "./define.ts";
 export { createRuntime, type Runtime } from "./runtime.ts";
+export { type Runtimes, runtimes } from "./runtimes.ts";
 export {
   createOwner,
   type Description,
@@ -9,6 +10,16 @@ export {
   type Transport,
 } from "./owner.ts";
 export { createExecutor, type Executor } from "./executor.ts";
+export {
+  type Client,
+  type ClientCollection,
+  type ClientLink,
+  type ClientOptions,
+  connect,
+  type Known,
+  type RemoteOptions,
+  type Watcher,
+} from "./client.ts";
 export {
   type BrowserLimits,
   CONTACT_READ,
@@ -28,14 +39,20 @@ export type {
 } from "./collection.ts";
 export type { Actor, Doc, Edge, Event, Executed, Inspected, Row, Store } from "./store.ts";
 export { type Maintenance, MAINTENANCE_SQL, redacted, type Written } from "./maintain.ts";
-export { personOf, principalOf } from "./actor.ts";
+export { inScope, personOf, principalOf, type Scope } from "./actor.ts";
+export { clientAddress, loopbackAddress, setClientAddress } from "./address.ts";
+export { bodyOf, jsonOf } from "./body.ts";
+export { cookieSafe, type CookieSettings } from "./cookies.ts";
+export { hostMatches, type HostsSettings, loopback, nearby, ownHost, vouched } from "./site.ts";
 export { keyOf, linksOf, type LinksSettings, secretsOf, signLink, verifyLink } from "./links.ts";
 export {
   type Caller,
   callerFrom,
+  callerOf,
   callerProblem,
   type CallerSettings,
   countedOf,
+  exemptProblem,
   type Network,
   networksOf,
   privateAddress,

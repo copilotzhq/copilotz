@@ -16,12 +16,10 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, tool } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
-import { createTickets } from "../../../../hosts/web/tickets.ts";
-import { webServer } from "../../../../hosts/web/server.ts";
+import { listen } from "../../../../hosts/web/node/serve.ts";
 import { voice } from "../mod.ts";
-import type { VoiceLine } from "../shared/settings.ts";
+import type { DeclaredVoiceNumber } from "../shared/settings.ts";
 import { sign } from "../shared/signature.ts";
-import { type RelaySocket, serveRelay } from "../resources/relay.ts";
 
 export const ACCOUNT = `AC${"1".repeat(32)}`;
 export const TOKEN = "twilio-auth-token-for-tests";
@@ -85,33 +83,26 @@ export type Sent = { type: string; token?: string; last?: boolean; handoffData?:
 
 /** ConversationRelay's side of a call's socket: what the app sent it, and what it tells the app. */
 export type Relay = {
-  socket: RelaySocket;
   sent: Sent[];
   /** What was said, each utterance (up to a `last` token) joined. */
   said(): string[];
   tell(message: Record<string, unknown>): void;
+  /** Sends a frame as it is (text or bytes). */
+  raw(data: string | Uint8Array): void;
   /** The caller hangs up. */
   hangUp(): void;
-  closed: boolean;
+  /** Whether the socket is closed (by the app, or by the caller). */
+  readonly closed: boolean;
 };
 
-export function fakeRelay(): Relay {
+/** A real socket to the app, as Twilio's ConversationRelay plays it. */
+export function fakeRelay(ws: WebSocket): Relay {
   const sent: Sent[] = [];
-  const relay: Relay = {
+  ws.onmessage = (event) => void sent.push(JSON.parse(String(event.data)));
+  return {
     sent,
-    closed: false,
-    socket: {
-      readyState: 1,
-      onmessage: null,
-      onclose: null,
-      onerror: null,
-      send: (data: string) => void sent.push(JSON.parse(data)),
-      close: () => {
-        if (relay.closed) return;
-        relay.closed = true;
-        (relay.socket as { readyState: number }).readyState = 3;
-        relay.socket.onclose?.({});
-      },
+    get closed() {
+      return ws.readyState === WebSocket.CLOSED;
     },
     said: () => {
       const all: string[] = [];
@@ -126,10 +117,10 @@ export function fakeRelay(): Relay {
       }
       return now ? [...all, now] : all;
     },
-    tell: (message) => relay.socket.onmessage?.({ data: JSON.stringify(message) }),
-    hangUp: () => relay.socket.close(),
+    tell: (message) => ws.send(JSON.stringify(message)),
+    raw: (data) => ws.send(data as string),
+    hangUp: () => ws.close(),
   };
-  return relay;
 }
 
 /** Waits until `ok()` says so (or fails after `ms`). */
@@ -151,8 +142,10 @@ export type Setup = {
     path?: string;
     form?: Record<string, string>;
   }): Promise<Response>;
-  /** Twilio opening a call's socket, from the TwiML it was given. */
-  open(twiml: string, options?: { token?: string }): Promise<{ response: Response; relay: Relay }>;
+  /** Twilio opening a call's socket, from the TwiML it was given (a real socket; fails if refused). */
+  open(twiml: string, options?: { token?: string }): Promise<{ relay: Relay }>;
+  /** Twilio asking for a call's socket, answered as a plain request: why it is refused. */
+  knock(twiml: string, options?: { token?: string; path?: string }): Promise<Response>;
   /** A whole call coming in: rung, its socket open, Twilio's `setup` told. */
   call(
     options?: { from?: string; call?: string; form?: Record<string, string> },
@@ -162,6 +155,13 @@ export type Setup = {
   /** The messages of a chat. */
   messages(thread: string): Promise<Message[]>;
 };
+
+/** The socket's address a TwiML names. */
+function socketOf(twiml: string): string {
+  const url = /url="([^"]+)"/.exec(twiml)?.[1]?.replaceAll("&amp;", "&");
+  if (!url) throw new Error(`No socket in ${twiml}`);
+  return url;
+}
 
 /** A call SID, as Twilio makes them. */
 export const callSid = (n: number) => `CA${n.toString(16).padStart(32, "0")}`;
@@ -174,7 +174,7 @@ export const VERIFIED = { StirVerstat: "TN-Validation-Passed-A" };
 
 export async function setup(
   fn: (s: Setup) => Promise<void>,
-  options: { line?: Partial<VoiceLine>; plugins?: Plugin[] } = {},
+  options: { line?: Partial<DeclaredVoiceNumber>; plugins?: Plugin[] } = {},
 ) {
   const app = definePlugin({
     name: "app",
@@ -196,16 +196,14 @@ export async function setup(
       },
       spaces: { line: { name: "Help line", agents: ["phone"] } },
       voice: {
-        lines: {
-          help: {
-            in: "line",
-            account: ACCOUNT,
-            token: TOKEN,
-            origin: ORIGIN,
-            agent: "phone",
-            language: "pt-BR",
-            ...options.line,
-          },
+        help: {
+          in: "line",
+          account: ACCOUNT,
+          token: TOKEN,
+          origin: ORIGIN,
+          agent: "phone",
+          language: "pt-BR",
+          ...options.line,
         },
       },
     },
@@ -215,12 +213,7 @@ export async function setup(
     store: memoryStore(),
     plugins: [models, chat, ...access, voice, reads, hands, app, ...options.plugins ?? []],
   });
-  const serve = webServer({
-    runtime,
-    tickets: createTickets(),
-    code: { entry: "app.js", files: { "app.js": "" } },
-    upgrade: () => new Response(null, { status: 299 }),
-  });
+  const listener = await listen(runtime.fetch);
   let rung = 0;
   const s: Setup = {
     runtime,
@@ -240,7 +233,7 @@ export async function setup(
         To: LINE_NUMBER,
         ...o.form,
       });
-      return await serve(
+      return await runtime.fetch(
         new Request(`http://localhost${path}`, {
           method: "POST",
           headers: {
@@ -252,31 +245,39 @@ export async function setup(
       );
     },
     open: async (twiml, o = {}) => {
-      const url = /url="([^"]+)"/.exec(twiml)?.[1]?.replaceAll("&amp;", "&");
-      if (!url) throw new Error(`No socket in ${twiml}`);
-      const relay = fakeRelay();
+      const url = socketOf(twiml);
       const at = new URL(url);
-      const response = await serveRelay(
-        new Request(`http://localhost${at.pathname}${at.search}`, {
+      const ws = new (WebSocket as unknown as new (
+        url: string,
+        options: { headers: Record<string, string> },
+      ) => WebSocket)(`ws://127.0.0.1:${listener.port}${at.pathname}${at.search}`, {
+        headers: { "x-twilio-signature": await sign(o.token ?? TOKEN, url) },
+      });
+      const relay = fakeRelay(ws);
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve();
+        ws.onerror = () => reject(new Error(`No socket at ${at.pathname}`));
+      });
+      return { relay };
+    },
+    knock: async (twiml, o = {}) => {
+      const url = socketOf(twiml);
+      const at = new URL(url);
+      return await runtime.fetch(
+        new Request(`http://localhost${o.path ?? at.pathname}${at.search}`, {
           headers: {
             upgrade: "websocket",
             "x-twilio-signature": await sign(o.token ?? TOKEN, url),
           },
         }),
-        {
-          runtime,
-          upgrade: () => ({ socket: relay.socket, response: new Response(null, { status: 200 }) }),
-        },
       );
-      return { response, relay };
     },
     call: async (o = {}) => {
       const n = rung + 1;
       const id = o.call ?? callSid(n);
       const from = o.from ?? numberFor(n);
       const twiml = await (await s.ring({ ...o, from, call: id })).text();
-      const { response, relay } = await s.open(twiml);
-      if (response.status !== 200) throw new Error(`No socket: ${await response.text()}`);
+      const { relay } = await s.open(twiml);
       relay.tell({
         type: "setup",
         sessionId: `VX${"a".repeat(32)}`,
@@ -312,6 +313,7 @@ export async function setup(
   try {
     await fn(s);
   } finally {
+    await listener.shutdown();
     await runtime.close();
   }
 }

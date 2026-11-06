@@ -2,11 +2,9 @@
  * Signed links: one opens until it expires, and changing anything in it, or
  * signing with another secret, breaks it.
  */
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createRuntime, definePlugin, keyOf, linksOf, signLink, verifyLink } from "../mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
-import { webServer } from "../../hosts/web/server.ts";
-import { createTickets } from "../../hosts/web/tickets.ts";
 import { test } from "../../testing/mod.ts";
 
 const links = { origin: "https://app.example", secret: "a-secret-only-the-app-has-32-bytes!" };
@@ -109,27 +107,17 @@ test("the app's links: an origin and a secret of 32 bytes or more, or none", () 
   assertEquals(linksOf({}), undefined);
 });
 
-test("a web server with a links secret too short refuses to start, rather than fail each file", async () => {
-  const runtime = await createRuntime({
-    store: memoryStore(),
-    plugins: [definePlugin({
-      name: "short",
-      resources: { links: { origin: "https://app.example", secret: "short" } },
-    })],
-  });
-  try {
-    assertThrows(
-      () =>
-        webServer({
-          runtime,
-          tickets: createTickets(),
-          code: { entry: "app.js", files: { "app.js": "" } },
-          upgrade: () => new Response(null, { status: 299 }),
-        }),
-      Error,
-      "at least 32 bytes",
-    );
-  } finally {
-    await runtime.close();
-  }
+test("a runtime with a links secret too short refuses to start, rather than fail each link", async () => {
+  await assertRejects(
+    () =>
+      createRuntime({
+        store: memoryStore(),
+        plugins: [definePlugin({
+          name: "short",
+          resources: { links: { origin: "https://app.example", secret: "short" } },
+        })],
+      }),
+    Error,
+    "at least 32 bytes",
+  );
 });

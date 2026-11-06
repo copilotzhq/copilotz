@@ -26,31 +26,27 @@ const linked = definePlugin({
 /** A route that draws a trip's card from its signed link, and a feature that shows one. */
 const cards = definePlugin({
   name: "cards",
-  resources: {
-    routes: { "trip-card": { path: "/media/trip-card", action: "test.card", methods: ["GET"] } },
-    additions: { card: { order: 1 }, trips: { order: 2 } },
-  },
-  actions: {
-    "test.card": defineAction({
-      input: { type: "object" },
-      allow: () => true,
-      record: false,
-      run: async (ctx, request: { path: string; query: Record<string, string> }) => {
-        const params = await verifyLink(
-          { origin: ORIGIN, secret: SECRET },
-          request.path,
-          request.query,
-        );
-        return params
-          ? { status: 200, headers: { "content-type": "text/plain" }, body: `card ${params.trip}` }
-          : { status: 403, body: "Forbidden" };
-      },
-    }),
+  resources: { additions: { card: { order: 1 }, trips: { order: 2 } } },
+  routes: {
+    "/media/trip-card": async (request) => {
+      const url = new URL(request.url);
+      const params = await verifyLink(
+        { origin: ORIGIN, secret: SECRET },
+        url.pathname,
+        Object.fromEntries(url.searchParams),
+      );
+      return params
+        ? new Response(`card ${params.trip}`, { headers: { "content-type": "text/plain" } })
+        : new Response("Forbidden", { status: 403 });
+    },
   },
   views: {
     "addition:card": ({ answer }: { answer: Message }) =>
       answer.text?.includes("card")
-        ? { key: "card:123", parts: [image({ route: "trip-card", params: { trip: "123" } })] }
+        ? {
+          key: "card:123",
+          parts: [image({ route: "/media/trip-card", params: { trip: "123" } })],
+        }
         : undefined,
     "addition:trips": ({ answer }: { answer: Message }) =>
       answer.text?.includes("trips")

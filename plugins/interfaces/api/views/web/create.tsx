@@ -1,11 +1,14 @@
 /**
  * Making a developer key, in a dialog: a name to know it by, then what it
- * can do: a preset (the `apiPresets` resource: chatting, reading), or a
- * custom pick of the app's Actions (from its catalog, by plugin) and
- * queries (by name). Made, its secret shows once, with a copy button and
- * what to paste in a terminal to try it, the secret in it.
+ * may use (its scope): a preset (the `apiPresets` resource: chatting,
+ * reading), or a custom pick of the app's Actions (from its catalog, by
+ * plugin) and queries (by name). What it may use says how it works in the
+ * space (an editor when it calls Actions, else a viewer), said beside it.
+ * Made, its secret shows once, with a copy button and what to paste in a
+ * terminal to try it, the secret in it.
  */
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import type { Scope } from "../../../../../runtime/mod.ts";
 import {
   appBase,
   Button,
@@ -20,9 +23,9 @@ import {
   Notice,
   Skeleton,
 } from "../../../../../hosts/web/mod.ts";
-import type { ApiPreset } from "../../contract.ts";
+import { type ApiPreset, roleOf } from "../../contract.ts";
 import { type ActionEntry, useCatalog } from "./catalog.ts";
-import { type Allowed, snippets } from "./snippet.ts";
+import { KINDS, namesIn, snippets } from "./snippet.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -30,11 +33,12 @@ export type Presets = [string, ApiPreset][];
 
 const CUSTOM = "custom";
 
-const listsOf = (preset?: ApiPreset): Allowed => ({
-  actions: preset?.actions ?? [],
-  queries: preset?.queries ?? [],
-  views: preset?.views ?? [],
-});
+/** A custom pick, to start with: nothing. */
+const NONE: Required<Pick<Scope, "call" | "query">> = { call: [], query: [] };
+
+/** A scope with only the lists it has, as a key keeps it. */
+const kept = (scope: Scope): Scope =>
+  Object.fromEntries(KINDS.flatMap((kind) => scope[kind]?.length ? [[kind, scope[kind]]] : []));
 
 export function CreateDialog(
   { open, onClose, space, where, presets, call }: {
@@ -49,25 +53,25 @@ export function CreateDialog(
 ): ReactNode {
   const [name, setName] = useState("");
   const [choice, setChoice] = useState(presets[0]?.[0] ?? CUSTOM);
-  const [custom, setCustom] = useState<Allowed>({ actions: [], queries: [] });
+  const [custom, setCustom] = useState(NONE);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [made, setMade] = useState<{ key: string; allowed: Allowed }>();
+  const [made, setMade] = useState<{ key: string; scope: Scope }>();
 
   useEffect(() => {
     if (!open) return;
     setName("");
     setChoice(presets[0]?.[0] ?? CUSTOM);
-    setCustom({ actions: [], queries: [] });
+    setCustom(NONE);
     setError(undefined);
     setMade(undefined);
   }, [open]);
 
-  const allowed = choice === CUSTOM
-    ? custom
-    : listsOf(presets.find(([key]) => key === choice)?.[1]);
-  const something = allowed.actions.length + allowed.queries.length + (allowed.views?.length ?? 0);
-  const ready = !!name.trim() && something > 0 && !busy;
+  const scope = kept(
+    choice === CUSTOM ? custom : presets.find(([key]) => key === choice)?.[1].scope ?? {},
+  );
+  const something = namesIn(scope).length > 0;
+  const ready = !!name.trim() && something && !busy;
 
   const create = async () => {
     if (!ready) return;
@@ -77,11 +81,9 @@ export function CreateDialog(
       const { key } = await call<{ key: string }>("api_key.create", {
         in: space,
         name: name.trim(),
-        actions: allowed.actions,
-        queries: allowed.queries,
-        ...(allowed.views?.length ? { views: allowed.views } : {}),
+        scope,
       });
-      setMade({ key, allowed });
+      setMade({ key, scope });
     } catch (e) {
       setError(message(e));
     } finally {
@@ -113,7 +115,7 @@ export function CreateDialog(
         </>
       )}
     >
-      {made ? <Made secret={made.key} allowed={made.allowed} /> : (
+      {made ? <Made secret={made.key} scope={made.scope} space={space} /> : (
         <form
           className="api-form"
           onSubmit={(event) => {
@@ -144,7 +146,7 @@ export function CreateDialog(
                   onSelect={() => setChoice(key)}
                   title={preset.title}
                   text={preset.description}
-                  names={[...preset.actions ?? [], ...preset.queries ?? []]}
+                  names={namesIn(preset.scope ?? {})}
                 />
               ))}
               <Choice
@@ -157,6 +159,7 @@ export function CreateDialog(
             {choice === CUSTOM
               ? <Custom value={custom} onChange={setCustom} presets={presets} />
               : null}
+            {something ? <Role scope={scope} where={where} /> : null}
           </fieldset>
           {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
           {/* Enter in the name makes it. */}
@@ -198,6 +201,29 @@ function Choice(
   );
 }
 
+/** How a key with this scope works in the space: what its role lets, in a line. */
+function Role({ scope, where }: { scope: Scope; where: string }): ReactNode {
+  const editor = roleOf(scope) === "editor";
+  return (
+    <p className="api-role" data-role={editor ? "editor" : "viewer"}>
+      <Icon name={editor ? "pencil" : "eye"} size={14} />
+      <span>
+        {editor
+          ? (
+            <>
+              <b>Works as an editor</b> in {where}: it may change things, as far as you can.
+            </>
+          )
+          : (
+            <>
+              <b>Works as a viewer</b> in {where}: it reads, and changes nothing.
+            </>
+          )}
+      </span>
+    </p>
+  );
+}
+
 /** The plugin an Action is from, by its name: `chat.send` is chat's. */
 const groupOf = (name: string) => name.split(".")[0];
 
@@ -208,15 +234,15 @@ const groupOf = (name: string) => name.split(".")[0];
  */
 function Custom(
   { value, onChange, presets }: {
-    value: Allowed;
-    onChange(value: Allowed): void;
+    value: typeof NONE;
+    onChange(value: typeof NONE): void;
     presets: Presets;
   },
 ): ReactNode {
   const catalog = useCatalog();
   const [search, setSearch] = useState("");
   const [typed, setTyped] = useState("");
-  const toggle = (list: "actions" | "queries", name: string) =>
+  const toggle = (list: "call" | "query", name: string) =>
     onChange({
       ...value,
       [list]: value[list].includes(name)
@@ -235,11 +261,11 @@ function Custom(
   for (const action of found) {
     groups.set(groupOf(action.name), [...groups.get(groupOf(action.name)) ?? [], action]);
   }
-  const known = [...new Set([...presets.flatMap(([, p]) => p.queries ?? []), ...value.queries])];
+  const known = [...new Set([...presets.flatMap(([, p]) => p.scope?.query ?? []), ...value.query])];
   const add = () => {
     const names = typed.split(/[\s,]+/).filter((n) => /^[\w.:-]+$/.test(n));
     if (names.length) {
-      onChange({ ...value, queries: [...new Set([...value.queries, ...names])] });
+      onChange({ ...value, query: [...new Set([...value.query, ...names])] });
     }
     setTyped("");
   };
@@ -248,18 +274,18 @@ function Custom(
       <div className="api-pick">
         <div className="api-custom-head">
           <h4>Actions</h4>
-          <span className="api-custom-count">{value.actions.length} picked</span>
+          <span className="api-custom-count">{value.call.length} picked</span>
         </div>
         {catalog === "unavailable"
           ? (
             <Input
               placeholder="chat.send, chat.stop"
               aria-label="Actions, by name"
-              value={value.actions.join(", ")}
+              value={value.call.join(", ")}
               onChange={(event) =>
                 onChange({
                   ...value,
-                  actions: event.target.value.split(/[\s,]+/).filter(Boolean),
+                  call: event.target.value.split(/[\s,]+/).filter(Boolean),
                 })}
             />
           )
@@ -282,8 +308,8 @@ function Custom(
                       {actions.map((action) => (
                         <div className="api-pick-item" key={action.name}>
                           <Checkbox
-                            checked={value.actions.includes(action.name)}
-                            onChange={() => toggle("actions", action.name)}
+                            checked={value.call.includes(action.name)}
+                            onChange={() => toggle("call", action.name)}
                             label={
                               <span className="api-pick-label">
                                 <code>{action.name}</code>
@@ -305,17 +331,17 @@ function Custom(
       <div className="api-pick">
         <div className="api-custom-head">
           <h4>Queries</h4>
-          <span className="api-custom-count">{value.queries.length} picked</span>
+          <span className="api-custom-count">{value.query.length} picked</span>
         </div>
         <div className="api-chips">
           {known.map((name) => (
             <Chip
               key={name}
               size="sm"
-              variant={value.queries.includes(name) ? "primary" : "outline"}
-              icon={value.queries.includes(name) ? "check" : "plus"}
-              title={value.queries.includes(name) ? `Leave out ${name}` : `Let it run ${name}`}
-              onClick={() => toggle("queries", name)}
+              variant={value.query.includes(name) ? "primary" : "outline"}
+              icon={value.query.includes(name) ? "check" : "plus"}
+              title={value.query.includes(name) ? `Leave out ${name}` : `Let it run ${name}`}
+              onClick={() => toggle("query", name)}
             >
               {name}
             </Chip>
@@ -340,7 +366,9 @@ function Custom(
 }
 
 /** The key, once: copy it, and try it. */
-function Made({ secret, allowed }: { secret: string; allowed: Allowed }): ReactNode {
+function Made(
+  { secret, scope, space }: { secret: string; scope: Scope; space: string },
+): ReactNode {
   const origin = appBase();
   return (
     <div className="api-made">
@@ -355,7 +383,7 @@ function Made({ secret, allowed }: { secret: string; allowed: Allowed }): ReactN
         copy={secret}
       />
       <h3 className="api-sub">Try it</h3>
-      {snippets(origin, allowed, secret).map((s) => (
+      {snippets(origin, scope, { secret, space }).map((s) => (
         <CodeBlock key={s.title} title={s.title} code={s.code} copy={s.text} />
       ))}
       <p className="api-note">

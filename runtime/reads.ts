@@ -16,17 +16,22 @@ export function reading(
   run: Run,
   record: Context["record"],
   metrics: Metrics,
+  fetch: typeof globalThis.fetch,
   actor?: Actor,
 ): ReadContext {
   const reads: Run = (op) =>
     isRead(op) ? run(op) : Promise.reject(invalid("Queries are read-only"));
-  const query = querying(registry, reads, record, metrics, actor);
+  const query = querying(registry, reads, record, metrics, fetch, actor);
   const ctx: ReadContext = {
     db: { collection: (name) => collection(name, reads, query) },
     graph: { edges: (query) => reads({ op: "edges", query }) as Promise<Edge[]> },
-    render: presenter(registry.views, () => reading(registry, reads, record, metrics, actor)),
+    render: presenter(
+      registry.views,
+      () => reading(registry, reads, record, metrics, fetch, actor),
+    ),
     record,
     metrics,
+    fetch,
     resources: registry.resources,
     adapters: registry.adapters,
     ...(actor ? { actor } : {}),
@@ -44,12 +49,13 @@ export const querying = (
   run: Run,
   record: Context["record"],
   metrics: Metrics,
+  fetch: typeof globalThis.fetch,
   actor?: Actor,
 ): Query =>
 async (name, queryName, params) => {
   const def = registry.collections[name]?.queries?.[queryName];
   if (!def) throw invalid(`Unknown query "${name}.${queryName}"`);
-  const ctx = reading(registry, run, record, metrics, actor);
+  const ctx = reading(registry, run, record, metrics, fetch, actor);
   return await (typeof def === "function" ? def : def.run)(
     ctx.db.collection(name),
     json(params),
@@ -61,7 +67,11 @@ async (name, queryName, params) => {
  * What startup checks call Actions with: the configuration, and no data yet
  * (reading or recording fails).
  */
-export function startup(registry: Registry, metrics: Metrics): ReadContext["call"] {
+export function startup(
+  registry: Registry,
+  metrics: Metrics,
+  fetch: typeof globalThis.fetch,
+): ReadContext["call"] {
   const none = () => {
     throw invalid("Nothing is stored yet: a startup check reads only the configuration");
   };
@@ -71,6 +81,7 @@ export function startup(registry: Registry, metrics: Metrics): ReadContext["call
     render: none,
     record: none,
     metrics,
+    fetch,
     resources: registry.resources,
     adapters: registry.adapters,
   };

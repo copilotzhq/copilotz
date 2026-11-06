@@ -90,8 +90,8 @@ export type CancelOp =
   | { op: "cancel"; call: string }
   | { op: "cancel"; processor: string; key: string };
 
-/** Ends an actor's browsers (see `Owner.disconnect`). */
-export type DisconnectOp = { op: "disconnect"; actor: { kind: string; id: string } };
+/** Ends an actor's browsers (see `Owner.disconnect`): a person's, or one key of theirs (`key`). */
+export type DisconnectOp = { op: "disconnect"; actor: { kind: string; id: string; key?: string } };
 
 export type Op = StoreOp | TimerOp | CancelOp | DisconnectOp;
 
@@ -172,6 +172,98 @@ export async function outcome(reader: Reader, call: string): Promise<Outcome> {
       ? { action: String(started.data.action), inputHash: started.data.inputHash as string }
       : {}),
   };
+}
+
+/** Whether two dot paths meet: one is the other, or lies within it. */
+const meet = (a: string, b: string) => a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
+
+/** Field references in an expression or a pipeline (`"$total"`, `"$assign.code"`), as paths. */
+function refs(value: unknown, into: string[]): string[] {
+  if (typeof value === "string") {
+    if (/^\$[^$]/.test(value)) into.push(value.slice(1));
+  } else if (Array.isArray(value)) { for (const item of value) refs(item, into); }
+  else if (value && typeof value === "object") {
+    for (const item of Object.values(value)) refs(item, into);
+  }
+  return into;
+}
+
+/** The field paths a filter names: its keys, through `$and`, `$or` and `$nor`, and its references. */
+function filterPaths(filter: unknown, into: string[] = []): string[] {
+  if (!filter || typeof filter !== "object") return into;
+  for (const [key, value] of Object.entries(filter)) {
+    if (key === "$and" || key === "$or" || key === "$nor") {
+      for (const each of [value].flat()) filterPaths(each, into);
+    } else if (key.startsWith("$")) refs(value, into);
+    else into.push(key);
+  }
+  return into;
+}
+
+/** Whether a document holds a value at a dot path. */
+function holds(doc: unknown, path: string): boolean {
+  let at = doc;
+  for (const key of path.split(".")) {
+    if (!at || typeof at !== "object" || !Object.hasOwn(at, key)) return false;
+    at = (at as Record<string, unknown>)[key];
+  }
+  return true;
+}
+
+/**
+ * The first of a collection's private fields (dot paths) an op names: in
+ * its filter, sort, update or pipeline (filtering by one tells of its
+ * value; changing what holds one changes it), or in a document it writes.
+ * What an outsider may never do (see `CollectionDef.private`).
+ */
+export function privateIn(op: StoreOp, fields: string[]): string | undefined {
+  if (!fields.length || !("collection" in op)) return undefined;
+  const paths: string[] = [];
+  const docs: unknown[] = [];
+  switch (op.op) {
+    case "find":
+    case "findOne":
+      filterPaths(op.filter, paths);
+      paths.push(...Object.keys(op.options?.sort ?? {}));
+      break;
+    case "count":
+    case "delete":
+      filterPaths(op.filter, paths);
+      break;
+    case "aggregate":
+      for (const stage of op.pipeline) {
+        if ("$match" in stage) filterPaths(stage.$match, paths);
+        refs(stage, paths);
+      }
+      break;
+    case "nearest":
+      filterPaths(op.options?.filter, paths);
+      if (op.field) paths.push(op.field);
+      break;
+    case "insert":
+      docs.push(...op.docs);
+      break;
+    case "replace":
+      filterPaths(op.filter, paths);
+      docs.push(op.doc);
+      break;
+    case "update": {
+      filterPaths(op.filter, paths);
+      const operators = Object.keys(op.update).some((key) => key.startsWith("$"));
+      if (!operators) docs.push(op.update);
+      else {
+        for (const [operator, fields] of Object.entries(op.update)) {
+          if (!fields || typeof fields !== "object") continue;
+          paths.push(...Object.keys(fields));
+          if (operator === "$rename") paths.push(...Object.values(fields).map(String));
+        }
+      }
+      break;
+    }
+  }
+  return fields.find((field) =>
+    paths.some((path) => meet(path, field)) || docs.some((doc) => holds(doc, field))
+  );
 }
 
 /** What the owner does around each write. */

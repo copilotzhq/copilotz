@@ -1,9 +1,11 @@
 /**
- * The developer API: keys (made by a person in a space, shown once, kept
- * as a hash, revoked), and calls with them over HTTP: as the key's person,
- * only in its space and only what it lists; Idempotency-Key as the call
- * id; JSON errors; queries, Views, the reference, and events as they
- * happen, of what the key may see.
+ * Developer keys over the runtime's REST API (`/api/`): keys (made by a
+ * person in a space, a member of it, shown once, kept as a hash, revoked),
+ * and calls with them: as the key's person, reaching what both its
+ * membership and its person reach, only what its scope lists (the runtime
+ * checks it); Idempotency-Key as the call id; JSON errors; queries, Views,
+ * collections, the reference, and events as they happen, of what the key
+ * may see. A key's record never changes from outside.
  */
 import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
 import {
@@ -19,8 +21,8 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, type Thread } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
-import { api, type ApiKey, serveApi } from "../mod.ts";
-import { test } from "../../../../testing/mod.ts";
+import { api, type ApiKey } from "../mod.ts";
+import { test, TEST_ACTOR, testWho } from "../../../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -89,6 +91,14 @@ const notes = definePlugin({
 
 const app = definePlugin({
   name: "app",
+  actions: {
+    // Who's in a space, as the system reads it: what tests check memberships by.
+    "test.members": defineAction({
+      input: { type: "object", properties: { space: { type: "string" } }, required: ["space"] },
+      record: false,
+      run: (ctx, input) => ctx.db.collection("member").find({ space: input.space }),
+    }),
+  },
   resources: {
     shared: { thread: {}, message: {}, note: {} },
     provider: { e: { adapter: "e" } },
@@ -103,7 +113,7 @@ type Setup = {
   /** Ana's Personal space, and a shared one she made. */
   personal: string;
   launch: string;
-  /** A key's secret, made by Ana in a space. */
+  /** A key's secret, made by Ana in a space (her Personal one, unless `in` says). */
   key(input?: Record<string, unknown>): Promise<string>;
   call(secret: string, path: string, init?: RequestInit): Promise<Response>;
 };
@@ -111,7 +121,7 @@ type Setup = {
 async function setup(fn: (s: Setup) => Promise<void>, whom: Actor | null = null) {
   const runtime = await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, api, notes, app],
+    plugins: [models, chat, ...access, api, notes, app, testWho],
   });
   try {
     const { space: personal } = await runtime.call<{ space: string }>(
@@ -124,8 +134,13 @@ async function setup(fn: (s: Setup) => Promise<void>, whom: Actor | null = null)
       { name: "Launch" },
       { actor: ana },
     );
-    const serve = (request: Request) =>
-      serveApi(request, { runtime, whom: () => Promise.resolve(whom) });
+    // `whom` is the person whose page asks (the runtime's `who`: testWho believes the header).
+    const serve = (request: Request) => {
+      if (!whom) return runtime.fetch(request);
+      const headers = new Headers(request.headers);
+      headers.set(TEST_ACTOR, JSON.stringify(whom));
+      return runtime.fetch(new Request(request, { headers }));
+    };
     await fn({
       runtime,
       serve,
@@ -135,8 +150,10 @@ async function setup(fn: (s: Setup) => Promise<void>, whom: Actor | null = null)
         (await runtime.call<{ key: string }>("api_key.create", {
           in: personal,
           name: "Script",
-          actions: ["chat.send", "note.write", "note.agent", "note.wipe"],
-          queries: ["note.list", "thread.recent", "message.conversation"],
+          scope: {
+            call: ["chat.send", "note.write", "note.agent", "note.wipe"],
+            query: ["note.list", "thread.recent", "message.conversation"],
+          },
           ...input,
         }, { actor: ana })).key,
       call: (secret, path, init = {}) =>
@@ -154,6 +171,18 @@ async function setup(fn: (s: Setup) => Promise<void>, whom: Actor | null = null)
   } finally {
     await runtime.close();
   }
+}
+
+/** A secret's SHA-256, hex, as a key is kept. */
+async function sha256(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** A key's role in a space, as its membership says; none when it isn't a member. */
+async function membership(runtime: Runtime, space: string, key: string) {
+  const found = await runtime.call<{ member: string; role: string }[]>("test.members", { space });
+  return found.find((m) => m.member === `key:${key}`)?.role;
 }
 
 const post = (body: unknown, headers: Record<string, string> = {}): RequestInit => ({
@@ -184,18 +213,33 @@ test("a key is shown once, kept as a hash, its person's alone, and revoked", asy
       secret = await key();
     });
     assertMatch(secret, /^cpz_[\w-]{43}$/);
-    // The log has who made it, and never its secret.
+    // The log has who made it, and never its secret, nor its hash.
+    const hashed = await sha256(secret);
     assert(log.includes("api_key.created"));
-    assert(!log.includes(secret));
+    assert(!log.includes(secret) && !log.includes(hashed));
     const [mine] = await runtime.query<ApiKey[]>("api_key.mine", { in: personal }, { actor: ana });
-    assertEquals([mine.name, mine.in, mine.hint, mine.person], [
+    assertEquals([mine._id, mine.name, mine.in, mine.hint, mine.person, mine.role], [
+      hashed.slice(0, 12),
       "Script",
       personal,
       secret.slice(0, 8),
       "ana",
+      "editor",
     ]);
-    assert(!JSON.stringify(mine).includes(secret));
+    assert(!JSON.stringify(mine).includes(secret) && !JSON.stringify(mine).includes(hashed));
     assertEquals(await runtime.query("api_key.mine", {}, { actor: bob }), []);
+    // Who calling with it is: its person, which key, and what it may use.
+    assertEquals(await runtime.query("api_key.actor", { secret }), {
+      kind: "person",
+      id: "ana",
+      key: mine._id,
+      scope: {
+        call: ["chat.send", "note.write", "note.agent", "note.wipe"],
+        query: ["note.list", "thread.recent", "message.conversation"],
+      },
+    });
+    // A member of its space, as an editor (it calls Actions).
+    assertEquals(await membership(runtime, personal, mine._id), "editor");
     // Nobody else revokes it; she does.
     assertEquals(await runtime.call("api_key.revoke", { key: mine._id }, { actor: bob }), {
       revoked: 0,
@@ -207,6 +251,8 @@ test("a key is shown once, kept as a hash, its person's alone, and revoked", asy
     const revoked = await call(secret, "/api/");
     assertEquals(revoked.status, 401);
     assertEquals((await revoked.json()).error.code, "unauthorized");
+    // Its membership went with it.
+    assertEquals(await membership(runtime, personal, mine._id), undefined);
   });
 });
 
@@ -215,24 +261,28 @@ test("a key is made only in a space its person is in, for something, and never b
     await assertRejects(() => key({ in: "nowhere" }), Error, "aren't in that space");
     await assertRejects(
       () =>
-        runtime.call("api_key.create", { in: launch, name: "x", actions: ["chat.send"] }, {
-          actor: bob,
-        }),
+        runtime.call("api_key.create", {
+          in: launch,
+          name: "x",
+          scope: { call: ["chat.send"] },
+        }, { actor: bob }),
       Error,
       "aren't in that space",
     );
     await assertRejects(
-      () => key({ actions: [], queries: [] }),
+      () => key({ scope: { call: [], query: [] } }),
       Error,
       "pick at least one",
     );
-    const secret = await key({ actions: ["api_key.create"] });
+    // No wildcards: names, exactly.
+    await assertRejects(() => key({ scope: { call: ["chat.*"] } }), Error);
+    const secret = await key({ scope: { call: ["api_key.create", "api_key.revoke"] } });
     const made = await call(secret, "/api/actions/api_key.create", post({ name: "more" }));
     assertEquals(made.status, 403);
   });
 });
 
-test("a call acts as the key's person, in its space, and only for what it lists", async () => {
+test("a call acts as the key's person, in its space, and only for what its scope lists", async () => {
   await setup(async ({ runtime, personal, key, call }) => {
     const secret = await key();
     // Without a key, or with a wrong one: 401.
@@ -241,7 +291,11 @@ test("a call acts as the key's person, in its space, and only for what it lists"
     assertEquals(anonymous.status, 401);
     assertEquals(anonymous.headers.get("www-authenticate"), 'Bearer realm="api"');
 
-    const sent = await call(secret, "/api/actions/chat.send", post({ text: "hello" }));
+    const sent = await call(
+      secret,
+      "/api/actions/chat.send",
+      post({ text: "hello", in: personal }),
+    );
     assertEquals(sent.status, 200);
     const { thread } = await sent.json() as { thread: string };
     await runtime.idle();
@@ -254,16 +308,16 @@ test("a call acts as the key's person, in its space, and only for what it lists"
       "heard: ana: hello",
     ]]);
 
-    // Not on its list: refused, before anything runs.
+    // Not in its scope: the runtime refuses it, before anything runs.
     const stopped = await call(secret, "/api/actions/chat.stop", post({ thread }));
     assertEquals(stopped.status, 403);
     assertEquals((await stopped.json()).error.code, "forbidden");
-    // On its list, but the system's alone: the runtime refuses it too.
+    // In it, but the system's alone: refused too.
     const wiped = await call(secret, "/api/actions/note.wipe", post({}));
     assertEquals(wiped.status, 403);
     // Not there at all; bad input; not JSON; the wrong method.
-    assertEquals((await call(secret, "/api/actions/nope", post({}))).status, 403);
-    const bad = await call(secret, "/api/actions/chat.send", post({ text: 3 }));
+    assertEquals((await call(secret, "/api/actions/nope", post({}))).status, 404);
+    const bad = await call(secret, "/api/actions/chat.send", post({ text: 3, in: personal }));
     assertEquals([bad.status, (await bad.json()).error.code], [400, "invalid"]);
     const garbled = await call(secret, "/api/actions/chat.send", {
       method: "POST",
@@ -281,10 +335,7 @@ test("a call acts as the key's person, in its space, and only for what it lists"
 
 /** A request with no key at all. */
 const serveApiAnonymously = (runtime: Runtime) =>
-  serveApi(new Request("http://localhost/api/actions/chat.send", { method: "POST" }), {
-    runtime,
-    whom: () => Promise.resolve(null),
-  });
+  runtime.fetch(new Request("http://localhost/api/actions/chat.send", { method: "POST" }));
 
 test("a key reaches its space alone: not its person's others, nor through their agents", async () => {
   await setup(async ({ runtime, personal, launch, key, call }) => {
@@ -301,14 +352,18 @@ test("a key reaches its space alone: not its person's others, nor through their 
     // An agent working for the key: the key's space too.
     const agent = await call(secret, "/api/actions/note.agent", post({}));
     assertEquals(await agent.json(), ["launch plan"]);
-    // Writing elsewhere is refused; where it works, by default.
+    // Writing elsewhere is refused; where it works, it writes.
     const elsewhere = await call(
       secret,
       "/api/actions/note.write",
       post({ text: "x", in: personal }),
     );
     assertEquals(elsewhere.status, 403);
-    const here = await call(secret, "/api/actions/note.write", post({ text: "from code" }));
+    const here = await call(
+      secret,
+      "/api/actions/note.write",
+      post({ text: "from code", in: launch }),
+    );
     assertEquals(here.status, 200);
     assertEquals(
       (await runtime.query<{ text: string; in: string }[]>("note.list", {}, { actor: ana }))
@@ -318,7 +373,7 @@ test("a key reaches its space alone: not its person's others, nor through their 
     // Private fields stay out of what it reads.
     const read = await (await call(secret, "/api/queries/note.list", post({}))).json();
     assert(!JSON.stringify(read).includes("s3cr3t"));
-    // Not on its list.
+    // Not in its scope.
     assertEquals((await call(secret, "/api/queries/message.history", post({}))).status, 403);
     // Its person left the space: the key ends with that.
     await runtime.call("person.set", { person: "bob", email: "bob@example.com" });
@@ -337,7 +392,7 @@ test("a key reaches its space alone: not its person's others, nor through their 
 test("an Idempotency-Key makes the call's id: sent again, it answers the first, done once", async () => {
   await setup(async ({ runtime, personal, key, call }) => {
     const secret = await key();
-    const once = post({ text: "only once" }, { "idempotency-key": "order-42" });
+    const once = post({ text: "only once", in: personal }, { "idempotency-key": "order-42" });
     const first = await (await call(secret, "/api/actions/chat.send", once)).json();
     const again = await (await call(secret, "/api/actions/chat.send", once)).json();
     assertEquals(again, first);
@@ -350,7 +405,7 @@ test("an Idempotency-Key makes the call's id: sent again, it answers the first, 
     const other = await call(
       secret,
       "/api/actions/chat.send",
-      post({ text: "something else" }, { "idempotency-key": "order-42" }),
+      post({ text: "something else", in: personal }, { "idempotency-key": "order-42" }),
     );
     assertEquals([other.status, (await other.json()).error.code], [409, "id_conflict"]);
     // Another key's same Idempotency-Key is its own.
@@ -361,7 +416,7 @@ test("an Idempotency-Key makes the call's id: sent again, it answers the first, 
     const bad = await call(
       secret,
       "/api/actions/chat.send",
-      post({ text: "x" }, {
+      post({ text: "x", in: personal }, {
         "idempotency-key": "",
       }),
     );
@@ -369,19 +424,33 @@ test("an Idempotency-Key makes the call's id: sent again, it answers the first, 
   });
 });
 
-test("the reference: what the key may call, each Action's input as declared", async () => {
+test("the reference: what the key's scope lets it use, each Action's input as declared", async () => {
   await setup(async ({ key, call, launch }) => {
-    const secret = await key({ in: launch, actions: ["note.write", "nope"], views: ["thread"] });
+    const secret = await key({
+      in: launch,
+      scope: {
+        call: ["note.write", "nope"],
+        query: ["note.list", "thread.recent"],
+        view: ["thread"],
+        read: ["note", "thread"],
+        write: ["note"],
+      },
+    });
     const reference = await (await call(secret, "/api/")).json();
-    assertEquals(reference.key, { name: "Script", in: launch, hint: secret.slice(0, 8) });
+    assertEquals(reference.actor, { kind: "person", id: "ana", key: reference.actor.key });
+    assertEquals(reference.actor.key.length, 12);
     assertEquals(reference.actions.map((a: { name: string }) => a.name), ["note.write"]);
     assertEquals(reference.actions[0].path, "/api/actions/note.write");
     assertEquals(reference.actions[0].input.required, ["text"]);
     assertEquals(
       reference.queries.map((q: { path: string }) => q.path),
-      ["/api/queries/note.list", "/api/queries/thread.recent", "/api/queries/message.conversation"],
+      ["/api/queries/note.list", "/api/queries/thread.recent"],
     );
     assertEquals(reference.views, [{ name: "thread", method: "GET", path: "/api/views/thread" }]);
+    assertEquals(reference.collections, [
+      { name: "note", read: true, write: true, path: "/api/collections/note" },
+      { name: "thread", read: true, write: false, path: "/api/collections/thread" },
+    ]);
   });
 });
 
@@ -390,6 +459,8 @@ test("from the app's page, signed in, the catalog of Actions; nobody else", asyn
     const catalog = await (await serve(new Request("http://localhost/api/"))).json();
     const names = catalog.actions.map((a: { name: string }) => a.name);
     assert(names.includes("chat.send") && names.includes("note.write"));
+    // What lets someone in from outside: the system's alone isn't among them.
+    assert(!names.includes("note.wipe"));
     assertEquals(names, [...names].sort((a: string, b: string) => a.localeCompare(b)));
   }, ana);
   await setup(async ({ serve }) => {
@@ -414,11 +485,13 @@ test("a View, as the key reads it: once, or as it changes", async () => {
   await setup(async ({ runtime, personal, launch, key, call }) => {
     await runtime.call("note.write", { text: "a", in: launch }, { actor: ana });
     await runtime.call("note.write", { text: "b", in: personal }, { actor: ana });
-    const secret = await key({ in: launch, views: ["note.count"] });
+    const secret = await key({ in: launch, scope: { view: ["note.count"] } });
     const shown = await call(secret, "/api/views/note.count");
     assertEquals(await shown.json(), "1 notes");
-    assertEquals((await call(secret, "/api/views/thread")).status, 403);
-    const followed = await call(secret, "/api/views/note.count?follow=1");
+    assertEquals((await call(secret, "/api/views/llm.thread")).status, 403);
+    const followed = await call(secret, "/api/views/note.count", {
+      headers: { accept: "text/event-stream" },
+    });
     const reader = followed.body!.pipeThrough(new TextDecoderStream()).getReader();
     let said = "";
     const next = async (until: string) => {
@@ -465,7 +538,7 @@ test("events: what happens in the key's space as it happens, as the key reads it
     // Elsewhere: never shown. Here: shown, without what's private.
     await runtime.call("note.write", { text: "diary", in: personal }, { actor: ana });
     await runtime.call("note.write", { text: "plan", in: launch }, { actor: ana });
-    const sent = await call(secret, "/api/actions/chat.send", post({ text: "go" }));
+    const sent = await call(secret, "/api/actions/chat.send", post({ text: "go", in: launch }));
     assertEquals(sent.status, 200);
     const events = await follow(
       stream,
@@ -488,7 +561,7 @@ test("events: what happens in the key's space as it happens, as the key reads it
 
 test("events: a call's large result comes whole, not as the log's blob reference", async () => {
   await setup(async ({ launch, key, call }) => {
-    const secret = await key({ in: launch, actions: ["note.long"] });
+    const secret = await key({ in: launch, scope: { call: ["note.long"] } });
     const stream = await call(secret, "/api/events");
     assertEquals((await call(secret, "/api/actions/note.long", post({}))).status, 200);
     const events = await follow(stream, (seen) => seen.some((e) => e.event === "action.completed"));
@@ -497,23 +570,58 @@ test("events: a call's large result comes whole, not as the log's blob reference
   });
 });
 
-test("events end, saying so, once the key is revoked", async () => {
+test("events end, saying so, as soon as the key is revoked", async () => {
   await setup(async ({ runtime, key, call }) => {
     const secret = await key();
     const stream = await call(secret, "/api/events");
     const [mine] = await runtime.query<ApiKey[]>("api_key.mine", {}, { actor: ana });
+    const said = follow(stream, (seen) => seen.some((e) => e.event === "revoked"));
     await runtime.call("api_key.revoke", { key: mine._id }, { actor: ana });
-    // The check runs with the ping: here, sooner.
-    const { eventStream } = await import("../shared/events.ts");
-    const proven = {
-      key: mine,
-      actor: { kind: "person" as const, id: "ana", key: "k", within: "x" },
-    };
-    const fast = eventStream(runtime, proven, () => Promise.resolve(false), 10);
-    const said = await follow(fast, (seen) => seen.some((e) => e.event === "revoked"));
-    assertEquals(said.at(-1)?.data, {
-      error: { code: "unauthorized", message: "The key was revoked." },
+    // At once, not at the next ping.
+    assertEquals((await said).at(-1)?.data, {
+      error: { code: "unauthorized", message: "No longer signed in, or the key was revoked." },
     });
-    await stream.body?.cancel();
   });
+});
+
+test("a key's record never changes from outside, not even by the managers who read it", async () => {
+  await setup(async ({ runtime, personal, key, serve }) => {
+    await key();
+    const [mine] = await runtime.query<ApiKey[]>("api_key.mine", {}, { actor: ana });
+    // She reads it where its space is, without its hash.
+    const read =
+      await (await serve(new Request(`http://localhost/api/collections/api_key/${mine._id}`)))
+        .json();
+    assertEquals([read.person, read.in, "hash" in read], ["ana", personal, false]);
+    // Its person and scope are what it acts as: only its Actions change them.
+    for (
+      const [method, body] of [
+        ["PATCH", { person: "bob" }],
+        ["PATCH", { $set: { "scope.call": ["note.wipe"] } }],
+        ["PUT", { ...read, _id: undefined, scope: { call: ["note.wipe"] } }],
+        ["DELETE", undefined],
+      ] as const
+    ) {
+      const answered = await serve(
+        new Request(`http://localhost/api/collections/api_key/${mine._id}`, {
+          method,
+          ...(body
+            ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } }
+            : {}),
+        }),
+      );
+      assertEquals([method, answered.status], [method, 403]);
+    }
+    // Nor are spaces' memberships, nor sessions, written directly.
+    for (const collection of ["member", "space", "credential", "person"]) {
+      const answered = await serve(
+        new Request(`http://localhost/api/collections/${collection}`, {
+          method: "POST",
+          body: JSON.stringify({ space: personal, member: "person:bob", role: "manager" }),
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      assertEquals([collection, answered.status], [collection, 403]);
+    }
+  }, ana);
 });

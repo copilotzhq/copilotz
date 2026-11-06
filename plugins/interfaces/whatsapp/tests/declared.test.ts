@@ -10,8 +10,6 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models from "../../../models/mod.ts";
 import { chat, type Thread } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
-import { createTickets } from "../../../../hosts/web/tickets.ts";
-import { webServer } from "../../../../hosts/web/server.ts";
 import { test } from "../../../../testing/mod.ts";
 import { whatsapp } from "../mod.ts";
 import { sign } from "../shared/signature.ts";
@@ -31,23 +29,21 @@ test("an app with only a declared line answers strangers, in a space of its own 
       agents: { booking: { instructions: "Sell tickets.", model: "e/booking" } },
       spaces: { line: { name: "Viação Azul", agents: ["booking"] } },
       whatsapp: {
-        graph: `${graph.url}/v23.0`,
-        lines: {
-          azul: {
-            in: "line",
-            phoneId: PHONE,
-            token: TOKEN,
-            secret: SECRET,
-            verify: "the-line-verify-token",
-            agent: "booking",
-            quiet: 0,
-          },
+        azul: {
+          in: "line",
+          phoneId: PHONE,
+          token: TOKEN,
+          secret: SECRET,
+          verify: "the-line-verify-token",
+          agent: "booking",
+          quiet: 0,
         },
       },
     },
     adapters: { llm: { e: echo } },
   });
-  const start = () => createRuntime({ store, plugins: [models, chat, ...access, whatsapp, app] });
+  const start = () =>
+    createRuntime({ store, fetch: graph.fetch, plugins: [models, chat, ...access, whatsapp, app] });
   let runtime: Runtime = await start();
   const write = async (body: string, id: string) => {
     const payload = JSON.stringify({
@@ -62,13 +58,7 @@ test("an app with only a declared line answers strangers, in a space of its own 
         }],
       }],
     });
-    const serve = webServer({
-      runtime,
-      tickets: createTickets(),
-      code: { entry: "app.js", files: { "app.js": "" } },
-      upgrade: () => new Response(null, { status: 299 }),
-    });
-    const answered = await serve(
+    const answered = await runtime.fetch(
       new Request("http://localhost/hooks/whatsapp/azul", {
         method: "POST",
         headers: {

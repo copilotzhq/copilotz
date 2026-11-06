@@ -12,7 +12,7 @@ import { chat } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import { mcp } from "../mod.ts";
-import type { McpLine } from "../shared/settings.ts";
+import type { DeclaredServer } from "../shared/settings.ts";
 import { app, LINE, MODERN, OFFERED, runs, said, type Setup, setup } from "./setup.ts";
 
 test("initialize: the version asked for when taken, else the newest with a handshake; no session", async () => {
@@ -106,12 +106,21 @@ test("Origin: a browser's page only from an origin the line names; none, unless 
       headers: { "mcp-protocol-version": "2025-11-25", origin },
     });
   await setup(async (s) => {
-    assertEquals((await ping(s, "https://chatgpt.com")).status, 200);
+    // The runtime's cross-site rule refuses an Origin that isn't the site's own, before the
+    // route: so the origin a line names that can reach it is the site's own (here, localhost).
+    assertEquals((await ping(s, "http://localhost")).status, 200);
     const other = await ping(s, "https://evil.example");
     assertEquals([other.status, other.body.id], [403, undefined]);
-  }, { line: { origins: ["https://chatgpt.com"] } });
+  }, { line: { origins: ["http://localhost"] } });
   await setup(async (s) => {
-    for (const origin of ["https://somewhere.example", "null", "https://chatgpt.com"]) {
+    for (
+      const origin of [
+        "https://somewhere.example",
+        "null",
+        "https://chatgpt.com",
+        "http://localhost",
+      ]
+    ) {
       assertEquals((await ping(s, origin)).status, 403);
     }
     // No Origin, as servers (ChatGPT's) call: taken.
@@ -367,7 +376,7 @@ test("a tool without its View, or whose offer says no, is neither listed nor run
 });
 
 test("at start: a line's mistakes stop the app", async () => {
-  const start = (line: Partial<McpLine>, links = true) =>
+  const start = (line: Partial<DeclaredServer>, links = true) =>
     createRuntime({
       store: memoryStore(),
       plugins: [
@@ -379,7 +388,7 @@ test("at start: a line's mistakes stop the app", async () => {
         definePlugin({
           name: "lines",
           resources: {
-            mcp: { lines: { chatgpt: { ...LINE, ...line } } },
+            mcp: { chatgpt: { ...LINE, ...line } },
             // Without its secret, the app signs nothing, and no conversation can be named.
             ...(links ? {} : { links: { secret: null } }),
           },
@@ -408,7 +417,7 @@ test("at start: a line's mistakes stop the app", async () => {
     "isn't an annotation",
   );
   // How it knows who calls: a header it says why it believes.
-  const settled = (settings: Record<string, unknown>) =>
+  const settled = (caller: Record<string, unknown>, server: Record<string, unknown> = {}) =>
     createRuntime({
       store: memoryStore(),
       plugins: [
@@ -419,25 +428,24 @@ test("at start: a line's mistakes stop the app", async () => {
         app,
         definePlugin({
           name: "lines",
-          resources: { mcp: { ...settings, lines: { chatgpt: LINE } } },
+          resources: { caller, mcp: { chatgpt: { ...LINE, ...server } } },
         }),
       ],
     }).then((runtime) => runtime.close());
-  await assertRejects(() => settled({ caller: { header: "cf-connecting-ip" } }), Error, "believed");
+  await assertRejects(() => settled({ header: "cf-connecting-ip" }), Error, "believed");
   await assertRejects(
-    () => settled({ caller: { header: "x-forwarded-for", hops: 1, exempt: ["10.0.0.0"] } }),
+    () => settled({ header: "x-forwarded-for", hops: 1 }, { exempt: ["10.0.0.0"] }),
     Error,
     "CIDR",
   );
-  await assertRejects(() => settled({ atOnce: 0 }), Error, "atOnce");
   // A list header's first entries are the caller's to write: it needs its hops.
   await assertRejects(
-    () => settled({ caller: { header: "x-forwarded-for", front: "a-front-secret-long-enough" } }),
+    () => settled({ header: "x-forwarded-for", front: "a-front-secret-long-enough" }),
     Error,
     "hops",
   );
   await assertRejects(
-    () => settled({ caller: { header: "forwarded", hops: 1 } }),
+    () => settled({ header: "forwarded", hops: 1 }),
     Error,
     "Forwarded",
   );
@@ -466,7 +474,7 @@ test("at start: a line's mistakes stop the app", async () => {
           chatty,
           definePlugin({
             name: "lines",
-            resources: { mcp: { lines: { chatgpt: LINE } } },
+            resources: { mcp: { chatgpt: LINE } },
           }),
         ],
       }),

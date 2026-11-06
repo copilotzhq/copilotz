@@ -1,7 +1,9 @@
 /**
  * The example app, serving many orgs behind one address (see design/tenancy.md
- * and `hosts/orgs`): a directory signs people in and knows their orgs; each
- * org is a runtime of its own, opened when first used.
+ * and the directory plugin): a directory runtime signs people in and knows
+ * their orgs, and its `fetch` is the whole app; each org is a runtime of its
+ * own, opened when first used, closed when idle (`runtimes`), its rows a
+ * tenant of one shared schema with Postgres.
  *
  *   deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/orgs.ts [--port 8800]
  *     [--hostname 0.0.0.0]        everyone's, not this machine's alone: then no sign-in by name
@@ -13,9 +15,14 @@
  * Sign in by name on this machine (`ana@example.com`), or with Google when
  * GOOGLE_CLIENT_ID is set.
  */
-import { parseArgs } from "jsr:@std/cli@1.0.24/parse-args";
-import { handler } from "@oxian/oxian-js/adapters/deno";
-import { createRuntime, definePlugin, type Store } from "../../runtime/mod.ts";
+import { parseArgs } from "@std/cli/parse-args";
+import {
+  createRuntime,
+  definePlugin,
+  type Runtime,
+  runtimes,
+  type Store,
+} from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import {
   copyTenant,
@@ -24,11 +31,16 @@ import {
   postgresPool,
   postgresStore,
 } from "../../stores/sql/postgres/mod.ts";
-import { devSignIn, googleSignIn, identity } from "../../plugins/access/mod.ts";
-import { directory } from "../../plugins/access/directory/mod.ts";
-import { setClientAddress } from "../../hosts/web/server.ts";
+import {
+  devSignIn,
+  directory,
+  googleSignIn,
+  identity,
+  type Operations,
+  type OrgInfo,
+} from "../../plugins/access/mod.ts";
+import { type Code, webPage } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
-import { type OrgInfo, orgsHost } from "../../hosts/orgs/mod.ts";
 import { plugins } from "./app.ts";
 
 const args = parseArgs(Deno.args, { string: ["port", "postgres", "hostname"] });
@@ -45,24 +57,67 @@ const google = clientId
 /** Every org's connections: one pool, however many orgs are open. */
 const pool = args.postgres ? await postgresPool({ url: args.postgres }) : undefined;
 
+/** Memory's stores, by org, while the process runs. */
+const kept = new Map<string, Store>();
 /** A store: an org's tenant of its schema, or memory. */
-const storeOf = async (schema: string, tenant?: string): Promise<Store> =>
-  pool ? await postgresStore({ pool, schema, ...(tenant ? { tenant } : {}) }) : memoryStore();
+const storeOf = async (schema: string, tenant?: string): Promise<Store> => {
+  if (pool) return await postgresStore({ pool, schema, ...(tenant ? { tenant } : {}) });
+  const key = `${schema}/${tenant ?? ""}`;
+  if (!kept.has(key)) kept.set(key, memoryStore());
+  return kept.get(key)!;
+};
 
 /** What staff may do to an org's rows, where they are in Postgres. */
-const operations = pool && {
-  async move(org: OrgInfo, to: OrgInfo["placement"]) {
+const operations: Operations | undefined = pool && {
+  async move(org, to) {
     const from = { pool, schema: org.placement.schema };
     await copyTenant({ from, to: { pool, schema: to.schema }, tenant: org.id });
     await dropTenant({ ...from, tenant: org.id });
   },
-  export: (org: OrgInfo) => exportTenant({ pool, schema: org.placement.schema, tenant: org.id }),
-  async drop(org: OrgInfo) {
+  export: (org) => exportTenant({ pool, schema: org.placement.schema, tenant: org.id }),
+  async drop(org) {
     await dropTenant({ pool, schema: org.placement.schema, tenant: org.id });
   },
 };
 
-const dir = await createRuntime({
+/** The browser's code, bundled once, on the first page asked for: the lobby's and every org's. */
+let bundled: Promise<Code> | undefined;
+/** The page, the same wherever it's served (an org's under its address: `page.base`). */
+const page = [
+  webPage,
+  definePlugin({
+    name: "page",
+    resources: {
+      page: { title: "Copilotz", code: () => bundled ??= bundle() },
+      theme: themeOf([]),
+    },
+  }),
+];
+
+/** Each org's runtime, opened on first use, closed after 30 minutes nobody's used it. */
+const orgs = runtimes(async (id) => {
+  const org = await dir.query<OrgInfo | null>("org.info", { org: id });
+  if (!org) return undefined;
+  return await createRuntime({
+    store: await storeOf(org.placement.schema, org.id),
+    plugins: [
+      ...plugins,
+      ...page,
+      // Where its computers connect: its own address on this server.
+      definePlugin({
+        name: "computers-here",
+        resources: { computers: { url: `http://127.0.0.1:${port}` } },
+      }),
+      directory.member(dir, org),
+    ],
+    executors: 2,
+  });
+});
+
+/** The page for someone signed in nowhere: the sign-in page, the ways to the directory's. */
+const lobby = await createRuntime({ store: memoryStore(), plugins: page });
+
+const dir: Runtime = await createRuntime({
   store: await storeOf("directory"),
   plugins: [
     identity,
@@ -74,39 +129,19 @@ const dir = await createRuntime({
     definePlugin({
       name: "directory-settings",
       resources: {
-        directory: { staff: (Deno.env.get("STAFF") ?? "").split(",").filter(Boolean) },
+        directory: {
+          staff: (Deno.env.get("STAFF") ?? "").split(",").filter(Boolean),
+          orgs,
+          lobby,
+          ...(operations ? { operations } : {}),
+        },
       },
     }),
   ],
 });
 
-const host = orgsHost({
-  directory: dir,
-  open: async (org, given) =>
-    await createRuntime({
-      store: await storeOf(org.placement.schema, org.id),
-      plugins: [
-        ...plugins,
-        ...given.plugins,
-        definePlugin({
-          name: "computers-here",
-          resources: { computers: { url: `http://127.0.0.1:${port}` } },
-        }),
-      ],
-      executors: 2,
-      transports: given.transports,
-      admit: given.admit,
-      browsers: given.browsers,
-    }),
-  upgrade: (runtime, request) => handler(runtime.hypervisor)(request),
-  ...(operations ? { operations } : {}),
-  code: await bundle(),
-  title: "Copilotz",
-  theme: themeOf([]),
-});
-
 /** The browser's code, bundled once, split where it imports lazily. */
-async function bundle() {
+async function bundle(): Promise<Code> {
   const out = await Deno.makeTempDir();
   const entry = new URL("./browser.tsx", import.meta.url).pathname;
   const { success, stderr } = await new Deno.Command(Deno.execPath(), {
@@ -124,7 +159,7 @@ async function bundle() {
     stderr: "piped",
   }).output();
   if (!success) throw new Error(new TextDecoder().decode(stderr));
-  const files: Record<string, string> = {};
+  const files: Code["files"] = {};
   for await (const file of Deno.readDir(out)) {
     files[file.name] = await Deno.readTextFile(`${out}/${file.name}`);
   }
@@ -132,8 +167,8 @@ async function bundle() {
   return { entry: "browser.js", files };
 }
 
-// Each request says where it came from, as the socket did: dev sign-in takes this machine's alone.
+// Deno hands the directory each request's address, and sockets it forwards are Deno's to accept.
 Deno.serve(
   { port, hostname, onListen: () => console.log(`http://${hostname}:${port}`) },
-  (request, info) => host.serve(setClientAddress(request, info.remoteAddr.hostname)),
+  dir.fetch,
 );

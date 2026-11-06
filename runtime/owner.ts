@@ -9,6 +9,8 @@ import { plan } from "./aggregate.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import { type Clock, type Scheduled, systemClock, TIMERS } from "./schedules.ts";
 import { createTimers } from "./timers.ts";
+import { callIdOf, inScope } from "./actor.ts";
+import { createApi } from "./api.ts";
 import type { IndexSpec, ScalarType } from "./store.ts";
 import { createHypervisor, type Hypervisor, type HypervisorOptions } from "@oxian/oxian-js";
 import type {
@@ -35,6 +37,8 @@ import {
   SESSION,
 } from "./browsers.ts";
 import { expiring } from "./expiring.ts";
+import { checkHttp, createFetch, SOCKET } from "./fetch.ts";
+import { createTickets } from "./tickets.ts";
 import { memoryStore } from "./memory.ts";
 import {
   type Hooks,
@@ -42,6 +46,7 @@ import {
   type Op,
   type Outcome,
   perform,
+  privateIn,
   read,
   type ReadOp,
   type StoreOp,
@@ -69,6 +74,7 @@ import type {
   Reader,
   Store,
   Transaction,
+  Update,
 } from "./store.ts";
 import {
   decode,
@@ -130,16 +136,20 @@ export type Owner = {
    * already completed returns its recorded result without running again, and
    * a call whose id is still running joins it.
    *
-   * With `actor`, it runs for them: the Action must `allow` them, and
-   * everything it causes is theirs, its reads and writes checked against the
-   * rules (`guard`). Without, it runs as the system.
+   * With `actor`, it runs for them: the Action must `allow` them (and be in
+   * their `scope`, if they have one: a key's), and everything it causes is
+   * theirs, its reads and writes checked against the rules (`guard`), never
+   * against the scope. Without, it runs as the system.
    */
   call<R = unknown>(
     action: string,
     input?: unknown,
     options?: { id?: string; actor?: Actor },
   ): Promise<R>;
-  /** Runs a collection's named query: `query("message.history", { thread })`. */
+  /**
+   * Runs a collection's named query: `query("message.history", { thread })`.
+   * With `actor`, the query must `allow` them (and be in their `scope`).
+   */
   query<R = unknown>(name: string, params?: unknown, options?: { actor?: Actor }): Promise<R>;
   /**
    * Renders `item` through the View named `name`; undefined when there is none.
@@ -155,7 +165,8 @@ export type Owner = {
    * Observes a View: its output now, and again whenever what it read
    * changes; each View it shows is a part that runs again on its own (see
    * runtime/observe.ts). Its Views run here, in this process, and call
-   * Actions from their handlers: what a terminal or a browser draws.
+   * Actions from their handlers: what a terminal or a browser draws. For an
+   * actor with a `scope`, only a View it lists (else it fails, `forbidden`).
    */
   observe<R = unknown>(
     name: string,
@@ -200,6 +211,13 @@ export type Owner = {
   /** The Oxian Hypervisor executors connect to; serve it to accept remote executors. */
   hypervisor: Hypervisor;
   /**
+   * Answers a request (see fetch.ts): plugins' routes, as whoever the
+   * request is, and the runtime's own paths, its socket (`/oxian`) and
+   * `POST /connect`. A host only calls it: `Deno.serve(runtime.fetch)`.
+   * `info` is what a listener gives beside the request (Deno's, Bun's server).
+   */
+  fetch(request: Request, info?: unknown): Promise<Response>;
+  /**
    * Plugins' workers, for trusted host code (a route streaming a request to a
    * computer): what `ctx.workers.dispatch` sends from an Action, with the
    * job's input as bytes (`body`, streamed) rather than JSON. Fails with code
@@ -225,6 +243,7 @@ export type Owner = {
 };
 
 const SYSTEM = "sys.";
+const WRITES = ["insert", "update", "replace", "delete"];
 /** A held transaction with no op for this long is rolled back. */
 const HOLD_IDLE_MS = 30_000;
 /** An idle owner saves Processor cursors this long after their last advance. */
@@ -244,6 +263,31 @@ const READY_MS = 10_000;
 const aborted = Object.freeze({ aborted: true });
 
 const forbidden = (message: string) => Object.assign(new Error(message), { code: "forbidden" });
+const notFound = (message: string) => Object.assign(new Error(message), { code: "not_found" });
+
+/** What an outsider may do to a collection directly (see `admitted`): read it, and write it. */
+const OUTSIDE = new Set(["find", "findOne", "count", "aggregate", "nearest", ...WRITES]);
+
+/** Copies `from`'s value at a dot path into `to` (none there: none in `to` either). */
+function carry(from: Record<string, unknown>, to: Record<string, unknown>, path: string) {
+  const keys = path.split(".");
+  let source: unknown = from;
+  for (const key of keys) {
+    source = source && typeof source === "object"
+      ? (source as Record<string, unknown>)[key]
+      : undefined;
+  }
+  let at = to;
+  for (const key of keys.slice(0, -1)) {
+    if (!at[key] || typeof at[key] !== "object") {
+      if (source === undefined) return;
+      at[key] = {};
+    }
+    at = at[key] as Record<string, unknown>;
+  }
+  if (source === undefined) delete at[keys.at(-1)!];
+  else at[keys.at(-1)!] = source;
+}
 
 /** Strings compared in time that doesn't depend on where they differ (keys). */
 function same(a: string, b: string): boolean {
@@ -268,13 +312,10 @@ export async function createOwner(
     cache?: { documents?: number; queries?: number } | false;
     /** Where the owner records its metrics (jobs, ops, commits, events, lag, cache). */
     metrics?: Metrics;
+    /** What plugin code (`ctx.fetch`) calls outside services with (default: the platform's). */
+    fetch?: typeof fetch;
     /** What timers run on (the system's by default; `manualClock` in tests). */
     clock?: Clock;
-    /**
-     * Who a browser is, from what it presents when it connects (a one-time
-     * ticket the host issued): undefined refuses it. Without it, no browsers.
-     */
-    admit?(secret: string): Actor | undefined | Promise<Actor | undefined>;
     /** How much browsers may hold (see browsers.ts): contacts' caps, a pool shared with others. */
     browsers?: BrowserLimits;
   },
@@ -283,11 +324,22 @@ export async function createOwner(
   const limited = limitsProblem(options.browsers);
   if (limited) throw invalid(limited);
   const registry = merge(options.plugins);
+  checkHttp(registry);
+  // What browsers connect with: a one-time ticket, from `POST /connect` (see fetch.ts).
+  const tickets = createTickets(
+    options.browsers?.tickets !== undefined ? { perMinute: options.browsers.tickets } : {},
+  );
+  // The socket `runtime.fetch` accepts, `/oxian`, beside the transports the app gives.
+  const transports: Transport[] =
+    options.transports.some((t) => t.type === "websocket" && t.config.path === SOCKET)
+      ? options.transports
+      : [...options.transports, { type: "websocket", config: { path: SOCKET } }];
   // The View a browser's watched read is: one read, made as its person.
   registry.views[READ_VIEW] = readView as ViewDef;
   const declared = events(registry);
   const metrics = options.metrics ?? noMetrics;
-  await checked(registry, startup(registry, metrics));
+  const outside = options.fetch ?? globalThis.fetch.bind(globalThis);
+  await checked(registry, startup(registry, metrics, outside));
   const measure = {
     jobs: metrics.histogram("copilotz.job.duration", {
       unit: "ms",
@@ -673,7 +725,8 @@ export async function createOwner(
         .then((value) => hydrate(value, blobsOf(reader)));
 
   // Views observed here read committed state, as clients do; their handlers call and emit.
-  // What comes from outside is a declared event, and the actor one it lets emit it.
+  // What comes from outside is a declared event, and the actor one it lets emit it. An actor
+  // with a scope (a key) emits nothing: a scope lists no events.
   const emit = async (
     type: string,
     data: Record<string, unknown> = {},
@@ -681,7 +734,7 @@ export async function createOwner(
   ) => {
     const def = declared(type, data);
     const { actor } = options;
-    if (actor && actor.kind !== "system" && !def.allow?.(actor)) {
+    if (actor && actor.kind !== "system" && (!def.allow?.(actor) || actor.scope !== undefined)) {
       throw forbidden(`${actor.kind} ${actor.id} may not emit "${type}".`);
     }
     await write(
@@ -698,11 +751,16 @@ export async function createOwner(
       // An actor's Views see what they reach, and what the rules read to
       // know it (memberships) is what they read too: they follow its changes.
       const rules = actor
-        ? reading(registry, (op) => {
-          track(op);
-          return answer(store, op as ReadOp);
-        }, () =>
-          crypto.randomUUID(), metrics)
+        ? reading(
+          registry,
+          (op) => {
+            track(op);
+            return answer(store, op as ReadOp);
+          },
+          () => crypto.randomUUID(),
+          metrics,
+          outside,
+        )
         : ruleReads;
       return reading(
         registry,
@@ -722,6 +780,7 @@ export async function createOwner(
           return _id;
         },
         metrics,
+        outside,
         actor,
       );
     },
@@ -832,6 +891,7 @@ export async function createOwner(
     (op) => answer(store, op as ReadOp),
     (_, doc) => typeof doc._id === "string" ? doc._id : crypto.randomUUID(),
     metrics,
+    outside,
   );
   /** An actor's rule on a collection, for an operation with this filter; none: unrestricted. */
   const rule = async (
@@ -854,23 +914,37 @@ export async function createOwner(
     return rules.length > 1 ? { $and: rules } : rules[0];
   };
   /**
-   * Whether any rule speaks for a collection's reads by this actor: a browser
-   * reads nothing else directly. Asked as its own read (`direct`), with its
-   * filter: a rule may refuse one it won't watch (thrown).
+   * Whether any rule speaks for a collection's reads (or writes) by this
+   * actor: from outside, an actor reads (or writes) nothing else directly.
+   * Asked as its own read (`direct`), with its filter: a rule may refuse one
+   * it won't watch (thrown), as is one its scope doesn't list.
    */
-  const ruled = async (actor: Actor, collection: string, filter?: Filter) => {
+  const ruled = async (
+    actor: Actor,
+    collection: string,
+    filter?: Filter,
+    access: "read" | "write" = "read",
+  ) => {
+    if (!inScope(actor, access, collection)) {
+      throw forbidden(
+        `${actor.kind} ${actor.id} may not ${access} "${collection}": not in its scope.`,
+      );
+    }
     let found = false;
     for (const guard of registry.guards as Guard[]) {
       const said = await guard(
         actor,
-        { collection, access: "read", ...(filter ? { filter } : {}), direct: true },
+        { collection, access, ...(filter ? { filter } : {}), direct: true },
         ruleReads,
       );
       if (said !== undefined) found = true;
     }
     return found;
   };
-  /** Whether an actor may run a query from outside: one that lets them, as Actions do. */
+  /**
+   * Whether an actor may run a query from outside: one that lets them, as
+   * Actions do, and that their scope lists, if they have one.
+   */
   const askable = (
     actor: Actor | undefined,
     collection: string,
@@ -879,7 +953,8 @@ export async function createOwner(
   ) => {
     if (!actor || actor.kind === "system") return true;
     const def = registry.collections[collection]?.queries?.[query];
-    return typeof def === "object" && def.allow(actor, params);
+    return typeof def === "object" && def.allow(actor, params) &&
+      inScope(actor, "query", `${collection}.${query}`);
   };
   const both = (filter: Filter | undefined, rule: Filter): Filter =>
     filter && Object.keys(filter).length ? { $and: [filter, rule] } : rule;
@@ -953,6 +1028,107 @@ export async function createOwner(
     return Array.isArray(value)
       ? value.map((doc) => without(doc as Record<string, unknown>))
       : without(value as Record<string, unknown>);
+  };
+
+  /**
+   * Whether an outsider (REST, the socket) may make an op on a collection
+   * directly, refused (thrown) when not: only reads (`find`, `findOne`,
+   * `count`, `aggregate`, `nearest`) and writes (insert, update, replace,
+   * delete) of a declared collection, never `sys.*`; never naming a private
+   * field; and only where a rule speaks for the collection's reads (or
+   * writes) by them, asked as their own (`direct`), and their scope lists it.
+   * A collection no rule speaks for is plugin code's alone.
+   */
+  const admitted = async (actor: Actor, op: StoreOp): Promise<void> => {
+    if (!("collection" in op) || !OUTSIDE.has(op.op)) {
+      throw forbidden(`Nobody outside makes "${op.op}" directly.`);
+    }
+    const { collection } = op;
+    const access = isRead(op) ? "read" : "write";
+    if (collection.startsWith(SYSTEM)) {
+      throw forbidden(`"${collection}" is the runtime's own: nobody outside ${access}s it.`);
+    }
+    const def = registry.collections[collection];
+    if (!def) throw notFound(`No collection "${collection}".`);
+    const named = privateIn(op, def.private ?? []);
+    if (named) {
+      throw forbidden(`"${collection}.${named}" is private: nobody outside reads or writes it.`);
+    }
+    const filter = "filter" in op ? op.filter : undefined;
+    if (!await ruled(actor, collection, filter, access)) {
+      throw forbidden(
+        `No rule lets ${actor.kind} ${actor.id} ${access} "${collection}" directly: ` +
+          (access === "read"
+            ? "read it through one of its queries"
+            : "change it through its Actions"),
+      );
+    }
+  };
+
+  /** An outsider's own read of a collection, admitted: under the rules, without private fields. */
+  const readOutside = async (actor: Actor, op: ReadOp): Promise<unknown> => {
+    if (!isRead(op)) throw invalid("Not a read.");
+    await admitted(actor, op);
+    known(op);
+    const [read] = (await guard([op], actor)).ops as ReadOp[];
+    return hidden(read, await answer(store, read));
+  };
+
+  /**
+   * An outsider's own write to a collection, admitted, as their own
+   * operation: inserts stay in their reach, updates and deletes touch only
+   * what's in it, and what an update leaves stays in it; the schema checks
+   * it; its events are recorded, theirs. An update with no operator sets the
+   * fields it gives (`$set`); a replacement keeps the private fields it
+   * can't write. It answers as MongoDB does (`insertedId`, `matchedCount`…).
+   */
+  const writeOutside = async (actor: Actor, given: WriteOp): Promise<unknown> => {
+    const op = outsideWrite(given);
+    await admitted(actor, op);
+    known(op);
+    const { ops: [guarded], keep } = await guard([op], actor);
+    const by: By = { actor, ...(keep.size ? { keep } : {}), foreign: true };
+    const fields = registry.collections[op.collection].private ?? [];
+    let result: unknown;
+    if (guarded.op === "replace" && fields.length) {
+      if (fleeting.has(guarded.collection)) {
+        throw invalid(`Change "${guarded.collection}" with an update: it keeps private fields.`);
+      }
+      // What it can't write stays as it was: read and replaced in one transaction.
+      result = await commit(async (tx, seen) => {
+        const [old] = await performEach(
+          tx,
+          [{ op: "findOne", collection: guarded.collection, filter: guarded.filter, options: {} }],
+          by,
+        ) as (Record<string, unknown> | null)[];
+        const doc = { ...guarded.doc };
+        for (const field of fields) if (old) carry(old, doc, field);
+        const filter = old ? { _id: old._id as string } : guarded.filter;
+        return (await performEach(tx, [{ ...guarded, filter, doc }], by, seen))[0];
+      });
+    } else result = await write([guarded], by);
+    switch (guarded.op) {
+      case "insert":
+        return guarded.docs.length === 1
+          ? { acknowledged: true, insertedId: guarded.docs[0]._id }
+          : {
+            acknowledged: true,
+            insertedCount: guarded.docs.length,
+            insertedIds: guarded.docs.map((doc) => doc._id),
+          };
+      case "delete":
+        return { acknowledged: true, deletedCount: result as number };
+      default: {
+        const done = result as { matched: number; modified?: number; upsertedId?: string };
+        return {
+          acknowledged: true,
+          matchedCount: done.matched,
+          modifiedCount: done.modified ?? done.matched,
+          upsertedCount: done.upsertedId ? 1 : 0,
+          upsertedId: done.upsertedId ?? null,
+        };
+      }
+    }
   };
 
   // Labels: what each actor's job read, carried to what it then writes (see `Labels`).
@@ -1166,8 +1342,8 @@ export async function createOwner(
     return { kind, id: String(who.id) };
   };
 
-  // Remote executors prove the shared key; a browser, a ticket the host's `admit` knows; a
-  // plugin's worker, what its kind's Action knows. Oxian fences their sessions.
+  // Remote executors prove the shared key; a browser, a ticket `/connect` issued; a plugin's
+  // worker, what its kind's Action knows. Oxian fences their sessions.
   let generation = 0;
   const admit: HypervisorOptions["admit"] = async (
     { identity, credential, workloads, capacity },
@@ -1202,9 +1378,7 @@ export async function createOwner(
       const since = browsers.ends();
       const actor = credential.kind === "resume"
         ? browsers.resumed(secret, identity.workerId)
-        : options.admit
-        ? await options.admit(secret)
-        : undefined;
+        : tickets.admit(secret);
       if (!actor) throw invalid("Unknown executor key.");
       browsers.room(actor, identity.workerId, since);
       // A browser: its person rides on the connection, and it takes no work but its session. Its
@@ -1281,12 +1455,9 @@ export async function createOwner(
 
   const ready = new Set<string>();
   const hypervisor = createHypervisor({
-    transports: options.transports,
-    // Its own admission whenever anyone but its in-process executors may connect.
-    ...(options.admit || Object.keys(registry.workers).length ||
-        options.transports.some((t) => t.type !== "in-process")
-      ? { admit }
-      : {}),
+    transports,
+    // Its own admission: anyone but its in-process executors may connect, over its socket.
+    admit,
     // A worker says it's ready as soon as it's welcomed (none starts anything first): one that
     // doesn't soon is closed, so a connection let in can't hold its place without being used.
     config: {
@@ -1355,6 +1526,21 @@ export async function createOwner(
       measure.executors.set(ready.size);
     },
   });
+  // Its REST API (`/api/`, see api.ts): outsiders' own reads and writes, calls, queries, Views.
+  const rest = createApi({
+    registry,
+    owner: () => api,
+    clock: options.clock ?? systemClock,
+    admitted,
+    read: readOutside,
+    write: writeOutside,
+    askable,
+    ruled,
+    rule: (actor, collection) => rule(actor, "read", collection),
+    watch: (remote, actor) => observers.observe(READ_VIEW, remote, { actor }),
+  });
+  // The runtime as a fetch handler: its socket, `/connect`, `/api/`, and plugins' routes.
+  const http = createFetch({ registry, runtime: () => api, tickets, hypervisor, api: rest });
   /**
    * A worker kind's Action hears one come or go, as the system; its failure
    * is only logged. Closing waits for what it's telling.
@@ -1398,16 +1584,22 @@ export async function createOwner(
       return { metadata: {}, body: handle.output };
     };
 
-  /** Ends an actor's browsers: see `Owner.disconnect`. */
-  const disconnect = (actor: Actor) =>
-    browsers.end(actor, (workerId) => {
+  /** Ends an actor's browsers, their tickets, and what `who` kept for them: see `Owner.disconnect`. */
+  const disconnect = (actor: Actor) => {
+    tickets.end(actor);
+    http.forget(actor);
+    rest.end(actor);
+    return browsers.end(actor, (workerId) => {
       void hypervisor.drain(workerId, "ended").catch(() => {});
     });
+  };
   const browsers = createBrowsers({
     observers,
-    ruled,
+    admitted,
+    write: writeOutside,
     askable,
-    call: (action, input, actor) => api.call(action, input, { actor }),
+    call: (action, input, actor, id) =>
+      api.call(action, input, { actor, ...(id !== undefined ? { id: callIdOf(actor, id) } : {}) }),
     emit: (type, data, actor) => emit(type, data, { actor }),
     dispatch: (input) => hypervisor.dispatch(input),
     ...(options.browsers ? { limits: options.browsers } : {}),
@@ -1811,9 +2003,14 @@ export async function createOwner(
       const def = registry.actions[action];
       if (!def) return Promise.reject(invalid(`Unknown action "${action}"`));
       const { actor } = options;
-      // An actor calls only what lets them.
+      // An actor calls only what lets them, and what their scope lists (a key's).
       if (actor && actor.kind !== "system" && !def.allow?.(actor, input)) {
         return Promise.reject(forbidden(`${actor.kind} ${actor.id} may not call "${action}".`));
+      }
+      if (actor && actor.kind !== "system" && !inScope(actor, "call", action)) {
+        return Promise.reject(
+          forbidden(`${actor.kind} ${actor.id} may not call "${action}": not in its scope.`),
+        );
       }
       const given = json(input);
       // What an Action is given goes on record as it is: it may hold no `$blob` key.
@@ -1834,7 +2031,16 @@ export async function createOwner(
         ...(options.hints ? { hints: json(options.hints) } : {}),
       }) as never;
     },
-    observe: (name, item, options) => observers.observe(name, item, options),
+    observe: (name, item, options) =>
+      // Rendered here for an actor with a scope (a key), the View is one it lists.
+      options?.actor && options.actor.kind !== "system" &&
+        !inScope(options.actor, "view", name)
+        ? refusedView(
+          forbidden(
+            `${options.actor.kind} ${options.actor.id} may not see "${name}": not in its scope.`,
+          ),
+        )
+        : observers.observe(name, item, options),
     emit,
     describe: () => ({
       collections: Object.fromEntries(
@@ -1894,6 +2100,7 @@ export async function createOwner(
       misses: cache?.stats().misses ?? 0,
     }),
     hypervisor,
+    fetch: (request, info) => http.fetch(request, info),
     async close(options = {}) {
       // What's running (deliveries, timer occurrences) gets a while to finish,
       // workers still there to serve it; nothing new starts.
@@ -1919,7 +2126,9 @@ export async function createOwner(
       // A browser's session is a stream that never ends on its own: end them, so the
       // shutdown's drain doesn't wait them out.
       browsers.close();
+      rest.close();
       resumed.close();
+      tickets.close();
       await hypervisor.shutdown();
       // Processors' last positions are saved if they can be (a fenced owner can't): the store
       // closes either way, and a failure still reaches the caller.
@@ -1931,6 +2140,75 @@ export async function createOwner(
     },
   };
   return api;
+}
+
+/** A plain object, or a refusal saying what `what` is. */
+function objectOf(value: unknown, what: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalid(`${what} is an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+/**
+ * A write an outsider sent, as the op it is (only what each write says,
+ * checked): an insert's documents, each with an `_id` (a new one when it
+ * has none); an update with no operator sets the fields it gives (`$set`).
+ */
+function outsideWrite(given: unknown): Extract<WriteOp, { collection: string }> {
+  const op = objectOf(given, "A write");
+  const collection = op.collection;
+  if (typeof collection !== "string" || !collection) throw invalid("A write names its collection.");
+  const options = op.options === undefined ? {} : objectOf(op.options, "A write's options");
+  const flag = (name: string) =>
+    options[name] === undefined ? {} : { [name]: options[name] === true };
+  const filter = () => (op.filter === undefined ? {} : objectOf(op.filter, "A filter")) as Filter;
+  switch (op.op) {
+    case "insert": {
+      if (!Array.isArray(op.docs) || !op.docs.length) throw invalid("An insert gives documents.");
+      return {
+        op: "insert",
+        collection,
+        docs: op.docs.map((doc) => {
+          const { _id, ...fields } = objectOf(doc, "A document");
+          if (_id !== undefined && (typeof _id !== "string" || !_id)) {
+            throw invalid("A document's _id is a string.");
+          }
+          return { ...fields, _id: (_id as string | undefined) ?? crypto.randomUUID() };
+        }),
+      };
+    }
+    case "update": {
+      const update = objectOf(op.update, "An update");
+      const operators = Object.keys(update).some((key) => key.startsWith("$"));
+      return {
+        op: "update",
+        collection,
+        filter: filter(),
+        update: (operators ? update : { $set: update }) as Update,
+        options: { ...flag("many"), ...flag("upsert") },
+      };
+    }
+    case "replace": {
+      const { _id: _, ...doc } = objectOf(op.doc, "A replacement");
+      return { op: "replace", collection, filter: filter(), doc, options: flag("upsert") };
+    }
+    case "delete":
+      return { op: "delete", collection, filter: filter(), options: flag("many") };
+    default:
+      throw invalid("A write is an insert, an update, a replace or a delete.");
+  }
+}
+
+/** An observation that failed before it began: refused. */
+function refusedView<R>(error: Error): Observation<R> {
+  const failed = { status: "failed" as const, error };
+  return {
+    get: () => failed,
+    subscribe: () => () => {},
+    ready: Promise.resolve(failed),
+    close: () => {},
+  };
 }
 
 /** The scalar type a schema gives a dot path (through properties and additionalProperties), if one. */

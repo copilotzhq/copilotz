@@ -10,9 +10,9 @@
  *   a code (`whatsapp.link`) and send it to the number from WhatsApp.
  *   Anyone else who writes is told how, once a day, and nothing more,
  *   unless the number is open to anyone.
- * - **A customer line:** those who manage the space open the number to
+ * - **An open number:** those who manage the space open it to
  *   anyone (`whatsapp.set`), or the app declares one in its settings
- *   (`resources.whatsapp.lines`: the space, Meta's ids, token and secret,
+ *   (`resources.whatsapp.<name>`: the space, Meta's ids, token and secret,
  *   its verify token, its webhook's path, its agent and gap), kept as they
  *   say with no person, and changed only there. A stranger who writes is then a contact
  *   (someone outside the org), in a chat of their own in the number's
@@ -42,19 +42,20 @@
  *   it failed to fetch). A tap comes back as its title, with its id.
  *   Pictures and files go as links (public ones; signed ones to the app's
  *   routes and files, with its `links` resource), or uploaded to Meta.
- * - **The webhook** (`/hooks/whatsapp/<number>`, the web host's `routes`
- *   resource) checks Meta's signature before anything else. Credentials are
- *   kept where no event and no reader outside reaches them.
+ * - **The webhook** (`/hooks/whatsapp/<number>`, `routes/hook.ts`) checks Meta's signature
+ *   before anything else. Credentials are kept where no event and no reader outside reaches them.
  *
  * ```ts
  * plugins: [models, chat, ...access, whatsapp]
- * resources: { whatsapp: { graph: "https://graph.facebook.com/v23.0" } }   // the default
+ * resources: {
+ *   whatsapp: { vendas: { in: "customers", phoneId, token, secret, verify, agent: "mobi" } },
+ * }
  * ```
  */
 import { definePlugin, linksOf, type Plugin } from "../../../runtime/mod.ts";
 import { connectAction, credentialsAction } from "./actions/connect.ts";
 import { disconnectAction, webhookAction } from "./actions/disconnect.ts";
-import { hookAction, HOOKS } from "./actions/hook.ts";
+import { numberAction, receiveAction } from "./actions/hook.ts";
 import { linkAction, moveAction, unlinkAction } from "./actions/link.ts";
 import { blockAction, setAction } from "./actions/set.ts";
 import { code } from "./collections/code.ts";
@@ -72,10 +73,12 @@ import { forgetProcessor } from "./processors/forget.ts";
 import { receiveProcessor } from "./processors/receive.ts";
 import { replyProcessor, undeliveredProcessor } from "./processors/reply.ts";
 import { typingProcessor } from "./processors/typing.ts";
+import { hookRoute } from "./routes/hook.ts";
 import { messageView } from "./views/message.ts";
 import { rules } from "./shared/rules.ts";
-import { linesOf } from "./shared/settings.ts";
+import { numbersOf } from "./shared/settings.ts";
 
+export { hookRoute } from "./routes/hook.ts";
 export * from "./contract.ts";
 
 export const whatsapp: Plugin = definePlugin({
@@ -98,7 +101,8 @@ export const whatsapp: Plugin = definePlugin({
     "whatsapp.credentials": credentialsAction,
     "whatsapp.disconnect": disconnectAction,
     "whatsapp.webhook": webhookAction,
-    "whatsapp.hook": hookAction,
+    "whatsapp.number": numberAction,
+    "whatsapp.receive": receiveAction,
     "whatsapp.link": linkAction,
     "whatsapp.unlink": unlinkAction,
     "whatsapp.move": moveAction,
@@ -115,23 +119,24 @@ export const whatsapp: Plugin = definePlugin({
   // WhatsApp's Views: what a message is there (a feature's additions bring their own).
   views: { "whatsapp.message": messageView },
   guard: rules,
-  // At start: links to what it sends (a secret too short is refused), and the app's own lines.
+  // At start: links to what it sends (a secret too short is refused), and the app's own numbers.
   check: (merged) => {
     linksOf(merged.resources);
-    for (const [name, line] of Object.entries(linesOf(merged))) {
+    for (const [name, number] of Object.entries(numbersOf(merged))) {
       for (const field of ["in", "phoneId", "token", "secret", "verify"] as const) {
-        if (typeof line?.[field] !== "string" || !line[field]) {
-          throw new Error(`whatsapp.lines.${name} needs its ${field}`);
+        if (typeof number?.[field] !== "string" || !number[field]) {
+          throw new Error(`whatsapp.${name} needs its ${field}`);
         }
       }
-      if (line.path !== undefined && !line.path.startsWith("/")) {
-        throw new Error(`whatsapp.lines.${name}: its path starts with "/"`);
+      if (number.path !== undefined && !number.path.startsWith("/")) {
+        throw new Error(`whatsapp.${name}: its path starts with "/"`);
       }
     }
   },
+  // Meta's webhook: each connected number's, and the app's own numbers' under it.
+  routes: { "/hooks/whatsapp/*": hookRoute },
   resources: {
     whatsapp: {},
-    routes: { whatsapp: { path: HOOKS, action: "whatsapp.hook", methods: ["GET", "POST"] } },
     // A number lives in a space: its members see it, its managers change it.
     shared: { whatsapp_number: { write: "manage" } },
   },

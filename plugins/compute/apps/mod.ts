@@ -31,7 +31,7 @@
  * resources: { agents: { assistant: { tools: ["terminal", "start_job", "publish"] } } }
  * ```
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
 import { buildAction } from "./actions/build.ts";
 import { configureAction } from "./actions/configure.ts";
 import { listAction } from "./actions/list.ts";
@@ -71,6 +71,13 @@ export const apps: Plugin = definePlugin({
     shared: { app: { field: "space" } },
     // An app's uses (its builds, what it ran) by its name.
     usageNames: { app: { tag: "tags.app", collection: "app", field: "name" } },
+  },
+  // What an app is (its build, where it runs) is its Actions' to change, never a write from outside.
+  guard: (_actor, { collection, access, direct }) => {
+    if (collection === "app" && direct && access === "write") {
+      throw failure("forbidden", "Apps change through their Actions.", { public: true });
+    }
+    return undefined;
   },
 });
 

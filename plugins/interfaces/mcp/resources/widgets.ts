@@ -1,7 +1,7 @@
 /**
  * A line's widgets, as the MCP route answers about them (MCP Apps, SEP-1865, and ChatGPT's
  * Apps SDK aliases): the app's web Views drawn inside the assistant's conversation, through
- * the web host's widgets (`Served.widgets`: `widgetsOf`, which owns front-end code).
+ * the app's widgets (its `widgets` resource: `widgetsOf`, which owns front-end code).
  *
  * - **The template** (`resources/list`, `resources/read`): one page for all of a line's
  *   widgets, `ui://<line>/widget-<version>.html`, `text/html;profile=mcp-app`; any older
@@ -26,14 +26,14 @@ import type { Widgets } from "../../../../hosts/web/mod.ts";
 import { answeredAs, type Remote } from "../../../../runtime/browsers.ts";
 import type { Called } from "../actions/call.ts";
 import { grantedTo, grantOf, type Scope } from "../shared/keys.ts";
-import { hasWidgets, type Line, READ } from "../shared/settings.ts";
+import { hasWidgets, READ, type Server } from "../shared/settings.ts";
 import { GRANT, READS } from "./tools.ts";
 
 /** What a widget's template is: MCP Apps' type for HTML that talks to its host. */
 export const MIME = "text/html;profile=mcp-app";
 
 /** The template's URI, for a version of it. */
-const uriOf = (line: Line, version: string) => `ui://${line.name}/widget-${version}.html`;
+const uriOf = (line: Server, version: string) => `ui://${line.name}/widget-${version}.html`;
 
 /** Any version's URI of this line's template. */
 const TEMPLATE = /^ui:\/\/([\w-]{1,60})\/widget-[\w-]{1,64}\.html$/;
@@ -50,7 +50,7 @@ const broken = new Set<string>();
  * its tools still answer, drawn by nothing.
  */
 export async function templateOf(
-  line: Line,
+  line: Server,
   widgets: Widgets | undefined,
   origin: string | undefined,
 ): Promise<{ uri: string; html: string } | undefined> {
@@ -69,7 +69,7 @@ export async function templateOf(
 }
 
 /** The template's `_meta`: MCP Apps' `ui`, with ChatGPT's aliases. */
-function templateMeta(line: Line, origin: string) {
+function templateMeta(line: Server, origin: string) {
   const at = new URL(origin).origin;
   const { domain, prefersBorder, description } = line.widgets ?? {};
   return {
@@ -87,7 +87,7 @@ function templateMeta(line: Line, origin: string) {
 
 /** `resources/list`: the template, when there is one. */
 export async function resourcesListed(
-  line: Line,
+  line: Server,
   widgets: Widgets | undefined,
   origin: string | undefined,
 ) {
@@ -107,7 +107,7 @@ export async function resourcesListed(
 
 /** `resources/read`: the template, at any version's URI of it; undefined for anything else. */
 export async function resourceRead(
-  line: Line,
+  line: Server,
   widgets: Widgets | undefined,
   origin: string | undefined,
   uri: unknown,
@@ -121,7 +121,7 @@ export async function resourceRead(
 }
 
 /** Which of the line's tools stand for which Actions: how a widget's View calls them. */
-const actionsOf = (line: Line): Record<string, string> =>
+const actionsOf = (line: Server): Record<string, string> =>
   Object.fromEntries(
     Object.entries(line.tools).flatMap(([name, entry]) =>
       entry.action ? [[entry.action, name]] : []
@@ -129,7 +129,7 @@ const actionsOf = (line: Line): Record<string, string> =>
   );
 
 /** The conversation's contact, as its widgets' Views see it. */
-const contactActor = (line: Line, contact: string): Actor => ({
+const contactActor = (line: Server, contact: string): Actor => ({
   kind: "contact",
   id: contact,
   mcp: line.name,
@@ -143,7 +143,7 @@ const contactActor = (line: Line, contact: string): Actor => ({
 export async function widgetMeta(
   runtime: Pick<Runtime, "query">,
   widgets: Widgets,
-  line: Line,
+  line: Server,
   scope: Scope & { secrets: string[] },
   call: { tool: string; input: Record<string, unknown> },
   conversation: { contact: string; thread: string; output?: string; call?: string },
@@ -206,7 +206,7 @@ export const NOT_YOURS = "This tool is the app's widget's own: only the widget c
  */
 export async function grantedContact(
   scope: Scope & { secrets: string[] },
-  line: Line,
+  line: Server,
   input: Record<string, unknown>,
   meta: Record<string, unknown> | undefined,
   named: () => Promise<string | undefined>,
@@ -252,7 +252,7 @@ async function readsOf(
  */
 export async function appCalled(
   runtime: Pick<Runtime, "call" | "query">,
-  line: Line,
+  line: Server,
   scope: Scope & { secrets: string[] },
   call: {
     tool: string;

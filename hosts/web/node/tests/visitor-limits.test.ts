@@ -21,9 +21,7 @@ import { chat } from "../../../../plugins/agents/chat/mod.ts";
 import { access } from "../../../../plugins/access/mod.ts";
 import { webLines } from "../../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../../testing/mod.ts";
-import { socket } from "../../server.ts";
-import { createTickets } from "../../tickets.ts";
-import { serve, type Server } from "../mod.ts";
+import { listen, type Listener } from "../serve.ts";
 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -45,10 +43,8 @@ const app = definePlugin({
     agents: { guide: { instructions: "x", model: "script/main" } },
     spaces: { visitors: { name: "Website", agents: ["guide"] } },
     web: {
-      lines: {
-        site: { in: "visitors", agent: "guide" },
-        voice: { in: "visitors", agent: "guide", files: {}, transcribe: true },
-      },
+      site: { in: "visitors", agent: "guide" },
+      voice: { in: "visitors", agent: "guide", files: {}, transcribe: true },
     },
     links: { origin: "http://127.0.0.1", secret: "the-app-secret-for-tests-0123456789" },
   },
@@ -86,48 +82,52 @@ const page = definePlugin({
 
 const ana: Actor = { kind: "person", id: "ana" };
 
-async function setup(fn: (server: Server, runtime: Runtime) => Promise<void>) {
-  const tickets = createTickets();
+async function setup(fn: (server: Listener, runtime: Runtime) => Promise<void>) {
   const runtime = await createRuntime({
     store: memoryStore(),
     plugins: [models, chat, ...access, webLines, app],
-    transports: [socket],
-    admit: tickets.admit,
   });
-  const server = await serve({
-    runtime,
-    tickets,
-    code: { entry: "app.js", files: { "app.js": "" } },
-  });
+  const server = await listen(runtime.fetch);
   try {
     await fn(server, runtime);
   } finally {
-    await server.close();
+    await server.shutdown();
+    await runtime.close();
   }
 }
 
-/** `/connect` from the page, with the cookie a browser holds: a ticket, and the cookie. */
-async function arrive(server: Server, cookie?: string, line = "site") {
+/**
+ * What the page does: arrives by the line (`POST /web/<line>`, which sets the visitor's cookie),
+ * then asks `/connect` for a ticket, with the cookie a browser holds.
+ */
+async function arrive(server: Listener, cookie?: string, line = "site") {
+  const headers = { "content-type": "application/json", origin: server.url.origin };
+  let kept = cookie;
+  if (!kept) {
+    const came = await fetch(`${server.url.origin}/web/${line}`, {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+    assertEquals(came.status, 200);
+    kept = came.headers.get("set-cookie")!.split(";")[0];
+    await came.body?.cancel();
+  }
   const r = await fetch(`${server.url.origin}/connect`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      origin: server.url.origin,
-      ...(cookie ? { cookie } : {}),
-    },
-    body: JSON.stringify({ line }),
+    headers: { ...headers, cookie: kept },
   });
   assertEquals(r.status, 200);
   const { ticket, actor } = await r.json() as { ticket: string; actor: Actor };
-  return { ticket, actor, cookie: cookie ?? r.headers.get("set-cookie")!.split(";")[0] };
+  return { ticket, actor, cookie: kept };
 }
 
-const browser = (server: Server, ticket: string): Client =>
+const browser = (server: Listener, ticket: string): Client =>
   connect({
     transport: {
       type: "websocket",
       config: {
-        url: `ws://127.0.0.1:${server.port}${socket.config.path}`,
+        url: `ws://127.0.0.1:${server.port}/oxian`,
         allowInsecureLoopback: true,
       },
     },

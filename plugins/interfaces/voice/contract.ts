@@ -1,6 +1,6 @@
 /**
  * The voice plugin's contract: what other plugins and apps may import: the
- * shape of a line the app declares and of the plugin's settings (the
+ * shape of a number the app declares and of the plugin's settings (the
  * `voice` resource), its defaults (`VOICE_LIMITS`, `VOICE_GAP`,
  * `VOICE_TEXTS`), a call's record, and Twilio's signature
  * (`twilioSignature`, for a test's fake Twilio). They reach the rest by
@@ -11,13 +11,14 @@
 export type { VoiceCall } from "./collections/call.ts";
 export type { VoiceBlock } from "./collections/blocked.ts";
 export {
+  type DeclaredVoiceNumber,
   GAP as VOICE_GAP,
   KEEP as VOICE_KEEP,
   LIMITS as VOICE_LIMITS,
   type Limits as VoiceLimits,
   TEXTS as VOICE_TEXTS,
   type Texts as VoiceTexts,
-  type VoiceLine,
+  type VoiceNumber,
   type VoiceSettings,
 } from "./shared/settings.ts";
 export { sign as twilioSignature } from "./shared/signature.ts";

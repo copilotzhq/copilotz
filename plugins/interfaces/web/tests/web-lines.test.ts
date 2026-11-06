@@ -18,6 +18,7 @@ import {
   definePlugin,
   type Plugin,
   type Runtime,
+  setClientAddress,
 } from "../../../../runtime/mod.ts";
 import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
@@ -26,8 +27,6 @@ import usage from "../../../billing/usage/mod.ts";
 import { access } from "../../../access/mod.ts";
 import { webLines } from "../lines.ts";
 import { test } from "../../../../testing/mod.ts";
-import { createTickets, type Tickets } from "../../../../hosts/web/tickets.ts";
-import { setClientAddress, webServer } from "../../../../hosts/web/server.ts";
 
 const PAGE = "https://book.example.com";
 const LINKS = { origin: PAGE, secret: "the-app-secret-for-web-lines-0123456789" };
@@ -52,6 +51,14 @@ async function all<T = Record<string, unknown>>(runtime: Runtime, c: string): Pr
   }
 }
 
+/** Who a visitor cookie (`name=secret`) is, as the web lines' `who` reads it; null: no one. */
+const whoIs = (runtime: Runtime, cookie?: string) =>
+  cookie
+    ? runtime.query<Actor | null>("contact_visitor.actor", {
+      secret: cookie.slice(cookie.indexOf("=") + 1),
+    })
+    : Promise.resolve(null);
+
 /** Time as the test sets it: windows begin where it says. */
 const realNow = Date.now;
 let shift = 0;
@@ -65,21 +72,19 @@ type Line = Record<string, unknown>;
 async function setup(
   fn: (s: {
     runtime: Runtime;
-    tickets: Tickets;
     visitor(address: string, more?: Record<string, unknown>, cookie?: string): Promise<Actor>;
     arrive(address: string, more?: Record<string, unknown>, cookie?: string): Promise<Response>;
     send(actor: Actor, text: string): Promise<string>;
   }) => Promise<void>,
   options: { line?: Line; plugins?: Plugin[]; resources?: Record<string, unknown> } = {},
 ) {
-  const tickets = createTickets({ perMinute: 100_000 });
   const app = definePlugin({
     name: "app",
     resources: {
       agents: { guide: { instructions: "Help.", model: "fake/echo" } },
       spaces: { visitors: { name: "Website", agents: ["guide"] } },
       links: LINKS,
-      web: { lines: { site: { in: "visitors", agent: "guide", ...options.line } } },
+      web: { site: { in: "visitors", agent: "guide", ...options.line } },
       ...options.resources,
     },
   });
@@ -88,35 +93,32 @@ async function setup(
     plugins: [models, chat, ...access, webLines, app, kept, ...options.plugins ?? []],
   });
   try {
-    const serve = webServer({
-      runtime,
-      tickets,
-      code: { entry: "app.js", files: { "app.js": "" } },
-    });
     const arrive = (address: string, more: Record<string, unknown> = {}, cookie?: string) =>
-      serve(setClientAddress(
-        new Request(`${PAGE}/connect`, {
+      runtime.fetch(setClientAddress(
+        new Request(`${PAGE}/web/site`, {
           method: "POST",
           headers: {
             "content-type": "application/json",
             origin: PAGE,
             ...(cookie ? { cookie } : {}),
           },
-          body: JSON.stringify({ line: "site", ...more }),
+          body: JSON.stringify(more),
         }),
         address,
       ));
+    /** A visitor let in by the line: it arrives, and is who its cookie says. */
     const visitor = async (address: string, more?: Record<string, unknown>, cookie?: string) => {
       const r = await arrive(address, more, cookie);
-      if (r.status !== 200) throw new Error(`connect ${r.status} ${await r.text()}`);
-      return tickets.admit((await r.json()).ticket)!;
+      if (r.status !== 200) throw new Error(`arrive ${r.status} ${await r.text()}`);
+      const mine = r.headers.getSetCookie()[0]?.split(";")[0] ?? cookie;
+      return (await whoIs(runtime, mine))!;
     };
     const send = (actor: Actor, text: string) =>
       runtime.call("chat.send", { text }, { actor }).then(
         () => "done",
         (e: { code?: string; message: string }) => `${e.code}: ${e.message}`,
       );
-    await fn({ runtime, tickets, visitor, arrive, send });
+    await fn({ runtime, visitor, arrive, send });
     await runtime.idle();
   } finally {
     Date.now = realNow;
@@ -254,11 +256,11 @@ test("hundreds of new speakers from a few networks don't stop a newcomer speakin
 });
 
 test("an erased visitor's cookie stays no one, whatever the prune finds", async () => {
-  await setup(async ({ runtime, arrive, tickets }) => {
+  await setup(async ({ runtime, arrive, visitor }) => {
     await runtime.call("space.create", { id: "shop", name: "Shop" }, { actor: ana });
     const first = await arrive("198.51.100.20");
-    const cookie = first.headers.get("set-cookie")!.split(";")[0];
-    const actor = tickets.admit((await first.json()).ticket)!;
+    const cookie = first.headers.getSetCookie()[0].split(";")[0];
+    const actor = (await whoIs(runtime, cookie))!;
     await runtime.call("chat.send", { text: "here's my stolen cookie" }, { actor });
     await runtime.idle();
     // Erased, with its chats, in its first minutes (before any prune saw it speak).
@@ -267,8 +269,9 @@ test("an erased visitor's cookie stays no one, whatever the prune finds", async 
     await runtime.call("contact.prune", {});
     const [record] = await all<{ ended?: boolean }>(runtime, "contact_visitor");
     assertEquals(record.ended, true);
-    const back = await arrive("198.51.100.20", {}, cookie);
-    const { actor: came } = await back.json();
+    // Back with it: not who it was, but a newcomer, with a cookie of its own.
+    assertEquals(await whoIs(runtime, cookie), null);
+    const came = await visitor("198.51.100.20", {}, cookie);
     assertNotEquals(came.id, actor.id);
   }, { line: { in: "shop" } });
 });
@@ -561,7 +564,6 @@ test("a line's challenge: a newcomer passes the app's check first; one back with
 
 test("the app's previous secret: a visitor its cookie was signed for is still who it was", async () => {
   const store = memoryStore();
-  const tickets = createTickets();
   const runtimeWith = (links: Record<string, string>) =>
     createRuntime({
       store,
@@ -576,34 +578,27 @@ test("the app's previous secret: a visitor its cookie was signed for is still wh
             agents: { guide: { instructions: "Help.", model: "fake/echo" } },
             spaces: { visitors: { name: "Website", agents: ["guide"] } },
             links: { origin: PAGE, ...links },
-            web: { lines: { site: { in: "visitors", agent: "guide" } } },
+            web: { site: { in: "visitors", agent: "guide" } },
           },
         }),
       ],
     });
   const connect = async (runtime: Runtime, cookie?: string) => {
-    const serve = webServer({
-      runtime,
-      tickets,
-      code: { entry: "app.js", files: { "app.js": "" } },
-    });
-    const r = await serve(setClientAddress(
-      new Request(`${PAGE}/connect`, {
+    const r = await runtime.fetch(setClientAddress(
+      new Request(`${PAGE}/web/site`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           origin: PAGE,
           ...(cookie ? { cookie } : {}),
         },
-        body: JSON.stringify({ line: "site" }),
+        body: "{}",
       }),
       "198.51.100.50",
     ));
-    return {
-      status: r.status,
-      cookie: r.headers.get("set-cookie")?.split(";")[0],
-      ...(await r.json()),
-    };
+    await r.body?.cancel();
+    const mine = r.headers.getSetCookie()[0]?.split(";")[0] ?? cookie;
+    return { status: r.status, cookie: mine, actor: (await whoIs(runtime, mine))! };
   };
   const old = "the-old-secret-for-web-lines-0123456789";
   let cookie: string | undefined;
@@ -613,7 +608,7 @@ test("the app's previous secret: a visitor its cookie was signed for is still wh
     const came = await connect(before);
     cookie = came.cookie;
     id = came.actor.id;
-    await before.call("chat.send", { text: "hi" }, { actor: tickets.admit(came.ticket)! });
+    await before.call("chat.send", { text: "hi" }, { actor: came.actor });
     await before.idle();
   } finally {
     await before.close();
@@ -636,7 +631,7 @@ test("the app's previous secret: a visitor its cookie was signed for is still wh
   }
 });
 
-test("visitors all from a private address (a proxy's, without web.caller): said once, clearly", async () => {
+test("visitors all from a private address (a proxy's, without the caller resource): said once, clearly", async () => {
   const warned: string[] = [];
   const warn = console.warn;
   console.warn = (...args: unknown[]) => void warned.push(args.map(String).join(" "));
@@ -652,5 +647,5 @@ test("visitors all from a private address (a proxy's, without web.caller): said 
   }
   assertEquals(warned.length, 1);
   assert(warned[0].includes("10.0.0.5, a private address"));
-  assert(warned[0].includes("web.caller"));
+  assert(warned[0].includes("caller resource"));
 });

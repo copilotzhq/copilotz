@@ -23,7 +23,7 @@
  * connects to the owner as a `computer` worker, which `computer.admit` lets
  * in; the plugin sends it work through `ctx.workers` (see shared/workloads.ts).
  */
-import { definePlugin, personOf, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, personOf, type Plugin } from "../../../runtime/mod.ts";
 import { admitAction } from "./actions/admit.ts";
 import { allowedAction } from "./actions/allowed.ts";
 import { allowOriginAction } from "./actions/allow-origin.ts";
@@ -71,6 +71,8 @@ export type { ComputerWake } from "./shared/wake.ts";
 
 /** Collections a person reaches only their own of. */
 const OWNED = new Set(["computer", "enrollment", "approval", "grant"]);
+/** Its records that live in spaces. */
+const PLACED = new Set(["desk", "preview", "envVar"]);
 
 export const computers: Plugin = definePlugin({
   name: "computers",
@@ -120,21 +122,28 @@ export const computers: Plugin = definePlugin({
   processors: { "computers.left": leftProcessor },
   // Agents with computer tools know, each turn, whose computer they work on and what waits for a yes.
   views: contextViews,
+  // What jobs serve, at addresses of their own, once the app says where (`previews`).
+  routes: previewRoutes,
   resources: {
     tools,
     computers: {},
     context: { computer: { place: "turn" } },
     // A space's members see its computers (their desks there), as they see its conversations.
     shared: { desk: {}, preview: { field: "space" }, envVar: { field: "space" } },
-    // What jobs serve, at addresses of their own, once the app says where (`previews`).
-    routes: previewRoutes,
     // A computer's uses (a cloud computer's time, its disk) by its name, as its desks say it.
     usageNames: {
       computer: { tag: "tags.computer", collection: "desk", key: "computer", field: "name" },
     },
   },
-  // Each person reaches their own computers, codes, approvals (those they answer) and grants.
-  guard: (actor, { collection }) => {
+  // Each person reaches their own computers, codes, approvals (those they answer) and grants. None
+  // of the plugin's records is written directly from outside: which computer a desk or a preview
+  // is on, an approval's answer, a grant's yes, are its Actions' to check.
+  guard: (actor, { collection, access, direct }) => {
+    if (direct && access === "write" && (OWNED.has(collection) || PLACED.has(collection))) {
+      throw failure("forbidden", "Computers, and what's on them, change through their Actions.", {
+        public: true,
+      });
+    }
     if (!OWNED.has(collection)) return undefined;
     const person = personOf(actor);
     return person ? { owner: person } : { owner: { $in: [] } };

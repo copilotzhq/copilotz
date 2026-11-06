@@ -49,9 +49,22 @@ boundary: the runtime enforces, so agents can be naive and still safe.
   nothing else works that out, so every limit on an actor holds everywhere. Two logged escape
   hatches for trusted code: acting as a person (a webhook mapping a number to its person) and acting
   as the system (creating a Personal space at sign-up).
-- **Who:** `personOf` (the runtime's) says whose work this is. An actor can be limited to one space
-  (`within`: a key's work), which reach respects, and carry what set it going (`origin`: a routine),
-  which only code can set. A message's `via` is only what people are shown: anyone can claim it.
+- **Who:** `personOf` (the runtime's) says whose work this is. A developer key is its person
+  (`kind: "person"`, with `key` and `scope`) and a member of its space (`key:<id>`): it reaches what
+  its membership and its person both reach, with no org role. Its `scope` (exact names of Actions,
+  queries, Views, collections) is checked only where a call from outside comes in, never inside the
+  work it starts. Every key has a scope: identity makes no keys of its own (see "Developer keys").
+- **Direct writes from outside** (REST, the socket) reach a collection only where a rule speaks for
+  its writes, asked as the outsider's own (`direct`). A plugin whose records only its Actions may
+  change refuses there: spaces, memberships, invitations and requests; people and sessions; keys;
+  contacts; messages and what a turn is doing; routines; computers, desks, previews, apps and cloud
+  computers; chats (`thread`), messages, files and what was shown after an answer (`shown`);
+  memories; skills and their files; agents; accounts; WhatsApp's phones and numbers; voice blocks.
+  Still writable directly, each under its rule: apps' own collections (an app whose rules assume its
+  Actions refuses there too, as Compass's boards and documents do). Filtering or sorting by a
+  private field is refused, over REST and the socket alike. An actor can carry what set it going
+  (`origin`: a routine), which only code can set. A message's `via` is only what people are shown:
+  anyone can claim it.
 - **A space put away** (archived) is read and managed, not written in: reach says so.
 - **Leaving** follows the membership (`member.deleted`), however someone left: their computers'
   desks, their yeses and keys for that space end; out of the org, all of them and their own
@@ -149,15 +162,53 @@ space.
   even a browser running the whole runtime: trust comes from who it is, not from its code.
 - **Two ways to prove it:** our workers show the deployment secret (compared in constant time);
   everything else shows a credential stored in the database (a session, an API key, a computer's
-  key), looked up once per connection and revoked by deleting it. TLS to the configured address
-  proves the owner.
-- **Browsers** sign in with Google once: a sign-in Action verifies the person, creates a session and
-  sets it as an httpOnly, Secure cookie, which the connection presents. Sign-in methods are plugins;
-  the runtime knows sessions.
-- **What a browser may do:** read directly under the rules, watch queries, and call Actions for
-  everything it changes (a message's `from` pinned to the person), including what rules can't
-  express (several documents kept consistent, side effects, secrets). It can't hold a transaction
-  open: batches commit in one request. It never receives secret fields.
+  key), revoked by deleting it. The plugin that knows a credential says who it proves: its `who` for
+  an HTTP request (asked once per request, the answer kept a few seconds), a worker kind's `admit`
+  for a computer's connection. A browser's socket shows a one-time ticket that `/connect` gave for
+  its cookie. TLS to the configured address proves the owner.
+- **Browsers** sign in with Google once: the sign-in route (`/signin/google`) calls the sign-in
+  Action (it verifies the person and starts a session), then sets the session as an httpOnly, Secure
+  cookie through the runtime (`ctx.cookies`). Sign-in methods are plugins; the runtime knows
+  cookies, and identity knows sessions.
+- **What a browser may do:** read directly under the rules, watch queries, write directly where a
+  rule speaks for the collection's writes, and call Actions for everything else it changes (a
+  message's `from` pinned to the person), including what rules can't express (several documents kept
+  consistent, side effects, secrets). It can't hold a transaction open: batches commit in one
+  request. It never receives secret fields.
+
+## Developer keys
+
+Agreed and built 2026-11-06. A key is how code outside the app acts as someone, over the REST API or
+the socket (`Authorization: Bearer <key>`).
+
+- **A key is its person,** with two more fields: `{ kind: "person", id, key, scope }`. So every
+  `allow` keeps working: `people` lets it in, and `inPerson` keeps it out of what a person must do
+  themselves.
+- **It reaches through its membership.** A key is a member of the space it was made in (`key:<id>`),
+  as an agent is, and reaches what both its membership and its person reach. It has no org role, so
+  even an admin's key reaches only its space, at its role. Its role follows from its scope: an
+  editor when the scope calls an Action or writes, else a viewer, and never more than its person may
+  be there. Keys show among the space's members, where its managers revoke them.
+- **Its scope says what it may ask for:** `call`, `query`, `view`, `read` and `write`, each a list
+  of exact names. The lists are typed because names collide across kinds (`message` is a collection
+  and a View); there are no wildcards, so a key never quietly gains an Action a plugin adds later.
+  Every key has one.
+- **The runtime checks the scope only where a call from outside comes in** (`inScope`): beside an
+  Action's `allow`, before a query, a View rendered for it, and its direct reads and writes. A key
+  can't emit an event from outside. It's never checked in `guard` or inside jobs: an Action the key
+  may call writes `message`, `thread` and usage as usual, so the scope gates what the key may ask
+  for, and the rules gate what anything may touch.
+- **A key names its space** (`in`) where an Action takes one: there's no default, so REST and the
+  socket behave the same.
+- **Making one:** the person picks the space (the one they make it in), a preset (Chat: an editor
+  that sends and reads chats; Read only: a viewer that reads them) or a custom pick from what the
+  app offers, and a name; the secret shows once. Apps may add presets (`apiPresets`). `GET /api/`
+  shows a key what it may use.
+- **Ending one:** `api_key.revoke` (its person, or a manager of its space) ends the key, its
+  membership and its connections at once. Its person leaving the space or the org ends it too.
+- **Not reused for other narrowed actors:** an MCP server's or an agent's tool list says what a
+  model is offered, and a routine's grants are a person's consent. A scope is for a credential a
+  third party holds.
 
 ## Built (2026-10-28)
 
@@ -206,13 +257,14 @@ Also built:
   thread stays there. The terminal acts as its person (`terminal({ actor, space })`); `/space`,
   `/invite`, `/spaces`, `/work`. Agents get a "where you are" context (the space, its members, what
   it draws on).
-- **Identity** (`identity`): people; credentials (sessions and keys) kept as SHA-256 hashes of their
-  secrets, shown once; `credential.actor` tells a host who a secret proves (once per connection);
-  revoking is deleting. Each person sees only their own credentials.
+- **Identity** (`identity`): people; credentials kept as SHA-256 hashes of their secrets, shown once
+  (sessions; keys were credentials too until 2026-11-06, and are now the api plugin's, each with a
+  scope); `credential.actor` says who a secret proves, which identity's `who` asks for a request's
+  session cookie; revoking is deleting. Each person sees only their own credentials.
 - **Google sign-in** (`google`, with `clientId`): `google.sign-in` verifies an ID token (RS256 on
   WebCrypto: Google's keys by `kid`, `iss`, `aud`, `exp`, verified email), finds or makes the
-  person, and starts a session; the host sets it as an httpOnly, Secure cookie. Google's keys are a
-  port (`googleKeys`), fetched and kept per Cache-Control.
+  person, and starts a session; its route sets it as an httpOnly, Secure cookie. Google's keys are a
+  port (`googleKeys`), fetched through `ctx.fetch` and kept per Cache-Control.
 
 - **Agents are members:** each agent on its own (`agent:maya`), a viewer or an editor, never a
   manager; an editor answers where it's a member, a viewer only reads there. A new space starts with
@@ -258,6 +310,4 @@ memories about a person that follow them into chats where they're the only perso
 
 - Does org membership reach inside its spaces? Proposed: org admins reach every space; members only
   theirs, plus spaces marked open to the org. Roles declare whether they pass down.
-- Where sessions live for people in several orgs. Proposed: in each org, with a transfer step when
-  switching (as 0.x apps do).
 - Default in shared chats: show the restricted answer at once with Share (proposed), or ask first.

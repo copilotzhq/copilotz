@@ -1,9 +1,9 @@
 /**
- * Previews on the web (see design/cloud-computers.md, "Previews"): the web
- * host's routes (the `routes` resource) for what jobs serve, once the app
- * says where (`previews` in the computers resource).
+ * Previews on the web (see design/cloud-computers.md, "Previews"): the
+ * computers plugin's `routes` for what jobs serve, once the app says where
+ * (`previews` in the computers resource).
  *
- * - Every request to `<label>.<domain>` (a host route: `*-preview.<domain>`)
+ * - Every request to `<label>.<domain>` (a route for every host that looks like a preview's)
  *   goes to the preview's computer, over its own connection (no inbound
  *   network: a person's computer or a cloud one alike), as one HTTP
  *   exchange with the port (`computer.http`), streamed both ways. A
@@ -18,18 +18,8 @@
  *   (`/__copilotz/grant?g=&to=`), which becomes the cookie. Only paths on
  *   the preview are gone back to (`to`).
  */
-import type { Actor, Resources, Runtime } from "../../../../runtime/mod.ts";
+import type { Actor, Route, RouteContext, Runtime } from "../../../../runtime/mod.ts";
 import { personOf } from "../../../../runtime/mod.ts";
-
-/**
- * The web host's routes, as its `routes` resource takes them (hosts/web/routes.ts,
- * which plugins don't import): by host or path, and what a `serve` route is given.
- */
-type Served = { runtime: Runtime; whom(): Promise<Actor | null>; host: string };
-type Route =
-  & ({ path: string } | { host: string | ((resources: Resources) => string | undefined) })
-  & { methods?: string[] }
-  & { serve(request: Request, served: Served): Response | Promise<Response> };
 import { previewUrl, schemeOf } from "../actions/preview.ts";
 import type { Preview } from "../collections/preview.ts";
 import { type PreviewsSettings, settingsOf } from "../shared/settings.ts";
@@ -114,8 +104,9 @@ const cookiesOf = (request: Request, name: string) =>
  * `Domain` goes, so its headers set no cookies on the domain's other hosts
  * (other previews, apps). That doesn't stop a preview tossing cookies: its
  * page's script can still set `document.cookie` with `Domain=<parent>`. What
- * stops that is the app's cookies' `__Host-` names (an entrance's
- * `hostOnly`, identity's session), which no other host can set.
+ * stops that is that the app's own cookies are named `__Host-` wherever
+ * they're Secure (the runtime names every plugin's so, identity's session
+ * among them), and no other host can set one of those.
  */
 const hostOnly = (cookie: string) => cookie.replace(/;\s*domain=[^;]*/gi, "");
 
@@ -350,14 +341,15 @@ async function forward(
   return new Response(bodiless ? null : body, { status, headers });
 }
 
-const reads = async (runtime: Served["runtime"], person: string, space: string) =>
+const reads = async (runtime: Runtime, person: string, space: string) =>
   (await runtime.call<{ can: boolean }>("space.can", { space, verb: "read" }, {
     actor: { kind: "person", id: person },
   })).can;
 
 /** Every request to a preview's host. */
-async function servePreview(request: Request, served: Served): Promise<Response> {
-  const { runtime, host } = served;
+async function servePreview(request: Request, ctx: RouteContext): Promise<Response> {
+  const { runtime } = ctx;
+  const host = new URL(request.url).host;
   const { settings } = configOf(runtime);
   const label = settings && labelOf(host, settings.domain);
   const preview = label
@@ -420,8 +412,8 @@ async function land(url: URL, host: string, settings: PreviewsSettings): Promise
 }
 
 /** On the app: a signed-in member of the preview's space is sent back with a grant. */
-async function grantPreview(request: Request, served: Served): Promise<Response> {
-  const { runtime } = served;
+async function grantPreview(request: Request, ctx: RouteContext): Promise<Response> {
+  const { runtime } = ctx;
   const { settings } = configOf(runtime);
   if (!settings) return text(404, "This app doesn't serve previews.");
   const url = new URL(request.url);
@@ -432,9 +424,9 @@ async function grantPreview(request: Request, served: Served): Promise<Response>
   if (!label || !to) return text(400, "That isn't a preview's address.");
   const preview = await runtime.query<Preview | null>("preview.label", { label });
   if (!preview) return text(404, "There's no such preview.");
-  const actor: Actor | null = await served.whom().catch(() => null);
-  const person = actor?.kind === "person" ? personOf(actor) : undefined;
-  if (!actor || !person) {
+  const actor: Actor = ctx.actor;
+  const person = actor.kind === "person" ? personOf(actor) : undefined;
+  if (!person) {
     return new Response(
       `<!doctype html><meta charset="utf-8"><title>Sign in</title><p>Sign in to the app ` +
         `(<a href="/">here</a>), then open the preview's link again.</p>`,
@@ -458,14 +450,27 @@ async function grantPreview(request: Request, served: Served): Promise<Response>
   return redirect(back.href);
 }
 
-/** The pattern previews' hosts match, when the app serves them. */
-const previewHosts = (resources: Resources) => {
-  const domain = settingsOf({ resources }).previews?.domain;
-  return domain ? `*-preview.${domain}` : undefined;
+/**
+ * The route for every request to a preview's host. Its pattern is wide
+ * (any domain, any port, any path) because the domain is a setting of
+ * the app, which a route's key can't read: the route checks the request's
+ * host against the configured `previews.domain` itself, and a host that
+ * matches the pattern but isn't one of this app's previews, or any host when
+ * previews aren't configured, gets a plain 404.
+ */
+const previewHost: Route = (request, ctx) => {
+  const { settings } = configOf(ctx.runtime);
+  const host = new URL(request.url).host;
+  if (!settings || !labelOf(host, settings.domain)) return text(404, "There's no preview here.");
+  return servePreview(request, ctx);
 };
 
-/** The web host's routes for previews (the `routes` resource). */
+/** The grant: GET only. */
+const grant: Route = (request, ctx) =>
+  request.method === "GET" ? grantPreview(request, ctx) : text(405, "Use GET.", { allow: "GET" });
+
+/** The computers plugin's routes for previews. */
 export const previewRoutes: Record<string, Route> = {
-  "computer.previews": { host: previewHosts, serve: servePreview },
-  "computer.previews.grant": { path: GRANT, methods: ["GET"], serve: grantPreview },
+  "*://*-preview.*:*/*": previewHost,
+  [GRANT]: grant,
 };

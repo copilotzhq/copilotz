@@ -3,7 +3,7 @@
  * read as the line's agent working for its caller: what agents answered
  * them since the call began, in order, each as its `voice.message` View says
  * it; what an agent is writing right now (`live`); and whether the agent
- * ended the call (`end`). The call's socket (resources/relay.ts) observes
+ * ended the call (`end`). The call's socket (routes/relay.ts) observes
  * it, and says what's new as it comes, of the turns the caller's own words
  * started.
  *

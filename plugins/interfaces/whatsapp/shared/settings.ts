@@ -1,20 +1,18 @@
 /**
- * The WhatsApp plugin's settings (the `whatsapp` resource): where Meta's
- * Graph API is (its version; a test's fake), how long a code to link a
- * phone lasts, the largest file a message may bring, and the app's own
- * customer lines (`lines`), by name: numbers it opens from its settings,
- * with no person connecting them.
+ * The WhatsApp plugin's settings (the `whatsapp` resource): the numbers the
+ * app declares, by name, as a flat map. Each is a number opened from the
+ * app's settings, with no person connecting it.
  */
 import type { Resources } from "../../../../runtime/mod.ts";
 
 /**
- * A customer line the app declares: a number open to anyone, kept as its
- * settings say at every use (no person connects it, nor changes it).
+ * A number the app declares: open to anyone, kept as its settings say at
+ * every use (no person connects it, nor changes it).
  */
-export type WhatsAppLine = {
+export type DeclaredNumber = {
   /**
    * The space its customers' chats live in: one the app declares too (the
-   * spaces plugin's `spaces` resource) is made and kept with the line.
+   * spaces plugin's `spaces` resource) is made and kept with the number.
    */
   in: string;
   /** Meta's id for the number, its access token, and the Meta app's secret (signing its webhook). */
@@ -25,7 +23,7 @@ export type WhatsAppLine = {
   verify: string;
   /**
    * Where its webhook is: `/hooks/whatsapp/<name>` unless the app routes
-   * another path to `whatsapp.hook` (its `routes` resource).
+   * another path to the plugin's `hookRoute` (its `routes` field).
    */
   path?: string;
   /**
@@ -40,37 +38,24 @@ export type WhatsAppLine = {
   /** The number as people dial it, and the business's name, as shown. */
   phone?: string;
   name?: string;
-  /** With the orgs host, the org it's for (its id): no other org has it. */
-  org?: string;
 };
 
-export type WhatsAppSettings = {
-  graph?: string;
-  codeMinutes?: number;
-  maxFileMb?: number;
-  lines?: Record<string, WhatsAppLine>;
-};
+/** The `whatsapp` resource: the declared numbers, by name. */
+export type WhatsAppSettings = Record<string, DeclaredNumber>;
 
-/**
- * The app's own lines, by name, here: with the orgs host (each org's runtime
- * knows its org, `resources.org`), only those that name this org (`org`); a
- * line naming none is the single-org app's. An org never answers, nor
- * writes, another's line.
- */
-export const linesOf = (ctx: { resources: Resources }): Record<string, WhatsAppLine> => {
-  const all = ((ctx.resources.whatsapp ?? {}) as WhatsAppSettings).lines ?? {};
-  const org = (ctx.resources.org as { id?: string } | undefined)?.id;
-  return Object.fromEntries(
-    Object.entries(all).filter(([, line]) => line && (org ? line.org === org : !line.org)),
+/** Where Meta's Graph API is. Tests replace `fetch` (`createRuntime({ fetch })`), not this. */
+export const GRAPH = "https://graph.facebook.com/v23.0";
+
+/** Minutes a code to link a phone lasts. */
+export const CODE_MINUTES = 15;
+
+/** What chat takes as a file, at most: 10 MB. */
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+/** The numbers the app declares, by name. */
+export const numbersOf = (ctx: { resources: Resources }): WhatsAppSettings =>
+  Object.fromEntries(
+    Object.entries((ctx.resources.whatsapp ?? {}) as WhatsAppSettings).filter(([, number]) =>
+      number
+    ),
   );
-};
-
-export const settingsOf = (ctx: { resources: Resources }) => {
-  const set = (ctx.resources.whatsapp ?? {}) as WhatsAppSettings;
-  return {
-    graph: (set.graph ?? "https://graph.facebook.com/v23.0").replace(/\/+$/, ""),
-    codeMinutes: set.codeMinutes ?? 15,
-    // What chat takes as a file, at most.
-    maxFileBytes: Math.min(set.maxFileMb ?? 10, 10) * 1024 * 1024,
-  };
-};

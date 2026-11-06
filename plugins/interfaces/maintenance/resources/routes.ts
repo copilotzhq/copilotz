@@ -1,5 +1,5 @@
 /**
- * The maintenance endpoints, the plugin's `routes` resource, under
+ * The maintenance endpoints, the plugin's route (`/maintenance/*`), under
  * `/maintenance/`. Every request shows the app's one maintenance key
  * (`Authorization: Bearer <key>`), compared in constant time, and acts as
  * the maintenance actor; `X-Maintenance-By` says who sent it, for the
@@ -32,13 +32,7 @@
  * first time, without doing it twice. Reads take at most the settings'
  * `limit` rows and `timeout` ms, and may ask for less.
  */
-import {
-  type Actor,
-  invalid,
-  redacted,
-  type Resources,
-  type Runtime,
-} from "../../../../runtime/mod.ts";
+import { invalid, redacted, type Resources, type Route } from "../../../../runtime/mod.ts";
 import type { MaintenanceActor, MaintenanceLog, MaintenanceSettings } from "../contract.ts";
 import { isRead, READS } from "../actions/read.ts";
 import { isWrite, WRITES } from "../actions/write.ts";
@@ -54,7 +48,7 @@ type Settings = {
   timeout: number;
   bytes: number;
   log: (line: MaintenanceLog) => void;
-  /** An orgs host's org: maintenance doesn't serve one (one key would reach every org). */
+  /** An org's runtime (`resources.org`): not served (one key would reach every org). */
   org: boolean;
 };
 
@@ -250,12 +244,6 @@ async function bodyOf(request: Request): Promise<Record<string, unknown>> {
 
 // The endpoints.
 
-/** What the web host hands a `serve` route: the runtime, and who a session signs in (unused). */
-type Served = {
-  runtime: Pick<Runtime, "call" | "describe" | "maintenance">;
-  whom?(): Promise<Actor | null>;
-};
-
 const BLOB = /^sha256-[0-9a-f]{64}$/;
 
 const unauthorized = () =>
@@ -338,14 +326,10 @@ const within = (value: unknown, bytes: number) => {
 };
 
 /** Answers a request under `/maintenance/`. */
-export async function serveMaintenance(request: Request, host?: Served): Promise<Response> {
-  if (!host?.runtime) {
-    return failure(501, "unavailable", "The web host doesn't hand this route the runtime.");
-  }
-  const { runtime } = host;
+export const serveMaintenance: Route = async (request, { runtime }) => {
   try {
     const settings = settingsOf(runtime.describe().resources);
-    // No key, or an orgs host's org: as unauthorized as a wrong key, so nothing says it's here.
+    // No key, or an org's runtime: as unauthorized as a wrong key, so nothing says it's here.
     const given = bearer(request);
     const key = given && settings.keys.length && !settings.org
       ? await keyOf(given, settings.keys)
@@ -509,9 +493,6 @@ export async function serveMaintenance(request: Request, host?: Served): Promise
   } catch (error) {
     return answerFor(error);
   }
-}
+};
 
 const elapsed = (started: number) => Math.round((performance.now() - started) * 100) / 100;
-
-/** The route the web host serves them at. */
-export const route = { path: "/maintenance/", serve: serveMaintenance };

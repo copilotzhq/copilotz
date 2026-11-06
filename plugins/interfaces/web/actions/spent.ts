@@ -14,7 +14,7 @@
 import { defineAction, invalid } from "../../../../runtime/mod.ts";
 import type { Rate } from "../collections/rate.ts";
 import { charge, close, type Day, left } from "../shared/budget.ts";
-import { lineOf } from "../shared/lines.ts";
+import { siteOf } from "../shared/lines.ts";
 
 const LINE = { type: "string", minLength: 1, maxLength: 60 } as const;
 
@@ -53,7 +53,7 @@ export const budgetAction = defineAction({
     additionalProperties: false,
   },
   run: async (ctx, input): Promise<{ left: boolean }> => {
-    const line = lineOf(ctx, input.line);
+    const line = siteOf(ctx, input.line);
     if (!line?.budget) return { left: true };
     const rates = ctx.as().db.collection<Rate & Day>("contact_rate");
     return { left: await left(rates, { name: line.name, budget: line.budget }) };

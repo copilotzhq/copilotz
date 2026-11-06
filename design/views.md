@@ -185,19 +185,67 @@ Three parts make a place work, and the words for them:
 
 ### The web
 
-Agreed 2026-10-28.
+Agreed 2026-10-28. How requests reach the runtime was redone on 2026-11-06: the runtime answers HTTP
+itself, plugins declare routes and say who a request is, and hosts only listen.
 
+- **The runtime is a fetch handler.** `runtime.fetch(request)` takes a web-standard `Request` and
+  answers a `Response`, for every request the app gets. A host only calls it:
+  `Deno.serve(runtime.fetch)` on Deno; `listen(runtime.fetch)` from `copilotz/web/node` on Node and
+  Bun (it carries sockets); `export default { fetch: runtime.fetch }` on workerd (Cloudflare
+  Workers). Hosts know no plugin, and tests need no listener:
+  `await runtime.fetch(new Request(url, init))`.
+- **Its own paths:** `POST /connect` (the page trades its cookie for a one-time ticket), `/oxian`
+  (the socket, for browsers, remote executors and plugins' workers), `/api/` (the REST API) and
+  `GET /health` when no route takes it. Under the app's base (`resources.page.base`, an org's
+  `/o/<org>`) too: a route sees `/o/acme/x` as `/x`.
+- **Routes are plain functions on a plugin:** `routes: { "/hooks/whatsapp/:name": hook }`, each key
+  a `URLPattern` pathname (a web standard), each value a `Route`,
+  `(request, { runtime, actor, params, cookies }) => Response`. Routes deal with HTTP; Actions do
+  the work, and get only plain data. A more specific pattern is matched first and `/*` last; a later
+  plugin's route replaces an earlier one of the same pattern. A key that's a whole URL pattern with
+  a host (`*://*-preview.*:*/*`) takes every request to the hosts it matches, before anything else.
+  No route takes `/connect`, `/oxian` or anything under `/api`.
+- **Who a request is** comes from plugins' `who`, a hook like `guard`: a plain function from a
+  request to an actor, or nothing, for the next plugin to say. The runtime asks each in plugin
+  order, once per request (what they query is kept five seconds, and dropped when the actor is
+  disconnected); if none answers, the actor is anonymous (`{ kind: "anonymous", id: "" }`).
+  Identity's reads the session cookie (a person), the api plugin's `Authorization: Bearer <key>`
+  (the key's person, with its scope), and the site chat's the visitor cookie (a contact). Apps never
+  write one.
+- **Cookies are the runtime's to name.** A route sets and clears its credential's cookie through
+  `ctx.cookies` (`get`, `set`, `clear`), `who` reads it there, and no plugin writes `Set-Cookie`.
+  Every cookie is httpOnly, on the whole site (`Path=/`, never a `Domain`), named `__Host-<name>`
+  wherever it's Secure (anywhere but plain http to this machine or one on its network),
+  `SameSite=Lax` unless the plugin asks for `Strict` (a visitor's); a response that sets one is
+  never cached; a name is one plugin's, unless one builds on the other (`requires`: Google's sign-in
+  sets identity's session). The app renames them with a `cookies` resource (`{ names, suffix }`),
+  which is how each org keeps its own (design/tenancy.md).
+- **Requests from other sites are refused:** one that may change something (anything but GET, HEAD
+  and OPTIONS), sent by a page of another site (its `Sec-Fetch-Site` or `Origin` says so), without
+  an `Authorization` header, is a 403. So another site can't sign its visitors in as someone it
+  chose, or act with their cookies. Webhooks (Meta, Twilio, Stripe) send no `Origin`, and pass. The
+  app's front (a Cloudflare worker before it) is believed once, first: a request carrying its secret
+  (`x-copilotz-front`, the `caller` resource's `front`) is for the host it forwards
+  (`x-forwarded-host`), which routes and cookies go by.
+- **Signing in is plugins' routes.** Google's button posts its ID token to `POST /signin/google`
+  (the Google sign-in plugin), which calls `google.sign-in` and sets the session's cookie; dev
+  sign-in is `/signin/dev`, from this machine only; identity's `POST /signout` ends the session,
+  disconnects its browsers and clears the cookie. The page asks `GET /google` and `GET /signin/dev`
+  which ways there are, and identity's `GET /me` whom it's showing.
+- **The page is a plugin too** (`webPage`, in `copilotz/web/server`): its routes read the `page`
+  resource (the bundled code, title, language, the app's own files, the base) and `theme`: the code
+  under `/app/`, files under `/assets/`, the manifest and service worker, and `/*`, matched last,
+  for a browser's GET navigations.
 - **Views run in the browser,** as the person: the same `observe`, its reads sent over the
   connection (one batch per pass) and answered on the server under the rules, without secret fields.
   Features bring `web.tsx` front ends (React Views), as they bring `terminal.ts`.
 - **The connection is Oxian's,** the one executors use: a browser joins as an untrusted worker bound
-  to its person. It signs in once (Google → a session in an httpOnly cookie), trades the cookie for
-  a one-time ticket over HTTP, and presents the ticket when it connects; the host's `admit` turns it
-  into the person. Every read, call and emit it makes is that person's. Who a cookie is comes from
-  the app's plugins (the `entrances` resource: identity's session; a web line's visitor, let in when
-  its page asks, a contact once it speaks), and how people sign in too (`signIn`: Google's, dev
-  sign-in's, from this machine's own socket only); the host keeps the cookies (2026-11-04). A
-  contact reads what's said in its chat, never an agent's private steps.
+  to its actor. It signs in once (Google, then a session in an httpOnly cookie), trades the cookie
+  at `POST /connect` for a one-time ticket (good for a minute), and presents the ticket on `/oxian`;
+  the runtime's tickets turn it back into the actor. Every read, call and emit it makes is that
+  actor's. A site visitor comes in first at its site chat's route (`POST /web/<name>`), which lets
+  it in and sets its cookie; it's a contact once it speaks. A contact reads what's said in its chat,
+  never an agent's private steps.
 - **Changes are pushed, one hop:** each read a browser's Views made is watched on the server; a
   commit that touches it re-runs it as the person, and a different result goes to the browser, which
   re-runs the parts that read it. A reply being written streams this way (`live` is a read like any
@@ -209,7 +257,11 @@ Agreed 2026-10-28.
 - **Reads keep to what the person may:** a browser reads a collection directly only when a rule
   speaks for it (`find` on `message`, as its person); anything else goes through a query that lets
   the person (`allow`), whose own reads keep to the rules.
-- **Writes are Actions** (`chat.send`…) for now; direct writes under the rules later.
+- **Writes** are Actions (`chat.send`…), or direct, under the rules (2026-11-06): a browser's (or a
+  script's) own insert, update, replace or delete of a collection a rule speaks for its writes of
+  (`direct`), never a private field, within its reach (the owner's guard), recorded as its events.
+  Over the socket (`core.write`) or the REST API (`/api/collections/…`), alike; the client spells
+  them as plugin code does (`client.db.collection(x).updateOne(…)`).
 - **Navigation is links:** Views render `<a href>`; the web host follows them (no reload) and
   observes the shell with the new path. A handler that must move on (a new conversation) calls the
   host's `go(path)`.
@@ -371,13 +423,14 @@ resources: {
   last one given, whole (`themeOf`): a theme that gives `font` names all its fonts (what it doesn't
   name is the system's; headings, the text's) and never inherits Copilotz's stylesheet or preloads;
   one that gives `logo` never shows its mark beside another brand's name. `null` gives none.
-- **The first paint is in it too:** given the same theme (`webServer({ theme: themeOf(plugins) })`),
-  the server puts its variables and the page's base in the page's head, so a dark screen is dark
-  before the code loads; the host replaces that copy with its own. The head also has the page's
-  icons (the theme's mark, and its PNG), the browser's colour around the page (`theme-color`: each
-  scheme's `background`), and its fonts, preloaded rather than linked: the stylesheet and the files
-  it lists in `font.preload` are fetched with the page, but the first paint waits on none of them,
-  and the host applies the stylesheet as it starts (fonts swap in).
+- **The first paint is in it too:** given the same theme (the `theme` resource beside the page
+  plugin, `theme: themeOf(plugins)`), the server puts its variables and the page's base in the
+  page's head, so a dark screen is dark before the code loads; the host replaces that copy with its
+  own. The head also has the page's icons (the theme's mark, and its PNG), the browser's colour
+  around the page (`theme-color`: each scheme's `background`), and its fonts, preloaded rather than
+  linked: the stylesheet and the files it lists in `font.preload` are fetched with the page, but the
+  first paint waits on none of them, and the host applies the stylesheet as it starts (fonts swap
+  in).
 - **Names are shadcn's,** so shadcn themes and theme generators work as they are: `background` and
   `foreground`; `card`, `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, each
   with its `-foreground`; `border`, `input`, `ring`, `radius`; `sidebar`, `sidebar-foreground`,
@@ -432,10 +485,10 @@ resources: {
 A theme's `font.url` is a stylesheet that loads its fonts, from one of three places:
 
 - **The host's own,** by default: Copilotz's Manrope (400 to 700) and Space Grotesk (500 to 700),
-  `/assets/copilotz/fonts.css`, which `webServer` serves with no configuration, so any app that uses
-  it has them, and no visitor's browser asks Google. They're data in the host
+  `/assets/copilotz/fonts.css`, which the page plugin (`webPage`) serves with no configuration, so
+  any app that uses it has them, and no visitor's browser asks Google. They're data in the host
   (`hosts/web/theme/files/`: base64 modules only the server imports), not files it reads, so the
-  server stays a plain `Request` handler on any runtime; each is decoded on its first request.
+  page's routes stay plain `Request` handlers on any runtime; each is decoded on its first request.
   Google's own files (one variable woff2 per subset, latin and latin-ext: 24, 15, 22 and 19 KB),
   with Google's stylesheet's ranges, so they render the same; a page with Latin text fetches the two
   latin ones (46 KB), preloaded, and keeps them a year. Their licences (OFL 1.1) sit beside them.
@@ -446,33 +499,39 @@ A theme's `font.url` is a stylesheet that loads its fonts, from one of three pla
   data passed to a third party without consent (a Munich court awarded a visitor damages over it in
   2022).
 - **The app's own,** for privacy and offline use: a path on its own origin, such as
-  `/assets/fonts/harbor.css`, with the font files beside it, served by the web server. No request
+  `/assets/fonts/harbor.css`, with the font files beside it, served by the page plugin. No request
   leaves the app, and the fonts work without the internet.
 
 A theme names either; a path must start with one `/` and have no `..` (nor `%2e`, `%2f`), and no URL
 may hold spaces, quotes, `<`, `>` or `\`: anything else is ignored, and the system fonts show.
 
-**An app passes its files** to the server as data, by the path each is served at, and reads them
-however its platform does; the server only answers `Request`s, so it runs on Deno, Node, Bun or a
-worker:
+**An app passes its files** to the page plugin as data (`page.assets`), by the path each is served
+at, and reads them however its platform does; the page's routes only answer `Request`s, so they run
+on Deno, Node, Bun or a worker:
 
 ```ts
-webServer({
-  runtime,
-  tickets,
-  script,
-  upgrade,
-  theme: themeOf(front),
-  assets: {
-    "/assets/fonts/brand.css": await Deno.readFile("fonts/brand.css"), // bytes, or text
-    // Or how to read it (here Node's `fs/promises`), on the first request.
-    "/assets/fonts/inter-v13-latin.woff2": () => readFile("fonts/inter-v13-latin.woff2"),
-  },
-});
+plugins: [
+  ...features,
+  webPage,
+  definePlugin({
+    name: "settings",
+    resources: {
+      page: {
+        code,
+        assets: {
+          "/assets/fonts/brand.css": await Deno.readFile("fonts/brand.css"), // bytes, or text
+          // Or how to read it (here Node's `fs/promises`), on the first request.
+          "/assets/fonts/inter-v13-latin.woff2": () => readFile("fonts/inter-v13-latin.woff2"),
+        },
+      },
+      theme: themeOf(front),
+    },
+  }),
+];
 ```
 
 - **Under `/assets/` only,** so an asset never stands in for a route or a page; a path elsewhere, or
-  not a plain one (`..`, `.`, `//`, a name starting with a dot, `%`), stops the server from
+  not a plain one (`..`, `.`, `//`, a name starting with a dot, `%`), stops the runtime from
   starting. Anything under `/assets/` that isn't one of them is a 404, never the page.
   `/assets/copilotz/` is the host's own (its fonts and icons): an app's asset there stops it too.
 - **Exact paths, as sent:** a request is matched before `..` is resolved (Deno's `Request.url` keeps

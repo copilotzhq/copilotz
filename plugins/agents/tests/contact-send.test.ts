@@ -12,6 +12,7 @@ import {
   createRuntime,
   definePlugin,
   type Runtime,
+  setClientAddress,
   type ViewContext,
 } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
@@ -19,8 +20,6 @@ import models, { type LlmAdapter } from "../../models/mod.ts";
 import { chat } from "../chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { webLines } from "../../interfaces/web/lines.ts";
-import { setClientAddress, webServer } from "../../../hosts/web/server.ts";
-import { createTickets } from "../../../hosts/web/tickets.ts";
 import { test } from "../../../testing/mod.ts";
 
 /** What the agent was told, each user message. */
@@ -41,7 +40,7 @@ const app = definePlugin({
     agents: { guide: { instructions: "x", model: "script/main" } },
     spaces: { visitors: { name: "Website", agents: ["guide"] } },
     links: { origin: PAGE, secret: "the-app-secret-for-tests-0123456789" },
-    web: { lines: { notes: { in: "visitors", agent: "guide", files: { count: 2 } } } },
+    web: { notes: { in: "visitors", agent: "guide", files: { count: 2 } } },
   },
   adapters: { llm: { script } },
 });
@@ -68,28 +67,33 @@ async function all<T>(runtime: Runtime, collection: string): Promise<T[]> {
 
 async function setup(fn: (runtime: Runtime, visitor: () => Promise<Actor>) => Promise<void>) {
   told.length = 0;
-  const tickets = createTickets();
   const runtime = await createRuntime({
     store: memoryStore(),
     plugins: [models, chat, ...access, webLines, app, kept],
   });
   try {
-    const serve = webServer({
-      runtime,
-      tickets,
-      code: { entry: "app.js", files: { "app.js": "" } },
-    });
+    const serve = (request: Request) => runtime.fetch(request);
     let n = 0;
-    /** A visitor let in by the line, as the socket would carry it. */
+    /** A visitor let in by the line: it arrives (its cookie), then connects. */
     const visitor = async () => {
-      const request = new Request(`${PAGE}/connect`, {
-        method: "POST",
-        headers: { "content-type": "application/json", origin: PAGE },
-        body: JSON.stringify({ line: "notes" }),
-      });
-      const response = await serve(setClientAddress(request, `198.51.100.${++n}`));
+      const headers = { "content-type": "application/json", origin: PAGE };
+      const from = `198.51.100.${++n}`;
+      const arrived = await serve(setClientAddress(
+        new Request(`${PAGE}/web/notes`, { method: "POST", headers, body: "{}" }),
+        from,
+      ));
+      assertEquals(arrived.status, 200);
+      const cookie = arrived.headers.getSetCookie()[0].split(";")[0];
+      const response = await serve(setClientAddress(
+        new Request(`${PAGE}/connect`, { method: "POST", headers: { ...headers, cookie } }),
+        from,
+      ));
       assertEquals(response.status, 200);
-      return tickets.admit((await response.json()).ticket)!;
+      const actor = await runtime.query<Actor | null>("contact_visitor.actor", {
+        secret: cookie.split("=")[1],
+      });
+      assertEquals(actor?.id, (await response.json()).actor.id);
+      return actor!;
     };
     await fn(runtime, visitor);
   } finally {

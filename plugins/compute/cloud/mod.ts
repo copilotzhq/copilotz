@@ -35,7 +35,8 @@
  *   app's cost and price books (storage's rates per GB-hour: `per: 1`).
  *
  * **`cloudPool`**, where pool VMs connect (the app's one runtime; in an app
- * of many orgs, the directory's): the pools' VMs, their admission, the pool
+ * of many orgs, the directory's), at its socket (`/oxian`, and at
+ * `POOL_SOCKET`, `/__pool/oxian`, its route): the pools' VMs, their admission, the pool
  * Actions (`pool.take`, `pool.serve`, `pool.stop`, `pool.drop`,
  * `pool.renew`), and each minute (`pool.tick`) the pools sized and VMs whose
  * lease ran out deleted. In an app of many orgs, each org's runtime has
@@ -71,7 +72,7 @@
  * plugins: [...orgPlugins, cloud, remotePool((action, input) => directory.call(action, input), org.id)]
  * ```
  */
-import { definePlugin, personOf, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, personOf, type Plugin, type Route } from "../../../runtime/mod.ts";
 import { createAction } from "./actions/create.ts";
 import { dailyAction } from "./actions/daily.ts";
 import { destroyAction } from "./actions/destroy.ts";
@@ -91,7 +92,7 @@ import { cloudComputer } from "./collections/cloud-computer.ts";
 import { markProcessor } from "./processors/mark.ts";
 import { poolVm } from "./collections/pool-vm.ts";
 import { poolWant } from "./collections/pool-want.ts";
-import { type CloudHostAdapter, POOL, POOL_ACTIONS, POOL_KIND } from "./contract.ts";
+import { type CloudHostAdapter, POOL, POOL_ACTIONS, POOL_KIND, POOL_SOCKET } from "./contract.ts";
 import { tools } from "./resources/tools.ts";
 import { DEFAULTS, settingsOf } from "./shared/settings.ts";
 
@@ -154,17 +155,30 @@ export const cloud: Plugin = definePlugin({
     tools,
   },
   adapters: { cloudHost: hosts },
-  // Each person reaches their own cloud computers.
-  guard: (actor, { collection }) => {
+  // Each person reaches their own cloud computers; its disk, where it runs and what it's metered
+  // for are the plugin's to change, never a write from outside.
+  guard: (actor, { collection, access, direct }) => {
     if (collection !== "cloudComputer") return undefined;
+    if (direct && access === "write") {
+      throw failure("forbidden", "Cloud computers change through their Actions.", { public: true });
+    }
+
     const person = personOf(actor);
     return person ? { owner: person } : { owner: { $in: [] } };
   },
 });
 
 /** The pools of VMs cloud computers wake on, where pool VMs connect: see the module's doc. */
+/** The pools' VMs' socket (`POOL_SOCKET`), as they connect: this runtime's own (`/oxian`). */
+const poolSocket: Route = (request, { runtime }) => {
+  const url = new URL(request.url);
+  url.pathname = "/oxian";
+  return runtime.fetch(new Request(url, { method: request.method, headers: request.headers }));
+};
+
 export const cloudPool: Plugin = definePlugin({
   name: "cloud-pool",
+  routes: { [POOL_SOCKET]: poolSocket },
   collections: { poolVm, poolWant },
   workers: {
     [POOL_KIND]: {

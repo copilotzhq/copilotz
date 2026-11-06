@@ -1,29 +1,38 @@
 /**
  * "Try it": what a key can do, as curl commands to paste in a terminal.
- * Sending a message when it may (`chat.send`), else its first Action; its
- * first query; and following what happens. With the secret when it's just
- * been made (shown once), else a variable to put it in.
+ * Sending a message when it may (`chat.send`, in the key's space), else its
+ * first Action; its first query; and following what happens. With the
+ * secret when it's just been made (shown once), else a variable to put it
+ * in. And what a key may use, in a few words.
  */
+import type { Scope } from "../../../../../runtime/mod.ts";
 import type { CodePart } from "../../../../../hosts/web/mod.ts";
-
-export type Allowed = { actions: string[]; queries: string[]; views?: string[] };
 
 export type Snippet = { title: string; code: CodePart[]; text: string };
 
 /** The variable a key goes in, when the snippet doesn't carry it. */
 export const VARIABLE = "COPILOTZ_KEY";
 
+/** The kinds of names a scope lists, in the order they're said. */
+export const KINDS = ["call", "query", "view", "read", "write"] as const;
+
 /** Quoted for a POSIX shell, in single quotes. */
 const quoted = (text: string) => `'${text.replaceAll("'", `'"'"'`)}'`;
 
-/** What an Action is sent, to try it: a message for chat, nothing for the rest. */
-const sample = (action: string) => action === "chat.send" ? { text: "Hello from my code" } : {};
+/** What an Action is sent, to try it: a message for chat (in the key's space), nothing for the rest. */
+const sample = (action: string, space?: string) =>
+  action === "chat.send" ? { text: "Hello from my code", ...(space ? { in: space } : {}) } : {};
 
-export function snippets(origin: string, allowed: Allowed, secret?: string): Snippet[] {
+export function snippets(
+  origin: string,
+  scope: Scope,
+  { secret, space }: { secret?: string; space?: string } = {},
+): Snippet[] {
   const key = secret ?? `$${VARIABLE}`;
   const auth = `-H "Authorization: Bearer ${key}"`;
   const made: { title: string; lines: string[] }[] = [];
-  const action = allowed.actions.includes("chat.send") ? "chat.send" : allowed.actions[0];
+  const calls = scope.call ?? [];
+  const action = calls.includes("chat.send") ? "chat.send" : calls[0];
   if (action) {
     made.push({
       title: action === "chat.send" ? "Send a message" : `Call ${action}`,
@@ -31,11 +40,11 @@ export function snippets(origin: string, allowed: Allowed, secret?: string): Sni
         `curl -X POST ${origin}/api/actions/${action} \\`,
         `  ${auth} \\`,
         `  -H "Content-Type: application/json" \\`,
-        `  -d ${quoted(JSON.stringify(sample(action)))}`,
+        `  -d ${quoted(JSON.stringify(sample(action, space)))}`,
       ],
     });
   }
-  const query = allowed.queries[0];
+  const query = scope.query?.[0];
   if (query) {
     made.push({
       title: `Run ${query}`,
@@ -56,23 +65,31 @@ export function snippets(origin: string, allowed: Allowed, secret?: string): Sni
   });
 }
 
-/** What a key does, in a few words: a preset's title when it's exactly one. */
+/** Whether two scopes list the same names, in any order. */
+export function sameScope(a: Scope, b: Scope): boolean {
+  const same = (x: string[] = [], y: string[] = []) =>
+    x.length === y.length && x.every((name) => y.includes(name));
+  return KINDS.every((kind) => same(a[kind], b[kind]));
+}
+
+/** Every name a scope lists, once each, in the order its kinds are said. */
+export const namesIn = (scope: Scope): string[] => [
+  ...new Set(KINDS.flatMap((kind) => scope[kind] ?? [])),
+];
+
+/** What a key may use, in a few words: a preset's title when it's exactly one. */
 export function summary(
-  allowed: Allowed,
-  presets: Record<string, { title: string; actions?: string[]; queries?: string[] } | null>,
+  scope: Scope,
+  presets: Record<string, { title: string; scope: Scope } | null>,
 ): string {
-  const same = (a: string[] = [], b: string[] = []) =>
-    a.length === b.length && a.every((name) => b.includes(name));
-  const preset = Object.values(presets).find((p) =>
-    p && same(p.actions, allowed.actions) && same(p.queries, allowed.queries)
-  );
+  const preset = Object.values(presets).find((p) => p?.scope && sameScope(p.scope, scope));
   if (preset) return preset.title;
-  const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+  const collections = new Set([...scope.read ?? [], ...scope.write ?? []]).size;
   return [
-    allowed.actions.length ? count(allowed.actions.length, "Action") : "",
-    allowed.queries.length
-      ? count(allowed.queries.length, "query").replace("querys", "queries")
-      : "",
-    allowed.views?.length ? count(allowed.views.length, "View") : "",
+    scope.call?.length ? count(scope.call.length, "Action") : "",
+    scope.query?.length ? count(scope.query.length, "query", "queries") : "",
+    scope.view?.length ? count(scope.view.length, "View") : "",
+    collections ? count(collections, "collection") : "",
   ].filter(Boolean).join(", ");
 }

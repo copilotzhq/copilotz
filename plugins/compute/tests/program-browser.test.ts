@@ -23,12 +23,30 @@ import {
   profileName,
   profilePath,
 } from "../computers/program/browser/mod.ts";
+import { launch } from "../computers/program/browser/chrome.ts";
 import type { Result } from "../computers/program/browser/types.ts";
 import { type Scope, type SearchResult, WORK } from "../computers/shared/workloads.ts";
 import { PAGE, RESULTS, TURNED_AWAY } from "./program-pages.ts";
 import { setup, until } from "./program-setup.ts";
 
 const chrome = await findChrome();
+
+/**
+ * Chrome, started once before the tests and given two minutes. Its first
+ * start on a machine reads its files from disk and builds what it caches
+ * (its fonts' among them): on CI's runners that has taken longer than the
+ * 20 s the engine gives each start (`launchTimeoutMs`), so the first test
+ * failed with "Browser deadline exceeded" about 2 runs in 5. Warm, each
+ * test's Chrome starts within the engine's own deadline, as on a person's
+ * computer, and the tests check what they did before.
+ */
+if (chrome) {
+  const warm = await launch(
+    { chromium: chrome, profile: join(tempDir(), "warm"), launchTimeoutMs: 120_000 },
+    new AbortController().signal,
+  ).catch(() => undefined);
+  await warm?.close();
+}
 const scope = (who: string): Scope => ({ space: "space-alpha", folder: "alpha", who });
 
 /** Every running command line that names `text`. */

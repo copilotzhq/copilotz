@@ -167,6 +167,13 @@ export type CloudHostAdapter =
     given: { resources: Record<string, Record<string, unknown>> },
   ) => CloudHost | Promise<CloudHost>);
 
+/**
+ * Where the pools' VMs connect, as their templates say (`app-url`:
+ * `wss://<host>/__pool/oxian`): the socket of the runtime with `cloudPool`
+ * (the directory's, in an app of many orgs), by `cloudPool`'s route.
+ */
+export const POOL_SOCKET = "/__pool/oxian";
+
 /** The worker kind pool VMs connect as, and the work they serve. */
 export const POOL_KIND = "pool";
 export const POOL = {

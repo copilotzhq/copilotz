@@ -26,7 +26,7 @@
  * Works with the chat plugin: it reads `message` and adds `context` entries
  * and tools that chat gives its agents.
  */
-import { defineAction, definePlugin, people, type Plugin } from "../../../runtime/mod.ts";
+import { defineAction, definePlugin, failure, people, type Plugin } from "../../../runtime/mod.ts";
 import { memoryCollection } from "./collections/memory.ts";
 import { memoryProgress } from "./collections/progress.ts";
 import { extractor } from "./processors/extract.ts";
@@ -42,6 +42,15 @@ export type { MemorySettings } from "./shared/settings.ts";
 export const memory: Plugin = definePlugin({
   name: "memory",
   requires: ["chat"],
+  // Its records change through its Actions, never written directly from outside.
+  guard: (_actor, { collection, access, direct }) => {
+    if (direct && access === "write" && ["memory", "memoryProgress"].includes(collection)) {
+      throw failure("forbidden", `"${collection}" changes through the memory plugin's Actions.`, {
+        public: true,
+      });
+    }
+    return undefined;
+  },
   collections: { memory: memoryCollection, memoryProgress },
   views: { "llm.memory": memoryView, ...contextViews },
   actions: {

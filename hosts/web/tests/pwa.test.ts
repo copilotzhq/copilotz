@@ -10,14 +10,19 @@
 import { assert, assertEquals, assertMatch } from "@std/assert";
 import { createRuntime, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
-import { identity } from "../../../plugins/access/mod.ts";
 import { test } from "../../../testing/mod.ts";
-import { createTickets } from "../tickets.ts";
-import { webServer } from "../server.ts";
+import { webPage } from "../server.ts";
 import { manifestOf, precacheOf, versionOf, workerOf } from "../pwa.ts";
 import { themeOf } from "../theme/css.ts";
 import { coverage, iconPng, outlines, rgbaOf } from "../theme/png.ts";
-import { asStaff, currentOrg, loadOrgs, orgName, type Orgs, refreshOrgs } from "../orgs.ts";
+import {
+  asStaff,
+  currentOrg,
+  loadOrgs,
+  orgName,
+  type Orgs,
+  refreshOrgs,
+} from "../../../plugins/access/directory/web.ts";
 
 const brand = definePlugin({
   name: "brand",
@@ -86,16 +91,21 @@ test("the worker carries the code's version, and handles only pages, code and ho
 });
 
 test("the server: the manifest, the worker at the root, and the page linking them", async () => {
-  const runtime = await createRuntime({ store: memoryStore(), plugins: [identity] });
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      webPage,
+      definePlugin({
+        name: "settings",
+        resources: {
+          page: { code: { entry: "app.js", files: { "app.js": "1" } }, title: "Test" },
+          theme: themeOf([]),
+        },
+      }),
+    ],
+  });
   try {
-    const serve = webServer({
-      runtime,
-      tickets: createTickets(),
-      code: { entry: "app.js", files: { "app.js": "1" } },
-      upgrade: () => new Response(null),
-      title: "Test",
-      theme: themeOf([]),
-    });
+    const serve = (request: Request) => runtime.fetch(request);
     const manifest = await serve(new Request("http://localhost/manifest.webmanifest"));
     assertMatch(manifest.headers.get("content-type")!, /application\/manifest\+json/);
     assertEquals((await manifest.json()).name, "Test");

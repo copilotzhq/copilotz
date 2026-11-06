@@ -30,9 +30,9 @@ import { type Context, defineAction, type TransactionScope } from "../../../../r
 import type { VoiceCall } from "../collections/call.ts";
 import type { VoicePhone } from "../collections/phone.ts";
 import type { Thread } from "../../../agents/chat/contract.ts";
-import { lastsMs, type Line, lineOf } from "../shared/settings.ts";
+import { declaredOf, lastsMs, type VoiceNumber } from "../shared/settings.ts";
 import { numberOf } from "../shared/caller.ts";
-import { sha256 } from "./hook.ts";
+import { sha256 } from "./ring.ts";
 
 /** What the socket knows of its call once admitted. */
 export type Admitted = Pick<VoiceCall, "_id" | "line" | "from" | "to">;
@@ -77,7 +77,7 @@ export const admitAction = defineAction({
   },
   record: false,
   run: async (ctx, input): Promise<Admitted | null> => {
-    const line = lineOf(ctx, input.line);
+    const line = declaredOf(ctx, input.line);
     const [id, secret] = input.ticket.split(".");
     if (!line || !id || !secret) return null;
     const found = await calls(ctx).findOne({ _id: id });
@@ -110,7 +110,7 @@ export const startAction = defineAction({
   record: false,
   run: async (ctx, input): Promise<Started> => {
     const call = await calls(ctx).findOne({ _id: input.call });
-    const line = call ? lineOf(ctx, call.line) : undefined;
+    const line = call ? declaredOf(ctx, call.line) : undefined;
     if (!call || !line || call.state === "over") {
       throw Object.assign(new Error("No such call going on"), { code: "not_found" });
     }
@@ -194,7 +194,7 @@ const greeting = (call: Pick<VoiceCall, "_id" | "thread">) =>
   call.thread ? { greeting: `${call.thread}:say:voice:${call._id}` } : {};
 
 /** The agent answering in a call's chat: the line's, else the chat's own. */
-async function whom(ctx: Context, line: Line, thread: string): Promise<{ agent: string }> {
+async function whom(ctx: Context, line: VoiceNumber, thread: string): Promise<{ agent: string }> {
   if (line.agent) return { agent: line.agent };
   const chat = await ctx.as().db.collection<Thread>("thread").findOne({ _id: thread });
   const agent = chat?.agents?.[0];
@@ -208,7 +208,7 @@ async function whom(ctx: Context, line: Line, thread: string): Promise<{ agent: 
  */
 async function chatOf(
   ctx: Context,
-  line: Line,
+  line: VoiceNumber,
   contact: string,
   thread: string | undefined,
 ): Promise<string | undefined> {
@@ -224,7 +224,7 @@ async function chatOf(
  * the line's agent doesn't answer in the space, the call fails: no other
  * agent takes it.
  */
-async function chatFor(ctx: Context, line: Line, contact: string, call: VoiceCall) {
+async function chatFor(ctx: Context, line: VoiceNumber, contact: string, call: VoiceCall) {
   const thread = `voice-${(await sha256(`voice:${call._id}`)).slice(0, 32)}`;
   await ctx.as().call("contact.chat", {
     contact,

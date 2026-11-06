@@ -2,44 +2,15 @@
  * The web host, for the browser: `web()` runs the app there, as the signed-in
  * person, in the app's theme. What features' web front ends use, as they'd
  * use React: `Part`, `LazyView` (a View shown only while a component is),
- * `go` (moving on without reloading), `signOut`, the person's orgs when the
- * server serves many (`useOrgs`, `enterOrg`…), the command palette's
+ * `go` (moving on without reloading), `signOut`, the command palette's
  * items and steps (`openPalette`, at a step, from anywhere), and the toolkit
  * (`toolkit/`), whose pieces take their look from the theme's variables
  * (`theme/`): a front end composes them, and its own CSS is only its layout,
- * on those variables. The server half is `server.ts` (with
- * `tickets.ts`), for the process that serves the page.
+ * on those variables. The server half is `server.ts` (the page, as a
+ * plugin: `webPage`), for the runtime that serves it.
  */
 export { go, signOut, web, type WebOptions, type Where, type Who } from "./host.tsx";
 export { appBase } from "./base.ts";
-// Orgs, when the server serves many (`hosts/orgs`): the person's, and going between them.
-export {
-  answerOrgInvite,
-  arrived,
-  asStaff,
-  type ConsoleOrg,
-  consoleOrgs,
-  createGiftCode,
-  createOrg,
-  currentOrg,
-  deleteOrg,
-  enterOrg,
-  exportOrgUrl,
-  type GiftCode,
-  giftCodes,
-  moveOrg,
-  type Org,
-  type OrgInvite,
-  orgName,
-  type Orgs,
-  type OrgsState,
-  refreshOrgs,
-  revokeGiftCode,
-  type Switching,
-  updateOrg,
-  useOrgs,
-  useSwitching,
-} from "./orgs.ts";
 export { message, node, Part } from "./part.tsx";
 // Where Views are drawn (the page, or a widget in an outside assistant), and what a widget asks of
 // its host: no-ops on the page.

@@ -8,13 +8,13 @@
  * `computerDownloads` gives an app both, as a plugin: by default this
  * Copilotz's own release on GitHub (`v<version>`: every release has the
  * program, built again only when it changed); or a release folder of its
- * own, served from its origin at `/computer/download/` (a `routes` entry of
- * the web host: only the release's files, as they are); or one at a URL (a
+ * own, served from its origin at `/computer/download/` (a route of the
+ * plugin: only the release's files, as they are); or one at a URL (a
  * bucket, another release). It reads the manifest once, as it starts.
  *
  * ```ts
  * plugins: [...plugins, await computerDownloads()]
- * plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.24" })]
+ * plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.25" })]
  * plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })]
  * ```
  */
@@ -63,6 +63,12 @@ function serveRelease(dir: string, manifest: Manifest) {
     ...manifest.binaries.map((b) => [b.file, { ...binary, tag: `"${b.sha256}"` }] as const),
   ]);
   return async (request: Request): Promise<Response> => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Only GET", {
+        status: 405,
+        headers: { allow: "GET, HEAD", "content-type": "text/plain; charset=utf-8" },
+      });
+    }
     const name = new URL(request.url).pathname.slice(DOWNLOADS.length);
     const file = files.get(name);
     const path = join(dir, name);
@@ -115,15 +121,7 @@ export async function computerDownloads(
   return definePlugin({
     name: "computer-downloads",
     requires: ["computers"],
-    resources: {
-      downloads: { base: DOWNLOADS, manifest } satisfies Downloads,
-      routes: {
-        "computer.downloads": {
-          path: DOWNLOADS,
-          methods: ["GET", "HEAD"],
-          serve: serveRelease(dir, manifest),
-        },
-      },
-    },
+    resources: { downloads: { base: DOWNLOADS, manifest } satisfies Downloads },
+    routes: { [`${DOWNLOADS}*`]: serveRelease(dir, manifest) },
   });
 }

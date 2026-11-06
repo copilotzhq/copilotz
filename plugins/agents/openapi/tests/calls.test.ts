@@ -28,7 +28,10 @@ const probe = defineAction({
   },
 });
 
-async function start(settings: OpenApiSettings, more: Plugin[] = []) {
+async function start(
+  { fetch, ...settings }: OpenApiSettings & { fetch?: typeof globalThis.fetch },
+  more: Plugin[] = [],
+) {
   const app = definePlugin({
     name: "app",
     actions: { probe },
@@ -36,6 +39,7 @@ async function start(settings: OpenApiSettings, more: Plugin[] = []) {
   });
   return await createRuntime({
     store: memoryStore(),
+    fetch,
     plugins: [models, chat, openapi({ name: "trips", spec }), app, ...more],
   });
 }

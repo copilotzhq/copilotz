@@ -77,6 +77,7 @@ function errorOf(body: Record<string, unknown>): string | undefined {
  * `account_refused` (with its OAuth `error`) when it says no.
  */
 export async function tokens(
+  fetch: typeof globalThis.fetch,
   provider: AccountProvider,
   params: Record<string, string>,
   signal?: AbortSignal,
@@ -118,7 +119,12 @@ export async function tokens(
 }
 
 /** Tells the provider to end a token (RFC 7009), as far as it will in a few seconds. */
-export async function revoke(provider: AccountProvider, token: string, hint: string) {
+export async function revoke(
+  fetch: typeof globalThis.fetch,
+  provider: AccountProvider,
+  token: string,
+  hint: string,
+) {
   const { oauth } = provider;
   if (!oauth.revoke) return;
   await fetch(oauth.revoke, {

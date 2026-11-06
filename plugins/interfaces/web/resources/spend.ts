@@ -18,13 +18,13 @@
 import { failure, principalOf } from "../../../../runtime/mod.ts";
 import type { ModelUse, UseContext, UseListener } from "../../../models/contract.ts";
 import { BUDGET } from "../shared/budget.ts";
-import { lineOf } from "../shared/lines.ts";
+import { siteOf } from "../shared/lines.ts";
 
 /** The budgeted line a call is made for, and its visitor: none for anyone else. */
 function budgeted(ctx: UseContext) {
   const visitor = principalOf(ctx.actor);
   if (visitor?.kind !== "contact" || typeof visitor.web !== "string" || !ctx.call) return;
-  const line = lineOf(ctx, visitor.web);
+  const line = siteOf(ctx, visitor.web);
   return line?.budget ? { line: line.name, contact: visitor.id, call: ctx.call } : undefined;
 }
 
@@ -50,7 +50,7 @@ async function used(ctx: UseContext, use: ModelUse): Promise<void> {
   });
   if (closed) {
     console.error(
-      `web.lines.${on.line}: what its visitors used (${use.subject}) has no price, so its ` +
+      `web.${on.line}: what its visitors used (${use.subject}) has no price, so its ` +
         "budget can't be kept: the line takes no more messages today. Price the model " +
         "(the usage plugin's price resource, or its catalog).",
     );

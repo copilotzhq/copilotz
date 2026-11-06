@@ -1,7 +1,7 @@
 /**
  * What the MCP tests share: an app with one line (`chatgpt`, in the app's
  * own space) and a way to call it as a client does: JSON-RPC over HTTP to
- * the web host, legacy (with a protocol version header) or modern
+ * the runtime, legacy (with a protocol version header) or modern
  * (2026-07-28's `_meta` and headers), from an address its front vouches for.
  *
  * The tools, each with its `tool:<name>` View (what a model reads of it):
@@ -18,6 +18,7 @@
  * (`stopping`), and waits on what tests watch for (`until`, `within`).
  */
 import {
+  type CallerSettings,
   createRuntime,
   definePlugin,
   failure,
@@ -32,10 +33,9 @@ import { memoryStore } from "../../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../../models/mod.ts";
 import { chat, type Message, tool } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
-import { createTickets } from "../../../../hosts/web/tickets.ts";
-import { webServer, type Widgets } from "../../../../hosts/web/server.ts";
+import type { Widgets } from "../../../../hosts/web/server.ts";
 import { mcp } from "../mod.ts";
-import type { McpLine, McpSettings } from "../shared/settings.ts";
+import type { DeclaredServer } from "../shared/settings.ts";
 
 export const SECRET = "a-secret-for-signing-links-in-tests-0123456789";
 export const MODERN = "2026-07-28";
@@ -285,7 +285,7 @@ export const app = definePlugin({
 });
 
 /** The line every test calls, unless it says otherwise. */
-export const LINE: McpLine = {
+export const LINE: DeclaredServer = {
   in: "line",
   client: "ChatGPT",
   title: "Viação Azul",
@@ -313,7 +313,7 @@ export const LINE: McpLine = {
 export const OFFERED = Object.keys(LINE.tools).filter((name) => name !== "staff" && name !== "raw");
 
 /** How the app knows who calls: its front says, with its secret. */
-export const CALLER: McpSettings["caller"] = { header: "cf-connecting-ip", front: FRONT };
+export const CALLER: CallerSettings = { header: "cf-connecting-ip", front: FRONT };
 
 /** Reads every document of the collections the tests look at, as the system. */
 export const reads = definePlugin({
@@ -449,13 +449,14 @@ let ids = 0;
 export async function setup(
   fn: (s: Setup) => Promise<void>,
   options: {
-    line?: Partial<McpLine>;
-    lines?: Record<string, McpLine>;
-    settings?: Omit<McpSettings, "lines">;
+    line?: Partial<DeclaredServer>;
+    lines?: Record<string, DeclaredServer>;
+    /** How the app knows who calls (the `caller` resource). */
+    caller?: CallerSettings;
     plugins?: Plugin[];
     /** One store for several runtimes in turn (an owner restarted). */
     store?: Store;
-    /** The web host's widgets (`widgetsOf`): the line's tools drawn by Views. */
+    /** The app's widgets (`widgetsOf`, its `widgets` resource): the line's tools drawn by Views. */
     widgets?: Widgets;
   } = {},
 ) {
@@ -477,25 +478,18 @@ export async function setup(
       definePlugin({
         name: "lines",
         resources: {
-          mcp: {
-            caller: CALLER,
-            ...options.settings,
-            lines: options.lines ?? { chatgpt: { ...LINE, ...options.line } },
-          },
+          caller: options.caller ?? CALLER,
+          mcp: options.lines ?? { chatgpt: { ...LINE, ...options.line } },
         },
       }),
+      ...options.widgets
+        ? [definePlugin({ name: "widgets", resources: { widgets: options.widgets } })]
+        : [],
       ...options.plugins ?? [],
     ],
   });
-  const serve = webServer({
-    runtime,
-    tickets: createTickets(),
-    code: { entry: "app.js", files: { "app.js": "" } },
-    upgrade: () => new Response(null, { status: 501 }),
-    ...(options.widgets ? { widgets: options.widgets } : {}),
-  });
   const post: Setup["post"] = async (body, o = {}) => {
-    const response = await serve(
+    const response = await runtime.fetch(
       new Request(`http://localhost/mcp/${o.line ?? "chatgpt"}`, {
         method: o.method ?? "POST",
         // As the app's front sends it: who calls, and its secret. A header said empty isn't sent.

@@ -1,13 +1,14 @@
 /**
  * A space's developer keys (kind `api.keys`: its API tab, item `{ _id }`,
  * the space; spaces' `spaceTabs`): what keys are for, the person's own keys
- * there (each with what it does, its first characters, when it was made and
- * last used, its reference, and revoking it, after asking), making one, and
- * trying it with curl. Keys are each person's: nobody sees another's. In a
- * side panel (`hints.mode: "panel"`), the same, compact.
+ * there (each with what it may use, how it works there, its first
+ * characters, when it was made and last used, its reference, and revoking
+ * it, after asking), making one, and trying it with curl. Here, each sees
+ * their own keys; everyone's show among the space's members. In a side panel
+ * (`hints.mode: "panel"`), the same, compact.
  */
 import { type ReactNode, useState } from "react";
-import type { ViewContext } from "../../../../../runtime/mod.ts";
+import type { Scope, ViewContext } from "../../../../../runtime/mod.ts";
 import {
   appBase,
   Button,
@@ -24,21 +25,25 @@ import {
 import type { ApiKey, ApiPreset } from "../../contract.ts";
 import { CreateDialog, type Presets } from "./create.tsx";
 import { Reference } from "./reference.tsx";
-import { type Allowed, snippets, summary, VARIABLE } from "./snippet.ts";
+import { snippets, summary, VARIABLE } from "./snippet.ts";
 import { STYLE } from "./style.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 type Space = { _id: string; name: string; kind?: string };
 
 /** The presets, lowest `order` first, leaving out those taken away. */
-const presetsOf = (given: unknown): Presets =>
+export const presetsOf = (given: unknown): Presets =>
   Object.entries((given ?? {}) as Record<string, ApiPreset | null>)
-    .flatMap(([key, p]) => p?.title ? [[key, p] as [string, ApiPreset]] : [])
+    .flatMap(([key, p]) => p?.title && p.scope ? [[key, p] as [string, ApiPreset]] : [])
     .sort(([a, x], [b, y]) => (x.order ?? 0) - (y.order ?? 0) || a.localeCompare(b));
+
+/** How a key works in its space, in a few words. */
+export const roleSaid = (role?: string) => role === "editor" ? "Editor" : "Viewer";
 
 export const keysView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
   const id = item._id ?? (typeof ctx.hints.in === "string" ? ctx.hints.in : "");
-  const keys = ctx.db.collection<ApiKey>("api_key").find({ in: id }, { sort: { at: -1 } }).value;
+  // Theirs alone: the space's members list everyone's.
+  const keys = ctx.db.collection<ApiKey>("api_key").query<ApiKey[]>("mine", { in: id }).value;
   const space = ctx.db.collection<Space>("space").findOne({ _id: id }).value;
   const compact = ctx.hints.mode === "panel";
   const style = <style href="api-web" precedence="copilotz">{STYLE}</style>;
@@ -81,10 +86,7 @@ function Keys(
   const where = space.kind === "personal" ? "your Personal space" : space.name;
   const known = Object.fromEntries(presets);
   // What to try: what its keys do, or chatting.
-  const tried: Allowed = keys[0] ?? {
-    actions: presets[0]?.[1].actions ?? ["chat.send"],
-    queries: presets[0]?.[1].queries ?? [],
-  };
+  const tried: Scope = keys[0]?.scope ?? presets[0]?.[1].scope ?? { call: ["chat.send"] };
   return (
     <div className={`api-tab${compact ? " api-tab-compact" : ""}`}>
       <section className="api-intro" aria-labelledby="api-keys-title">
@@ -110,7 +112,7 @@ function Keys(
               <KeyRow
                 key={key._id}
                 apiKey={key}
-                what={summary(key, known)}
+                what={summary(key.scope ?? {}, known)}
                 onRevoke={() => setRevoking(key)}
               />
             ))}
@@ -132,7 +134,7 @@ function Keys(
             reads the conversations, and follows replies as they're written.
           </EmptyState>
         )}
-      {compact ? null : <TryIt allowed={tried} />}
+      {compact ? null : <TryIt scope={tried} space={space._id} />}
       <CreateDialog
         open={making}
         onClose={() => setMaking(false)}
@@ -165,6 +167,8 @@ function KeyRow(
             <div className="api-key-meta">
               <code>{apiKey.hint}…</code>
               <span aria-hidden="true">·</span>
+              <span>{roleSaid(apiKey.role)} here</span>
+              <span aria-hidden="true">·</span>
               <span>
                 Made <Time at={apiKey.at} />
               </span>
@@ -194,7 +198,7 @@ function KeyRow(
         {open
           ? (
             <div className="api-key-ref">
-              <Reference allowed={apiKey} />
+              <Reference scope={apiKey.scope ?? {}} />
             </div>
           )
           : null}
@@ -204,8 +208,14 @@ function KeyRow(
 }
 
 /** Revoking a key, once they've read what it means. */
-function Revoke(
-  { apiKey, onClose, call }: { apiKey?: ApiKey; onClose(): void; call: Call },
+export function Revoke(
+  { apiKey, onClose, call, theirs }: {
+    apiKey?: ApiKey;
+    onClose(): void;
+    call: Call;
+    /** Whose it is, when it isn't the viewer's: a manager revoking someone's key. */
+    theirs?: string;
+  },
 ): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -245,7 +255,9 @@ function Revoke(
       }
     >
       <p className="api-note">
-        Code that uses it stops working at once. You can't undo this: make a new key instead.
+        {theirs
+          ? `Code that uses it stops working at once, and it leaves this space. You can't undo this: ${theirs} can make a new key.`
+          : "Code that uses it stops working at once. You can't undo this: make a new key instead."}
       </p>
       {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
     </Dialog>
@@ -253,7 +265,7 @@ function Revoke(
 }
 
 /** Trying a key with curl, the key in a variable. */
-function TryIt({ allowed }: { allowed: Allowed }): ReactNode {
+function TryIt({ scope, space }: { scope: Scope; space: string }): ReactNode {
   const origin = appBase();
   return (
     <section className="api-try" aria-labelledby="api-try-title">
@@ -262,7 +274,7 @@ function TryIt({ allowed }: { allowed: Allowed }): ReactNode {
         With a key in <code>${VARIABLE}</code>, from a terminal:
       </p>
       <div className="api-try-list">
-        {snippets(origin, allowed).map((s) => (
+        {snippets(origin, scope, { space }).map((s) => (
           <CodeBlock key={s.title} title={s.title} code={s.code} copy={s.text} />
         ))}
       </div>

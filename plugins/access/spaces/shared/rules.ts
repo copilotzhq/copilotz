@@ -14,10 +14,12 @@
  * managers', and read by whom they're to (by the email they signed in with).
  * A contact's own read from its browser (`direct`) names what of its own it
  * reads, 32 ids at most: its chats or documents, or its memberships by its key.
+ * Spaces, memberships, invitations and requests are never written directly
+ * from outside (`direct`): who's where changes only through their Actions.
  */
 import { type Actor, failure, type Filter, type Guard } from "../../../../runtime/mod.ts";
 import { membersOf } from "./agents.ts";
-import { homeOf, memberKey, type Reach, reachOf, type Verb, where } from "./reach.ts";
+import { homeOf, keyOf, memberKey, type Reach, reachOf, type Verb, where } from "./reach.ts";
 
 /**
  * The `shared` resource: collections whose documents live in spaces, the
@@ -79,6 +81,13 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
   const shared = (ctx.resources.shared ?? {}) as Shared;
   const own = ["space", "member", "request", "invitation"];
   if (!Object.hasOwn(shared, collection) && !own.includes(collection)) return undefined;
+  if (direct && access === "write" && own.includes(collection)) {
+    throw failure(
+      "forbidden",
+      "Spaces, their members, invitations and requests change through their Actions.",
+      { public: true },
+    );
+  }
   // A contact's own read from its browser names what of its own it reads (anything wider would
   // run again on every change to the collection): of these, only its memberships, by its key.
   const mineOnly = direct && actor.kind === "contact";
@@ -90,7 +99,8 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
   const reach = await reachOf(actor, ctx);
   if (collection === "invitation") {
     const managed = { space: { $in: where(reach, "manage") } };
-    if (access === "write" || actor.kind !== "person" || actor.within) return managed;
+    // A key isn't who an invitation to its person's email is for.
+    if (access === "write" || actor.kind !== "person" || keyOf(actor)) return managed;
     const { email } = await ctx.call<{ email: string | null }>("person.email", {
       person: actor.id,
     });
@@ -106,7 +116,7 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
     const spaces = where(by, access === "read" ? "read" : "manage");
     if (collection === "space") return { _id: { $in: spaces } };
     // Where a contact is a member, asked by its own key: it finds its chats so. (Anyone else
-    // reads memberships as far as they reach, as below: a key `within` a space, that space.)
+    // reads memberships as far as they reach, as below: a developer key, its space's.)
     if (access === "read" && actor.kind === "contact" && filter?.member === memberKey(actor)) {
       return { member: memberKey(actor) };
     }

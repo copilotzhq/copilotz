@@ -3,10 +3,15 @@
  * an untrusted worker bound to its person. Every read, call and emit it makes
  * is that person's, under the rules, without secret fields.
  *
- * - **Admission:** the host's `admit` turns what a browser presents (a
- *   one-time ticket) into its person; the person rides on the connection.
+ * - **Admission:** the runtime's tickets (`POST /connect`, see tickets.ts
+ *   and fetch.ts) turn what a browser presents (a one-time ticket) into its
+ *   actor; the actor rides on the connection.
  * - **What it asks** (calls of its own, outside any job): reads, which are
- *   watched from then on; Actions; declared events; reads it no longer needs.
+ *   watched from then on; writes to a collection, as its own (see
+ *   `admitted` and `writeOutside`, owner.ts: only where a rule speaks for
+ *   the collection's writes, never its private fields, within its reach);
+ *   Actions, with its own call id when it gives one; declared events; reads
+ *   it no longer needs.
  * - **What it's told:** a read's new result once a commit changes it, over
  *   one session stream per connection. A read is watched by observing a View
  *   that makes it, as the person: what the rules read to know their reach is
@@ -30,7 +35,7 @@
  *   its tags: as many times that as the network counts, `scaleOf`), 300 on
  *   each web line (`actor.web`), 400 in all: well under what a listener
  *   holds (`LISTENER`, Oxian's), so people always find room. Runtimes on one
- *   listener (the orgs host's orgs) count their contacts together too, with
+ *   listener (a directory's orgs) count their contacts together too, with
  *   one `contactsPool()` given to each. People's connections never count
  *   against those. A contact reads a collection directly only with `find`,
  *   `findOne` or `count`, its filter and options (or a query's params) 2 KB
@@ -43,10 +48,11 @@
  *   resume credentials go, and a connection let in before is never ready.
  */
 import type { JsonObject, WorkInput } from "@oxian/oxian-js";
+import { holderOf } from "./actor.ts";
 import type { ViewContext } from "./define.ts";
 import type { Observers, Output } from "./observe.ts";
-import type { ReadOp } from "./ops.ts";
-import type { Actor, Filter } from "./store.ts";
+import type { ReadOp, WriteOp } from "./ops.ts";
+import type { Actor } from "./store.ts";
 import { failure as refusal } from "./errors.ts";
 import { expiring } from "./expiring.ts";
 import { scaleOf } from "./caller.ts";
@@ -55,9 +61,10 @@ import { decode, encode, type Failure, failure } from "./wire.ts";
 
 /** A browser connection's provider id, set at admission. */
 export const BROWSER = "core.browser";
-/** What a browser asks: reads (watched), reads no longer needed, Actions, events. */
+/** What a browser asks: reads (watched), reads no longer needed, writes, Actions, events. */
 export const READ = "core.read";
 export const UNWATCH = "core.unwatch";
+export const WRITE = "core.write";
 export const CALL = "core.call";
 export const EMIT = "core.emit";
 /**
@@ -147,7 +154,7 @@ const answer = (output: Output, actor: Actor): Answer =>
 
 /**
  * The most WebSockets one listener holds (Oxian's Node adapter's budget):
- * people, contacts, routes' sockets and, on the orgs host, every org's.
+ * people, contacts, routes' sockets and, behind a directory, every org's.
  */
 export const LISTENER: number = CONNECTION_BUDGET;
 
@@ -156,7 +163,7 @@ export const CONTACT_READ = 2_048;
 
 /**
  * Contacts' connections counted across runtimes that share a listener (the
- * orgs host's orgs), as many as `most` (400 unless said): `contactsPool()`,
+ * a directory's orgs), as many as `most` (400 unless said): `contactsPool()`,
  * given to each runtime (`browsers: { pool }`).
  */
 export type ContactsPool = { readonly held: Set<object>; readonly most: number };
@@ -185,6 +192,8 @@ export type BrowserLimits = {
   contacts?: number;
   /** Contacts' connections counted with other runtimes' on the same listener. */
   pool?: ContactsPool;
+  /** Each actor's tickets a minute, from `POST /connect` (30): its tabs and reconnects together. */
+  tickets?: number;
 };
 
 /** What's wrong with browser limits, if anything (checked as the runtime starts). */
@@ -199,6 +208,7 @@ export function limitsProblem(limits: BrowserLimits | undefined): string | undef
     ["network", limits.network],
     ["line", limits.line],
     ["contacts", limits.contacts],
+    ["tickets", limits.tickets],
   ];
   for (const [name, value] of counts) {
     if (value !== undefined && !(Number.isInteger(value) && (value as number) > 0)) {
@@ -213,9 +223,6 @@ export function limitsProblem(limits: BrowserLimits | undefined): string | undef
   return undefined;
 }
 
-/** Who an actor is, for counting what they hold. */
-const whoOf = (actor: Actor) => `${actor.kind}:${actor.id}`;
-
 /**
  * The pools a contact's connections are counted in with others' (none for
  * anyone else): every contact's here, its web line's, each network's it came from.
@@ -229,10 +236,6 @@ const poolsOf = (actor: Actor): string[] => {
     ...from.map((tag) => `from:${tag}`),
   ];
 };
-
-/** A read's filter, where it names one (find, findOne, count). */
-const filterOf = (remote: Remote): Filter | undefined =>
-  "op" in remote && "filter" in remote.op ? remote.op.filter as Filter : undefined;
 
 /** What a read says beyond its collection: its filter and options, or a query's params. */
 const sizeOf = (remote: Remote): number =>
@@ -265,14 +268,18 @@ type Connection = {
 export function createBrowsers(env: {
   observers: Pick<Observers, "observe">;
   /**
-   * Whether a rule speaks for an actor's reads of a collection: a browser
-   * reads nothing else directly. Asked with the read's filter (`direct`, for
-   * the rules): one that won't be watched as asked is refused (thrown).
+   * Refuses (thrown) an actor's own read or write of a collection, directly,
+   * unless a rule speaks for it (asked with its filter, `direct`, for the
+   * rules: one that won't be watched as asked is refused), its scope lists
+   * it, and it names no private field.
    */
-  ruled(actor: Actor, collection: string, filter?: Filter): Promise<boolean>;
-  /** Whether a query lets an actor run it (its `allow`). */
+  admitted(actor: Actor, op: ReadOp | WriteOp): Promise<void>;
+  /** An actor's own write to a collection, as theirs: admitted, within their reach. */
+  write(actor: Actor, op: WriteOp): Promise<unknown>;
+  /** Whether a query lets an actor run it (its `allow`, and the actor's scope). */
   askable(actor: Actor, collection: string, query: string, params: unknown): boolean;
-  call(action: string, input: unknown, actor: Actor): Promise<unknown>;
+  /** Calls an Action as an actor; with `id`, the caller's own id for it (theirs alone). */
+  call(action: string, input: unknown, actor: Actor, id?: string): Promise<unknown>;
   emit(type: string, data: Record<string, unknown>, actor: Actor): Promise<void>;
   dispatch(input: WorkInput): Promise<unknown>;
   limits?: BrowserLimits;
@@ -314,12 +321,12 @@ export function createBrowsers(env: {
   let ends = 0;
   const ended = expiring<string, number>(DAY);
   /** Whether an actor was ended after `since` (a count of ends). */
-  const endedSince = (actor: Actor, since: number) => (ended.get(whoOf(actor)) ?? 0) > since;
+  const endedSince = (actor: Actor, since: number) => (ended.get(holderOf(actor)) ?? 0) > since;
 
   /** Why a browser can't come in on `workerId` now (a refusal to throw), if it can't. */
   const full = (actor: Actor, workerId: string, since: number) => {
     if (endedSince(actor, since)) return refusal("forbidden", "Signed out: sign in again");
-    const theirs = held.get(whoOf(actor));
+    const theirs = held.get(holderOf(actor));
     const same = theirs?.get(workerId);
     const most = own(actor).sockets;
     // A tab already on two connections (one maybe half-open, after a network flap) isn't
@@ -346,7 +353,7 @@ export function createBrowsers(env: {
 
   /** A connection let in takes its place: as its actor's (its browser's), and in its pools. */
   const take = (place: Place) => {
-    const who = whoOf(place.actor);
+    const who = holderOf(place.actor);
     // A tab on two connections already gives up its oldest (never ready after this: refused there).
     const old = held.get(who)?.get(place.workerId);
     while (old && old.size >= 2) release(old.values().next().value!);
@@ -366,7 +373,7 @@ export function createBrowsers(env: {
   const release = (place: Place) => {
     if (places.get(place.via) !== place) return;
     places.delete(place.via);
-    const who = whoOf(place.actor);
+    const who = holderOf(place.actor);
     const theirs = held.get(who);
     const same = theirs?.get(place.workerId);
     same?.delete(place);
@@ -500,20 +507,12 @@ export function createBrowsers(env: {
                   "count, naming what of its own it reads",
               );
             }
-            let ruled: boolean;
             try {
-              ruled = await env.ruled(actor, read.op.collection, filterOf(read));
+              await env.admitted(actor, read.op);
             } catch (error) {
               return { key, error: { ...toldTo(actor, error), code: "forbidden" } };
             }
-            if (!ruled) {
-              return refused(
-                key,
-                `No rule lets a browser read "${read.op.collection}" directly: ` +
-                  "read it through one of its queries",
-              );
-            }
-          }
+          } else return refused(key, `A browser can't read ${read.op.op}`);
           return { key, ...await watch(connection, key, read) };
         }));
       }
@@ -523,8 +522,15 @@ export function createBrowsers(env: {
           connection.watches.delete(key);
         }
         return null;
+      case WRITE:
+        return await env.write(connection.actor, body.op as WriteOp);
       case CALL:
-        return await env.call(String(body.action), body.input ?? {}, connection.actor);
+        return await env.call(
+          String(body.action),
+          body.input ?? {},
+          connection.actor,
+          typeof body.id === "string" ? body.id : undefined,
+        );
       case EMIT:
         await env.emit(
           String(body.type),
@@ -588,7 +594,7 @@ export function createBrowsers(env: {
     resume: (actor: Actor, workerId: string) => {
       const secret = crypto.randomUUID() + crypto.randomUUID();
       resumes.set(secret, { actor, workerId });
-      const who = whoOf(actor);
+      const who = holderOf(actor);
       const theirs = (lately.get(who) ?? []).filter((kept) => resumes.get(kept));
       theirs.push(secret);
       while (theirs.length > limits.resumes) resumes.delete(theirs.shift()!);
@@ -615,7 +621,7 @@ export function createBrowsers(env: {
      * still someone gets. How many connections it had.
      */
     end: (actor: Actor, drain: (workerId: string) => void): number => {
-      const who = whoOf(actor);
+      const who = holderOf(actor);
       ended.set(who, ++ends);
       for (const secret of lately.get(who) ?? []) resumes.delete(secret);
       lately.delete(who);
@@ -650,7 +656,7 @@ export function createBrowsers(env: {
       context: { workload: string; definition: { providerId: string; workerId: string } },
     ) => {
       if (context.definition.providerId !== BROWSER) return undefined;
-      if (![READ, UNWATCH, CALL, EMIT].includes(context.workload)) return undefined;
+      if (![READ, UNWATCH, WRITE, CALL, EMIT].includes(context.workload)) return undefined;
       return async ({ input }: { input: ReadableStream<Uint8Array> }) => {
         const connection = connections.get(context.definition.workerId);
         try {

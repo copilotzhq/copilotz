@@ -1,8 +1,8 @@
 /**
  * Who's calling, as far as the network says: the caller's address, from the
  * header the app's front sets, believed only through the front. What a
- * plugin that limits callers by address reads them with (MCP's lines, the
- * the web lines), each from its own settings (`CallerSettings`).
+ * plugin that limits callers by address reads them with (MCP's servers,
+ * the web sites), from the app's one `caller` resource (`CallerSettings`).
  *
  * - **With `front`** (the front's secret): a request without it came around
  *   the front, straight to the app: it's refused (`refused`).
@@ -26,15 +26,16 @@
  * it's believed. A header anyone may send is believed only from the front:
  *
  * - `front`: the front's secret, which it sends in `x-copilotz-front` (the
- *   web host's own front header). A request without it came around the
+ *   header the runtime trusts its front by, see site.ts). A request without it came around the
  *   front, straight to the app: it's refused.
  * - `hops`: for a list the app's own proxies append to (`x-forwarded-for`:
  *   Cloud Run's appends the address it saw), the entry that many from the
  *   end. A list header needs it: its first entries are the caller's to say.
  *
- * Callers in `exempt` (CIDR ranges: a shared proxy such as OpenAI's, every
- * ChatGPT user's calls behind a few addresses) aren't limited by address;
- * the plugin's other limits still hold. An address that can't be read is
+ * A plugin may exempt CIDR ranges of its own (a shared proxy such as OpenAI's,
+ * every ChatGPT user's calls behind a few addresses): `callerFrom`'s `exempt`.
+ * Callers in them aren't limited by address; the plugin's other limits
+ * still hold. An address that can't be read is
  * counted with every other such call, as one caller. Without settings, no
  * limit goes by address.
  *
@@ -48,9 +49,13 @@
  *   before it: 2). Too few hops counts a caller's own entry; too many, a
  *   proxy's address, every caller's.
  */
-export type CallerSettings = { header: string; front?: string; hops?: number; exempt?: string[] };
+export type CallerSettings = { header: string; front?: string; hops?: number };
 
-/** The header the web host's front carries its secret in. */
+/** How the app knows who's calling: its `caller` resource, if it has one. */
+export const callerOf = (ctx: { resources: Record<string, unknown> }): CallerSettings | undefined =>
+  ctx.resources.caller as CallerSettings | undefined;
+
+/** The header the app's front carries its secret in (as site.ts reads it). */
 const FRONT = "x-copilotz-front";
 
 /** Headers that hold a list of addresses, each proxy appending its own: they need `hops`. */
@@ -71,10 +76,14 @@ const same = (a: string, b: string) => {
   return differ === 0;
 };
 
-/** Who calls, by the app's `caller` settings; undefined without them (nothing goes by address). */
+/**
+ * Who calls, by the app's `caller` settings; undefined without them (nothing goes by address).
+ * `exempt` are CIDR ranges (a plugin's, for what it serves) whose callers aren't limited by address.
+ */
 export function callerFrom(
   request: Request,
   caller: CallerSettings | undefined,
+  exempt?: string[],
 ): Caller | undefined {
   if (!caller) return undefined;
   if (caller.front !== undefined) {
@@ -86,7 +95,7 @@ export function callerFrom(
   const entry = caller.hops ? list.at(-caller.hops) : list.length === 1 ? list[0] : undefined;
   const at = entry ? addressOf(entry) : undefined;
   if (!at) return { counted: UNVOUCHED, exempt: false };
-  return { counted: countOf(at), exempt: inRanges(at, caller.exempt) };
+  return { counted: countOf(at), exempt: inRanges(at, exempt) };
 }
 
 /** What an address is counted as: IPv4 by itself, IPv6 by its /64. */
@@ -255,7 +264,13 @@ export function callerProblem(caller: CallerSettings | undefined): string | unde
   if (LISTS.includes(header) && caller.hops === undefined) {
     return `caller.header ${header} is a list whose first entries the caller writes: say its hops`;
   }
-  const bad = (caller.exempt ?? []).find((range) => !rangeOk(range));
-  if (bad !== undefined) return `caller.exempt: "${bad}" isn't a CIDR range (192.0.2.0/24)`;
   return undefined;
+}
+
+/** What's wrong with ranges a plugin exempts from limits by address, if anything. */
+export function exemptProblem(exempt: string[] | undefined): string | undefined {
+  if (exempt === undefined) return undefined;
+  if (!Array.isArray(exempt)) return "exempt is a list of CIDR ranges (192.0.2.0/24)";
+  const bad = exempt.find((range) => !rangeOk(range));
+  return bad === undefined ? undefined : `exempt: "${bad}" isn't a CIDR range (192.0.2.0/24)`;
 }

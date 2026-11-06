@@ -18,8 +18,8 @@ import {
   Input,
   message,
   Notice,
-  refreshOrgs,
 } from "../../../../../hosts/web/mod.ts";
+import { refreshOrgs } from "../../../directory/contract.ts";
 import {
   ORG_ROLES,
   orgRoleName,

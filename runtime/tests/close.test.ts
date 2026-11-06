@@ -8,28 +8,23 @@
 import { assert, assertEquals } from "@std/assert";
 import { type Actor, createRuntime, definePlugin, type Store } from "../mod.ts";
 import { connect } from "../client.ts";
+import { listen } from "../../hosts/web/node/serve.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
-import { host, tempFile, test } from "../../testing/mod.ts";
+import { tempFile, test, testWho, ticketFor } from "../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 
 test("a runtime closes promptly with a browser still connected", async () => {
   const topic = `close-test.${crypto.randomUUID()}`;
-  const tickets = new Map<string, Actor>();
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [],
+    plugins: [testWho],
     transports: [{ type: "in-process", config: { topic } }],
-    admit: (secret) => tickets.get(secret),
   });
   const client = connect({
     transport: { type: "in-process", config: { topic } },
-    ticket: () => {
-      const secret = crypto.randomUUID();
-      tickets.set(secret, ana);
-      return Promise.resolve(secret);
-    },
+    ticket: () => ticketFor(rt, ana),
     plugins: [],
   });
   try {
@@ -47,27 +42,20 @@ test("a runtime closes promptly with a browser still connected", async () => {
 });
 
 test("a runtime closes promptly with a browser connected over a socket", async () => {
-  const tickets = new Map<string, Actor>();
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [],
-    transports: [{ type: "websocket", config: { path: "/browsers" } }],
-    admit: (secret) => tickets.get(secret),
+    plugins: [testWho],
   });
-  const listener = await host(rt.hypervisor);
+  const listener = await listen(rt.fetch);
   const client = connect({
     transport: {
       type: "websocket",
       config: {
-        url: `ws://127.0.0.1:${new URL(String(listener.url)).port}/browsers`,
+        url: `ws://127.0.0.1:${new URL(String(listener.url)).port}/oxian`,
         allowInsecureLoopback: true,
       },
     },
-    ticket: () => {
-      const secret = crypto.randomUUID();
-      tickets.set(secret, ana);
-      return Promise.resolve(secret);
-    },
+    ticket: () => ticketFor(rt, ana),
     plugins: [],
   });
   try {

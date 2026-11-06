@@ -1,13 +1,13 @@
 /**
- * The voice plugin's settings (the `voice` resource): the phone lines the
- * app declares, by name. Each is a Twilio number whose calls this app
- * answers, with its space, its credentials, how it sounds and its limits.
- * `lineOf` gives a line with every default filled in, as the plugin uses it.
+ * The voice plugin's settings (the `voice` resource): the numbers the app
+ * declares, by name, as a flat map. Each is a Twilio number whose calls this
+ * app answers, with its space, its credentials, how it sounds and its limits.
+ * `declaredOf` gives a number with every default filled in, as the plugin uses it.
  */
 import type { Resources } from "../../../../runtime/mod.ts";
 
-/** A phone line the app declares: a Twilio number open to anyone who calls. */
-export type VoiceLine = {
+/** A number the app declares: a Twilio number open to anyone who calls. */
+export type DeclaredVoiceNumber = {
   /** The space its callers' chats live in (declared with the spaces plugin's `spaces`, or not). */
   in: string;
   /** Twilio's account SID (`AC…`) and auth token: the token signs Twilio's requests. */
@@ -46,16 +46,16 @@ export type VoiceLine = {
   keys?: boolean;
   /** How much calls may cost: see `Limits`. */
   limits?: Partial<Limits>;
-  /** With the orgs host, the org it's for (its id): no other org has it. */
-  org?: string;
+  /** Days its calls' records are kept, once they're over (`KEEP`, 30; 1 at least). */
+  keep?: number;
 };
 
 /**
- * What calls on a line may cost. Past them, a call isn't taken (Twilio rejects it as busy:
+ * What calls on a number may cost. Past them, a call isn't taken (Twilio rejects it as busy:
  * nothing is spent), or it ends politely.
  */
 export type Limits = {
-  /** Calls at once, and calls that went on in any 24 hours, on the line. */
+  /** Calls at once, and calls that went on in any 24 hours, on the number. */
   atOnce: number;
   perDay: number;
   /** The same, from one caller (by number), checked first. */
@@ -63,7 +63,7 @@ export type Limits = {
   callerPerDay: number;
   /**
    * The same, for all callers whose number is hidden, who can't be told apart: their own
-   * allowance, instead of one caller's (by default the line's `atOnce`, and half its `perDay`).
+   * allowance, instead of one caller's (by default the number's `atOnce`, and half its `perDay`).
    */
   hiddenAtOnce: number;
   hiddenPerDay: number;
@@ -79,7 +79,7 @@ export type Limits = {
 /**
  * 0.x's limits, kept (2 at once, 50 a day, 25 s an answer, 90 s of silence, 10 minutes, 30
  * things said a call), with a caller's own: 1 call at once, 10 a day; hidden numbers', together:
- * the line's at once, half its day (here 2 and 25); and 1,200 characters an answer (about 80
+ * the number's at once, half its day (here 2 and 25); and 1,200 characters an answer (about 80
  * seconds said).
  */
 export const LIMITS: Limits = {
@@ -96,7 +96,7 @@ export const LIMITS: Limits = {
   said: 1_200,
 };
 
-/** Days a call's record is kept (`keep`), and a caller's link to their contact. */
+/** Days a call's record is kept (a number's `keep`), and a caller's link to their contact. */
 export const KEEP = 30;
 
 /** Hours a caller's chat stays the one they're in, as WhatsApp's (12): calling back goes on. */
@@ -105,7 +105,7 @@ export const GAP = 12;
 /** What callers are told: the greeting, a turn that failed (never its error), and goodbye. */
 export type Texts = { greeting: string; failed: string; bye: string };
 
-/** The plugin's own lines, by a language's first part (`pt` of `pt-BR`); English for any other. */
+/** The plugin's own texts, by a language's first part (`pt` of `pt-BR`); English for any other. */
 export const TEXTS: Record<string, Texts> = {
   en: {
     greeting: "Hi! How can I help?",
@@ -119,58 +119,42 @@ export const TEXTS: Record<string, Texts> = {
   },
 };
 
-export type VoiceSettings = {
-  lines?: Record<string, VoiceLine>;
-  /**
-   * Days calls' records are kept, once they're over (`KEEP`, 30; 1 at least); then they go, with
-   * the number they had.
-   */
-  keep?: number;
-};
+/** The `voice` resource: the declared numbers, by name. */
+export type VoiceSettings = Record<string, DeclaredVoiceNumber>;
 
-/** Where every line's paths start: `/hooks/voice/<name>`, `…/relay`, `…/over`. */
+/** Where every number's paths start: `/hooks/voice/<name>`, `…/relay`, `…/over`. */
 export const HOOKS = "/hooks/voice/";
 
-/**
- * The app's own lines, by name, here: with the orgs host (each org's runtime
- * knows its org, `resources.org`), only those that name this org; a line
- * naming none is the single-org app's.
- */
-export const linesOf = (ctx: { resources: Resources }): Record<string, VoiceLine> => {
-  const all = ((ctx.resources.voice ?? {}) as VoiceSettings).lines ?? {};
-  const org = (ctx.resources.org as { id?: string } | undefined)?.id;
-  return Object.fromEntries(
-    Object.entries(all).filter(([, line]) => line && (org ? line.org === org : !line.org)),
+/** The numbers the app declares, by name. */
+export const numbersOf = (ctx: { resources: Resources }): VoiceSettings =>
+  Object.fromEntries(
+    Object.entries((ctx.resources.voice ?? {}) as VoiceSettings).filter(([, number]) => number),
   );
-};
 
 /** The longest a goodbye waits for what's being said, before Twilio's `end`; then closing. */
 export const GOODBYE_MS = 15_000;
 export const CLOSING_MS = 5_000;
 
 /** The longest a call lasts, from its socket opening: its limit, its goodbye, and closing. */
-export const lastsMs = (line: Pick<Line, "limits">) =>
+export const lastsMs = (line: Pick<VoiceNumber, "limits">) =>
   line.limits.call * 1000 + GOODBYE_MS + CLOSING_MS;
 
-/** Days calls' records are kept. */
-export const keepOf = (ctx: { resources: Resources }): number =>
-  ((ctx.resources.voice ?? {}) as VoiceSettings).keep ?? KEEP;
-
-/** A line as the plugin uses it: its settings, its name, and every default filled in. */
-export type Line = VoiceLine & {
+/** A number as the plugin uses it: its settings, its name, and every default filled in. */
+export type VoiceNumber = DeclaredVoiceNumber & {
   name: string;
   language: string;
   texts: Texts;
   limits: Limits;
   gap: number;
+  keep: number;
   /** Where Twilio calls: the webhook, the socket and the end of a call's relay. */
   urls: { hook: string; relay: string; over: string };
 };
 
-/** The line `name`, ready to use; undefined when the app declares none by that name. */
-export function lineOf(ctx: { resources: Resources }, name: string): Line | undefined {
-  const lines = linesOf(ctx);
-  const line = Object.hasOwn(lines, name) ? lines[name] : undefined;
+/** The number `name`, ready to use; undefined when the app declares none by that name. */
+export function declaredOf(ctx: { resources: Resources }, name: string): VoiceNumber | undefined {
+  const numbers = numbersOf(ctx);
+  const line = Object.hasOwn(numbers, name) ? numbers[name] : undefined;
   if (!line) return undefined;
   const language = line.language ?? "en-US";
   const own = TEXTS[language.split("-")[0].toLowerCase()] ?? TEXTS.en;
@@ -183,6 +167,7 @@ export function lineOf(ctx: { resources: Resources }, name: string): Line | unde
     texts: { ...own, ...line.texts },
     limits: limitsOf(line.limits),
     gap: line.gap ?? GAP,
+    keep: line.keep ?? KEEP,
     urls: {
       hook,
       relay: `${origin.protocol === "http:" ? "ws" : "wss"}://${origin.host}${
@@ -193,7 +178,7 @@ export function lineOf(ctx: { resources: Resources }, name: string): Line | unde
   };
 }
 
-/** A line's limits, the defaults filled in: hidden numbers' from the line's own. */
+/** A number's limits, the defaults filled in: hidden numbers' from the number's own. */
 function limitsOf(given: Partial<Limits> = {}): Limits {
   const merged = { ...LIMITS, ...given };
   return {
@@ -203,8 +188,8 @@ function limitsOf(given: Partial<Limits> = {}): Limits {
   };
 }
 
-/** What's wrong with a line's settings, if anything (checked when the app starts). */
-export function problemOf(name: string, line: VoiceLine): string | undefined {
+/** What's wrong with a number's settings, if anything (checked when the app starts). */
+export function problemOf(name: string, line: DeclaredVoiceNumber): string | undefined {
   for (const field of ["in", "account", "token", "origin"] as const) {
     if (typeof line?.[field] !== "string" || !line[field]) return `needs its ${field}`;
   }
@@ -227,5 +212,8 @@ export function problemOf(name: string, line: VoiceLine): string | undefined {
     if (typeof value !== "number" || !(value > 0)) return `limits.${key} is a number over 0`;
   }
   if (line.gap !== undefined && !(line.gap >= 0)) return "its gap is hours, 0 or more";
+  if (line.keep !== undefined && !(typeof line.keep === "number" && line.keep >= 1)) {
+    return "its keep is days, 1 or more";
+  }
   return undefined;
 }

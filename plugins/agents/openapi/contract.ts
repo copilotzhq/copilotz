@@ -41,8 +41,6 @@ export type OpenApiSettings = {
   maxFileBytes?: number;
   /** Media types a file may have (`image/*` matches every image); see `FILE_TYPES`. */
   fileTypes?: string[];
-  /** The `fetch` to call with (a proxy, a test's). */
-  fetch?: typeof fetch;
 };
 
 /** What `openapi()` takes: the API's name, its spec, which operations, and its settings. */

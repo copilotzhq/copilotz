@@ -1,7 +1,7 @@
 /**
  * Calls running now, counted by the MCP route for its limits at once: in
  * the runtime, on a line, from a caller's address, in a conversation. Kept
- * by runtime, so under the orgs host (a runtime each) one org's calls never
+ * by runtime, so behind a directory (a runtime each) one org's calls never
  * take another's places. A request takes its places whole or not at all,
  * and gives them back once it's answered. In this process's memory: a
  * runtime's calls all come through it.

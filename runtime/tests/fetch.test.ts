@@ -139,7 +139,7 @@ test("the app's own hosts: any other is host routes' alone, and the app's own ne
     definePlugin({ name: "app", routes }),
     definePlugin({
       name: "settings",
-      resources: { hosts: { own: ["app.test", "*.run.test", "own.sites.test"] } },
+      resources: { hosts: { "app.test": true, "*.run.test": true, "own.sites.test": true } },
     }),
   ]);
   try {
@@ -165,7 +165,7 @@ test("the app's own hosts: any other is host routes' alone, and the app's own ne
       definePlugin({
         name: "settings",
         resources: {
-          hosts: { own: ["app.test"] },
+          hosts: { "app.test": true },
           caller: { header: "cf-connecting-ip", front: "the-front-secret-0123" },
         },
       }),
@@ -214,11 +214,24 @@ test("without the app's own hosts named, every host is the app's: a route for ev
   } finally {
     await rt.close();
   }
-  for (const own of [[], ["https://app.test"], ["app test"], "app.test"]) {
+  // An entry per host, each true: a list, and the shape before rc.26 (`{ own: [...] }`), are refused.
+  const wrong: unknown[] = [
+    {},
+    { "https://app.test": true },
+    { "app test": true },
+    { "app.test": "yes" },
+    "app.test",
+    ["app.test"],
+    { own: ["app.test"] },
+  ];
+  for (const hosts of wrong) {
     await assertRejects(
-      () => runtimeWith([definePlugin({ name: "s", resources: { hosts: { own } } })]),
+      () =>
+        runtimeWith([
+          definePlugin({ name: "s", resources: { hosts: hosts as Record<string, unknown> } }),
+        ]),
       Error,
-      "hosts.own",
+      "hosts",
     );
   }
 });

@@ -19,7 +19,7 @@
  * - anything else: the org the browser is in (its `org` cookie), going in
  *   first when a page needs it to; for someone signed in nowhere, the
  *   lobby (`directory.lobby`: the sign-in page);
- * - a host an org claimed (with the app's own named, `hosts.own`): that
+ * - a host an org claimed (with the app's own named, `hosts`): that
  *   org's routes by host alone; `GET /__copilotz/hosts/resolve` says whose
  *   a host is, for the app's front.
  *
@@ -36,7 +36,7 @@
  * const dir = await createRuntime({ store, plugins: [identity, googleSignIn, directory,
  *   definePlugin({ name: "d", resources: {
  *     directory: { staff: ["you@example.com"], orgs, lobby },
- *     hosts: { own: ["app.example.com"] },
+ *     hosts: { "app.example.com": true },
  *   } })] });
  * const orgs = runtimes(async (id) => {
  *   const org = await dir.query("org.info", { org: id });
@@ -134,7 +134,7 @@ const plugin: Plugin = definePlugin({
     "/o/:org": addressedRoute,
     "/o/:org/*": addressedRoute,
     "/*": currentRoute,
-    // Every host but the app's own (`hosts.own`): those orgs claimed.
+    // Every host but the app's own (`hosts`): those orgs claimed.
     "*://*:*/*": claimedRoute,
   },
   // Its session is identity's, in today's cookie: `dir` (`__Host-dir` wherever it's Secure).

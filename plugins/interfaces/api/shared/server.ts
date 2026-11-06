@@ -1,7 +1,7 @@
 /**
  * The developer API over HTTP, under `/api/`. Code calls with a key
- * (`Authorization: Bearer <key>`), as the key's person, narrowed to its
- * space, and only for what the key lists:
+ * (`Authorization: Bearer <key>`), as the key's person, in its space, and
+ * only for what its scope lists:
  *
  * - `POST /api/actions/<name>`: calls an Action, the body its input (an
  *   Action that takes a space, `in`, gets the key's when the body names
@@ -13,19 +13,20 @@
  *   (`llm.thread`); `?follow=1` keeps sending it as it changes.
  * - `GET /api/events`: what the key may see, as it happens (see events.ts).
  * - `GET /api/`: the key's reference (each Action's description and input
- *   schema, its queries and Views). From the app's own page, signed in, the
- *   catalog of Actions instead, for choosing what a key does.
+ *   schema, its queries, Views and collections). From the app's own page,
+ *   signed in, the catalog of Actions instead, for choosing what a key does.
  *
  * Errors are JSON, `{ error: { code, message } }`, with the status their
- * code says. The runtime checks each Action's and query's `allow` and the
- * rules, as for any outside call; the key's lists are checked here first.
+ * code says. The runtime checks everything a call from outside is checked
+ * for: each Action's and query's `allow`, the key's scope, and the rules.
  *
  * It runs in the web host's process (a `serve` route) and needs the runtime
- * the host hands it: calls by id, `allow`, `describe()` and following
- * events are the runtime's public API, not plugin code's.
+ * the host hands it: calls by id, `describe()` and following events are the
+ * runtime's public API, not plugin code's.
  */
 import type { Actor, Runtime } from "../../../../runtime/mod.ts";
-import type { Proven } from "../collections/key.ts";
+import type { ApiKey } from "../collections/key.ts";
+import type { KeyActor } from "./actor.ts";
 import { eventStream } from "./events.ts";
 import { answerFor, bodyOf, CORS, failure, fault, json } from "./http.ts";
 import { catalogOf, referenceOf, takesSpace } from "./reference.ts";
@@ -39,6 +40,9 @@ export type Served = {
 /** A key's last use is noted at most this often. */
 const USED_EVERY_MS = 60_000;
 
+/** When each key's use was last noted, by runtime: at most once a minute each. */
+const noted = new WeakMap<object, Map<string, number>>();
+
 const unauthorized = () =>
   failure(
     401,
@@ -47,14 +51,18 @@ const unauthorized = () =>
     { "www-authenticate": 'Bearer realm="api"' },
   );
 
-const notAllowed = (what: string, name: string) =>
-  fault("forbidden", `This key may not ${what} "${name}": its person can let it, in the API tab.`);
-
-/** The key a request shows, and who calling with it is; null when it shows none that works. */
-async function proven(request: Request, runtime: Served["runtime"]): Promise<Proven | null> {
+/** Who calls with a request's key (its person, with its scope); null when none that works. */
+async function proven(request: Request, runtime: Served["runtime"]): Promise<KeyActor | null> {
   const [scheme, secret] = (request.headers.get("authorization") ?? "").split(/\s+/, 2);
   if (scheme?.toLowerCase() !== "bearer" || !secret) return null;
-  return await runtime.query<Proven | null>("api_key.actor", { secret });
+  return await runtime.query<KeyActor | null>("api_key.actor", { secret });
+}
+
+/** The key calling, as its person reads it (its name, its space): the system's read. */
+async function keyOf(runtime: Served["runtime"], actor: KeyActor): Promise<ApiKey> {
+  const key = await runtime.query<ApiKey | null>("api_key.get", { key: actor.key });
+  if (!key) throw fault("unauthorized", "The key was revoked.");
+  return key;
 }
 
 /** The name after a prefix of the path, decoded: `/api/actions/chat.send` → `chat.send`. */
@@ -67,13 +75,13 @@ const nameAfter = (path: string, prefix: string) => {
 };
 
 /** An Action's call id, from the caller's `Idempotency-Key`: its own, within the key's. */
-function callId(request: Request, proven: Proven): string | undefined {
+function callId(request: Request, actor: KeyActor): string | undefined {
   const given = request.headers.get("idempotency-key");
   if (given === null) return undefined;
   if (!/^[\x21-\x7e]{1,200}$/.test(given)) {
     throw fault("invalid", "An Idempotency-Key is 1 to 200 visible ASCII characters.");
   }
-  return `api:${proven.actor.key}:${given}`;
+  return `api:${actor.key}:${given}`;
 }
 
 /** Answers a request under `/api/`. */
@@ -90,8 +98,8 @@ export async function serveApi(request: Request, host?: Served): Promise<Respons
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api\/?/, "/");
   try {
-    const key = await proven(request, runtime);
-    if (!key) {
+    const actor = await proven(request, runtime);
+    if (!actor) {
       // The app's own page, signed in: every Action, to choose what a key does.
       const person =
         path === "/" && request.method === "GET" && !request.headers.has("authorization")
@@ -100,8 +108,7 @@ export async function serveApi(request: Request, host?: Served): Promise<Respons
       if (person?.kind === "person") return json({ actions: catalogOf(runtime.describe()) });
       return unauthorized();
     }
-    used(runtime, key);
-    const { actor } = key;
+    used(runtime, actor);
     const described = runtime.describe();
     const action = nameAfter(path, "/actions/");
     const query = nameAfter(path, "/queries/");
@@ -109,40 +116,34 @@ export async function serveApi(request: Request, host?: Served): Promise<Respons
 
     if (path === "/") {
       if (request.method !== "GET") throw fault("method", "Use GET for the reference.");
+      const key = await keyOf(runtime, actor);
       return json({
-        ...referenceOf(described, key.key),
-        key: { name: key.key.name, in: key.key.in, hint: key.key.hint },
+        ...referenceOf(described, actor.scope),
+        key: { name: key.name, in: key.in, hint: key.hint, role: key.role },
       });
     }
     if (action !== undefined) {
       if (request.method !== "POST") throw fault("method", "Call Actions with POST.");
-      if (!key.key.actions.includes(action)) throw notAllowed("call", action);
-      if (!described.actions[action]) throw fault("not_found", `No Action "${action}" here.`);
-      const id = callId(request, key);
+      const id = callId(request, actor);
       let input = await bodyOf(request);
+      // An Action that takes a space works in the key's, unless the body names one.
       if (
         input && typeof input === "object" && !Array.isArray(input) && !("in" in input) &&
         takesSpace(described, action)
-      ) input = { ...input, in: actor.within };
+      ) input = { ...input, in: (await keyOf(runtime, actor)).in };
       return json(await runtime.call(action, input, { actor, ...(id ? { id } : {}) }));
     }
     if (query !== undefined) {
       if (request.method !== "POST") throw fault("method", "Run queries with POST.");
-      if (!key.key.queries.includes(query)) throw notAllowed("run", query);
       return json(await runtime.query(query, await bodyOf(request), { actor }));
     }
     if (view !== undefined) {
       if (request.method !== "GET") throw fault("method", "Read Views with GET.");
-      if (!(key.key.views ?? []).includes(view)) throw notAllowed("read", view);
       return await viewOf(runtime, url, view, actor);
     }
     if (path === "/events") {
       if (request.method !== "GET") throw fault("method", "Follow events with GET.");
-      return eventStream(
-        runtime,
-        key,
-        async () => !!await proven(request, runtime),
-      );
+      return eventStream(runtime, actor, async () => !!await proven(request, runtime));
     }
     throw fault("not_found", `Nothing at ${url.pathname}: see GET /api/ for what this key can do.`);
   } catch (error) {
@@ -151,19 +152,25 @@ export async function serveApi(request: Request, host?: Served): Promise<Respons
 }
 
 /** Notes the key's use, at most once a minute, without waiting for it. */
-function used(runtime: Served["runtime"], { key }: Proven) {
+function used(runtime: Served["runtime"], actor: KeyActor) {
+  let last = noted.get(runtime);
+  if (!last) noted.set(runtime, last = new Map());
   const now = Date.now();
-  if (key.used && now - Date.parse(key.used) < USED_EVERY_MS) return;
-  void runtime.call("api_key.used", { key: key._id, at: new Date(now).toISOString() })
+  if (now - (last.get(actor.key) ?? 0) < USED_EVERY_MS) return;
+  last.set(actor.key, now);
+  void runtime.call("api_key.used", { key: actor.key, at: new Date(now).toISOString() })
     .catch(() => {});
 }
 
-/** A View as the key reads it: once, or (`follow=1`) as server-sent events while it changes. */
+/**
+ * A View as the key reads it (one its scope lists: the runtime says): once,
+ * or (`follow=1`) as server-sent events while it changes.
+ */
 async function viewOf(
   runtime: Served["runtime"],
   url: URL,
   name: string,
-  actor: Proven["actor"],
+  actor: KeyActor,
 ): Promise<Response> {
   let item: unknown = {};
   const given = url.searchParams.get("item");

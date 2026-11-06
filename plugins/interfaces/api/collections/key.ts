@@ -1,79 +1,122 @@
 /**
  * Developer keys: what code shows to call the app (`Authorization: Bearer
- * <key>`). A key is its person's, works in one space (`in`) and does only
- * what it lists: Actions, queries and Views by name. Only a hash of its
- * secret is kept (its `_id`): the secret is shown once, when it's made.
- * Deleting one revokes it. Each person reads only their own.
+ * <key>`). A key is its person's, a member of one space (`in`, as
+ * `key:<id>`, with its `role`), and may use only what its `scope` lists:
+ * Actions, queries and Views, and collections read and written directly, by
+ * name. Its id is the start of its secret's hash, and only that hash is kept
+ * (`hash`, never read from outside): the secret is shown once, when it's made.
  *
- * Shaped to fold into the identity plugin's credentials (a key there, with
- * `in` and the lists), so the two never differ in meaning.
+ * Its record lives in its space (the spaces plugin's `shared`): whoever reads
+ * the space sees its keys, and its managers revoke them; a key itself, or an
+ * agent working for one, never reads or changes a key (shared/rules.ts).
  */
-import { defineCollection, type Infer, inPerson } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, inPerson, type Scope } from "../../../../runtime/mod.ts";
 import { hash } from "../shared/secret.ts";
 import { isKey, type KeyActor } from "../shared/actor.ts";
 
 const names = { type: "array", items: { type: "string" } } as const;
 
+/** The spaces plugin's own records, which live in spaces too (a space, its memberships…). */
+export const PLACED = new Set(["space", "member", "request", "invitation"]);
+
 const keySchema = {
   type: "object",
   properties: {
+    /** The SHA-256 of its secret, hex: what a secret is looked up by. */
+    hash: { type: "string" },
     /** Whom it acts as. */
     person: { type: "string" },
-    /** The space it works in: what it reaches, and where what it makes goes. */
+    /** The space it's a member of: what it reaches, and where what it makes goes. */
     in: { type: "string" },
     /** What its person calls it ("Support bot"). */
     name: { type: "string" },
     /** The first characters of its secret, to tell keys apart. */
     hint: { type: "string" },
-    /** What it may do: Actions, queries (`message.conversation`) and Views (`thread`), by name. */
-    actions: names,
-    queries: names,
-    views: names,
+    /** Its role in its space, as its scope says: `editor` when it calls or writes, else `viewer`. */
+    role: { type: "string", enum: ["editor", "viewer"] },
+    /** What it may use, by exact name. */
+    scope: {
+      type: "object",
+      properties: { call: names, query: names, view: names, read: names, write: names },
+      additionalProperties: false,
+    },
     /** When it was last used (to the minute). */
     used: { type: "string" },
     at: { type: "string" },
   },
-  required: ["person", "in", "name", "hint", "actions", "queries", "at"],
+  required: ["hash", "person", "in", "name", "hint", "role", "scope", "at"],
 } as const;
 
-export type ApiKey = Infer<typeof keySchema> & { _id: string };
+/** A key as it's read from outside: everything but its hash. */
+export type ApiKey = {
+  _id: string;
+  person: string;
+  in: string;
+  name: string;
+  hint: string;
+  role: "editor" | "viewer";
+  scope: Scope;
+  used?: string;
+  at: string;
+};
 
-/** What a secret proves: the key, and who calling with it is. */
-export type Proven = { key: ApiKey; actor: KeyActor };
+/** A key as it's kept. */
+export type StoredKey = Infer<typeof keySchema> & ApiKey;
+
+/** A key's actor: its person, with which key it is and what it may use. */
+export const actorOf = (key: Pick<ApiKey, "_id" | "person" | "scope">): KeyActor => ({
+  kind: "person",
+  id: key.person,
+  key: key._id,
+  scope: key.scope,
+});
 
 export const apiKey = defineCollection({
   schema: keySchema,
-  indexes: [["person"]],
+  indexes: [["hash"], ["person"], ["in"]],
+  private: ["hash"],
   queries: {
-    /** The asker's keys (in a space, with `in`), newest first, without their secrets. */
+    /** The asker's own keys (in a space, with `in`), newest first. */
     mine: {
       allow: inPerson,
-      run: (keys, params: { in?: string } = {}) =>
-        keys.find(params.in ? { in: params.in } : {}, { sort: { at: -1 } }),
+      run: (keys, params: { in?: string } = {}, ctx) =>
+        keys.find(
+          { person: ctx.actor?.id ?? "", ...(params.in ? { in: params.in } : {}) },
+          { sort: { at: -1 } },
+        ),
     },
     /**
-     * What a secret proves, if anything: the key and who calling with it is
-     * (its person, narrowed to its space). The system's: the API asks it once
-     * per request.
+     * Who a secret proves, if anyone: the key's person, with the key and its
+     * scope. The system's: the API asks it once per request.
      */
-    actor: async (keys, params: { secret: string }): Promise<Proven | null> => {
-      const found = await keys.findOne({ _id: await hash(String(params.secret ?? "")) });
+    actor: async (keys, params: { secret: string }): Promise<KeyActor | null> => {
+      const found = await keys.findOne({ hash: await hash(String(params.secret ?? "")) });
+      return found ? actorOf(found as StoredKey) : null;
+    },
+    /** A key by its id, without its hash: what the API says of the key calling. The system's. */
+    get: async (keys, params: { key: string }): Promise<ApiKey | null> => {
+      const found = await keys.findOne({ _id: String(params.key ?? "") });
       if (!found) return null;
-      return {
-        key: found as ApiKey,
-        actor: { kind: "person", id: found.person, key: found._id.slice(0, 12), within: found.in },
-      };
+      const { hash: _, ...key } = found as Record<string, unknown>;
+      return key as ApiKey;
     },
     /**
-     * Documents of a collection by id, as the asker reads them (the rules,
-     * without private fields): what the API's event stream shows of a change.
+     * Documents of a collection that lives in spaces, by id, as a key reads
+     * them (the rules, without private fields): what the API's event stream
+     * shows of a change. Only as the stream asks it, for the key without its
+     * scope (the stream follows the rules): a key calling with its own scope
+     * never runs it.
      */
     see: {
-      allow: (actor) => isKey(actor),
-      run: (_, params: { collection: string; ids: string[] }, ctx) =>
-        ctx.db.collection(String(params.collection)).find({
+      allow: (actor) => isKey(actor) && actor.scope === undefined,
+      run: (_, params: { collection: string; ids: string[] }, ctx) => {
+        const collection = String(params.collection);
+        const shared = (ctx.resources.shared ?? {}) as Record<string, unknown>;
+        if (!PLACED.has(collection) && !Object.hasOwn(shared, collection)) return [];
+        return ctx.db.collection(collection).find({
           _id: { $in: (params.ids ?? []).map(String) },
-        }),
+        });
+      },
     },
   },
 });

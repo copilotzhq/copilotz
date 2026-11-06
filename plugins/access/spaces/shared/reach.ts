@@ -4,9 +4,12 @@
  * `manage`), and the documents shared with them on their own (a contact's
  * chat), each with the space it lives in (`home`). An agent acting for
  * someone reaches what both reach: a space, or a document one of them reaches
- * on its own and the other through its space. An actor limited to one space
- * (`within`: a key's work) reaches only that. Everything that asks what
- * someone may do asks here, so those limits hold everywhere.
+ * on its own and the other through its space. A key of a person's
+ * (`actor.key`) is a member of its space, `key:<id>`, and works for its
+ * person the same way: it reaches what its membership and its person both
+ * reach, and has no org role, so even an admin's key reaches only its space,
+ * at its role. Everything that asks what someone may do asks here, so those
+ * limits hold everywhere.
  */
 import type { Actor, ReadContext } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
@@ -47,8 +50,15 @@ const RUN = new Set<string>(["owner", "admin"]);
 export const runsOrg = (role?: string | null): boolean => !!role && RUN.has(role);
 const ALL: Verb[] = ["read", "write", "manage"];
 
-/** How an actor appears as a member: `person:ana`. */
-export const memberKey = (actor: { kind: string; id: string }) => `${actor.kind}:${actor.id}`;
+/** The key of a person's an actor calls with (`actor.key`), if it's one. */
+export const keyOf = (actor: { kind: string; key?: unknown }): string | undefined =>
+  actor.kind === "person" && typeof actor.key === "string" ? actor.key : undefined;
+
+/** How an actor appears as a member: `person:ana`; a key of hers, `key:<id>`. */
+export const memberKey = (actor: { kind: string; id: string; key?: unknown }): string => {
+  const key = keyOf(actor);
+  return key === undefined ? `${actor.kind}:${actor.id}` : `key:${key}`;
+};
 
 export const rolesOf = (ctx: Pick<ReadContext, "resources">): Record<string, Verb[]> =>
   // No prototype: a role is one the app names, so "toString" or "__proto__" is no role at all.
@@ -89,9 +99,9 @@ async function walk(key: string, ctx: ReadContext): Promise<Reach> {
   return reach;
 }
 
-/** Someone's role in the org, if they have one. */
+/** Someone's role in the org, if they have one: never a key's. */
 export async function orgRoleOf(actor: Actor, ctx: ReadContext): Promise<OrgRole | undefined> {
-  if (actor.kind !== "person") return undefined;
+  if (actor.kind !== "person" || keyOf(actor) !== undefined) return undefined;
   const held = await ctx.db.collection<Member>("member").findOne({
     _id: `${ORG}|${memberKey(actor)}`,
   });
@@ -106,29 +116,33 @@ async function everything(ctx: ReadContext): Promise<Reach> {
   return reach;
 }
 
-/** What `actor` reaches; an agent acting for someone (`for`), what both reach. */
+/**
+ * What `actor` reaches; an agent acting for someone (`for`), what both
+ * reach; a key, what it and its person both reach.
+ */
 export async function reachOf(actor: Actor, ctx: ReadContext): Promise<Reach> {
   const reach = await unlimited(actor, ctx);
-  const { within } = actor;
-  const limited = typeof within === "string"
-    ? new Map([...reach].filter(([space]) => space === within))
-    : reach;
   // A space put away is read and managed, not written in, until it's brought back: nor what's in it.
   const archived = new Set(
     (await ctx.db.collection("space").find({ archived: { $exists: true } })).map((s) =>
       String(s._id)
     ),
   );
-  for (const [key, held] of limited) {
+  for (const [key, held] of reach) {
     if (held.can.has("write") && archived.has(held.home ?? key)) {
-      limited.set(key, { ...held, can: new Set([...held.can].filter((v) => v !== "write")) });
+      reach.set(key, { ...held, can: new Set([...held.can].filter((v) => v !== "write")) });
     }
   }
-  return limited;
+  return reach;
 }
 
+/** Whom an actor works for: an agent, whoever it acts for (`for`); a key, the person whose it is. */
+const worksFor = (actor: Actor): Actor | undefined =>
+  (actor.for as Actor | undefined) ??
+    (keyOf(actor) !== undefined ? { kind: "person", id: actor.id } : undefined);
+
 async function unlimited(actor: Actor, ctx: ReadContext): Promise<Reach> {
-  const principal = actor.for as Actor | undefined;
+  const principal = worksFor(actor);
   if (!principal) {
     if (actor.kind === "person" && actor.staff === true) return await everything(ctx);
     const role = await orgRoleOf(actor, ctx);

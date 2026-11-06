@@ -82,7 +82,7 @@ export type Context = {
   /**
    * Ends an actor's browsers, when who they were ends (signed out, erased):
    * each connection closes, and comes back only with a new ticket. How many
-   * it ended.
+   * it ended. A key of a person's (`actor.key`) is ended apart from them.
    *
    * Like `cancel`, it checks nothing of who asks: plugins are trusted code,
    * and it's theirs to call only once who the actor was has ended (a sign-out,

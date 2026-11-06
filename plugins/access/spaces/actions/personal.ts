@@ -11,7 +11,8 @@ export const personalAction = defineAction({
   allow: people,
   run: async (ctx) => {
     const id = `personal:${ctx.actor!.id}`;
-    const who = memberKey(ctx.actor!);
+    // Its person's, even asked by a key of theirs.
+    const who = memberKey({ kind: "person", id: ctx.actor!.id });
     const system = ctx.as();
     if (!await system.db.collection("space").findOne({ _id: id })) {
       await system.transaction(async (tx) => {

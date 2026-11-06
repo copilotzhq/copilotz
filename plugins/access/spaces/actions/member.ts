@@ -8,9 +8,11 @@
  * People join a space by accepting an invitation (`invitation.send`) or a
  * request they made: here, a person who's in already only changes role.
  * An agent joins at once, as a viewer or an editor, if the manager adding
- * it has met it (see agents.ts); taken out, it no longer answers there.
+ * it has met it (see agents.ts); taken out, it no longer answers there. A
+ * key (`{ kind: "key", id }`) is seated by the plugin that made it, with
+ * the role what it may do says; its managers take it out (which revokes it).
  */
-import { type Context, defineAction, forbidden, people } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, forbidden, invalid, people } from "../../../../runtime/mod.ts";
 import { mustKnow, unseat } from "../shared/agents.ts";
 import { keepsAManager } from "../shared/managers.ts";
 import { joinable } from "../shared/personal.ts";
@@ -69,6 +71,12 @@ export const setMemberAction = defineAction({
   allow: people,
   run: async (ctx, input) => {
     if (input.space === ORG) throw forbidden("Org roles change with org.role.");
+    // A key's role follows from what it may do: only trusted code (its plugin's) seats one.
+    if (input.member.kind === "key" && ctx.actor && ctx.actor.kind !== "system") {
+      throw invalid(
+        "A key's role follows from what it may do: make another key for something else.",
+      );
+    }
     const place = await manages(ctx, input.space, input.on);
     const key = memberKey(input.member);
     checkRole(ctx, key, input.role);

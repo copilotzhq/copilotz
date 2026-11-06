@@ -1,13 +1,12 @@
 /**
  * The API's reference, made from what the plugins declare
- * (`runtime.describe()`): for a key, what it may call, each Action with its
- * description and its input's JSON Schema, its queries and Views by name,
- * and where to call each; for a person choosing what a key does, every
- * Action the app has (the catalog).
+ * (`runtime.describe()`): for a key, what its scope lets it use, each Action
+ * with its description and its input's JSON Schema, its queries and Views by
+ * name, the collections it reads and writes directly, and where to call each;
+ * for a person choosing what a key does, every Action the app has (the
+ * catalog).
  */
-import type { Description } from "../../../../runtime/mod.ts";
-
-export type Allowed = { actions: string[]; queries: string[]; views?: string[] };
+import type { Description, Scope } from "../../../../runtime/mod.ts";
 
 export type ActionEntry = {
   name: string;
@@ -18,31 +17,40 @@ export type ActionEntry = {
 };
 
 export type Reference = {
-  key?: { name: string; in: string; hint: string };
+  key?: { name: string; in: string; hint: string; role: string };
   actions: ActionEntry[];
   queries: { name: string; method: "POST"; path: string }[];
   views: { name: string; method: "GET"; path: string }[];
+  /** Collections it reads or writes directly (over the app's socket), as the rules let it. */
+  collections: { name: string; read: boolean; write: boolean }[];
   events: { method: "GET"; path: string };
 };
 
 const enc = encodeURIComponent;
 
-/** What a key may call, as the app declares it; names the app doesn't have are left out. */
-export function referenceOf(described: Description, allowed: Allowed): Reference {
+/** What a key's scope lets it use, as the app declares it; Actions it doesn't have, left out. */
+export function referenceOf(described: Description, scope: Scope): Reference {
+  const read = new Set(scope.read ?? []);
+  const write = new Set(scope.write ?? []);
   return {
-    actions: allowed.actions.flatMap((name) => {
+    actions: (scope.call ?? []).flatMap((name) => {
       const action = described.actions[name];
       return action ? [actionEntry(name, action)] : [];
     }),
-    queries: allowed.queries.map((name) => ({
+    queries: (scope.query ?? []).map((name) => ({
       name,
       method: "POST",
       path: `/api/queries/${enc(name)}`,
     })),
-    views: (allowed.views ?? []).map((name) => ({
+    views: (scope.view ?? []).map((name) => ({
       name,
       method: "GET",
       path: `/api/views/${enc(name)}`,
+    })),
+    collections: [...new Set([...read, ...write])].map((name) => ({
+      name,
+      read: read.has(name),
+      write: write.has(name),
     })),
     events: { method: "GET", path: "/api/events" },
   };

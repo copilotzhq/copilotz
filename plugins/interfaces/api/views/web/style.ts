@@ -1,8 +1,9 @@
 /**
  * The API's front end, laid out on the theme's variables: a space's API tab
  * (its intro, the person's keys, trying it), making a key (presets, a
- * custom pick, the secret shown once) and a key's reference. Only layout:
- * the pieces are the toolkit's.
+ * custom pick, how it works there, the secret shown once), a key's
+ * reference, and the space's keys among its members. Only layout: the
+ * pieces are the toolkit's.
  */
 export const STYLE = `
 .api-tab { container: api-tab / inline-size; display: grid; gap: 22px; }
@@ -86,6 +87,13 @@ export const STYLE = `
 .api-pick-label span { color: var(--muted-foreground); font-size: 12px; line-height: 1.4; }
 .api-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 
+/* How it works there, from what it may use */
+.api-role { display: flex; align-items: flex-start; gap: 8px; margin: 2px 0 0; color: var(--muted-foreground);
+  font-size: 13px; line-height: 1.5; }
+.api-role > svg { flex: none; margin-top: 3px; }
+.api-role b { color: var(--foreground); font-weight: 620; }
+.api-role[data-role=editor] > svg { color: var(--primary-text); }
+
 /* The secret, once */
 .api-made { display: grid; gap: 14px; }
 .api-secret .copilotz-code-body { font-size: 13.5px; }
@@ -102,4 +110,25 @@ export const STYLE = `
 .api-ref-fields dt code { font-size: 12px; }
 .api-ref-fields dd { margin: 0; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .api-ref-optional { color: var(--muted-foreground); }
+
+/* The space's keys, among its members */
+.api-members { display: grid; gap: 10px; }
+.api-members-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  min-height: 30px; margin-bottom: -4px; }
+.api-members-head .copilotz-button { margin-right: -6px; }
+.api-members-title { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted-foreground);
+  font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+.api-members-count { font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.api-members-rows { list-style: none; display: grid; gap: 8px; margin: 0; padding: 0; }
+.api-member { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 10px 10px 10px 14px; }
+.api-member-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md);
+  background: var(--primary-soft); color: var(--primary-text); }
+.api-member-text { display: grid; gap: 1px; min-width: 0; }
+.api-member-name { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; font-weight: 620; }
+.api-member-name > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-member-what { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; overflow: hidden;
+  color: var(--muted-foreground); font-size: 12.5px; white-space: nowrap; }
+.api-member-what .copilotz-time { font-size: 12.5px; }
+.api-member-end { display: flex; align-items: center; gap: 6px; }
 `;

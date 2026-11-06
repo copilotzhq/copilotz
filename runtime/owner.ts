@@ -9,6 +9,7 @@ import { plan } from "./aggregate.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import { type Clock, type Scheduled, systemClock, TIMERS } from "./schedules.ts";
 import { createTimers } from "./timers.ts";
+import { inScope } from "./actor.ts";
 import type { IndexSpec, ScalarType } from "./store.ts";
 import { createHypervisor, type Hypervisor, type HypervisorOptions } from "@oxian/oxian-js";
 import type {
@@ -130,16 +131,20 @@ export type Owner = {
    * already completed returns its recorded result without running again, and
    * a call whose id is still running joins it.
    *
-   * With `actor`, it runs for them: the Action must `allow` them, and
-   * everything it causes is theirs, its reads and writes checked against the
-   * rules (`guard`). Without, it runs as the system.
+   * With `actor`, it runs for them: the Action must `allow` them (and be in
+   * their `scope`, if they have one: a key's), and everything it causes is
+   * theirs, its reads and writes checked against the rules (`guard`), never
+   * against the scope. Without, it runs as the system.
    */
   call<R = unknown>(
     action: string,
     input?: unknown,
     options?: { id?: string; actor?: Actor },
   ): Promise<R>;
-  /** Runs a collection's named query: `query("message.history", { thread })`. */
+  /**
+   * Runs a collection's named query: `query("message.history", { thread })`.
+   * With `actor`, the query must `allow` them (and be in their `scope`).
+   */
   query<R = unknown>(name: string, params?: unknown, options?: { actor?: Actor }): Promise<R>;
   /**
    * Renders `item` through the View named `name`; undefined when there is none.
@@ -155,7 +160,8 @@ export type Owner = {
    * Observes a View: its output now, and again whenever what it read
    * changes; each View it shows is a part that runs again on its own (see
    * runtime/observe.ts). Its Views run here, in this process, and call
-   * Actions from their handlers: what a terminal or a browser draws.
+   * Actions from their handlers: what a terminal or a browser draws. For an
+   * actor with a `scope`, only a View it lists (else it fails, `forbidden`).
    */
   observe<R = unknown>(
     name: string,
@@ -676,7 +682,8 @@ export async function createOwner(
         .then((value) => hydrate(value, blobsOf(reader)));
 
   // Views observed here read committed state, as clients do; their handlers call and emit.
-  // What comes from outside is a declared event, and the actor one it lets emit it.
+  // What comes from outside is a declared event, and the actor one it lets emit it. An actor
+  // with a scope (a key) emits nothing: a scope lists no events.
   const emit = async (
     type: string,
     data: Record<string, unknown> = {},
@@ -684,7 +691,7 @@ export async function createOwner(
   ) => {
     const def = declared(type, data);
     const { actor } = options;
-    if (actor && actor.kind !== "system" && !def.allow?.(actor)) {
+    if (actor && actor.kind !== "system" && (!def.allow?.(actor) || actor.scope !== undefined)) {
       throw forbidden(`${actor.kind} ${actor.id} may not emit "${type}".`);
     }
     await write(
@@ -864,23 +871,37 @@ export async function createOwner(
     return rules.length > 1 ? { $and: rules } : rules[0];
   };
   /**
-   * Whether any rule speaks for a collection's reads by this actor: a browser
-   * reads nothing else directly. Asked as its own read (`direct`), with its
-   * filter: a rule may refuse one it won't watch (thrown).
+   * Whether any rule speaks for a collection's reads (or writes) by this
+   * actor: from outside, an actor reads (or writes) nothing else directly.
+   * Asked as its own read (`direct`), with its filter: a rule may refuse one
+   * it won't watch (thrown), as is one its scope doesn't list.
    */
-  const ruled = async (actor: Actor, collection: string, filter?: Filter) => {
+  const ruled = async (
+    actor: Actor,
+    collection: string,
+    filter?: Filter,
+    access: "read" | "write" = "read",
+  ) => {
+    if (!inScope(actor, access, collection)) {
+      throw forbidden(
+        `${actor.kind} ${actor.id} may not ${access} "${collection}": not in its scope.`,
+      );
+    }
     let found = false;
     for (const guard of registry.guards as Guard[]) {
       const said = await guard(
         actor,
-        { collection, access: "read", ...(filter ? { filter } : {}), direct: true },
+        { collection, access, ...(filter ? { filter } : {}), direct: true },
         ruleReads,
       );
       if (said !== undefined) found = true;
     }
     return found;
   };
-  /** Whether an actor may run a query from outside: one that lets them, as Actions do. */
+  /**
+   * Whether an actor may run a query from outside: one that lets them, as
+   * Actions do, and that their scope lists, if they have one.
+   */
   const askable = (
     actor: Actor | undefined,
     collection: string,
@@ -889,7 +910,8 @@ export async function createOwner(
   ) => {
     if (!actor || actor.kind === "system") return true;
     const def = registry.collections[collection]?.queries?.[query];
-    return typeof def === "object" && def.allow(actor, params);
+    return typeof def === "object" && def.allow(actor, params) &&
+      inScope(actor, "query", `${collection}.${query}`);
   };
   const both = (filter: Filter | undefined, rule: Filter): Filter =>
     filter && Object.keys(filter).length ? { $and: [filter, rule] } : rule;
@@ -1821,9 +1843,14 @@ export async function createOwner(
       const def = registry.actions[action];
       if (!def) return Promise.reject(invalid(`Unknown action "${action}"`));
       const { actor } = options;
-      // An actor calls only what lets them.
+      // An actor calls only what lets them, and what their scope lists (a key's).
       if (actor && actor.kind !== "system" && !def.allow?.(actor, input)) {
         return Promise.reject(forbidden(`${actor.kind} ${actor.id} may not call "${action}".`));
+      }
+      if (actor && actor.kind !== "system" && !inScope(actor, "call", action)) {
+        return Promise.reject(
+          forbidden(`${actor.kind} ${actor.id} may not call "${action}": not in its scope.`),
+        );
       }
       const given = json(input);
       // What an Action is given goes on record as it is: it may hold no `$blob` key.
@@ -1844,7 +1871,16 @@ export async function createOwner(
         ...(options.hints ? { hints: json(options.hints) } : {}),
       }) as never;
     },
-    observe: (name, item, options) => observers.observe(name, item, options),
+    observe: (name, item, options) =>
+      // Rendered here for an actor with a scope (a key), the View is one it lists.
+      options?.actor && options.actor.kind !== "system" &&
+        !inScope(options.actor, "view", name)
+        ? refusedView(
+          forbidden(
+            `${options.actor.kind} ${options.actor.id} may not see "${name}": not in its scope.`,
+          ),
+        )
+        : observers.observe(name, item, options),
     emit,
     describe: () => ({
       collections: Object.fromEntries(
@@ -1941,6 +1977,17 @@ export async function createOwner(
     },
   };
   return api;
+}
+
+/** An observation that failed before it began: refused. */
+function refusedView<R>(error: Error): Observation<R> {
+  const failed = { status: "failed" as const, error };
+  return {
+    get: () => failed,
+    subscribe: () => () => {},
+    ready: Promise.resolve(failed),
+    close: () => {},
+  };
 }
 
 /** The scalar type a schema gives a dot path (through properties and additionalProperties), if one. */

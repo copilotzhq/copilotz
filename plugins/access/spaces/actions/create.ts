@@ -18,7 +18,9 @@ export const createAction = defineAction({
   },
   allow: people,
   run: async (ctx, input) => {
-    if (await orgRoleOf(ctx.actor!, ctx.as()) === "guest") {
+    // A guest's, through a key of theirs too: the person's role says.
+    const person = { kind: ctx.actor!.kind, id: ctx.actor!.id };
+    if (await orgRoleOf(person, ctx.as()) === "guest") {
       throw Object.assign(new Error("Guests work in the spaces they're invited to."), {
         code: "forbidden",
       });
@@ -31,7 +33,8 @@ export const createAction = defineAction({
       });
     }
     const id = input.id ?? crypto.randomUUID();
-    const who = memberKey(ctx.actor!);
+    // Its maker manages it: a person, even through a key of theirs (which stays in its own space).
+    const who = memberKey(person);
     // Nobody reaches a space before it exists: it's made as the system, for them.
     await ctx.as().transaction(async (tx) => {
       await tx.db.collection("member").insertOne({

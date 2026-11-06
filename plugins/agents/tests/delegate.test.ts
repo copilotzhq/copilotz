@@ -243,8 +243,9 @@ test("what set the work going, and a key's limit, go with it", async () => {
       actor: ana,
     });
     const pm = await team(rt, "Project", "lead");
-    // A key for One can't hand work to Project.
-    const key: Actor = { kind: "person", id: "ana", key: "k", within: one };
+    // A key for One (its member, as the plugin that makes keys seats it) can't hand work to Project.
+    await rt.call("member.set", { space: one, member: { kind: "key", id: "k" }, role: "editor" });
+    const key: Actor = { kind: "person", id: "ana", key: "k" };
     said = [];
     await rt.call("chat.send", { text: `hand ${pm}: whoami`, in: one }, { actor: key });
     await rt.idle();

@@ -350,7 +350,8 @@ test("a key can't answer for its person, and nobody works directly on a computer
     await s.rt.call("chat.send", { text: "run ls", in: space }, { actor: ana });
     await s.rt.idle();
     const [asked] = await s.pending();
-    const key: Actor = { kind: "person", id: "ana", key: "k1", within: space };
+    await s.rt.call("member.set", { space, member: { kind: "key", id: "k1" }, role: "editor" });
+    const key: Actor = { kind: "person", id: "ana", key: "k1" };
     const by = (call: Promise<unknown>) =>
       call.then(() => "done", (e) => (e as { code?: string }).code);
     assertEquals(

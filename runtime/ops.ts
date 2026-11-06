@@ -90,8 +90,8 @@ export type CancelOp =
   | { op: "cancel"; call: string }
   | { op: "cancel"; processor: string; key: string };
 
-/** Ends an actor's browsers (see `Owner.disconnect`). */
-export type DisconnectOp = { op: "disconnect"; actor: { kind: string; id: string } };
+/** Ends an actor's browsers (see `Owner.disconnect`): a person's, or one key of theirs (`key`). */
+export type DisconnectOp = { op: "disconnect"; actor: { kind: string; id: string; key?: string } };
 
 export type Op = StoreOp | TimerOp | CancelOp | DisconnectOp;
 

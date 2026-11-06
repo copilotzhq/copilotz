@@ -1,6 +1,6 @@
 /**
  * What one actor may never do through another path: pass a document for a
- * space, leave the space a key is limited to, or work as the agent that asked.
+ * space, reach past a key's own membership, or work as the agent that asked.
  */
 import { assert, assertEquals } from "@std/assert";
 import {
@@ -149,7 +149,7 @@ test("a document never passes for a space with the same id", async () => {
   });
 });
 
-test("a key limited to a space does nothing in another its person reaches", async () => {
+test("a key reaches only its space, at its membership's role, within what its person reaches", async () => {
   await setup(async (rt) => {
     const { space: one } = await rt.call<{ space: string }>("space.create", { name: "One" }, {
       actor: ana,
@@ -157,16 +157,18 @@ test("a key limited to a space does nothing in another its person reaches", asyn
     const { space: two } = await rt.call<{ space: string }>("space.create", { name: "Two" }, {
       actor: ana,
     });
-    const key: Actor = { kind: "person", id: "ana", key: "k1", within: one };
-    assertEquals(await canIn(rt, one, key), true);
-    assertEquals(await canIn(rt, two, key), false);
+    // A key of hers, a member of One, as the plugin that makes keys seats it (the system).
+    await rt.call("member.set", { space: one, member: { kind: "key", id: "k1" }, role: "editor" });
+    const key: Actor = { kind: "person", id: "ana", key: "k1" };
+    const can = (space: string, who: Actor, verb: string) =>
+      rt.call<{ can: boolean }>("space.can", { space, verb }, { actor: who }).then((r) => r.can);
+    assertEquals(await can(one, key, "write"), true);
+    assertEquals(await can(two, key, "read"), false);
+    // At its role: managing is never a key's, even where its person manages.
+    assertEquals(await canIn(rt, one, key), false);
     assertEquals(
-      await code(rt.call("space.rename", { space: two, name: "No" }, { actor: key })),
+      await code(rt.call("space.rename", { space: one, name: "No" }, { actor: key })),
       "forbidden",
-    );
-    assertEquals(
-      await code(rt.call("space.rename", { space: one, name: "Yes" }, { actor: key })),
-      "done",
     );
     assertEquals(
       await code(
@@ -175,6 +177,21 @@ test("a key limited to a space does nothing in another its person reaches", asyn
         }),
       ),
       "forbidden",
+    );
+    // Nor do people make a key a member, or give it a role: it follows from what it may do.
+    assertEquals(
+      await code(
+        rt.call("member.set", { space: two, member: { kind: "key", id: "k1" }, role: "viewer" }, {
+          actor: ana,
+        }),
+      ),
+      "invalid",
+    );
+    assertEquals(
+      await code(
+        rt.call("member.set", { space: one, member: { kind: "key", id: "k2" }, role: "manager" }),
+      ),
+      "invalid",
     );
     // An agent working for that key is limited with it.
     const agent: Actor = { kind: "agent", id: "x", for: key };
@@ -185,7 +202,7 @@ test("a key limited to a space does nothing in another its person reaches", asyn
         actor: ana,
       },
     );
-    assertEquals(await canIn(rt, two, agent), false);
+    assertEquals(await can(two, agent, "read"), false);
     // Her own, without the key, still reaches both.
     assertEquals(await canIn(rt, two, ana), true);
   });

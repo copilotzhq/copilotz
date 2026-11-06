@@ -49,9 +49,12 @@ boundary: the runtime enforces, so agents can be naive and still safe.
   nothing else works that out, so every limit on an actor holds everywhere. Two logged escape
   hatches for trusted code: acting as a person (a webhook mapping a number to its person) and acting
   as the system (creating a Personal space at sign-up).
-- **Who:** `personOf` (the runtime's) says whose work this is. An actor can be limited to one space
-  (`within`: a key's work), which reach respects, and carry what set it going (`origin`: a routine),
-  which only code can set. A message's `via` is only what people are shown: anyone can claim it.
+- **Who:** `personOf` (the runtime's) says whose work this is. A developer key is its person
+  (`kind: "person"`, with `key` and `scope`) and a member of its space (`key:<id>`): it reaches what
+  its membership and its person both reach, with no org role. Its `scope` (exact names of Actions,
+  queries, Views, collections) is checked only where a call from outside comes in, never inside the
+  work it starts. An actor can carry what set it going (`origin`: a routine), which only code can
+  set. A message's `via` is only what people are shown: anyone can claim it.
 - **A space put away** (archived) is read and managed, not written in: reach says so.
 - **Leaving** follows the membership (`member.deleted`), however someone left: their computers'
   desks, their yeses and keys for that space end; out of the org, all of them and their own

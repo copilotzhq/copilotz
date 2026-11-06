@@ -1,5 +1,20 @@
 ## Unreleased
 
+- **Breaking: developer keys are members of their space, with a scope.** A key's actor is
+  `{ kind: "person", id, key, scope }` (`within` is gone): `people` still lets it in and `inPerson`
+  keeps it out. It's a member of its space (`key:<id>`), an editor when its scope calls or writes,
+  else a viewer, and reaches what both its membership and its person reach, with no org role (an
+  admin's key reaches only its space). Its `scope` (`call`, `query`, `view`, `read`, `write`: exact
+  names, no wildcards) is checked by the runtime (`inScope`) where a call from outside comes in:
+  calls, queries, Views rendered for it, direct reads; a scoped actor emits nothing. Never inside a
+  job: an Action it may call writes as usual. `api_key` records keep `scope` and `role` (no
+  `actions`, `queries`, `views`), their id is the start of the secret's hash (`hash` is private),
+  and they live in their space (`shared`): its members see them in the Members tab, its managers
+  revoke them. `api_key.actor` answers the actor; `api_key.revoke` (its person, or a manager) ends
+  the key, its membership and its connections (`ctx.disconnect` of a key ends only its own).
+  `apiPresets` are `{ title, description, scope }`. Spaces add `spaceMembers` (a section of the
+  Members tab). Keys made before stop working: make them again.
+
 ## 1.0.0-rc.23 — 2026-11-05
 
 **Upgrading from rc.22** (three renames and one host change; nothing else needs doing):

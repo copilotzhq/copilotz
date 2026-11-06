@@ -9,6 +9,64 @@
   `list_documents`, `read_document`, `write_document`, `append_document`, `edit_document`). Each has
   its web front end (`boardsWeb`, `documentsWeb`). The empty Board tab's line about agents is the
   app's: `resources.boardsText.agentHint`.
+- **A `@word` is a mention only when it names someone.** Chat took any `@word` as a mention, so a
+  message with a social handle ("my profile is @ana.marca") and no agent named reached no agent. Now
+  a mention counts only when it names an agent, or a person in the conversation; any other `@word`
+  is plain text, and the message goes where it would without it (the conversation's agents, or the
+  space's default).
+- **A failed recall never sinks a turn.** When memory recall fails at the start of a turn (the
+  embedder's provider refuses the key, or times out), the turn goes on without recalled memories.
+  The failure is logged (`memory: recall failed…`) and counted (`copilotz.memory.recall_failures`).
+  A failing `remember` is still a tool error the agent sees.
+- **Web tools** (`webTools`, in `copilotz/plugins/agents`): agents search the web and read a page
+  without a computer. `web_search` `{ query, count?, language?, country? }` →
+  `{ title, url,
+  snippet }` results, through a new `search` adapter port (`duckduckgo`, the
+  default: its HTML page, no key, no cost, a bot challenge or empty page is a public "search is
+  unavailable" error; `serper`, optional; `fake`; one more adapter adds Brave or Google), and
+  `read_page` `{ url, start? }` → the final URL, title, main text and links, in parts, marked as
+  data. Reading refuses non-http(s) URLs, private, loopback, link-local and metadata addresses (the
+  host resolved, checked again on every redirect), other ports than 80 and 443 unless
+  `webTools.ports` lists them, pages over 2 MB or 15 s, and non-text types; a turn reads at most 8
+  pages. A search is a `search` use of the usage ledger (in the `agents` category), priced from
+  resources, asked of the `modelUse` listeners and the `spending` check first. The models contract
+  now exports `mayUse` and `used`, for uses outside model calls.
+- **An agent's message with files.** `chat.say` takes `files`, and `text` may be left out when there
+  are files. Trusted code, such as a tool during a turn, can now post what it made without writing
+  chat's collections itself. Each file is one of these:
+  - `{ id, collection? }`: a document the caller reads that holds a file as `type` and `data`.
+    That's chat's own `file` by default, or another plugin's, such as the models plugin's `image`.
+  - `{ name, type, data }`: the file given as it is.
+
+  Each becomes a file of the chat, with its `thread` and space. People and contacts read it there as
+  they read people's files, and it meets the same limits: ten at most, about 10 MB each, and a media
+  type. Its content is the same blob, so a picture kept elsewhere isn't stored twice. The answer
+  adds the files' ids: `{ message, files }`. Saying it again sends nothing, files included. An
+  agent's own message tells it next time what it sent: `[sent: logo.png]`.
+
+- **A refusal says why.** A turn that fails with a refusal written for people answers in that
+  refusal's own words, where only the codes `credits` and `budget` did before. That covers any
+  failure made public, including the `spending` check's refusal whatever its `why`: an app's own
+  reason, such as an inactive subscription, no longer needs to borrow `credits`. The `spending`
+  refusal is now public, so a model outside the app reads its message too. A web line's spent budget
+  now shows its own words ("This chat has done all it can for today…"). Every other failure still
+  shows people the short line, with the details in the event.
+Moving in from another app. Nothing changes for an app that doesn't call these.
+
+- **`chat.import`** (the system's: a migration) brings a conversation in as it was: its thread (the
+  importer's id) in a space, with its title, and its messages with who said them (a person's id or
+  an agent's name), to whom, what, their files (`data`, or the `id` of a document holding one:
+  chat's `file` by default) and when (ISO 8601 with a zone, kept to the millisecond). Nothing runs:
+  no turn, no transcript, nothing delivered. Importing again replaces what it made; a long
+  conversation comes in several calls, and the thread's summary (count, first, latest, when it last
+  moved) is worked out from every message it has. A thread already in another space is refused
+  (`chat.move` moves it). Unrecorded: the documents it writes are their own record.
+- **`memory.import`** (the system's) brings memories in as they were, in a space: text, whom each is
+  about, who wrote it, `core`, when it was learned and last changed, under the importer's ids. Each
+  is embedded as it's kept (with an embedder), so recall finds it by meaning.
+- **Dev sign-in reaches someone already there:** an email a person has (one who moved in under an id
+  of its own) signs in as them, and the id of someone there signs in as them too, both as they are
+  (their name isn't touched). Anyone else signs in as before.
 
 ## 1.0.0-rc.26 — 2026-11-06
 
@@ -27,6 +85,27 @@ resources: { hosts: { "app.example.com": true, "*.run.app": true } }
   `{ own: [...] }`, like every other resource: a later plugin adds a host, or takes one away with
   `null`, without restating the rest. What it does is unchanged: with the app's hosts named, any
   other host is answered only by routes that take it. `HostsSettings` is `Record<string, true>`.
+- **Image generation** in `models`: `image.generate`
+  `{ model, prompt, references?, count?, aspectRatio?, size?, tags? }` answers
+  `{ images: [{ id, type, size }], text, usage }`. The images are kept in the `image` collection, a
+  document each, with the content as a blob, and the answer names them by id. A reference is an
+  image made here (`{ id }`), a document the caller may read that holds a file as `type` and `data`
+  (`{ id, collection: "file" }`, read as the caller), or inline data (`{ data, type }`, or a data
+  URL). Models are chosen as `llm`'s are: an alias, settings around one, or a list tried in order.
+  Adapters go under `adapters.image`: `gemini` (`generateContent` with `responseModalities`; `count`
+  images are that many calls, made together), `openai` (`/images/generations`, or `/images/edits`
+  with references), and `fake` (`"fake/image"`).
+  - **Metered like every model call.** The org's own key comes first. `modelUse` listeners and the
+    `spending` check go before the call. Its tokens are told to the ledger after, with meter
+    `image`, priced from the catalog as `llm`'s are, and counted under agents. The provider's
+    `silence` and `retry` apply.
+  - **Refusals are final.** A model whose safety rules say no fails `image_refused`, and no other
+    model is asked. One that makes nothing fails `no_image` once the list is spent. Both are public
+    messages: an agent's tool tells its model why.
+  - **Recorded, unlike the other ports' Actions.** It writes what it made, so a job that runs again
+    finds the call done and doesn't pay twice. `models.check` takes `port: "image"`.
+  - `keyed` and `mayRun` (the org's own key, and the spending check) moved from the llm port to
+    `shared/use.ts`, so every port that spends asks the same way. Nothing changes for `llm`.
 
 ## 1.0.0-rc.25 — 2026-11-06
 

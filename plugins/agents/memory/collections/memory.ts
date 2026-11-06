@@ -61,12 +61,24 @@ export const memoryCollection = defineCollection({
     /**
      * The memories most relevant to a text, for a scope: core ones aside,
      * unless learned `since` (after a conversation's start: it has them only
-     * as they come up).
+     * as they come up). If finding them fails (an embedder's 401, a timeout),
+     * it finds none: the failure is logged and counted, and the turn goes on.
      */
-    relevant: (_memories, p: Scope & { text: string; since?: string }, ctx) =>
-      search(ctx, p, p.text, LIMIT.relevant, {
-        least: RELEVANT,
-        ...(p.since ? { coreSince: p.since } : {}),
-      }),
+    relevant: async (_memories, p: Scope & { text: string; since?: string }, ctx) => {
+      try {
+        return await search(ctx, p, p.text, LIMIT.relevant, {
+          least: RELEVANT,
+          ...(p.since ? { coreSince: p.since } : {}),
+        });
+      } catch (error) {
+        // Recall helps a turn, it isn't the turn: without memories, the turn goes on.
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("memory: recall failed, the turn goes on without it:", message);
+        ctx.metrics.counter("copilotz.memory.recall_failures", {
+          description: "Turns that went on without recalled memories because recall failed",
+        }).add(1);
+        return [];
+      }
+    },
   },
 });

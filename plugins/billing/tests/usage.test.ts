@@ -13,12 +13,12 @@ import {
   type Store,
 } from "../../../runtime/mod.ts";
 import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
-import models, { type LlmAdapter } from "../../models/mod.ts";
+import models, { type ImageAdapter, type LlmAdapter } from "../../models/mod.ts";
 import { chat } from "../../agents/chat/mod.ts";
 import { history } from "../../agents/history/mod.ts";
 import { memory, memoryExtraction } from "../../agents/memory/mod.ts";
 import usage, { rate, type UsageRecord } from "../usage/mod.ts";
-import { catalog } from "../../models/shared/choice.ts";
+import { catalog, lookup } from "../../models/shared/choice.ts";
 import { tempFile, test } from "../../../testing/mod.ts";
 
 const MILLION = 1_000_000;
@@ -343,6 +343,52 @@ test("an app records its own uses, priced by its own rates", async () => {
       totals.map((t) => [t.key.meter, t.uses, t.unpriced]).sort(),
       [["compute", 2, 0], ["tool", 1, 1]],
     );
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("an image's use is priced from the catalog as a chat's is, and counted as agents'", async () => {
+  // A Gemini image model, scripted: its tokens as Gemini reports them.
+  const drawn: ImageAdapter = {
+    generate: () =>
+      Promise.resolve({
+        images: [{ type: "image/png", data: btoa("\x89PNG") }],
+        text: "",
+        usage: { input: 600, output: 1320, reasoning: 200 },
+      }),
+  };
+  const artist = definePlugin({
+    name: "artist",
+    resources: { provider: { drawn: { adapter: "drawn", catalog: "google" } } },
+    adapters: { image: { drawn } },
+  });
+  const runtime = await started(await sqliteStore({ path: tempFile() }), [artist]);
+  try {
+    await runtime.call("image.generate", {
+      model: "drawn/gemini-3-pro-image",
+      prompt: "A cat",
+      tags: { space: "s1", purpose: "post" },
+    });
+    const [record] = await runtime.query<UsageRecord[]>("usage.list", {
+      filter: { meter: "image" },
+    });
+    assertEquals([record.subject, record.catalog, record.quantities, record.tags], [
+      "drawn/gemini-3-pro-image",
+      "google/gemini-3-pro-image",
+      { input: 600, output: 1320, reasoning: 200 },
+      { space: "s1", purpose: "post" },
+    ]);
+    // Each kind of token at the catalog's price (2 input, 120 output per million), thinking as
+    // output; the app's margin of 0.5 doubles it.
+    const { input, output } = lookup("google/gemini-3-pro-image")!.cost!;
+    assertAlmostEquals(record.cost!, (600 * input! + 1320 * output!) / MILLION);
+    assertAlmostEquals(record.price!, 2 * record.cost!);
+    const [agents] = await runtime.query<{ key: { category: string }; uses: number }[]>(
+      "usage.totals",
+      { filter: { meter: "image" }, by: ["category"] },
+    );
+    assertEquals([agents.key.category, agents.uses], ["agents", 1]);
   } finally {
     await runtime.close();
   }

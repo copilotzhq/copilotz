@@ -1,5 +1,7 @@
 ## Unreleased
 
+## 1.0.0-rc.24 — 2026-11-06
+
 **Upgrading from rc.23** (two breaking renames; no aliases, no data moves):
 
 1. **Views are found by name alone; the medium is gone.** Flatten `views`:
@@ -35,6 +37,9 @@
    `visitor` entrance and its cookie keep their names. `runtime/actor.ts` now lists all six kinds
    (person, agent, contact, system, maintenance, anonymous); `routine` is an origin and `space` a
    kind of member, not actors.
+
+- **Oxian 0.23.4:** its adapters await an asynchronous `prepare`, so a front serving several
+  runtimes behind one listener can open the right one before deciding a socket upgrade.
 
 ## 1.0.0-rc.23 — 2026-11-05
 

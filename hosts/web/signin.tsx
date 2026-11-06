@@ -8,20 +8,24 @@
  * the page then starts over, connected, where the server lands them (with
  * many orgs, the one they were in last; their own the first time), with a
  * word on where they're going while it does. Beside the form, what the app
- * is: agents that work with you, spaces for you and your team, and every
- * org you belong to behind one sign-in. Drawn with the toolkit, in the
- * app's theme; on a phone, one column.
+ * is, in its own words: its logo (the theme's), its name (the page's title),
+ * and the panel its `signInPage` resource gives (`about`: a headline and a
+ * few points; Copilotz's when it says nothing; none, the form alone). Every
+ * word the page shows is the app's too (`signInPage.words`: see
+ * signin-words.ts). Drawn with the toolkit, in the app's theme; on a phone,
+ * one column.
  */
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Button } from "./toolkit/button.tsx";
 import { Card } from "./toolkit/card.tsx";
 import { Field } from "./toolkit/field.tsx";
-import { Icon, type IconName } from "./toolkit/icon.tsx";
+import { Icon } from "./toolkit/icon.tsx";
 import { Input } from "./toolkit/input.tsx";
 import { Logo } from "./toolkit/logo.tsx";
 import { Notice } from "./toolkit/notice.tsx";
 import { Spinner } from "./toolkit/spinner.tsx";
-import { EmailSignIn, post, type SignedIn } from "./signin-email.tsx";
+import { EmailSignIn, post, say, type SignedIn } from "./signin-email.tsx";
+import { signInPageOf, type SignInSaid } from "./signin-words.ts";
 
 /** The ways to sign in the app's routes offer, each with what its button needs. */
 export type Ways = { google?: { clientId: string }; email?: { signUp: boolean }; dev?: true };
@@ -110,6 +114,8 @@ const STYLE = `
 .copilotz-signin-going p { margin: 0; color: var(--muted-foreground); }
 .copilotz-signin-going b { display: block; color: var(--foreground); font-family: var(--font-display); font-size: 20px;
   font-weight: 680; letter-spacing: -.02em; }
+.copilotz-signin-alone { grid-template-columns: minmax(0, 1fr); justify-items: center; max-width: 520px; gap: 28px; }
+.copilotz-signin-alone .copilotz-signin-card { justify-self: stretch; }
 @media (max-width: 880px) {
   .copilotz-signin { grid-template-columns: minmax(0, 1fr); gap: 28px; max-width: 460px; padding: 32px 16px 40px;
     align-content: start; }
@@ -131,27 +137,18 @@ const NAME = /^[a-z0-9._-]{1,40}$|^[a-z0-9._+-]{1,64}@[a-z0-9.-]{1,64}$/;
 /** The app's name: the title the page came with. */
 const app = globalThis.document?.title || "Copilotz";
 
-const POINTS: { icon: IconName; title: string; text: string }[] = [
-  {
-    icon: "sparkles",
-    title: "Agents that work with you",
-    text:
-      "In your conversations, on your computer, remembering what matters, and asking before anything they can't undo.",
-  },
-  {
-    icon: "users",
-    title: "Spaces for you and your team",
-    text: "A Personal space that's yours alone, and shared spaces you invite people to.",
-  },
-  {
-    icon: "building",
-    title: "Every organization, one sign-in",
-    text:
-      "Your own, and your teams': switch between them in a click. Invitations wait for you here.",
-  },
-];
+/** Copilotz's words and pitch: what a page shows when its app says nothing. */
+const COPILOTZ = signInPageOf([]);
 
-export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): ReactNode {
+export function SignIn(
+  { signIn, invite, page = COPILOTZ }: {
+    signIn: Ways;
+    invite?: string;
+    /** What the page says: the app's words, and its panel (`signInPageOf(plugins)`). */
+    page?: SignInSaid;
+  },
+): ReactNode {
+  const { words, about } = page;
   const config = { google: signIn.google ?? null, email: signIn.email ?? null, dev: !!signIn.dev };
   const [name, setName] = useState("");
   // What went wrong with Google's button, or signing in by name: said beside it.
@@ -180,7 +177,7 @@ export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): R
         callback: ({ credential }) =>
           void post<SignedIn>("/signin/google", { idToken: credential }).then(
             landed,
-            (e) => setError({ text: e.message, from: "google" }),
+            () => setError({ text: words.googleFailed, from: "google" }),
           ),
       });
       const dark = matchMedia("(prefers-color-scheme: dark)").matches;
@@ -189,6 +186,8 @@ export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): R
         size: "large",
         shape: "pill",
         width: 336,
+        // Its words in the page's language (`page.lang`), as the rest of it.
+        locale: document.documentElement.lang || "en",
       });
     };
     document.head.append(script);
@@ -202,24 +201,25 @@ export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): R
     try {
       landed(await post<SignedIn>("/signin/dev", { name: typed }));
     } catch (e) {
-      setError({ text: (e as Error).message, from: "dev" });
+      const offline = (e as { code?: string }).code === "offline";
+      setError({ text: offline ? words.offline : words.failed, from: "dev" });
       setBusy(false);
     }
   };
 
   const lede = config.email
-    ? config.google ? "With Google, or with your email." : "With your email and password."
+    ? config.google ? words.ledeGoogleEmail : words.ledeEmail
     : config.google && config.dev
-    ? "With Google, or by name on this machine."
+    ? words.ledeGoogleDev
     : config.google
-    ? "With your Google account."
-    : "By name, on this machine.";
+    ? words.ledeGoogle
+    : words.ledeDev;
 
   const googleButton = config.google
     ? (
       <>
         <div ref={button} className="copilotz-signin-google" />
-        {config.email || config.dev ? <div className="copilotz-signin-or">or</div> : null}
+        {config.email || config.dev ? <div className="copilotz-signin-or">{words.or}</div> : null}
       </>
     )
     : null;
@@ -228,11 +228,9 @@ export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): R
     ? (
       <form onSubmit={dev} noValidate>
         <Field
-          label="Your name or email"
-          hint="Anyone you name here is a person in this app; with an email, invitations to it reach you."
-          error={invalid
-            ? "Use letters, digits, dots, dashes or underscores, or an email."
-            : undefined}
+          label={words.devLabel}
+          hint={words.devHint}
+          error={invalid ? words.devInvalid : undefined}
         >
           {(control) => (
             <Input
@@ -240,7 +238,7 @@ export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): R
               size="lg"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. ana, or ana@example.com"
+              placeholder={words.devPlaceholder}
               autoComplete={config.email ? "off" : "username"}
               autoCapitalize="none"
               spellCheck={false}
@@ -256,7 +254,7 @@ export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): R
           loading={busy}
           disabled={!typed || invalid}
         >
-          {busy ? "Signing in…" : config.email ? "Sign in by name" : "Continue"}
+          {busy ? words.signingInBusy : config.email ? words.devSubmitBeside : words.devSubmit}
         </Button>
       </form>
     )
@@ -275,52 +273,74 @@ export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): R
     ? (
       <p className="copilotz-signin-note">
         <Icon name="lock" size={15} />
-        Signing in by name works on this machine only, for trying things out.
+        {words.devNote}
       </p>
     )
     : null;
 
   return (
     <div className="copilotz-signin-page">
-      <main className="copilotz-signin">
+      <main className={about ? "copilotz-signin" : "copilotz-signin copilotz-signin-alone"}>
         <style href="copilotz-signin" precedence="copilotz">{STYLE}</style>
-        <section className="copilotz-signin-about" aria-labelledby="copilotz-signin-title">
-          <div className="copilotz-signin-brand">
-            <Logo variant="full" name={app} size={40} />
-          </div>
-          <h1 id="copilotz-signin-title">
-            Your agents, <span>with you and your team.</span>
-          </h1>
-          <ul className="copilotz-signin-points">
-            {POINTS.map((point) => (
-              <li key={point.title}>
-                <span className="copilotz-signin-point-icon">
-                  <Icon name={point.icon} size={17} />
-                </span>
-                <span>
-                  <b>{point.title}</b>
-                  <p>{point.text}</p>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        {about
+          ? (
+            <section className="copilotz-signin-about" aria-labelledby="copilotz-signin-title">
+              <div className="copilotz-signin-brand">
+                <Logo variant="full" name={app} size={40} />
+              </div>
+              <h1 id="copilotz-signin-title">
+                {about.headline}
+                {about.quiet
+                  ? (
+                    <>
+                      {" "}
+                      <span>{about.quiet}</span>
+                    </>
+                  )
+                  : null}
+              </h1>
+              {about.points?.length
+                ? (
+                  <ul className="copilotz-signin-points">
+                    {about.points.map((point, i) => (
+                      <li key={i}>
+                        <span className="copilotz-signin-point-icon">
+                          <Icon name={point.icon ?? "check"} size={17} />
+                        </span>
+                        <span>
+                          <b>{point.title}</b>
+                          {point.text ? <p>{point.text}</p> : null}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )
+                : null}
+            </section>
+          )
+          : (
+            <div className="copilotz-signin-brand">
+              <Logo variant="full" name={app} size={40} />
+            </div>
+          )}
         <Card className="copilotz-signin-card" padding="none">
           {going !== undefined
             ? (
               <div className="copilotz-signin-going" role="status">
                 <Spinner variant="dots" size={7} />
                 <p>
-                  {going ? "Opening" : "Signing you in"}
                   {going
-                    ? <b>{going.kind === "personal" ? "your Personal org" : going.name}</b>
-                    : null}
+                    ? say(words.opening, {
+                      org: <b>{going.kind === "personal" ? words.personalOrg : going.name}</b>,
+                    })
+                    : words.signingIn}
                 </p>
               </div>
             )
             : config.email
             ? (
               <EmailSignIn
+                words={words}
                 signUp={config.email.signUp}
                 invite={invite}
                 lede={lede}
@@ -339,7 +359,7 @@ export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): R
                           icon="terminal"
                           onClick={() => setByName(true)}
                         >
-                          Sign in by name instead
+                          {words.devInstead}
                         </Button>
                       )}
                       {errorNotice("dev")}
@@ -352,12 +372,12 @@ export function SignIn({ signIn, invite }: { signIn: Ways; invite?: string }): R
             )
             : (
               <>
-                <h2>Sign in</h2>
+                <h2>{words.signIn}</h2>
                 <p className="copilotz-signin-lede">{lede}</p>
                 {googleButton}
                 {devForm}
                 {!config.google && !config.dev
-                  ? <p className="copilotz-signin-lede">No way to sign in is configured.</p>
+                  ? <p className="copilotz-signin-lede">{words.noWay}</p>
                   : null}
                 {errorNotice()}
                 {devNote}

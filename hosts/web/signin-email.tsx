@@ -16,10 +16,13 @@
  *
  * Each screen puts the cursor where typing starts, Enter sends it, and a
  * refusal says what to do next beside what it's about (the field, or the
- * form). Signed in, the page goes on as with any sign-in (`landed`).
+ * form). Every word is the app's (`words`, the `signInPage` resource's: see
+ * signin-words.ts): a refusal is said by its code in those words, never in
+ * the server's. Signed in, the page goes on as with any sign-in (`landed`).
  */
 import {
   type FormEvent,
+  Fragment,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
@@ -27,6 +30,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { fill, type SignInWords } from "./signin-words.ts";
 import { Button } from "./toolkit/button.tsx";
 import { Field } from "./toolkit/field.tsx";
 import { Icon, type IconName } from "./toolkit/icon.tsx";
@@ -41,23 +45,30 @@ export type SignedIn = { person: string; org?: { name: string; kind: "personal" 
 /** A refusal as a sign-in route said it: its words, and its code (`unverified`, `too_many`…). */
 type Refused = Error & { code?: string };
 
-/** A sign-in route asked: what it answers, or its refusal thrown. */
+/** A sign-in route asked: what it answers, or its refusal thrown (`offline`: no answer at all). */
 export async function post<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   }).catch(() => undefined);
-  if (!response) {
-    throw Object.assign(new Error("Couldn't reach the server. Check your connection."), {
-      code: "offline",
-    });
-  }
+  if (!response) throw Object.assign(new Error("offline"), { code: "offline" });
   const answer = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw Object.assign(new Error(answer.error ?? response.statusText), { code: answer.code });
   }
   return answer as T;
+}
+
+/**
+ * A phrase with blanks filled by what's drawn there (an address in bold, a
+ * button): `say("We sent it to {email}.", { email: <b>…</b> })`.
+ */
+export function say(text: string, parts: Record<string, ReactNode>): ReactNode {
+  return text.split(/(\{\w+\})/).map((piece, i) => {
+    const name = /^\{(\w+)\}$/.exec(piece)?.[1];
+    return <Fragment key={i}>{name && name in parts ? parts[name] : piece}</Fragment>;
+  });
 }
 
 /** Where in the page's address an invitation's link carries its token (email sign-in's). */
@@ -75,26 +86,36 @@ const MIN_PASSWORD = 8;
 const AGAIN = 30;
 
 type Screen =
-  | { name: "signin"; note?: string }
+  | { name: "signin" }
   | { name: "signup" }
-  | { name: "code"; email: string; password: string; from: "signin" | "signup"; note?: string }
+  | { name: "code"; email: string; password: string; from: "signin" | "signup"; first?: true }
   | { name: "forgot" }
   | { name: "reset"; email: string }
   | { name: "invite"; token: string };
 
 type Problem = { field?: "email" | "password" | "code" | "name"; text: string; tone?: "warning" };
 
-/** What a refusal says, and beside what: the field it's about, else the form. */
-function problemOf(error: unknown, field?: Problem["field"]): Problem {
-  const { message, code } = error as Refused;
-  if (code === "too_many") return { text: message, tone: "warning" };
-  if (code === "invalid" && field) return { field, text: message };
-  return { text: message || "Something went wrong. Try again." };
+/**
+ * What a refusal says, in the app's words, by its code: those a step expects
+ * (`expected`), else too many tries, no connection, or that something failed.
+ */
+function problemOf(
+  error: unknown,
+  words: SignInWords,
+  expected: Partial<Record<string, Problem>> = {},
+): Problem {
+  const { code } = error as Refused;
+  const known = code ? expected[code] : undefined;
+  if (known) return known;
+  if (code === "too_many") return { text: words.tooMany, tone: "warning" };
+  if (code === "offline") return { text: words.offline };
+  return { text: words.failed };
 }
 
 /** A password field: shown or hidden at a click, saying when Caps Lock is on. */
 function Password(
-  { label, value, onChange, autoComplete, hint, error, input, autoFocus }: {
+  { words, label, value, onChange, autoComplete, hint, error, input, autoFocus }: {
+    words: SignInWords;
     label: string;
     value: string;
     onChange(value: string): void;
@@ -116,7 +137,7 @@ function Password(
       hint={caps
         ? (
           <span className="copilotz-signin-hint copilotz-signin-caps">
-            <Icon name="alert" size={13} /> Caps Lock is on
+            <Icon name="alert" size={13} /> {words.capsLock}
           </span>
         )
         : hint}
@@ -141,7 +162,7 @@ function Password(
           end={
             <IconButton
               icon={shown ? "eye-off" : "eye"}
-              label={shown ? "Hide password" : "Show password"}
+              label={shown ? words.hidePassword : words.showPassword}
               tooltip={false}
               size="sm"
               aria-pressed={shown}
@@ -155,19 +176,20 @@ function Password(
 }
 
 /** A new password's hint: how long it must be, ticked once it is. */
-function lengthHint(password: string): ReactNode {
+function lengthHint(words: SignInWords, password: string): ReactNode {
   const long = password.length >= MIN_PASSWORD;
   return (
     <span className={long ? "copilotz-signin-hint copilotz-signin-ok" : "copilotz-signin-hint"}>
       {long ? <Icon name="check" size={13} /> : null}
-      At least {MIN_PASSWORD} characters
+      {fill(words.atLeast, { min: MIN_PASSWORD })}
     </span>
   );
 }
 
 /** The six-digit code: digits only, big and spaced, sent on once all six are in. */
 function CodeField(
-  { value, onChange, error, input }: {
+  { words, value, onChange, error, input }: {
+    words: SignInWords;
     value: string;
     onChange(code: string): void;
     error?: string;
@@ -175,7 +197,7 @@ function CodeField(
   },
 ): ReactNode {
   return (
-    <Field label="Code" error={error}>
+    <Field label={words.code} error={error}>
       {(control) => (
         <Input
           {...control}
@@ -188,7 +210,7 @@ function CodeField(
           autoComplete="one-time-code"
           pattern="[0-9]*"
           placeholder="000000"
-          aria-label="Six-digit code"
+          aria-label={words.codeLabel}
           autoFocus
         />
       )}
@@ -220,7 +242,9 @@ const Badge = ({ icon }: { icon: IconName }) => (
 );
 
 export function EmailSignIn(
-  { signUp, invite, lede, above, below, landed }: {
+  { words, signUp, invite, lede, above, below, landed }: {
+    /** What it says: the app's words. */
+    words: SignInWords;
     /** Whether people make accounts themselves. */
     signUp: boolean;
     /** An invitation's token, when the page was opened by its link. */
@@ -251,6 +275,7 @@ export function EmailSignIn(
   const codeInput = useRef<HTMLInputElement>(null);
 
   const typed = email.trim().toLowerCase();
+  const tooShort = fill(words.tooShort, { min: MIN_PASSWORD });
 
   /** A field typed into: what was said about it goes, as it's being fixed. */
   const edited = <T,>(field: Problem["field"], set: (value: T) => void) => (value: T) => {
@@ -287,15 +312,15 @@ export function EmailSignIn(
   /** Checked here before it's sent: an address that's one, a password long enough. */
   const checked = (needs: { email?: boolean; password?: "any" | "new" }): boolean => {
     if (needs.email && !EMAIL.test(typed)) {
-      refused({ field: "email", text: "Enter your email address, such as ana@example.com." });
+      refused({ field: "email", text: words.enterEmail });
       return false;
     }
     if (needs.password === "any" && !password) {
-      refused({ field: "password", text: "Enter your password." });
+      refused({ field: "password", text: words.enterPassword });
       return false;
     }
     if (needs.password === "new" && password.length < MIN_PASSWORD) {
-      refused({ field: "password", text: `Use at least ${MIN_PASSWORD} characters.` });
+      refused({ field: "password", text: tooShort });
       return false;
     }
     return true;
@@ -318,12 +343,14 @@ export function EmailSignIn(
     try {
       landed(await send<SignedIn>("/signin/email", { email: typed, password }));
     } catch (error) {
-      const { code: why, message } = error as Refused;
-      if (why === "unverified") {
-        go({ name: "code", email: typed, password, from: "signin", note: message });
-      } else if (why === "unauthorized") {
-        refused({ field: "password", text: message });
-      } else refused(problemOf(error, "email"));
+      if ((error as Refused).code === "unverified") {
+        go({ name: "code", email: typed, password, from: "signin", first: true });
+      } else {
+        refused(problemOf(error, words, {
+          unauthorized: { field: "password", text: words.wrongPassword },
+          invalid: { field: "email", text: words.enterEmail },
+        }));
+      }
     }
   };
 
@@ -338,22 +365,25 @@ export function EmailSignIn(
       });
       go({ name: "code", email: typed, password, from: "signup" });
     } catch (error) {
-      const said = problemOf(error);
-      refused(/password/i.test(said.text) ? { ...said, field: "password" } : said);
+      refused(problemOf(error, words, {
+        invalid: { field: "email", text: words.enterEmail },
+        forbidden: { text: words.byInvitation },
+        unavailable: { text: words.notSent },
+      }));
     }
   };
 
   const confirm = async (digits = code) => {
     if (screen.name !== "code" || busy) return;
     if (digits.length !== 6) {
-      refused({ field: "code", text: "Enter the six digits from the email." });
+      refused({ field: "code", text: words.enterCode });
       return;
     }
     try {
       landed(await send<SignedIn>("/signin/email/verify", { email: screen.email, code: digits }));
     } catch (error) {
       setCode("");
-      refused(problemOf(error, "code"));
+      refused(problemOf(error, words, { invalid: { field: "code", text: words.wrongCode } }));
     }
   };
 
@@ -365,13 +395,12 @@ export function EmailSignIn(
         await send<SignedIn>("/signin/email", { email: screen.email, password: screen.password }),
       );
     } catch (error) {
-      const { code: why, message } = error as Refused;
-      if (why === "unverified") {
+      if ((error as Refused).code === "unverified") {
         restart();
-        setSent(message);
-      } else if (why === "unauthorized") {
-        refused({ text: "We couldn't send a new code. If you have an account, sign in instead." });
-      } else refused(problemOf(error));
+        setSent(words.codeSent);
+      } else {
+        refused(problemOf(error, words, { unauthorized: { text: words.codeNotSent } }));
+      }
     }
   };
 
@@ -382,7 +411,7 @@ export function EmailSignIn(
       await send("/signin/email/forgot", { email: typed });
       go({ name: "reset", email: typed });
     } catch (error) {
-      refused(problemOf(error, "email"));
+      refused(problemOf(error, words, { invalid: { field: "email", text: words.enterEmail } }));
     }
   };
 
@@ -391,9 +420,9 @@ export function EmailSignIn(
     try {
       await send("/signin/email/forgot", { email: screen.email });
       restart();
-      setSent("We've sent a new code.");
+      setSent(words.codeSent);
     } catch (error) {
-      refused(problemOf(error));
+      refused(problemOf(error, words));
     }
   };
 
@@ -401,7 +430,7 @@ export function EmailSignIn(
     event.preventDefault();
     if (screen.name !== "reset" || busy) return;
     if (code.length !== 6) {
-      refused({ field: "code", text: "Enter the six digits from the email." });
+      refused({ field: "code", text: words.enterCode });
       return;
     }
     if (!checked({ password: "new" })) return;
@@ -410,8 +439,7 @@ export function EmailSignIn(
         await send<SignedIn>("/signin/email/reset", { email: screen.email, code, password }),
       );
     } catch (error) {
-      const said = problemOf(error, "code");
-      refused(/password/i.test(said.text) ? { ...said, field: "password" } : said);
+      refused(problemOf(error, words, { invalid: { field: "code", text: words.wrongCode } }));
     }
   };
 
@@ -420,7 +448,10 @@ export function EmailSignIn(
     if (screen.name !== "invite" || invited) return;
     post<{ email: string }>("/signin/email/invitation", { token: screen.token }).then(
       ({ email }) => setInvited({ email }),
-      (error) => setInvited({ error: (error as Error).message }),
+      (error) =>
+        setInvited({
+          error: problemOf(error, words, { invalid: { text: words.linkExpired } }).text,
+        }),
     );
   }, [screen]);
 
@@ -436,7 +467,7 @@ export function EmailSignIn(
       history.replaceState(null, "", location.pathname + location.search);
       landed(signed);
     } catch (error) {
-      refused(problemOf(error, "password"));
+      refused(problemOf(error, words, { invalid: { text: words.linkExpired } }));
     }
   };
 
@@ -460,9 +491,16 @@ export function EmailSignIn(
       </Notice>
     )
     : null;
+  const sentNotice = sent && !problem
+    ? (
+      <Notice tone="success" role="status" className="copilotz-signin-error">
+        {sent}
+      </Notice>
+    )
+    : null;
 
   const emailField = (autoFocus: boolean) => (
-    <Field label="Email" error={errorOf("email")}>
+    <Field label={words.email} error={errorOf("email")}>
       {(control) => (
         <Input
           {...control}
@@ -472,7 +510,7 @@ export function EmailSignIn(
           icon="mail"
           value={email}
           onChange={(e) => editEmail(e.target.value)}
-          placeholder="you@example.com"
+          placeholder={words.emailPlaceholder}
           autoComplete={screen.name === "signup" ? "email" : "username"}
           inputMode="email"
           autoCapitalize="none"
@@ -484,7 +522,7 @@ export function EmailSignIn(
     </Field>
   );
 
-  const back = (to: Screen, label = "Back") => (
+  const back = (to: Screen, label = words.back) => (
     <Button
       variant="link"
       icon="chevron-left"
@@ -501,13 +539,16 @@ export function EmailSignIn(
     </p>
   );
 
+  /** An address in a sentence, in bold. */
+  const bold = (address: string | undefined) => ({ email: <b>{address}</b> });
+
   return (
     <>
       {screen.name === "signin"
         ? (
           <>
-            <h2>Sign in</h2>
-            <p className="copilotz-signin-lede">{screen.note ?? lede}</p>
+            <h2>{words.signIn}</h2>
+            <p className="copilotz-signin-lede">{lede}</p>
           </>
         )
         : null}
@@ -521,7 +562,8 @@ export function EmailSignIn(
               {emailField(true)}
               <div className="copilotz-signin-stack">
                 <Password
-                  label="Password"
+                  words={words}
+                  label={words.password}
                   value={password}
                   onChange={editPassword}
                   autoComplete="current-password"
@@ -533,15 +575,15 @@ export function EmailSignIn(
                   className="copilotz-signin-aside"
                   onClick={() => go({ name: "forgot" })}
                 >
-                  Forgot your password?
+                  {words.forgot}
                 </Button>
               </div>
               {notice}
               <Button type="submit" variant="primary" size="lg" loading={busy}>
-                {busy ? "Signing in…" : "Sign in"}
+                {busy ? words.signingInBusy : words.signIn}
               </Button>
             </form>
-            {signUp ? switchTo("New here?", "Create an account", { name: "signup" }) : null}
+            {signUp ? switchTo(words.newHere, words.createAccount, { name: "signup" }) : null}
           </>
         )
         : null}
@@ -550,12 +592,10 @@ export function EmailSignIn(
         ? (
           <>
             {back({ name: "signin" })}
-            <h2>Create your account</h2>
-            <p className="copilotz-signin-lede">
-              We'll email you a code to confirm your address.
-            </p>
+            <h2>{words.signUpTitle}</h2>
+            <p className="copilotz-signin-lede">{words.signUpLede}</p>
             <form onSubmit={create} noValidate>
-              <Field label="Name" hint="Optional: what people here see.">
+              <Field label={words.name} hint={words.nameHint}>
                 {(control) => (
                   <Input
                     {...control}
@@ -563,7 +603,7 @@ export function EmailSignIn(
                     icon="person"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Ana Lima"
+                    placeholder={words.namePlaceholder}
                     autoComplete="name"
                     maxLength={120}
                     autoFocus
@@ -572,20 +612,21 @@ export function EmailSignIn(
               </Field>
               {emailField(false)}
               <Password
-                label="Password"
+                words={words}
+                label={words.password}
                 value={password}
                 onChange={editPassword}
                 autoComplete="new-password"
-                hint={lengthHint(password)}
+                hint={lengthHint(words, password)}
                 error={errorOf("password")}
                 input={passwordInput}
               />
               {notice}
               <Button type="submit" variant="primary" size="lg" loading={busy}>
-                {busy ? "Creating your account…" : "Create account"}
+                {busy ? words.signUpBusy : words.signUp}
               </Button>
             </form>
-            {switchTo("Already have an account?", "Sign in", { name: "signin" })}
+            {switchTo(words.haveAccount, words.signIn, { name: "signin" })}
           </>
         )
         : null}
@@ -595,13 +636,13 @@ export function EmailSignIn(
           <>
             {back(
               screen.from === "signup" ? { name: "signup" } : { name: "signin" },
-              "Use another email",
+              words.otherEmail,
             )}
             <Badge icon="mail" />
-            <h2>Check your email</h2>
+            <h2>{words.codeTitle}</h2>
             <p className="copilotz-signin-lede">
-              {screen.note ? <>{screen.note.replace(/:.*$/, ".")}</> : null}
-              We sent a 6-digit code to <b>{screen.email}</b>. Enter it to confirm it's yours.
+              {screen.first ? <>{words.confirmFirst}{" "}</> : null}
+              {say(words.codeLede, bold(screen.email))}
             </p>
             <form
               onSubmit={(event) => {
@@ -611,6 +652,7 @@ export function EmailSignIn(
               noValidate
             >
               <CodeField
+                words={words}
                 value={code}
                 onChange={(digits) => {
                   setCode(digits);
@@ -621,22 +663,23 @@ export function EmailSignIn(
                 input={codeInput}
               />
               {notice}
-              {sent && !problem
-                ? (
-                  <Notice tone="success" role="status" className="copilotz-signin-error">
-                    {sent}
-                  </Notice>
-                )
-                : null}
+              {sentNotice}
               <Button type="submit" variant="primary" size="lg" loading={busy}>
-                {busy ? "Confirming…" : "Confirm"}
+                {busy ? words.confirmBusy : words.confirm}
               </Button>
             </form>
             <p className="copilotz-signin-switch">
-              Didn't get it? Check your spam folder, or{" "}
-              <Button variant="link" disabled={again > 0 || busy} onClick={() => void newCode()}>
-                {again > 0 ? `send a new code in ${again}s` : "send a new code"}
-              </Button>
+              {say(words.noCode, {
+                link: (
+                  <Button
+                    variant="link"
+                    disabled={again > 0 || busy}
+                    onClick={() => void newCode()}
+                  >
+                    {again > 0 ? fill(words.newCodeIn, { seconds: again }) : words.newCode}
+                  </Button>
+                ),
+              })}
             </p>
           </>
         )
@@ -647,15 +690,13 @@ export function EmailSignIn(
           <>
             {back({ name: "signin" })}
             <Badge icon="lock" />
-            <h2>Reset your password</h2>
-            <p className="copilotz-signin-lede">
-              Enter your account's email, and we'll send you a code to choose a new password.
-            </p>
+            <h2>{words.forgotTitle}</h2>
+            <p className="copilotz-signin-lede">{words.forgotLede}</p>
             <form onSubmit={forgot} noValidate>
               {emailField(true)}
               {notice}
               <Button type="submit" variant="primary" size="lg" loading={busy}>
-                {busy ? "Sending…" : "Send code"}
+                {busy ? words.sending : words.sendCode}
               </Button>
             </form>
           </>
@@ -667,12 +708,11 @@ export function EmailSignIn(
           <>
             {back({ name: "forgot" })}
             <Badge icon="mail" />
-            <h2>Choose a new password</h2>
-            <p className="copilotz-signin-lede">
-              If <b>{screen.email}</b> has an account, we've sent it a 6-digit code.
-            </p>
+            <h2>{words.resetTitle}</h2>
+            <p className="copilotz-signin-lede">{say(words.resetLede, bold(screen.email))}</p>
             <form onSubmit={reset} noValidate>
               <CodeField
+                words={words}
                 value={code}
                 onChange={(digits) => {
                   setCode(digits);
@@ -684,31 +724,33 @@ export function EmailSignIn(
                 input={codeInput}
               />
               <Password
-                label="New password"
+                words={words}
+                label={words.newPassword}
                 value={password}
                 onChange={editPassword}
                 autoComplete="new-password"
-                hint={lengthHint(password)}
+                hint={lengthHint(words, password)}
                 error={errorOf("password")}
                 input={passwordInput}
               />
               {notice}
-              {sent && !problem
-                ? (
-                  <Notice tone="success" role="status" className="copilotz-signin-error">
-                    {sent}
-                  </Notice>
-                )
-                : null}
+              {sentNotice}
               <Button type="submit" variant="primary" size="lg" loading={busy}>
-                {busy ? "Saving…" : "Set password and sign in"}
+                {busy ? words.saving : words.reset}
               </Button>
             </form>
             <p className="copilotz-signin-switch">
-              Didn't get it?{" "}
-              <Button variant="link" disabled={again > 0 || busy} onClick={() => void resetCode()}>
-                {again > 0 ? `Send a new code in ${again}s` : "Send a new code"}
-              </Button>
+              {say(words.noResetCode, {
+                link: (
+                  <Button
+                    variant="link"
+                    disabled={again > 0 || busy}
+                    onClick={() => void resetCode()}
+                  >
+                    {again > 0 ? fill(words.resetCodeIn, { seconds: again }) : words.resetCode}
+                  </Button>
+                ),
+              })}
             </p>
           </>
         )
@@ -718,12 +760,12 @@ export function EmailSignIn(
         ? (
           <>
             <Badge icon="sparkles" />
-            <h2>Choose your password</h2>
+            <h2>{words.inviteTitle}</h2>
             {!invited
               ? (
                 <div className="copilotz-signin-going" role="status">
                   <Spinner variant="dots" size={7} />
-                  <p>Opening your invitation</p>
+                  <p>{words.inviteOpening}</p>
                 </div>
               )
               : invited.error
@@ -734,7 +776,7 @@ export function EmailSignIn(
                   </Notice>
                   <div className="copilotz-signin-actions">
                     <Button variant="primary" size="lg" onClick={leaveInvite}>
-                      Go to sign in
+                      {words.toSignIn}
                     </Button>
                   </div>
                 </>
@@ -742,7 +784,7 @@ export function EmailSignIn(
               : (
                 <>
                   <p className="copilotz-signin-lede">
-                    Welcome! Set a password for <b>{invited.email}</b>, and you're in.
+                    {say(words.inviteLede, bold(invited.email))}
                   </p>
                   <form onSubmit={accept} noValidate>
                     {/* For password managers: the account this password is for. */}
@@ -755,18 +797,19 @@ export function EmailSignIn(
                       hidden
                     />
                     <Password
-                      label="Password"
+                      words={words}
+                      label={words.password}
                       value={password}
                       onChange={editPassword}
                       autoComplete="new-password"
-                      hint={lengthHint(password)}
+                      hint={lengthHint(words, password)}
                       error={errorOf("password")}
                       input={passwordInput}
                       autoFocus
                     />
                     {notice}
                     <Button type="submit" variant="primary" size="lg" loading={busy}>
-                      {busy ? "Saving…" : "Set password and continue"}
+                      {busy ? words.saving : words.invite}
                     </Button>
                   </form>
                 </>

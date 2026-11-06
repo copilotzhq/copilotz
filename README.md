@@ -314,6 +314,45 @@ plugins: [
 ];
 ```
 
+**The sign-in page is the app's,** in every word: beside the form, the app's logo (its theme's
+`logo`), its name (the page's title) and its own pitch; in it, its words. Both are the `signInPage`
+resource of the browser's plugins (those `web({ plugins })` runs), merged over Copilotz's as the
+theme is: `words` patch one by one by key (`SIGN_IN_WORDS`, from `copilotz/web`, lists them all,
+with their blanks such as `{email}` and `{seconds}`); `about` (a headline, its quieter end and a few
+points) is given whole, so no Copilotz pitch stays beside the app's own, and `null` leaves the form
+alone. An app that says nothing shows Copilotz's words and pitch. Refusals are said in these words,
+by their code, never in the server's. The messages email sign-in sends are the server's
+`emailSignIn.messages` (`html: null` sends one as text alone); `page.lang` says the page's language,
+which Google's button follows:
+
+```tsx
+// browser.tsx: an app in Portuguese, with its own pitch
+const brand = definePlugin({
+  name: "brand",
+  resources: {
+    theme: { light: { primary: "#0F172A" }, logo: { mark: myMark } },
+    signInPage: {
+      about: {
+        headline: "Seu Instagram,",
+        quiet: "com estratégia de verdade.",
+        points: [{ icon: "sparkles", title: "Estrategista e Criadora", text: "Duas agentes…" }],
+      },
+      words: {
+        signIn: "Entrar",
+        email: "E-mail",
+        password: "Senha",
+        forgot: "Esqueceu a senha?",
+        codeLede: "Enviamos um código de 6 dígitos para {email}.",
+        // … every key of SIGN_IN_WORDS the app says otherwise
+      },
+    },
+  },
+});
+await web({ root, plugins: [webShell, chatWeb, spacesWeb, brand] });
+// server: page: { title: "CO-CR.IA", lang: "pt-BR", code }, theme: themeOf([brand]),
+//         emailSignIn: { app: "CO-CR.IA", messages: { verify: { subject: "{code} é o seu código" } } }
+```
+
 Tests need no listener: `await runtime.fetch(new Request("http://localhost/hooks/ping", init))`. To
 connect a client in the process as someone, add `testWho` (from `copilotz/testing`) to the plugins,
 and take its tickets from `/connect` with `ticketFor(runtime, actor)`.

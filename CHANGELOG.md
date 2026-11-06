@@ -53,6 +53,16 @@ resources: { hosts: { "app.example.com": true, "*.run.app": true } }
   code, and arriving by an invitation's link to choose a password. Signing in by name moves under
   it, a click away. The toolkit has an `eye-off` icon. The example web app takes `EMAIL=1` (and
   `EMAIL_INVITE=<address>`) to try it, its messages in the terminal.
+- **The sign-in page is the app's, in every word** (the `signInPage` resource of the browser's
+  plugins, merged over Copilotz's as the theme is): `words` patch its phrases one by one by key
+  (`SIGN_IN_WORDS` in `copilotz/web`: every heading, label, placeholder, button, hint and refusal of
+  Google's, email's and dev sign-in's screens, refusals said by their code, never in the server's
+  words); `about`, the panel beside the form (a headline, its quieter end, points with icons), is
+  given whole (no Copilotz pitch stays beside an app's own), and `null` leaves the form alone. Its
+  logo is the theme's and its name the page's title, as before; an app that says nothing shows
+  Copilotz's words and pitch, as before. Google's button speaks `page.lang`. New in `copilotz/web`:
+  `SIGN_IN_WORDS`, `COPILOTZ_ABOUT`, `signInPageOf` and the `SignInPage`, `SignInWords`,
+  `SignInAbout` and `SignInPoint` types.
 
 ## 1.0.0-rc.25 — 2026-11-06
 

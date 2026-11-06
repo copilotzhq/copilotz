@@ -36,6 +36,17 @@ export {
   type PaletteStep,
 } from "./palette/state.ts";
 export { DEFAULT_THEME, type Theme } from "./theme/default.ts";
+// What the sign-in page says, as the app's (its `signInPage` resource): every word, and the panel
+// beside the form.
+export {
+  COPILOTZ_ABOUT,
+  SIGN_IN_WORDS,
+  type SignInAbout,
+  type SignInPage,
+  signInPageOf,
+  type SignInPoint,
+  type SignInWords,
+} from "./signin-words.ts";
 export type { Drawing, Picture } from "./theme/picture.ts";
 
 // The toolkit: actions and fields.

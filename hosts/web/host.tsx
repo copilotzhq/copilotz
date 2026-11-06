@@ -30,6 +30,7 @@ import { Part } from "./part.tsx";
 import { session } from "./session.ts";
 import { SignIn, type Ways } from "./signin.tsx";
 import { inviteOf } from "./signin-email.tsx";
+import { signInPageOf } from "./signin-words.ts";
 import { BASE } from "./style.ts";
 import { ThemeContext } from "./theme/context.ts";
 import { fontsOf, fromGoogle, preloadsOf, themeCss, themeOf } from "./theme/css.ts";
@@ -195,7 +196,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   if (invite) {
     const ways = await waysToSignIn();
     if (ways.email) {
-      draw(<SignIn signIn={ways} invite={invite} />);
+      draw(<SignIn signIn={ways} invite={invite} page={signInPageOf(options.plugins)} />);
       return undefined;
     }
   }
@@ -204,7 +205,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   const named = options.arrive ? Promise.resolve(undefined) : nameOf();
   const first = await ticket();
   if (!first) {
-    draw(<SignIn signIn={await waysToSignIn()} />);
+    draw(<SignIn signIn={await waysToSignIn()} page={signInPageOf(options.plugins)} />);
     return undefined;
   }
   const person = first.actor.kind === "person";

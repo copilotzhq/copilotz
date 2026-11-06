@@ -25,7 +25,7 @@
  * resources: { spaces: { support: { name: "Support", agents: ["guide"] } } }
  * ```
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
 import { chatAction } from "./actions/chat.ts";
 import { forgetAction } from "./actions/forget.ts";
 import { startAction } from "./actions/start.ts";
@@ -50,6 +50,13 @@ export const contacts: Plugin = definePlugin({
     shared: { contact: { write: "manage", member: "contact" } },
     names: { contact: { collection: "contact", prefix: CONTACT } },
     context: { contact: { place: "system" } },
+  },
+  // Who a contact is (its number, its channel) is trusted code's to say: never written from outside.
+  guard: (_actor, { collection, access, direct }) => {
+    if (collection === "contact" && direct && access === "write") {
+      throw failure("forbidden", "Contacts change through their Actions.", { public: true });
+    }
+    return undefined;
   },
 });
 

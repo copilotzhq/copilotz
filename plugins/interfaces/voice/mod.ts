@@ -50,7 +50,7 @@
  * The socket needs a listener that takes a route's socket: `listen` from
  * `copilotz/web/node` (with or without a page), or `Deno.serve(runtime.fetch)`.
  */
-import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
 import { hangupAction, ringAction } from "./actions/ring.ts";
 import { admitAction, heardAction, overAction, startAction } from "./actions/call.ts";
 import { blockAction, unblockAction } from "./actions/block.ts";
@@ -113,6 +113,13 @@ export const voice: Plugin = definePlugin({
     // managers change them.
     shared: { voice_blocked: { write: "manage" } },
     context: { voice: { place: "turn" } },
+  },
+  // A block is by a number's hash, which only the plugin makes: its Actions change them.
+  guard: (_actor, { collection, access, direct }) => {
+    if (collection === "voice_blocked" && direct && access === "write") {
+      throw failure("forbidden", "Blocks change through their Actions.", { public: true });
+    }
+    return undefined;
   },
 });
 

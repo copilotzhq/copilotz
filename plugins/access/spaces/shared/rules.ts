@@ -14,6 +14,8 @@
  * managers', and read by whom they're to (by the email they signed in with).
  * A contact's own read from its browser (`direct`) names what of its own it
  * reads, 32 ids at most: its chats or documents, or its memberships by its key.
+ * Spaces, memberships, invitations and requests are never written directly
+ * from outside (`direct`): who's where changes only through their Actions.
  */
 import { type Actor, failure, type Filter, type Guard } from "../../../../runtime/mod.ts";
 import { membersOf } from "./agents.ts";
@@ -79,6 +81,13 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
   const shared = (ctx.resources.shared ?? {}) as Shared;
   const own = ["space", "member", "request", "invitation"];
   if (!Object.hasOwn(shared, collection) && !own.includes(collection)) return undefined;
+  if (direct && access === "write" && own.includes(collection)) {
+    throw failure(
+      "forbidden",
+      "Spaces, their members, invitations and requests change through their Actions.",
+      { public: true },
+    );
+  }
   // A contact's own read from its browser names what of its own it reads (anything wider would
   // run again on every change to the collection): of these, only its memberships, by its key.
   const mineOnly = direct && actor.kind === "contact";

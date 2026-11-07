@@ -78,6 +78,26 @@ only tenant (`""`), in the same tables.
 - **SQLite and memory stay one tenant per store,** a file per org: a file already moves and deletes
   whole, and has a single writer, the org's.
 
+## One process at a time
+
+A store's epoch fences an owner another has opened the store over: its writes are refused. A deploy
+runs two processes for a while, though: the new one starts while the old one still serves its
+browsers' sockets (Cloud Run keeps a retired revision running while a socket stays open), and every
+write those browsers send is refused. `lease(pool, options)` (`sql/postgres/lease.ts`) keeps them
+apart: a row in `copilotz_lease`, renewed every third of its time (15 s by default), taken before a
+process opens its stores and let go when it stops.
+
+- **The next process waits,** and marks the lease wanted. The holder hears it as it renews (`asked`)
+  and hands over: it stops listening (its sockets close; browsers reconnect, to the new process),
+  lets running work finish, and lets go. `serve` (`copilotz/web/node`) does all of it.
+- **Only a deploy at least as new asks** (`revision`, a number each deploy raises: Cloud Run's
+  `app-00015-8bs` is 15). The platform may restart the old revision's process while traffic moves;
+  that one waits without asking for it back.
+- **A script that writes while the app runs** (a data load) takes it with a revision above any
+  deploy's (`Number.MAX_SAFE_INTEGER`): the app hands over, waits, and takes it back after.
+- **A holder that can't renew in time has lost it** (`lost`), and stops rather than write beside
+  another.
+
 ## Blobs in GCS
 
 `gcsBlobs({ bucket, prefix?, token?, timeout?, fetch? })` (`copilotz/blobs/gcs`) keeps each blob as

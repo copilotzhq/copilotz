@@ -65,6 +65,7 @@ import { allowed, alone, confined, connect, noRole, triggers } from "./maintenan
 import { connections } from "../shared/capped.ts";
 import { upTo, weight } from "../shared/rows.ts";
 
+export { type Lease, lease, type LeaseOptions } from "./lease.ts";
 export { type PostgresPool, postgresPool } from "./pool.ts";
 export { copyTenant, dropTenant, exportTenant, type Location } from "./tenants.ts";
 

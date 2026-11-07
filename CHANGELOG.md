@@ -1,5 +1,14 @@
 ## Unreleased
 
+- **A deploy hands over instead of fencing** (`serve` in `copilotz/web/node`, `lease` in
+  `copilotz/stores/postgres`). While a deploy moves traffic, the platform keeps the old process
+  running for as long as its browsers' sockets stay open, and the new process's store fenced it:
+  every write those browsers sent failed ("This owner was fenced"). Now one process at a time holds
+  the store's lease: `serve` listens first (a request is told it's starting: a 503 to retry, a page
+  that reloads itself), waits for the lease, then opens the app; the old process, asked for it,
+  stops listening (its browsers reconnect, to the new one), lets running work finish, and lets go.
+  Only a deploy at least as new asks (`revision`); a process that loses the lease stops. Its table
+  is `copilotz_lease`, in the schema it's given (`public` by default).
 - **A contact's message may go to nobody** (`chat.send` with `to: []`), as a person's already could:
   it's kept in the chat, its agents read it the next time they answer there (with its `tap`, as
   `[tapped: <id>]`), and none answers it. It's how a page beside the chat says what the customer did

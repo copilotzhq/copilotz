@@ -28,6 +28,7 @@ import { chat, tool } from "../../../../plugins/agents/chat/mod.ts";
 import { access } from "../../../../plugins/access/mod.ts";
 import { webLines } from "../../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../../testing/mod.ts";
+import { attached } from "../../../../plugins/agents/tests/fixtures/files.ts";
 import { listen, type Listener } from "../serve.ts";
 
 /** What a tool call holds while it runs: released by the test, once it's looked. */
@@ -224,6 +225,12 @@ async function counts(runtime: Runtime) {
 const code = (p: Promise<unknown>) =>
   p.then(() => "done", (e) => (e as { code?: string }).code ?? String(e));
 
+/** A visitor's message of files: each uploaded first (`chat.attach`), then sent by id. */
+const sends = async (client: Client, files: { name: string; type: string; data: string }[]) =>
+  client.call("chat.send", {
+    files: await attached({ call: (action, input) => client.call(action, input) }, files),
+  });
+
 test("a visitor on the socket: nothing made until it speaks, then its own chat, as itself", async () => {
   await setup(async (server, runtime) => {
     const carla = await arrive(server);
@@ -411,9 +418,9 @@ test("a visitor's messages: a few a minute, at once too, as large as a contact's
         await eve.ready;
         assertEquals(await code(eve.call("chat.send", { text: "x".repeat(4_097) })), "invalid");
         assertEquals(await code(eve.call("chat.send", { text: "x".repeat(4_096) })), "done");
-        // No files on a line that takes none.
+        // No files on a line that takes none: not even uploaded.
         const file = { name: "a.txt", type: "text/plain", data: btoa("hi") };
-        assertEquals(await code(eve.call("chat.send", { text: "see", files: [file] })), "invalid");
+        assertEquals(await code(sends(eve, [file])), "invalid");
       } finally {
         await eve.close();
       }
@@ -423,14 +430,12 @@ test("a visitor's messages: a few a minute, at once too, as large as a contact's
       try {
         await voice.ready;
         const audio = { name: "v.ogg", type: "audio/ogg", data: btoa("\0".repeat(500)) };
-        assertEquals(await code(voice.call("chat.send", { files: [audio] })), "done");
+        assertEquals(await code(sends(voice, [audio])), "done");
         assertEquals(heard, 1);
-        assertEquals(
-          await code(voice.call("chat.send", { files: [audio, audio, audio] })),
-          "invalid",
-        );
+        assertEquals(await code(sends(voice, [audio, audio, audio])), "invalid");
+        // Too large for the line: refused as it's uploaded.
         const large = { ...audio, data: btoa("\0".repeat(2_000)) };
-        assertEquals(await code(voice.call("chat.send", { files: [large] })), "invalid");
+        assertEquals(await code(sends(voice, [large])), "invalid");
         assertEquals(heard, 1);
       } finally {
         await voice.close();
@@ -439,7 +444,7 @@ test("a visitor's messages: a few a minute, at once too, as large as a contact's
       try {
         await notes.ready;
         const audio = { name: "n.ogg", type: "audio/ogg", data: btoa("\0".repeat(500)) };
-        const { thread } = await notes.call<{ thread: string }>("chat.send", { files: [audio] });
+        const { thread } = await sends(notes, [audio]) as { thread: string };
         assertEquals(heard, 1);
         const [sent] = await runtime.query<{ files: { transcript?: string }[] }[]>(
           "message.history",

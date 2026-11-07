@@ -22,6 +22,11 @@
  *   instead of asking its model again, so a call that returned never runs
  *   twice, and one cut short runs again as itself (`ctx.callId`, the key for
  *   what it does outside).
+ * - A file goes in on its own before the message that sends it
+ *   (`chat.attach`: one a call, kept as its sender's draft, which nobody
+ *   else reads), and the message names it by id (`chat.send`): no call
+ *   carries more than one file. Drafts not sent within a day go
+ *   (`chat.prune`, hourly).
  * - A person moves a conversation to another space (`chat.move`), with
  *   everything in it; not while an agent is writing in it.
  * - A chat can be opened empty (`chat.open`), to share it with a contact
@@ -66,23 +71,26 @@
  * - `roster`: { action }: `{ space }` in, `{ agents, default? }` out;
  * - `agentModel`: { action }: `{ agent, space? }` in, a model or null out;
  * - `contactSend`: { action }: asked as a contact about to send, `{ thread?,
- *   files }` in (each file's name, type and size); it refuses, or answers
- *   `{ thread?, transcribe?: false }` (see actions/send.ts);
+ *   files }` in (each file's name, type and size), and for each file it
+ *   uploads, as a message to nobody (`to: []`) carrying it; it refuses, or
+ *   answers `{ thread?, transcribe?: false }` (see shared/contact-send.ts);
  * - `additions`: { order?, agents? }, each with an `addition:<name>` View in
  *   the place that shows it, given `{ thread, answer }` (see `Addition`).
  */
 import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
+import { attachAction } from "./actions/attach.ts";
 import { eraseAction } from "./actions/erase.ts";
 import { forkAction } from "./actions/fork.ts";
 import { importAction } from "./actions/import.ts";
 import { moveAction } from "./actions/move.ts";
 import { openAction } from "./actions/open.ts";
+import { pruneAction } from "./actions/prune.ts";
 import { quietAction } from "./actions/quiet.ts";
 import { sayAction } from "./actions/say.ts";
 import { sendAction } from "./actions/send.ts";
 import { shownAction } from "./actions/shown.ts";
 import { stopAction } from "./actions/stop.ts";
-import { file } from "./collections/file.ts";
+import { drafter, file } from "./collections/file.ts";
 import { serveFile } from "./routes/files.ts";
 import { intent } from "./collections/intent.ts";
 import { live } from "./collections/live.ts";
@@ -135,6 +143,8 @@ export const chat: Plugin = definePlugin({
   },
   actions: {
     "chat.send": sendAction,
+    "chat.attach": attachAction,
+    "chat.prune": pruneAction,
     "chat.open": openAction,
     "chat.say": sayAction,
     "chat.quiet": quietAction,
@@ -146,6 +156,8 @@ export const chat: Plugin = definePlugin({
     "chat.import": importAction,
   },
   events: { "turn.requested": turnRequested },
+  // Files uploaded to send that no message sent within a day go.
+  schedules: { "chat.prune": { every: "1h", call: "chat.prune", input: {} } },
   resources: {
     // Conversations by title on Usage.
     usageNames: { thread: { tag: "tags.thread", collection: "thread", field: "title" } },
@@ -179,14 +191,19 @@ export const chat: Plugin = definePlugin({
     "chat.failed": failedProcessor,
   },
   // Chat's records change through its Actions, never written directly from outside: what's said
-  // (who said it), what a turn is doing, a conversation's state, its files, what was shown.
-  guard: (_actor, { collection, access, direct }) => {
+  // (who said it), what a turn is doing, a conversation's state, its files, what was shown. A file
+  // not sent yet (a draft) is its sender's alone, wherever it is: a rule on every read and write
+  // of files, that never lets anyone read them directly where no other rule does (`direct`).
+  guard: (actor, { collection, access, direct }) => {
     if (direct && access === "write" && CHAT_RECORDS.includes(collection)) {
       throw failure("forbidden", `"${collection}" changes through chat's Actions (chat.send…).`, {
         public: true,
       });
     }
-    return undefined;
+    if (direct || collection !== "file") return undefined;
+    const by = drafter(actor);
+    const sent = { draft: { $exists: false } };
+    return by ? { $or: [sent, { draft: by }] } : sent;
   },
   // Files people sent, as whoever asks reaches them (or by a link signed for one).
   routes: { "/files/*": serveFile },

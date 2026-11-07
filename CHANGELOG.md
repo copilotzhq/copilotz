@@ -1,5 +1,7 @@
 ## Unreleased
 
+## 1.0.0-rc.29 — 2026-11-07
+
 - **An agent waiting on your yes waits within its turn.** A command, job or file write that needs a
   person's OK used to end the agent's turn ("Waiting for ana's yes…"). The turn's answer went to
   whoever had asked it, and the yes then started a new turn that answered the person. So when one

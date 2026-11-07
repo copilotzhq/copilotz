@@ -167,6 +167,7 @@ function screens(): ReactNode[] {
     />,
     <p>{did([{ name: "send_message", input: { to: "ana" } }, { name: "clock" }], true, "ana")}</p>,
     <Composer
+      attach={() => Promise.resolve({ id: "f1" })}
       send={() => Promise.resolve()}
       working={["Maya", "Bo"]}
       agents={[{ id: "maya", name: "Maya" }]}
@@ -174,7 +175,11 @@ function screens(): ReactNode[] {
       suggestions={["Draft a reply"]}
       note={<span>{say("startsInPersonal")}</span>}
     />,
-    <Composer send={() => Promise.resolve()} working={["Maya"]} />,
+    <Composer
+      attach={() => Promise.resolve({ id: "f1" })}
+      send={() => Promise.resolve()}
+      working={["Maya"]}
+    />,
     <>{chatsView({ _id: "s1" }, ctx([thread("a"), thread("b", { messages: 1 })]))}</>,
     <>{chatsView({ _id: "s1" }, ctx([]))}</>,
     <>{chatsView({ _id: "s1" }, ctx([thread("a")], { mode: "panel" }))}</>,
@@ -249,7 +254,11 @@ test("with the app's words set, nothing English of chat's shows", () => {
   const restore = setWords(pseudoWords("chat"));
   try {
     const all = markup() + html(
-      <Composer send={() => Promise.resolve()} initial="" />,
+      <Composer
+        attach={() => Promise.resolve({ id: "f1" })}
+        send={() => Promise.resolve()}
+        initial=""
+      />,
     ) + paletteWords();
     // Class names, ids and addresses are code, not words.
     const read = all.replace(/ (class|href|id|for|aria-labelledby)="[^"]*"/g, "").replaceAll(

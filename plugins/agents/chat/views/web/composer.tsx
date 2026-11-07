@@ -46,19 +46,22 @@ import {
 import type { ComposerNote, RefusalView } from "../../shared/types.ts";
 import { matching, mention, type Mentionable, typingAt, unanswered } from "./agents.ts";
 import { type Attached, chosen, FILES, read, size } from "./attach.ts";
-import { record, type Recorder as Recording } from "./record.ts";
+import { record, type Recorder as Recording, type Take } from "./record.ts";
 import { Recorder } from "./recorder.tsx";
 import { VoiceFailed } from "./voice-failed.tsx";
 import { names } from "./who.ts";
 import { say } from "./words.ts";
 
-/** A file as `chat.send` takes it; a voice message's says how long it runs, and its peaks. */
-export type Sent = {
+/** A file to upload (`chat.attach`); a voice message's says how long it runs, and its peaks. */
+export type Upload = {
   name: string;
   type: string;
   data: string;
   voice?: { duration: number; peaks?: number[] };
 };
+
+/** A file as `chat.send` takes it: one uploaded, by id. */
+export type Sent = { id: string };
 
 /** How it's sent: `transcribe: false` sends audio without a transcript. */
 export type SendOptions = { transcribe?: boolean };
@@ -76,6 +79,11 @@ const audio = (type: string) => type.startsWith("audio/");
 const reason = (error: unknown) => message(error).replace(/^Couldn't transcribe [^:]*:\s*/, "");
 
 export function Composer(props: {
+  /**
+   * Uploads a file to send (`chat.attach`), on its own: each as it's chosen,
+   * so sending is instant and a file that can't go says so alone.
+   */
+  attach(file: Upload): Promise<{ id: string }>;
   send(text: string, files: Sent[], options: SendOptions): Promise<void>;
   /** Agents writing right now. */
   working?: string[];
@@ -124,6 +132,8 @@ export function Composer(props: {
   const picker = useRef<HTMLInputElement>(null);
   const mic = useRef<HTMLDivElement>(null);
   const previews = useRef(new Set<string>());
+  /** Each recording's upload, once: sending it again (without a transcript) sends the same one. */
+  const voices = useRef(new WeakMap<Blob, Promise<string>>());
   const id = useId();
   const working = props.working ?? [];
   const phase = recording?.phase;
@@ -158,16 +168,45 @@ export function Composer(props: {
     const fresh = picked.map(chosen);
     for (const f of fresh) if (f.preview) previews.current.add(f.preview);
     setFiles((now) => [...now, ...fresh]);
+    const change = (id: string, to: Partial<Attached>) =>
+      setFiles((now) => now.map((x) => x.id === id ? { ...x, ...to } : x));
     fresh.forEach((f, i) => {
       if (f.error) return;
+      // Read, then uploaded at once: what's sent later is its id.
       read(picked[i]).then(
-        (data) => setFiles((now) => now.map((x) => x.id === f.id ? { ...x, data } : x)),
-        () =>
-          setFiles((now) =>
-            now.map((x) => x.id === f.id ? { ...x, error: say("couldntRead") } : x)
-          ),
+        async (data) => {
+          change(f.id, { read: true });
+          try {
+            const { id } = await props.attach({ name: f.name, type: f.type, data });
+            change(f.id, { uploaded: id });
+          } catch (e) {
+            change(f.id, { error: message(e) || say("couldntUpload") });
+          }
+        },
+        () => change(f.id, { error: say("couldntRead") }),
       );
     });
+  };
+  /** A recording, uploaded once (see `voices`). */
+  const upload = (voice: Take) => {
+    let uploaded = voices.current.get(voice.blob);
+    if (!uploaded) {
+      uploaded = read(voice.blob).then((data) =>
+        props.attach({
+          name: voice.name,
+          type: voice.type,
+          data,
+          voice: {
+            duration: voice.duration,
+            ...(voice.peaks.length ? { peaks: voice.peaks } : {}),
+          },
+        })
+      ).then(({ id }) => id);
+      voices.current.set(voice.blob, uploaded);
+      // One that failed is tried again next time.
+      uploaded.catch(() => voices.current.delete(voice.blob));
+    }
+    return uploaded;
   };
   const typeOn = () => requestAnimationFrame(() => fine() && area.current?.focus());
   const remove = (gone: Attached) => {
@@ -191,8 +230,8 @@ export function Composer(props: {
     );
   };
 
-  const reading = files.some((f) => !f.data && !f.error);
-  const blocked = !!sending || reading || files.some((f) => f.error);
+  const uploading = files.some((f) => !f.uploaded && !f.error);
+  const blocked = !!sending || uploading || files.some((f) => f.error);
   const ready = !blocked && !live && (!!text.trim() || files.length > 0 || !!take);
 
   // The `@name` being typed, and the agents it could be.
@@ -231,18 +270,8 @@ export function Composer(props: {
     setFailed(undefined);
     setRefused(undefined);
     try {
-      const sent: Sent[] = files.map((f) => ({ name: f.name, type: f.type, data: f.data! }));
-      if (voice) {
-        sent.unshift({
-          name: voice.name,
-          type: voice.type,
-          data: await read(voice.blob),
-          voice: {
-            duration: voice.duration,
-            ...(voice.peaks.length ? { peaks: voice.peaks } : {}),
-          },
-        });
-      }
+      const sent: Sent[] = files.map((f) => ({ id: f.uploaded! }));
+      if (voice) sent.unshift({ id: await upload(voice) });
       await props.send(text.trim(), sent, options);
       for (const f of files) if (f.preview) URL.revokeObjectURL(f.preview);
       setText("");
@@ -468,7 +497,10 @@ export function Composer(props: {
                       )}
                     <span className="chat-attached-name">
                       <span>{f.name}</span>
-                      <small>{f.error ?? (f.data ? size(f.size) : say("reading"))}</small>
+                      <small>
+                        {f.error ??
+                          (f.uploaded ? size(f.size) : f.read ? say("uploading") : say("reading"))}
+                      </small>
                     </span>
                     <IconButton
                       icon="close"

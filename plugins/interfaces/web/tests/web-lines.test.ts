@@ -367,6 +367,68 @@ test("a line's budget holds against messages at once: each holds its turn's cost
   }, { plugins: [usage, spending], resources: prices, line: { budget: 2 } });
 });
 
+test("a visitor's message to nobody: kept, unanswered, read later, holding none of the budget", async () => {
+  // What the line's agent is told, each turn: its user messages.
+  const heard: string[][] = [];
+  const listening = definePlugin({
+    name: "listening",
+    adapters: {
+      llm: {
+        dollar: {
+          async *generate(request) {
+            heard.push(request.messages.flatMap((m) => m.role === "user" ? [m.text] : []));
+            yield { type: "text", text: "ok" };
+            yield { type: "usage", input: 1_000_000, output: 0 };
+          },
+        } satisfies LlmAdapter,
+      },
+    },
+  });
+  await setup(async ({ runtime, visitor, send }) => {
+    const carla = await visitor("198.51.100.50");
+    const dani = await visitor("198.51.100.51");
+    const toNobody = (actor: Actor, text: string, id: string) =>
+      runtime.call<{ thread: string; message: string }>(
+        "chat.send",
+        { text, to: [], tap: { id } },
+        { actor },
+      );
+    const messages = () =>
+      all<{ _id: string; thread: string; to: string[]; text: string }>(runtime, "message");
+    // Before any turn's cost is known, a message holds the rest of the day: one to nobody, held,
+    // would have kept Dani out ("busy") for two minutes, for a turn that never comes.
+    const { thread, message } = await toNobody(carla, "Chose the 8:00 trip", "trip:t1");
+    assertEquals(await send(dani, "hi"), "done");
+    await runtime.idle();
+    // Kept in Carla's chat, to nobody: no agent answered it, only Dani's turn was charged.
+    const said = (await messages()).find((m) => m._id === message)!;
+    assertEquals([said.thread, said.to], [thread, []]);
+    assertEquals((await messages()).filter((m) => m.thread === thread).length, 1);
+    assertEquals(heard.length, 1);
+    assertEquals(await charged(runtime), [1]);
+    // When Carla writes, her agent reads what she did on the page, as tapped.
+    await toNobody(carla, "Seats 12 and 13", "seats:12,13");
+    assertEquals(await send(carla, "is it a direct bus?"), "done");
+    await runtime.idle();
+    const read = heard.at(-1)!.join("\n");
+    assert(read.includes("Chose the 8:00 trip [tapped: trip:t1]"), read);
+    assert(read.includes("Seats 12 and 13 [tapped: seats:12,13]"), read);
+    // It's still a message: it counts against the visitor's minute (three here).
+    await assertRejects(() => toNobody(carla, "One way", "return:none"), Error, "too fast");
+    // A contact still can't name an agent: its message goes to its chat's.
+    const { message: hey } = await runtime.call<{ message: string }>(
+      "chat.send",
+      { text: "hey", to: ["someone"] },
+      { actor: dani },
+    );
+    assertEquals((await messages()).find((m) => m._id === hey)!.to, ["guide"]);
+  }, {
+    plugins: [usage, listening],
+    resources: prices,
+    line: { budget: 10, limits: { perMinute: 3 } },
+  });
+});
+
 test("a line's budget stops a turn's tool loop once it's spent", async () => {
   await setup(async ({ runtime, visitor, send }) => {
     const carla = await visitor("198.51.100.30");

@@ -21,7 +21,9 @@
  *   (`contact.spent`, as the usage plugin prices them), and what's held for
  *   messages let in not yet charged: each holds an estimate as it goes in
  *   (see shared/budget.ts). Past it, it waits for tomorrow; with no room
- *   beside what's held, a moment.
+ *   beside what's held, a moment. A message to nobody (`to: []`: what the
+ *   visitor did on the page, which no agent answers) holds nothing, since no
+ *   turn will be charged for it; it counts against the limits all the same.
  * - **What it may carry:** files only when the line takes them (`files`),
  *   as many and as large as it says, each saying what it is in a media type
  *   of 127 characters at most; audio goes untranscribed unless the line
@@ -90,6 +92,8 @@ export const sendingAction = defineAction({
           required: ["size"],
         },
       },
+      /** To nobody: no agent answers it. */
+      to: { type: "array", maxItems: 0 },
     },
     additionalProperties: false,
   },
@@ -188,7 +192,7 @@ export const sendingAction = defineAction({
       }
     }
     // Its turn's cost, estimated, held against the line's budget until it's charged.
-    if (line.budget !== undefined) {
+    if (line.budget !== undefined && !input.to) {
       await hold(
         system.db.collection<Rate & Day>("contact_rate"),
         { name: line.name, budget: line.budget },

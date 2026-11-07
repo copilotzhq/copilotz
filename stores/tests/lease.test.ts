@@ -1,8 +1,9 @@
 /**
  * The store's lease (`lease`, stores/sql/postgres/lease.ts): one process at a
  * time holds it; the next waits, and asks the holder to hand over when it's
- * at least as new; an older one waits without asking; a holder that can't
- * keep it hears it's lost. Two leases on one pool stand for two processes.
+ * at least as new; an older one waits without asking; one whose holder died
+ * runs out; a holder that can't keep it hears it's lost. Two leases on one
+ * pool stand for two processes.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { lease, type PostgresPool, postgresPool } from "../sql/postgres/mod.ts";
@@ -97,6 +98,21 @@ for (const [db, url] of Object.entries(databases)) {
       assertEquals(asked, 0);
       await holder.release();
       await (await older).release();
+    }));
+
+  test(`lease (${db}): one nobody renews (its process died) runs out, and the next takes it`, () =>
+    withPool(url, async (pool, schema) => {
+      const held = await lease(pool, { schema, ttlMs: 600, lost: () => {} });
+      // The process died: its row stays, renewed by nobody.
+      await pool.writes.query(
+        `UPDATE "${schema}".copilotz_lease SET holder = 'gone', ` +
+          "until = now() + interval '500 milliseconds'",
+      );
+      await held.release();
+      const started = Date.now();
+      const next = await lease(pool, { schema, ttlMs: 600, lost: () => {} });
+      assert(Date.now() - started >= 300, "it waited for it to run out");
+      await next.release();
     }));
 
   test(`lease (${db}): one waiting stops when its signal aborts`, () =>

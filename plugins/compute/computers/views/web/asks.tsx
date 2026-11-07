@@ -1,7 +1,8 @@
 /**
- * What agents wait on you for in this conversation (kind `computer.asks`,
- * shown over where you type: chat's `conversation` resource, with hints
- * `{ thread, working }`): a card each, "assistant wants to run `npm test`"
+ * What agents wait on you for in this conversation and its side threads
+ * (kind `computer.asks`, shown over where you type: chat's `conversation`
+ * resource, with hints `{ thread, side, busy }`; one from a side thread says
+ * so): a card each, "assistant wants to run `npm test`"
  * on which computer, with Allow once · Allow in this conversation · Always
  * allow · Deny (`computer.approve`, whose answer goes into the
  * conversation, and the agent carries on). What a routine's run asks can also
@@ -48,7 +49,11 @@ export const asksView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
   const pending = ctx.db.collection("approval").query<Approval[]>("pending", {}).value ?? [];
   // While an agent is still writing, its explanation comes first; another's work doesn't hold it.
   const busy = Array.isArray(ctx.hints.busy) ? ctx.hints.busy as string[] : [];
-  const here = pending.filter((a) => a.thread === thread && !busy.includes(a.agent));
+  // Asked here, or in one of its side threads: answered here all the same.
+  const side = Array.isArray(ctx.hints.side) ? ctx.hints.side as string[] : [];
+  const here = pending.filter((a) =>
+    (a.thread === thread || side.includes(a.thread)) && !busy.includes(a.agent)
+  );
   if (!thread || !here.length) return null;
   const agents = agentsShown(ctx, here.map((a) => a.agent));
   if (!agents) return null;
@@ -61,6 +66,7 @@ export const asksView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
             key={a._id}
             approval={{ ...a, agent: agents[a.agent]?.name || a.agent }}
             computer={a.name}
+            aside={a.thread !== thread}
             call={ctx.call}
           />
         );
@@ -70,7 +76,13 @@ export const asksView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
 };
 
 function Ask(
-  { approval: a, computer, call }: { approval: Approval; computer?: string; call: Call },
+  { approval: a, computer, aside, call }: {
+    approval: Approval;
+    computer?: string;
+    /** Asked in a side thread of this conversation. */
+    aside?: boolean;
+    call: Call;
+  },
 ): ReactNode {
   const [busy, setBusy] = useState<Answer>();
   const [error, setError] = useState<string>();
@@ -110,6 +122,7 @@ function Ask(
           <b>{a.agent}</b> {wants}
           <span className="ask-where">
             {computer ? <>on {computer} ·</> : null}
+            {aside ? <>in a side thread ·</> : null}
             <Time at={a.at} />
           </span>
         </p>

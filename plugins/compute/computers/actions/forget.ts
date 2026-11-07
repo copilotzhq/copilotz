@@ -1,10 +1,13 @@
 /**
  * Forgets one of the person's computers: it can't connect again (its program
  * forgets it at its next try), every space it's in loses it, and what
- * agents waited on it for, and what they were let do there, go with it. Its files stay
+ * agents waited on it for (a turn waiting is told no, and goes on), and what
+ * they were let do there, go with it. Its files stay
  * where they are, on the machine.
  */
 import { defineAction, people } from "../../../../runtime/mod.ts";
+import type { Approval } from "../collections/approval.ts";
+import { asking, told } from "../shared/grants.ts";
 
 export const forgetAction = defineAction({
   description: "Forgets one of your computers",
@@ -20,6 +23,15 @@ export const forgetAction = defineAction({
     if (deletedCount) {
       // Its desks too, in every space it's in: the system's to remove.
       await ctx.as().db.collection("desk").deleteMany({ computer: input.computer });
+      // A turn waiting on it is told no, and carries on without it.
+      const waiting = await ctx.as().db.collection<Approval>("approval").find({
+        computer: input.computer,
+        status: "pending",
+        question: { $exists: true },
+      });
+      for (const asked of waiting) {
+        if (await asking(ctx, asked)) await told(ctx, asked, `No: ${asked.detail}`);
+      }
       await ctx.as().db.collection("approval").deleteMany({ computer: input.computer });
       await ctx.as().db.collection("grant").deleteMany({ computer: input.computer });
     }

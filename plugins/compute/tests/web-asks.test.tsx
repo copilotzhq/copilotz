@@ -1,7 +1,8 @@
 /**
  * What agents wait on you for, over where you type (`computer.asks`): an
  * agent's cards wait for its own turn to be over, never for another agent
- * still working in the conversation.
+ * still working in the conversation; and what's asked in a side thread shows
+ * in the conversation too, saying so.
  */
 import { assert, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
@@ -62,4 +63,15 @@ test("an agent's OK shows once its turn is over, while another agent works on", 
   assert(both.includes("ls -la") && !both.includes("rm -rf build"), both);
   // Another conversation's asks don't show here.
   assert(!shown([east], { thread: "t2", busy: [] }).includes("ls -la"));
+});
+
+test("an OK asked in a side thread shows in its conversation, saying where it was asked", () => {
+  const east = { ...asking("east", "df -h"), thread: "t1-side" };
+  const html = shown([east], { thread: "t1", side: ["t1-side"], busy: [] });
+  assertStringIncludes(html, "df -h");
+  assertStringIncludes(html, "in a side thread");
+  // Not another conversation's side thread.
+  assert(!shown([east], { thread: "t1", side: ["t2-side"], busy: [] }).includes("df -h"));
+  // Seen in the side thread itself, it's just here.
+  assert(!shown([east], { thread: "t1-side", busy: [] }).includes("in a side thread"));
 });

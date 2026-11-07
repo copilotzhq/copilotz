@@ -1,5 +1,7 @@
 ## Unreleased
 
+## 1.0.0-rc.28 — 2026-11-07
+
 - **A deploy hands over instead of fencing** (`serve` in `copilotz/web/node`, `lease` in
   `copilotz/stores/postgres`). While a deploy moves traffic, the platform keeps the old process
   running for as long as its browsers' sockets stay open, and the new process's store fenced it:

@@ -1,5 +1,34 @@
 ## Unreleased
 
+**Upgrading.** `chat.send` no longer takes a file's content. Upload each file first with
+`chat.attach` (`{ name, type, data, voice? }`, as `files` took it), and send what it answers by id:
+
+```ts
+const { id } = await runtime.call("chat.attach", {
+  name: "plan.pdf",
+  type: "application/pdf",
+  data,
+});
+await runtime.call("chat.send", { text: "The plan", files: [{ id }] });
+```
+
+Call both as the same sender: a draft is sent only by its uploader's message. An API key that sends
+files needs `chat.attach` in its scope: the "Chat" preset has it now, and a key made with it before
+is made again (or given `chat.attach`).
+
+- **Files of about 10 MB go, ten to a message.** `chat.send` carried every file's content, on record
+  with what it wrote too, in one call, and a call carries at most 16 MiB to the owner: a file past
+  about 6 MB was refused (`payload_too_large`). Now each file is its own call (`chat.attach`,
+  unrecorded), kept as its sender's draft (`draft`, in no conversation: nobody else reads it, a rule
+  of chat's own), and the message names it: its commit makes it the conversation's, under the rules
+  as the message is. The web composer uploads each file as it's chosen (reading, uploading, its
+  size, or why it couldn't), so sending is instant; a voice message uploads once, also when it's
+  sent again without a transcript. WhatsApp uploads what a phone sends the same way.
+- **Drafts are bounded:** a sender holds 20 at most (the oldest go past them), and `chat.prune`
+  (chat's schedule, every hour) drops those not sent within a day. A contact's upload is let in by
+  the `contactSend` hooks as a message to nobody carrying it: a web line's file rules apply as it's
+  uploaded, and it counts against the visitor's limits.
+
 - **A contact's message may go to nobody** (`chat.send` with `to: []`), as a person's already could:
   it's kept in the chat, its agents read it the next time they answer there (with its `tap`, as
   `[tapped: <id>]`), and none answers it. It's how a page beside the chat says what the customer did

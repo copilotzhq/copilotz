@@ -26,6 +26,7 @@ import { access, devSignIn, identity } from "../../../plugins/access/mod.ts";
 import { chat } from "../../../plugins/agents/chat/mod.ts";
 import models from "../../../plugins/models/mod.ts";
 import { test } from "../../../testing/mod.ts";
+import { attached } from "../../../plugins/agents/tests/fixtures/files.ts";
 import { type PageSettings, webPage } from "../server.ts";
 import { themeOf } from "../theme/css.ts";
 import type { Theme } from "../theme/default.ts";
@@ -618,10 +619,10 @@ test("a file someone sent: theirs to fetch, in parts, inline or saved; nobody el
     const { thread } = await rt.call<{ thread: string }>("chat.send", {
       text: "look",
       in: space,
-      files: [
+      files: await attached(rt, [
         { name: "a b.png", type: "image/png", data: btoa(String.fromCharCode(...bytes)) },
         { name: "page.html", type: "text/html", data: btoa("<script>alert(1)</script>") },
-      ],
+      ], as),
     }, as);
     const [message] = await rt.query<{ files: { id: string }[] }[]>(
       "message.history",

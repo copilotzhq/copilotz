@@ -117,10 +117,16 @@ export const commands: Commands = {
       const name = path.split("/").at(-1)!;
       const state = await term.state();
       const here = state.open?.kind === "thread" ? state.open.item._id as string : undefined;
+      // Uploaded first, on its own; the message sends it by id.
+      const { id } = await term.runtime.call<{ id: string }>("chat.attach", {
+        name,
+        type: typeOf(name),
+        data: btoa(binary),
+      });
       const sent = await send(term, {
         text: words.join(" ") || `Here's ${name}.`,
         from: term.me,
-        files: [{ name, type: typeOf(name), data: btoa(binary) }],
+        files: [{ id }],
         ...(here ? { thread: here } : state.space ? { in: state.space } : {}),
       });
       if (sent.thread !== here) await go(term, sent.thread);

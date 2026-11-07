@@ -9,6 +9,7 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   type Actor,
   createRuntime,
+  defineAction,
   definePlugin,
   signLink,
   type Store,
@@ -21,6 +22,7 @@ import models from "../../models/mod.ts";
 import { access } from "../../access/mod.ts";
 import { chat, type FileAbout, type Message } from "../chat/mod.ts";
 import { PART } from "../chat/routes/files.ts";
+import { attached } from "./fixtures/files.ts";
 import { tempDir, tempFile, test, TEST_ACTOR, testWho } from "../../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
@@ -67,13 +69,19 @@ const app = definePlugin({
     agents: { lead: { instructions: "Hi.", model: "fake/echo", default: true } },
     links: LINKS,
   },
+  actions: {
+    // A file uploaded more than a day ago.
+    "test.age": defineAction({
+      input: { type: "object" },
+      run: (ctx, input: { id: string }) =>
+        ctx.db.collection("file").updateOne({ _id: input.id }, {
+          $set: { at: new Date(Date.now() - 86_400_001).toISOString() },
+        }),
+    }),
+  },
 });
 
-/**
- * Ana's messages with the three files, in her own space; each file's path.
- * The recording goes alone: an Action's call, its input on record with what
- * it writes, carries at most 16 MiB to the owner.
- */
+/** Ana's message with the three files, each uploaded first, in her own space; each file's path. */
 async function start(place: () => { store: Store | Promise<Store>; blobs?: Blobs }) {
   const { store, blobs } = place();
   const rt = await createRuntime({
@@ -83,23 +91,16 @@ async function start(place: () => { store: Store | Promise<Store>; blobs?: Blobs
   });
   const as = { actor: ana };
   const { space } = await rt.call<{ space: string }>("space.personal", {}, as);
-  const send = (
-    thread: string | undefined,
-    files: { name: string; type: string; data: string }[],
-  ) =>
-    rt.call<{ thread: string }>("chat.send", {
-      text: "files",
-      ...(thread ? { thread } : { in: space }),
-      transcribe: false,
-      files,
-    }, as);
-  const { thread } = await send(undefined, [
-    { name: "call.wav", type: "audio/wav", data: base64(LARGE) },
-  ]);
-  await send(thread, [
-    { name: "photo.jpg", type: "image/jpeg", data: base64(PAST) },
-    { name: "a.png", type: "image/png", data: base64(SMALL) },
-  ]);
+  const { thread } = await rt.call<{ thread: string }>("chat.send", {
+    text: "files",
+    in: space,
+    transcribe: false,
+    files: await attached(rt, [
+      { name: "call.wav", type: "audio/wav", data: base64(LARGE) },
+      { name: "photo.jpg", type: "image/jpeg", data: base64(PAST) },
+      { name: "a.png", type: "image/png", data: base64(SMALL) },
+    ], as),
+  }, as);
   const said = await rt.query<Message[]>("message.history", { thread }, as);
   const ids = said.flatMap((m) => m.files?.map((f) => f.id) ?? []);
   const paths = ids.map((id) => `/files/${encodeURIComponent(id)}`);
@@ -217,17 +218,63 @@ test("a file is theirs who may read it, and a link's signed for it; nobody else'
   }
 });
 
-test("a file's content is plain base64, or it isn't sent", async () => {
+test("a file's content is plain base64, or it isn't uploaded", async () => {
   const { rt } = await start(places.memory);
   try {
     for (const data of [`${base64(SMALL)}\n`, `data:image/png;base64,${base64(SMALL)}`, "a b c"]) {
       const error = await assertRejects(() =>
-        rt.call("chat.send", { text: "x", files: [{ name: "a.png", type: "image/png", data }] }, {
-          actor: ana,
-        })
+        rt.call("chat.attach", { name: "a.png", type: "image/png", data }, { actor: ana })
       );
       assertEquals((error as { code?: string }).code, "invalid", data.slice(0, 30));
     }
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a file not sent yet is its uploader's alone, sent by their message only, gone after a day", async () => {
+  const { rt, get } = await start(places.memory);
+  const as = (actor: Actor) => ({ actor });
+  const code = (call: Promise<unknown>) =>
+    call.then(() => "done", (error) => (error as { code?: string }).code);
+  try {
+    const { space: hers } = await rt.call<{ space: string }>("space.personal", {}, as(ana));
+    const { space: his } = await rt.call<{ space: string }>("space.personal", {}, as(bob));
+    const [draft] = await attached(rt, [{
+      name: "plan.txt",
+      type: "text/plain",
+      data: btoa("plan"),
+    }], as(ana));
+    const path = `/files/${encodeURIComponent(draft.id)}`;
+    const about = (actor: Actor) =>
+      rt.query<FileAbout | null>("file.about", { id: draft.id }, as(actor));
+    // Nobody reads it before it's sent, its uploader neither: it's in no conversation yet.
+    for (const who of [ana, bob]) {
+      assertEquals(await about(who), null);
+      assertEquals((await get(path, who)).status, 404);
+    }
+    // Nobody else sends it.
+    const send = (actor: Actor, space: string, files: { id: string }[]) =>
+      rt.call("chat.send", { text: "here", in: space, files }, as(actor));
+    assertEquals(await code(send(bob, his, [draft])), "not_found");
+    // Sent where she can't write, nothing's sent, and it's hers alone still: not theirs who are there.
+    assert((await code(send(ana, his, [draft]))) !== "done");
+    assertEquals(await about(bob), null);
+    // Sent where she writes, it's the message's: whoever reads that reads it.
+    assertEquals(await code(send(ana, hers, [draft])), "done");
+    assertEquals((await about(ana))?.name, "plan.txt");
+    assertEquals((await body(await get(path, ana))).bytes, new TextEncoder().encode("plan"));
+    // Twenty at most wait to be sent, the oldest dropped past them; any a day old goes.
+    const many = await attached(
+      rt,
+      Array.from({ length: 21 }, (_, i) => ({ name: `${i}.txt`, data: btoa(String(i)) })),
+      as(ana),
+    );
+    assertEquals(await code(send(ana, hers, [many[0]])), "not_found");
+    await rt.call("test.age", { id: many[1].id });
+    assertEquals(await rt.call("chat.prune", {}), { gone: 1 });
+    assertEquals(await code(send(ana, hers, [many[1]])), "not_found");
+    assertEquals(await code(send(ana, hers, many.slice(2, 12))), "done");
   } finally {
     await rt.close();
   }

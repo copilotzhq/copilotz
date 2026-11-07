@@ -19,6 +19,7 @@ import { chat, type Message, tool } from "../../agents/chat/mod.ts";
 import { access } from "../mod.ts";
 import { join } from "./join.ts";
 import { test } from "../../../testing/mod.ts";
+import { attached } from "../../agents/tests/fixtures/files.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -127,7 +128,11 @@ const say = async (rt: Runtime, text: string, where: { in?: string; thread?: str
     text,
     ...where,
     ...(text === "ask"
-      ? { files: [{ name: "plan.txt", type: "text/plain", data: btoa("plan") }] }
+      ? {
+        files: await attached(rt, [{ name: "plan.txt", type: "text/plain", data: btoa("plan") }], {
+          actor: ana,
+        }),
+      }
       : {}),
   }, { actor: ana });
   await rt.idle();

@@ -13,6 +13,7 @@ import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
 import { chat, type Prompt } from "../chat/mod.ts";
 import { history, type Summary } from "../history/mod.ts";
 import { env, tempFile, temporary, test } from "../../../testing/mod.ts";
+import { attached } from "./fixtures/files.ts";
 
 const POSTGRES = env("COPILOTZ_TEST_POSTGRES_URL");
 const stores: Record<string, () => Store | Promise<Store>> = {
@@ -69,12 +70,13 @@ async function start(make: () => Store | Promise<Store>) {
     plugins: [models, chat, history, app],
   });
   let thread: string | undefined;
-  const say = async (words: string, files?: unknown[]) => {
+  const say = async (words: string, files?: Parameters<typeof attached>[1]) => {
     thread = (await runtime.call<{ thread: string }>("chat.send", {
       thread,
       text: words,
       from: "ana",
-      ...(files ? { files } : {}),
+      // Each uploaded first, then sent by id.
+      ...(files ? { files: await attached(runtime, files) } : {}),
     })).thread;
     await runtime.idle();
   };

@@ -80,6 +80,7 @@ export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
           refusals={ctx.resources.refusals as Record<string, RefusalView | null> | undefined}
           notes={ctx.resources.composerNotes as Record<string, ComposerNote | null> | undefined}
           place={here ? { in: here } : {}}
+          attach={(file) => ctx.call<{ id: string }>("chat.attach", file)}
           send={async (text, files, options) => {
             const sent = await ctx.call<{ thread: string }>("chat.send", {
               ...(text ? { text } : {}),

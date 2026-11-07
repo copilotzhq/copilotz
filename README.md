@@ -788,8 +788,13 @@ name, never by importing its code.
     `runtime.query("thread.prompt", { thread, agent })` and `/prompt` show exactly what an agent
     gets.
   - **Files:** a message's files ride on it by name, type and size; their content is a `file`
-    document whose data (plain base64) the owner keeps as a blob. `file.about` says what one is, as
-    its reader reaches it, without its content; `/files/<id>` streams the content, of any size, in
+    document whose data (plain base64) the owner keeps as a blob. Each is uploaded on its own first
+    (`chat.attach`, one file a call, about 10 MB at most), as its sender's draft, which nobody else
+    reads; `chat.send` then names them (`files: [{ id }]`) and they join its conversation in its
+    commit. The web composer uploads each file as it's chosen. A sender holds 20 drafts at most, and
+    those not sent within a day go (`chat.prune`, every hour). A contact's upload is let in by the
+    `contactSend` hooks as a message to nobody carrying it. `file.about` says what a file is, as its
+    reader reaches it, without its content; `/files/<id>` streams the content, of any size, in
     parts, with ranges. Agents read a text file's content, are shown images and PDFs when their
     model reads them (the latest 8; the catalog says which models do, or the model choice's
     `input: ["image"]`, and the others are told what they can't see), and see anything else by name.

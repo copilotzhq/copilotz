@@ -197,7 +197,7 @@ const space = async (runtime: Runtime, name: string, by: Actor) =>
 
 test("presets: each a scope, its role following: Chat an editor, Read only a viewer", async () => {
   assertEquals(presets.chat.scope, {
-    call: ["chat.send", "chat.stop"],
+    call: ["chat.send", "chat.attach", "chat.stop"],
     query: ["thread.recent", "message.conversation"],
   });
   assertEquals(presets.read.scope, {

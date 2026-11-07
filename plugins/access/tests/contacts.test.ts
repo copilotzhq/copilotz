@@ -37,6 +37,7 @@ import { api, terminalPlugin, whatsapp } from "../../interfaces/mod.ts";
 import { apps, cloud, computers } from "../../compute/mod.ts";
 import { credits, stripe, stripeWebhook, usage } from "../../billing/mod.ts";
 import { test } from "../../../testing/mod.ts";
+import { attached } from "../../agents/tests/fixtures/files.ts";
 import { tools as spacesTools } from "../spaces/resources/tools.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
@@ -256,7 +257,13 @@ test("a contact reaches its own chat, what's said and filed in it, and nothing e
     await runtime.call("chat.send", {
       thread: carlas,
       text: "a ticket to Santos",
-      files: [{ name: "id.txt", type: "text/plain", data: btoa("RG 12.345") }],
+      files: await attached(runtime, [{
+        name: "id.txt",
+        type: "text/plain",
+        data: btoa("RG 12.345"),
+      }], {
+        actor: carla,
+      }),
     }, { actor: carla });
     await runtime.idle();
     // Its message is from it, and the agent's answer goes back to it.
@@ -513,9 +520,10 @@ test("every Action, query and event stays shut to contacts, but those opened to 
     ...Object.entries(registry.events).filter(([, def]) => def.allow?.(contact))
       .map(([type]) => type),
   ]).sort();
-  // `file.about` is a file as its reader reaches it: a contact, its own chat's. Meta's webhook
-  // is WhatsApp's route, which calls `whatsapp.receive` as trusted code: no Action of it is open.
-  assertEquals(open, ["chat.send", "file.about"]);
+  // `file.about` is a file as its reader reaches it: a contact, its own chat's; `chat.attach`
+  // uploads a file its message then sends. Meta's webhook is WhatsApp's route, which calls
+  // `whatsapp.receive` as trusted code: no Action of it is open.
+  assertEquals(open, ["chat.attach", "chat.send", "file.about"]);
 });
 
 test("an agent says a fixed message to a contact's chat without a turn, once", async () => {

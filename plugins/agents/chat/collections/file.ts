@@ -6,6 +6,11 @@
  * Nothing answers a file whole: a query's answer comes from an executor in
  * one piece, which is no way to move megabytes. `file.about` says what a
  * file is, and `/files/<id>` (routes/files.ts) streams its content.
+ *
+ * Nor does a call carry more than one: a file comes in on its own
+ * (`chat.attach`), as a draft (`draft`: whose it is, nobody else reads it;
+ * no `thread` yet), and the message that sends it (`chat.send`) names it by
+ * id. Drafts never sent go after a day (`chat.prune`).
  */
 import { defineCollection, type Infer, peopleOrContacts } from "../../../../runtime/mod.ts";
 
@@ -26,6 +31,11 @@ const fileSchema = {
     size: { type: "integer" },
     /** The content, base64. */
     data: { type: "string", pattern: BASE64 },
+    /**
+     * Not sent yet: whose it is (a person's id, `contact:<id>`, or `system`).
+     * Only they reach it, and only a message of theirs sends it.
+     */
+    draft: { type: "string" },
     /** A recording's length (ms) and its loudness over time (up to 64 values, 0–1), for its player. */
     voice: {
       type: "object",
@@ -37,6 +47,7 @@ const fileSchema = {
     },
     /** What an audio file says, transcribed when it was sent: what agents read. */
     transcript: { type: "string" },
+    /** Its conversation, once a message sends it. */
     thread: { type: "string" },
     /** The space its thread is in. */
     in: { type: "string" },
@@ -47,7 +58,7 @@ const fileSchema = {
     private: { type: "boolean" },
     at: { type: "string" },
   },
-  required: ["name", "type", "size", "data", "thread", "at"],
+  required: ["name", "type", "size", "data", "at"],
 } as const;
 
 export const file = defineCollection({
@@ -72,7 +83,17 @@ export type File = Infer<typeof fileSchema> & { _id: string };
 /** A file as `file.about` answers it: everything but its content. */
 export type FileAbout = Pick<
   File,
-  "_id" | "name" | "type" | "size" | "voice" | "transcript" | "thread" | "in" | "private" | "at"
+  | "_id"
+  | "name"
+  | "type"
+  | "size"
+  | "voice"
+  | "transcript"
+  | "thread"
+  | "in"
+  | "private"
+  | "draft"
+  | "at"
 >;
 
 /** Media types read as text: what agents get the content of. */
@@ -87,6 +108,23 @@ export const sizeOf = (data: string) => Math.floor(data.replace(/=+$/, "").lengt
 
 /** The most a file's content may be, as base64 (about 10 MB): people's and agents' alike. */
 export const FILE_DATA = 14_000_000;
+
+/** The most files a message carries. */
+export const MOST_FILES = 10;
+
+/**
+ * Whose drafts are whose: a person by id, a contact as `contact:<id>`
+ * (as messages name their sender), the system as `system`; anyone else
+ * (an agent) has none.
+ */
+export const drafter = (actor?: { kind: string; id: string }): string | undefined =>
+  !actor || actor.kind === "system"
+    ? "system"
+    : actor.kind === "person"
+    ? actor.id
+    : actor.kind === "contact"
+    ? `contact:${actor.id}`
+    : undefined;
 
 /** A base64 file's content as text. */
 export const text = (data: string) =>

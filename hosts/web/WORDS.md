@@ -32,6 +32,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.couldntRead` | Couldn't read it |
 | `chat.couldntTranscribeAudio` | Couldn't transcribe the audio, so it wasn't sent |
 | `chat.couldntTranscribeRecording` | Couldn't transcribe your recording, so it wasn't sent |
+| `chat.couldntUpload` | Couldn't upload it |
 | `chat.create` | Create |
 | `chat.deleteRecording` | Delete recording |
 | `chat.download` | Download {name} |
@@ -150,6 +151,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.transcribingRecording` | Transcribing your recording… |
 | `chat.transcript` | Transcript |
 | `chat.tryAgain` | Try again |
+| `chat.uploading` | Uploading… |
 | `chat.used` | Used {names} |
 | `chat.usesSources` | Uses {sources}. Not everyone here can see it. |
 | `chat.using` | Using {names} |

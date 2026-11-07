@@ -1,4 +1,8 @@
-/** Files chosen to send: read as `chat.send` takes them (base64), with a preview for images. */
+/**
+ * Files chosen to send: each read (base64) and uploaded on its own
+ * (`chat.attach`) as it's chosen, with a preview for images; the message
+ * sends them by their uploads' ids.
+ */
 
 import { formatNumber } from "../../../../../hosts/web/words.ts";
 import { say } from "./words.ts";
@@ -8,8 +12,10 @@ export type Attached = {
   name: string;
   type: string;
   size: number;
-  /** Its content, base64, once read. */
-  data?: string;
+  /** Read, and being uploaded. */
+  read?: true;
+  /** Uploaded: the id the message sends it by. */
+  uploaded?: string;
   /** An image's preview (an object URL), until it's sent or removed. */
   preview?: string;
   /** Why it can't go. */

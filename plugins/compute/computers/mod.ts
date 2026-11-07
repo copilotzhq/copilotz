@@ -7,7 +7,8 @@
  * and browser, so they never tread on each other. Running commands, starting
  * jobs and writing files wait for a yes (once, for the conversation, or
  * always): from the person the agent works for, or the computer's owner when
- * they keep that to themselves. What a job serves gets an address of its own
+ * they keep that to themselves. The agent's turn waits for it, and goes on
+ * once it's answered, the call running then. What a job serves gets an address of its own
  * for the space's members (`computer.preview`, the `preview` tool), once the
  * app names a domain for previews (`computers: { previews }`: see
  * resources/previews.ts). A space's environment (variables and secrets, its

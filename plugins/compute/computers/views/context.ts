@@ -91,7 +91,8 @@ export const contextViews = {
           ? [
             "Where a yes is needed, the tool asks, and you wait. They see your request where " +
             "they talk with you and answer there (on the web, a card in the conversation; in " +
-            "the terminal, a line above where they type, answered with /approve). Reading " +
+            "the terminal, a line above where they type, answered with /approve). Once they " +
+            "answer, it runs, and you go on with what it returned (or their no). Reading " +
             "files, listing and searching need no yes.",
           ]
           : []),
@@ -143,7 +144,8 @@ export const contextViews = {
           `Before you ${asked.join(", ")}, ${answerer} says yes: the tool asks them, and you ` +
           `wait. They see your request where they talk with you and answer there (on the ` +
           `web, a card in the conversation; in the terminal, a line above where they type, ` +
-          `answered with /approve). Reading files, listing and searching need no yes.`,
+          `answered with /approve). Once they answer, it runs, and you go on with what it ` +
+          `returned (or their no). Reading files, listing and searching need no yes.`,
         ]
         : []),
       ...environment(ctx, thread.in),

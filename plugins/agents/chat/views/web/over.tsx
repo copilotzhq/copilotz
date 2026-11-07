@@ -1,6 +1,7 @@
 /**
  * What other front ends show over where you type (chat's `conversation`
- * resource): their Views, each with hints `{ thread, in, working, busy }`.
+ * resource): their Views, each with hints `{ thread, in, side, working, busy }`
+ * (`side`: the conversation's side threads, whose asks show here too).
  * `busy` is the agents whose turns run in the conversation (or its
  * subthreads), each held 600 ms after its last step ends, and `working`
  * whether there are any; so what waits for an agent's turn to be over (its
@@ -14,10 +15,12 @@ import type { ConversationView } from "../../shared/types.ts";
 import { held } from "./held.ts";
 
 export function Over(
-  { entries, thread, space, live }: {
+  { entries, thread, space, side = [], live }: {
     entries: ConversationView[];
     thread: string;
     space?: string;
+    /** The conversation's side threads. */
+    side?: string[];
     /** The agents with a turn step live here now. */
     live: string[];
   },
@@ -31,7 +34,13 @@ export function Over(
       key={entry.view}
       kind={entry.view}
       item={{}}
-      hints={{ thread, ...(space ? { in: space } : {}), working: busy.length > 0, busy }}
+      hints={{
+        thread,
+        ...(space ? { in: space } : {}),
+        side,
+        working: busy.length > 0,
+        busy,
+      }}
       fallback={null}
     />
   ));

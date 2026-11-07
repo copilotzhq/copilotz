@@ -12,7 +12,7 @@ import type {
   ModelRef,
   ToolCall,
 } from "../../../models/contract.ts";
-import type { Intent } from "../collections/intent.ts";
+import type { Intent, Question } from "../collections/intent.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import {
@@ -114,6 +114,13 @@ const turn = async (ctx: Context, event: Event) => {
     if (done.some((m) => m._id === `${run}:reply`) || waiting) return;
     step = done.length;
     if (taking?.step === step) open = taking;
+  }
+  // Resumed once the questions its tools asked were answered: the calls that asked run again
+  // first, as themselves, in a step of their own after the answers.
+  let fresh = false;
+  if (event.type === "wait.updated" && t.step && step === 0 && !open) {
+    open = await again(ctx, t, run);
+    fresh = !!open;
   }
 
   // What it is sent is the thread's llm View: its instructions, the
@@ -242,11 +249,17 @@ const turn = async (ctx: Context, event: Event) => {
     // The step's calls run together, each in a branch of its own, so a retry
     // finds what each one called whatever order they started in. Their
     // results keep the model's order.
+    // What its calls ask as they run (a person's yes), each its own question: those of a call
+    // that returned before a retry are on its intent.
+    const asks: Record<number, Question> = { ...resumed?.asks };
+    const questionOf = (i: number) => `${id}:${i}:question`;
     const ran = await Promise.all(calls.map(async (call, i) => {
       live.call({ id: call.id, name: call.name, input: call.input });
       let output: string;
       let send: Send | undefined;
       const returned = resumed?.outputs[i];
+      // A call run again once its question was answered: as itself, told the answer.
+      const answering = resumed?.again?.[i];
       if (messaging && call.name === SEND) {
         send = await prepare(ctx, t, id, `${id}:${i}`, call.input, here, known, current.in);
         output = send.output;
@@ -260,18 +273,29 @@ const turn = async (ctx: Context, event: Event) => {
             agent: t.agent,
             thread: t.thread,
             trigger: t.trigger,
-            callId: `${id}:${i}`,
+            callId: answering?.call ?? `${id}:${i}`,
             // Only a call that was written and never returned may have run already.
-            retry: !!resumed,
+            retry: !!resumed && !(fresh && answering),
+            ask: (question) => {
+              asks[i] = { to: question.to, text: question.text };
+              return questionOf(i);
+            },
+            ...(answering ? { answer: await answerTo(ctx, answering.question) } : {}),
           })).output
           : `Error: Unknown tool "${call.name}"`;
-        // What it returned is on record at once: a retry won't run it again. If
+        // What it returned (and asked) is on record at once: a retry won't run it again. If
         // that write fails, a retry runs it again, as itself.
-        await intents.updateOne({ _id: run }, { $set: { [`outputs.${i}`]: output } })
-          .catch(() => {});
+        await intents.updateOne({ _id: run }, {
+          $set: { [`outputs.${i}`]: output, ...(asks[i] ? { [`asks.${i}`]: asks[i] } : {}) },
+        }).catch(() => {});
       }
       live.result(call.id, output);
-      const made: Step = { ...call, output, ...(send?.message ? { sent: send.message._id } : {}) };
+      const made: Step = {
+        ...call,
+        output,
+        ...(send?.message ? { sent: send.message._id } : {}),
+        ...(asks[i] ? { asked: questionOf(i) } : {}),
+      };
       return { made, send };
     }));
     const done = ran.map((r) => r.made);
@@ -287,10 +311,23 @@ const turn = async (ctx: Context, event: Event) => {
       conversation.push({ role: "tool", toolCallId: c.id, text: await toolText(ctx, c, viewer) });
     }
 
-    // The step, what it sent and what it waits for commit together, so no
+    // What its tools asked: each the agent's message to whom it asks, a reply to which they wait for.
+    const questions = Object.entries(asks).map(([i, q]) => ({
+      _id: questionOf(Number(i)),
+      thread: t.thread,
+      ...(current.in ? { in: current.in } : {}),
+      from: t.agent,
+      to: [q.to],
+      text: q.text,
+      hops: t.hops + 1,
+      at: now(),
+    }));
+    // The step, what it sent and asked, and what it waits for commit together, so no
     // reply can arrive before the wait it checks off.
-    const waitingFor = sends.filter((s) => s.message!.expectReply !== false)
-      .map((s) => s.message!._id);
+    const waitingFor = [
+      ...sends.filter((s) => s.message!.expectReply !== false).map((s) => s.message!._id),
+      ...questions.map((q) => q._id),
+    ];
     // Handing work to another space is trusted code's: the agent doesn't work there.
     const writer = sends.some((s) => s.across) ? ctx.as() : ctx;
     const deliveries = await Promise.all(
@@ -327,6 +364,10 @@ const turn = async (ctx: Context, event: Event) => {
         await tx.db.collection("message").insertOne(send.message!);
         await deliveries[i](tx);
       }
+      for (const question of questions) {
+        await noted(tx, question);
+        await tx.db.collection("message").insertOne(question);
+      }
       if (waitingFor.length) {
         await tx.db.collection("wait").insertOne({
           _id: `${run}:wait`,
@@ -336,6 +377,7 @@ const turn = async (ctx: Context, event: Event) => {
           hops: t.hops,
           waitingFor,
           received: [],
+          ...(questions.length ? { step: id } : {}),
           at: now(),
         });
       }
@@ -360,6 +402,40 @@ async function answered(ctx: Context, t: Turn): Promise<boolean> {
   ]);
   return !!trigger && !!latest?.knew && latest.knew >= trigger.at &&
     latest.to.includes(trigger.from);
+}
+
+/**
+ * The step a turn resumes with once the questions its tools asked were
+ * answered: each call that asked, run again as itself (its own `callId`),
+ * after the answers; nothing of the paused step is rewritten. None when the
+ * step asked nothing.
+ */
+async function again(ctx: Context, t: Turn, run: string): Promise<Intent | null> {
+  const paused = await ctx.db.collection<Message>("message").findOne({ _id: t.step });
+  const asked = ((paused?.toolCalls ?? []) as Step[]).flatMap((c, i) =>
+    c.asked ? [{ ...c, call: `${t.step}:${i}` }] : []
+  );
+  if (!asked.length) return null;
+  const intent: Intent = {
+    thread: t.thread,
+    agent: t.agent,
+    step: 0,
+    calls: asked.map(({ id, name, input }) => ({ id: `${id}:answered`, name, input })),
+    outputs: {},
+    again: Object.fromEntries(asked.map((c, i) => [i, { call: c.call, question: c.asked! }])),
+    at: now(),
+  };
+  await ctx.db.collection("intent").replaceOne({ _id: run }, intent, { upsert: true });
+  return intent;
+}
+
+/** The answer to a question a tool asked: who answered, and what they said. */
+async function answerTo(ctx: Context, question: string) {
+  const [reply] = await ctx.db.collection<Message>("message").find(
+    { replyTo: question },
+    { sort: { at: 1 }, limit: 1 },
+  );
+  return { from: reply?.from ?? "", text: reply?.text ?? "" };
 }
 
 /** What a written step's model said, said again: what it wrote, its state and its calls. */

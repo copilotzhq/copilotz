@@ -23,9 +23,10 @@ export type Letting = {
 export const saidFor = (origin: Pick<Origin, "kind">) => `Yes, for this ${origin.kind}`;
 
 /**
- * The answer, in the conversation, as part of what set it going. Its next turn
- * is for whom the agent was working: where the computer's owner answered, the
- * message is that person's, saying who did.
+ * The answer, in the conversation, as part of what set it going: a reply to
+ * the agent's question, when its turn waits on it (it goes on from there).
+ * It's for whom the agent was working: where the computer's owner answered,
+ * the message is that person's, saying who did.
  */
 export async function told(ctx: Context, asked: Approval, text: string): Promise<void> {
   const me = ctx.actor!.id;
@@ -36,7 +37,22 @@ export async function told(ctx: Context, asked: Approval, text: string): Promise
   const answered = asked.for === me
     ? {}
     : { via: { kind: "answer", name: nameOf(me, await namesFor(ctx, [me])).slice(0, 120) } };
-  await by.call("chat.send", { thread: asked.thread, to: [asked.agent], text, ...answered });
+  await by.call("chat.send", {
+    thread: asked.thread,
+    to: [asked.agent],
+    text,
+    ...(asked.question ? { replyTo: asked.question } : {}),
+    ...answered,
+  });
+}
+
+/**
+ * Whether what was asked can be answered now: asked in an agent's turn, its
+ * question is written (the step that asked it is); asked elsewhere, always.
+ */
+export async function asking(ctx: Context, asked: Approval): Promise<boolean> {
+  return !asked.question ||
+    !!await ctx.as().db.collection("message").findOne({ _id: asked.question });
 }
 
 export async function letOrigin(ctx: Context, l: Letting): Promise<void> {
@@ -59,9 +75,10 @@ export async function letOrigin(ctx: Context, l: Letting): Promise<void> {
   const approvals = ctx.db.collection<Approval>("approval");
   const waiting = await approvals.find({ ...scope, status: "pending" });
   for (const asked of waiting) {
-    if (!asked.origin || originKey(asked.origin) !== key || asked.origin.rev !== l.origin.rev) {
-      continue;
-    }
+    if (
+      !asked.origin || originKey(asked.origin) !== key || asked.origin.rev !== l.origin.rev ||
+      !await asking(ctx, asked)
+    ) continue;
     await approvals.updateOne({ _id: asked._id }, {
       $set: { status: "allowed", grant: "origin", decided: now },
     });

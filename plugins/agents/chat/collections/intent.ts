@@ -43,6 +43,27 @@ const intentSchema = {
     },
     /** What each call returned, by its place in `calls`. */
     outputs: { type: "object", additionalProperties: { type: "string" } },
+    /** The question a call asked as it ran (`ToolContext.ask`), by its place in `calls`. */
+    asks: {
+      type: "object",
+      additionalProperties: {
+        type: "object",
+        properties: { to: { type: "string" }, text: { type: "string" } },
+        required: ["to", "text"],
+      },
+    },
+    /**
+     * Calls run again once their questions were answered, by place in `calls`:
+     * the call's own id (it runs as itself) and the question it asked.
+     */
+    again: {
+      type: "object",
+      additionalProperties: {
+        type: "object",
+        properties: { call: { type: "string" }, question: { type: "string" } },
+        required: ["call", "question"],
+      },
+    },
     at: { type: "string" },
   },
   required: ["thread", "agent", "step", "calls", "outputs", "at"],
@@ -60,8 +81,13 @@ export type Intent = {
   told?: Told[];
   calls: ToolCall[];
   outputs: Record<string, string>;
+  asks?: Record<string, Question>;
+  again?: Record<string, { call: string; question: string }>;
   at: string;
 };
+
+/** What a tool asks someone, its call waiting for their answer (`ToolContext.ask`). */
+export type Question = { to: string; text: string };
 
 /** What a call that never returned says, in the step a turn keeps when it ends without it. */
 export const CUT_SHORT = "Interrupted before it returned: it may or may not have taken effect. " +

@@ -1,5 +1,15 @@
 ## Unreleased
 
+- **A deploy hands over instead of fencing** (`serve` in `copilotz/web/node`, `lease` in
+  `copilotz/stores/postgres`). While a deploy moves traffic, the platform keeps the old process
+  running for as long as its browsers' sockets stay open, and the new process's store fenced it:
+  every write those browsers sent failed ("This owner was fenced"). Now one process at a time holds
+  the store's lease: `serve` listens first (a request is told it's starting: a 503 to retry, a page
+  that reloads itself), waits for the lease, then opens the app; the old process, asked for it,
+  stops listening (its browsers reconnect, to the new one), lets running work finish, and lets go.
+  Only a deploy at least as new asks (`revision`); a process that loses the lease stops. Its table
+  is `copilotz_lease`, in the schema it's given (`public` by default).
+
 ## 1.0.0-rc.27 — 2026-11-06
 
 **Upgrading.** Chat's `file.content` query is `file.about`, and answers a file without its content

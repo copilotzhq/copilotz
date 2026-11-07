@@ -385,6 +385,9 @@ test("a visitor's message to nobody: kept, unanswered, read later, holding none 
     },
   });
   await setup(async ({ runtime, visitor, send }) => {
+    // The line counts by the clock's minute: start well inside one, so Carla's four share it.
+    const left = 60_000 - (Date.now() % 60_000);
+    if (left < 10_000) await new Promise((resolve) => setTimeout(resolve, left + 100));
     const carla = await visitor("198.51.100.50");
     const dani = await visitor("198.51.100.51");
     const toNobody = (actor: Actor, text: string, id: string) =>

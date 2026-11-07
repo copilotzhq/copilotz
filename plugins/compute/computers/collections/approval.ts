@@ -3,7 +3,9 @@
  * for: a command, a job, a file write. Who answers (`owner`): the person the
  * agent works for (`for`), or the computer's owner when its desk says so;
  * they answer with `computer.approve`: yes once, yes for the conversation,
- * yes for the routine that set it going (`origin`), yes always, or no.
+ * yes for the routine that set it going (`origin`), yes always, or no. Asked
+ * in an agent's turn, it's that call's own (`call`), and the turn waits for
+ * the answer to its question.
  */
 import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
@@ -40,6 +42,12 @@ const approvalSchema = {
       },
       required: ["kind", "id", "name", "rev"],
     },
+    /**
+     * Asked in an agent's turn: the call that asked (its `callId`: it runs again as itself once
+     * answered), and its question, the agent's message the answer replies to.
+     */
+    call: { type: "string" },
+    question: { type: "string" },
     status: { type: "string", enum: ["pending", "allowed", "denied"] },
     /** How far a yes goes. */
     grant: { type: "string", enum: ["once", "thread", "origin", "always"] },
@@ -62,7 +70,7 @@ const approvalSchema = {
 
 export const approval = defineCollection({
   schema: approvalSchema,
-  indexes: [["owner", "status"], ["thread", "at"]],
+  indexes: [["owner", "status"], ["thread", "at"], ["call"]],
   queries: {
     /** What agents wait on the asker for, oldest first. */
     pending: {

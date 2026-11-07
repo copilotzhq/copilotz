@@ -108,6 +108,21 @@ export type ToolContext = Context & {
    * call never ran before.
    */
   callId: string;
+  /**
+   * In an agent's turn: a question this call can't go on without (a person's
+   * yes), to `to`. It's written with the call's step, as the agent's message
+   * to them, and the turn waits for its reply as it does for the messages it
+   * sends, other questions and messages of the step too. Then the call runs
+   * again, as itself, in a step of its own after the answer, with `answer`;
+   * what it returns then is what the agent reads. It returns the question's
+   * id: what an answer replies to (`chat.send`'s `replyTo`). Asked again in
+   * the same call, it's the same question. Absent where no turn waits (a
+   * model outside, over MCP): there, a tool says in its output what it waits
+   * for.
+   */
+  ask?: (question: { to: string; text: string }) => string;
+  /** On a call run again once its question was answered: who answered, and what they said. */
+  answer?: { from: string; text: string };
 };
 
 /** A tool whose `run` input type comes from its JSON Schema. */
@@ -143,14 +158,18 @@ export type ChatSettings = {
   transcriber?: ModelRef;
 };
 
-/** A tool call in an agent's step, with what it returned. */
-export type Step = ToolCall & { output: string; sent?: string };
+/**
+ * A tool call in an agent's step, with what it returned: the message it sent
+ * (`send_message`'s), or the question it asked and waited on (`ToolContext.ask`).
+ */
+export type Step = ToolCall & { output: string; sent?: string; asked?: string };
 
 /**
  * A `conversation` resource: a View that a conversation shows on the web,
- * over where you type, with hints `{ thread, in, working, busy }` (the
- * thread, its space, whether an agent's turn is running there, and whose):
- * something to answer there, such as an agent waiting on your OK. `busy`
+ * over where you type, with hints `{ thread, in, side, working, busy }` (the
+ * thread, its space, its side threads, whether an agent's turn is running
+ * there, and whose): something to answer there, such as an agent waiting on
+ * your OK, here or in a side thread. `busy`
  * lists the agents with a turn step live in the thread or its subthreads,
  * each kept 600 ms after its last one ends (a turn's steps come about 50 ms
  * apart), and `working` is whether there are any; so a View that waits for
@@ -207,7 +226,12 @@ export type ShownCall = {
 };
 
 /** What starts or resumes an agent's turn. */
-export type Turn = { thread: string; agent: string; trigger: string; hops: number };
+/**
+ * A turn: its thread, its agent, the message it answers and how many agent
+ * messages in a row led to it. Resumed from a wait whose step asked
+ * questions, `step` is that step's message: its asked calls run again first.
+ */
+export type Turn = { thread: string; agent: string; trigger: string; hops: number; step?: string };
 
 /**
  * What an agent is sent: its tools, then the zones the prompt cache wants

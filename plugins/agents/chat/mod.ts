@@ -14,7 +14,11 @@
  *   document. Each reply checks itself off; the last one resumes the agent
  *   with every reply in its history. Waiting holds nothing open.
  * - People are reached the same way: a question to a person waits until they
- *   reply to it.
+ *   reply to it. So does a tool that needs a person's answer to go on (a yes
+ *   to run a command, `ctx.ask`): its turn waits with the step's other
+ *   messages, and resumes with that call run again, as itself, after the
+ *   answer. An agent another one asked still answers it, whatever it waited
+ *   on meanwhile.
  * - What an agent is writing shows as it comes: a `live` document per running
  *   turn, kept in memory, swapped for the step or reply it became in one commit.
  * - A step's tool calls are written (an `intent`) before any of them runs, and

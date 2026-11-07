@@ -1,5 +1,28 @@
 ## Unreleased
 
+- **An agent waiting on your yes waits within its turn.** A command, job or file write that needs a
+  person's OK used to end the agent's turn ("Waiting for ana's yes…"). The turn's answer went to
+  whoever had asked it, and the yes then started a new turn that answered the person. So when one
+  agent asked another, and that one needed a yes, the first got "I'm waiting on your yes" as its
+  answer and the real answer went to the person. Now the turn pauses, as it does for the messages it
+  sends. The call asks its person a question: the agent's message to them, answered on the approval
+  card. The answer is a reply to that question, and the same turn goes on. The call runs again as
+  itself, in a step after the answer, so the agent reads its question, the answer, then what the
+  command did, and its answer goes to whoever started the turn. Several asks in one step wait
+  together, and the turn goes on once, when the last is answered: what was allowed runs, and what
+  wasn't says no. A yes in this conversation, or always, answers the agent's other asks it covers,
+  and their turns go on too. A reply typed to the question isn't a yes: the call doesn't run, and
+  says what they said. A card asked in a side thread shows in its conversation too ("in a side
+  thread"). A card answered before its step is written is refused (`busy`, "answer in a moment");
+  the card shows only once the step is written anyway. Forgetting a computer tells a turn waiting on
+  it no. A model outside (MCP) still gets "Waiting for…" and asks again later, as before.
+- **Tools can wait for a person** (`ToolContext.ask`, in chat's contract). In a turn, a tool asks
+  `{ to, text }` and gets the question's id; the turn waits for a reply to it (a message with that
+  `replyTo`), then runs the call again with `answer` (who answered, and what they said). The
+  question is written with the step. Steps record it (`Step.asked`), as they record what they sent
+  (`sent`). The `conversation` resource's Views get the conversation's side threads too (hint
+  `side`).
+
 ## 1.0.0-rc.28 — 2026-11-07
 
 - **A deploy hands over instead of fencing** (`serve` in `copilotz/web/node`, `lease` in

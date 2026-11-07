@@ -5,6 +5,7 @@
  * address; and the kinds of member its invite surface adds (`spaceInvite`).
  */
 import type { SpaceInvite, SpaceTab } from "../../contract.ts";
+import { say } from "./words.ts";
 
 export type ShownTab = SpaceTab & { key: string; sections: ShownTab[] };
 
@@ -62,5 +63,5 @@ export function kindsOf(given: unknown, personal: boolean): Kind[] {
     )
     .sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
     .map(({ key, title, view }) => ({ key, title, view }));
-  return personal ? added : [{ key: "people", title: "People" }, ...added];
+  return personal ? added : [{ key: "people", title: say("kindPeople") }, ...added];
 }

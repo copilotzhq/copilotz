@@ -5,6 +5,7 @@
  */
 import {
   type Actor,
+  type Blobs,
   type Clock,
   createRuntime,
   defineAction,
@@ -314,7 +315,7 @@ export type Setup = {
 
 export async function setup(
   fn: (s: Setup) => Promise<void>,
-  options: { plugins?: Plugin[]; llm?: LlmAdapter; clock?: Clock } = {},
+  options: { plugins?: Plugin[]; llm?: LlmAdapter; clock?: Clock; blobs?: Blobs } = {},
 ) {
   const graph = await fakeGraph();
   const app = definePlugin({
@@ -337,6 +338,7 @@ export async function setup(
       fetch: graph.fetch,
       plugins: [models, chat, ...access, whatsapp, reads, app, ...options.plugins ?? []],
       ...(options.clock ? { clock: options.clock } : {}),
+      ...(options.blobs ? { blobs: options.blobs } : {}),
     });
   let runtime = await start();
   try {

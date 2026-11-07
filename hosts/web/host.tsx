@@ -28,11 +28,15 @@ import type { Observation, Plugins } from "../../runtime/mod.ts";
 import { registerWorker } from "./install.ts";
 import { Part } from "./part.tsx";
 import { session } from "./session.ts";
-import { SignIn } from "./signin.tsx";
+import { SignIn, type Ways } from "./signin.tsx";
+import { inviteOf } from "./signin-email.tsx";
+import { signInPageOf } from "./signin-words.ts";
 import { BASE } from "./style.ts";
 import { ThemeContext } from "./theme/context.ts";
 import { fontsOf, fromGoogle, preloadsOf, themeCss, themeOf } from "./theme/css.ts";
 import { UpdateReady } from "./update.tsx";
+import { say } from "./host-words.ts";
+import { setWords, wordsOf } from "./words.ts";
 
 export type WebOptions = {
   plugins: Plugins;
@@ -96,10 +100,13 @@ const config = () =>
   };
 
 /** What the runtime answered, or the error it said. */
-async function answered<T>(response: Response, what: string): Promise<T> {
+async function answered<T>(
+  response: Response,
+  what: "couldntComeIn" | "couldntConnect",
+): Promise<T> {
   if (!response.ok) {
     const said = await response.json().catch(() => null) as { error?: string } | null;
-    throw new Error(said?.error ?? `${what}: ${response.statusText}`);
+    throw new Error(said?.error ?? `${say(what)}: ${response.statusText}`);
   }
   return await response.json() as T;
 }
@@ -114,7 +121,7 @@ async function arriving(arrive: { name: string; challenge?: string }): Promise<v
     headers: { "content-type": "application/json" },
     body: JSON.stringify(arrive.challenge ? { challenge: arrive.challenge } : {}),
   });
-  await answered(response, "Couldn't come in");
+  await answered(response, "couldntComeIn");
 }
 
 /**
@@ -124,7 +131,7 @@ async function arriving(arrive: { name: string; challenge?: string }): Promise<v
 async function ticket(): Promise<{ ticket: string; actor: Who } | undefined> {
   const response = await fetch(`${config().base ?? ""}/connect`, { method: "POST" });
   if (response.status === 401) return undefined;
-  return await answered(response, "Couldn't connect");
+  return await answered(response, "couldntConnect");
 }
 
 /** What the person signed in is shown as: their name (identity's `/me`), else nothing. */
@@ -137,10 +144,11 @@ async function nameOf(): Promise<string | undefined> {
 
 /**
  * The ways to sign in the app has, by what its routes answer: Google's, with
- * its client id (`GET /google`), and dev sign-in, on this machine
+ * its client id (`GET /google`), email's, with whether people make accounts
+ * (`GET /signin/email`), and dev sign-in, on this machine
  * (`GET /signin/dev`). One that isn't there answers 404.
  */
-async function waysToSignIn(): Promise<{ google?: { clientId: string }; dev?: true }> {
+async function waysToSignIn(): Promise<Ways> {
   const asked = async (path: string) => {
     const response = await fetch(path, { headers: { accept: "application/json" } }).catch(() =>
       undefined
@@ -148,16 +156,23 @@ async function waysToSignIn(): Promise<{ google?: { clientId: string }; dev?: tr
     const json = response?.ok && response.headers.get("content-type")?.includes("json");
     return json ? await response!.json().catch(() => undefined) : undefined;
   };
-  const [google, dev] = await Promise.all([asked("/google"), asked("/signin/dev")]);
+  const [google, email, dev] = await Promise.all([
+    asked("/google"),
+    asked("/signin/email"),
+    asked("/signin/dev"),
+  ]);
   const clientId = (google as { clientId?: unknown } | undefined)?.clientId;
   return {
     ...(typeof clientId === "string" && clientId ? { google: { clientId } } : {}),
+    ...(email ? { email: { signUp: (email as { signUp?: unknown }).signUp !== false } } : {}),
     ...(dev ? { dev: true as const } : {}),
   };
 }
 
 export async function web(options: WebOptions): Promise<Client | undefined> {
   const react = createRoot(options.root);
+  // The app's words (its plugins' `words` resources) are what every front end says from the start.
+  setWords(wordsOf(options.plugins));
   // The app's look goes with everything drawn, from the start: its theme, then the page's base.
   const theme = themeOf(options.plugins);
   const css = themeCss(theme);
@@ -182,12 +197,22 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   draw(null);
   // Installable, and told when a new version is ready (see pwa.ts).
   registerWorker();
+  // Opened by an invitation's link (email sign-in's): its person chooses a password first,
+  // whoever this browser was.
+  const invite = options.arrive ? undefined : inviteOf(location.hash);
+  if (invite) {
+    const ways = await waysToSignIn();
+    if (ways.email) {
+      draw(<SignIn signIn={ways} invite={invite} page={signInPageOf(options.plugins)} />);
+      return undefined;
+    }
+  }
   if (options.arrive) await arriving(options.arrive);
   // Their name, asked while the ticket is: a person's, as they signed in.
   const named = options.arrive ? Promise.resolve(undefined) : nameOf();
   const first = await ticket();
   if (!first) {
-    draw(<SignIn signIn={await waysToSignIn()} />);
+    draw(<SignIn signIn={await waysToSignIn()} page={signInPageOf(options.plugins)} />);
     return undefined;
   }
   const person = first.actor.kind === "person";
@@ -206,7 +231,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
       const next = kept ?? (await ticket())?.ticket;
       if (!next) {
         location.reload();
-        throw new Error("Signed out");
+        throw new Error(say("signedOut"));
       }
       return next;
     },

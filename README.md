@@ -22,7 +22,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.26"`),
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.27"`),
 and the imports below are the same everywhere. Some pieces need a package of their own, installed
 beside it: `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for
 PostgreSQL in the process, and `@types/react` for the front ends' types.
@@ -95,41 +95,78 @@ events. Time is a caller too: schedules call Actions (see Schedules).
 
 The package's entry points, the same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`):
 
-| Import                                 | What it has                                                                                                       |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, `runtimes`, `connect` (the client)…                 |
-| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference                                                                         |
-| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                                                  |
-| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`…      |
-| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                    |
-| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                              |
-| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                                   |
-| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account         |
-| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                                  |
-| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`         |
-| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                   |
-| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                       |
-| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `accounts`, `directory`, `googleSignIn`, `devSignIn`                 |
-| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`, and the directory's browser half (`useOrgs`, `enterOrg`…)              |
-| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                  |
-| `copilotz/plugins/billing`             | `usage` (the ledger), `credits`, `stripe`, `stripeWebhook`                                                        |
-| `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                        |
-| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                   |
-| `copilotz/plugins/compute`             | `computers`: people's computers, where agents work                                                                |
-| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                    |
-| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                               |
-| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                     |
-| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance` |
-| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                         |
-| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                         |
-| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`…)         |
-| `copilotz/web/server`                  | its server half: `webPage` (the page, as a plugin), `widgetsOf`                                                   |
-| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (`widget`, MCP Apps, ChatGPT)                     |
-| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                   |
-| `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)  |
-| `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                                   |
-| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                          |
-| `copilotz/testing`                     | one test API for Deno, Node and Bun (`test`, `tempDir`, `serve`, `testWho`, `ticketFor`…)                         |
+| Import                                 | What it has                                                                                                           |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, `runtimes`, `connect` (the client)…                     |
+| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference                                                                             |
+| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                                                      |
+| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`…          |
+| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                        |
+| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                                  |
+| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                                       |
+| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account             |
+| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, the models.dev catalog                                                      |
+| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `webTools`, `tool` |
+| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                       |
+| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                           |
+| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `accounts`, `directory`, `googleSignIn`, `devSignIn`                     |
+| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`, and the directory's browser half (`useOrgs`, `enterOrg`…)                  |
+| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                      |
+| `copilotz/plugins/billing`             | `usage` (the ledger), `credits`, `stripe`, `stripeWebhook`                                                            |
+| `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                            |
+| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                       |
+| `copilotz/plugins/compute`             | `computers`: people's computers, where agents work                                                                    |
+| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                        |
+| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                                   |
+| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                         |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`     |
+| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                             |
+| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                             |
+| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`…)             |
+| `copilotz/web/server`                  | its server half: `webPage` (the page, as a plugin), `widgetsOf`                                                       |
+| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (`widget`, MCP Apps, ChatGPT)                         |
+| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                       |
+| `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)      |
+| `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                                       |
+| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                              |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun (`test`, `tempDir`, `serve`, `testWho`, `ticketFor`…)                             |
+| Import                                 | What it has                                                                                                           |
+| -------------------------------------- | -----------------------------------------------------------------------------------------------------------------     |
+| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, `runtimes`, `connect` (the client)…                     |
+| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference                                                                             |
+| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                                                      |
+| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`…          |
+| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                        |
+| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: blobs as files                                                                                  |
+| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                                       |
+| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account             |
+| `copilotz/plugins/models`              | `models`: llm, embeddings, transcription, image, the models.dev catalog                                               |
+| `copilotz/plugins/agents`              | `chat`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `tool`             |
+| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `teamWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                       |
+| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                           |
+| `copilotz/plugins/access`              | `access`, `accounts`, `directory`, `email`, `googleSignIn`, `emailSignIn`, `devSignIn`                                |
+| `copilotz/plugins/access/web`          | `spacesWeb`, `accountsWeb`, `contactsWeb`, and the directory's browser half (`useOrgs`, `enterOrg`…)                  |
+| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                      |
+| `copilotz/plugins/billing`             | `usage` (the ledger), `credits`, `stripe`, `stripeWebhook`                                                            |
+| `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                            |
+| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                       |
+| `copilotz/plugins/compute`             | `computers`: people's computers, where agents work                                                                    |
+| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                        |
+| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                                   |
+| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                         |
+| `copilotz/plugins/work`                | `boards` (kanban), `documents` (shared Markdown with versions and merges)                                             |
+| `copilotz/plugins/work/web`            | `boardsWeb`, `documentsWeb`                                                                                           |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`     |
+| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                             |
+| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                             |
+| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`…)             |
+| `copilotz/web/server`                  | its server half: `webPage` (the page, as a plugin), `widgetsOf`                                                       |
+| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (`widget`, MCP Apps, ChatGPT)                         |
+| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                       |
+| `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)      |
+| `copilotz/terminal`                    | the terminal host: `terminal({ runtime, me })`, and its toolkit                                                       |
+| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                              |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun (`test`, `tempDir`, `serve`, `testWho`, `ticketFor`…)                             |
 
 The browser loads only `copilotz/web`, the `…/web` front ends and what they import; every other
 entry point is for the process that runs the runtime (or the terminal). The npm package is
@@ -150,13 +187,13 @@ export default { fetch: runtime.fetch }; // workerd (Cloudflare Workers)
 What it answers comes from the app's plugins, so the same call serves a signed-in workspace, a
 public site where visitors chat with an agent, or a WhatsApp app with no page at all:
 
-| Part                                                       | Comes from                                                                  |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `POST /connect`, the socket (`/oxian`), `/api/`, `/health` | the runtime itself                                                          |
-| Webhooks, APIs, sockets of their own                       | plugins' `routes`                                                           |
-| Who a request is (if nobody says, it's anonymous)          | plugins' `who`: identity's sessions, the api plugin's keys, site visitors   |
-| The page and its code (without it, there's no page)        | the page plugin (`webPage`) and the `page` resource                         |
-| Signing in and out (without them, nobody signs in)         | `googleSignIn`, `devSignIn` (this machine only), identity's `POST /signout` |
+| Part                                                       | Comes from                                                                 |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `POST /connect`, the socket (`/oxian`), `/api/`, `/health` | the runtime itself                                                         |
+| Webhooks, APIs, sockets of their own                       | plugins' `routes`                                                          |
+| Who a request is (if nobody says, it's anonymous)          | plugins' `who`: identity's sessions, the api plugin's keys, site visitors  |
+| The page and its code (without it, there's no page)        | the page plugin (`webPage`) and the `page` resource                        |
+| Signing in and out (without them, nobody signs in)         | `googleSignIn`, `emailSignIn`, `devSignIn` (this machine), `POST /signout` |
 
 **Routes** are plain functions on a plugin, by URL pattern (a `URLPattern` pathname, a web
 standard). Routes deal with HTTP; Actions do the work, given plain data:
@@ -223,8 +260,10 @@ cookies. Webhooks send no `Origin`, and pass. Behind a front of the app's own (a
 the `caller` resource's `front` secret says which requests the front vouches for; the host it
 forwards (`x-forwarded-host`) is then the request's. Signing in by name (`devSignIn`) is for this
 machine only: the socket's address and the host must both be this machine's, with no header a proxy
-adds, and an app whose `links` origin is public doesn't start with it. Signing out (`POST /signout`)
-ends the session, disconnects its browsers and clears the cookie. On Node:
+adds, and an app whose `links` origin is public doesn't start with it. An email someone already has
+(a person who moved in from another app, under an id of its own) signs in as them, as they are.
+Signing out (`POST /signout`) ends the session, disconnects its browsers and clears the cookie. On
+Node:
 
 ```ts
 // server.ts
@@ -290,7 +329,68 @@ Oxian's Node adapter, sockets included, and tells the runtime the address each r
 (`clientAddress`); Bun runs it too. On Deno, `Deno.serve({ hostname, port }, runtime.fetch)` is the
 whole host, and `deno bundle` makes the code (`examples/terminal-agent/web.ts`). The Node example is
 in `examples/web-node/` (`node examples/web-node/server.ts`). Google sign-in is `googleSignIn` with
-the `google` resource's `clientId`: the page shows its button.
+the `google` resource's `clientId`: the page shows its button. Email sign-in is `emailSignIn` with
+`email` (how mail goes) and the `links` resource: the page shows its form, and its screens for
+making an account, the code, a new password and an invitation's link:
+
+```ts
+plugins: [
+  ...plugins,
+  email,
+  emailSignIn,
+  definePlugin({
+    name: "app",
+    resources: {
+      links: { origin: "https://app.example.com", secret: process.env.LINKS_SECRET },
+      email: {
+        adapter: "resend",
+        from: "App <noreply@example.com>",
+        apiKey: process.env.RESEND_API_KEY,
+      },
+      // On a laptop: email: { adapter: "console" } writes each message to the log.
+    },
+  }),
+];
+```
+
+**The sign-in page is the app's,** in every word: beside the form, the app's logo (its theme's
+`logo`), its name (the page's title) and its own pitch; in it, its words. Both are the `signInPage`
+resource of the browser's plugins (those `web({ plugins })` runs), merged over Copilotz's as the
+theme is: `words` patch one by one by key (`SIGN_IN_WORDS`, from `copilotz/web`, lists them all,
+with their blanks such as `{email}` and `{seconds}`); `about` (a headline, its quieter end and a few
+points) is given whole, so no Copilotz pitch stays beside the app's own, and `null` leaves the form
+alone. An app that says nothing shows Copilotz's words and pitch. Refusals are said in these words,
+by their code, never in the server's. The messages email sign-in sends are the server's
+`emailSignIn.messages` (`html: null` sends one as text alone); `page.lang` says the page's language,
+which Google's button follows:
+
+```tsx
+// browser.tsx: an app in Portuguese, with its own pitch
+const brand = definePlugin({
+  name: "brand",
+  resources: {
+    theme: { light: { primary: "#0F172A" }, logo: { mark: myMark } },
+    signInPage: {
+      about: {
+        headline: "Seus projetos,",
+        quiet: "sempre em dia.",
+        points: [{ icon: "sparkles", title: "Agentes que ajudam", text: "Respostas em segundos." }],
+      },
+      words: {
+        signIn: "Entrar",
+        email: "E-mail",
+        password: "Senha",
+        forgot: "Esqueceu a senha?",
+        codeLede: "Enviamos um código de 6 dígitos para {email}.",
+        // … every key of SIGN_IN_WORDS the app says otherwise
+      },
+    },
+  },
+});
+await web({ root, plugins: [webShell, chatWeb, spacesWeb, brand] });
+// server: page: { title: "Exemplo", lang: "pt-BR", code }, theme: themeOf([brand]),
+//         emailSignIn: { app: "Exemplo", messages: { verify: { subject: "{code} é o seu código" } } }
+```
 
 Tests need no listener: `await runtime.fetch(new Request("http://localhost/hooks/ping", init))`. To
 connect a client in the process as someone, add `testWho` (from `copilotz/testing`) to the plugins,
@@ -531,7 +631,7 @@ and an app serves it from there by default:
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.26" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.27" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 
@@ -610,7 +710,7 @@ identity) says so (`requires: ["chat"]`), and imports from it only its `contract
 its documents and resource kinds, its Actions' inputs and outputs, and declaration helpers such as
 chat's `tool()`. Never its code. Plugins that would share code are one plugin (`models`).
 
-**`models/`**: talking to models, one plugin (`models`) for three kinds. Other plugins call it by
+**`models/`**: talking to models, one plugin (`models`) for four kinds. Other plugins call it by
 name, never by importing its code.
 
 - **`llm`**: `llm.stream` (chunks as they come, for a job in the same process: an agent's turn) or
@@ -622,10 +722,38 @@ name, never by importing its code.
   vectors from different models don't compare.
 - **`transcription`**: `transcription.transcribe`, with base64 audio. Adapters: `openai`,
   `openai-compatible`.
+- **`image`**: `image.generate`, images from a prompt and images to work from. Adapters: `gemini`
+  (`generateContent` asking for images: `gemini-3-pro-image`, `gemini-3.1-flash-image`…), `openai`
+  (`gpt-image-2`…), and `fake` for offline runs (`"fake/image"`).
+  - **References** are an image made here (`{ id }`), a document the caller may read holding a file
+    as `type` and `data` (`{ id, collection: "file" }`: chat's files; read as the caller, so the
+    rules decide), or inline (`{ data, type }`, or a data URL).
+  - **What it makes** is kept in the `image` collection, a document each (its content a blob, so the
+    same image attached to a message is stored once), and answered by id, media type and size, with
+    what the model said. Posting one in a conversation is the caller's: models knows nothing of
+    chat.
+  - **Metered like every model call:** the org's own key if it has one, `modelUse` listeners and the
+    `spending` check before; its tokens told after, which the ledger prices from the catalog as it
+    prices a chat's. A model that refuses (its safety rules) fails `image_refused`, and no other
+    model is asked; one that makes nothing fails `no_image` once the list is spent.
+
+  ```ts
+  // In a tool or an Action: the images kept, by id; their content is read by id when needed.
+  const { images, text } = await ctx.call<Images>("image.generate", {
+    model: "google/gemini-3-pro-image", // or an alias, or a list tried in order
+    prompt: "Our mascot on a beach, flat illustration",
+    references: [{ id: fileId, collection: "file" }],
+    aspectRatio: "4:5",
+    size: "2K", // the provider's own: Gemini's 1K, 2K, 4K
+    tags: { thread, space, purpose: "post" },
+  });
+  const image = await ctx.db.collection<Image>("image").findOne({ _id: images[0].id });
+  ```
 - **`models.check`** says what's wrong with a model for a port (other plugins' startup checks ask
   it); **`models.price`** says what the catalog says a model costs (the usage ledger asks it).
 - These are unrecorded Actions: called from a job they run inline (no events, no commit of their
-  own), and queries, Views and startup checks may call them too, read-only.
+  own), and queries, Views and startup checks may call them too, read-only. `image.generate` is
+  recorded: it writes what it made and costs, so a job that runs again finds it done.
 
 **`agents/`**: conversations and the agents in them.
 
@@ -635,6 +763,9 @@ name, never by importing its code.
   the agent's tool steps and goes back to that model while its turn goes on.
   - **Several agents** take turns in parallel. With `send_message` an agent messages another agent
     or a person, and waits for the replies before it continues.
+  - **`@name` mentions** choose who a message goes to, but only when the name is someone: an agent,
+    or a person in the conversation. Any other `@word` (a social handle, say) is plain text, and the
+    message goes where it would without it: the conversation's agents, or the space's default.
   - **History by age:** an agent with `history: { maxAge: 4 * 3_600_000 }` (ms) is sent only the
     last four hours of a conversation, back from its newest message (summaries too, with `history`);
     what's older stays in the chat. The start moves in steps of a tenth of `maxAge`, so prompts keep
@@ -657,10 +788,11 @@ name, never by importing its code.
     `runtime.query("thread.prompt", { thread, agent })` and `/prompt` show exactly what an agent
     gets.
   - **Files:** a message's files ride on it by name, type and size; their content is a `file`
-    document whose data the owner keeps as a blob. Agents read a text file's content, are shown
-    images and PDFs when their model reads them (the latest 8; the catalog says which models do, or
-    the model choice's `input: ["image"]`, and the others are told what they can't see), and see
-    anything else by name.
+    document whose data (plain base64) the owner keeps as a blob. `file.about` says what one is, as
+    its reader reaches it, without its content; `/files/<id>` streams the content, of any size, in
+    parts, with ranges. Agents read a text file's content, are shown images and PDFs when their
+    model reads them (the latest 8; the catalog says which models do, or the model choice's
+    `input: ["image"]`, and the others are told what they can't see), and see anything else by name.
   - **Audio:** `chat.send` transcribes audio before anything is sent (`chat.transcriber`, by default
     the `transcribe` model alias), and agents read the transcript. If it fails nothing is sent
     (`transcription_failed`); `transcribe: false` sends audio as it is. A voice message may say
@@ -671,10 +803,38 @@ name, never by importing its code.
     come with it. `chat.open` opens an empty chat in a space; `chat.say` has an agent say a fixed
     message there without a turn (trusted code only: a payment confirmed), which goes out like any
     of its answers.
+  - **An agent's message with files:** `chat.say` takes `files`, so a tool posts what it made (a
+    picture) without writing chat's collections. Each is a document the caller reads that holds a
+    file as `type` and `data`: one of chat's own (`{ id }`) or another plugin's
+    (`{ id, collection: "image" }`, the models plugin's pictures). Or it's given as it is
+    (`{ name, type, data }`). Each becomes a file of the chat, under people's limits (ten, about 10
+    MB each, a media type). Its content is the same blob, so it isn't stored again. The message may
+    then say nothing else, and the agent is told next time what it sent (`[sent: logo.png]`).
+
+    ```ts
+    const { images } = await ctx.call<Images>("image.generate", { model, prompt });
+    await ctx.call("chat.say", {
+      id: `image:${images[0].id}`, // said once
+      thread,
+      from: "designer",
+      files: images.map(({ id }) => ({ id, collection: "image" })),
+    }); // → { message, files: [ids of the chat's files] }
+    ```
+  - **A turn that fails** still answers, so whoever waits on it resumes. People read a short line
+    (`<agent> failed: something went wrong…`), and what went wrong stays in the `processor.failed`
+    event. A refusal written for people answers in its own words: any failure made public, such as
+    the `spending` check's refusal (its `message`, whatever its `why`) or a web line's budget.
   - **After an answer:** a place that can (WhatsApp) shows features' additions
     (`resources.additions.<name> = { order?, agents? }` and an `addition:<name>` View there), each
     once per chat per key, recorded in `shown`; the model is told what went (`[then shown: …]`). A
     message tapped from a button carries `tap: { id, title, key }`, and agents read the id.
+  - **Moving in:** `chat.import` (the system's: a migration) brings a conversation from another app
+    as it was: its thread in a space with its title, and its messages, each with who said it, to
+    whom, what, its files (their `data`, or the `id` of a document holding one) and when (ISO 8601
+    with its zone). Nothing runs: no turn, no transcript. Ids are the importer's, so importing again
+    replaces what it made, and a long conversation comes in several calls; the thread's count, first
+    and latest are worked out from what it has. Processors that follow messages (history's
+    summaries) take imported ones as any.
 - **`history`** keeps chat history from outgrowing the prompt
   (`resources: { history: { summarizer: "openai/gpt-5.4-mini" } }`): every message stays whole, a
   cheap model writes a line for each and merges pairs up a binary tree, and an agent gets recent
@@ -689,11 +849,15 @@ name, never by importing its code.
     an embedding, so recall works by meaning and by words.
   - **Always in mind:** core memories about whoever is in the conversation go in the stable system
     text; the other memories most relevant to what was just said come after the conversation, each
-    turn.
+    turn. If finding them fails (the embedder's provider refuses, or times out), the turn goes on
+    without them: the failure is logged and counted (`copilotz.memory.recall_failures`).
   - **Tools for every agent:** `remember` (which updates what it repeats instead of duplicating it),
     `recall` and `forget`.
   - **On its own:** with an `extractor` model, every few messages it writes down what's worth
     keeping (who people are, preferences, decisions), updating what it already knew.
+  - **Moving in:** `memory.import` (the system's) brings memories from another app as they were, in
+    a space: what each says, whom it's about, who wrote it and when, under the importer's ids
+    (importing again replaces them). Each is embedded as it's kept, so recall finds it by meaning.
 - **`team`**: agents people make in a space, beside the app's, each a member of the spaces it works
   in, with a page of its own on the web.
 - **`skills`**: know-how an agent reads only when a task calls for it (a SKILL.md: a name, when it's
@@ -720,6 +884,37 @@ name, never by importing its code.
   image as base64 or a data URL, in the fields `files` names, or a response that is one) become
   files of the conversation, and the agent gets a reference instead (`maxFileBytes`, `fileTypes`). A
   tool of your own is `{ ...trips.tools.getTrip, run }`.
+- **`webTools`**: agents that search the web and read a page, without a computer. Two tools, which
+  agents get by listing them: `web_search` `{ query, count?, language?, country? }` (results
+  `{ title, url, snippet }`) and `read_page` `{ url, start? }` (the final URL, title, main text
+  without scripts, styles or navigation, and links; long pages come in parts, `start` reads on; the
+  text is marked as data, never instructions). Search is the `search` adapter port
+  (`resources.webTools.search`: `adapter`, `apiKey`): `duckduckgo` by default (its HTML page: no
+  key, no cost; a bot challenge or an empty page is a public "search is unavailable" error the agent
+  reads; `language` with `country` set its region), `serper` optional, `fake` offline, and Brave or
+  Google are one more adapter. Reading is safe by design: http(s) only, through `ctx.fetch`, no
+  cookies, an honest user agent; the host is resolved and loopback, private, link-local (the
+  metadata address) and reserved addresses refused, again on every redirect (4 at most); ports other
+  than 80 and 443 only if `ports` lists them; 15 s, 2 MB, HTML or text (no PDF); 8 pages per turn. A
+  search is a `search` use in the usage ledger, priced from resources (DuckDuckGo's is 0), and asks
+  `modelUse` listeners and the `spending` check first, like a model call; reading is free.
+
+  ```ts
+  plugins: [
+    models,
+    chat,
+    usage,
+    webTools,
+    definePlugin({
+      name: "app",
+      resources: {
+        webTools: { search: { adapter: "serper", apiKey: env.SERPER_KEY } }, // none for DuckDuckGo
+        cost: { serper: { queries: 0.001, per: 1 } }, // what a search costs the app
+        agents: { scout: { instructions, model, tools: ["web_search", "read_page"] } },
+      },
+    }),
+  ];
+  ```
 
 **`access/`**: who can see and do what (see [design/access.md](design/access.md)).
 
@@ -743,6 +938,36 @@ name, never by importing its code.
 - **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client). Its
   routes: `POST /signin/google`, which Google's button posts its token to, sets the session's
   cookie; `GET /google` gives the page the client id for its button.
+- **`emailSignIn`**: sign-in with an email and a password (with identity and `email`, the app's
+  email port). Its routes are `GET /signin/email` (it's here, and whether people make accounts) and
+  `POST /signin/email` with its steps under it, each that ends signed in setting the session's
+  cookie.
+  - **Making an account:** `email.sign-up` sends a six-digit code, the password hashed and waiting
+    for it; `email.verify` with the code makes the person and signs in. An address that has an
+    account gets a word saying so instead, with the same answer; a stranger signing up first with
+    someone's address can't choose their password (each code confirms the password it came with).
+    `emailSignIn.signUp: false` leaves only invitations.
+  - **Signing in:** `email.sign-in`, refused with `unverified` (a new code sent) until the address
+    is confirmed. A wrong password and an address nobody has are one refusal, as slow.
+  - **A new password:** `email.forgot` sends a code (the same answer for any address); `email.reset`
+    with it sets the password, ends the person's other sessions and signs in.
+  - **Invitations:** trusted code (a webhook, once someone bought) calls `email.invite`: the person,
+    answered at once, and a link working once for a day (`/#email-invite=<token>`, in the fragment,
+    so no server logs it) where they choose a password and arrive signed in.
+  - **Moving in:** `email.import` brings a person with the hash another app kept, as it is (legacy
+    `salt:hash` hex, PBKDF2-SHA256 at 100,000), hashed again, stronger, at their first sign-in.
+  - **Passwords** are PBKDF2-SHA256 on WebCrypto in six stages of 100,000 (workerd takes no more in
+    one call): `pbkdf2-sha256$6x100000$<salt>$<hash>`, compared in constant time, a private field no
+    event or actor's read holds. Codes and tokens are kept only as HMACs under the `links` secret,
+    used once, codes for 15 minutes and five wrong tries. Messages to an address (5 an hour), tries
+    at it (10 in 15 minutes) and one caller's asks (30) are limited (`emailSignIn.limits`).
+  - **Its words** are the `emailSignIn` resource's `messages` (`verify`, `reset`, `invite`,
+    `exists`: a subject, text and HTML with blanks such as `{code}`, `{link}`, `{app}`), English
+    unless the app gives its own.
+- **`email`**: the app's email port: `email.send` `{ to, subject, text, html? }` (trusted code's,
+  unrecorded) sends through the adapter the `email` resource names: `resend` (Resend's API, its
+  `apiKey`), or `console`, which writes each message to the log for a laptop (refused where the
+  `links` origin is public). An adapter of your own is an `email` adapter (`EmailAdapter`).
 - **`devSignIn`**: sign-in by name or email, from this machine only, for trying an app out
   (`/signin/dev`).
 - **`accounts`**: outside accounts a person connects once, for their agents to use: first their
@@ -788,7 +1013,7 @@ name, never by importing its code.
     from an older day. `schedules: { "usage.close": null }` turns them off.
   - **Re-rating** (`usage.rerate`) never changes a record: it appends adjustments, dated when made,
     and totals follow.
-  - **Categories:** each meter is one (`llm`, `embeddings` and `transcription` are agents',
+  - **Categories:** each meter is one (`llm`, `embeddings`, `transcription` and `image` are agents',
     `computer` computers', `app` apps'; any other its own); totals group and filter by `category`,
     and rollups serve it. Rollups keep `tags.space` too; days rolled up in another shape are closed
     again, and read from records until then.
@@ -810,6 +1035,20 @@ shell, jobs and browser, in a folder of the space under `~/Copilotz`. A computer
 shared into another space, every member's agents use it too (it runs their commands as its owner, on
 that machine: share one you mean to). Commands, jobs and writes wait for a yes, from the person the
 agent works for (or, if its owner says so, from the owner).
+
+**`work/`**: **`boards`** and **`documents`**, what a space's people and agents make together. Both
+live in spaces (read where the space is read, changed where it's written), change only through their
+Actions, and give agents tools wherever a conversation is in a space. Boards are kanban: columns in
+order (a new one starts with Backlog, To do, Doing, Blocked, In review and Done), cards dragged
+within and across them, owners, labels and due dates; the tools are `list_boards`, `read_board`,
+`create_board`, `create_card`, `update_card` and `move_card`. Documents are Markdown where every
+save is a version (who, what, when), a save that started from an old version is merged line by line
+or refused as a `conflict` for the person to settle, an old version comes back as a new one, and who
+has one open is live; the tools are `list_documents`, `read_document`, `write_document`,
+`append_document` and `edit_document`. Their front ends (`boardsWeb`, `documentsWeb`) add a Board
+and a Documents tab to a space, a page for each, palette entries and cards for the tools' calls in a
+chat. The app words the one line about agents on an empty Board tab
+(`boardsText: { agentHint: "…" }`, a resource).
 
 **`interfaces/`**: how people reach the runtime. The terminal's data (`terminalPlugin`: where each
 person is, what their commands printed) and its shell (`terminalShell`), and the web shell
@@ -930,8 +1169,8 @@ resources: {
   missing provider, an unknown protocol or a wrong effort fails `createRuntime`, not a turn.
 
 Action inputs name models and never carry keys, because Action inputs are recorded in events. Any
-plugin can add its own adapter under `adapters.llm`, `adapters.embeddings` or
-`adapters.transcription`, named by the protocol it speaks.
+plugin can add its own adapter under `adapters.llm`, `adapters.embeddings`, `adapters.transcription`
+or `adapters.image`, named by the protocol it speaks.
 
 `plugins/models/tests/providers.test.ts` checks each adapter against a local server speaking that
 provider's API; `plugins/models/tests/live.test.ts` runs against the real APIs when
@@ -1153,6 +1392,7 @@ deno task bench [--rtt=1.74] [--remote] [--sqlite | --postgres=URL]   # overhead
 
 deno task web [--sqlite]                      # the same app in a browser: http://localhost:8790
 BRAND=harbor deno task web                    # …rebranded by one theme resource (/gallery: the toolkit)
+EMAIL=1 deno task web                         # …with email sign-in, its messages in the terminal
 node examples/web-node/server.ts              # a web app on Node: http://localhost:8080
 node examples/web-node/orgs.ts                # many orgs behind one address, on Node
 ```
@@ -1174,12 +1414,14 @@ Inside the chat: `/new`, `/threads`, `/open <n>`, `/history`, `/memories`, `/usa
 `/quit`. Every turn prints its time, its database round trips, the jobs sent to executors and the
 calls they made back to the owner.
 
-In the browser, you sign in by name or email (this machine only), or with Google when
-`GOOGLE_CLIENT_ID` is set. Where you are is the address (`/thread/<id>`, `?in=<space>`), so links,
-back and forward, and two tabs work. ⌘K (Ctrl+K) opens the command palette: go to any space, chat or
-agent, make a space, a chat or an agent, invite someone, move this chat (or a memory, a note, a
-computer) to another space, rename, archive or leave a space, each from the plugin it belongs to.
-The composer also records voice messages.
+In the browser, you sign in by name or email (this machine only), with Google when
+`GOOGLE_CLIENT_ID` is set, or with an email and a password with `EMAIL=1` (its codes and links
+written to the terminal; `EMAIL_INVITE=<address>` invites someone as it starts). Where you are is
+the address (`/thread/<id>`, `?in=<space>`), so links, back and forward, and two tabs work. ⌘K
+(Ctrl+K) opens the command palette: go to any space, chat or agent, make a space, a chat or an
+agent, invite someone, move this chat (or a memory, a note, a computer) to another space, rename,
+archive or leave a space, each from the plugin it belongs to. The composer also records voice
+messages.
 
 ### Developing Copilotz
 
@@ -1257,6 +1499,11 @@ The log records what happened, with no bookkeeping tables beside it:
   is `__proto__` (an aggregate's `$group` names no `$…` field either). A path ends at a reference as
   at a string. On read, only an exact reference (those three keys, a `sha256-<64 hex>` id) loads a
   blob; any other object is data. Blob stores take no other id.
+- **Large values, in parts.** Trusted host code (a route serving a file) reads one as bytes with
+  `runtime.bytes(collection, filter, field, { actor })`: the owner reads the document as that actor
+  does (under the rules; the system without one), and answers its `size` and `read(start, end)`,
+  from the document or its blob, never whole through any answer. The reference stays in the owner:
+  the caller gets bytes, nothing it could forge.
 
 ## Schedules
 
@@ -1328,7 +1575,10 @@ A runtime is one **owner** and its **executors**, composed with Oxian:
   retries).
 - **Executors** run plugin code (Actions, Processor deliveries and queries) as Oxian work. They hold
   no store: each storage call is one op they send to the owner, and live frames ride the job's
-  output stream back to it.
+  output stream back to it. Oxian takes a stream in chunks of at most 1 MiB, so a line longer than
+  that (a long history, a prompt with pictures) goes in parts; what's meant to be large (a file's
+  content) isn't put in an answer at all: host code reads it from the owner in parts
+  (`runtime.bytes`, see Blobs).
 - **Same code, any placement.** By default both share one process over Oxian's in-process transport.
   Executors in other processes or machines connect over Oxian's WebSocket transport and present the
   owner's executor key.
@@ -1379,7 +1629,9 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   port (`runtime/store.ts`).
 - **Collections speak MongoDB:** `ctx.db.collection("x").insertOne/find/updateOne(...)`, with the
   usual filter and update operators. The runtime translates each call into one store operation,
-  which the memory store runs in JavaScript and the SQL stores translate to SQL.
+  which the memory store runs in JavaScript and the SQL stores translate to SQL. `find` and
+  `findOne` take a `projection` (`{ name: 1 }` keeps fields, `{ data: 0 }` leaves them out), which
+  the owner applies before it loads any blob: a file's metadata costs no read of its content.
 - **Queries** are named reads declared on a collection
   (`queries: { history: (messages, params,
   ctx) => … }`). Clients call
@@ -1431,6 +1683,37 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   Google Fonts (convenient, but every visitor's browser tells Google its IP address: a GDPR concern)
   or from the app itself (`page.assets`: `{ "/assets/fonts/brand.css": bytes, … }`, served under
   `/assets/` only, by exact path, with known types, `nosniff` and caching).
+- **Words** (`hosts/web/words.ts`): every word the web front ends show (the shell, chat, spaces,
+  memory, team, usage, the command palette, the toolkit and the host's own notices) is English by
+  key, and an app changes any of them with a `words` resource on any plugin the page runs. Keys are
+  `area.key` (`chat.send`); the full list, with the English, is `hosts/web/WORDS.md`. Resources
+  merge in order like every resource (a later plugin's win; `null` takes an override back out), and
+  a key the app leaves out stays English, so an app that sets nothing looks as before.
+  - **Blanks** are `{name}`, filled where the phrase shows; one nothing fills stays as written.
+  - **Plurals** are an object by the language's plural categories (`one`, `few`, `many`, `other`…),
+    chosen by the `{count}` blank with the page's language (`Intl.PluralRules`).
+  - **Language:** dates, times, numbers and currency follow the page's `lang`
+    (`webPage({ lang:
+    "pt-BR" })`), not the browser's.
+  - A front end of your own says its words the same way: `const say = defineWords("acme", { … })`
+    (from `copilotz/web`), then `say("key", { name })`; `say.nodes` puts an element in a phrase.
+
+    ```ts
+    definePlugin({
+      name: "words",
+      resources: {
+        words: {
+          "chat.send": "Enviar",
+          "chat.retryingIn": "Conexão perdida, tentando em {seconds} s",
+          "chat.messageCount": { one: "{count} mensagem", other: "{count} mensagens" },
+        },
+      },
+    });
+    ```
+
+    Not in the table: what people and agents wrote, names from data, and text the server sends (an
+    Action's error message, a refusal's reason): those are the server's, and the app writes them
+    where it defines them.
 - **Live state is data:** a collection declared `durable: false` lives in the owner's memory, not
   the store, with no events. Chat's `live` collection is what agents are writing right now; it goes
   in the commit that writes the step or reply it became, so a screen never shows both, or neither.
@@ -1489,13 +1772,14 @@ stores/         where the runtime keeps things: the Store port's implementations
                 (blobs/files, blobs/http, blobs/gcs); tests/ (conformance)
 exporters/      where measurements go: the Exporter port's implementations (OTLP, Prometheus)
 plugins/        the features, by theme
-  models/       one plugin: llm, embeddings, transcription; shared/ (providers, model choice,
-                models.dev catalog)
+  models/       one plugin: llm, embeddings, transcription, image; shared/ (providers, model
+                choice, models.dev catalog)
   agents/       chat, history, memory, team, skills, routines, tiers
   billing/      usage (the ledger)
   access/       spaces (members, reach, rules), identity, Google sign-in, connected accounts, the
                 directory of orgs
   compute/      computers: desks per space, agents' tools, approvals; program/, the computer program
+  work/         boards (kanban) and documents (versioned Markdown), with their front ends
   interfaces/   terminal (where each person is, the shell View), web (the web shell), the developer
                 API, WhatsApp, voice (phone calls), MCP and maintenance; features'
                 own front ends live with them (chat/terminal.ts, chat/web.tsx…), gathered by theme

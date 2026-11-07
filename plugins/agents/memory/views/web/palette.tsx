@@ -10,6 +10,7 @@ import type { ViewContext } from "../../../../../runtime/mod.ts";
 import type { PaletteGroup, PaletteItem } from "../../../../../hosts/web/mod.ts";
 import type { Memory } from "../../collections/memory.ts";
 import { moveStep } from "./move.ts";
+import { say } from "./words.ts";
 
 export const memoryPaletteView = (
   _: unknown,
@@ -29,7 +30,7 @@ export const memoryPaletteView = (
   if (open) {
     items.push({
       key: "memory:move",
-      label: "Move this memory to another space…",
+      label: say("moveThis"),
       icon: "sparkles",
       keywords: ["memory", "space"],
       step: moveStep(open, ctx.call),
@@ -37,16 +38,18 @@ export const memoryPaletteView = (
   } else if (here && some.length) {
     items.push({
       key: "memory:move-one",
-      label: "Move a memory to another space…",
+      label: say("moveOne"),
       icon: "sparkles",
       keywords: ["memory", "memories", "space"],
       step: {
-        title: "Move a memory…",
-        placeholder: "Find a memory",
+        title: say("moveOneTitle"),
+        placeholder: say("findMemory"),
         view: "memory.pick",
         hints: { in: here },
       },
     });
   }
-  return items.length ? [{ title: open ? "This memory" : "This space", order: 10, items }] : null;
+  return items.length
+    ? [{ title: open ? say("thisMemory") : say("thisSpace"), order: 10, items }]
+    : null;
 };

@@ -26,6 +26,7 @@ import { InviteDialog } from "./invite-dialog.tsx";
 import { STYLE } from "./style.ts";
 import { kindsOf } from "./tabs.ts";
 import { byKind, peopleIn, roleName, spaceName, whoOf } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -89,19 +90,17 @@ function Settings(
       {!manage
         ? (
           <Notice tone="neutral" icon="lock">
-            Those who manage {spaceName(space)} change its settings.
+            {say("managersChange", { name: spaceName(space) })}
           </Notice>
         )
         : null}
-      <Card as="section" padding="none" className="space-setting-list" aria-label="Settings">
+      <Card as="section" padding="none" className="space-setting-list" aria-label={say("settings")}>
         <Setting
-          title="Name"
-          text={personal
-            ? "Your Personal space is always called Personal."
-            : "What everyone sees this space as: in the sidebar, and on its chats."}
+          title={say("name")}
+          text={personal ? say("nameSettingPersonal") : say("nameSettingShared")}
         >
           {personal
-            ? <Input value="Personal" disabled aria-label="The space's name" />
+            ? <Input value={say("personal")} disabled aria-label={say("spaceNameLabel")} />
             : <Rename space={space} manage={manage} call={call} />}
         </Setting>
         {adds || byKind(members).agents.length
@@ -120,24 +119,24 @@ function Settings(
         {!personal && role ? <Leave space={space} call={call} /> : null}
       </Card>
       <Card as="section" className="space-setting-about" aria-labelledby="space-setting-about">
-        <h3 id="space-setting-about" className="space-section-title">About</h3>
+        <h3 id="space-setting-about" className="space-section-title">{say("aboutLabel")}</h3>
         <dl className="space-facts">
-          <dt>Kind</dt>
-          <dd>{personal ? "Personal: yours alone" : "Shared"}</dd>
+          <dt>{say("kind")}</dt>
+          <dd>{personal ? say("kindPersonal") : say("shared")}</dd>
           {role
             ? (
               <>
-                <dt>Your role</dt>
+                <dt>{say("yourRole")}</dt>
                 <dd>{roleName(role)}</dd>
               </>
             )
             : null}
-          <dt>People</dt>
+          <dt>{say("people")}</dt>
           <dd>{people}</dd>
-          <dt>Id</dt>
+          <dt>{say("id")}</dt>
           <dd className="space-facts-id">
             <code>{space._id}</code>
-            <CopyButton text={space._id} label="Copy the space's id" />
+            <CopyButton text={space._id} label={say("copySpaceId")} />
           </dd>
         </dl>
       </Card>
@@ -156,14 +155,13 @@ function Leave({ space, call }: { space: Reached; call: Call }): ReactNode {
   const [error, setError] = useState<string>();
   return (
     <Setting
-      title="Leave"
-      text={error ??
-        "You'll no longer see its chats, memories or computers; what you added stays here."}
+      title={say("leave")}
+      text={error ?? say("leaveAbout")}
     >
       {sure
         ? (
           <div className="space-setting-form">
-            <Button onClick={() => setSure(false)} disabled={busy}>Stay</Button>
+            <Button onClick={() => setSure(false)} disabled={busy}>{say("stay")}</Button>
             <Button
               variant="destructive"
               disabled={busy}
@@ -180,11 +178,11 @@ function Leave({ space, call }: { space: Reached; call: Call }): ReactNode {
                 }
               }}
             >
-              Leave {spaceName(space)}
+              {say("leaveNamed", { name: spaceName(space) })}
             </Button>
           </div>
         )
-        : <Button onClick={() => setSure(true)}>Leave this space</Button>}
+        : <Button onClick={() => setSure(true)}>{say("leaveThisSpace")}</Button>}
     </Setting>
   );
 }
@@ -211,56 +209,47 @@ function Archive({ space, call }: { space: Reached; call: Call }): ReactNode {
   };
   return (
     <Setting
-      title={space.archived ? "Archived" : "Archive"}
+      title={space.archived ? say("archived") : say("archiveSetting")}
       text={error ??
         (space.archived
-          ? (
-            <>
-              Archived{" "}
-              <Time at={space.archived} long />. It's listed apart, and readable as it was;
-              restored, it's listed with the others again.
-            </>
-          )
-          : "When the work here is done: everything stays as it was, and readable, and the space " +
-            "is listed apart, under Archived. Restore it any time.")}
+          ? say.nodes("archivedAt", { time: <Time at={space.archived} long /> })
+          : say("archiveAbout"))}
     >
       {space.archived
         ? (
           <Button icon="restore" loading={busy} onClick={() => void archive(false)}>
-            Restore
+            {say("restore")}
           </Button>
         )
-        : <Button icon="archive" onClick={() => setAsking(true)}>Archive…</Button>}
+        : <Button icon="archive" onClick={() => setAsking(true)}>{say("archiveMenu")}</Button>}
       <Dialog
         open={asking}
         onClose={() => setAsking(false)}
         size="sm"
-        title={`Archive ${space.name}?`}
+        title={say("archiveTitle", { name: space.name })}
         footer={
           <>
-            <Button onClick={() => setAsking(false)}>Cancel</Button>
+            <Button onClick={() => setAsking(false)}>{say("cancel")}</Button>
             <Button
               variant="primary"
               icon="archive"
               loading={busy}
               onClick={() => void archive(true)}
             >
-              Archive
+              {say("archiveSetting")}
             </Button>
           </>
         }
       >
         <ul className="space-archive-means">
           <li>
-            <b>It stays readable.</b>{" "}
-            Its chats, memories and computers stay as they are, for everyone in it.
+            <b>{say("archiveReadableLead")}</b> {say("archiveReadableRest")}
           </li>
           <li>
-            <b>It's listed apart,</b>{" "}
-            under Archived in the sidebar, and agents in other spaces' chats stop looking in it.
+            <b>{say("archiveApartLead")}</b> {say("archiveApartRest")}
           </li>
           <li>
-            <b>It comes back as it was:</b> anyone who manages it can restore it, any time.
+            <b>{say("archiveBackLead")}</b> {say("archiveBackRest")}
           </li>
         </ul>
         {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
@@ -315,7 +304,7 @@ function Rename(
           maxLength={60}
           disabled={!manage}
           autoComplete="off"
-          aria-label="The space's name"
+          aria-label={say("spaceNameLabel")}
           invalid={!!said.error}
           onChange={(event) => {
             setName(event.target.value);
@@ -325,7 +314,7 @@ function Rename(
         {manage
           ? (
             <Button type="submit" variant="primary" loading={busy} disabled={!changed}>
-              Save
+              {say("save")}
             </Button>
           )
           : null}
@@ -333,7 +322,7 @@ function Rename(
       {said.error
         ? <p role="alert" className="space-setting-note space-invite-error">{said.error}</p>
         : said.saved
-        ? <p role="status" className="space-setting-note space-invite-done">Saved.</p>
+        ? <p role="status" className="space-setting-note space-invite-done">{say("saved")}</p>
         : null}
     </form>
   );
@@ -367,13 +356,13 @@ function Answers(
   const choices = current && !answering.includes(current) ? [current, ...answering] : answering;
   return (
     <Setting
-      title="Answers new chats"
+      title={say("answersNew")}
       text={error ??
         (answering.length
-          ? "Who answers a chat started here. Anyone can still ask another agent with @name."
+          ? say("answersAbout")
           : agents.length
-          ? "Its agents only read here (viewers): make one an editor, in Members, to answer chats."
-          : "No agent works here: chats here have no one to answer them.")}
+          ? say("answersViewersOnly")
+          : say("answersNone"))}
     >
       {choices.length
         ? (
@@ -381,7 +370,7 @@ function Answers(
             <Select
               value={current ?? ""}
               disabled={!manage || busy}
-              aria-label="The agent that answers new chats"
+              aria-label={say("answersLabel")}
               onChange={async (event) => {
                 setBusy(true);
                 setError(undefined);
@@ -401,7 +390,7 @@ function Answers(
             {saved
               ? (
                 <p role="status" className="space-setting-note space-invite-done">
-                  {name(current ?? "")} answers new chats here now.
+                  {say("answersNow", { name: name(current ?? "") })}
                 </p>
               )
               : null}
@@ -410,7 +399,7 @@ function Answers(
         : manage && adds && !space.archived
         ? (
           <>
-            <Button icon="plus" onClick={() => setAdding(true)}>Add an agent</Button>
+            <Button icon="plus" onClick={() => setAdding(true)}>{say("addAgent")}</Button>
             <InviteDialog
               open={adding}
               onClose={() => setAdding(false)}

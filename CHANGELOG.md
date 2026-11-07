@@ -8,6 +8,117 @@
   (`to: []`): a web line's visitor's message to nobody counts against its limits but holds none of
   the line's budget, since no turn will be charged for it.
 
+## 1.0.0-rc.27 — 2026-11-06
+
+**Upgrading.** Chat's `file.content` query is `file.about`, and answers a file without its content
+(`data`). Host code that wants the content reads it as bytes, in parts:
+`runtime.bytes("file", { _id }, "data", { actor })`, or serves it at `/files/<id>`. A file's content
+is plain base64 (no line breaks, no `data:` prefix): `chat.send` refuses anything else.
+
+- **Files of any size are served** (`GET /files/<id>`): a picture or a recording whose base64 passed
+  1 MiB (about 750 KB) was answered as missing (404), so it showed broken. The route read the whole
+  file through a query, whose answer comes from an executor over Oxian in one chunk, and Oxian takes
+  at most 1 MiB a chunk. Now it reads what the file is (`file.about`, as whoever the request is),
+  then its content from the owner, as them again (`runtime.bytes`), and decodes it as the response
+  is read, 192 KiB at a time; a range (`206`) decodes only its part. Who reads a file is unchanged:
+  the request's actor, a signed link as the system, and a file out of reach is a 404 alike. A
+  failure that isn't about reach is now a 500, logged, not a 404.
+- **`runtime.bytes(collection, filter, field, { actor })`**: a large value's bytes for trusted host
+  code, read by the owner itself, under the rules as `actor` (the system without one), its `size`
+  and `read(start, end)`, from the document or its blob (loaded once, at the first part). The blob's
+  reference never leaves the owner.
+- **Projections:** `find` and `findOne` take `{ projection }`, as MongoDB's (`{ name: 1 }` keeps,
+  `{ data: 0 }` leaves out, `_id` either way; dotted paths into objects). The owner applies it
+  before it loads any blob: a field left out costs no blob read. Stores never see it.
+- **Answers past 1 MiB go in parts:** a job's output (a query's answer, an Action's result, a
+  View's) and what a browser is pushed are written in parts of at most 1 MiB, Oxian's bound on a
+  chunk. A long history, a prompt with pictures (`thread.prompt`, `/prompt`) or a large read a
+  browser watches failed whole before (the executor "lost", the browser's session closed).
+- **A message's files reach the prompt one read each:** `llm.message` read all of a message's files
+  in one answer of the owner's, which carries at most 16 MiB; pictures that together passed it
+  failed the turn.
+- **WhatsApp links a file without reading its content:** sending a chat's file by signed link reads
+  only whether its recipient may see it; Meta's fetch streams the content from `/files/<id>`.
+- **Every word Copilotz's web front ends show is the app's to change.** An app in another language
+  no longer rewrites the page as it is drawn: it gives a `words` resource
+  (`{ "chat.send":
+  "Enviar" }`), on any plugin the page runs, merged over the English in order.
+  Words are by key (`hosts/web/WORDS.md` lists them: the shell, chat, spaces, memory, team, usage,
+  the command palette, the toolkit and the host's notices), with `{blanks}` for names and numbers
+  and plural forms by the page's language (`{ one, other }`). Dates, times, numbers and currency
+  follow the page's `lang` (`webPage({ lang })`) instead of the browser's. Front ends of an app's
+  own use the same way: `defineWords(area, { … })` from `copilotz/web`. English is unchanged, so an
+  app that sets nothing looks as before. Not covered: the other front ends (billing's credits,
+  routines, skills, computers, apps, API keys, WhatsApp, tiers), text the server sends, and the
+  offline page.
+- **Boards and documents are Copilotz's** (`copilotz/plugins/work`, front ends in
+  `copilotz/plugins/work/web`). `boards` is kanban in a space (boards with ordered columns, cards
+  dragged between them, owners, labels, due dates; Actions `board.*` and `card.*`; agents' tools
+  `list_boards`, `read_board`, `create_board`, `create_card`, `update_card`, `move_card`).
+  `documents` is shared Markdown in a space (every save a version, saves merged line by line or
+  refused as a `conflict`, restoring, presence; Actions `document.*`; agents' tools
+  `list_documents`, `read_document`, `write_document`, `append_document`, `edit_document`). Each has
+  its web front end (`boardsWeb`, `documentsWeb`). The empty Board tab's line about agents is the
+  app's: `resources.boardsText.agentHint`.
+- **A `@word` is a mention only when it names someone.** Chat took any `@word` as a mention, so a
+  message with a social handle ("my profile is @ana.marca") and no agent named reached no agent. Now
+  a mention counts only when it names an agent, or a person in the conversation; any other `@word`
+  is plain text, and the message goes where it would without it (the conversation's agents, or the
+  space's default).
+- **A failed recall never sinks a turn.** When memory recall fails at the start of a turn (the
+  embedder's provider refuses the key, or times out), the turn goes on without recalled memories.
+  The failure is logged (`memory: recall failed…`) and counted (`copilotz.memory.recall_failures`).
+  A failing `remember` is still a tool error the agent sees.
+- **Web tools** (`webTools`, in `copilotz/plugins/agents`): agents search the web and read a page
+  without a computer. `web_search` `{ query, count?, language?, country? }` →
+  `{ title, url,
+  snippet }` results, through a new `search` adapter port (`duckduckgo`, the
+  default: its HTML page, no key, no cost, a bot challenge or empty page is a public "search is
+  unavailable" error; `serper`, optional; `fake`; one more adapter adds Brave or Google), and
+  `read_page` `{ url, start? }` → the final URL, title, main text and links, in parts, marked as
+  data. Reading refuses non-http(s) URLs, private, loopback, link-local and metadata addresses (the
+  host resolved, checked again on every redirect), other ports than 80 and 443 unless
+  `webTools.ports` lists them, pages over 2 MB or 15 s, and non-text types; a turn reads at most 8
+  pages. A search is a `search` use of the usage ledger (in the `agents` category), priced from
+  resources, asked of the `modelUse` listeners and the `spending` check first. The models contract
+  now exports `mayUse` and `used`, for uses outside model calls.
+- **An agent's message with files.** `chat.say` takes `files`, and `text` may be left out when there
+  are files. Trusted code, such as a tool during a turn, can now post what it made without writing
+  chat's collections itself. Each file is one of these:
+  - `{ id, collection? }`: a document the caller reads that holds a file as `type` and `data`.
+    That's chat's own `file` by default, or another plugin's, such as the models plugin's `image`.
+  - `{ name, type, data }`: the file given as it is.
+
+  Each becomes a file of the chat, with its `thread` and space. People and contacts read it there as
+  they read people's files, and it meets the same limits: ten at most, about 10 MB each, and a media
+  type. Its content is the same blob, so a picture kept elsewhere isn't stored twice. The answer
+  adds the files' ids: `{ message, files }`. Saying it again sends nothing, files included. An
+  agent's own message tells it next time what it sent: `[sent: logo.png]`.
+
+- **A refusal says why.** A turn that fails with a refusal written for people answers in that
+  refusal's own words, where only the codes `credits` and `budget` did before. That covers any
+  failure made public, including the `spending` check's refusal whatever its `why`: an app's own
+  reason, such as an inactive subscription, no longer needs to borrow `credits`. The `spending`
+  refusal is now public, so a model outside the app reads its message too. A web line's spent budget
+  now shows its own words ("This chat has done all it can for today…"). Every other failure still
+  shows people the short line, with the details in the event. Moving in from another app. Nothing
+  changes for an app that doesn't call these.
+
+- **`chat.import`** (the system's: a migration) brings a conversation in as it was: its thread (the
+  importer's id) in a space, with its title, and its messages with who said them (a person's id or
+  an agent's name), to whom, what, their files (`data`, or the `id` of a document holding one:
+  chat's `file` by default) and when (ISO 8601 with a zone, kept to the millisecond). Nothing runs:
+  no turn, no transcript, nothing delivered. Importing again replaces what it made; a long
+  conversation comes in several calls, and the thread's summary (count, first, latest, when it last
+  moved) is worked out from every message it has. A thread already in another space is refused
+  (`chat.move` moves it). Unrecorded: the documents it writes are their own record.
+- **`memory.import`** (the system's) brings memories in as they were, in a space: text, whom each is
+  about, who wrote it, `core`, when it was learned and last changed, under the importer's ids. Each
+  is embedded as it's kept (with an embedder), so recall finds it by meaning.
+- **Dev sign-in reaches someone already there:** an email a person has (one who moved in under an id
+  of its own) signs in as them, and the id of someone there signs in as them too, both as they are
+  (their name isn't touched). Anyone else signs in as before.
+
 ## 1.0.0-rc.26 — 2026-11-06
 
 **Upgrading from rc.25.** The `hosts` resource names the app's own hosts an entry each, without the
@@ -25,6 +136,75 @@ resources: { hosts: { "app.example.com": true, "*.run.app": true } }
   `{ own: [...] }`, like every other resource: a later plugin adds a host, or takes one away with
   `null`, without restating the rest. What it does is unchanged: with the app's hosts named, any
   other host is answered only by routes that take it. `HostsSettings` is `Record<string, true>`.
+- **Email sign-in** (`emailSignIn`, in `copilotz/plugins/access`, with identity and `email`): people
+  sign in with an email and a password. Nothing changes for apps that don't add it.
+  - **Flows,** each an unrecorded Action behind a route, those that end signed in answering with
+    identity's `signedIn`: `email.sign-up` (a six-digit code by email, the password waiting for it)
+    and `email.verify` (the person made, and a session); `email.sign-in`, refused with `unverified`
+    (and a new code sent) until the address is confirmed; `email.forgot` (the same answer for any
+    address) and `email.reset` (the password set, the person's other sessions ended);
+    `email.invite`, trusted code's (a webhook after a purchase: the person, answered at once, and a
+    link that works once for a day, `/#email-invite=<token>`), `email.invitation` and `email.accept`
+    (the password chosen, signed in); and `email.import`, the system's, which keeps another app's
+    password hashes as they are, for a migration, with the person ids the importer chooses. Routes:
+    `GET /signin/email` (it's here; `signUp`), `POST /signin/email`, and `/signin/email/sign-up`,
+    `verify`, `forgot`, `reset`, `invitation`, `accept`; a refusal answers `{ error, code }`.
+  - **Passwords:** legacy hashes (`"<saltHex>:<hashHex>"`, PBKDF2-HMAC-SHA256 at 100,000, as
+    Copilotz 0.x apps kept them) verify as stored and are hashed again at the next sign-in; new ones
+    are `pbkdf2-sha256$6x100000$<salt>$<hash>` (PBKDF2 in six stages of 100,000, each salted with
+    the stage before: workerd refuses more than 100,000 in one call), on WebCrypto, compared in
+    constant time, in a private field (`email_login.hash`) no event or actor's read holds.
+  - **Codes and links** are kept only as HMACs under the `links` secret (still matching under its
+    `previous` while it changes), used once; codes last 15 minutes and five wrong tries. A stranger
+    signing up first with someone's address can't choose their password: each code confirms the
+    password its sign-up came with. Messages to an address (5 an hour), tries at it (10 in 15
+    minutes) and one caller's asks (30, by the `caller` resource or the socket's address) are
+    limited (`too_many`), the same whether or not the address has an account (`emailSignIn.limits`).
+    What's past goes every ten minutes (`email.prune`).
+  - **Its words** are the `emailSignIn` resource's `messages` (`verify`, `reset`, `invite`,
+    `exists`), English unless the app gives its own; `app` names the app in them (the `links`
+    origin's host unless said). It needs the `links` resource (`{ origin, secret }`) to start.
+- **`email`, the app's email port:** `email.send` `{ to, subject, text, html? }` (trusted code's,
+  unrecorded) through the adapter the `email` resource names: `resend` (Resend's API, through
+  `ctx.fetch`, with its `apiKey` and `from`) or `console` (each message in the log, for a laptop;
+  refused where the `links` origin is public). `EmailAdapter` and the settings' types are in its
+  contract.
+- **The sign-in page offers email** when `GET /signin/email` says it's there: sign in, create an
+  account, the code (sent on once typed or pasted; a new one every 30 seconds), a new password by
+  code, and arriving by an invitation's link to choose a password. Signing in by name moves under
+  it, a click away. The toolkit has an `eye-off` icon. The example web app takes `EMAIL=1` (and
+  `EMAIL_INVITE=<address>`) to try it, its messages in the terminal.
+- **The sign-in page is the app's, in every word** (the `signInPage` resource of the browser's
+  plugins, merged over Copilotz's as the theme is): `words` patch its phrases one by one by key
+  (`SIGN_IN_WORDS` in `copilotz/web`: every heading, label, placeholder, button, hint and refusal of
+  Google's, email's and dev sign-in's screens, refusals said by their code, never in the server's
+  words); `about`, the panel beside the form (a headline, its quieter end, points with icons), is
+  given whole (no Copilotz pitch stays beside an app's own), and `null` leaves the form alone. Its
+  logo is the theme's and its name the page's title, as before; an app that says nothing shows
+  Copilotz's words and pitch, as before. Google's button speaks `page.lang`. New in `copilotz/web`:
+  `SIGN_IN_WORDS`, `COPILOTZ_ABOUT`, `signInPageOf` and the `SignInPage`, `SignInWords`,
+  `SignInAbout` and `SignInPoint` types.
+- **Image generation** in `models`: `image.generate`
+  `{ model, prompt, references?, count?, aspectRatio?, size?, tags? }` answers
+  `{ images: [{ id, type, size }], text, usage }`. The images are kept in the `image` collection, a
+  document each, with the content as a blob, and the answer names them by id. A reference is an
+  image made here (`{ id }`), a document the caller may read that holds a file as `type` and `data`
+  (`{ id, collection: "file" }`, read as the caller), or inline data (`{ data, type }`, or a data
+  URL). Models are chosen as `llm`'s are: an alias, settings around one, or a list tried in order.
+  Adapters go under `adapters.image`: `gemini` (`generateContent` with `responseModalities`; `count`
+  images are that many calls, made together), `openai` (`/images/generations`, or `/images/edits`
+  with references), and `fake` (`"fake/image"`).
+  - **Metered like every model call.** The org's own key comes first. `modelUse` listeners and the
+    `spending` check go before the call. Its tokens are told to the ledger after, with meter
+    `image`, priced from the catalog as `llm`'s are, and counted under agents. The provider's
+    `silence` and `retry` apply.
+  - **Refusals are final.** A model whose safety rules say no fails `image_refused`, and no other
+    model is asked. One that makes nothing fails `no_image` once the list is spent. Both are public
+    messages: an agent's tool tells its model why.
+  - **Recorded, unlike the other ports' Actions.** It writes what it made, so a job that runs again
+    finds the call done and doesn't pay twice. `models.check` takes `port: "image"`.
+  - `keyed` and `mayRun` (the org's own key, and the spending check) moved from the llm port to
+    `shared/use.ts`, so every port that spends asks the same way. Nothing changes for `llm`.
 
 ## 1.0.0-rc.25 — 2026-11-06
 

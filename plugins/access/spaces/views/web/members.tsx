@@ -41,6 +41,7 @@ import { Pending } from "./pending.tsx";
 import { STYLE } from "./style.ts";
 import { kindsOf } from "./tabs.ts";
 import { byKind, byMember, lastManager, roleName, ROLES, type Who, whoOf } from "./who.ts";
+import { say } from "./words.ts";
 import { namesIn, picturesIn } from "../../shared/names.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
@@ -202,8 +203,7 @@ function Members(
       {personal
         ? (
           <Notice tone="neutral" icon="person">
-            Personal is yours alone: you, and the agents that work for you. To work with others,
-            make a shared space (New space, in the sidebar) and invite them there.
+            {say("membersPersonal")}
           </Notice>
         )
         : null}
@@ -211,7 +211,7 @@ function Members(
         ? (
           <section className="space-section" aria-labelledby="space-requests">
             <h3 id="space-requests" className="space-section-title">
-              Waiting to join <Badge tone="warning">{requests.length}</Badge>
+              {say("waitingToJoin")} <Badge tone="warning">{requests.length}</Badge>
             </h3>
             <ul className="space-rows">
               {requests.map((r) => <Asking key={r._id} request={r} call={call} names={names} />)}
@@ -222,14 +222,14 @@ function Members(
       {!personal && manage && !space.archived
         ? (
           <section className="space-section" aria-labelledby="space-invite">
-            <h3 id="space-invite" className="space-section-title">Invite people</h3>
+            <h3 id="space-invite" className="space-section-title">{say("invitePeople")}</h3>
             <InviteForm space={space} call={call} compact={compact} />
           </section>
         )
         : null}
       <section className="space-section" aria-labelledby="space-people">
         <h3 id="space-people" className="space-section-title">
-          People <span className="space-count">{people.length}</span>
+          {say("people")} <span className="space-count">{people.length}</span>
         </h3>
         <ul className="space-rows">{rows(people)}</ul>
       </section>
@@ -253,7 +253,7 @@ function Members(
         ? (
           <section className="space-section" aria-labelledby="space-drawing">
             <h3 id="space-drawing" className="space-section-title">
-              Spaces drawing on it <span className="space-count">{spaces.length}</span>
+              {say("spacesDrawing")} <span className="space-count">{spaces.length}</span>
             </h3>
             <ul className="space-rows">{rows(spaces)}</ul>
           </section>
@@ -285,8 +285,7 @@ function Face({ who, picture }: { who: Who; picture?: string }): ReactNode {
   );
 }
 
-const whatOf = (who: Who) =>
-  who.kind === "space" ? "A space whose members are in this one" : "Person";
+const whatOf = (who: Who) => who.kind === "space" ? say("spaceMembersIn") : say("person");
 
 function Row(
   { member: m, space, me, manage, last, call, names, picture }: {
@@ -321,7 +320,7 @@ function Row(
       <div className="space-row-text">
         <p className="space-row-name">
           {who.name}
-          {mine ? <Badge tone="primary">You</Badge> : null}
+          {mine ? <Badge tone="primary">{say("you")}</Badge> : null}
         </p>
         <p className="space-row-what">{error ?? whatOf(who)}</p>
       </div>
@@ -332,7 +331,7 @@ function Row(
               size="sm"
               value={m.role}
               disabled={busy}
-              aria-label={`${who.name}'s role`}
+              aria-label={say("roleOf", { name: who.name })}
               onChange={(event) => void act("member.set", { role: event.target.value })}
             >
               {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
@@ -345,7 +344,7 @@ function Row(
           ? (
             <IconButton
               icon="close"
-              label={mine ? "Leave this space" : `Take ${who.name} out`}
+              label={mine ? say("leaveThisSpace") : say("takeOut", { name: who.name })}
               size="sm"
               loading={busy}
               onClick={() => void act("member.remove", {})}
@@ -376,7 +375,7 @@ function Asking(
     }
   };
   const by = r.by ? whoOf(r.by, names) : undefined;
-  const asker = by && by.id !== who.id ? `${by.name} asked for them` : "They asked";
+  const asked = by && by.id !== who.id ? by.name : undefined;
   return (
     <Card as="li" padding="none" className="space-row space-row-asking">
       <Avatar name={who.name} size={32} />
@@ -386,14 +385,16 @@ function Asking(
           <Time at={r.at} />
         </p>
         <p className="space-row-what">
-          {error ?? (r.reason ? `${asker}: “${r.reason}”` : `${asker} to join.`)}
+          {error ?? (asked
+            ? say(r.reason ? "askedByWhy" : "askedBy", { by: asked, reason: r.reason ?? "" })
+            : say(r.reason ? "askedWhy" : "asked", { reason: r.reason ?? "" }))}
         </p>
       </div>
       <div className="space-row-end">
         <Select
           size="sm"
           value={role}
-          aria-label={`${who.name}'s role`}
+          aria-label={say("roleOf", { name: who.name })}
           onChange={(event) => setRole(event.target.value)}
         >
           {ROLES.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
@@ -405,7 +406,7 @@ function Asking(
           disabled={!!busy}
           onClick={() => void decide("grant")}
         >
-          Let in
+          {say("letIn")}
         </Button>
         <Button
           size="sm"
@@ -414,7 +415,7 @@ function Asking(
           disabled={!!busy}
           onClick={() => void decide("deny")}
         >
-          Turn down
+          {say("turnDown")}
         </Button>
       </div>
     </Card>

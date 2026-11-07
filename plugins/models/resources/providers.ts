@@ -1,7 +1,7 @@
 /**
  * The offline providers: `"fake/<anything>"` echoes, calls a tool asked for
- * by name, and transcribes by size; `"hash/<anything>"` embeds by word
- * overlap only. For tests and demos.
+ * by name, transcribes by size and draws a pixel; `"hash/<anything>"` embeds
+ * by word overlap only. For tests and demos.
  */
 export const providers = {
   fake: { adapter: "fake", catalog: false },

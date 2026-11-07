@@ -440,7 +440,11 @@ test("a line's budget stops a turn's tool loop once it's spent", async () => {
       runtime,
       "message",
     );
-    assert(said.some((m) => m.failed), "the turn stopped");
+    // Stopped, and saying why in the words written for the visitor.
+    assertEquals(
+      said.filter((m) => m.failed).map((m) => m.text),
+      ["This chat has done all it can for today: come back tomorrow."],
+    );
   }, {
     plugins: [usage, spending],
     resources: {

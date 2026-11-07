@@ -10,14 +10,19 @@
  * with the computer program's release built (`node scripts/computer/build.ts`),
  * the app serves it, and the connect flow installs it; else from this code
  * (`deno task computer connect http://127.0.0.1:<port> --code <code>`).
+ * With `EMAIL=1`, people sign in with an email and a password too
+ * (`emailSignIn`): its codes and links are written to this terminal, or sent
+ * with Resend when `RESEND_API_KEY` and `EMAIL_FROM` are set; with
+ * `EMAIL_INVITE=<address>` as well, that address is invited as it starts
+ * (its link, to choose a password, written here too).
  *
- *   [BRAND=harbor] deno task web [--port=8790] [--sqlite[=path]]
+ *   [BRAND=harbor] [EMAIL=1] deno task web [--port=8790] [--sqlite[=path]]
  */
 import { parseArgs } from "@std/cli/parse-args";
 import { createRuntime, definePlugin, type Plugins } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
-import { devSignIn, googleSignIn } from "../../plugins/access/mod.ts";
+import { devSignIn, email, emailSignIn, googleSignIn } from "../../plugins/access/mod.ts";
 import { type Asset, type Code, webPage } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
 import { computerDownloads } from "../../plugins/compute/computers/resources/downloads.ts";
@@ -30,6 +35,31 @@ const port = Number(args.port ?? 8790);
 const sqlite = args.sqlite === undefined ? undefined : args.sqlite || ".data/web.sqlite";
 if (sqlite) await Deno.mkdir(".data", { recursive: true });
 const clientId = Deno.env.get("GOOGLE_CLIENT_ID");
+const resendKey = Deno.env.get("RESEND_API_KEY");
+
+/**
+ * Email sign-in, with `EMAIL=1`: links to this server, its codes sealed with a
+ * secret made each start (codes in flight don't outlive it), and messages
+ * written here unless Resend's key and a sender are given.
+ */
+const byEmail = Deno.env.get("EMAIL")
+  ? [
+    email,
+    emailSignIn,
+    definePlugin({
+      name: "email-here",
+      resources: {
+        links: {
+          origin: `http://localhost:${port}`,
+          secret: `${crypto.randomUUID()}${crypto.randomUUID()}`,
+        },
+        email: resendKey && Deno.env.get("EMAIL_FROM")
+          ? { adapter: "resend", apiKey: resendKey, from: Deno.env.get("EMAIL_FROM")! }
+          : { adapter: "console" },
+      },
+    }),
+  ]
+  : [];
 /**
  * The page's code: the app's own, or a brand's (`BRAND=harbor`: harbor.tsx), the name it goes
  * by, its theme (the front ends' `theme` resources), which the page carries for its first paint,
@@ -68,11 +98,12 @@ const runtime = await createRuntime({
   store: sqlite ? await sqliteStore({ path: sqlite }) : memoryStore(),
   plugins: [
     ...plugins,
-    // Sign in by name on this machine, and with Google when GOOGLE_CLIENT_ID is set.
+    // Sign in by name on this machine, with Google when GOOGLE_CLIENT_ID is set, by email with EMAIL.
     devSignIn,
     ...(clientId
       ? [googleSignIn, definePlugin({ name: "google", resources: { google: { clientId } } })]
       : []),
+    ...byEmail,
     // Where computers connect: this server's socket.
     definePlugin({
       name: "computers-here",
@@ -121,6 +152,10 @@ async function bundle(): Promise<Code> {
   await Deno.remove(out, { recursive: true });
   return { entry: entry.split("/").pop()!.replace(/\.tsx?$/, ".js"), files };
 }
+
+// Someone invited by email as it starts, to try the link: what trusted code (a webhook) does.
+const invited = Deno.env.get("EMAIL_INVITE");
+if (invited && byEmail.length) await runtime.call("email.invite", { email: invited });
 
 // This machine alone (dev sign-in is its own); Deno hands the runtime each request's address.
 Deno.serve(

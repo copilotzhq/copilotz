@@ -38,6 +38,7 @@ import { nameOf } from "../../shared/names.ts";
 import { ORG } from "../../shared/reach.ts";
 import { STYLE } from "./style.ts";
 import { addressesOf, EMAIL, listed } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -139,15 +140,14 @@ function People(
       {personal
         ? (
           <Notice tone="neutral" icon="person">
-            A personal org is yours alone. To work with others, make a team org (New organization,
-            in the switcher) and invite them there.
+            {say("orgPersonalAlone")}
           </Notice>
         )
         : null}
       {manage && !personal
         ? (
           <section className="space-section" aria-labelledby="org-invite">
-            <h3 id="org-invite" className="space-section-title">Invite people</h3>
+            <h3 id="org-invite" className="space-section-title">{say("invitePeople")}</h3>
             <OrgInviteForm org={org} call={call} sent={() => ask((n) => n + 1)} />
           </section>
         )
@@ -161,7 +161,7 @@ function People(
         : null}
       <section className="space-section" aria-labelledby="org-people">
         <h3 id="org-people" className="space-section-title">
-          People <span className="space-count">{people.length}</span>
+          {say("people")} <span className="space-count">{people.length}</span>
         </h3>
         <ul className="space-rows">
           {sorted.map((p) => (
@@ -182,7 +182,7 @@ function People(
         ? (
           <section className="space-section" aria-labelledby="org-invited">
             <h3 id="org-invited" className="space-section-title">
-              Invited <span className="space-count">{invites.length}</span>
+              {say("invitedHeading")} <span className="space-count">{invites.length}</span>
             </h3>
             <ul className="space-rows">
               {invites.map((i) => (
@@ -211,10 +211,13 @@ function People(
               ask((n) => n + 1);
               setNote(
                 handed.length
-                  ? `${who} is out of ${org.name}. ${
-                    handed.length === 1 ? "A space" : `${handed.length} spaces`
-                  } only they managed went on: ${listed(handed.map(spaceName))}.`
-                  : `${who} is out of ${org.name}.`,
+                  ? say("removedHanded", {
+                    count: handed.length,
+                    who,
+                    org: org.name,
+                    spaces: listed(handed.map(spaceName)),
+                  })
+                  : say("removedPlain", { who, org: org.name }),
               );
             }}
           />
@@ -265,7 +268,7 @@ function Row(
       <div className="space-row-text">
         <p className="space-row-name">
           <span className="org-row-name">{name}</span>
-          {mine ? <Badge tone="primary">You</Badge> : null}
+          {mine ? <Badge tone="primary">{say("you")}</Badge> : null}
         </p>
         <p className="space-row-what">
           {error ?? (p.email && p.email !== name ? p.email : "")}
@@ -278,7 +281,7 @@ function Row(
               size="sm"
               value={p.role}
               disabled={busy}
-              aria-label={`${name}'s role`}
+              aria-label={say("roleOf", { name })}
               title={ORG_ROLES.find((r) => r.value === p.role)?.lets}
               onChange={(event) => void setRole(event.target.value)}
             >
@@ -288,9 +291,7 @@ function Row(
           : (
             <Badge
               variant="outline"
-              title={lastOwner
-                ? "The org's only owner: make someone else an owner first"
-                : ORG_ROLES.find((r) => r.value === p.role)?.lets}
+              title={lastOwner ? say("onlyOwner") : ORG_ROLES.find((r) => r.value === p.role)?.lets}
             >
               {orgRoleName(p.role)}
             </Badge>
@@ -298,11 +299,11 @@ function Row(
         {removes
           ? (
             <Menu
-              label={`${name}: more`}
+              label={say("moreOf", { name })}
               align="end"
               size="sm"
               items={[{
-                label: `Remove from the org…`,
+                label: say("removeFromOrg"),
                 icon: "signout",
                 tone: "destructive",
                 onSelect: remove,
@@ -355,9 +356,7 @@ function OrgInviteForm(
     } finally {
       setDone(
         done.length
-          ? `Invited ${listed(done)} to ${org.name}. ${
-            done.length === 1 ? "They'll join" : "Each joins"
-          } once they accept, signed in with that email.`
+          ? say("orgInvited", { count: done.length, emails: listed(done), org: org.name })
           : undefined,
       );
       setBusy(false);
@@ -367,7 +366,7 @@ function OrgInviteForm(
   return (
     <form className="space-invite" onSubmit={submit}>
       <div className="space-invite-row">
-        <label className="copilotz-sr" htmlFor={`${id}-email`}>Their email</label>
+        <label className="copilotz-sr" htmlFor={`${id}-email`}>{say("theirEmail")}</label>
         <Input
           id={`${id}-email`}
           type="text"
@@ -375,7 +374,7 @@ function OrgInviteForm(
           icon="mail"
           value={typed}
           maxLength={2000}
-          placeholder="name@example.com"
+          placeholder={say("emailPlaceholder")}
           autoComplete="off"
           autoCapitalize="off"
           spellCheck={false}
@@ -387,12 +386,12 @@ function OrgInviteForm(
             setError(undefined);
           }}
         />
-        <label className="copilotz-sr" htmlFor={`${id}-role`}>Their role</label>
+        <label className="copilotz-sr" htmlFor={`${id}-role`}>{say("theirRole")}</label>
         <Select id={`${id}-role`} value={role} onChange={(event) => setRole(event.target.value)}>
           {roles.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
         </Select>
         <Button type="submit" variant="primary" icon="invite" loading={busy} disabled={!ready}>
-          Invite
+          {say("invite")}
         </Button>
       </div>
       <p id={`${id}-note`} className="space-invite-note" aria-live="polite">
@@ -407,9 +406,9 @@ function OrgInviteForm(
           )
           : (
             <span>
-              {lets}. {emails.length > 1
-                ? `${emails.length} addresses.`
-                : "Several? Separate them with commas."}
+              {emails.length > 1
+                ? say("inviteHintMany", { lets: lets ?? "", count: emails.length })
+                : say("inviteHint", { lets: lets ?? "" })}
             </span>
           )}
       </p>
@@ -431,11 +430,7 @@ function InviteRow({ invite: i, call, gone }: { invite: Invite; call: Call; gone
           <Badge variant="outline">{orgRoleName(i.role)}</Badge>
         </p>
         <p className="space-row-what">
-          {error ?? (
-            <>
-              Invited <Time at={i.at} long />
-            </>
-          )}
+          {error ?? say.nodes("invitedTime", { time: <Time at={i.at} long /> })}
         </p>
       </div>
       <div className="space-row-end">
@@ -443,7 +438,7 @@ function InviteRow({ invite: i, call, gone }: { invite: Invite; call: Call; gone
           size="sm"
           variant="ghost"
           loading={busy}
-          aria-label={`Take back the invitation to ${i.email}`}
+          aria-label={say("takeBackTo", { email: i.email })}
           onClick={async () => {
             setBusy(true);
             setError(undefined);
@@ -456,7 +451,7 @@ function InviteRow({ invite: i, call, gone }: { invite: Invite; call: Call; gone
             }
           }}
         >
-          Take back
+          {say("takeBack")}
         </Button>
       </div>
     </Card>
@@ -509,12 +504,12 @@ function RemoveDialog(
     <Dialog
       open={!!person}
       onClose={close}
-      title={`Remove ${name} from ${org.name}?`}
+      title={say("removeTitle", { name, org: org.name })}
       footer={
         <>
-          <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={close} disabled={busy}>{say("cancel")}</Button>
           <Button variant="destructive" loading={busy} onClick={() => void go()}>
-            Remove {name}
+            {say("removeNamed", { name })}
           </Button>
         </>
       }
@@ -523,21 +518,16 @@ function RemoveDialog(
         <ul className="org-remove-means">
           <li>
             <Icon name="signout" size={15} />
-            <span>
-              They're signed out of {org.name}{" "}
-              at once, wherever they are, and leave every space in it.
-            </span>
+            <span>{say("removeMeansOut", { org: org.name })}</span>
           </li>
           <li>
             <Icon name="person" size={15} />
-            <span>
-              Their Personal space stays, as it is: the org's owners and admins still reach it.
-            </span>
+            <span>{say("removeMeansPersonal")}</span>
           </li>
         </ul>
         <Field
-          label="Shared spaces only they manage go to"
-          hint="They become its manager there. Spaces others manage too stay as they are."
+          label={say("heirLabel")}
+          hint={say("heirHint")}
         >
           {(control) => (
             <Select
@@ -545,10 +535,12 @@ function RemoveDialog(
               value={to}
               onChange={(event) => setTo(event.target.value)}
             >
-              {!me || !people.some((p) => p.person === me) ? <option value="">You</option> : null}
+              {!me || !people.some((p) => p.person === me)
+                ? <option value="">{say("you")}</option>
+                : null}
               {heirs.map((p) => (
                 <option key={p.person} value={p.person}>
-                  {p.person === me ? `You (${named(p)})` : named(p)}
+                  {p.person === me ? say("youNamed", { name: named(p) }) : named(p)}
                 </option>
               ))}
             </Select>

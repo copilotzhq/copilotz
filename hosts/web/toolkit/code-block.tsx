@@ -31,6 +31,7 @@ import { CopyButton } from "./copy-button.tsx";
 import { cx } from "./cx.ts";
 import { type CodePart, linesOf } from "./code-lines.ts";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 
 export type { CodePart, CodeTone } from "./code-lines.ts";
 
@@ -146,10 +147,10 @@ export function CodeBlock(
           onClick={() => setOpen(!open)}
         >
           {open
-            ? "Show less"
+            ? say("showLess")
             : from === "end"
-            ? `Show ${hidden} earlier line${hidden === 1 ? "" : "s"}`
-            : `Show ${hidden} more line${hidden === 1 ? "" : "s"}`}
+            ? say("showEarlierLines", { count: hidden })
+            : say("showMoreLines", { count: hidden })}
         </Button>
       </div>
     )

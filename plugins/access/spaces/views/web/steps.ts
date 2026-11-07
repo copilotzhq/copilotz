@@ -9,6 +9,7 @@ import { go, type PaletteControl, type PaletteStep } from "../../../../../hosts/
 import type { Reached } from "../../contract.ts";
 import { spacePath } from "./tabs.ts";
 import { spaceName } from "./who.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -27,9 +28,9 @@ export function newSpaceStep(
   made: (space: Reached, palette: PaletteControl) => unknown = (space) => go(spacePath(space._id)),
 ): PaletteStep {
   return {
-    title: "New space",
-    placeholder: "Name it",
-    note: "A shared space, to work in with others: you'll manage it, and invite them.",
+    title: say("newSpace"),
+    placeholder: say("nameIt"),
+    note: say("newSpaceNote"),
     filter: false,
     items: (search) => {
       const { name, long } = named(search);
@@ -38,10 +39,10 @@ export function newSpaceStep(
         title: "",
         items: [{
           key: "space:create",
-          label: `Create “${name}”`,
+          label: say("createNamed", { name }),
           icon: "plus",
           disabled: long,
-          ...(long ? { description: `At most ${LONGEST} characters` } : {}),
+          ...(long ? { description: say("atMost", { count: LONGEST }) } : {}),
           run: async (palette) => {
             const { space } = await call<{ space: string }>("space.create", { name });
             const fresh: Reached = {
@@ -61,10 +62,10 @@ export function newSpaceStep(
 /** A new name for a space, typed over its old one. */
 export function renameStep(space: Reached, call: Call): PaletteStep {
   return {
-    title: `Rename ${space.name}`,
-    placeholder: "Its new name",
+    title: say("renameTitle", { name: space.name }),
+    placeholder: say("newName"),
     value: space.name,
-    note: "Everyone in it sees the new name, in the sidebar and on its chats.",
+    note: say("renameNote"),
     filter: false,
     items: (search) => {
       const { name, long } = named(search);
@@ -73,10 +74,10 @@ export function renameStep(space: Reached, call: Call): PaletteStep {
         title: "",
         items: [{
           key: "space:rename",
-          label: `Rename to “${name}”`,
+          label: say("renameTo", { name }),
           icon: "pencil",
           disabled: long,
-          ...(long ? { description: `At most ${LONGEST} characters` } : {}),
+          ...(long ? { description: say("atMost", { count: LONGEST }) } : {}),
           run: () => call("space.rename", { space: space._id, name }),
         }],
       }];
@@ -87,20 +88,19 @@ export function renameStep(space: Reached, call: Call): PaletteStep {
 /** Archiving a space, once they've read what it means. */
 export function archiveStep(space: Reached, call: Call): PaletteStep {
   return {
-    title: `Archive ${space.name}?`,
+    title: say("archiveTitle", { name: space.name }),
     confirm: true,
-    note: "It stays readable, as it is, and it's listed apart, under Archived. " +
-      "Restore it any time.",
+    note: say("archiveNote"),
     items: () => [{
       title: "",
       items: [
         {
           key: "space:archive",
-          label: `Archive ${space.name}`,
+          label: say("archiveNamed", { name: space.name }),
           icon: "archive",
           run: () => call("space.archive", { space: space._id, archived: true }),
         },
-        { key: "space:keep", label: "Keep it as it is", icon: "close", run: (p) => p.back() },
+        { key: "space:keep", label: say("keepIt"), icon: "close", run: (p) => p.back() },
       ],
     }],
   };
@@ -109,16 +109,15 @@ export function archiveStep(space: Reached, call: Call): PaletteStep {
 /** Leaving a shared space, once they've read what it means; home after. */
 export function leaveStep(space: Reached, call: Call): PaletteStep {
   return {
-    title: `Leave ${spaceName(space)}?`,
+    title: say("leaveTitle", { name: spaceName(space) }),
     confirm: true,
-    note: "You'll no longer see its chats, memories or computers; what you added stays there. " +
-      "To come back, someone who manages it invites you again.",
+    note: say("leaveNote"),
     items: () => [{
       title: "",
       items: [
         {
           key: "space:leave",
-          label: `Leave ${spaceName(space)}`,
+          label: say("leaveNamed", { name: spaceName(space) }),
           icon: "signout",
           tone: "destructive",
           run: async () => {
@@ -126,7 +125,7 @@ export function leaveStep(space: Reached, call: Call): PaletteStep {
             go("/");
           },
         },
-        { key: "space:stay", label: "Stay", icon: "close", run: (p) => p.back() },
+        { key: "space:stay", label: say("stay"), icon: "close", run: (p) => p.back() },
       ],
     }],
   };

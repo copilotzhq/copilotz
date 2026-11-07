@@ -4,31 +4,48 @@
  * and the console's orgs as staff search and sort them.
  */
 import type { IconName } from "../../../../hosts/web/mod.ts";
+import { say } from "../views/words.ts";
 
 /** Someone's standing in the org they're in: their role, and whether they're platform staff. */
 export type Standing = { role: string | null; staff: boolean };
 
-/** The roles in an org, in the order they let more, each with what it lets. */
+/** The roles in an org, in the order they let more, each with what it lets (said when read). */
 export const ORG_ROLES = [
   {
     value: "owner",
-    label: "Owner",
-    lets: "Runs the org: everything admins do, and makes or unmakes owners",
+    get label() {
+      return say("roleOwner");
+    },
+    get lets() {
+      return say("roleOwnerLets");
+    },
   },
   {
     value: "admin",
-    label: "Admin",
-    lets: "Invites people, changes roles, and reaches everything in the org",
+    get label() {
+      return say("roleAdmin");
+    },
+    get lets() {
+      return say("roleAdminLets");
+    },
   },
   {
     value: "member",
-    label: "Member",
-    lets: "Works in their spaces, makes new ones, and sees who's in the org",
+    get label() {
+      return say("roleMember");
+    },
+    get lets() {
+      return say("roleMemberLets");
+    },
   },
   {
     value: "guest",
-    label: "Guest",
-    lets: "Reaches only the spaces they're invited to",
+    get label() {
+      return say("roleGuest");
+    },
+    get lets() {
+      return say("roleGuestLets");
+    },
   },
 ] as const;
 
@@ -43,7 +60,7 @@ export const runs = (standing: Standing | undefined): boolean =>
 
 /** How someone stands, in a word: their role ("Owner"), or "Staff" for staff who aren't in it. */
 export const standingName = (standing: Standing | undefined): string =>
-  !standing ? "" : standing.role ? orgRoleName(standing.role) : standing.staff ? "Staff" : "";
+  !standing ? "" : standing.role ? orgRoleName(standing.role) : standing.staff ? say("staff") : "";
 
 /**
  * An `orgSettings` resource: a section of the org's page, from the plugin it

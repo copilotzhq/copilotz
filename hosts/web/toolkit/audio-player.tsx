@@ -18,6 +18,7 @@ import { clock } from "./clock.ts";
 import { cx } from "./cx.ts";
 import { Icon } from "./icon.tsx";
 import { sheet } from "./sheet.tsx";
+import { say } from "./words.ts";
 import { Spinner } from "./spinner.tsx";
 import { Waveform } from "./waveform.tsx";
 
@@ -59,7 +60,7 @@ export function AudioPlayer(
     src,
     duration,
     peaks,
-    label = "Audio",
+    label: given,
     variant = "card",
     bars,
     className,
@@ -134,6 +135,7 @@ export function AudioPlayer(
     return known;
   };
 
+  const label = given ?? say("audio");
   const ready = !!src && !failed;
   const started = playing || at > 0;
   const time = started ? clock(at * 1000) : total ? clock(total * 1000, true) : "–:––";
@@ -141,7 +143,7 @@ export function AudioPlayer(
   return (
     <div
       role="group"
-      aria-label={length ? `${label}, ${length}` : label}
+      aria-label={length ? say("audioLabel", { label, length }) : label}
       className={cx(
         "copilotz-audio",
         variant !== "card" && `copilotz-audio-${variant}`,
@@ -157,12 +159,12 @@ export function AudioPlayer(
           onClick={toggle}
           disabled={!src}
           aria-label={failed
-            ? `Couldn't load the ${label.toLowerCase()}. Try again`
+            ? say("audioFailed", { label: label.toLowerCase() })
             : !src
-            ? "Loading"
+            ? say("audioLoading")
             : playing
-            ? "Pause"
-            : "Play"}
+            ? say("audioPause")
+            : say("audioPlay")}
         >
           {!src || (playing && waiting)
             ? <Spinner size={14} />
@@ -179,8 +181,11 @@ export function AudioPlayer(
           onSeek={seek}
           step={total ? Math.min(0.25, 5 / total) : 0.05}
           disabled={!ready || !total}
-          label={`${label}: position`}
-          valueText={`${clock(at * 1000)} of ${length ?? "unknown"}`}
+          label={say("audioPosition", { label })}
+          valueText={say("audioProgress", {
+            at: clock(at * 1000),
+            length: length ?? say("audioLengthUnknown"),
+          })}
         />
         <span className="copilotz-audio-time" aria-hidden="true">{time}</span>
       </div>

@@ -20,6 +20,7 @@ import {
   Dialog,
   EmptyState,
   Field,
+  formatNumber,
   go,
   Icon,
   Input,
@@ -44,26 +45,28 @@ import {
 } from "../../../access/directory/contract.ts";
 import { type ConsoleFilter, consoleList, consoleTotals, SCHEMA } from "../shared/orgs.ts";
 import { GiftCodes } from "./console-codes.tsx";
+import { say } from "./words.ts";
 
 export const consoleView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => (
   <Console tab={(ctx.hints.query as Record<string, string> | undefined)?.tab} />
 );
 
 /** What staff are doing to an org, in a dialog. */
-type Doing = { what: "rename" | "suspend" | "move" | "delete"; org: ConsoleOrg };
+export type Doing = { what: "rename" | "suspend" | "move" | "delete"; org: ConsoleOrg };
 
-const FILTERS: { value: ConsoleFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "team", label: "Teams" },
-  { value: "personal", label: "Personal" },
-  { value: "suspended", label: "Suspended" },
+const filters = (): { value: ConsoleFilter; label: string }[] => [
+  { value: "all", label: say("filterAll") },
+  { value: "team", label: say("filterTeams") },
+  { value: "personal", label: say("personal") },
+  { value: "suspended", label: say("suspended") },
 ];
 
 /** The console's tabs: the address says which (`?tab=codes`). */
-const CONSOLE_TABS = [
-  { value: "orgs", label: "Organizations", icon: "building", href: "/console" },
-  { value: "codes", label: "Gift codes", icon: "star", href: "/console?tab=codes" },
-] as const;
+const consoleTabs = () =>
+  [
+    { value: "orgs", label: say("organizations"), icon: "building", href: "/console" },
+    { value: "codes", label: say("giftCodes"), icon: "star", href: "/console?tab=codes" },
+  ] as const;
 
 function Console({ tab }: { tab?: string }): ReactNode {
   const orgs = useOrgs();
@@ -100,14 +103,14 @@ function Console({ tab }: { tab?: string }): ReactNode {
   if (orgs.status !== "loading" && !staff) {
     return (
       <div className="copilotz-org-missing">
-        <Title text="Console" />
+        <Title text={say("consoleTitle")} />
         <EmptyState
           icon="lock"
           heading="h1"
-          title="For platform staff"
-          action={<Button variant="primary" href="/">Go home</Button>}
+          title={say("forStaff")}
+          action={<Button variant="primary" href="/">{say("goHome")}</Button>}
         >
-          The console lists every organization, for the people who run this app.
+          {say("forStaffAbout")}
         </EmptyState>
       </div>
     );
@@ -124,25 +127,25 @@ function Console({ tab }: { tab?: string }): ReactNode {
   };
   const tabs = (
     <Tabs
-      label="What the console shows"
+      label={say("consoleShows")}
       variant="line"
       className="console-tabs"
       value={tab === "codes" ? "codes" : "orgs"}
       onChange={(next) => go(next === "codes" ? "/console?tab=codes" : "/console")}
-      tabs={[...CONSOLE_TABS]}
+      tabs={[...consoleTabs()]}
     />
   );
   if (tab === "codes") {
     return (
       <Page
-        title="Gift codes"
+        title={say("giftCodes")}
         icon="server"
         width="full"
         className="console"
-        badges={<Badge tone="warning">Staff</Badge>}
-        description="Credits waiting to be claimed. Someone who runs an org types one in under Billing, and its credits are that org's."
+        badges={<Badge tone="warning">{say("staff")}</Badge>}
+        description={say("giftCodesAbout")}
       >
-        <Title text="Gift codes" />
+        <Title text={say("giftCodes")} />
         {tabs}
         <GiftCodes orgs={list ?? []} ready={staff} />
       </Page>
@@ -150,26 +153,26 @@ function Console({ tab }: { tab?: string }): ReactNode {
   }
   return (
     <Page
-      title="Organizations"
+      title={say("organizations")}
       icon="server"
       width="full"
       className="console"
-      badges={<Badge tone="warning">Staff</Badge>}
-      description="Every org on this app: what each last reported, where its rows live, and what you can do about it. Nothing here reads an org's content."
+      badges={<Badge tone="warning">{say("staff")}</Badge>}
+      description={say("consoleAbout")}
       actions={
         <Button size="sm" icon="refresh" loading={loading} onClick={() => void load()}>
-          Refresh
+          {say("refresh")}
         </Button>
       }
     >
-      <Title text="Console" />
+      <Title text={say("consoleTitle")} />
       {tabs}
       <div className="console-stats" aria-busy={!list || undefined}>
-        <Stat label="Organizations" value={list ? totals.orgs : undefined} />
-        <Stat label="Team orgs" value={list ? totals.teams : undefined} />
-        <Stat label="People" value={list ? totals.people : undefined} />
+        <Stat label={say("organizations")} value={list ? totals.orgs : undefined} />
+        <Stat label={say("teamOrgs")} value={list ? totals.teams : undefined} />
+        <Stat label={say("people")} value={list ? totals.people : undefined} />
         <Stat
-          label="Suspended"
+          label={say("suspended")}
           value={list ? totals.suspended : undefined}
           tone={totals.suspended ? "warning" : undefined}
         />
@@ -180,16 +183,16 @@ function Console({ tab }: { tab?: string }): ReactNode {
           type="search"
           size="sm"
           className="console-search"
-          placeholder="Search by name, id, schema or maker"
-          aria-label="Search organizations"
+          placeholder={say("searchPlaceholder")}
+          aria-label={say("searchOrgs")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
         <Tabs
-          label="Which organizations"
+          label={say("whichOrgs")}
           value={filter}
           onChange={setFilter}
-          tabs={FILTERS.map((f) => ({
+          tabs={filters().map((f) => ({
             ...f,
             ...(list && f.value === "suspended" && totals.suspended
               ? { count: totals.suspended }
@@ -219,15 +222,15 @@ function Console({ tab }: { tab?: string }): ReactNode {
         )
         : shown.length
         ? (
-          <div className="console-table" role="table" aria-label="Organizations">
+          <div className="console-table" role="table" aria-label={say("organizations")}>
             <div className="console-row console-head" role="row">
-              <span role="columnheader">Organization</span>
-              <span role="columnheader" className="console-num">People</span>
-              <span role="columnheader" className="console-num">Spaces</span>
-              <span role="columnheader">Last active</span>
-              <span role="columnheader">Placement</span>
-              <span role="columnheader">Status</span>
-              <span role="columnheader" className="console-sr">Actions</span>
+              <span role="columnheader">{say("organization")}</span>
+              <span role="columnheader" className="console-num">{say("people")}</span>
+              <span role="columnheader" className="console-num">{say("spaces")}</span>
+              <span role="columnheader">{say("lastActive")}</span>
+              <span role="columnheader">{say("placement")}</span>
+              <span role="columnheader">{say("status")}</span>
+              <span role="columnheader" className="console-sr">{say("actions")}</span>
             </div>
             {shown.map((org) => (
               <Row
@@ -241,17 +244,16 @@ function Console({ tab }: { tab?: string }): ReactNode {
           </div>
         )
         : (
-          <EmptyState icon="search" title="No organization matches">
-            {search ? `Nothing matches “${search.trim()}”` : "Nothing in this list yet."}
+          <EmptyState icon="search" title={say("noMatch")}>
+            {search ? say("nothingMatches", { search: search.trim() }) : say("nothingYet")}
           </EmptyState>
         )}
       {list && shown.length
         ? (
           <p className="console-foot">
             {shown.length === list.length
-              ? `${list.length} ${list.length === 1 ? "organization" : "organizations"}`
-              : `${shown.length} of ${list.length} organizations`}
-            {" · "}the most recently active first
+              ? say("footAll", { count: list.length })
+              : say("footSome", { shown: shown.length, total: list.length })}
           </p>
         )
         : null}
@@ -271,12 +273,13 @@ function Stat(
       <span className="console-stat-label">{label}</span>
       {value === undefined
         ? <Skeleton height={26} width={48} />
-        : <span className="console-stat-value">{value.toLocaleString()}</span>}
+        : <span className="console-stat-value">{formatNumber(value)}</span>}
     </div>
   );
 }
 
-function Row(
+/** One org in the console's table. */
+export function Row(
   { org, here, inAsStaff, onDo }: {
     org: ConsoleOrg;
     here: boolean;
@@ -305,35 +308,37 @@ function Row(
           <span className="console-org-name">
             {org.name}
             {here
-              ? <Badge tone="primary">{inAsStaff ? "You're here as staff" : "You're here"}</Badge>
+              ? <Badge tone="primary">{inAsStaff ? say("hereAsStaff") : say("youreHere")}</Badge>
               : null}
           </span>
           <span className="console-org-meta">
-            <span className="console-kind">{org.kind === "personal" ? "Personal" : "Team"}</span>
+            <span className="console-kind">
+              {org.kind === "personal" ? say("personal") : say("team")}
+            </span>
             <span aria-hidden="true">·</span>
             <code title={org.id}>{org.id}</code>
-            <CopyButton text={org.id} label="Copy the org's id" />
+            <CopyButton text={org.id} label={say("copyOrgId")} />
           </span>
           {error ? <span className="console-error">{error}</span> : null}
         </span>
       </span>
-      <span role="cell" className="console-num" data-label="People">
-        {people.toLocaleString()}
+      <span role="cell" className="console-num" data-label={say("people")}>
+        {formatNumber(people)}
       </span>
-      <span role="cell" className="console-num" data-label="Spaces">
-        {org.summary?.spaces === undefined ? "—" : org.summary.spaces.toLocaleString()}
+      <span role="cell" className="console-num" data-label={say("spaces")}>
+        {org.summary?.spaces === undefined ? "—" : formatNumber(org.summary.spaces)}
       </span>
-      <span role="cell" className="console-active" data-label="Last active">
-        {org.summary?.active ? <Time at={org.summary.active} /> : <span>Not yet</span>}
+      <span role="cell" className="console-active" data-label={say("lastActive")}>
+        {org.summary?.active ? <Time at={org.summary.active} /> : <span>{say("notYet")}</span>}
       </span>
-      <span role="cell" className="console-placement" data-label="Placement">
+      <span role="cell" className="console-placement" data-label={say("placement")}>
         <Icon name="server" size={13} />
         <code>{org.placement?.schema ?? "—"}</code>
       </span>
-      <span role="cell" data-label="Status">
+      <span role="cell" data-label={say("status")}>
         {org.suspended
-          ? <Badge tone="warning" variant="soft">Suspended</Badge>
-          : <Badge tone="success" variant="soft">Active</Badge>}
+          ? <Badge tone="warning" variant="soft">{say("suspended")}</Badge>
+          : <Badge tone="success" variant="soft">{say("active")}</Badge>}
       </span>
       <span role="cell" className="console-actions">
         <Button
@@ -342,26 +347,24 @@ function Row(
           loading={entering}
           disabled={inAsStaff}
           onClick={enter}
-          title={inAsStaff
-            ? "You're in it as staff"
-            : `Go into ${org.name} as staff: what you do there is on its record`}
+          title={inAsStaff ? say("inItAsStaff") : say("goIntoAsStaff", { name: org.name })}
         >
-          Enter as staff
+          {say("enterAsStaff")}
         </Button>
         <Menu
-          label={`${org.name}: more`}
+          label={say("moreOf", { name: org.name })}
           align="end"
           size="sm"
           items={[
-            { label: "Rename…", icon: "pencil", onSelect: () => onDo("rename") },
+            { label: say("renameMore"), icon: "pencil", onSelect: () => onDo("rename") },
             org.suspended
-              ? { label: "Lift the suspension…", icon: "play", onSelect: () => onDo("suspend") }
-              : { label: "Suspend…", icon: "pause", onSelect: () => onDo("suspend") },
-            { label: "Move to another schema…", icon: "move", onSelect: () => onDo("move") },
-            { label: "Export its rows (SQL)", icon: "download", href: exportOrgUrl(org.id) },
+              ? { label: say("liftMore"), icon: "play", onSelect: () => onDo("suspend") }
+              : { label: say("suspendMore"), icon: "pause", onSelect: () => onDo("suspend") },
+            { label: say("moveMore"), icon: "move", onSelect: () => onDo("move") },
+            { label: say("exportRows"), icon: "download", href: exportOrgUrl(org.id) },
             "separator",
             {
-              label: "Delete for good…",
+              label: say("deleteMore"),
               icon: "trash",
               tone: "destructive",
               onSelect: () => onDo("delete"),
@@ -373,7 +376,7 @@ function Row(
   );
 }
 
-type DialogProps = { doing?: Doing; close(): void; finished(note: string): void };
+export type DialogProps = { doing?: Doing; close(): void; finished(note: string): void };
 
 /** Doing something to an org in a dialog: busy while it goes, and why it failed if it does. */
 function useAct(doing?: Doing) {
@@ -392,7 +395,7 @@ function useAct(doing?: Doing) {
     } catch (e) {
       const code = (e as { code?: string }).code;
       setError(
-        code === "unsupported" ? `This app doesn't do that yet. (${message(e)})` : message(e),
+        code === "unsupported" ? say("unsupported", { reason: message(e) }) : message(e),
       );
       setBusy(false);
     }
@@ -400,7 +403,7 @@ function useAct(doing?: Doing) {
   return { busy, error, act };
 }
 
-function RenameDialog({ doing, close, finished }: DialogProps): ReactNode {
+export function RenameDialog({ doing, close, finished }: DialogProps): ReactNode {
   const open = doing?.what === "rename";
   const org = doing?.org;
   const [name, setName] = useState("");
@@ -410,31 +413,34 @@ function RenameDialog({ doing, close, finished }: DialogProps): ReactNode {
   const save = (event?: FormEvent) => {
     event?.preventDefault();
     if (!org || !typed || typed === org.name) return;
-    void act(() => updateOrg(org.id, { name: typed }), () => finished(`Renamed to “${typed}”.`));
+    void act(
+      () => updateOrg(org.id, { name: typed }),
+      () => finished(say("renamedTo", { name: typed })),
+    );
   };
   return (
     <Dialog
       open={open}
       onClose={close}
       size="sm"
-      title="Rename organization"
-      description={org ? `Its people see the new name at once, everywhere.` : undefined}
+      title={say("renameOrg")}
+      description={org ? say("renameOrgAbout") : undefined}
       footer={
         <>
-          <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={close} disabled={busy}>{say("cancel")}</Button>
           <Button
             variant="primary"
             loading={busy}
             disabled={!typed || typed === org?.name}
             onClick={() => save()}
           >
-            Rename
+            {say("rename")}
           </Button>
         </>
       }
     >
       <form onSubmit={save}>
-        <Field label="Name" error={error}>
+        <Field label={say("name")} error={error}>
           {(control) => (
             <Input
               {...control}
@@ -450,7 +456,7 @@ function RenameDialog({ doing, close, finished }: DialogProps): ReactNode {
   );
 }
 
-function SuspendDialog({ doing, close, finished }: DialogProps): ReactNode {
+export function SuspendDialog({ doing, close, finished }: DialogProps): ReactNode {
   const open = doing?.what === "suspend";
   const org = doing?.org;
   const lifting = !!org?.suspended;
@@ -460,10 +466,10 @@ function SuspendDialog({ doing, close, finished }: DialogProps): ReactNode {
       open={open}
       onClose={close}
       size="sm"
-      title={org ? `${lifting ? "Lift the suspension of" : "Suspend"} ${org.name}?` : ""}
+      title={org ? say(lifting ? "liftTitle" : "suspendTitle", { name: org.name }) : ""}
       footer={
         <>
-          <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={close} disabled={busy}>{say("cancel")}</Button>
           <Button
             variant={lifting ? "primary" : "destructive"}
             loading={busy}
@@ -472,25 +478,25 @@ function SuspendDialog({ doing, close, finished }: DialogProps): ReactNode {
               void act(
                 () => updateOrg(org.id, { suspended: !lifting }),
                 () =>
-                  finished(lifting ? `${org.name} is open again.` : `${org.name} is suspended.`),
+                  finished(
+                    say(lifting ? "openAgain" : "isSuspended", { name: org.name }),
+                  ),
               )}
           >
-            {lifting ? "Lift the suspension" : "Suspend"}
+            {lifting ? say("lift") : say("suspend")}
           </Button>
         </>
       }
     >
       <p className="console-dialog-text">
-        {lifting
-          ? "Its people can go in again, as before. Nothing in it changed while it was suspended."
-          : "Nobody but staff goes in until you lift it: its people see that it's suspended. Nothing in it is changed or deleted."}
+        {lifting ? say("liftAbout") : say("suspendAbout")}
       </p>
       {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
     </Dialog>
   );
 }
 
-function MoveDialog({ doing, close, finished }: DialogProps): ReactNode {
+export function MoveDialog({ doing, close, finished }: DialogProps): ReactNode {
   const open = doing?.what === "move";
   const org = doing?.org;
   const [schema, setSchema] = useState("");
@@ -504,43 +510,43 @@ function MoveDialog({ doing, close, finished }: DialogProps): ReactNode {
   const move = (event?: FormEvent) => {
     event?.preventDefault();
     if (!org || !typed || bad || same) return;
-    void act(() => moveOrg(org.id, typed), () => finished(`${org.name} now lives in “${typed}”.`));
+    void act(
+      () => moveOrg(org.id, typed),
+      () => finished(say("nowLivesIn", { name: org.name, schema: typed })),
+    );
   };
   return (
     <Dialog
       open={open}
       onClose={close}
-      title={org ? `Move ${org.name}` : ""}
-      description="For big orgs: gives it a schema of its own, so its load and its rows stand apart from the shared pool."
+      title={org ? say("moveTitle", { name: org.name }) : ""}
+      description={say("moveAbout")}
       footer={
         <>
-          <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={close} disabled={busy}>{say("cancel")}</Button>
           <Button
             variant="primary"
             loading={busy}
             disabled={!typed || bad || same}
             onClick={() => move()}
           >
-            Move its rows
+            {say("moveRows")}
           </Button>
         </>
       }
     >
       <form onSubmit={move} className="console-move">
         <p className="console-dialog-text">
-          It's closed for a moment, its rows are copied to the new schema as they are, and it opens
-          there on its next use. Its people may see it reconnect.
+          {say("moveText")}
         </p>
         <div className="console-move-from">
-          <span>Now in</span>
+          <span>{say("nowIn")}</span>
           <code>{org?.placement?.schema ?? "—"}</code>
         </div>
         <Field
-          label="New schema"
-          hint={same
-            ? "That's where it is now."
-            : "Lowercase letters, digits and _, starting with a letter."}
-          error={bad ? "Lowercase letters, digits and _, starting with a letter." : error}
+          label={say("newSchema")}
+          hint={same ? say("sameSchema") : say("schemaRule")}
+          error={bad ? say("schemaRule") : error}
         >
           {(control) => (
             <Input
@@ -559,7 +565,7 @@ function MoveDialog({ doing, close, finished }: DialogProps): ReactNode {
   );
 }
 
-function DeleteDialog({ doing, close, finished }: DialogProps): ReactNode {
+export function DeleteDialog({ doing, close, finished }: DialogProps): ReactNode {
   const open = doing?.what === "delete";
   const org = doing?.org;
   const [typed, setTyped] = useState("");
@@ -569,16 +575,16 @@ function DeleteDialog({ doing, close, finished }: DialogProps): ReactNode {
   const remove = (event?: FormEvent) => {
     event?.preventDefault();
     if (!org || !matches) return;
-    void act(() => deleteOrg(org.id, typed), () => finished(`${org.name} is deleted.`));
+    void act(() => deleteOrg(org.id, typed), () => finished(say("isDeleted", { name: org.name })));
   };
   return (
     <Dialog
       open={open}
       onClose={close}
-      title={org ? `Delete ${org.name} for good?` : ""}
+      title={org ? say("deleteTitle", { name: org.name }) : ""}
       footer={
         <>
-          <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={close} disabled={busy}>{say("cancel")}</Button>
           <Button
             variant="destructive"
             icon="trash"
@@ -586,31 +592,25 @@ function DeleteDialog({ doing, close, finished }: DialogProps): ReactNode {
             disabled={!matches}
             onClick={() => remove()}
           >
-            Delete for good
+            {say("deleteForGood")}
           </Button>
         </>
       }
     >
       <form onSubmit={remove} className="console-delete">
-        <Notice tone="destructive" icon="alert" title="This can't be undone">
-          Everything in it goes: its people's memberships, spaces, conversations, agents, files and
-          usage. Its people are signed out of it at once. Export its rows first if you may need
-          them.
+        <Notice tone="destructive" icon="alert" title={say("cantUndo")}>
+          {say("deleteAbout")}
         </Notice>
         {org
           ? (
             <a className="console-export" href={exportOrgUrl(org.id)} download>
               <Icon name="download" size={15} />
-              Export its rows (SQL) first
+              {say("exportFirst")}
             </a>
           )
           : null}
         <Field
-          label={
-            <>
-              Type <b className="console-name">{org?.name}</b> to confirm
-            </>
-          }
+          label={say.nodes("typeToConfirm", { name: <b className="console-name">{org?.name}</b> })}
           error={error}
         >
           {(control) => (

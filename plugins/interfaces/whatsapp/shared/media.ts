@@ -46,9 +46,10 @@ export async function sendable(
     if (!links) throw invalid("WhatsApp: a route's link needs the app's `links` resource.");
     return { link: await signLink(links, path, media.params) };
   }
-  // Read as whom it goes to: a file they may not see is neither linked nor uploaded.
+  // Read as whom it goes to: a file they may not see is neither linked nor uploaded. Linked, its
+  // content isn't read here at all (Meta fetches it from the link, streamed); uploaded, it is.
   const file = await (reader ? ctx.as(reader) : ctx.as()).db.collection<File>("file")
-    .findOne({ _id: media.file });
+    .findOne({ _id: media.file }, links || linked ? { projection: { data: 0 } } : {});
   if (!file) throw failure("unsendable", `WhatsApp: no file "${media.file}" theirs to see.`);
   if (links) return { link: await signLink(links, `/files/${encodeURIComponent(media.file)}`) };
   if (linked) {

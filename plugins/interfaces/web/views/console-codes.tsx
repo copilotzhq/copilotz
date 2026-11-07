@@ -27,7 +27,8 @@ import {
   giftCodes,
   revokeGiftCode,
 } from "../../../access/directory/contract.ts";
-import { codeStatus, dayOf, dollarsOf, newCodeOf, STATUS } from "../shared/codes.ts";
+import { codeStatus, dayOf, dollarsOf, newCodeOf, statusOf } from "../shared/codes.ts";
+import { say } from "./words.ts";
 
 const STYLE = `
 .console-tabs { display: flex; margin-bottom: 18px; }
@@ -91,18 +92,18 @@ export function GiftCodes({ orgs, ready }: { orgs: ConsoleOrg[]; ready: boolean 
       <style href="console-codes" precedence="copilotz">{STYLE}</style>
       <div className="codes-tools">
         <p>
-          {codes
-            ? `${codes.length} ${codes.length === 1 ? "code" : "codes"}, the newest first`
-            : " "}
+          {codes ? say("codesCount", { count: codes.length }) : " "}
         </p>
-        <Button variant="primary" icon="plus" onClick={() => setMaking(true)}>New gift code</Button>
+        <Button variant="primary" icon="plus" onClick={() => setMaking(true)}>
+          {say("newGiftCode")}
+        </Button>
       </div>
       {error && !codes
         ? (
           <Notice
             tone="destructive"
             role="alert"
-            action={<Button size="sm" onClick={() => void load()}>Try again</Button>}
+            action={<Button size="sm" onClick={() => void load()}>{say("tryAgain")}</Button>}
           >
             {error}
           </Notice>
@@ -119,10 +120,12 @@ export function GiftCodes({ orgs, ready }: { orgs: ConsoleOrg[]; ready: boolean 
         ? (
           <EmptyState
             icon="star"
-            title="No gift codes yet"
-            action={<Button icon="plus" onClick={() => setMaking(true)}>New gift code</Button>}
+            title={say("noCodes")}
+            action={
+              <Button icon="plus" onClick={() => setMaking(true)}>{say("newGiftCode")}</Button>
+            }
           >
-            A gift code gives whoever claims it credits for their org.
+            {say("noCodesAbout")}
           </EmptyState>
         )
         : null}
@@ -162,7 +165,7 @@ export function GiftCodes({ orgs, ready }: { orgs: ConsoleOrg[]; ready: boolean 
   );
 }
 
-function Row(
+export function Row(
   { code, orgName, onRevoke }: {
     code: GiftCode;
     orgName(id: string): string;
@@ -170,11 +173,16 @@ function Row(
   },
 ): ReactNode {
   const status = codeStatus(code);
-  const { label, tone } = STATUS[status];
-  const terms = [
-    code.expires ? `Credits lapse ${dayOf(code.expires)}` : "Credits don't lapse",
-    status === "waiting" && code.until ? `claim by ${dayOf(code.until)}` : null,
-  ].filter(Boolean).join(" · ");
+  const { label, tone } = statusOf(status);
+  const claimBy = status === "waiting" && code.until ? dayOf(code.until) : undefined;
+  const terms = say(
+    code.expires
+      ? claimBy ? "termsLapseClaim" : "termsLapse"
+      : claimBy
+      ? "termsNoLapseClaim"
+      : "termsNoLapse",
+    { lapse: code.expires ? dayOf(code.expires) : "", until: claimBy ?? "" },
+  );
   return (
     <li className="codes-row">
       <span className="codes-amount">{dollarsOf(code.amount)}</span>
@@ -182,10 +190,10 @@ function Row(
         {code.note ? <span className="codes-note" title={code.note}>{code.note}</span> : null}
         <small>{terms}</small>
         <small>
-          <code title="Only the start of what's kept: it can't be claimed with this">
+          <code title={say("codeShortTitle")}>
             {code.short}
           </code>{" "}
-          · made <Time at={code.at} />
+          {say.nodes("codeMade", { time: <Time at={code.at} /> })}
         </small>
       </span>
       <span className="codes-status">
@@ -193,13 +201,18 @@ function Row(
         {code.org
           ? (
             <span title={code.org}>
-              by {orgName(code.org)}, {code.claimed ? dayOf(code.claimed) : ""}
+              {say("claimedBy", {
+                org: orgName(code.org),
+                day: code.claimed ? dayOf(code.claimed) : "",
+              })}
             </span>
           )
           : null}
       </span>
       <span className="codes-end">
-        {status === "waiting" ? <Button size="sm" onClick={onRevoke}>Take back</Button> : null}
+        {status === "waiting"
+          ? <Button size="sm" onClick={onRevoke}>{say("takeBack")}</Button>
+          : null}
       </span>
     </li>
   );
@@ -207,7 +220,7 @@ function Row(
 
 const EMPTY = { amount: "", expires: "", until: "", note: "" };
 
-function NewCode(
+export function NewCode(
   { open, close, onMade }: {
     open: boolean;
     close(): void;
@@ -244,18 +257,18 @@ function NewCode(
     <Dialog
       open={open}
       onClose={close}
-      title="New gift code"
+      title={say("newGiftCode")}
       footer={
         <>
-          <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={close} disabled={busy}>{say("cancel")}</Button>
           <Button variant="primary" loading={busy} disabled={!ready} onClick={() => void go()}>
-            {ready ? `Make a ${dollarsOf(asked.amount)} code` : "Make the code"}
+            {ready ? say("makeCode", { amount: dollarsOf(asked.amount) }) : say("makeTheCode")}
           </Button>
         </>
       }
     >
       <form className="codes-form" onSubmit={(event) => void go(event)}>
-        <Field label="Credits">
+        <Field label={say("credits")}>
           {(control) => (
             <Input
               {...control}
@@ -269,23 +282,23 @@ function NewCode(
           )}
         </Field>
         <div className="codes-two">
-          <Field label="Credits lapse on" hint="Empty: they don't lapse.">
+          <Field label={say("lapseOn")} hint={say("lapseHint")}>
             {(control) => (
               <Input {...control} type="date" value={form.expires} onChange={set("expires")} />
             )}
           </Field>
-          <Field label="Claim by" hint="Empty: any time.">
+          <Field label={say("claimBy")} hint={say("claimHint")}>
             {(control) => (
               <Input {...control} type="date" value={form.until} onChange={set("until")} />
             )}
           </Field>
         </div>
-        <Field label="What it's for" hint="Whoever claims it sees this in their history.">
+        <Field label={say("whatFor")} hint={say("whatForHint")}>
           {(control) => (
             <Input
               {...control}
               maxLength={200}
-              placeholder="Conference, November"
+              placeholder={say("notePlaceholder")}
               value={form.note}
               onChange={set("note")}
             />
@@ -298,26 +311,25 @@ function NewCode(
 }
 
 /** The code, just this once. */
-function ShownOnce(
+export function ShownOnce(
   { made, close }: { made?: { code: string; amount: number }; close(): void },
 ): ReactNode {
   return (
     <Dialog
       open={!!made}
       onClose={close}
-      title={made ? `Your ${dollarsOf(made.amount)} gift code` : ""}
-      footer={<Button variant="primary" onClick={close}>Done, I've kept it</Button>}
+      title={made ? say("yourCode", { amount: dollarsOf(made.amount) }) : ""}
+      footer={<Button variant="primary" onClick={close}>{say("keptIt")}</Button>}
     >
       {made
         ? (
           <div className="codes-once">
             <div className="codes-shown">
               <code>{made.code}</code>
-              <CopyButton text={made.code} label="Copy the code" />
+              <CopyButton text={made.code} label={say("copyCode")} />
             </div>
-            <Notice tone="warning" title="This won't be shown again">
-              Only a fingerprint of it is kept, so nobody can look it up later. Copy it now. If it's
-              lost, take this one back and make another.
+            <Notice tone="warning" title={say("notShownAgain")}>
+              {say("notShownAgainAbout")}
             </Notice>
           </div>
         )
@@ -326,7 +338,7 @@ function ShownOnce(
   );
 }
 
-function Revoke(
+export function Revoke(
   { code, close, onDone }: { code?: GiftCode; close(): void; onDone(): void },
 ): ReactNode {
   const [busy, setBusy] = useState(false);
@@ -340,10 +352,10 @@ function Revoke(
       open={!!code}
       onClose={close}
       size="sm"
-      title={code ? `Take back this ${dollarsOf(code.amount)} code?` : ""}
+      title={code ? say("takeBackTitle", { amount: dollarsOf(code.amount) }) : ""}
       footer={
         <>
-          <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={close} disabled={busy}>{say("cancel")}</Button>
           <Button
             variant="destructive"
             loading={busy}
@@ -359,14 +371,13 @@ function Revoke(
               }
             }}
           >
-            Take it back
+            {say("takeItBack")}
           </Button>
         </>
       }
     >
       <p className="codes-text">
-        Nobody can claim it after this, and that can't be undone. If someone still needs it, make
-        them a new one.
+        {say("takeBackAbout")}
       </p>
       {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
     </Dialog>

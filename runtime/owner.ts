@@ -22,7 +22,7 @@ import type {
   ViewDef,
   WorkerJob,
 } from "./define.ts";
-import { type Blobs, hydrate, offload, refuseBlobKeys } from "./blobs.ts";
+import { type Blobs, hydrate, isBlobRef, offload, refuseBlobKeys } from "./blobs.ts";
 import { createCache } from "./cache.ts";
 import { createMaintenance, type Maintenance } from "./maintain.ts";
 import { createObservers, type Observation, type ObserveOptions } from "./observe.ts";
@@ -52,7 +52,7 @@ import {
   type StoreOp,
   type WriteOp,
 } from "./ops.ts";
-import { check, checkPath, matches } from "./mongo.ts";
+import { check, checkPath, checkProjection, get, matches, project } from "./mongo.ts";
 import {
   canonical,
   checked,
@@ -69,8 +69,10 @@ import type {
   Blob,
   Change,
   Command,
+  Doc,
   Event,
   Filter,
+  Projection,
   Reader,
   Store,
   Transaction,
@@ -120,6 +122,13 @@ export type Stats = {
   misses: number;
 };
 
+/** A large value's bytes (see `Owner.bytes`): how many, and a part of them. */
+export type Bytes = {
+  size: number;
+  /** The bytes from `start` up to `end` (not included), as `slice` takes them. */
+  read(start: number, end: number): Promise<Uint8Array>;
+};
+
 /** What a runtime's plugins declare, for hosts: help, forms, defaults. */
 export type Description = {
   collections: Record<string, { schema: unknown }>;
@@ -151,6 +160,26 @@ export type Owner = {
    * With `actor`, the query must `allow` them (and be in their `scope`).
    */
   query<R = unknown>(name: string, params?: unknown, options?: { actor?: Actor }): Promise<R>;
+  /**
+   * A large value as bytes, for trusted host code that sends it on (a route
+   * serving a file): the string at `field` (a dotted path) of the first
+   * document `filter` finds in `collection`, its UTF-8 bytes read in parts
+   * from where it's kept, in the document or as its blob. The document is
+   * read as `actor` reads it (under the rules, without private fields), or
+   * as the system without one. Null when none is in reach, or its field
+   * isn't a string.
+   *
+   * The owner reads it itself, so it crosses no wire: a query's answer comes
+   * whole from an executor over Oxian, no way to move megabytes. Nor does the
+   * blob's reference leave the owner: the caller gets bytes, never a
+   * reference it could keep, change or forge.
+   */
+  bytes(
+    collection: string,
+    filter: Filter,
+    field: string,
+    options?: { actor?: Actor },
+  ): Promise<Bytes | null>;
   /**
    * Renders `item` through the View named `name`; undefined when there is none.
    */
@@ -531,7 +560,9 @@ export async function createOwner(
       };
       const values: unknown[] = [];
       for (const op of ops) {
-        values.push(isRead(op) ? await read(tx, op) : await perform(tx, op, hooks));
+        values.push(
+          isRead(op) ? await projecting(op, (op) => read(tx, op)) : await perform(tx, op, hooks),
+        );
       }
       return values;
     });
@@ -718,11 +749,42 @@ export async function createOwner(
         return read(store, op);
     }
   };
-  const answer = (reader: Reader, op: ReadOp) =>
-    memory && inMemory(op)
-      ? read(memory, op)
-      : (reader === store && cache ? cached(op) : read(reader, op))
-        .then((value) => hydrate(value, blobsOf(reader)));
+  /** A find's projection, taken off the op (stores never see one) and checked. */
+  const projectionOf = (op: ReadOp): [ReadOp, Projection | undefined] => {
+    if ((op.op !== "find" && op.op !== "findOne") || op.options?.projection === undefined) {
+      return [op, undefined];
+    }
+    const { projection, ...options } = op.options;
+    checkProjection(projection);
+    return [{ ...op, options }, projection];
+  };
+  /** Reads with `load`, the op's projection (if any) taken off and applied to what it found. */
+  const projecting = async (given: ReadOp, load: (op: ReadOp) => Promise<unknown>) => {
+    const [op, projection] = projectionOf(given);
+    const value = await load(op);
+    if (!projection || !value) return value;
+    return Array.isArray(value)
+      ? value.map((doc: Doc) => project(doc, projection))
+      : project(value as Doc, projection);
+  };
+  /**
+   * A read as stored, projected: large values are still blob references
+   * (`answer` loads them), so a field a projection leaves out loads nothing.
+   */
+  const stored = (reader: Reader, given: ReadOp): Promise<unknown> =>
+    projecting(
+      given,
+      (op) =>
+        memory && inMemory(op)
+          ? read(memory, op)
+          : reader === store && cache
+          ? cached(op)
+          : read(reader, op),
+    );
+  const answer = async (reader: Reader, op: ReadOp) => {
+    const value = await stored(reader, op);
+    return memory && inMemory(op) ? value : hydrate(value, blobsOf(reader));
+  };
 
   // Views observed here read committed state, as clients do; their handlers call and emit.
   // What comes from outside is a declared event, and the actor one it lets emit it. An actor
@@ -2074,6 +2136,34 @@ export async function createOwner(
         params: json(params),
         ...(options.actor ? { actor: options.actor } : {}),
       }) as never;
+    },
+    async bytes(collection, filter, field, options = {}) {
+      const op: ReadOp = {
+        op: "findOne",
+        collection,
+        filter,
+        options: { projection: { [field]: 1 } },
+      };
+      known(op);
+      const { actor } = options;
+      const [read] = (await guard([op], actor)).ops as ReadOp[];
+      const doc = await stored(store, read);
+      const value = get(actor ? hidden(read, doc) : doc, field);
+      if (typeof value === "string") {
+        const data = new TextEncoder().encode(value);
+        return { size: data.length, read: (start, end) => Promise.resolve(data.slice(start, end)) };
+      }
+      // The reference is the store's, as this read found it: nothing outside named it.
+      if (!isBlobRef(value)) return null;
+      const { $blob: id, size } = value;
+      // Loaded once, at the first part asked for, and only then.
+      let loading: Promise<Uint8Array> | undefined;
+      const load = () =>
+        loading ??= blobsOf(store)(id).then((blob) => {
+          if (!blob) throw Object.assign(new Error(`Missing blob ${id}`), { code: "missing_blob" });
+          return blob.data;
+        });
+      return { size, read: async (start, end) => (await load()).slice(start, end) };
     },
     subscribe(listener) {
       listeners.add(listener);

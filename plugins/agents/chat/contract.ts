@@ -13,7 +13,7 @@
  * space, and what each agent is), its events (`message.created`,
  * `turn.requested`), its Actions (`chat.send`, `chat.stop`, `chat.move`…).
  */
-export type { File } from "./collections/file.ts";
+export type { File, FileAbout } from "./collections/file.ts";
 export { FILE_CHARS, textual } from "./collections/file.ts";
 export type { Live, LiveCall } from "./collections/live.ts";
 export { isAnswer, type Message } from "./collections/message.ts";

@@ -50,6 +50,7 @@ import { record, type Recorder as Recording } from "./record.ts";
 import { Recorder } from "./recorder.tsx";
 import { VoiceFailed } from "./voice-failed.tsx";
 import { names } from "./who.ts";
+import { say } from "./words.ts";
 
 /** A file as `chat.send` takes it; a voice message's says how long it runs, and its peaks. */
 export type Sent = {
@@ -100,7 +101,11 @@ export function Composer(props: {
   const [text, setText] = useState(props.initial ?? "");
   const [files, setFiles] = useState<Attached[]>([]);
   const [recorder, setRecorder] = useState<Recording>();
-  const recording = useSyncExternalStore(recorder?.subscribe ?? silent, recorder?.get ?? none);
+  const recording = useSyncExternalStore(
+    recorder?.subscribe ?? silent,
+    recorder?.get ?? none,
+    recorder?.get ?? none,
+  );
   const [sending, setSending] = useState<false | "sending" | "transcribing">(false);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string>();
@@ -159,7 +164,7 @@ export function Composer(props: {
         (data) => setFiles((now) => now.map((x) => x.id === f.id ? { ...x, data } : x)),
         () =>
           setFiles((now) =>
-            now.map((x) => x.id === f.id ? { ...x, error: "Couldn't read it" } : x)
+            now.map((x) => x.id === f.id ? { ...x, error: say("couldntRead") } : x)
           ),
       );
     });
@@ -353,7 +358,7 @@ export function Composer(props: {
       <div className="chat-status" role="status">
         <Spinner size={13} className="chat-status-spin" />
         <span className="chat-status-text">
-          Transcribing {take || phase === "stopping" ? "your recording" : "the audio"}…
+          {take || phase === "stopping" ? say("transcribingRecording") : say("transcribingAudio")}
         </span>
       </div>
     )
@@ -362,7 +367,7 @@ export function Composer(props: {
       <div className="chat-status" role="status">
         <Spinner variant="dots" className="chat-status-dots" />
         <span className="chat-status-text">
-          <b>{names(working)}</b> {working.length > 1 ? "are" : "is"} working…
+          {say.nodes("areWorking", { names: <b>{names(working)}</b>, count: working.length })}
         </span>
         <Button
           size="sm"
@@ -371,8 +376,8 @@ export function Composer(props: {
           disabled={stopping}
         >
           <Icon name="stop" size={11} filled />
-          {stopping ? "Stopping…" : "Stop"}
-          <Kbd>Esc</Kbd>
+          {stopping ? say("stopping") : say("stop")}
+          <Kbd>{say("keyEsc")}</Kbd>
         </Button>
       </div>
     )
@@ -381,7 +386,7 @@ export function Composer(props: {
   return (
     <form
       className="chat-composer"
-      aria-label="Send a message"
+      aria-label={say("sendMessage")}
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
@@ -448,7 +453,7 @@ export function Composer(props: {
         >
           {files.length
             ? (
-              <ul className="chat-attached" aria-label="Files to send">
+              <ul className="chat-attached" aria-label={say("filesToSend")}>
                 {files.map((f) => (
                   <li
                     key={f.id}
@@ -463,12 +468,12 @@ export function Composer(props: {
                       )}
                     <span className="chat-attached-name">
                       <span>{f.name}</span>
-                      <small>{f.error ?? (f.data ? size(f.size) : "Reading…")}</small>
+                      <small>{f.error ?? (f.data ? size(f.size) : say("reading"))}</small>
                     </span>
                     <IconButton
                       icon="close"
                       size="sm"
-                      label={`Remove ${f.name}`}
+                      label={say("remove", { name: f.name })}
                       onClick={() => remove(f)}
                       disabled={!!sending}
                     />
@@ -491,7 +496,7 @@ export function Composer(props: {
             )
             : null}
           <div className="chat-box-text" hidden={live}>
-            <label className="copilotz-sr" htmlFor={id}>Message</label>
+            <label className="copilotz-sr" htmlFor={id}>{say("message")}</label>
             <Textarea
               id={id}
               ref={area}
@@ -500,7 +505,7 @@ export function Composer(props: {
               autoGrow
               className="chat-input"
               value={text}
-              placeholder={take ? "Add a message, or just send it" : props.placeholder ?? "Message"}
+              placeholder={take ? say("addMessage") : props.placeholder ?? say("message")}
               enterKeyHint="send"
               readOnly={!!sending}
               aria-autocomplete={props.agents?.length ? "list" : undefined}
@@ -521,8 +526,8 @@ export function Composer(props: {
                   id={list}
                   target={box}
                   open={listing}
-                  label={props.where ? `Agents in ${props.where}` : "Agents here"}
-                  title={props.where ? `Agents in ${props.where}` : "Agents here"}
+                  label={props.where ? say("agentsIn", { space: props.where }) : say("agentsHere")}
+                  title={props.where ? say("agentsIn", { space: props.where }) : say("agentsHere")}
                   active={active}
                   onActive={setActive}
                   onPick={(option) => pick(option.key)}
@@ -542,7 +547,7 @@ export function Composer(props: {
             <div className="chat-box-row">
               <IconButton
                 icon="attach"
-                label="Attach files"
+                label={say("attachFiles")}
                 disabled={files.length + (take ? 1 : 0) >= FILES || !!sending}
                 onClick={() => picker.current?.click()}
               />
@@ -560,7 +565,7 @@ export function Composer(props: {
                 {recording ? null : (
                   <IconButton
                     icon="mic"
-                    label="Record a voice message"
+                    label={say("recordVoice")}
                     onClick={startRecording}
                     disabled={!!sending || files.length >= FILES}
                   />
@@ -568,7 +573,7 @@ export function Composer(props: {
                 <IconButton
                   type="submit"
                   icon="send"
-                  label="Send"
+                  label={say("send")}
                   variant="primary"
                   className="chat-send"
                   loading={!!sending}
@@ -581,7 +586,7 @@ export function Composer(props: {
         {error ? <p role="alert" className="chat-error">{error}</p> : null}
         {props.suggestions?.length && !text && !files.length && !recording
           ? (
-            <ul className="chat-suggestions" aria-label="Suggestions">
+            <ul className="chat-suggestions" aria-label={say("suggestions")}>
               {props.suggestions.map((s) => (
                 <li key={s}>
                   <Chip
@@ -605,7 +610,10 @@ export function Composer(props: {
         <p className="chat-hint">
           {props.note}
           <span className="chat-keys">
-            <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd> for a new line
+            {say.nodes("keysHint", {
+              enter: <Kbd>{say("keyEnter")}</Kbd>,
+              shift: <Kbd>{say("keyShift")}</Kbd>,
+            })}
           </span>
         </p>
       </div>

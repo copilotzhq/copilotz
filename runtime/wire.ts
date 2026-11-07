@@ -76,6 +76,27 @@ const encoder = new TextEncoder();
 
 export const encode = (value: unknown): Uint8Array => encoder.encode(JSON.stringify(value));
 
+/**
+ * The most bytes Oxian takes as one chunk of a stream (1 MiB): a chunk any
+ * larger fails the whole stream ("exceeds the … byte staging bound").
+ */
+export const CHUNK = 1024 * 1024;
+
+/**
+ * Writes `line` to a stream as one line of JSON, in parts of at most
+ * `CHUNK` bytes: a large answer (a long history, a prompt with pictures)
+ * goes whole all the same, and `lines` joins the parts back by line.
+ */
+export function writeLine(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  line: unknown,
+): void {
+  const bytes = encoder.encode(JSON.stringify(line) + "\n");
+  for (let at = 0; at < bytes.length; at += CHUNK) {
+    controller.enqueue(bytes.subarray(at, at + CHUNK));
+  }
+}
+
 export const decode = async <T>(body: ReadableStream<Uint8Array>): Promise<T> =>
   JSON.parse(await new Response(body).text());
 
@@ -132,7 +153,7 @@ export function output() {
     cancel: () => void (open = false),
   });
   const write = (line: Line) => {
-    if (open) controller.enqueue(encoder.encode(JSON.stringify(line) + "\n"));
+    if (open) writeLine(controller, line);
   };
   return {
     readable,

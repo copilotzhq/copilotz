@@ -15,14 +15,18 @@ import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { Avatar, go, type PaletteGroup, type PaletteItem } from "../../../../../hosts/web/mod.ts";
 import type { Invitation, Reached } from "../../contract.ts";
-import { INVITE_ABOUT, inviteTitle } from "./invite-dialog.tsx";
+import { inviteAbout, inviteTitle } from "./invite-dialog.tsx";
 import { archiveStep, leaveStep, newSpaceStep, renameStep } from "./steps.ts";
 import { spacePath, tabsOf } from "./tabs.ts";
 import { apart, aRole, ownersOf, spaceName, whoOf } from "./who.ts";
+import { say } from "./words.ts";
 import { namesIn } from "../../shared/names.ts";
 
 /** How many spaces show with nothing typed, and while searching. */
 const SHOWN = { idle: 6, searching: 8 };
+
+/** The words a phrase gives to find an item by (its keywords), apart. */
+const keywords = (key: Parameters<typeof say>[0]) => say(key).split(/\s+/).filter(Boolean);
 
 /** A space's mark, as the palette shows it before its name. */
 const markOf = (space: Reached): Pick<PaletteItem, "icon" | "leading"> =>
@@ -48,15 +52,15 @@ export const spacesPaletteView = (
 
   if (invitations?.length) {
     groups.push({
-      title: "Invitations",
+      title: say("invitations"),
       order: 5,
       items: invitations.flatMap((i): PaletteItem[] => [
         {
           key: `invitation:${i._id}`,
-          label: `Join ${i.name}`,
+          label: say("joinNamed", { name: i.name }),
           icon: "mail",
-          description: `${whoOf(i.by, names).name} invited you, as ${aRole(i.role)}`,
-          keywords: ["invitation", "accept"],
+          description: say("invitedYouAs", { by: whoOf(i.by, names).name, role: aRole(i.role) }),
+          keywords: keywords("keysAcceptInvitation"),
           run: async () => {
             const joined = await call<{ space: string }>("invitation.accept", {
               invitation: i._id,
@@ -67,9 +71,9 @@ export const spacesPaletteView = (
         ...(searching
           ? [{
             key: `invitation:${i._id}:decline`,
-            label: `Decline the invitation to ${i.name}`,
+            label: say("declineInvitation", { name: i.name }),
             icon: "close" as const,
-            keywords: ["invitation"],
+            keywords: keywords("keysInvitation"),
             run: () => call("invitation.decline", { invitation: i._id }),
           }]
           : []),
@@ -84,13 +88,13 @@ export const spacesPaletteView = (
     if (manage && !here.archived) {
       items.push({
         key: "space:invite",
-        label: `Invite someone to ${name}…`,
+        label: say("inviteToNamed", { name }),
         icon: "invite",
-        keywords: ["people", "member", "email", "add"],
+        keywords: keywords("keysInvite"),
         run: (palette) =>
           palette.dialog({
             title: inviteTitle(name),
-            description: INVITE_ABOUT,
+            description: inviteAbout(),
             view: "space.invite",
             item: { _id: here._id },
             hints: { in: here._id },
@@ -100,7 +104,7 @@ export const spacesPaletteView = (
     if (manage) {
       items.push({
         key: "space:rename",
-        label: `Rename ${name}…`,
+        label: say("renameNamed", { name }),
         icon: "pencil",
         step: renameStep(here, call),
       });
@@ -108,14 +112,14 @@ export const spacesPaletteView = (
         here.archived
           ? {
             key: "space:restore",
-            label: `Restore ${name}`,
+            label: say("restoreNamed", { name }),
             icon: "restore",
-            keywords: ["unarchive", "archived"],
+            keywords: keywords("keysRestore"),
             run: () => call("space.archive", { space: here._id, archived: false }),
           }
           : {
             key: "space:archive",
-            label: `Archive ${name}…`,
+            label: say("archiveNamedMore", { name }),
             icon: "archive",
             step: archiveStep(here, call),
           },
@@ -123,7 +127,7 @@ export const spacesPaletteView = (
     }
     items.push({
       key: "space:leave",
-      label: `Leave ${name}…`,
+      label: say("leaveNamedMore", { name }),
       icon: "signout",
       tone: "destructive",
       step: leaveStep(here, call),
@@ -136,18 +140,18 @@ export const spacesPaletteView = (
             key: `space:tab:${part.key}`,
             label: part.title,
             ...(part.icon ? { icon: part.icon } : {}),
-            description: part === tab ? name : `${name} · ${tab.title}`,
+            description: part === tab ? name : say("tabIn", { name, tab: tab.title }),
             href: spacePath(here._id, part.key, part === tab && tab.sections.length > 0),
           });
         }
       }
     }
-    groups.push({ title: "This space", order: 10, items });
+    groups.push({ title: say("thisSpace"), order: 10, items });
   }
 
   const { active, archived } = apart(spaces);
   groups.push({
-    title: "Spaces",
+    title: say("spacesGroup"),
     order: 20,
     limit: searching ? SHOWN.searching : SHOWN.idle,
     items: [...active, ...(searching ? archived : [])].map((s) => ({
@@ -155,25 +159,25 @@ export const spacesPaletteView = (
       label: spaceName(s, ctx.viewer?.name, names),
       ...markOf(s),
       description: s.archived
-        ? "Archived"
+        ? say("archived")
         : s._id === here?._id
-        ? "You're here"
+        ? say("youreHere")
         : s.kind === "personal"
-        ? "Just you"
+        ? say("justYou")
         : undefined,
-      keywords: s.kind === "personal" ? ["personal", "mine"] : [],
+      keywords: s.kind === "personal" ? keywords("keysPersonal") : [],
       href: spacePath(s._id),
     })),
   });
 
   groups.push({
-    title: "Create",
+    title: say("createGroup"),
     order: 40,
     items: [{
       key: "space:new",
-      label: "New space…",
+      label: say("newSpaceMore"),
       icon: "plus",
-      keywords: ["create", "make", "shared"],
+      keywords: keywords("keysNewSpace"),
       step: newSpaceStep(call),
     }],
   });

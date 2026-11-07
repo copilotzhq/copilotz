@@ -146,6 +146,35 @@ test("an agent's picture goes as a signed link, its text the caption, served wit
   }, { plugins: [linked] });
 });
 
+test("a large picture goes as a link without its content read; Meta's fetch gets all of it", async () => {
+  // Blobs that count what's read of them.
+  const kept = new Map<string, { data: Uint8Array; type?: string }>();
+  let gets = 0;
+  const blobs = {
+    put: (blob: { id: string; data: Uint8Array; type?: string }) =>
+      Promise.resolve(void kept.set(blob.id, blob)),
+    get: (id: string) => Promise.resolve((gets++, kept.get(id) ?? null)),
+  };
+  // 3 MB, its base64 past what one answer once carried whole.
+  const bytes = Uint8Array.from({ length: 3_000_000 }, (_, i) => (i * 31 + (i >> 9)) & 0xff);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  await setup(async (s) => {
+    const before = gets;
+    const file = await sendFile(s, "image/png", btoa(binary));
+    const picture = s.graph.sent(CARLA).at(-1)!.image as { link: string };
+    assert(picture.link.startsWith(`${ORIGIN}/files/${encodeURIComponent(file)}?exp=`));
+    // Linked, its content wasn't read: only the link went.
+    assertEquals(gets, before);
+    const served = await s.serve(local(picture.link));
+    assertEquals(served.status, 200);
+    assertEquals(served.headers.get("content-length"), String(bytes.length));
+    assertEquals(new Uint8Array(await served.arrayBuffer()), bytes);
+  }, { plugins: [linked], blobs });
+});
+
 test("without the app's links, a file is uploaded to Meta and sent by its id", async () => {
   await setup(async (s) => {
     await sendFile(s, "application/pdf", btoa("%PDF-1.4 ticket"));

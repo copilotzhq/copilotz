@@ -169,7 +169,9 @@ space.
 - **Browsers** sign in with Google once: the sign-in route (`/signin/google`) calls the sign-in
   Action (it verifies the person and starts a session), then sets the session as an httpOnly, Secure
   cookie through the runtime (`ctx.cookies`). Sign-in methods are plugins; the runtime knows
-  cookies, and identity knows sessions.
+  cookies, and identity knows sessions. Email sign-in (`emailSignIn`) is another: its routes call
+  its Actions the same way, and its secrets (password hashes, codes, links' tokens) are the system's
+  alone, hashed or sealed, never in the log.
 - **What a browser may do:** read directly under the rules, watch queries, write directly where a
   rule speaks for the collection's writes, and call Actions for everything else it changes (a
   message's `from` pinned to the person), including what rules can't express (several documents kept
@@ -265,6 +267,12 @@ Also built:
   WebCrypto: Google's keys by `kid`, `iss`, `aud`, `exp`, verified email), finds or makes the
   person, and starts a session; its route sets it as an httpOnly, Secure cookie. Google's keys are a
   port (`googleKeys`), fetched through `ctx.fetch` and kept per Cache-Control.
+- **Email sign-in** (`emailSignIn`, with `email`, the app's email port), built 2026-11-06: an email
+  and a password; a sign-up confirmed by a code (the person made only then: `person.email` stays an
+  address someone proved), resets by code that end the other sessions, invitations by link that
+  trusted code asks for, and an import that keeps another app's hashes. An address someone proves is
+  the person a sign-in already verified it for (a Google sign-in's). Every refusal says the same for
+  an address nobody has; codes, tries and callers are limited.
 
 - **Agents are members:** each agent on its own (`agent:maya`), a viewer or an editor, never a
   manager; an editor answers where it's a member, a viewer only reads there. A new space starts with

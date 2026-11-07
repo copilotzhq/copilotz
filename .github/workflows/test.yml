@@ -1,18 +1,17 @@
 # The same suite on every runtime Copilotz supports, against PostgreSQL (with
 # pgvector), PGlite, SQLite and memory stores; Node's also on macOS and Windows,
-# where the computer program runs too. The publish workflow runs this one before
-# it publishes a release.
+# where the computer program runs too. It runs when the publish workflow calls
+# it, before a release, and on demand (Actions → Test → Run workflow): not on
+# pushes or pull requests. A release whose tests fail publishes nothing; it's
+# fixed forward and tagged again. Run what a change touches locally before
+# merging it.
 name: Test
 
 on:
-  # Branches only: a release tag runs it through the publish workflow.
-  push:
-    branches: ["**"]
-  pull_request:
   workflow_call:
+  workflow_dispatch:
 
-# A newer push to the same branch (or PR) cancels the run before it: only the latest commit's
-# result counts, and runners aren't held by superseded runs. Release runs (a tag, through the
+# A newer run for the same ref cancels the one before it. Release runs (a tag, through the
 # publish workflow) each have their own tag, so nothing cancels them.
 concurrency:
   group: test-${{ github.event_name }}-${{ github.head_ref || github.ref }}

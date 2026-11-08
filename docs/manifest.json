@@ -197,6 +197,21 @@
           "title": "Ch 38: A computer for your agents",
           "slug": "getting-started/part-12-shipping/38-a-computer-for-your-agents",
           "description": "Run Copilotz's computers plugin, unchanged, on Compass's spaces: a machine you connect with a one-time code, where North gets a terminal, jobs, files, a browser and web search, and asks before it runs anything. One change to spaces makes it fit: you are a member of your spaces, the way Copilotz's keep it."
+        },
+        {
+          "title": "Ch 39: Swapping in Copilotz's plugins",
+          "slug": "getting-started/part-13-from-one-person-to-many/39-swapping-in-copilotzs-plugins",
+          "description": "Every plugin you rebuilt kept Copilotz's contract, so one setting runs Compass on Copilotz's own plugins instead, the real Compass's. A test runs the same end-to-end scenario on both lists, and shows where they differ on purpose."
+        },
+        {
+          "title": "Ch 40: Sign-in and people",
+          "slug": "getting-started/part-13-from-one-person-to-many/40-sign-in-and-people",
+          "description": "On Copilotz's identity, a request is whoever its session proves, so people sign in: by email and a password, with codes written to the log on this machine, or by name. Then a space gets members: Ana invites Bruno to Launch, he accepts, and he reads its board."
+        },
+        {
+          "title": "Ch 41: Many orgs and billing",
+          "slug": "getting-started/part-13-from-one-person-to-many/41-many-orgs-and-billing",
+          "description": "One address, many orgs: a directory runtime signs people in and knows their orgs, and each org is a Compass of its own, opened when used and closed when idle. With Copilotz's usage ledger, what each org's agents use is recorded and priced in that org alone."
         }
       ]
     }

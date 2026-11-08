@@ -278,3 +278,18 @@ it.
     one-time code, where North gets a terminal, jobs, files, a browser and web search, and asks
     before it runs anything. One change to spaces makes it fit: you are a member of your spaces, the
     way Copilotz's keep it.
+
+**Part 13: from one person to many**
+
+39. [Swapping in Copilotz's plugins](getting-started/part-13-from-one-person-to-many/39-swapping-in-copilotzs-plugins.md):
+    every plugin you rebuilt kept Copilotz's contract, so one setting runs Compass on Copilotz's own
+    plugins instead, the real Compass's. A test runs the same end-to-end scenario on both lists, and
+    shows where they differ on purpose.
+40. [Sign-in and people](getting-started/part-13-from-one-person-to-many/40-sign-in-and-people.md):
+    on Copilotz's identity, a request is whoever its session proves, so people sign in: by email and
+    a password, with codes written to the log on this machine, or by name. Then a space gets
+    members: Ana invites Bruno to Launch, he accepts, and he reads its board.
+41. [Many orgs and billing](getting-started/part-13-from-one-person-to-many/41-many-orgs-and-billing.md):
+    one address, many orgs: a directory runtime signs people in and knows their orgs, and each org
+    is a Compass of its own, opened when used and closed when idle. With Copilotz's usage ledger,
+    what each org's agents use is recorded and priced in that org alone.

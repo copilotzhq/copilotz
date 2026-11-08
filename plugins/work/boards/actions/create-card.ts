@@ -82,8 +82,6 @@ export const createCardAction = defineAction({
         by: keyOf(ctx.actor),
         at,
       });
-      // Read back before the commit: an insert the rules refuse fails here, closing the commit.
-      await tx.db.collection("card").findOne({ _id: card });
       return { column, order, board };
     }).catch(said());
     return {

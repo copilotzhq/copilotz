@@ -41,7 +41,10 @@ test("trying a key: sending a message when it may, a query, and following what h
 
 test("what a key may use, in a few words: its preset, else what it counts", () => {
   assertEquals(
-    summary({ call: ["chat.stop", "chat.send"], query: presets.chat.scope.query }, presets),
+    summary(
+      { call: ["chat.stop", "chat.attach", "chat.send"], query: presets.chat.scope.query },
+      presets,
+    ),
     "Chat",
   );
   assertEquals(summary(presets.read.scope, presets), "Read only");

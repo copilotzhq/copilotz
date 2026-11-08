@@ -13,6 +13,7 @@ import { httpBlobs } from "../../../stores/blobs/http/mod.ts";
 import models, { type LlmAdapter, type Transcript } from "../../models/mod.ts";
 import { chat, type File, type FileAbout, type Message, type Prompt } from "../chat/mod.ts";
 import { serve, tempFile, test } from "../../../testing/mod.ts";
+import { attached } from "./fixtures/files.ts";
 
 const quiet: LlmAdapter = {
   async *generate() {
@@ -43,11 +44,11 @@ for (const [name, make] of Object.entries(stores)) {
       const { thread } = await runtime.call<{ thread: string }>("chat.send", {
         from: "ana",
         text: "Please look at these",
-        files: [
+        files: await attached(runtime, [
           { name: "notes.txt", type: "text/plain", data: b64("Ship on Friday.") },
           { name: "report.txt", type: "text/plain", data: b64(big) },
           { name: "logo.png", type: "image/png", data: b64("\x89PNG...") },
-        ],
+        ]),
       });
       await runtime.idle();
       const [sent] = await runtime.query<Message[]>("message.history", { thread });
@@ -181,7 +182,7 @@ test("blobs can live in a bucket, over HTTP", async () => {
     const { thread } = await runtime.call<{ thread: string }>("chat.send", {
       from: "ana",
       text: "here",
-      files: [{ name: "big.txt", type: "text/plain", data: b64(big) }],
+      files: await attached(runtime, [{ name: "big.txt", type: "text/plain", data: b64(big) }]),
     });
     await runtime.idle();
     assertEquals(bucket.size, 1);
@@ -230,7 +231,7 @@ test("an image goes to a model that reads images; one that doesn't is told it is
       const { thread } = await runtime.call<{ thread: string }>("chat.send", {
         from: "ana",
         text: "What's this?",
-        files: [png],
+        files: await attached(runtime, [png]),
       });
       const reply = (await answer(runtime, thread)).text ?? "";
       if (sees) assertStringIncludes(reply, "[saw a.png]");
@@ -251,11 +252,14 @@ test("audio is transcribed as it's sent; agents read what it says", async () => 
     // A voice message may say nothing else.
     const { thread } = await runtime.call<{ thread: string }>("chat.send", {
       from: "ana",
-      files: [{ name: "voice.m4a", type: "audio/mp4", data: b64("abcdef"), voice }],
+      files: await attached(runtime, [
+        { name: "voice.m4a", type: "audio/mp4", data: b64("abcdef"), voice },
+      ]),
     });
     const [sent] = await runtime.query<Message[]>("message.history", { thread });
+    const id = sent.files![0].id;
     assertEquals(sent.files, [{
-      id: `${sent._id}:file.0`,
+      id,
       name: "voice.m4a",
       type: "audio/mp4",
       size: 6,
@@ -267,7 +271,7 @@ test("audio is transcribed as it's sent; agents read what it says", async () => 
     const [listed] = await runtime.query<{ first?: string }[]>("thread.recent");
     assertEquals(listed.first, "(A recording, 6 bytes.)");
     // And what it says is the file's.
-    const file = await runtime.query<FileAbout>("file.about", { id: `${sent._id}:file.0` });
+    const file = await runtime.query<FileAbout>("file.about", { id });
     assertEquals([file.transcript, file.voice], ["(A recording, 6 bytes.)", voice]);
   } finally {
     await runtime.close();
@@ -289,9 +293,13 @@ test("when transcribing fails nothing is sent; sent without transcribing, audio 
     plugins: [models, chat, echoing("fake/echo"), deaf],
   });
   try {
-    const audio = { name: "note.webm", type: "audio/webm", data: b64("abc") };
+    const audio = await attached(runtime, [{
+      name: "note.webm",
+      type: "audio/webm",
+      data: b64("abc"),
+    }]);
     const error = await assertRejects(
-      () => runtime.call("chat.send", { from: "ana", text: "listen", files: [audio] }),
+      () => runtime.call("chat.send", { from: "ana", text: "listen", files: audio }),
     );
     assertEquals((error as { code?: string }).code, "transcription_failed");
     assertStringIncludes((error as Error).message, "Couldn't transcribe note.webm: no signal");
@@ -299,7 +307,8 @@ test("when transcribing fails nothing is sent; sent without transcribing, audio 
     const { thread } = await runtime.call<{ thread: string }>("chat.send", {
       from: "ana",
       text: "listen",
-      files: [audio],
+      // The same upload: nothing was sent the first time.
+      files: audio,
       transcribe: false,
     });
     const [sent] = await runtime.query<Message[]>("message.history", { thread });
@@ -379,6 +388,49 @@ test("a message's pictures reach the prompt however large together: each read on
       ["p2.png", noise(6_500_000, 5).length],
     ]);
     assertEquals(shown[1].data, noise(6_500_000, 5));
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("files of about 10 MB go, several in a message: each uploaded on its own, sent by id", async () => {
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [models, chat, echoing("fake/echo")],
+  });
+  try {
+    // 9.5 MB each, 12.7 MB of base64: within what one call carries (16 MiB), alone. Three of them,
+    // or one sent with what a call is given on record, are not.
+    const bytes = (seed: number) => {
+      let text = "";
+      for (let i = 0; i < 9_500_000; i++) {
+        text += String.fromCharCode((i * seed + (i >> 11)) & 0xff);
+      }
+      return btoa(text);
+    };
+    const datas = [3, 5, 7].map(bytes);
+    const files = await attached(
+      runtime,
+      datas.map((data, i) => ({ name: `scan-${i}.bin`, type: "application/octet-stream", data })),
+    );
+    const { thread } = await runtime.call<{ thread: string }>("chat.send", {
+      from: "ana",
+      text: "The scans",
+      files,
+    });
+    const [sent] = await runtime.query<Message[]>("message.history", { thread });
+    assertEquals(sent.files!.map((f) => [f.id, f.size]), files.map((f) => [f.id, 9_500_000]));
+    // Its content, as uploaded.
+    for (const [i, { id }] of files.entries()) {
+      const content = (await runtime.bytes("file", { _id: id }, "data"))!;
+      assertEquals(content.size, datas[i].length);
+      assertEquals(new TextDecoder().decode(await content.read(0, 64)), datas[i].slice(0, 64));
+    }
+    // Sent, they're no one's drafts: sending them again is refused.
+    const again = await assertRejects(() =>
+      runtime.call("chat.send", { from: "ana", text: "again", files: [files[0]] })
+    );
+    assertEquals((again as { code?: string }).code, "not_found");
   } finally {
     await runtime.close();
   }

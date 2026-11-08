@@ -13,6 +13,7 @@ import { history, type Summary } from "../history/mod.ts";
 import { IMAGE, PAGE, pagesOf, weigh } from "../history/shared/weight.ts";
 import { windowStart } from "../chat/shared/lineage.ts";
 import { test } from "../../../testing/mod.ts";
+import { attached } from "./fixtures/files.ts";
 
 const text = (m: LlmMessage) => m.text ?? "";
 const said = (messages: LlmMessage[]) => messages.map(text).join("\n");
@@ -76,12 +77,13 @@ async function run(settings: Record<string, unknown>, options: Options = {}) {
     plugins: [models, chat, ...(options.history === false ? [] : [history]), app],
   });
   let thread: string | undefined;
-  const say = async (words: string, files?: unknown[]) => {
+  const say = async (words: string, files?: Parameters<typeof attached>[1]) => {
     thread = (await runtime.call<{ thread: string }>("chat.send", {
       thread,
       text: words,
       from: "ana",
-      ...(files ? { files } : {}),
+      // Each uploaded first, then sent by id.
+      ...(files ? { files: await attached(runtime, files) } : {}),
     })).thread;
     await runtime.idle();
   };

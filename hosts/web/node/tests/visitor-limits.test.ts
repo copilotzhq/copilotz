@@ -21,6 +21,7 @@ import { chat } from "../../../../plugins/agents/chat/mod.ts";
 import { access } from "../../../../plugins/access/mod.ts";
 import { webLines } from "../../../../plugins/interfaces/web/lines.ts";
 import { test } from "../../../../testing/mod.ts";
+import { attached } from "../../../../plugins/agents/tests/fixtures/files.ts";
 import { listen, type Listener } from "../serve.ts";
 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -224,7 +225,10 @@ test("a visitor is told a failure's words only when they're for anyone: never a 
     try {
       await client.ready;
       const audio = { name: "v.ogg", type: "audio/ogg", data: btoa("\0".repeat(200)) };
-      const failure = await client.call("chat.send", { files: [audio] }).catch((e) => e) as {
+      const files = await attached({ call: (action, input) => client.call(action, input) }, [
+        audio,
+      ]);
+      const failure = await client.call("chat.send", { files }).catch((e) => e) as {
         message: string;
         code?: string;
       };

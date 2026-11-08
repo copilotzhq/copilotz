@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.31 — 2026-11-08
 
 - **A write the rules refuse in a transaction no longer holds up every write.** Refused before it
   reached its transaction, it left the transaction open, holding the store's writer: the Action's
@@ -7,6 +7,7 @@
   fail ("The transaction is closed."), even when the error is caught. Code that caught a failed op
   and wrote on used to commit what came after it. A transaction with no op for 5 s (30 s before)
   rolls back, and `copilotz.transaction.duration` measures how long each one held the writer.
+- **Boards** no longer read a new card back inside its transaction: one round trip less per card.
 
 ## 1.0.0-rc.30 — 2026-11-08
 

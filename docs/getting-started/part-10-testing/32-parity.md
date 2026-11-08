@@ -156,21 +156,24 @@ test("our identity and Copilotz's keep a person, their profile and /me alike", a
 });
 ```
 
-The reference swaps spaces too, as spaces' own parity test does: your spaces read names from your
-identity's `person` queries, so Copilotz's identity comes with Copilotz's spaces. The scenario
-covers what a page and a host do with identity: keep a person twice (the first time is `new`), read
-their profile (an email comes back trimmed and lowercased), ask `/me` as Ana, as nobody (401) and
-with the wrong method (405), read her document through the REST API, and try to write it there,
-which both refuse with `forbidden`. One check runs on Copilotz's answer alone, so the scenario can't
-pass by being empty on both.
+The reference swaps spaces too, as spaces' own parity test does: Copilotz's identity guards only
+people and their credentials, and leaves who reaches the rest to its spaces' rules, so the two come
+together. (Yours has one rule for everything: it's all yours.) The scenario covers what a page and a
+host do with identity: keep a person twice (the first time is `new`), read their profile (an email
+comes back trimmed and lowercased), ask `/me` as Ana, as nobody (401) and with the wrong method
+(405), read her document through the REST API, and try to write it there, which both refuse with
+`forbidden`. One check runs on Copilotz's answer alone, so the scenario can't pass by being empty on
+both.
 
 ## Run it
 
+The three parity tests this chapter touches:
+
 ```text
-$ node --disable-warning=ExperimentalWarning --test --test-concurrency=1 plugins/*/tests/parity.test.ts
-✔ kept Actions, document fields, ordering and tool answers match Copilotz's boards (436.774708ms)
-✔ our identity and Copilotz's keep a person, their profile and /me alike (56.044875ms)
-✔ our spaces and Copilotz's spaces keep the same single-person contract (326.658917ms)
+$ node --disable-warning=ExperimentalWarning --test --test-concurrency=1 plugins/{boards,identity,spaces}/tests/parity.test.ts
+✔ kept Actions, document fields, ordering and tool answers match Copilotz's boards (590.15775ms)
+✔ our identity and Copilotz's keep a person, their profile and /me alike (64.226041ms)
+✔ our spaces and Copilotz's spaces keep the same single-person contract (356.155959ms)
 ℹ tests 3
 ℹ suites 0
 ℹ pass 3
@@ -178,8 +181,10 @@ $ node --disable-warning=ExperimentalWarning --test --test-concurrency=1 plugins
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 1289.099334
+ℹ duration_ms 2094.699041
 ```
+
+`plugins/*/tests/parity.test.ts` runs all twelve, one or two for each plugin you rebuilt.
 
 And when they differ: take `.toLowerCase()` out of `person.set`'s email in
 `plugins/identity/actions/person.ts`, and the diff shows every place it shows:
@@ -203,7 +208,9 @@ And when they differ: take `.toLowerCase()` out of `person.set`'s email in
 
 ## Check it
 
-`npm test`: 35 tests, the boards and spaces parity tests among them, unchanged in what they check.
+`npm test`: 111 tests. Spaces' parity test checks what it did before. Boards' checks a little more:
+its own `normalize` dropped `at` and `updated` and made `archived` `true`; `stable` keeps them, as
+`<time>`, so a time one plugin sets and the other doesn't is a difference.
 
 ## Also in this chapter
 

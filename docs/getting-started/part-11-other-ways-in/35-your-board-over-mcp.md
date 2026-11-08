@@ -27,11 +27,14 @@ of yours: nobody else, and no web page, may call them.
 
 Copilotz has an `mcp` plugin. It **can't run on Compass's plugins**, and the reason is who calls:
 it's built for apps whose MCP servers are open to anyone (ChatGPT's users), so each conversation is
-a **contact**, a stranger in a chat of its own. Its first call makes that contact and its chat with
-`space.keep` (a space the app declares) and Copilotz's contacts plugin, which shares the chat with
-the contact through `member.set`. Compass's spaces, for one person, have neither; on Compass,
-Copilotz's mcp answers `initialize` and `tools/list`, then fails its first `tools/call` with
-`Unknown action "space.keep"`. Nor should we add them: in Compass, the caller is you.
+a **contact**, a stranger in a chat of its own. It requires Copilotz's `contacts` plugin, and the
+`links` resource's secret, which makes the contacts' ids. Its first call makes the contact and its
+chat with `space.keep` (a space the app declares), and contacts shares the chat with the contact
+through `member.set`. Compass's spaces, for one person, have neither Action. Add `contacts`, a
+secret, and the `tool:<name>` View Copilotz's mcp wants for each tool it offers, and on Compass it
+answers `initialize` and `tools/list`, then fails its first `tools/call`
+(`Unknown action "space.keep"`, an internal error to the caller). Nor should we add them: in
+Compass, the caller is you.
 
 So, as with every plugin besides the agentic core, Compass rebuilds it: **`plugins/mcp`, the same
 contract, for you.** A server the app declares in the `mcp` resource (its space, the tools it
@@ -86,9 +89,9 @@ export const serveMcp: Route = async (request, { runtime, actor }) => {
   // … JSON only; bad JSON is -32700, a malformed message -32600, a notification 202
 ```
 
-A request with an `Origin` comes from a web page: no browser calls MCP, so even the app's own page
-is refused (the runtime already refuses a page from another site). The `actor` is identity's `who`:
-from this machine, you. Then four methods:
+A request with an `Origin` comes from a web page, and no page needs to call this, so even the app's
+own page is refused (the runtime already refuses a page from another site). The `actor` is
+identity's `who`: from this machine, you. Then four methods:
 
 ```ts
 switch (message.method) {
@@ -163,12 +166,13 @@ await ctx.as().db.collection("message").insertOne({
   space from the thread (`mcp-compass`, in your Personal space) and call the board's Actions as you.
 - **`toolText`** is what a model reads of a call: the tool's `tool:<name>` View if it has one, else
   its output. An error says its words only when they're for anyone (`failure(…, { public: true })`);
-  anything else is "Something went wrong running that tool."
+  anything else is "Something went wrong running that tool. Try again in a moment."
 - **The step** is written as an agent's is, so the server's chat, "Claude", shows every call, what
   it was given and what it said.
 
 Left out of Copilotz's, as `mod.ts` says: contacts and their HMAC ids, limits, receipts for calls
-sent again, slow calls, widgets, MCP 2026-07-28's requests without a handshake, and batches.
+sent again, slow calls, the app's front and allowed origins, widgets, MCP 2026-07-28's requests
+without a handshake, batches, and a `tool:<name>` View for every tool offered.
 
 ## Run it
 
@@ -179,7 +183,7 @@ Claude Code:
 claude mcp add --transport http compass http://127.0.0.1:8080/mcp/compass
 ```
 
-By hand, it's three requests:
+By hand, `initialize`, then a call (`tools/list`, between them, is long):
 
 ```text
 $ curl -s http://127.0.0.1:8080/mcp/compass -H 'content-type: application/json' \
@@ -209,7 +213,7 @@ Board “Launch” (/board/50550b789de3): 6 columns, 3 cards.
 ```
 
 The Board tab shows the card moved, and a chat called Claude in your Personal space holds each call.
-From a page, it's refused:
+From the app's own page (a request with an `Origin`), it's a 403:
 
 ```text
 {"jsonrpc":"2.0","error":{"code":-32600,"message":"Not from this origin"}}
@@ -239,8 +243,9 @@ own (one that answers, one that refuses in public, one that fails inside), and c
 
 - `plugins/mcp/contract.ts`: the shape of a server the app declares (`DeclaredServer`, `McpTool`).
 - `plugins/mcp/shared/servers.ts`: a server by name, with its defaults, and the tools it offers.
-- `plugins/mcp/mod.ts`: the plugin, after `chat` and `spaces`; at start, each server must say its
-  space and offer tools the app has.
+- `plugins/mcp/mod.ts`: the plugin, which requires `chat` and `spaces`; at start, each server must
+  say its space and offer only tools the app has.
+- `app.ts`: `mcp` in the list, after `webTools`.
 
 `git diff lesson-11.2 lesson-11.3` shows every change.
 

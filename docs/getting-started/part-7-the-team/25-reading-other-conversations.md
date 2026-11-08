@@ -57,7 +57,8 @@ export const inSpace = (_agent: string, thread: Thread) => !!thread.in;
 ### Listing
 
 `list_conversations` asks chat's `thread.recent` query for the space's latest conversations, each
-with how many messages it has and what its first and latest say, and leaves out the agent's own:
+with how many messages it has and what its first and latest say, and leaves out the one the agent is
+in:
 
 ```ts
 run: async ({ limit }, ctx) => {
@@ -127,15 +128,20 @@ The charter gets one more paragraph:
 asking people to repeat themselves.
 ```
 
-and `app.ts` runs the plugin after spaces and boards, before Compass's own:
+and `app.ts` runs the plugin after the others, before Compass's own:
 
 ```ts
 return [
   models,
   chat,
+  history,
   identity,
   spaces,
   boards,
+  documents,
+  memory,
+  // Memories on their own, only where there's a model to write them.
+  ...(settings.openai ? [memoryExtraction] : []),
   coordination,
   compass,
   settingsPlugin(settings),
@@ -154,13 +160,13 @@ ana › /new
 New conversation.
 Ana → north › What did we settle on pricing? list conversations
   ⚙ north: list_conversations → - 00d4ab2e-040e-4729-a65c-4f1147f338be …
-north › The tool says: - 00d4ab2e-040e-4729-a65c-4f1147f338be · 2 messages ·
-last 2026-11-08 10:42
+north › The tool says: - 00d4ab2e-040e-4729-a65c-4f1147f338be · 2 messages · last 2026-11-08 10:42
   opened: Pricing: we settled on 12 a month.
   latest: You said: Ana: Pricing: we settled on 12 a month.
 ana › /prompt
 ── tools · north
-list_boards, read_board, create_board, create_card, update_card, move_card,
+list_boards, read_board, create_board, create_card, update_card, move_card, list_documents,
+read_document, write_document, append_document, edit_document, remember, recall, forget,
 list_conversations, read_conversation, send_message
 ```
 
@@ -172,9 +178,9 @@ without asking you.
 `plugins/coordination/tests/coordination.test.ts`, on a scripted model: an agent lists the other
 conversations of its space (not its own, not another space's), reads one with names in place of ids,
 never sees an agent's tool call there, and is refused a conversation in another space. And
-`tests/parity.test.ts`: Copilotz has no coordination plugin to compare with, so the same scenario
-runs on Copilotz's access plugins (identity and spaces, where Compass runs its own) and on yours,
-and every tool answer must be the same, ids and times aside.
+`parity.test.ts` beside it: Copilotz has no coordination plugin to compare with, so the same
+scenario runs on Copilotz's access plugins (identity and spaces, where Compass runs its own) and on
+yours, and every tool answer must be the same, ids and times aside.
 
 ## Also in this chapter
 

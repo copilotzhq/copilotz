@@ -274,6 +274,9 @@ and `/routines`.
   routine sets its timer again; pausing takes it away; "Run now" records a run with who asked.
 - `plugins/routines/shared/routines.ts`: the fields the Actions take, the timer's id, `arm` (the
   timer, set again as the routine's maker), and `chatTitle` (`{name} · {date}`).
+- `plugins/routines/collections/routine.ts` and `run.ts`: the queries `routine.list` (a space's
+  routines, oldest first) and `routine.runs` (a routine's runs, newest first); and `contract.ts`
+  (the types other code imports, and `routinePath`).
 - `plugins/routines/views/web/routines-tab.tsx`, `routine-page.tsx`, `when.ts`, `style.ts`, and
   `views/terminal/routines.ts`.
 - `app.ts` (routines after skills), `front.ts` (`routinesWeb`) and `terminal.ts`

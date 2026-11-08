@@ -116,9 +116,10 @@ where the limit falls; after three tries it cuts the shortest one.
 
 A line is only read once its message has left the **tail**: the recent messages an agent is sent
 whole. So that's when it's written, and a conversation that stays short never calls the model. The
-Processor, `history.compact`, follows every message (`message.created`), one thread at a time, in
-order, and measures what each costs a prompt in estimated tokens (`processors/weight.ts`: about four
-bytes a token, through the message's `llm.message` View, with its files by what they are).
+Processor, `history.compact`, follows every message (`message.created`), each thread's in order
+(different threads at once), and measures what each costs a prompt in estimated tokens
+(`processors/weight.ts`: about four bytes a token, through the message's `llm.message` View, with
+its files by what they are).
 
 The tail grows to its maximum, then the oldest messages leave it until it's down to its minimum,
 each shared one with its line:
@@ -180,10 +181,27 @@ export const DEFAULTS: Omit<HistorySettings, "summarizer"> = {
 ```
 
 `mod.ts` checks at startup that a summarizer is named and that the models plugin knows it
-(`models.check`). In `app.ts`, history comes after chat, and the settings name a model alias, as
-North's does:
+(`models.check`). In `app.ts`, history comes after chat:
 
 ```ts
+return [
+  models,
+  chat,
+  history,
+  identity,
+  spaces,
+  boards,
+  documents,
+  compass,
+  settingsPlugin(settings),
+];
+```
+
+And the settings name a model alias, as North's does:
+
+```ts
+model: {
+  // …
   // What writes the lines of long chats. Offline, the fake model: short messages need none.
   summaries: settings.openai ? { model: "openai/gpt-6-luna", effort: "none" } : "fake/echo",
 },
@@ -198,8 +216,8 @@ and a PDF's pages are guessed from its size, not counted.
 
 ## Run it
 
-In the terminal, with a small tail (`COMPASS_TAIL=40,80`), have a short conversation of eight
-messages (offline, North answers "You said: …"), then look in the store:
+In the terminal, with a small tail (`COMPASS_TAIL=40,80`), send North eight short messages (offline,
+North answers each with "You said: …"), then look in the store:
 
 ```text
 $ sqlite3 -header -column .data/compass.sqlite 'SELECT "index", text FROM summary WHERE level = 0'
@@ -241,6 +259,8 @@ every line of the tree, and the outline.
 - `shared/lines.ts`: a node's id (`thread:level:index`), a line's size in bytes, and a message as
   one line (`Ana → north: …`), with your name from identity's `person`.
 - `contract.ts`: the types other code may import (`HistorySettings`, `Outline`, `Line`, `Summary`).
+- `terminal.ts`: reads `COMPASS_TAIL` into `Settings.tail`.
+- `tests/start.ts`: the history tests' runtime, with a scripted summarizer and small budgets.
 
 `git diff lesson-4.4 lesson-5.1` shows every change.
 

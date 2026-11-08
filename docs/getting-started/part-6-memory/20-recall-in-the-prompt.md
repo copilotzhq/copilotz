@@ -60,10 +60,10 @@ agents, unless it names some). A View that returns `undefined` adds nothing.
 ### Core memories, when the conversation begins
 
 Core memories aren't in the system part, though they're stable: the system part is the same in every
-conversation, so it's cached across all of them, and core memories depend on who's here. They're a
-`turn` context that never changes: the core memories as the conversation began knowing them
-(`before` its first message's time). Told on its first turn, the same text every turn after, so it's
-never told again.
+conversation with the same people in the same space, so it's cached across them, and core memories
+change whenever one is learned. They're a `turn` context that never changes: the core memories as
+the conversation began knowing them (`before` its first message's time). Told on its first turn, the
+same text every turn after, so it's never told again.
 
 ```ts
 export const rememberedView = (thread: Thread, ctx: ViewContext) => {
@@ -168,7 +168,8 @@ Ana → north › My dog is called Rex.
 north › You said: Ana: My dog is called Rex.
 ana › /prompt
 ── tools · north
-list_boards, read_board, create_board, create_card, update_card, move_card
+list_boards, read_board, create_board, create_card, update_card, move_card,
+list_documents, read_document, write_document, append_document, edit_document
 ── system (cached across turns)
 # North
 …

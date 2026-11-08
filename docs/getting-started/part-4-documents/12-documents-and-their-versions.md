@@ -90,11 +90,12 @@ export const documentVersion = defineCollection({
 });
 ```
 
-Its `_id` is `<document>:<version>`, so a version is had once. `kind` says how it was made: by you
-(`create`, `save`, `rename`, `restore`) or, from Chapter 15, by an agent's tool (`write`, `append`,
-`edit`). `by` and `for` say who: `person:ana`, or `agent:north` working for `person:ana`. The
-`document` collection has two queries for front ends, `list` (a space's documents, latest saved
-first, each with an `excerpt` instead of its text) and `recent`; `documentVersion` has `history`.
+Its `_id` is `<document>:<version>`, so a version is had once. `kind` says how it was made:
+`create`, `save`, `rename` or `restore`, or, from Chapter 15, by an agent's tool: `write`, `append`
+or `edit` (a document an agent makes is a `create` too). `by` and `for` say who: `person:ana`, or
+`agent:north` working for `person:ana`. The `document` collection has two queries for front ends,
+`list` (a space's documents, latest saved first, each with an `excerpt` instead of its text) and
+`recent`; `documentVersion` has `history`.
 
 ### One way to change a document
 
@@ -259,6 +260,8 @@ await runtime.call("document.save", {
 await runtime.call("document.restore", { document, version: 1 }, { actor });
 await runtime.query("documentVersion.history", { document }, { actor });
 ```
+
+Each result printed, the refused save as its `code` and message, and the history one version a line:
 
 ```text
 { document: '<id>', title: 'Launch plan', version: 1, added: 2, removed: 0 }

@@ -172,10 +172,11 @@ Offline, without a key, North answers with Copilotz's fake model, which calls a 
 message names it ("list documents" for `list_documents`) and answers with what the tool said:
 
 ```sh
-printf '/doc new Launch plan: Record the trailer, then review the course page.\nNorth, list documents\n' | COMPASS_ME=ana COMPASS_DATA=/tmp/x.sqlite OPENAI_API_KEY= node --disable-warning=ExperimentalWarning terminal.ts
+printf '/doc new Launch plan: Record the trailer, then review the course page.\nNorth, list documents\n' | COMPASS_ME=ana COMPASS_DATA=.data/l44.sqlite OPENAI_API_KEY= node --disable-warning=ExperimentalWarning terminal.ts
 ```
 
 ```text
+…
 Ana → north › North, list documents
   ⚙ north: list_documents → Documents here (1), latest saved first:…
 north › The tool says: Documents here (1), latest saved first:

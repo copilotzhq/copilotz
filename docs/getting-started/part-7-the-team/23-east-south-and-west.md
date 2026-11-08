@@ -144,7 +144,8 @@ east › You said: Ana: @east @south What would you each check first?
 south › You said: Ana: @east @south What would you each check first?
 ana › /prompt south
 ── tools · south
-list_boards, read_board, create_board, create_card, update_card, move_card
+list_boards, read_board, create_board, create_card, update_card, move_card, list_documents,
+read_document, write_document, append_document, edit_document, remember, recall, forget
 ── system (cached across turns)
 # South
 
@@ -156,6 +157,7 @@ Other agents here: East, called east (Ask East when building it is the fastest w
 bold idea deserves its strongest version before anyone judges it, or when a limit everyone treats as
  fixed needs pushing on. East checks back only when results change the goal.).
 People here: Ana.
+…
 ```
 
 Offline, the fake model only repeats what it heard, but who answers is real: East and South, both,

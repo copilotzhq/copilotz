@@ -114,7 +114,7 @@ answers from them.
 ## Run it
 
 The test's second half runs the same scripted team through the terminal host (Copilotz's
-`terminal()`, as `terminal.ts` does), and this is what it prints:
+`terminal()`, as `terminal.ts` does), and this is what it prints with `SHOW=1`:
 
 ```text
 Ana → north › Can we launch on Friday?
@@ -135,7 +135,8 @@ but `/prompt` shows North now has the tool:
 ```text
 ana › /prompt
 ── tools · north
-list_boards, read_board, create_board, create_card, update_card, move_card,
+list_boards, read_board, create_board, create_card, update_card, move_card, list_documents,
+read_document, write_document, append_document, edit_document, remember, recall, forget,
 send_message
 ```
 
@@ -144,11 +145,13 @@ send_message
 `plugins/compass/tests/asking.test.ts`: North is offered `send_message`, which lists East, South and
 West by their descriptions; East's and South's turns overlap in time; North's model is called
 exactly twice, to ask and to answer; the conversation holds the question, both asks, both replies
-and North's answer; and the terminal shows them in that order.
+and North's answer, in that order; and the terminal shows all of them.
 
 ## Also in this chapter
 
 - East, South and West list `send_message` too: any of them may ask a teammate, or you.
+- North's "What you don't do" also says to look a disputed fact up, or ask South to check it.
+- `plugins/compass/resources/agents.ts` and `charter.ts`: their doc comments.
 
 `git diff lesson-7.1 lesson-7.2` shows every change.
 

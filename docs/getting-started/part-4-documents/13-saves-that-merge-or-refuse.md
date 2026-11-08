@@ -189,7 +189,8 @@ export const presenceAction = defineAction({
 ```
 
 One entry per page: your two tabs are two. A tab that closes without saying goodbye stops beating,
-and its entry goes once it's older than `STALE_MS` (90 seconds), the next time any page speaks.
+and its entry goes once it's older than `STALE_MS` (90 seconds), the next time any page says
+anything about that document.
 
 The collection lives in spaces too, with `write: "read"` in the `shared` resource: saying you're
 there takes only reading the document. In Copilotz's spaces, `write` names the verb that changing a

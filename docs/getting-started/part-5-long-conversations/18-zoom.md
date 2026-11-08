@@ -111,11 +111,13 @@ north › The tool says: Error: zoom input: Instance does not have required
 property "n". (#)
 ana › /prompt
 ── tools · north
-zoom, list_boards, read_board, create_board, create_card, update_card, move_card
+zoom, list_boards, read_board, create_board, create_card, update_card,
+move_card, list_documents, read_document, write_document, append_document,
+edit_document
 ```
 
-`zoom` is offered first, before the board's tools: history comes before boards in `app.ts`. In a
-chat that isn't summarized yet, it isn't listed at all.
+`zoom` is offered first, before the board's and the documents' tools: history comes before both in
+`app.ts`. In a chat that isn't summarized yet, it isn't listed at all.
 
 ## Check it
 

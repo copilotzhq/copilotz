@@ -245,7 +245,7 @@ chat, Compass's identity and spaces, and the `hash/words` embedder.
   resource (`embedder`, `extractor`, `every`, `agents`).
 - `plugins/memory/shared/scope.ts`: `Scope`, the limits (`LIMIT`, `SAME`, `RELEVANT`), `words` and
   `overlap`.
-- `app.ts`: `memory` after `boards` in the plugin list, and its `embedder`.
+- `app.ts`: `memory` after `documents` in the plugin list, and its `embedder`.
 
 `git diff lesson-5.3 lesson-6.1` shows every change.
 

@@ -155,11 +155,18 @@ assistant You said: Ana: Book the studio
 user      Ana: The price stays at 49
 assistant You said: Ana: The price stays at 49
 ── turn (what's new, then kept in the history)
+<context name="today">
+It's Sunday, 8 November 2026, 08:15 (America/Sao_Paulo).
+</context>
 ```
 
 Where Chapter 16 sent sixteen messages, North is sent the outline and the last three exchanges.
 `/prompt` shows each message's first 160 characters; the first one holds the lines of the ten
 messages before them.
+
+Ten, not Chapter 16's eight: chat tells North a turn context (`today`) again when the conversation
+it's sent no longer has the message it was last told in. Once the outline stands for that message,
+North's next reply carries the date again, weighs more, and the tail cuts further.
 
 ## Check it
 

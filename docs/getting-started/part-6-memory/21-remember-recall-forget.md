@@ -127,9 +127,9 @@ export const memoryLine = (m: Memory, ctx: ViewContext): string => {
 };
 ```
 
-The web gets `memoryWeb` (in `front.ts`): a Memories section in each space's Settings, Copilotz's
-`spaceTabs` entry, `under: "settings"`; the `memories` View groups what was learned there by whom
-it's about, and at `/memories` shows everything.
+The web gets `memoryWeb` (in `front.ts`): a Memories section in each space's Settings, a `spaceTabs`
+entry (Chapter 8) with `under: "settings"`; the `memories` View groups what was learned there by
+whom it's about, and at `/memories` shows everything.
 
 ```ts
 export const memoryWeb: Plugin = definePlugin({
@@ -152,8 +152,9 @@ export const memoryWeb: Plugin = definePlugin({
 
 ## Run it
 
-`/prompt` now lists the three tools after the board's. Offline, the fake model calls a tool whose
-name you write, with no input, so the tool's input check answers instead, and nothing is kept:
+`/prompt` now lists the three tools after the board's and the documents'. Offline, the fake model
+calls a tool whose name you write, with no input, so the tool's input check answers instead, and
+nothing is kept:
 
 ```text
 $ printf 'Please remember that I like tea.\n/memories\n' | COMPASS_ME=ana COMPASS_DATA=.data/r63.sqlite OPENAI_API_KEY= node --disable-warning=ExperimentalWarning terminal.ts
@@ -180,16 +181,16 @@ Settings → Memories. The tests drive the tools with a scripted model:
 
 `tests/tools.test.ts` runs a scripted North (`tests/agent.ts`, a scripted model as in Chapter 11):
 it remembers a core memory, is told `Already remembered` when it repeats it, writes a note to itself
-(`about: "me"`, recalled as "(about you)"), recalls, forgets with a reason, and recalls nothing.
-Another test keeps a memory in your Personal space and recalls from a Work space: nothing, until it
-asks with `in`. `tests/screens.test.ts` prints `/memories` through the real terminal host and
-renders a space's Memories. And `tests/parity.test.ts` runs the same tool calls on Copilotz's memory
-(on Copilotz's identity and spaces) and on yours, and compares the answers, the memories kept and
-the next conversation's prompt.
+(`about: "me"`, recalled as "(about you)"), recalls, forgets with a reason, and recalls again: the
+forgotten one is gone. Another test keeps a memory in your Personal space and recalls from a Work
+space: nothing, until it asks with `in`. `tests/screens.test.ts` prints `/memories` through the real
+terminal host and renders a space's Memories. And `tests/parity.test.ts` runs the same tool calls on
+Copilotz's memory (on Copilotz's identity and spaces) and on yours, and compares the answers, the
+memories kept and the next conversation's prompt.
 
 ## Also in this chapter
 
-- `plugins/memory/resources/tools.ts`: the three tools, as chat's `tools` resource.
+- `plugins/memory/resources/tools.ts` and `mod.ts`: the three tools, as chat's `tools` resource.
 - `plugins/memory/views/web/style.ts`, `resources/commands.ts`: the page's layout and `/memories`.
 - `tests/store.test.ts`: its message said "Remember me", which the offline model now takes as asking
   for the `remember` tool; it says "See you tomorrow" instead.

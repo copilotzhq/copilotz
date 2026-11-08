@@ -199,7 +199,7 @@ return [
 In the terminal, with piped input:
 
 ```sh
-printf '/doc new Launch plan: Record the trailer, then review the course page.\n/doc\n/doc 1\n' | COMPASS_ME=ana COMPASS_DATA=/tmp/x.sqlite OPENAI_API_KEY= node --disable-warning=ExperimentalWarning terminal.ts
+printf '/doc new Launch plan: Record the trailer, then review the course page.\n/doc\n/doc 1\n' | COMPASS_ME=ana COMPASS_DATA=.data/l43.sqlite OPENAI_API_KEY= node --disable-warning=ExperimentalWarning terminal.ts
 ```
 
 ```text
@@ -223,10 +223,11 @@ History:
   v1 · Ana · create · +1 −0
 ```
 
-In the browser (`npm run dev`, with the terminal closed: one writer at a time), open your Personal
-space's Documents tab: the same Launch plan. Open it, add a line, and save: History shows version 2.
-Open the same document in a second tab, change different lines in each, and save both: the second
-save merges. Change the same line in both: the second is refused, with Keep mine and Take theirs.
+In the browser (`COMPASS_ME=ana COMPASS_DATA=.data/l43.sqlite npm run dev`, the same store, with the
+terminal closed: one writer at a time), open your Personal space's Documents tab: the same Launch
+plan. Open it, add a line, and save: History shows version 2. Open the same document in a second
+tab, change different lines in each, and save both: the second save merges. Change the same line in
+both: the second is refused, with Keep mine and Take theirs.
 
 ## Check it
 

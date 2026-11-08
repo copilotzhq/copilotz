@@ -210,7 +210,9 @@ north › You said: Ana: Hi North
 ana › /prompt
 ── tools · north
 list_boards, read_board, create_board, create_card, update_card, move_card,
-read_skill, schedule_routine, list_routines, cancel_routine
+list_documents, read_document, write_document, append_document, edit_document,
+remember, recall, forget, list_conversations, read_conversation, read_skill,
+schedule_routine, list_routines, cancel_routine, send_message
 ── system (cached across turns)
 …
 **Routines** (`schedule_routine`, `list_routines`, `cancel_routine`), for
@@ -227,9 +229,9 @@ it posts.
 tools, and no `name_chat`: this chat wasn't started by a run.
 
 With a key, ask North in a space: "remind me every Monday at 9 to send the weekly report". The tests
-run that conversation with a scripted model instead (`tests/tools.test.ts`); here is what the tools
-told it, with the manual clock moved to Monday 9:00 in São Paulo between the first and the second
-call:
+run that conversation with a scripted model instead (`tests/tools.test.ts`), which answers with what
+it read unless it's told to call a tool. Here is what the tools told it, and, between the first call
+and the second, the chat's last two messages once the manual clock reached Monday 9:00 in São Paulo:
 
 ```text
 Made it: "Monday report" [a58a4aaf-…]: Mondays at 9:00 AM (Sao Paulo time), asks @north: "Remind me

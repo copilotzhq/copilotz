@@ -29,8 +29,8 @@ Copilotz already measures itself, in OpenTelemetry's model: counters, histograms
 no plugin to add: each plugin instruments itself through `ctx.metrics`. What it records:
 
 - the runtime: `copilotz.job.duration` (jobs run on executors, by kind, name and outcome, in ms),
-  `copilotz.op.duration`, `copilotz.commit.duration`, `copilotz.events`, `copilotz.processor.lag`,
-  `copilotz.executors`, `copilotz.cache.reads`;
+  `copilotz.op.duration`, `copilotz.op.roundtrip`, `copilotz.commit.duration`, `copilotz.events`,
+  `copilotz.processor.lag`, `copilotz.executors`, `copilotz.cache.reads`;
 - model calls, by OpenTelemetry's GenAI conventions: `gen_ai.client.operation.duration` (in
   seconds), `gen_ai.client.token.usage`, and `copilotz.llm.time_to_first_token`;
 - the ledger, where there's one: `copilotz.usage.cost` and `copilotz.usage.price`.
@@ -68,15 +68,17 @@ The terminal and the server make one meter each and pass it to `createRuntime` a
 
 ```ts
 const me = you();
+const tail = process.env.COMPASS_TAIL?.split(",").map(Number) as [number, number] | undefined;
 const meter = openMeter();
 
 const runtime = await createRuntime({
   ...(await openStorage()),
   metrics: meter,
   plugins: [
-    ...plugins({ you: me, openai: process.env.OPENAI_API_KEY }),
+    ...plugins({ you: me, openai: process.env.OPENAI_API_KEY, tail }),
     metrics(meter),
-    // … terminalPlugin, terminalShell, chatTerminal, spacesTerminal, boardsTerminal
+    // … terminalPlugin, terminalShell, and the terminal front ends of chat, spaces, boards,
+    // documents, memory, skills and routines
     metricsTerminal(meter),
   ],
 });
@@ -174,13 +176,17 @@ Compass
 Ana → north › Hi North
 north › You said: Ana: Hi North
 ana › /metrics gen_ai
-copilotz_llm_time_to_first_token_sum{gen_ai_operation_name="chat",gen_ai_provide
-r_name="fake",gen_ai_request_model="echo"} 0.017374459000000002
-copilotz_llm_time_to_first_token_count{gen_ai_operation_name="chat",gen_ai_provi
-der_name="fake",gen_ai_request_model="echo"} 1
+gen_ai_client_operation_duration_sum{gen_ai_operation_name="embeddings",gen_ai_p
+rovider_name="hash",gen_ai_request_model="words"} 0.0006370410000000675
+gen_ai_client_operation_duration_count{gen_ai_operation_name="embeddings",gen_ai
+_provider_name="hash",gen_ai_request_model="words"} 1
 gen_ai_client_operation_duration_sum{gen_ai_operation_name="chat",gen_ai_provide
-r_name="fake",gen_ai_request_model="echo"} 0.09155025
+r_name="fake",gen_ai_request_model="echo"} 0.09285429099999999
 gen_ai_client_operation_duration_count{gen_ai_operation_name="chat",gen_ai_provi
+der_name="fake",gen_ai_request_model="echo"} 1
+copilotz_llm_time_to_first_token_sum{gen_ai_operation_name="chat",gen_ai_provide
+r_name="fake",gen_ai_request_model="echo"} 0.016860083000000033
+copilotz_llm_time_to_first_token_count{gen_ai_operation_name="chat",gen_ai_provi
 der_name="fake",gen_ai_request_model="echo"} 1
 ana › /metrics copilotz_job_duration_count
 copilotz_job_duration_count{kind="call",name="person.set",outcome="ok"} 1
@@ -191,15 +197,18 @@ copilotz_job_duration_count{kind="query",name="message.questions",outcome="ok"}
 1
 copilotz_job_duration_count{kind="process",name="compass.title",outcome="ok"} 1
 copilotz_job_duration_count{kind="call",name="chat.send",outcome="ok"} 1
+copilotz_job_duration_count{kind="process",name="history.compact",outcome="ok"}
+2
 copilotz_job_duration_count{kind="process",name="chat.turn",outcome="ok"} 1
 copilotz_job_duration_count{kind="call",name="shell.print",outcome="ok"} 3
 ```
 
-One model call, offline (`fake/echo`), in 0.09 seconds, its first piece after 0.017. And every job
-of the turn: your `chat.send`, North's turn (`chat.turn`, a Processor), the title (`compass.title`),
-and the terminal's own calls. With `npm run dev`, the same text is at http://127.0.0.1:8080/metrics
-for a Prometheus on this machine to scrape; with `OTEL_EXPORTER_OTLP_ENDPOINT` set, it also goes to
-that collector every 15 seconds.
+Two model calls, both offline: memory's embedding of what you said, to recall by (`hash/words`), and
+North's answer (`fake/echo`), in 0.09 seconds, its first piece after 0.017. And every job of the
+turn: your `chat.send`, North's turn (`chat.turn`, a Processor), the title (`compass.title`),
+history's `history.compact` (once for each message), and the terminal's own calls. With
+`npm run dev`, the same text is at http://127.0.0.1:8080/metrics for a Prometheus on this machine to
+scrape; with `OTEL_EXPORTER_OTLP_ENDPOINT` set, it also goes to that collector every 15 seconds.
 
 ## Check it
 
@@ -221,6 +230,8 @@ reads the numbers both ways. Through `runtime.fetch` (no port), a request from `
 - `server.ts`: the same meter, the `metrics(meter)` plugin before the page, and `meter.close()`
   after the runtime when you stop it.
 - `terminal.ts`: its doc comment names `/metrics`.
+- `tests/store.test.ts`: the PostgreSQL test returns early when PGlite isn't installed, instead of
+  failing (Chapter 36's `{ skip }` is an option `copilotz/testing`'s `test` doesn't take).
 
 `git diff lesson-12.1 lesson-12.2` shows every change.
 

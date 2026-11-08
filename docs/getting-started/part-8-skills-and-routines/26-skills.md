@@ -237,12 +237,30 @@ And the charter says when to read one:
 ```
 
 `app.ts` puts `skills` after the plugins it needs and before `compass`, which declares the skill:
-`[models, chat, identity, spaces, boards, skills, compass, settingsPlugin(settings)]`.
+
+```ts
+return [
+  models,
+  chat,
+  history,
+  identity,
+  spaces,
+  boards,
+  documents,
+  memory,
+  // Memories on their own, only where there's a model to write them.
+  ...(settings.openai ? [memoryExtraction] : []),
+  coordination,
+  skills,
+  compass,
+  settingsPlugin(settings),
+];
+```
 
 ## Run it
 
 Offline, North's fake model only repeats what it's told, so it won't read a skill; but the terminal
-shows what it has, and `/prompt` where it's told:
+shows what it has, and, once there's a conversation, `/prompt` shows where it's told:
 
 ```text
 ana › /skills
@@ -250,10 +268,14 @@ planning (the app's)
   Plan work so others can act on it: turn a goal into projects, milestones and
 tasks with clear outcomes, evidence and scope. Use it when asked to plan, break
 down, organize or track a piece of work.
+Ana → north › Hi North
+north › You said: Ana: Hi North
 ana › /prompt
 ── tools · north
 list_boards, read_board, create_board, create_card, update_card, move_card,
-read_skill
+list_documents, read_document, write_document, append_document, edit_document,
+remember, recall, forget, list_conversations, read_conversation, read_skill,
+send_message
 ── system (cached across turns)
 # North
 …
@@ -271,6 +293,8 @@ to plan, break down, organize or track a piece of work.
 ── history (cached as it grows)
 …
 ```
+
+(The terminal wraps the prompt at 80 columns.)
 
 `/skill planning` prints its instructions, the text `read_skill` gives North. In the browser, a
 space's Settings has a Skills section: Compass's `planning`, the space's own, and a form for a new
@@ -298,6 +322,9 @@ refusals, the three queries, what `read_skill` tells the agent and the list in i
   "settings"`), a page at `/skill/<id>`, and a line in chat for each `read_skill` (chat's
   `toolViews`, `skill.step`). `front.ts` adds it.
 - `terminal.ts`: `skillsTerminal`, `/skills` and `/skill <name>`. `terminal.ts` at the root adds it.
+- The rest of skills: `contract.ts` (the types other code imports, and `skillPath`),
+  `collections/skill-file.ts`, `shared/write.ts` (the fields the Actions take, and the names a skill
+  can't have), and the tests' `start.ts`, `terminal.test.ts` and `web.test.ts`.
 
 `git diff lesson-7.3 lesson-8.1` shows every change.
 

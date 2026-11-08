@@ -63,6 +63,8 @@ async function ask<T>(api: Api, path: string, body?: unknown): Promise<T> {
   return said as T;
 }
 
+const json = (value: unknown) => encodeURIComponent(JSON.stringify(value));
+
 /** Your Personal space's first board, and its cards in order. */
 export async function firstBoard(api: Api): Promise<{ board: Board; cards: Card[] }> {
   const { space } = await ask<{ space: string }>(api, "actions/space.personal", {});
@@ -77,6 +79,8 @@ export async function firstBoard(api: Api): Promise<{ board: Board; cards: Card[
   );
   return { board, cards };
 }
+
+// … shown(board, cards): the board as text, each column, then its cards
 
 /** Moves the card titled `title` to the column named `column`, with `card.move`. */
 export async function move(api: Api, title: string, column: string): Promise<string> {
@@ -106,12 +110,12 @@ if (import.meta.main) {
 
 ### Nobody gets nothing
 
-Identity's rule said "a request that's nobody reaches none", and returned an empty filter for them,
-but only when asked about a direct request. Writing this chapter's test showed that isn't enough:
-the runtime asks each guard about every read and write an actor makes **without** `direct` (it
-passes `direct` only when it asks whether any rule speaks for a collection at all), so the filter
-never applied, and spaces' rule, which says yes to reading shared documents, let a stranger read
-every card. The rule now keeps nobody out of everything:
+The API answers whoever `who` says, and that includes nobody. What keeps nobody out is identity's
+rule from Chapter 3: for anyone who isn't you or your agents, it returns a filter nothing matches.
+The runtime asks every rule about every read and write an actor makes, from outside or not, and
+applies all their filters together. So it holds even where another rule has nothing against a read:
+spaces' rule says `true` to reading shared documents, cards among them, and a stranger still reads
+nothing.
 
 ```ts
 // Everything here is yours, and your agents' as they work for you. Nobody else reaches
@@ -122,11 +126,12 @@ return actor.kind === "agent" ? undefined : { _id: { $in: [] } };
 
 That matters even with the server on `127.0.0.1`: a page on another site can point its own name at
 your machine (DNS rebinding), and its requests then come from this machine but for another host.
-Identity's `who` calls that nobody (Chapter 3); now nobody also reads nothing.
+Identity's `who` calls that nobody (Chapter 3), and nobody reads nothing.
 
 ## Run it
 
-Start the server (`npm run dev`), and in another shell:
+With a board, Launch, in your Personal space and three cards in To do, start the server
+(`npm run dev`), and in another shell:
 
 ```text
 $ node scripts/board.ts
@@ -183,10 +188,6 @@ and moves a card; from `203.0.113.7` it's nobody, reads an empty list and gets a
 ✔ from this machine, the script reads your board and moves a card
 ✔ from anywhere else, it's nobody: nothing is read, nothing moves
 ```
-
-## Also in this chapter
-
-- `plugins/identity/mod.ts`: the rule above, and its doc comment.
 
 `git diff lesson-10.2 lesson-11.1` shows every change.
 

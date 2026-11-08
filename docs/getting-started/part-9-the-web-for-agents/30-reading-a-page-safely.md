@@ -180,7 +180,8 @@ page harmless, but it tells the model, every time, which words are the page's.
 ### North reads
 
 `mod.ts` adds the tool, `read_page: readPage`, beside `web_search`; North lists it
-(`tools: ["web_search", "read_page"]`); and the charter's paragraph gets one more step:
+(`tools: [...tools, "web_search", "read_page"]`); and the charter gets a web paragraph that names
+`read_page`, with one more step:
 
 ```text
 **The web** (`web_search`, `read_page`), when the answer depends on facts out there that you
@@ -194,6 +195,8 @@ Every limit is a setting of the `webTools` resource, as in Copilotz: `timeout`, 
 
 ## Run it
 
+Offline, `/prompt` shows `read_page` beside `web_search`:
+
 ```text
 Compass
 Ana → north › Hi North
@@ -201,7 +204,10 @@ north › You said: Ana: Hi North
 ana › /prompt
 ── tools · north
 web_search, read_page, list_boards, read_board, create_board, create_card,
-update_card, move_card
+update_card, move_card, list_documents, read_document, write_document,
+append_document, edit_document, remember, recall, forget, list_conversations,
+read_conversation, read_skill, schedule_routine, list_routines, cancel_routine,
+send_message
 ── system (cached across turns)
 # North
 …

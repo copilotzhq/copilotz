@@ -120,18 +120,36 @@ export const memoryExtraction: Plugin = definePlugin({
 So Compass installs it only with a key (`app.ts`), on a small model, the `cheap` alias:
 
 ```ts
-      // What writes memories down on its own: small and cheap too.
-      ...(settings.openai ? { cheap: { model: "openai/gpt-6-luna", effort: "low" } } : {}),
-    // …
-      // Memories on their own, from a model that reads the conversation: only with a key.
-      ...(settings.openai ? { extractor: "cheap" } : {}),
+model: {
+  // …
+  // What writes memories down on its own: small and cheap too.
+  ...(settings.openai ? { cheap: { model: "openai/gpt-6-luna", effort: "low" } } : {}),
+},
 // …
-return [
-  models, chat, identity, spaces, boards, memory,
-  // Memories on their own, only where there's a model to write them.
-  ...(settings.openai ? [memoryExtraction] : []),
-  compass, settingsPlugin(settings),
-];
+memory: {
+  // …
+  // Memories on their own, from a model that reads the conversation: only with a key.
+  ...(settings.openai ? { extractor: "cheap" } : {}),
+},
+```
+
+```ts
+export function plugins(settings: Settings): Plugin[] {
+  return [
+    models,
+    chat,
+    history,
+    identity,
+    spaces,
+    boards,
+    documents,
+    memory,
+    // Memories on their own, only where there's a model to write them.
+    ...(settings.openai ? [memoryExtraction] : []),
+    compass,
+    settingsPlugin(settings),
+  ];
+}
 ```
 
 Offline, the fake model would only echo the excerpt back, which isn't JSON: it would keep nothing.

@@ -23,18 +23,16 @@ it has to be one you chose to connect, the agent has to ask before it runs a com
 or writes a file, and its work has to stay in a folder for the space it's in.
 
 Copilotz has all of this: the `computers` plugin (`copilotz/plugins/compute`), and the computer
-program people run on their machine. It requires `chat` and `spaces`
-(`plugins/compute/computers/mod.ts:80`), and Compass has both, so the plan is to import it as it is.
+program people run on their machine. It requires `chat` and `spaces`, and Compass has both, so the
+plan is to import it as it is.
 
-But it doesn't start working at once. Ask it for a code to connect a machine to your Personal space,
-and it answers `You can't work in this space.` Copilotz's computers don't ask spaces whether you may
-work there through `space.can`; they import `must` from Copilotz's own spaces
-(`plugins/compute/computers/actions/code.ts:17`, used at line 32), and `must` asks what you reach
-(`plugins/access/spaces/shared/can.ts:41`), which is worked out from the `member` collection
-directly: the spaces you're a member of, with your role there
-(`plugins/access/spaces/shared/reach.ts:75`, `walk`, reading `member` at line 77). Compass's spaces
-seated only the agents: in a space for one person, you didn't need to be a member of anything. To
-Copilotz's computers, you're in no space at all.
+But it doesn't start working at once. Ask it for a code to connect a machine to your Personal space
+(`computer.code`), and it answers `You can't work in this space.` Copilotz's computers don't ask
+spaces whether you may work there through `space.can`; they import `must` from Copilotz's own
+spaces' contract, and `must` asks what you reach, which is worked out from the `member` collection
+directly: the spaces you're a member of, with your role there. Compass's spaces seated only the
+agents: in a space for one person, you didn't need to be a member of anything. To Copilotz's
+computers, you're in no space at all.
 
 ## The solution
 
@@ -94,7 +92,7 @@ await ctx.as().transaction(async (tx) => {
 The agents keep their role, `editor`. When North acts for you, Copilotz's spaces give it what you
 both reach: read and write, in your spaces.
 
-### The plugin, and North's tools
+### The plugin, and the agents' tools
 
 `app.ts` adds `computers` after `spaces`, which it requires:
 
@@ -102,16 +100,35 @@ both reach: read and write, in your spaces.
 import { computers } from "copilotz/plugins/compute";
 // …
 export function plugins(settings: Settings): Plugin[] {
-  return [models, chat, identity, spaces, boards, computers, compass, settingsPlugin(settings)];
+  return [
+    models,
+    chat,
+    history,
+    identity,
+    spaces,
+    boards,
+    documents,
+    memory,
+    // Memories on their own, only where there's a model to write them.
+    ...(settings.openai ? [memoryExtraction] : []),
+    coordination,
+    skills,
+    routines,
+    computers,
+    webTools,
+    mcp,
+    compass,
+    settingsPlugin(settings),
+  ];
 }
 ```
 
 The computer's tools aren't offered on their own, the way the board's are: an agent lists them in
-its `tools`, by name (`plugins/compute/computers/resources/tools.ts:6`). North gets them
-(`plugins/compass/resources/agents.ts`):
+its `tools`, by name. Every agent of the team gets them, next to `send_message`, and North keeps the
+web's tools from Chapter 29 (`plugins/compass/resources/agents.ts`):
 
 ```ts
-/** What an agent does on the space's computer: its shell, jobs, files, browser and web search. */
+/** What an agent does on the space's computer: its shell, jobs, files and browser. */
 export const COMPUTER = [
   "terminal",
   "start_job",
@@ -123,27 +140,29 @@ export const COMPUTER = [
   "write_file",
   "edit_file",
   "browser",
-  "web_search",
 ];
+
+/** The tools each of them lists: asking a teammate (or you) for something, and the computer. */
+const tools = ["send_message", ...COMPUTER];
 
 export const north: Agent = {
   name: "North",
   // …
   model: "north",
+  tools: [...tools, "web_search", "read_page"],
   default: true,
-  tools: COMPUTER,
   // …
 };
 ```
 
-Copilotz's `preview` tool is left out: it gives what a job serves an address of its own, which needs
-a domain for previews that the app names (`computers: { previews }`), and Compass on your machine
-has none.
+East, South and West list `tools`. Copilotz's `preview` tool is left out: it gives what a job serves
+an address of its own, which needs a domain for previews that the app names
+(`computers: { previews }`), and Compass on your machine has none.
 
 An agent with computer tools also gets, each turn, the `computer` context: whose computer this space
-has, whether it's online, where its folder is and what waits for a yes; or that there's none yet
-(`plugins/compute/computers/views/context.ts:67` checks the agent's tools first). And the charter
-says what the computer is for (`plugins/compass/resources/charter.ts`):
+has, whether it's online, where its folder is and what waits for a yes; or that there's none yet. An
+agent without them doesn't get it. And the charter says what the computer is for
+(`plugins/compass/resources/charter.ts`):
 
 ```text
 **The computer**, when one is connected to the space: files, tests, prototypes, calculations, the
@@ -164,6 +183,10 @@ export const front: Plugin[] = [
   chatWeb,
   spacesWeb,
   boardsWeb,
+  documentsWeb,
+  memoryWeb,
+  skillsWeb,
+  routinesWeb,
   computersWeb,
   compassWeb,
   compassTheme,
@@ -228,8 +251,11 @@ north › You said: Ana: Hi North
 ana › /prompt
 ── tools · north
 terminal, start_job, list_jobs, job_logs, stop_job, list_files, read_file,
-write_file, edit_file, browser, web_search, list_boards, read_board,
-create_board, create_card, update_card, move_card
+write_file, edit_file, browser, web_search, read_page, list_boards, read_board,
+create_board, create_card, update_card, move_card, list_documents,
+read_document, write_document, append_document, edit_document, remember, recall,
+ forget, list_conversations, read_conversation, read_skill, schedule_routine,
+list_routines, cancel_routine, send_message
 ── system (cached across turns)
 # North
 …
@@ -254,15 +280,20 @@ Compass, it's the Computer tab.
 ## Check it
 
 `plugins/spaces/tests/computers.test.ts` runs Copilotz's computers on Compass's spaces, offline:
-North's prompt has the eleven computer tools and says the space has no computer; `computer.code`
-gives you a code for your Personal space; the program's first connection is admitted as the runtime
-admits it (`computer.admit` with `code:<code>`, as the system), and asking again with the same code
-gets the same computer; the computer has a desk in `personal:ana`, in the folder `personal`, the
-space's default; and now North is told this space's computer is offline. The machine itself, the
-program and its socket, isn't in the test.
+North's prompt has the ten computer tools and says the space has no computer; `computer.code` gives
+you a code for your Personal space; the program's first connection is admitted as the runtime admits
+it (`computer.admit` with `code:<code>`, as the system), and coming again with the same code gets
+that same computer or nothing, never a second one; the computer has a desk in `personal:ana`, in the
+folder `personal`, the space's default; and now North is told this space's computer is offline. The
+machine itself, the program and its socket, isn't in the test.
 
-The second test is parity: the same scenario on Copilotz's own identity and spaces, and on
-Compass's, must answer the same.
+The second test is parity: the same scenario on Copilotz's own identity and spaces (Compass's boards
+and MCP server left out), and on Compass's, must answer the same.
+
+```text
+✔ North gets a computer in your Personal space, on Compass's spaces
+✔ the same on Copilotz's identity and spaces
+```
 
 ## Also in this chapter
 

@@ -35,8 +35,8 @@ const app = await connect("http://127.0.0.1:8080", { over: "http" }); // over HT
 Over the socket, it asks `POST /connect` for a one-time ticket, as whoever the request is, then each
 line is a frame and watches are pushed. Over HTTP, each line is a request to the REST API of Chapter
 33, and a watch is a server-sent stream. Either way, from this machine it's you: identity's `who`
-says so, and no key is needed. (`key` is for a developer key, which apps with sign-in give; Compass
-has one person, on one machine.)
+says so, and no key is needed. (`key` is for a developer key, which Copilotz's `api` plugin makes
+for apps with sign-in; Compass has one person, on one machine.)
 
 Its collections have `find` (then `.toArray()`), `findOne`, `countDocuments`, the writes, a named
 `query`, and **`watch(filter, options?, onChange)`**: the rows `find` would find, now and after each

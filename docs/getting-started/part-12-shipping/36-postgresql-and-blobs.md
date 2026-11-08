@@ -119,8 +119,7 @@ north › You said: Ana: Hello North
 Two blobs: your long message, and North's echo of it (the offline model answers "You said: …").
 
 ```text
-$ find .data/l121 -type f
-.data/l121/compass.sqlite
+$ find .data/l121/blobs -type f
 .data/l121/blobs/f5/sha256-f534a56cc2d74b49c475073b949ec0f99b6196720f9c3b82b10c714f46060175
 .data/l121/blobs/07/sha256-071581ef7fe3b324d20aae156bdaf34fb89ae059d79376392bdcc1233509f34a
 ```
@@ -161,21 +160,24 @@ With a real one, the terminal starts as it always does, and its tables are in th
   The message is one long word on purpose: the offline model echoes word by word, waiting 15 ms on
   each, and a long sentence would make a slow test.
 - **The same app on PostgreSQL**: Compass on `DATABASE_URL=:memory:`, PGlite in the process; a chat
-  in your Personal space, and North answers. PGlite isn't in `package.json`, so without it the test
-  is skipped, and says how to run it:
+  in your Personal space, and North answers. PGlite isn't in `package.json`, so the test means to
+  skip itself without it, with `{ skip }` as `node:test` takes it.
 
 ```text
-✔ a conversation is still there when Compass opens its store again (154.617917ms)
-✔ one writer: a second runtime on the same file fences the first (109.388ms)
-✔ DATABASE_URL puts Compass on PostgreSQL; without it, it's a SQLite file (0.17325ms)
-✔ a large value is kept once, as a file in the blobs folder (94.949958ms)
-﹣ the same app on PostgreSQL, in this process (0.050583ms) # PGlite isn't installed (npm i -D @electric-sql/pglite runs this test)
+✔ a conversation is still there when Compass opens its store again (202.687916ms)
+✔ one writer: a second runtime on the same file fences the first (137.826167ms)
+✔ DATABASE_URL puts Compass on PostgreSQL; without it, it's a SQLite file (0.151958ms)
+✔ a large value is kept once, as a file in the blobs folder (108.630166ms)
+✖ the same app on PostgreSQL, in this process (0.14525ms)
 ```
 
-With PGlite installed (0.4.6 here), it runs:
+At this tag the last one fails, with PGlite or without (`TypeError: options.fn is not a function`):
+`test` from `copilotz/testing` takes `test(name, fn)` or `test({ name, fn, ignore })`, not options
+in the middle. Chapter 37's code has it return early when PGlite isn't installed; with PGlite
+installed (0.4.6 here), it then runs:
 
 ```text
-✔ the same app on PostgreSQL, in this process (1226.105334ms)
+✔ the same app on PostgreSQL, in this process (1106.864709ms)
 ```
 
 ## Also in this chapter

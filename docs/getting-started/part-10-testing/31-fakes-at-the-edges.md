@@ -30,10 +30,10 @@ for real and puts fakes only at the edges.
 
 Copilotz makes each edge something you can replace:
 
-- **The model.** An LLM adapter is an object with `generate(request)`, which yields chunks:
-  `{ type: "text", text }` or `{ type: "tool_call", call }`. A plugin adds one under `adapters.llm`,
-  a `provider` names it (`{ script: { adapter: "script" } }`), and a `model` alias points at it
-  (`north: "script/north"`). Chapter 6 did this for chat titles.
+- **The model.** An LLM adapter is an object with `generate(request)`, which yields chunks,
+  `{ type: "text", text }` and `{ type: "tool_call", call }` among them. A plugin adds one under
+  `adapters.llm`, a `provider` names it (`{ script: { adapter: "script" } }`), and a `model` alias
+  points at it (`north: "script/north"`). Chapter 6 did this for chat titles.
 - **The clock.** `createRuntime({ clock })`. Timers run on the system's clock unless you pass
   another one. `manualClock(start)`, from `copilotz`, moves only when a test moves it
   (`advance(ms)`, `set(time)`).
@@ -46,7 +46,7 @@ Copilotz makes each edge something you can replace:
 And `copilotz/testing` is Copilotz's own test API, the one its suite runs on: `test` (on Node it's
 `node:test`'s, and the same file runs under Deno and Bun), `tempDir` (a temporary directory, removed
 when the test ends), `serve` (a local HTTP server that answers with your handler), and `testWho` and
-`ticketFor` (saying who a request is, in the next chapter).
+`ticketFor` (saying who a request is; the next chapter uses `testWho`).
 
 ### The kit
 
@@ -118,8 +118,8 @@ export async function compass(options: {
 ```
 
 The plugins are app.ts's own (`plugins(settings)`), so every test runs the app you ship. The script
-comes after them and patches one entry of the `model` resource: the `north` alias, which North's
-agent names. Nothing else changes.
+comes after them, adds its `script` provider, and patches one entry of the `model` resource: the
+`north` alias, which North's agent names. Nothing else changes.
 
 ### Compass as a person uses it
 
@@ -249,13 +249,18 @@ events) for Copilotz's `openai` adapter: one piece of text, then "completed". Th
 what Compass sent: `/responses`, `Bearer sk-test`, the model `gpt-6-luna`, and
 `reasoning: { effort: "low" }` for North and `"none"` for the title.
 
+With a key, memory finds what it recalls with OpenAI's embeddings too (app.ts names
+`openai/text-embedding-3-small`), and the fake answers that call with the same stream. Recall fails,
+memory says so, and the turn goes on without it: that's the one line between the tests below.
+
 ## Run it
 
 ```text
 $ node --disable-warning=ExperimentalWarning --test tests/app.test.ts
-✔ North puts the work on the board, and the record says it acted for Ana (68.09675ms)
-✔ a burst of messages gets one answer, once Ana has been quiet two seconds (24.082584ms)
-✔ with a key, North and chat titles go to OpenAI, with the models app.ts names (30.522625ms)
+✔ North puts the work on the board, and the record says it acted for Ana (97.072917ms)
+✔ a burst of messages gets one answer, once Ana has been quiet two seconds (41.011125ms)
+memory: recall failed, the turn goes on without it: SyntaxError: Unexpected token 'd', "data: {"ty"... is not valid JSON
+✔ with a key, North and chat titles go to OpenAI, with the models app.ts names (48.477792ms)
 ℹ tests 3
 ℹ suites 0
 ℹ pass 3
@@ -263,14 +268,14 @@ $ node --disable-warning=ExperimentalWarning --test tests/app.test.ts
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 279.4875
+ℹ duration_ms 395.924
 ```
 
-No key, no network, under a third of a second.
+No real key, no outside network, under half a second.
 
 ## Check it
 
-`npm test` runs these with every plugin's tests, 34 in all. A test is worth what it catches, so
+`npm test` runs these with every plugin's tests, 110 in all. A test is worth what it catches, so
 break what each one covers and run it again: the model North thinks with when there's a key
 (app.ts), or `create_card` in boards' tools (`resources/tools.ts`).
 

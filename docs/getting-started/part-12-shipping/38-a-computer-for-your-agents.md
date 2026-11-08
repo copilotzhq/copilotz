@@ -115,6 +115,9 @@ export function plugins(settings: Settings): Plugin[] {
     skills,
     routines,
     computers,
+    // The computers plugin has a web_search of its own, run on the computer; Compass's is
+    // webTools', on any machine: the computer's goes before webTools adds its own.
+    definePlugin({ name: "web-search-from-webtools", resources: { tools: { web_search: null } } }),
     webTools,
     mcp,
     compass,
@@ -276,6 +279,11 @@ connects one, or adds one of theirs (in the terminal: /computer connect or
 
 That context is Copilotz's text, and it names `/computer connect` for apps whose terminal has it; in
 Compass, it's the Computer tab.
+
+Copilotz's `computers` has a `web_search` tool of its own, which searches from the connected
+computer. Resources merge field by field, so two plugins declaring one tool would blend; a small
+plugin between the two removes the computer's (`null` removes a resource, as JSON Merge Patch does),
+and webTools then declares its own, whole.
 
 ## Check it
 

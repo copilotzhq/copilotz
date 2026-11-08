@@ -152,9 +152,10 @@ export const identity: Plugin = definePlugin({
     if (collection === "person" && direct && access === "write") {
       throw failure("forbidden", "People change through their Actions.", { public: true });
     }
-    // Everything here is yours; nobody else reaches anything. Code acting for you isn't checked.
+    // Everything here is yours, and your agents' as they work for you. Nobody else reaches
+    // anything: the runtime asks this for every read and write they'd make, from outside or not.
     if (actor.kind === "person") return true;
-    return direct ? { _id: { $in: [] } } : undefined;
+    return actor.kind === "agent" ? undefined : { _id: { $in: [] } };
   },
   check(merged) {
     const you = merged.resources.identity as You | undefined;
@@ -173,10 +174,12 @@ Four hooks besides the primitives:
   `Response` out. `GET /me` tells the page whom it's showing. Routes deal with HTTP; Actions do the
   work.
 - **`guard`** is the rule: for an actor and an operation on a collection, a filter its documents
-  must match, `true` for "nothing to restrict", or `undefined` for "this rule has nothing to say". A
-  collection no rule speaks for never reaches the outside (a browser, the REST API). Each plugin
-  guards its own collections from direct writes (chat refuses them for messages, too); this one adds
-  who reaches anything at all.
+  must match, `true` for "nothing to restrict", or `undefined` for "this rule has nothing to say".
+  The runtime asks every plugin's rule about every read and write an actor makes, whether it comes
+  from outside (a browser, the REST API) or from code acting for them; a collection no rule speaks
+  for never reaches the outside. Here: you reach everything, your agents aren't restricted by this
+  rule (others still apply to them), and anyone else gets a filter nothing matches. Each plugin
+  guards its own collections from direct writes (chat refuses them for messages, too).
 - **`check`** runs once all plugins are merged, so a missing setting stops the app from starting.
 
 Who "you" are is a setting. `you.ts` reads it from the machine:

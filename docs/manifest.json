@@ -1,0 +1,69 @@
+{
+  "sections": [
+    {
+      "title": "Getting Started",
+      "items": [
+        {
+          "title": "Getting Started: build Compass",
+          "slug": "getting-started",
+          "description": "Build Compass on Copilotz 1.0: import the agentic core, rebuild Copilotz's other plugins for one person, one primitive at a time."
+        },
+        {
+          "title": "Ch 1: One agent, one message",
+          "slug": "getting-started/part-1-an-agent-of-your-own/01-one-agent-one-message",
+          "description": "A runtime, two of Copilotz's plugins and one of yours; the events a message leaves."
+        },
+        {
+          "title": "Ch 2: North, in your terminal",
+          "slug": "getting-started/part-1-an-agent-of-your-own/02-north-in-your-terminal",
+          "description": "A plugin of your own, laid out by primitive; the prompt is a View."
+        },
+        {
+          "title": "Ch 3: Compass in the browser",
+          "slug": "getting-started/part-1-an-agent-of-your-own/03-compass-in-the-browser",
+          "description": "Identity rebuilt for one person: a who, a route, a rule; the web page in Compass's look."
+        },
+        {
+          "title": "Ch 4: Today, every turn",
+          "slug": "getting-started/part-2-your-own-plugins/04-today-every-turn",
+          "description": "A turn context: the prompt's stable part, the part that changes, and the cache."
+        },
+        {
+          "title": "Ch 5: One store",
+          "slug": "getting-started/part-2-your-own-plugins/05-one-store",
+          "description": "SQLite, the store's tables, each collection as a SQL view, and one writer."
+        },
+        {
+          "title": "Ch 6: Chats that name themselves",
+          "slug": "getting-started/part-2-your-own-plugins/06-chats-that-name-themselves",
+          "description": "A Processor on another plugin's events, and a scripted model in its test."
+        },
+        {
+          "title": "Ch 7: Spaces",
+          "slug": "getting-started/part-2-your-own-plugins/07-spaces",
+          "description": "Rebuild a plugin others depend on, by its contract, with a parity test."
+        },
+        {
+          "title": "Ch 8: Spaces on the web",
+          "slug": "getting-started/part-2-your-own-plugins/08-spaces-on-the-web",
+          "description": "Web Views, and resource kinds as places other plugins plug in."
+        },
+        {
+          "title": "Ch 9: The board's data and Actions",
+          "slug": "getting-started/part-3-the-board/09-the-boards-data-and-actions",
+          "description": "Two collections that must agree, changed only through Actions, in transactions."
+        },
+        {
+          "title": "Ch 10: The board on screen",
+          "slug": "getting-started/part-3-the-board/10-the-board-on-screen",
+          "description": "The same board as a web View and a terminal View, both live."
+        },
+        {
+          "title": "Ch 11: The board for North",
+          "slug": "getting-started/part-3-the-board/11-the-board-for-north",
+          "description": "Tools that call the same Actions people use, and read back as text."
+        }
+      ]
+    }
+  ]
+}

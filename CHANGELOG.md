@@ -1,5 +1,7 @@
 ## Unreleased
 
+## 1.0.0-rc.30 — 2026-11-08
+
 **Upgrading.** `chat.send` no longer takes a file's content. Upload each file first with
 `chat.attach` (`{ name, type, data, voice? }`, as `files` took it), and send what it answers by id:
 

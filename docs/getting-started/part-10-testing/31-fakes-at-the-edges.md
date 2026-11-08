@@ -221,11 +221,13 @@ sends calls there:
 
 ```ts
 const openai = await serve(async (request) => {
-  asked.push({
-    path: new URL(request.url).pathname,
-    key: request.headers.get("authorization"),
-    body: await request.json(),
-  });
+  const path = new URL(request.url).pathname;
+  const body = await request.json();
+  asked.push({ path, key: request.headers.get("authorization"), body });
+  if (path === "/embeddings") {
+    const vector = Array.from({ length: 512 }, (_, i) => (i === 0 ? 1 : 0));
+    return Response.json({ data: [body.input].flat().map((_, index) => ({ index, embedding: vector })) });
+  }
   const events = [
     { type: "response.output_text.delta", delta: "Hello, Ana." },
     { type: "response.completed", response: { usage: { input_tokens: 9, output_tokens: 3 } } },
@@ -250,8 +252,11 @@ what Compass sent: `/responses`, `Bearer sk-test`, the model `gpt-6-luna`, and
 `reasoning: { effort: "low" }` for North and `"none"` for the title.
 
 With a key, memory finds what it recalls with OpenAI's embeddings too (app.ts names
-`openai/text-embedding-3-small`), and the fake answers that call with the same stream. Recall fails,
-memory says so, and the turn goes on without it: that's the one line between the tests below.
+`openai/text-embedding-3-small`, at 512 dimensions), so the fake answers `POST /embeddings` as
+well: one vector per input, in JSON. Leave that out and nothing breaks. Recall fails, memory says
+so in one line, and the turn goes on without it. But a fake should speak every part of the provider
+the app uses, or each run prints an error that isn't one. And since recall's call lands in `asked`
+too, the test looks for the title among the `/responses` calls only.
 
 ## Run it
 
@@ -259,7 +264,6 @@ memory says so, and the turn goes on without it: that's the one line between the
 $ node --disable-warning=ExperimentalWarning --test tests/app.test.ts
 ✔ North puts the work on the board, and the record says it acted for Ana (97.072917ms)
 ✔ a burst of messages gets one answer, once Ana has been quiet two seconds (41.011125ms)
-memory: recall failed, the turn goes on without it: SyntaxError: Unexpected token 'd', "data: {"ty"... is not valid JSON
 ✔ with a key, North and chat titles go to OpenAI, with the models app.ts names (48.477792ms)
 ℹ tests 3
 ℹ suites 0

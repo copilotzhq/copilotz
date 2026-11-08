@@ -84,10 +84,11 @@ return await ctx.transaction(async (tx) => {
     await cards.find({ in: board.in, board: board._id, column: column.id }),
   ).filter((c) => c._id !== card._id);
   const { order, renumbered } = orderAt(others, indexOf(others, place));
-  await cards.updateOne(
+  const moved = await cards.updateOne(
     { _id: card._id },
     { $set: { column: column.id, order, updatedBy: by, updated } },
   );
+  if (!moved.matchedCount) throw readOnly();
   for (const [id, fresh] of Object.entries(renumbered)) {
     await cards.updateOne({ _id: id }, { $set: { order: fresh } }, { writeConcern: { w: 0 } });
   }

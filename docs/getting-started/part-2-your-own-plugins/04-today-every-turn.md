@@ -95,6 +95,11 @@ It's Saturday, 7 November 2026, 22:13 (America/Sao_Paulo).
 </context>
 ```
 
+`/prompt` shows what North would be sent _now_. The date shows in the turn part only when it says
+something new: here, the minute changed since North was told. Within the same minute the turn part
+says `(nothing new)`, and the date sits in the history, on the message of the turn it was told in,
+where every later call finds it. That's what the test checks.
+
 ## Check it
 
 ```ts

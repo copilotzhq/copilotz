@@ -104,6 +104,11 @@ export const compass: Plugin = definePlugin({
 });
 ```
 
+`instructions: true` says the charter is the app's own words on how its agents work, so chat sends
+it as it is, right after the agent's instructions. Any other context is information, not
+instructions: chat wraps it in a `<context name="…">` tag and puts it after who's in the
+conversation (Chapter 4 shows one).
+
 A View is how data presents itself in one place. An `llm` View returns text for the model; later
 chapters add Views for the web (React) and the terminal (Ink) to the same plugins. `requires` says
 compass builds on chat: the runtime refuses to start without it.
@@ -145,8 +150,8 @@ export function plugins(settings: Settings = {}): Plugin[] {
 }
 ```
 
-The models plugin checks every agent's model when the runtime starts: a missing provider or an
-effort the model doesn't take stops `createRuntime`, not North's first answer.
+Chat checks every agent's model when the runtime starts, asking the models plugin: a missing
+provider or an effort the model doesn't take stops `createRuntime`, not North's first answer.
 
 ### The terminal
 
@@ -190,7 +195,8 @@ The front ends are added here, not in `app.ts`: only the process that draws load
 node --env-file-if-exists=.env terminal.ts
 ```
 
-Talk to North, then type `/prompt`:
+Talk to North, then type `/prompt`. You type as your user name on this machine; the transcripts in
+this guide set `COMPASS_ME=ana`:
 
 ```text
 ana → north › Hi North. In one line: who are you?
@@ -222,9 +228,9 @@ this agent. (`runtime.query("thread.prompt", { thread, agent })` returns it in c
 parts, in the order providers cache them:
 
 - **tools**: what North may call. None yet.
-- **system**: North's instructions, then `system` contexts (the charter), then who's in the
-  conversation. Chat adds that last part itself. It stays the same from turn to turn, so the
-  provider's prompt cache keeps it.
+- **system**: North's instructions, then the charter (a context with `instructions: true`), then
+  who's in the conversation, which chat adds itself, then any other `system` contexts. It stays the
+  same from turn to turn, so the provider's prompt cache keeps it.
 - **history**: the conversation, each message through its own View. It only grows at its end, so the
   cache keeps it too.
 - **turn**: `turn` contexts that say something new. Chapter 4 puts one there.
@@ -264,6 +270,12 @@ test("North answers a new chat, with the charter in its prompt's system part", a
 ```sh
 node --test "plugins/*/tests/*.test.ts"
 ```
+
+## Also in this chapter
+
+- `package.json`: the `terminal` and `test` scripts.
+
+`git diff lesson-1.1 lesson-1.2` shows every change.
 
 ## What you have now
 

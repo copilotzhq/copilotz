@@ -49,8 +49,8 @@ const runtime = await createRuntime({
 });
 ```
 
-Node prints a warning that `node:sqlite` is experimental; `--disable-warning=ExperimentalWarning` in
-the scripts keeps it quiet.
+Node prints a warning that `node:sqlite` is experimental; the `terminal` and `dev` scripts pass
+`--disable-warning=ExperimentalWarning` to keep it quiet.
 
 ## Run it
 
@@ -67,8 +67,8 @@ sqlite3 .data/compass.sqlite
 
 ```text
 sqlite> .tables
-blobs    events   image    message  nodes    shown    vectors
-edges    file     intent   meta     person   thread   wait
+blobs    events   image    message  nodes    shell    thread   wait
+edges    file     intent   meta     person   shown    vectors
 ```
 
 The store is a few tables, whatever the app's collections are:
@@ -82,28 +82,25 @@ The store is a few tables, whatever the app's collections are:
 | `vectors` | embeddings, for search by meaning                                                |
 | `meta`    | the store's own state: the owner's epoch, where each Processor has read to       |
 
-The rest (`message`, `person`, `thread`…) are SQL **views**, one per collection, with the document's
-fields as columns. You read them like tables:
+The rest (`message`, `person`, `thread`, and the terminal's `shell`…) are SQL **views**, one per
+collection, with the document's fields as columns. You read them like tables:
 
 ```text
 sqlite> SELECT _id, name FROM person;
 ana|Ana
-sqlite> SELECT seq, type, actor FROM events ORDER BY seq;
-1|action.started|
-2|person.created|
-3|action.completed|
-4|action.started|{"kind":"person","id":"ana"}
-5|thread.created|{"kind":"person","id":"ana"}
-6|message.created|{"kind":"person","id":"ana"}
-7|turn.requested|{"kind":"person","id":"ana"}
-8|action.completed|{"kind":"person","id":"ana"}
-9|message.created|{"kind":"agent","id":"north","for":{"kind":"person","id":"ana"},"via":…}
-10|thread.updated|{"kind":"agent","id":"north","for":{"kind":"person","id":"ana"},"via":…}
+sqlite> SELECT seq, type, actor FROM events ORDER BY seq DESC LIMIT 6;
+20|thread.updated|{"kind":"agent","id":"north","for":{"kind":"person","id":"ana"},"via":…}
+19|message.created|{"kind":"agent","id":"north","for":{"kind":"person","id":"ana"},"via":…}
+18|action.completed|{"kind":"person","id":"ana"}
+17|turn.requested|{"kind":"person","id":"ana"}
+16|message.created|{"kind":"person","id":"ana"}
+15|thread.updated|{"kind":"person","id":"ana"}
 ```
 
-Every event says who did it. The first three have no actor: the server's own `person.set` call, made
-as the system. North's answer is from `north`, acting **for** Ana: everything an agent does is done
-for someone, and can reach only what they reach.
+Every event says who did it. Ana's message, and the call that sent it, are hers; an event with no
+actor is the system's (the app's own `person.set` as it starts). North's answer is from `north`,
+acting **for** Ana: everything an agent does is done for someone, and can reach only what they
+reach.
 
 Read the store by hand as much as you like, but never write it by hand: writes go through the
 runtime, as Actions, so they're checked and recorded.

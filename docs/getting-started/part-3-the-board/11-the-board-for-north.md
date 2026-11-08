@@ -27,8 +27,9 @@ needs ids to act on, short lines, no pixels.
 **Tools**: chat's `tools` resource kind. A tool is what a model may call: a description the model
 reads, a JSON Schema input, and a `run`. Boards declares six, `list_boards`, `read_board`,
 `create_board`, `create_card`, `update_card` and `move_card`, and each one is small: it finds the
-conversation's space, resolves the names a model uses ("Doing", "North", "the launch board") to ids,
-and **calls the board's Action, by name**.
+conversation's space and resolves the names a model uses ("Doing", "North", "the launch board") to
+ids. `list_boards` and `read_board` only read; the four that change the board **call its Actions, by
+name**.
 
 `resources/create-card.ts`:
 
@@ -90,9 +91,11 @@ Three things make it safe and readable:
   model never sees it. (Since Chapter 7 every chat a person starts is in a space, so North has them
   everywhere you talk to it.)
 - **The Action does the work.** `ctx.call("card.create", …)` runs as the agent, acting **for** the
-  person it works for: the Action's `allow`, the rules and the guard all apply, and the record says
-  `{ kind: "agent", id: "north", for: { kind: "person", id: "ana" } }`. A tool is never a back door;
-  it's one more caller of the same Actions.
+  person it works for: the rules apply to every read and write it makes, the Action's own checks
+  run, and the record says `{ kind: "agent", id: "north", for: { kind: "person", id: "ana" } }`. (An
+  Action's `allow` is for callers from outside, a browser or a script; plugin code, a tool included,
+  calls any Action, so the tool is where you decide what an agent may do.) A tool is never a back
+  door; it's one more caller of the same Actions.
 - **Text for the model.** A tool returns what the model reads: short lines with the ids it needs
   next (`read_board` lists each card as `- [id] title · owner · labels · due`). A refusal comes back
   as text too, so the model can read why and try again, instead of the turn failing.
@@ -126,19 +129,24 @@ it, or say it's done before the tool answers. The charter says what you want, in
 
 ## Run it
 
-In a new space, ask: "Put on the board: record the trailer, and review the course page." North lists
-the boards, finds none, makes one, adds two cards, and only then answers:
+In a new space, ask in the browser: "Put on the board: record the trailer, and review the course
+page." North lists the boards, finds none, makes one, adds two cards, and only then answers. The
+chat shows each tool call as a card (`board.step`), then the answer:
 
 ```text
 No boards in this space yet. Make one with create_board
-Made the board "Course launch" (/board/aaac98338273), with columns Backlog, To do, Doing, Blocked,
-In review, Done. Add cards with create_card
-Created "Record the trailer" in To do, for North
-Created "Review the course page" in To do, for North
-North › I added both tasks to the Course launch board under To do, assigned to me: "Record the
-trailer" and "Review the course page." Done means the trailer file is ready, and the page has been
-checked with any fixes made or noted.
+Made the board “Course launch” (/board/cf6e36f039df), with columns Backlog, To do, Doing, Blocked,
+In review, Done. Add cards with create_card                                       Course launch
+Created “Record the trailer” in To do, for Ana                                     Course launch
+Created “Review the course page” in To do, for Ana                                 Course launch
+
+I added both to the Course launch board in To do, assigned to you. "Record the trailer" is done
+when it's recorded and ready for review; "Review the course page" is done when it's reviewed and
+any needed changes are identified.
 ```
+
+The model reads a fuller text for each call (the card's id, and the board it's on); the card in the
+chat is the `board.step` View of it, with a link to the board.
 
 Open the Board tab, or `/board` in the terminal: the same two cards. `/prompt` shows the six tools
 at the top of North's prompt:

@@ -179,9 +179,63 @@ Four hooks besides the primitives:
   who reaches anything at all.
 - **`check`** runs once all plugins are merged, so a missing setting stops the app from starting.
 
-Who "you" are is a setting. `you.ts` reads it (your user name on this machine, or `COMPASS_ME` and
-`COMPASS_NAME`), and `app.ts` puts it in the `identity` resource and adds `identity` to the list,
-after chat.
+Who "you" are is a setting. `you.ts` reads it from the machine:
+
+```ts
+import process from "node:process";
+import { userInfo } from "node:os";
+import type { You } from "./plugins/identity/mod.ts";
+
+export function you(): Required<You> {
+  const person = process.env.COMPASS_ME || userInfo().username;
+  const name = process.env.COMPASS_NAME || person[0].toUpperCase() + person.slice(1);
+  return { person, name };
+}
+```
+
+`app.ts` adds identity after chat, and puts you in the `identity` resource. `plugins()` now needs
+the settings, since identity's `check` refuses to start without knowing who you are:
+
+```ts
+export type Settings = {
+  /** Who the app is for: you, on this machine. */
+  you: You;
+  /** OpenAI's API key; without it, agents answer with the offline fake model. */
+  openai?: string;
+};
+
+function settingsPlugin(settings: Settings): Plugin {
+  return definePlugin({
+    name: "compass-settings",
+    resources: {
+      identity: settings.you,
+      // … provider and model, as before
+    },
+  });
+}
+
+export function plugins(settings: Settings): Plugin[] {
+  return [models, chat, identity, compass, settingsPlugin(settings)];
+}
+```
+
+The terminal types as you now, a person, so everything it does is yours, under the rules:
+
+```ts
+const me = you();
+const runtime = await createRuntime({
+  store: memoryStore(),
+  plugins: [...plugins({ you: me, openai: process.env.OPENAI_API_KEY }) /* … front ends */],
+});
+await runtime.call("person.set", me);
+// You type as yourself: every call and read is yours.
+await terminal({
+  runtime,
+  me: me.person,
+  actor: { kind: "person", id: me.person },
+  banner: "Compass",
+});
+```
 
 ### The page
 
@@ -298,6 +352,16 @@ test("from another machine, or through a proxy, it's nobody", async () => {
   }
 });
 ```
+
+## Also in this chapter
+
+- `plugins/compass/theme.ts`: Compass's look, a `theme` resource (its mark as SVG paths, and its
+  colours for light and dark). Copy it from the tag, or write a theme of your own.
+- `plugins/identity/routes/me.ts` and `contract.ts`, as described above.
+- `plugins/compass/tests/compass.test.ts`: `plugins({ you: { person: "ana" } })`.
+- `package.json`: the `dev` script.
+
+`git diff lesson-1.2 lesson-1.3` shows every change.
 
 ## What you have now
 

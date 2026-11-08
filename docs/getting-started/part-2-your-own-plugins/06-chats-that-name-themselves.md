@@ -79,10 +79,31 @@ processors: {
 },
 ```
 
+And `app.ts` says what `titles` is, only when there's a key:
+
+```ts
+model: {
+  // What North thinks with: the `north` model alias its agent names.
+  north: settings.openai ? { model: "openai/gpt-6-luna", effort: "low" } : "fake/echo",
+  // What names chats: small and cheap. Offline, chats keep their first message.
+  ...(settings.openai ? { titles: { model: "openai/gpt-6-luna", effort: "none" } } : {}),
+},
+```
+
 ## Run it
 
-Write "Preciso planejar o lançamento do curso para dezembro" and the sidebar names the chat
-"Lançamento do curso em dezembro", in the language you wrote in.
+In the terminal, start two chats (`/new` starts the second), each about one thing. Then look in the
+store, the way Chapter 5 did:
+
+```text
+$ sqlite3 -header -column .data/compass.sqlite "SELECT title FROM thread"
+title
+---------------------------------
+Lançamento do Curso em Dezembro
+Reunião de design na quinta-feira
+```
+
+Named in the language you wrote in. In the browser, a chat's header shows its name too.
 
 ## Check it
 

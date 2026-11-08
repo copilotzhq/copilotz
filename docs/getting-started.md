@@ -68,9 +68,49 @@ npm install copilotz@1.0.0-rc.29 react@19 react-dom@19
 npm install -D typescript @types/node @types/react @types/react-dom esbuild
 ```
 
+Node runs TypeScript files as they are, so there's no build step for the server or the terminal. The
+editor and `tsc` need to know imports end in `.ts`; this `tsconfig.json` is the guide's:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2024", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": false,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  }
+}
+```
+
+And the scripts the chapters run, in `package.json` (each arrives with the chapter that needs it):
+
+```json
+"scripts": {
+  "hello": "node --env-file-if-exists=.env hello.ts",
+  "terminal": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env terminal.ts",
+  "dev": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server.ts",
+  "test": "node --disable-warning=ExperimentalWarning --test --test-timeout=60000 --test-concurrency=1 \"plugins/*/tests/*.test.ts\" \"tests/*.test.ts\"",
+  "check": "tsc --noEmit -p ."
+}
+```
+
+A `.env` beside them may hold `OPENAI_API_KEY=sk-…`; the scripts read it if it's there.
+
 The code at the end of each chapter is a tag of the course repository,
 [copilotzhq/compass-course](https://github.com/copilotzhq/compass-course) (`lesson-1.1`,
-`lesson-1.2`…), and each chapter is also a video lesson of the Copilotz course.
+`lesson-1.2`…), and each chapter is also a video lesson of the Copilotz course. Chapters show the
+files that matter; each ends with what else changed, and `git diff lesson-a lesson-b` shows all of
+it.
 
 ## The chapters
 

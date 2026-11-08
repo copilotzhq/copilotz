@@ -51,7 +51,7 @@ Chapter 8 shows it without knowing boards exist. `/board/<id>` is a board's own 
 `board`), and the palette finds boards by name.
 
 The board itself is a View that reads cards and draws columns (`views/web/board-view.tsx`). Moving a
-card is a column picker and two buttons, each a call to the same Action the terminal and agents use:
+card is a column picker and two buttons, each a call to the same Action every caller uses:
 
 ```tsx
 const move = async (card: string, place: { column?: string; before?: string; after?: string }) => {
@@ -129,21 +129,30 @@ working in. `terminal.ts` adds `boardsTerminal`; `front.ts` adds `boardsWeb`.
 
 ## Run it
 
+In the browser, make a space, open its Board tab, and make a board, "Launch": it comes with its
+columns. Add two cards in To do, "Record the trailer" for North and "Review the course page" for
+you, and move the first to Doing. Then, with the server stopped, the terminal on the same store:
+
 ```text
+ana › /spaces
+[1] Course launch · shared · 5b4479ac-…
+[2] Personal · personal · personal:ana ●
 ana › /work 1
 You work in Course launch now.
 ana › /board
-Course launch
+Launch
   Backlog (0)
     No cards.
-  To do (2)
+  To do (1)
+    • Review the course page · Ana
+  Doing (1)
     • Record the trailer · North
-    • Review the course page · North
-  Doing (0)
+  Blocked (0)
+    No cards.
 …
 ```
 
-In the browser, open the space and its Board tab: the same cards, in the same order.
+The same cards, in the same order.
 
 ## Check it
 

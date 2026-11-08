@@ -170,9 +170,9 @@ export const rules: Guard = async (_, { collection, access, direct }, ctx) => {
 
 A rule returns a filter, and the runtime does the rest: an insert, and whatever an update leaves,
 must match it. Chat declares its own collections as `shared`, so from now on every chat lives in a
-space: a person's `chat.send` without one is refused ("That thread document would be out of your
-reach"), exactly as with Copilotz's spaces. The terminal and the page start in your Personal space,
-so you never see it.
+space: a person's `chat.send` without one is refused
+(`That "thread" document would be out of your reach.`), exactly as with Copilotz's spaces. The
+terminal and the page start in your Personal space, so you never see it.
 
 ### Telling agents where they are
 
@@ -240,6 +240,21 @@ const { space } = await runtime.call<{ space: string }>("space.personal", {}, { 
 await terminal({ runtime, me: me.person, actor, space, banner: "Compass" });
 ```
 
+And the page starts there too: the web host takes a `start` function, which says where you work
+first (`front.ts`, passed to `web()` in `browser.tsx`):
+
+```ts
+/** Where you work first: your Personal space. */
+export const start = async (client: Client) => ({
+  space: (await client.call<{ space: string }>("space.personal", {})).space,
+});
+```
+
+```ts
+// browser.tsx
+await web({ root: document.getElementById("app")!, plugins: front, start });
+```
+
 ## Run it
 
 ```text
@@ -265,6 +280,18 @@ even you can't write spaces through the REST API. And a **parity test** (`tests/
 the same scenario runs on Copilotz's `spaces` and `identity` and on yours, and the answers must be
 the same. Another test runs Copilotz's own boards and documents on your spaces, unchanged. That's
 what "same contract" means in practice: code written for Copilotz's plugin works with yours.
+
+## Also in this chapter
+
+- `plugins/identity/collections/person.ts`: two queries the `names` resource needs, `names` and
+  `pictures` (ids in, names or pictures out), which Copilotz's front ends and plugins ask when they
+  show a person.
+- `tests/store.test.ts`: it sends in Ana's Personal space (`in: space`), since a person's chat now
+  lives in a space.
+- The rest of spaces: `actions/personal.ts`, `rename.ts`, `archive.ts`, `agent.ts`, `roster.ts`,
+  `collections/member.ts` (which agents work in a space), `shared/agents.ts`, `views/elsewhere.ts`.
+
+`git diff lesson-2.3 lesson-2.4` shows every change.
 
 ## What you have now
 

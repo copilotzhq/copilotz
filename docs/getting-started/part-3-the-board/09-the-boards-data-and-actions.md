@@ -66,8 +66,9 @@ spaces that exist.
 ### Seven Actions, and one guard
 
 `board.create`, `board.update`, `board.delete`, `card.create`, `card.update`, `card.move` and
-`card.delete`. Each one reads what it needs and writes what must agree **in one transaction**:
-either every write commits, with its events, or none does. Here's the heart of `card.move`
+`card.delete`. The four that touch several documents (`card.create`, `card.move`, `board.update`,
+`board.delete`) read what they need and write what must agree **in one transaction**: either every
+write commits, with its events, or none does. Here's the heart of `card.move`
 (`actions/move-card.ts`):
 
 ```ts
@@ -97,8 +98,10 @@ return await ctx.transaction(async (tx) => {
 ```
 
 A card's order is a number between its neighbours'. When a column gets crowded and there's no number
-left between two cards, the move renumbers the column, in the same commit. A column that isn't on
-the board is refused before anything is written.
+left between two cards, the move renumbers the column, in the same commit: `writeConcern: { w: 0 }`
+sends each of those writes with the commit without waiting for its own answer. A column that isn't
+on the board is refused before anything is written, and `said()` turns a failure into one a person
+can read.
 
 Then the guard (`mod.ts`), so nothing outside writes either collection directly:
 
@@ -140,10 +143,16 @@ own one, in an app for one person?
 From any client that's you, the Actions are the board:
 
 ```ts
-const { board } = await runtime.call("board.create", { in: space, name: "Launch" }, { actor });
-const { card } = await runtime.call("card.create", { board, title: "Record the trailer" }, {
-  actor,
-});
+const actor = { kind: "person", id: "ana" } as const;
+const { space } = await runtime.call<{ space: string }>("space.personal", {}, { actor });
+const { board } = await runtime.call<{ board: string }>("board.create", {
+  in: space,
+  name: "Launch",
+}, { actor });
+const { card } = await runtime.call<{ card: string }>("card.create", {
+  board,
+  title: "Record the trailer",
+}, { actor });
 await runtime.call("card.move", { card, column: "doing" }, { actor });
 ```
 
@@ -156,6 +165,16 @@ actor.
 move to a column the board doesn't have changes nothing; many moves into one place renumber the
 column before orders collide; deleting a board deletes its cards; and every direct write over the
 REST API is a 403 while reads still work.
+
+## Also in this chapter
+
+- `app.ts`: `boards` after `spaces`.
+- `plugins/spaces/tests/work.test.ts`: the test that runs Copilotz's own boards on your spaces takes
+  your `boards` out of the list first, since two plugins can't share a name.
+- The rest of boards: `collections/board.ts`, `contract.ts`, the other Actions, and `shared/`
+  (columns, order, fields, errors, loading a board or a card).
+
+`git diff lesson-2.5 lesson-3.1` shows every change.
 
 ## What you have now
 

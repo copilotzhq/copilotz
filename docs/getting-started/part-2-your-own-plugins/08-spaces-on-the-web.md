@@ -107,27 +107,28 @@ export const spaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
   const spaces = ctx.db.collection("space").query<Reached[]>("reached", {}).value;
   if (spaces === undefined) return <Page title={<Skeleton width={220} height={30} />} />;
   const space = spaces.find((space) => space._id === item._id);
-  // …
+  // … a page saying it doesn't exist, when it doesn't
   const tabs = tabsOf(ctx.resources.spaceTabs);
   const query = (ctx.hints.query ?? {}) as Record<string, string>;
   const tab = chosen(tabs, query.tab);
-  // …
-  <Tabs
-    label={`${space.name} tabs`}
-    value={tab.key}
-    variant="line"
-    onChange={(key) => go(href(key))}
-    tabs={tabs.map((tab) => ({
-      value: tab.key,
-      label: tab.title,
-      icon: tab.icon,
-      href: href(tab.key),
-    }))}
-  />;
-  {
-    ctx.show(shown.view, { _id: space._id }, { in: space._id, mode: "page" });
-  }
-  // …
+  // … `shown`: the tab, or its section the address names; `href`: a tab's address
+  return (
+    <Page title={space.name} width="lg" icon={space.kind === "personal" ? "person" : "folder"}>
+      <Tabs
+        label={`${space.name} tabs`}
+        value={tab.key}
+        variant="line"
+        onChange={(key) => go(href(key))}
+        tabs={tabs.map((tab) => ({
+          value: tab.key,
+          label: tab.title,
+          icon: tab.icon,
+          href: href(tab.key),
+        }))}
+      />
+      {ctx.show(shown.view, { _id: space._id }, { in: space._id, mode: "page" })}
+    </Page>
+  );
 };
 ```
 
@@ -140,22 +141,12 @@ same way. That's the third way plugins reach each other, beside calling Actions 
 The shapes of `spaceTabs` and `spaceSidebar` are in `contract.ts`, the one file other plugins may
 import from spaces.
 
-### Where the page starts
+### In the page
 
-`front.ts` adds `spacesWeb`, and tells the web host where you work first, your Personal space:
+`front.ts` adds `spacesWeb` beside chat's front end:
 
 ```ts
 export const front: Plugin[] = [webShell, chatWeb, spacesWeb, compassWeb, compassTheme];
-
-/** Where you work first: your Personal space. */
-export const start = async (client: Client) => ({
-  space: (await client.call<{ space: string }>("space.personal", {})).space,
-});
-```
-
-```ts
-// browser.tsx
-await web({ root: document.getElementById("app")!, plugins: front, start });
 ```
 
 ## Run it

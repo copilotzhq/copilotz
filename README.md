@@ -265,7 +265,7 @@ their front ends from `/web` and `/terminal` beside it.
 
 ## Learn it
 
-- **[Getting Started](docs/getting-started.md)** builds Compass, a single-user workspace where you
+- **[Build Compass](docs/build-compass.md)** builds Compass, a single-user workspace where you
   and a team of agents share chats, a board and documents, in 41 chapters. You import Copilotz's
   agentic core and rebuild the rest yourself, one primitive at a time.
 - **[The video course](#)**, in Portuguese and English, follows the same chapters.

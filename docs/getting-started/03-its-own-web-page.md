@@ -78,7 +78,7 @@ One read, for every medium. Chapter 7 draws the same reads inside ChatGPT, and c
 lists, with a Book or Cancel button on each line. The View reads, and hands it what it read:
 
 ```tsx
-const salon = (ctx: Ctx, title: string, where: { in?: string; thread?: string }) => (
+const salon = (ctx: Ctx, title: string, where: { thread?: string } = {}) => (
   <Salon
     title={title}
     bookings={ctx.db.collection("booking").query<Reached[]>("reached", {}).value ?? []}
@@ -92,8 +92,9 @@ export const bookingsWeb: Plugin = definePlugin({
   name: "bookings-web",
   requires: ["web-shell"],
   views: {
-    // A space's Bookings tab: every booking there. Booked here, it's a walk-in, at the desk.
-    "bookings.tab": (space: { _id: string }, ctx: Ctx) => salon(ctx, "Bookings", { in: space._id }),
+    // A space's Bookings tab: every booking there. Booked here, it's a walk-in, where the page
+    // is: the call is in its space.
+    "bookings.tab": (_space: unknown, ctx: Ctx) => salon(ctx, "Bookings"),
   },
   resources: {
     spaceTabs: { bookings: { title: "Bookings", view: "bookings.tab", order: 15 } },
@@ -105,7 +106,9 @@ export const bookingsWeb: Plugin = definePlugin({
   observed by: when a commit changes the answer, the runtime runs the View again, and the page
   redraws. No polling, no refresh button.
 - **The buttons are the Actions.** `ctx.call` calls `booking.make` as the person at the page, under
-  the same rules as anyone.
+  the same rules as anyone, and where the page is. Copilotz's web host says each page's space: on
+  `/space/desk`, every call is at the desk (`in`). So the tab passes no chat, and Book there is a
+  walk-in at the desk.
 - **`spaceTabs`** is a resource kind of Copilotz's spaces front end. One entry puts a Bookings tab
   on every space's page, and spaces never imports bookings.
 
@@ -201,10 +204,10 @@ Sat 10:00 Book
 And the tests:
 
 ```text
-✔ staff see every booking; a customer sees only their own (138.025625ms)
-✔ a customer can't book into another's chat, take a slot, or cancel what isn't theirs (76.440541ms)
-✔ the page is served, with the salon's code (186.310958ms)
-✔ staff's Bookings tab: every booking, live, and its buttons are the Actions (111.882167ms)
+✔ staff see every booking; a customer sees only their own (71.996459ms)
+✔ a customer can't book into another's chat, take a slot, or cancel what isn't theirs (35.61375ms)
+✔ the page is served, with the salon's code (99.035667ms)
+✔ staff's Bookings tab: every booking, live, and its buttons are the Actions (44.390708ms)
 ℹ tests 4
 ℹ suites 0
 ℹ pass 4
@@ -212,7 +215,7 @@ And the tests:
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 1436.991291
+ℹ duration_ms 650.11525
 ```
 
 ## What this unlocks

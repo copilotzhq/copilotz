@@ -80,7 +80,8 @@ export const makeAction = defineAction({
 });
 ```
 
-- `allow` says who may call it from outside. `people` lets in any actor whose kind is `person`.
+- `allow` says who may call it, whichever way the call comes in. `people` lets in people, and an
+  agent working for one of them (chapter 4).
 - `ctx.db` reads and writes collections with the MongoDB API.
 - A refusal is a `failure`: a code callers act on, and a message people read.
 - `slotsOf(ctx)` reads the `slots` resource, whatever the app set it to.

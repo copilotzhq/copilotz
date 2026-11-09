@@ -90,10 +90,10 @@ cancel_booking: tool({
 }),
 ```
 
-A tool runs as the agent **acting for** whoever it works for: in Bia's chat, the concierge for Bia;
-at the desk, the concierge for Sam. Its reads and its Actions are checked against that person's
-reach. In Caio's chat, `findOne({ slot: "tue-10" })` can't find Bia's booking, whatever the model
-was told.
+A tool runs as the agent **acting for** whoever it works for, where its chat is (`ctx.in`): in Bia's
+chat, the concierge for Bia; in Sam's, the concierge for Sam; both at the desk. Its reads and its
+Actions are checked against that person's reach, in that space alone. In Caio's chat,
+`findOne({ slot: "tue-10" })` can't find Bia's booking, whatever the model was told.
 
 The tools join bookings' resources (`tools`), the resource kind chat reads them from.
 
@@ -164,6 +164,41 @@ const made = (await store.events(0)).find((e) => e.type === "booking.created")!;
 assert.equal(who(made.actor!), `agent concierge for contact ${bia.actor.id}`);
 ```
 
+### Only what its customer may call
+
+An Action's `allow` is asked of the concierge too, and of whom it works for (chapter 2). The last
+test gives it a tool that calls a staff-only Action, `salon.close` (`allow: people`). The tool's
+`offer` hands it to the concierge without changing the app:
+
+```ts
+close_day: tool({
+  description: "Closes the salon for a day",
+  input: { type: "object", properties: { day: { type: "string" } }, required: ["day"] },
+  offer: ["concierge"],
+  run: ({ day }, ctx) => ctx.call("salon.close", { day }),
+}),
+```
+
+In Bia's chat, the call is refused before `salon.close` runs. At the desk, for Sam, the same tool
+runs:
+
+```ts
+// In Bia's chat it works for a customer, whom `people` doesn't let in: so neither is it.
+const bia = await customer(runtime, "Bia");
+await runtime.call("chat.send", { thread: bia.thread, text: "Close Friday." }, {
+  actor: bia.actor,
+});
+await runtime.idle();
+assert.equal(lastRead(concierge.sent), 'Error: agent concierge may not call "salon.close".');
+// At the desk it works for Sam, staff: the same tool runs.
+await runtime.call("chat.send", { in: DESK, text: "Close Friday." }, { actor: sam });
+await runtime.idle();
+assert.equal(lastRead(concierge.sent), '{"closed":"fri"}');
+```
+
+So an Action only staff may call can sit behind a tool the concierge has everywhere. In a customer's
+chat, it's refused.
+
 ### In the terminal
 
 `terminal.ts` runs the same app in Copilotz's terminal, as Sam at the desk. `bookingsTerminal` adds
@@ -186,21 +221,22 @@ npm test
 ```
 
 ```text
-✔ the concierge books for a customer, in their chat, and the record says for whom (173.034667ms)
-✔ whatever the model asks, it reaches only what its customer does (107.330375ms)
-✔ staff ask the same concierge at the desk, and it reaches every booking (89.993459ms)
-✔ staff see every booking; a customer sees only their own (144.355583ms)
-✔ a customer can't book into another's chat, take a slot, or cancel what isn't theirs (75.076333ms)
-✔ the page is served, with the salon's code (294.521375ms)
-✔ staff's Bookings tab: every booking, live, and its buttons are the Actions (95.325958ms)
-ℹ tests 7
+✔ the concierge books for a customer, in their chat, and the record says for whom (90.257125ms)
+✔ whatever the model asks, it reaches only what its customer does (56.13425ms)
+✔ staff ask the same concierge at the desk, and it reaches every booking (41.799083ms)
+✔ the concierge calls only what whoever it works for may (58.694125ms)
+✔ staff see every booking; a customer sees only their own (74.031667ms)
+✔ a customer can't book into another's chat, take a slot, or cancel what isn't theirs (36.958542ms)
+✔ the page is served, with the salon's code (98.62875ms)
+✔ staff's Bookings tab: every booking, live, and its buttons are the Actions (44.27375ms)
+ℹ tests 8
 ℹ suites 0
-ℹ pass 7
+ℹ pass 8
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 2064.72275
+ℹ duration_ms 1056.175458
 ```
 
 With `OPENAI_API_KEY` in `.env`, talk to the concierge as Sam:
@@ -213,7 +249,7 @@ npm run terminal
 The salon
 Sam → concierge › Book Thursday 9 for Rui, a walk-in.
   ⚙ concierge: list_slots → ["tue-10","tue-11","wed-15","thu-09","f…
-  ⚙ concierge: book → {"booking":"fa1a2dc9-480a-4cda-a9fd-f4c…
+  ⚙ concierge: book → {"booking":"52686cba-767a-4873-8550-4d1…
 concierge › Booked Thursday at 9:00 for Rui.
 sam › /bookings
 Thu 09:00 (thu-09), for Rui
@@ -229,7 +265,7 @@ a name.
 - **Tool, Action, the world.** The model calls a tool, the tool calls an Action, and the Action is
   the only thing that changes anything.
 - **An agent with its customer's limits.** Tell it anything: it reaches what the person it works for
-  reaches, and the record says so.
+  reaches, calls only what they may, and the record says so.
 - **Tests without a model.** A script plays the model's part, offline, in milliseconds.
 
 ## Your challenge

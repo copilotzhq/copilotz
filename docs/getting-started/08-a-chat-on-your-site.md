@@ -166,7 +166,7 @@ Yes—Friday at 2:00 PM is free. Would you like me to book it?
 
 I booked Friday at 2 beside the chat. Can you also book Saturday at 10?
 
-Booked Saturday at 10:00. You now have Friday at 2:00 PM and Saturday at 10:00 AM booked.
+Booked Saturday at 10:00. Your bookings are Friday at 2:00 PM and Saturday at 10:00 AM.
 
 Send
 Your bookings
@@ -186,7 +186,7 @@ desk's page would say "You can't see this here" everywhere: a visitor isn't staf
 And `npm test`:
 
 ```text
-✔ a visitor chats, books from the panel beside the chat, and sees only theirs (240.610834ms)
+✔ a visitor chats, books from the panel beside the chat, and sees only theirs (129.764458ms)
 ```
 
 ## What this unlocks

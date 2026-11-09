@@ -31,8 +31,8 @@ An app is a **runtime** made of **plugins**. A plugin is plain objects, made of 
 
 Around them, the runtime keeps one contract for every caller:
 
-- **Who is asking.** Every call carries an actor: a person, a contact from outside, or an agent
-  acting for one of them.
+- **Who is asking, and where.** Every call carries an actor: a person, a contact from outside, or an
+  agent acting for one of them. In an app with spaces, it also says where the work is.
 - **The rules, at the data.** Reads come back filtered by what the actor reaches, and writes are
   checked, whichever way the call came in.
 - **The record.** Every write is an event with its actor, so "who booked Tuesday, for whom?" always
@@ -56,7 +56,7 @@ git switch -c my-salon chapter-1
 npm ci
 ```
 
-`chapter-0` is the empty start: `package.json` with `copilotz@1.0.0-rc.31`, React and the TypeScript
+`chapter-0` is the empty start: `package.json` with `copilotz@1.0.0-rc.32`, React and the TypeScript
 toolchain, and `tsconfig.json`. Node runs TypeScript files as they are, so there's no build step.
 Each chapter says which scripts it adds: `npm run hello`, `dev`, `terminal`, `tour`, and always
 `npm test` and `npm run check`. A `.env` beside them may hold your `OPENAI_API_KEY`.

@@ -182,14 +182,14 @@ Booked Wed 15:00.
 Bookings:
 Wed 15:00 (wed-15), for Assistant
 
-chat: -t7DYhJPsaQX9YBt1RWpOg
+chat: kix0gO-FRvfOEdTcl-A1Nw
 (stopped, started again)
-$ tools/call my_bookings {"chat":"-t7DYhJPsaQX9YBt1RWpOg"}
+$ tools/call my_bookings {"chat":"kix0gO-FRvfOEdTcl-A1Nw"}
 Wed 15:00 (wed-15), for Assistant
 ```
 
-Now PostgreSQL, and a deploy. Start the salon with `DATABASE_URL`, and then a second one on another
-port, as a new deploy would. The first hands over:
+Now PostgreSQL, and a deploy. Start the salon with `DATABASE_URL`, book from an assistant, and then
+start a second one on another port, as a new deploy would. The first hands over:
 
 ```text
 The salon's site on http://127.0.0.1:8098/, the desk at /space/desk, MCP at http://127.0.0.1:8098/mcp/salon
@@ -202,12 +202,11 @@ The salon's site on http://127.0.0.1:8099/, the desk at /space/desk, MCP at http
 web: visitors come from 127.0.0.1, a private address: a proxy or a load balancer's before the app, not theirs. Every visitor is then counted as one caller, so the limits by address hold for everyone together. Say how the app's front names callers (the caller resource), unless this is a machine of your own.
 ```
 
-A visitor's page, still open in a browser, came back to the new process, and the salon said what the
-`caller` setting is for. The booking made through the first process reads the same through the
-second. And `npm test`:
+The same handle reads the same booking through the second process. When a visitor opened the site
+there, the salon said what the `caller` setting is for. And `npm test`:
 
 ```text
-✔ kept: the bookings outlive the process, and a conversation stays itself (249.317333ms)
+✔ kept: the bookings outlive the process, and a conversation stays itself (143.603375ms)
 ```
 
 ## What this unlocks

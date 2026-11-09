@@ -107,7 +107,7 @@ npm run tour
 
 ```text
 desk      › booked Tue 10:00 for Rui
-bia       › Yes—Tuesday at 11:00 was free, and I booked it for you.
+bia       › Tuesday at 11:00 is booked for you.
 assistant › Booked Wed 15:00.
 site      › Booked Friday at 14:00.
 whatsapp  › You’re booked for Saturday at 10:00.
@@ -146,7 +146,7 @@ Bad signature [401]
 And `npm test`:
 
 ```text
-✔ a customer books from WhatsApp, and the desk sees it with everyone else's (190.348542ms)
+✔ a customer books from WhatsApp, and the desk sees it with everyone else's (110.152ms)
 ```
 
 ## What this unlocks

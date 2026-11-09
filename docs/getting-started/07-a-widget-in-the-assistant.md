@@ -138,7 +138,7 @@ With `npm run dev`, `tools/list` now says which tools draw a widget, and which o
 call (each tool's `_meta`, shortened):
 
 ```text
-book {"openai/toolInvocation/invoking": "Booking…", "openai/toolInvocation/invoked": "Booked.", "ui": {"visibility": ["model", "app"], "resourceUri": "ui://salon/widget-ab0b59821a97.html"}, "openai/outputTemplate": "ui://salon/widget-ab0b59821a97.html", ...}
+book {"openai/toolInvocation/invoking": "Booking…", "openai/toolInvocation/invoked": "Booked.", "ui": {"visibility": ["model", "app"], "resourceUri": "ui://salon/widget-d0b39dc8903c.html"}, "openai/outputTemplate": "ui://salon/widget-d0b39dc8903c.html", ...}
 book_slot {"ui": {"visibility": ["app"]}, "openai/widgetAccessible": true, "openai/visibility": "private", ...}
 copilotz_read {"ui": {"visibility": ["app"]}, "openai/widgetAccessible": true, "openai/visibility": "private", ...}
 ```
@@ -149,13 +149,13 @@ And `book` answers with the text the model reads, and, apart from it, the widget
 {
  "view": "bookings.widget",
  "hints": {
-  "thread": "mcp-06545596e785a1371b4cb768cb8e57ed"
+  "thread": "mcp-1517b62fda12a6bf81e7ea53b192e0d1"
  },
  "viewer": {
   "kind": "contact",
-  "name": "contact:c-1f6bd6c1b8cfa77467e136cc"
+  "name": "contact:c-4e058c80d2e49690a9280da0"
  },
- "grant": "g2.c-1f6bd6c1b8cfa77467e136cc.to82kd.f08a8b671997635f3849979c7a998008",
+ "grant": "g2.c-4e058c80d2e49690a9280da0.to89oa.d82d8a7b2e83f8ca94b32f1dbce5c5ae",
  "tools": {
   "booking.make": "book_slot",
   "booking.cancel": "cancel_slot"
@@ -167,7 +167,7 @@ And `book` answers with the text the model reads, and, apart from it, the widget
 (`item` and `reads`, the call and the two queries' answers, are left out here.) And `npm test`:
 
 ```text
-✔ the widget: its template, and what it reads, answered as the conversation's contact (200.599834ms)
+✔ the widget: its template, and what it reads, answered as the conversation's contact (114.080333ms)
 ```
 
 This chapter's widget is checked through the protocol, offline. It hasn't been drawn in a real

@@ -53,9 +53,10 @@ mcp: {
 ```
 
 - **`POST /mcp/salon`** is the server: MCP's Streamable HTTP, one JSON-RPC message a request.
-- **Only the tools it lists** are offered, and only those with a `tool:<name>` View. What the
-  concierge reads after a call is what the assistant's model reads. A tool with no View is left out,
-  and the server says so in its log as it starts.
+- **`in`** is its space, the desk. Its conversations' chats are there, and so are their calls.
+- **Only the tools it lists** are offered, each with its `tool:<name>` View: what the concierge
+  reads after a call is what the assistant's model reads. A tool listed without one stops the app
+  from starting, so nothing is offered that a model can't read back.
 - **`links`** is where the app is, and a secret of 32 bytes or more. Conversations' ids are made
   from it. Nothing maps them, and a stranger can't work out another's.
 
@@ -113,6 +114,9 @@ assert.equal(taken.text, "Wed 15:00 is taken.");
 "Wed 15:00 is taken." reaches the model word for word because it's a public failure (chapter 2). Any
 other error would say only that the call failed.
 
+A second test lists a tool, `refund`, without its View, and the salon doesn't start. Its error says
+why: `offers "refund" without its tool:refund View`.
+
 ### Connecting an assistant
 
 - **Claude Code**, on this machine, takes the address as it is:
@@ -138,7 +142,7 @@ curl -s http://127.0.0.1:8080/mcp/salon \
 ```
 
 ```text
-{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Booked Wed 15:00.\n\nBookings:\nWed 15:00 (wed-15), for Assistant\n\nchat: EeblqXdsLk2ZyDmFmavwbA"}]}}
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Booked Wed 15:00.\n\nBookings:\nWed 15:00 (wed-15), for Assistant\n\nchat: b2GLrzvvXueuiUN4TeAhKA"}]}}
 ```
 
 The same way, three more calls. `cancel_booking` with no handle is a new conversation, and reaches
@@ -146,10 +150,10 @@ nothing. Then `my_bookings` and `book` with the first one's handle:
 
 ```text
 $ tools/call cancel_booking {"slot": "wed-15"}
-{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"No booking of yours at wed-15.\n\nchat: LhVje4S-wcVRvqYV58ZTPw"}],"isError":true}}
-$ tools/call my_bookings {"chat": "EeblqXdsLk2ZyDmFmavwbA"}
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"No booking of yours at wed-15.\n\nchat: InxLlCEz5pVftRZOkqcvJg"}],"isError":true}}
+$ tools/call my_bookings {"chat": "b2GLrzvvXueuiUN4TeAhKA"}
 {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Wed 15:00 (wed-15), for Assistant"}]}}
-$ tools/call book {"slot": "thu-09", "chat": "EeblqXdsLk2ZyDmFmavwbA"}
+$ tools/call book {"slot": "thu-09", "chat": "b2GLrzvvXueuiUN4TeAhKA"}
 {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"Booked Thu 09:00.\n\nBookings:\nWed 15:00 (wed-15), for Assistant\nThu 09:00 (thu-09), for Assistant"}]}}
 ```
 
@@ -157,8 +161,8 @@ With Sam's Bookings tab open meanwhile, both bookings appear on it as they're ma
 without a reload. `npm test` adds two tests:
 
 ```text
-✔ an assistant books as a contact, in a chat of its own, and sees only its bookings (173.87725ms)
-✔ a tool with no View of its own is never offered over MCP (21.32175ms)
+✔ an assistant books as a contact, in a chat of its own, and sees only its bookings (93.325292ms)
+✔ every tool the server lists needs its View, or the salon doesn't start (0.486916ms)
 ```
 
 ## What this unlocks

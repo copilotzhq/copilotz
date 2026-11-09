@@ -120,8 +120,8 @@ node --import ./tsx.ts --test tests/every-way-in.test.ts
 ```
 
 ```text
-✔ the same bookings, live, from every way in, and the record says who acted for whom (262.428541ms)
-✔ the rules hold at every way in: nobody else can see or cancel Bia's booking (158.664166ms)
+✔ the same bookings, live, from every way in, and the record says who acted for whom (116.506833ms)
+✔ the rules hold at every way in: nobody else can see or cancel Bia's booking (73.817667ms)
 ℹ tests 2
 ℹ suites 0
 ℹ pass 2
@@ -129,7 +129,7 @@ node --import ./tsx.ts --test tests/every-way-in.test.ts
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 1019.097459
+ℹ duration_ms 618.614916
 ```
 
 With `OPENAI_API_KEY` in `.env`:

@@ -86,8 +86,8 @@ slot_taken: {
 
 ### Booking, now
 
-`booking.make` takes a chat (a customer's) or a space (staff booking a walk-in), in one transaction
-(`actions.ts`):
+`booking.make` books into a chat (a customer's), or, with none, where the call is: a walk-in that
+staff book at the desk. It runs in one transaction (`actions.ts`):
 
 ```ts
 allow: peopleOrContacts,
@@ -101,8 +101,9 @@ run: (ctx, input) =>
       ? await tx.db.collection<{ in: string }>("thread").findOne({ _id: input.thread })
       : null;
     if (input.thread && !chat) throw said("not_found", "That chat isn't one of yours.");
-    const where = chat?.in ?? input.in;
-    if (!where) throw said("invalid", "Say which chat, or which space, the booking is in.");
+    // In a chat, where the chat is. Without one, where the call is (`ctx.in`): a walk-in.
+    const where = chat?.in ?? ctx.in;
+    if (!where) throw said("invalid", "Book in a chat, or from a space.");
     // Whether a slot is free is the salon's to know, not in anyone's bookings.
     if (await tx.db.collection("slot_taken").findOne({ _id: input.slot })) {
       throw said("taken", `${label} is taken.`);
@@ -123,6 +124,10 @@ run: (ctx, input) =>
 
 - **The Action runs as its caller.** When Caio names Bia's chat, the read finds nothing: the rules
   filtered it out. There is no `if` about who Caio is.
+- **Where** is the chat's space, or, without a chat, the call's. An actor says where it's working
+  (`in`), as it says who it is, and code reads it as `ctx.in`. A page of the desk says the desk
+  (chapter 3), and so does every way customers come in: their chats are there. It's said, not
+  proved: the rules still check that the booking lands within the caller's reach.
 - **The transaction** makes the look and both writes one step. Nobody books in between, and a write
   the rules refuse ends it at once, with nothing kept.
 - **`said`** is a public failure, `failure(code, message, { public: true })`. Its message reaches
@@ -134,13 +139,16 @@ isn't found, for the same reason.
 
 ### Who may call
 
-`allow: peopleOrContacts` says who may call the Action from outside: people and contacts. What each
-of them reaches is the rule's to decide.
+`allow: peopleOrContacts` says who may call the Action: people and contacts, and an agent working
+for one of them (chapter 4). What each of them reaches is the rule's to decide.
 
-The salon keeps it that way on purpose. When the salon's agent calls an Action through a tool
-(chapter 4), the tool is the app's own code, and today the Action's `allow` isn't asked again. The
-rule at the data still holds, because the agent acts for its customer. So never put an Action that
-only staff may call behind a tool you offer customers.
+`allow` is asked wherever someone acts: from outside, and from the app's own code acting for
+someone, such as a tool the salon's agent calls. For an agent, it's asked of the agent and of whom
+it works for. So an agent working for a customer can't call what only staff may (`allow: people`),
+whatever the model is told. Chapter 4 tests it.
+
+What only a person decides says `inPerson`, which never lets in an agent or a key. Copilotz's own
+`space.create`, which `openDesk` calls as Sam, is one.
 
 ### Only through the Actions
 
@@ -165,13 +173,20 @@ has done its work before a line is written.
 
 ### The first tests
 
-`tests/kit.ts` starts the app as `app.ts` makes it, in memory, and opens the desk. `customer` makes
-a contact with a chat at the desk, and `seen` reads a View as someone. The first test books for two
-customers and a walk-in, then reads as each:
+`tests/kit.ts` starts the app as `app.ts` makes it, in memory, and opens the desk. Sam works there,
+so his calls say so:
+
+```ts
+/** Staff: a person, at the desk. His calls are there (`in`), as a page of the desk says. */
+export const sam: Actor = { kind: "person", id: "sam", in: DESK };
+```
+
+`customer` makes a contact with a chat at the desk, and `seen` reads a View as someone. The first
+test books for two customers and a walk-in, then reads as each:
 
 ```ts
 // A walk-in, booked by Sam at the desk: in the space, in no chat.
-await runtime.call("booking.make", { slot: "thu-09", in: DESK, name: "Rui" }, { actor: sam });
+await runtime.call("booking.make", { slot: "thu-09", name: "Rui" }, { actor: sam });
 
 assert.equal(
   await seen(runtime, "bookings", sam),
@@ -181,13 +196,13 @@ assert.equal(await seen(runtime, "bookings", bia.actor), "Tue 10:00 (tue-10), fo
 assert.equal(await seen(runtime, "bookings", caio.actor), "Wed 15:00 (wed-15), for Caio");
 ```
 
-The second has Caio try what he shouldn't. One of his tries books at the desk itself, outside his
-chat. Nothing in the Action stops him; the rule does:
+The second has Caio try what he shouldn't. One of his tries says he's at the desk, and books there,
+outside his chat. Nothing in the Action stops him; the rule does:
 
 ```ts
 // At the desk, outside his chat: the booking would be out of his reach, so the rules refuse it.
 await assert.rejects(
-  runtime.call("booking.make", { slot: "tue-11", in: DESK }, { actor: caio.actor }),
+  runtime.call("booking.make", { slot: "tue-11" }, { actor: { ...caio.actor, in: DESK } }),
   /would be out of your reach/,
 );
 ```
@@ -201,8 +216,8 @@ npm test
 ```
 
 ```text
-✔ staff see every booking; a customer sees only their own (169.935125ms)
-✔ a customer can't book into another's chat, take a slot, or cancel what isn't theirs (78.44ms)
+✔ staff see every booking; a customer sees only their own (73.702708ms)
+✔ a customer can't book into another's chat, take a slot, or cancel what isn't theirs (40.759958ms)
 ℹ tests 2
 ℹ suites 0
 ℹ pass 2
@@ -210,7 +225,7 @@ npm test
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 648.985541
+ℹ duration_ms 260.016834
 ```
 
 ## What this unlocks

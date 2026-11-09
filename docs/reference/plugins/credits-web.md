@@ -1,6 +1,8 @@
 ---
 title: "credits-web"
 description: "Credits' web front end: the org page's Billing section (the web shell's `orgSettings`)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -36,7 +38,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It ships in a package of its own, `@copilotz/billing@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+It ships in a package of its own, `@copilotz/billing@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## Listing

@@ -1,6 +1,8 @@
 ---
 title: "models"
 description: "Models: talking to models, one way for every kind."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -54,7 +56,7 @@ resource kinds the app and other plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

@@ -1,6 +1,8 @@
 ---
 title: "mcp"
 description: "MCP: models outside the app (ChatGPT, Claude, any MCP client) call the app's tools."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -74,7 +76,7 @@ It also reads `caller`, `org`, `tools` and `widgets`, resource kinds the app and
 The runtime doesn't start without [`chat`](chat.md), [`spaces`](spaces.md) and
 [`contacts`](contacts.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

@@ -1,6 +1,8 @@
 ---
 title: "terminal-shell"
 description: "The terminal's front end, for the process that draws: the `shell` View (what's open, the scrollback, where you type), where you type's prompt, and the View any kind without its own falls back to."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -36,7 +38,7 @@ Nothing to set. It reads `notices`, resource kinds the app and other plugins fil
 
 The runtime doesn't start without [`terminal`](terminal.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

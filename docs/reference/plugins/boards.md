@@ -1,6 +1,8 @@
 ---
 title: "boards"
 description: "Boards: kanban boards in a space, for people and agents, the team's operational source of truth: one real outcome per card, with its owner, what done looks like, an honest column, and any blocker."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -71,7 +73,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It ships in a package of its own, `@copilotz/work@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+It ships in a package of its own, `@copilotz/work@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## Listing

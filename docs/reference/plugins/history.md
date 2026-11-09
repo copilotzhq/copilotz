@@ -1,6 +1,8 @@
 ---
 title: "history"
 description: "Summarizes each thread's older messages as they leave its tail, and sends agents the outline and the recent messages whole (it replaces chat's `history` View)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -62,7 +64,7 @@ history resource's summarizer model."
 
 The runtime doesn't start without [`chat`](chat.md) and [`models`](models.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

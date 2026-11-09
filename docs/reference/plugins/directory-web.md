@@ -1,6 +1,8 @@
 ---
 title: "directory-web"
 description: "The directory's web front end, for apps that serve many orgs behind one address: it fills the web shell's `orgs` slot, and draws the org's pages."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -37,7 +39,7 @@ Nothing to set. It reads `orgSettings`, resource kinds the app and other plugins
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It ships in a package of its own, `@copilotz/directory@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+It ships in a package of its own, `@copilotz/directory@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## Listing

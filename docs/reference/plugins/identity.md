@@ -1,6 +1,8 @@
 ---
 title: "identity"
 description: "Identity: who people are and what proves it."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -64,7 +66,7 @@ Nothing to set: it works as it comes.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

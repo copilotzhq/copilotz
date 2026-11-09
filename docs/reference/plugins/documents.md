@@ -1,6 +1,8 @@
 ---
 title: "documents"
 description: "Documents: shared Markdown in a space, for people and agents — the canonical artifact of the thing being made, and its working memory."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -78,7 +80,7 @@ Nothing to set. It reads `agents`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It ships in a package of its own, `@copilotz/work@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+It ships in a package of its own, `@copilotz/work@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## Listing

@@ -1,6 +1,8 @@
 ---
 title: "maintenance"
 description: "Maintenance: HTTP endpoints for an app's operators, for when they can't reach its database themselves (a client's network that keeps their database user out)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -58,7 +60,7 @@ It also reads `org`, resource kinds the app and other plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

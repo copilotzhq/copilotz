@@ -1,6 +1,8 @@
 ---
 title: "api"
 description: "Developer keys: what code calls the app with, as someone, over the runtime's REST API (`/api/`) or its socket (see runtime/api.ts and runtime/client.ts): `Authorization: Bearer <key>`."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -60,7 +62,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`spaces`](spaces.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

@@ -1,6 +1,8 @@
 ---
 title: "chat"
 description: "Chat: threads where people and agents talk."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -97,7 +99,7 @@ It also reads `agentModel`, `agentSources`, `agents`, `contactSend`, `context`, 
 
 The runtime doesn't start without [`models`](models.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

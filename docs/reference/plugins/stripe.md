@@ -1,6 +1,8 @@
 ---
 title: "stripe"
 description: "Stripe: one way an org pays, for `credits`, which never asks it anything."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -56,7 +58,7 @@ It also reads `billing` and `org`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`credits`](credits.md): add it too.
 
-It ships in a package of its own, `@copilotz/billing@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+It ships in a package of its own, `@copilotz/billing@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## What it does on its own

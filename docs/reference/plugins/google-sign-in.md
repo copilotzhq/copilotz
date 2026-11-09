@@ -1,6 +1,8 @@
 ---
 title: "google-sign-in"
 description: "Google sign-in: `google.sign-in` turns a Google ID token into a person and a session (with the identity plugin)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -51,7 +53,7 @@ resource's clientId."
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

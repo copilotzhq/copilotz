@@ -1,6 +1,8 @@
 ---
 title: "memory"
 description: "Memory: what agents know across conversations."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -80,7 +82,7 @@ You set it in `resources.memory`.
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

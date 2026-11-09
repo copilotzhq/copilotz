@@ -1,6 +1,8 @@
 ---
 title: "web-lines"
 description: "Web sites (`resources.web.<name>`, declared in the app's settings, with the app's secret, `links`)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -70,7 +72,7 @@ It also reads `agents`, `caller` and `org`, resource kinds the app and other plu
 
 The runtime doesn't start without [`contacts`](contacts.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

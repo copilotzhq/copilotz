@@ -16,7 +16,8 @@
  * Each counts its runs (`runs`).
  *
  * And for an owner that stops mid-call: a store that stops at a write
- * (`stopping`), and waits on what tests watch for (`until`, `within`).
+ * (`stopping`), and waits on what tests watch for (`until`, `within`), or
+ * for a call that's still working to answer (`untilAnswered`).
  */
 import {
   type CallerSettings,
@@ -702,6 +703,29 @@ export async function within<T>(promise: Promise<T>, what: string, ms = 10_000):
     ]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** How an answer that a call is still running (past the line's timeout) begins. */
+const STILL = /^Still working on it/;
+
+/**
+ * What a call answers once it no longer answers one of `meanwhile`'s (that it's still working,
+ * unless a test says): asked again until then, as a model told so does, every few ms, or a
+ * failure after `ms`. How long a slow machine takes to get there isn't what a test looks at.
+ */
+export async function untilAnswered(
+  ask: () => Promise<Rpc>,
+  what: string,
+  meanwhile: RegExp = STILL,
+  ms = 10_000,
+): Promise<string> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const text = said(await ask());
+    if (!meanwhile.test(text)) return text;
+    if (Date.now() > deadline) throw new Error(`Never happened: ${what} (it said: ${text})`);
+    await sleep(20);
   }
 }
 

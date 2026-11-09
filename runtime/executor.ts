@@ -370,7 +370,11 @@ export function createExecutor(
       after: undefined,
     };
     if (!given && parent && job.retry) {
-      const prior = await job.send({ ops: [{ op: "outcome", call: id }] }) as Outcome;
+      // Asked as whom it works for: in someone's job, an op that names nobody is refused.
+      const prior = await job.send({
+        ops: [{ op: "outcome", call: id }],
+        ...(actor ? { actor } : {}),
+      }) as Outcome;
       if (prior.completed) return prior.result as R;
       attempt = prior.attempts + 1;
       if (prior.attempts) after = prior.lost ? "lost" : "failed";

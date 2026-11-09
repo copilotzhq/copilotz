@@ -3,9 +3,10 @@
  * as whom the job works for. Claiming someone else, or nobody (the system),
  * is refused; trusted code that chose to act for another (`ctx.as()`) says
  * whose job it was, and only then passes. A system job's code may act for
- * anyone. The executor here is a raw one, sending what it likes.
+ * anyone. The executor here is a raw one, sending what it likes; the
+ * runtime's own keeps to it too, in a call run again as well as the first.
  */
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { createWorker } from "@oxian/oxian-js";
 import { type Actor, createRuntime, defineAction, definePlugin } from "../mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
@@ -82,6 +83,38 @@ test("an executor acts only as its job's actor, or says it acts for them", async
     assertEquals(await as(null), "ok");
   } finally {
     await worker.stop();
+    await rt.close();
+  }
+});
+
+test("a call run again under its id finds what its nested calls did, as whom it works for", async () => {
+  let inner = 0;
+  let outer = 0;
+  const retried = definePlugin({
+    name: "retried",
+    actions: {
+      "retried.inner": defineAction({ input: { type: "object" }, run: () => ++inner }),
+      // Fails once, after its nested call.
+      "retried.outer": defineAction({
+        input: { type: "object" },
+        allow: () => true,
+        run: async (ctx) => {
+          const n = await ctx.call("retried.inner", {});
+          if (++outer === 1) throw new Error("fails once");
+          return n;
+        },
+      }),
+    },
+  });
+  const rt = await createRuntime({ store: memoryStore(), plugins: [retried] });
+  try {
+    const call = () => rt.call("retried.outer", {}, { actor: ana, id: "o1" });
+    await assertRejects(call, Error, "fails once");
+    // Called again under its id, it's a retry: whether its nested call is done is asked in
+    // Ana's job, as Ana, and it is: it isn't run again.
+    assertEquals(await call(), 1);
+    assertEquals([inner, outer], [1, 2]);
+  } finally {
     await rt.close();
   }
 });

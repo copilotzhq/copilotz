@@ -1,3 +1,51 @@
+## Unreleased
+
+**Upgrading.** Copilotz's product plugins are packages of their own, released with it at its version
+([design](design/plugins.md)). Their names (collections, Actions, events, Views, routes, resources)
+are as they were, so an app's data stays as it is: only its imports change.
+
+- `copilotz/plugins/work` → `@copilotz/work`, and `copilotz/plugins/work/web` →
+  `@copilotz/work/web`.
+- `copilotz/plugins/access`'s `directory` (with `Operations`, `OrgInfo`…) → `@copilotz/directory`;
+  the directory's browser half in `copilotz/plugins/access/web` (`useOrgs`, `enterOrg`,
+  `refreshOrgs`…) → `@copilotz/directory/web` (or `@copilotz/directory/contract`).
+- `copilotz/plugins/billing`'s `credits`, `stripe` and `stripeWebhook` → `@copilotz/billing`, and
+  `creditsWeb` → `@copilotz/billing/web`. `usage` stays in `copilotz/plugins/billing`.
+- `copilotz/plugins/agents`'s `team` and `tiers` → `@copilotz/team`, and `teamWeb`, `tiersWeb` →
+  `@copilotz/team/web`.
+- An app serving many orgs adds `directoryWeb` (from `@copilotz/directory/web`) to its page: the web
+  shell has no org switcher, org page or console of its own any more. Their words keep their keys
+  (`shell.<key>`).
+- On Deno, name each in the import map at Copilotz's version
+  (`"@copilotz/work": "jsr:@copilotz/work@<version>"`); on npm, install it beside `copilotz` at the
+  same version, or, until npm has it, from the release's tarball.
+
+```ts
+import { boards, documents } from "@copilotz/work"; // was copilotz/plugins/work
+import { directoryWeb } from "@copilotz/directory/web";
+
+await web({ plugins: [webShell, chatWeb, spacesWeb, directoryWeb, boardsWeb], root });
+```
+
+- **Product packages** ([design](design/plugins.md)): `@copilotz/work` (boards, documents),
+  `@copilotz/directory` (many orgs behind one address), `@copilotz/billing` (credits, Stripe) and
+  `@copilotz/team` (agents people make, model tiers), each in `packages/<name>` with its `mod.ts`,
+  `web.tsx`, `contract.ts`, tests and README, on JSR and npm. They import Copilotz by its entry
+  points alone, as an outside plugin would; the core imports none of them, its tests neither.
+- **The web shell knows no orgs.** Its `orgs` slot (a resource) takes a switcher View, an overlay
+  View and a hook for what the menu and palette list; `directoryWeb` fills it. The person's standing
+  in the org is spaces' `org.me` (`useStanding`, in the shell's contract), which spaces' sidebar and
+  credits' note read; renaming the org says so (`orgsChanged()`).
+- **The core's contracts are entry points:** `copilotz/plugins/<theme>/contract` (access, agents,
+  models, interfaces, compute), each theme's plugins' `contract.ts` together.
+- **Testing:** `copilotz/testing/words` (`pseudoWords`, `englishLeft`, `wordsList`) and `openTo`
+  (what a kind of caller is let into of some plugins), for packages' tests as for Copilotz's.
+- **Releases:** `npm run build` builds Copilotz and every package; the smoke test installs them all
+  together from their tarballs and uses a plugin of each; a release attaches every tarball to its
+  GitHub release before publishing, and publishes the packages after Copilotz, each on its own (one
+  a registry doesn't have yet is skipped, with a notice). `node scripts/version.ts <version>` says a
+  version everywhere, in lockstep.
+
 ## 1.0.0-rc.32 — 2026-11-09
 
 **Upgrading.** `people` now lets in an agent working for a person, and an Action's `allow` is asked

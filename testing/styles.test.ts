@@ -1,8 +1,9 @@
 /**
- * Plugins compose; they don't style. A plugin's own CSS (its `style.ts`
- * strings, `style={{…}}` props, SVG paint attributes) is only its layout, on
- * the theme's variables, so a theme rebrands every plugin. This fails on what
- * would escape the theme on the web:
+ * Plugins compose; they don't style (the product packages' neither). A
+ * plugin's own CSS (its `style.ts` strings, `style={{…}}` props, SVG paint
+ * attributes) is only its layout, on the theme's variables, so a theme
+ * rebrands every plugin. This fails on what would escape the theme on the
+ * web:
  *
  * - **Colour literals**, anywhere in a declaration: hex (`#fff`), `rgb()`,
  *   `hsl()`, `hwb()`, `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, and
@@ -222,7 +223,8 @@ test("the styles rule: what it allows, and what it doesn't", () => {
 });
 
 test("plugins style only their layout, on the theme's variables", () => {
-  const found = files(join(ROOT, "plugins")).flatMap((path) =>
+  // The standard plugins, and the product packages' (packages/).
+  const found = ["plugins", "packages"].flatMap((dir) => files(join(ROOT, dir))).flatMap((path) =>
     problems(readFileSync(path, "utf8")).map((p) =>
       `${relative(ROOT, path).split(sep).join("/")}:${p}`
     )

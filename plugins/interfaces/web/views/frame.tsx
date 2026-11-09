@@ -91,7 +91,8 @@ export function Frame(
     children: ReactNode;
   },
 ): ReactNode {
-  const narrow = useSyncExternalStore(phone.subscribe, phone.matches);
+  // Drawn on a server (a test), it is not a phone.
+  const narrow = useSyncExternalStore(phone.subscribe, phone.matches, () => false);
   const [open, setOpen] = useState(false);
   useEffect(() => setOpen(false), [path, narrow]);
   const side = usePanel(viewer, path, narrow);

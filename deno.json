@@ -28,8 +28,6 @@
     "./plugins/compute/web": "./plugins/compute/web.tsx",
     "./plugins/compute/terminal": "./plugins/compute/computers/terminal.ts",
     "./plugins/compute/downloads": "./plugins/compute/computers/resources/downloads.ts",
-    "./plugins/work": "./plugins/work/mod.ts",
-    "./plugins/work/web": "./plugins/work/web.tsx",
     "./plugins/interfaces": "./plugins/interfaces/mod.ts",
     "./plugins/interfaces/contract": "./plugins/interfaces/contract.ts",
     "./plugins/interfaces/web": "./plugins/interfaces/web.tsx",
@@ -46,6 +44,9 @@
     "./testing": "./testing/mod.ts",
     "./testing/words": "./testing/words.ts"
   },
+  "workspace": [
+    "./packages/work"
+  ],
   "tasks": {
     "chat": "deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/chat.ts",
     "test": "deno test -A --unstable-no-legacy-abort",
@@ -96,6 +97,7 @@
   ],
   "publish": {
     "exclude": [
+      "packages/",
       "**/tests/",
       "**/*.test.ts",
       "**/*.test.tsx",

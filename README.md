@@ -160,7 +160,7 @@ OPENAI_API_KEY=sk-… node salon.ts    # or bun salon.ts, or deno run -A salon.t
 ```
 
 On Deno, map the name `copilotz` in `deno.json`
-(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.29"`) so the imports read the same everywhere.
+(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.31"`) so the imports read the same everywhere.
 Copilotz runs on Node, Deno and Bun, and it's built on web standards for Cloudflare Workers and the
 browser.
 
@@ -265,26 +265,31 @@ their front ends from `/web` and `/terminal` beside it.
 
 ## Learn it
 
-- **[Build Compass](docs/build-compass.md)** builds Compass, a single-user workspace where you
-  and a team of agents share chats, a board and documents, in 41 chapters. You import Copilotz's
-  agentic core and rebuild the rest yourself, one primitive at a time.
-- **[The video course](#)**, in Portuguese and English, follows the same chapters.
-  <!-- TODO: link the video course, PT and EN -->
-- **[Reference](docs/reference/)**: every entry point, primitive and resource kind.
-  <!-- TODO: docs/reference/ doesn't exist yet -->
-- **[Architecture](docs/architecture/)**: the owner, its executors, the store and the log.
-  <!-- TODO: docs/architecture/ doesn't exist yet -->
+- **[Getting Started](docs/getting-started.md)** builds a salon's booking app: one booking, then who
+  sees what, its own web page and its own agent, ChatGPT, Claude and Gemini over MCP, a chat on its
+  site and WhatsApp. Its chapters are coming.
+- **[Build Compass](docs/build-compass.md)** is the deep track. In 41 chapters you build Compass, a
+  workspace where people and agents share chats, a board and documents, and with it every part of
+  the runtime's contract. [The video course](#), in Portuguese and English, follows the same
+  chapters. <!-- TODO: link the video course, PT and EN -->
+- **Guides:** [serving on the web](docs/guides/serving-on-the-web.md),
+  [many orgs behind one address](docs/guides/many-orgs.md), [visitors](docs/guides/visitors.md),
+  [the REST API and the client](docs/guides/rest-and-the-client.md) and
+  [installing a computer](docs/guides/installing-a-computer.md).
+- **Operations:** [stores](docs/operations/stores.md), [maintenance](docs/operations/maintenance.md)
+  and [metrics](docs/operations/metrics.md).
+- **Reference** and **Architecture** are coming: every entry point, primitive and resource kind, and
+  the owner, its executors, the store and the log.
+  <!-- TODO: link docs/reference/ and docs/architecture/ once they exist (their content waits in docs/_staging/) -->
 - **[Design records](design/)**: the decisions behind Views, access, memory and tenancy.
 
 ## Status
 
-Copilotz 1.0 is a release candidate, `1.0.0-rc.29`. It's a new runtime, and it doesn't read 0.x
+Copilotz 1.0 is a release candidate, `1.0.0-rc.31`. It's a new runtime, and it doesn't read 0.x
 data. Copilotz 0.x lives on the [`v0`](https://github.com/copilotzhq/copilotz/tree/v0) branch, and
 [CHANGELOG.md](CHANGELOG.md) says what each release changed.
 
 To work on Copilotz itself, see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-<!-- TODO: write CONTRIBUTING.md, from the old README's "Developing Copilotz" and "Layout" -->
 
 ## License
 

@@ -31,6 +31,8 @@ URLs and cookie names are the same as with one runtime. `directory.member` keeps
 
 ## The code
 
+<!-- TODO split -->
+
 ```ts
 import { createRuntime, definePlugin, type Runtime, runtimes } from "copilotz";
 import { memoryStore } from "copilotz/stores/memory";
@@ -93,6 +95,8 @@ host is then an org's claimed one, answered by that org's host routes alone.
 
 Whatever has one address for every org lives in the directory's runtime. Stripe's webhook is one
 (`stripeWebhook`, with the `stripe` resource's `orgs`). The cloud pool's socket is another.
+
+<!-- TODO split -->
 
 ## Examples
 

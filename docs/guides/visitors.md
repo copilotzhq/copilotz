@@ -44,6 +44,9 @@ wherever it's Secure. The site chat's `who` reads it. It stays the same visitor 
 Coming in makes and keeps nothing. The visitor's first message (`chat.send`, naming no chat) makes
 it a contact in the site's space, with a chat of its own, answered by the site's agent.
 
+A visitor works in the site's space. Its actor says so (`in`), from its first request on, so its
+calls and the record put it there.
+
 Someone signed in comes in as themselves.
 
 ## What a visitor reaches
@@ -54,6 +57,13 @@ step's words before they're known to be an answer.
 
 Its page reads only what it names of its own: its chat's messages by `thread`, and its chats by its
 memberships, `{ member: "contact:<id>" }`. A read that names none is refused, never watched.
+
+A visitor writes as itself. `chat.send` and `chat.attach` let in people and contacts writing their
+own words, never an agent, so the site's agent can't speak for the visitor.
+
+The site's agent answers as an agent working for the visitor, a contact. An Action its tools call
+asks its `allow` for the agent and for the visitor. So an Action that lets contacts in, such as one
+saying `peopleOrContacts`, lets the agent in, and one that lets in only people refuses it.
 
 ## Its limits
 
@@ -89,6 +99,10 @@ proxy's, the runtime warns once.
 A site may have a `budget`: what its visitors' turns may be charged in a day, in the usage ledger's
 prices. It needs the usage plugin. Past it, visitors wait for the next day.
 
+Pricing a visitor's use is the site's own bookkeeping, not something the visitor may do. So the site
+charges it under a named grant, `web.budget`, on the record and counted in
+[`copilotz.elevated.ops`](../operations/metrics.md).
+
 A site may also have a `challenge`: an Action of the app's that checks what the page answered coming
 in, such as a CAPTCHA's token, before a newcomer is let in:
 
@@ -100,7 +114,9 @@ web({ arrive: { name: "site", challenge: token } });
 
 - A message says 4,096 characters at most.
 - Files go only to a site that takes them, `files: { count, bytes }`. That's 1 file of 5 MB unless
-  the site says.
+  the site says, and 10 files of 10 MB at most.
+- The page uploads each file on its own first, with `chat.attach`, then sends it by id. The site
+  lets each upload in as a message to nobody, so it counts against the visitor's limits.
 - Audio is transcribed, which is a model call, only with `transcribe: true`.
 - A visitor holds 2 connections, with 32 reads on each.
 - A visitor is told a failure's words only when they're meant for anyone.

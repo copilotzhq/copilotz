@@ -120,6 +120,15 @@ apart.
 The page trades its cookie for a one-time ticket at `POST /connect`. It then talks to the owner over
 its socket, `/oxian`, as an untrusted worker bound to that actor, under the access rules.
 
+The page also says where it is. A space's page, `/space/<id>`, is in that space. Any other page is
+where the person works: the space `start` gave, or the one `?in=` names. What its Views call is done
+there, as the work's `in`. Code of the page's own says it with `client.call(…, { in })`.
+
+The page says it, and nothing proves it. It's what the record shows, and where the work a call sets
+going is. A person's own reach isn't narrowed by it: they reach what they reach from any page. An
+agent's turn works where its chat is, which the turn reads itself, so a page can't move what an
+agent reaches.
+
 Requests from other sites are refused. A request that may change something (anything but GET, HEAD
 and OPTIONS), sent by another site's page, without an `Authorization` header, gets a 403. The
 browser's `Origin` or `Sec-Fetch-Site` header says where it came from. So another site can't sign

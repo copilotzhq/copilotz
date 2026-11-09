@@ -63,7 +63,8 @@ A request acts as the maintenance actor, `{ kind: "maintenance", id: "maintenanc
 what the `X-Maintenance-By` header says, as said.
 
 Its Actions let only that actor call them, and they run as the system, on the record (`ctx.as()`).
-No rule keeps it from a document, and every event says `via` it.
+No rule keeps it from a document, and every event says `via` it. Their ops count in
+[`copilotz.elevated.ops`](metrics.md), as `system`.
 
 Writes take an `Idempotency-Key`. Sent again, a write answers what it did the first time.
 
@@ -113,7 +114,8 @@ Its `maintenance.sql` event goes in the same commit: the statement, its params, 
 in any table, and who.
 
 A raw write bypasses schemas and per-document events. So the owner then forgets what it derived from
-documents: its cache empties, observed Views run again, and the clock reads the timers again.
+documents: its cache empties, it lets go of every reach it kept, observed Views run again, and the
+clock reads the timers again.
 
 Some statements don't run at all:
 
@@ -304,7 +306,7 @@ Only the role check above is skipped, which the store's role couldn't pass. Ever
 - timeouts, the row and byte caps, and at most `connections` at once;
 - writes inside the owner, fenced, with their `maintenance.sql` event;
 - a statement that changes `meta` or makes a trigger, rolled back;
-- the owner's cache, emptied after a write;
+- the owner's cache and kept reach, emptied after a write;
 - the key, and the log line.
 
 ### What's still refused

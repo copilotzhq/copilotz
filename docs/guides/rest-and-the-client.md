@@ -68,7 +68,8 @@ The `api` plugin gives people developer keys. A person makes a key in a space, f
 queries, Views and collections it may use there. That's its scope, and every key has one.
 
 Code then calls the REST API or the socket with it, as `Authorization: Bearer <key>`. It acts as
-that person, in that space only.
+that person, in that space only. Its work is there (`in`), and the record says which key did it
+(`actor.key`).
 
 A key is a member of its space, `key:<id>`. The space's managers see and revoke it there.
 
@@ -77,6 +78,39 @@ one.
 
 A browser on another site may call the API with a key, since a key is a header no page sends by
 itself. With a session's cookie, only the app's own page can call it.
+
+The runtime checks a key's scope where its call comes in. An Action's `allow` is asked at every call
+the work makes after that. So code a key sets going calls only what the key could, unless it goes
+beyond on purpose, as a named grant (`ctx.as(grant("…"))`).
+
+## What a key can't call
+
+A key is its person, so an Action that lets people in (`people`) lets their key in too. What only
+the person decides is `inPerson`, and that never lets a key in, even when its scope lists it. Since
+1.0.0-rc.32, that's these Actions:
+
+| Plugin      | Actions                                                                                                                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `identity`  | `session.end`                                                                                                                                                                                                                              |
+| `spaces`    | `space.create`, `space.leave`, `share`, `member.set`, `member.remove`, `invitation.send`, `invitation.accept`, `invitation.decline`, `request.grant`, `request.deny`, `org.role`, `org.remove`, `org.invite`, `org.uninvite`, `org.rename` |
+| `contacts`  | `contact.forget`                                                                                                                                                                                                                           |
+| `accounts`  | `account.connect`, `account.complete`, `account.callback`, `account.disconnect`, `modelKey.set`, `modelKey.remove`                                                                                                                         |
+| `api`       | `api_key.create`, `api_key.revoke`                                                                                                                                                                                                         |
+| `chat`      | `chat.move`                                                                                                                                                                                                                                |
+| `memory`    | `memory.move`                                                                                                                                                                                                                              |
+| `team`      | `agent.create`, `agent.update`, `agent.delete`                                                                                                                                                                                             |
+| `tiers`     | `tiers.choose`, `tiers.pick`                                                                                                                                                                                                               |
+| `credits`   | `billing.setPlan`, `billing.grant`, `billing.waive`, `billing.pay`, `billing.budget`, `billing.redeem`                                                                                                                                     |
+| `stripe`    | `billing.checkout`, `billing.portal`                                                                                                                                                                                                       |
+| `computers` | `computer.code`, `computer.work`, `computer.approve`, `computer.allowOrigin`, `computer.forgetGrant`                                                                                                                                       |
+| `apps`      | `app.publish`                                                                                                                                                                                                                              |
+| `voice`     | `voice.block`, `voice.unblock`                                                                                                                                                                                                             |
+| `whatsapp`  | `whatsapp.connect`, `whatsapp.credentials`, `whatsapp.set`, `whatsapp.move`, `whatsapp.link`, `whatsapp.unlink`, `whatsapp.block`, `whatsapp.disconnect`, `whatsapp.webhook`                                                               |
+
+A key can't list keys either: the `api_key.mine` query is `inPerson` too. The person does these
+themselves, on the app's page or in its terminal.
+
+Each plugin's [reference page](../reference/plugins.md) says who may call each of its Actions.
 
 ## The client
 
@@ -105,7 +139,8 @@ Its collections have `find` (then `.toArray()`), `findOne`, `countDocuments`, `i
 `updateOne`, `replaceOne`, `deleteOne`, a named `query`, and `watch(filter, options?, onChange)`.
 
 `app.call(action, input, { id })` gives a call an id of its own. Sent again, it answers what the
-first did.
+first did. Over the socket, `{ in }` says where the call is, as a page's space does. A key's calls
+are in its own space.
 
 ## In Build Compass
 

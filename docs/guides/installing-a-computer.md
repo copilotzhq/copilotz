@@ -10,6 +10,10 @@ order: 5
 A person connects their own machine with one line, and their agents can then work on it once they
 say yes.
 
+A computer belongs to a space. An agent uses a computer of the space its chat is in, for the person
+it works for, and only where that person reaches. Only the person says yes: an agent, a key or a
+routine can't answer for them, since `computer.approve` is `inPerson`.
+
 ## Where the program comes from
 
 People's computers run the computer program, `plugins/compute/computers/program/`. It's a single
@@ -24,7 +28,7 @@ An app serves it from there by default. It can also serve a folder of its own, o
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.31" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.32" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 

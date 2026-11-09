@@ -92,6 +92,10 @@ export async function whereFor(
   if (!space) {
     return { missing: "This conversation isn't in a space, so there's no computer here." };
   }
+  // Read as whoever acts: work somewhere its person doesn't reach has no computer there.
+  if (!await ctx.db.collection("space").findOne({ _id: space }, { projection: { _id: 1 } })) {
+    return { missing: "There's no computer for this conversation: it isn't one of yours." };
+  }
   const desks = await desksIn(ctx, space);
   if (computer) {
     const found = named(desks, computer);

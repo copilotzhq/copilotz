@@ -228,11 +228,12 @@ test("a key is shown once, kept as a hash, its person's alone, and revoked", asy
     ]);
     assert(!JSON.stringify(mine).includes(secret) && !JSON.stringify(mine).includes(hashed));
     assertEquals(await runtime.query("api_key.mine", {}, { actor: bob }), []);
-    // Who calling with it is: its person, which key, and what it may use.
+    // Who calling with it is: its person, which key, what it may use, and where it works.
     assertEquals(await runtime.query("api_key.actor", { secret }), {
       kind: "person",
       id: "ana",
       key: mine._id,
+      in: personal,
       scope: {
         call: ["chat.send", "note.write", "note.agent", "note.wipe"],
         query: ["note.list", "thread.recent", "message.conversation"],

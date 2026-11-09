@@ -82,9 +82,12 @@ test({
             "test.tool": defineAction({
               input: { type: "object", properties: { thread: {}, input: {} } },
               allow: () => true,
-              run: (ctx, input) =>
+              run: async (ctx, input) =>
                 tools.terminal.run(input.input as Record<string, unknown>, {
-                  ...ctx,
+                  // As a turn's tools run: where its chat is (`in`, on the actor).
+                  ...await ctx.as().db.collection<{ in?: string }>("thread")
+                    .findOne({ _id: input.thread as string })
+                    .then((t) => t?.in ? ctx.as({ ...ctx.actor!, in: t.in }) : ctx),
                   agent: "assistant",
                   thread: input.thread as string,
                   trigger: "test",

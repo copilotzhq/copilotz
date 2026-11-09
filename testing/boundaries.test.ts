@@ -50,8 +50,9 @@ function files(dir: string, tests = false): string[] {
 function specifiers(path: string): string[] {
   const source = readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
-  const found = [...source.matchAll(/(?:from|import)\s*\(?\s*["']([^"'\n]+)["']/g)];
-  return found.map(([, spec]) => spec);
+  // The keywords, not a string or a name that says them ("from" in a schema, `imported`).
+  const found = [...source.matchAll(/(?:^|[\s}(=;,])(?:from|import)\s*\(?\s*(["'])([^"'\n]+)\1/g)];
+  return found.map(([, , spec]) => spec);
 }
 
 /** Every relative import or re-export in a file, as a path from the root. */

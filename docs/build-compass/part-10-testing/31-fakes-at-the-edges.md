@@ -226,7 +226,9 @@ const openai = await serve(async (request) => {
   asked.push({ path, key: request.headers.get("authorization"), body });
   if (path === "/embeddings") {
     const vector = Array.from({ length: 512 }, (_, i) => (i === 0 ? 1 : 0));
-    return Response.json({ data: [body.input].flat().map((_, index) => ({ index, embedding: vector })) });
+    return Response.json({
+      data: [body.input].flat().map((_, index) => ({ index, embedding: vector })),
+    });
   }
   const events = [
     { type: "response.output_text.delta", delta: "Hello, Ana." },
@@ -252,11 +254,11 @@ what Compass sent: `/responses`, `Bearer sk-test`, the model `gpt-6-luna`, and
 `reasoning: { effort: "low" }` for North and `"none"` for the title.
 
 With a key, memory finds what it recalls with OpenAI's embeddings too (app.ts names
-`openai/text-embedding-3-small`, at 512 dimensions), so the fake answers `POST /embeddings` as
-well: one vector per input, in JSON. Leave that out and nothing breaks. Recall fails, memory says
-so in one line, and the turn goes on without it. But a fake should speak every part of the provider
-the app uses, or each run prints an error that isn't one. And since recall's call lands in `asked`
-too, the test looks for the title among the `/responses` calls only.
+`openai/text-embedding-3-small`, at 512 dimensions), so the fake answers `POST /embeddings` as well:
+one vector per input, in JSON. Leave that out and nothing breaks. Recall fails, memory says so in
+one line, and the turn goes on without it. But a fake should speak every part of the provider the
+app uses, or each run prints an error that isn't one. And since recall's call lands in `asked` too,
+the test looks for the title among the `/responses` calls only.
 
 ## Run it
 

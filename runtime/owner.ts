@@ -9,7 +9,7 @@ import { plan } from "./aggregate.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import { type Clock, type Scheduled, systemClock, TIMERS } from "./schedules.ts";
 import { createTimers } from "./timers.ts";
-import { callIdOf, inScope } from "./actor.ts";
+import { allows, callIdOf, inScope } from "./actor.ts";
 import { createApi } from "./api.ts";
 import type { IndexSpec, ScalarType } from "./store.ts";
 import { createHypervisor, type Hypervisor, type HypervisorOptions } from "@oxian/oxian-js";
@@ -17,6 +17,7 @@ import type {
   Guard,
   Plugins,
   ProcessorDef,
+  ReadContext,
   RenderOptions,
   Resources,
   ViewDef,
@@ -25,7 +26,14 @@ import type {
 import { type Blobs, hydrate, isBlobRef, offload, refuseBlobKeys } from "./blobs.ts";
 import { createCache } from "./cache.ts";
 import { createMaintenance, type Maintenance } from "./maintain.ts";
-import { createObservers, type Observation, type ObserveOptions } from "./observe.ts";
+import {
+  createObservers,
+  type Dep,
+  depOf,
+  type Observation,
+  type ObserveOptions,
+} from "./observe.ts";
+import { createKept } from "./kept.ts";
 import { reading, startup } from "./reads.ts";
 import {
   BROWSER,
@@ -341,8 +349,11 @@ export async function createOwner(
     blobs?: Blobs;
     /** Strings over this many bytes become blobs (default 16 KiB). */
     blobThreshold?: number;
-    /** The read cache's size, or false to read the store every time. */
-    cache?: { documents?: number; queries?: number } | false;
+    /**
+     * The read cache's size, and how many answers the rules work out it keeps
+     * (`kept`: see kept.ts), or false to read the store every time.
+     */
+    cache?: { documents?: number; queries?: number; kept?: number } | false;
     /** Where the owner records its metrics (jobs, ops, commits, events, lag, cache). */
     metrics?: Metrics;
     /** What plugin code (`ctx.fetch`) calls outside services with (default: the platform's). */
@@ -398,6 +409,10 @@ export async function createOwner(
     executors: metrics.gauge("copilotz.executors", { description: "Executors connected" }),
     cache: metrics.counter("copilotz.cache.reads", {
       description: "Reads the owner's cache answered (hit) or passed to the store (miss)",
+    }),
+    elevated: metrics.counter("copilotz.elevated.ops", {
+      description:
+        "Ops trusted code made beyond the actor it acted for, as the system or a named grant",
     }),
   };
   // A Processor filter the reference can't evaluate fails here, not when an event arrives.
@@ -586,6 +601,8 @@ export async function createOwner(
       if (!fleeting.has(collection)) cache?.apply(collection, changes);
       if (collection === TIMERS) timers.changed(changes);
     }
+    // What the rules worked out from what changed goes, before anything reacting reads it.
+    kept?.changed(seen);
     for (const [name, seq] of saving) if (unsaved.get(name) === seq) unsaved.delete(name);
     for (const event of events) {
       measure.events.add(1, { type: event.type });
@@ -727,6 +744,9 @@ export async function createOwner(
     ...options.cache,
     onRead: (hit) => measure.cache.add(1, { result: hit ? "hit" : "miss" }),
   });
+  const kept = options.cache === false
+    ? undefined
+    : createKept(options.cache?.kept !== undefined ? { max: options.cache.kept } : {});
   const cached = (op: ReadOp): Promise<unknown> => {
     switch (op.op) {
       case "find":
@@ -804,7 +824,10 @@ export async function createOwner(
   ) => {
     const def = declared(type, data);
     const { actor } = options;
-    if (actor && actor.kind !== "system" && (!def.allow?.(actor) || actor.scope !== undefined)) {
+    if (
+      actor && actor.kind !== "system" &&
+      (!def.allow || !allows(def.allow, actor, undefined) || actor.scope !== undefined)
+    ) {
       throw forbidden(`${actor.kind} ${actor.id} may not emit "${type}".`);
     }
     await write(
@@ -819,19 +842,8 @@ export async function createOwner(
     views: registry.views,
     reads: (track, actor) => {
       // An actor's Views see what they reach, and what the rules read to
-      // know it (memberships) is what they read too: they follow its changes.
-      const rules = actor
-        ? reading(
-          registry,
-          (op) => {
-            track(op);
-            return answer(store, op as ReadOp);
-          },
-          () => crypto.randomUUID(),
-          metrics,
-          outside,
-        )
-        : ruleReads;
+      // know it (memberships) is what they read too, kept or not: they follow its changes.
+      const rules = actor ? ruling(track) : ruleReads;
       return reading(
         registry,
         async (op) => {
@@ -955,14 +967,27 @@ export async function createOwner(
     return values;
   };
 
-  // Who reaches what: the plugins' rules, as filters (see `Guard`). They read freely.
-  const ruleReads = reading(
-    registry,
-    (op) => answer(store, op as ReadOp),
-    (_, doc) => typeof doc._id === "string" ? doc._id : crypto.randomUUID(),
-    metrics,
-    outside,
-  );
+  // Who reaches what: the plugins' rules, as filters (see `Guard`). They read freely, and what
+  // they work out over and over (reach) is kept until a commit changes what it read (kept.ts).
+  // `track` hears each read, kept or not: an observed View follows what its rules read.
+  function ruling(track?: (dep: Dep) => void): ReadContext {
+    return reading(
+      registry,
+      (op) => {
+        if (track) {
+          const dep = depOf(op);
+          if (dep) track(dep);
+        }
+        return answer(store, op as ReadOp);
+      },
+      (_, doc) => typeof doc._id === "string" ? doc._id : crypto.randomUUID(),
+      metrics,
+      outside,
+      undefined,
+      (key, work, ctx) => kept ? kept.get(key, (heard) => work(ruling(heard)), track) : work(ctx),
+    );
+  }
+  const ruleReads = ruling();
   /** An actor's rule on a collection, for an operation with this filter; none: unrestricted. */
   const rule = async (
     actor: Actor,
@@ -1023,7 +1048,7 @@ export async function createOwner(
   ) => {
     if (!actor || actor.kind === "system") return true;
     const def = registry.collections[collection]?.queries?.[query];
-    return typeof def === "object" && def.allow(actor, params) &&
+    return typeof def === "object" && allows(def.allow, actor, params) &&
       inScope(actor, "query", `${collection}.${query}`);
   };
   const both = (filter: Filter | undefined, rule: Filter): Filter =>
@@ -1391,6 +1416,10 @@ export async function createOwner(
         throw invalid("A disconnect goes on its own.");
       }
       return disconnect(first.actor);
+    }
+    // Trusted code going on beyond whom it acted for: as the system, or a grant, on the record.
+    if (request.actor?.kind === "system" && request.actor.via) {
+      measure.elevated.add(request.ops.length, { grant: request.actor.id });
     }
     let ops: StoreOp[], keep: Map<string, Filter>;
     try {
@@ -2080,6 +2109,7 @@ export async function createOwner(
       // SQL changed what nothing follows: forget what came from documents, then tell.
       wrote: (events) => {
         cache?.clear();
+        kept?.clear();
         committed([], events);
         observers.stale();
         void timers.wake();
@@ -2116,8 +2146,9 @@ export async function createOwner(
       const def = registry.actions[action];
       if (!def) return Promise.reject(invalid(`Unknown action "${action}"`));
       const { actor } = options;
-      // An actor calls only what lets them, and what their scope lists (a key's).
-      if (actor && actor.kind !== "system" && !def.allow?.(actor, input)) {
+      // An actor calls only what lets them (an agent, for whom it works for too), and what their
+      // scope lists (a key's).
+      if (actor && actor.kind !== "system" && (!def.allow || !allows(def.allow, actor, input))) {
         return Promise.reject(forbidden(`${actor.kind} ${actor.id} may not call "${action}".`));
       }
       if (actor && actor.kind !== "system" && !inScope(actor, "call", action)) {

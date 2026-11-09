@@ -50,7 +50,7 @@ export type {
   Store,
 } from "./store.ts";
 export { type Maintenance, MAINTENANCE_SQL, redacted, type Written } from "./maintain.ts";
-export { inScope, personOf, principalOf, type Scope } from "./actor.ts";
+export { allows, grant, inScope, personOf, principalOf, type Scope, whereOf } from "./actor.ts";
 export { clientAddress, loopbackAddress, setClientAddress } from "./address.ts";
 export { bodyOf, jsonOf } from "./body.ts";
 export { cookieSafe, type CookieSettings } from "./cookies.ts";

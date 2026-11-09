@@ -70,6 +70,9 @@ import { isRead, type Op, type WriteOp } from "./ops.ts";
 import { canonical, invalid, merge } from "./registry.ts";
 import { decode, encode, lines } from "./wire.ts";
 
+/** Where an observing actor is, as a call from its View says it (`in`). */
+const placeOf = (actor?: { in?: unknown }) => typeof actor?.in === "string" ? { in: actor.in } : {};
+
 /** What a client's transport is: the one Oxian workers connect with. */
 export type ClientTransport = Parameters<typeof createWorker>[0]["transport"];
 
@@ -80,8 +83,11 @@ export type ClientTransport = Parameters<typeof createWorker>[0]["transport"];
 export type ClientLink = {
   /** Answers a batch of reads, by the key each was asked under. */
   read(reads: { key: string; read: Remote }[]): Promise<({ key: string } & Answer)[]>;
-  /** Calls an Action; with `id`, the caller's own id for the call (done once). */
-  call(action: string, input: unknown, options?: { id?: string }): Promise<unknown>;
+  /**
+   * Calls an Action; with `id`, the caller's own id for the call (done once);
+   * with `in`, where its page is.
+   */
+  call(action: string, input: unknown, options?: { id?: string; in?: string }): Promise<unknown>;
   emit?(type: string, data: Record<string, unknown>): Promise<void>;
   /** A write to a collection, as the person, answered as MongoDB does (`insertedId`…). */
   write?(op: WriteOp): Promise<unknown>;
@@ -129,9 +135,16 @@ export type Client = {
   db: { collection<T = Record<string, unknown>>(name: string): ClientCollection<T> };
   /**
    * Calls an Action on the owner, as the person. With `id` (theirs alone),
-   * sent again it answers what the first did, without doing it twice.
+   * sent again it answers what the first did, without doing it twice. With
+   * `in`, where the page that calls is (its space): the work's `in`. A View
+   * observed for an actor with `in` (`observe(…, { actor })`) calls from
+   * there.
    */
-  call<R = unknown>(action: string, input?: unknown, options?: { id?: string }): Promise<R>;
+  call<R = unknown>(
+    action: string,
+    input?: unknown,
+    options?: { id?: string; in?: string },
+  ): Promise<R>;
   /** Emits a declared event on the owner, as the person (what the event allows). */
   emit(type: string, data?: Record<string, unknown>): Promise<void>;
   /** Resolves when no part is running here. */
@@ -395,11 +408,10 @@ function open(options: ClientOptions): Client {
       case READ:
         return await link.read(body.reads as { key: string; read: Remote }[]) as R;
       case CALL:
-        return await link.call(
-          body.action as string,
-          body.input,
-          typeof body.id === "string" ? { id: body.id } : {},
-        ) as R;
+        return await link.call(body.action as string, body.input, {
+          ...(typeof body.id === "string" ? { id: body.id } : {}),
+          ...(typeof body.in === "string" ? { in: body.in } : {}),
+        }) as R;
       case WRITE:
         if (!link.write) throw invalid("This client's link writes nothing");
         return await link.write(body.op as WriteOp) as R;
@@ -624,7 +636,7 @@ function open(options: ClientOptions): Client {
       };
       const query = (name: string, queryName: string, params: unknown) =>
         value({ collection: name, query: queryName, params: params ?? null }, track);
-      return {
+      const reads: ReadContext = {
         db: { collection: (name) => collection(name, run, query) as never },
         graph: { edges: refuse("reading edges") as never },
         render: refuse("rendering") as never,
@@ -635,11 +647,16 @@ function open(options: ClientOptions): Client {
         fetch: refuse("calling outside services") as never,
         resources: registry.resources,
         adapters: registry.adapters,
+        // Nothing is kept here: what the rules work out, the owner keeps.
+        kept: (_key, work) => work(reads),
         call: refuse("calling Actions") as never,
       };
+      return reads;
     },
-    call: (action, input) => ask(CALL, { action, input: input ?? {} }) as Promise<never>,
-    emit: (type, data) => ask(EMIT, { type, data: data ?? {} }),
+    // A View's handlers call from where it's observed (its actor's `in`).
+    call: (action, input, actor) =>
+      ask(CALL, { action, input: input ?? {}, ...placeOf(actor) }) as Promise<never>,
+    emit: (type, data, actor) => ask(EMIT, { type, data: data ?? {}, ...placeOf(actor) }),
     // No part reads it now: the owner stops watching it.
     unread: (watched) => {
       if (!watched.startsWith(WATCHED)) return;
@@ -665,8 +682,13 @@ function open(options: ClientOptions): Client {
   return {
     observe: observers.observe,
     db: { collection: collectionOf },
-    call: (action, input, { id } = {}) =>
-      ask(CALL, { action, input: input ?? {}, ...(id !== undefined ? { id } : {}) }),
+    call: (action, input, { id, in: where } = {}) =>
+      ask(CALL, {
+        action,
+        input: input ?? {},
+        ...(id !== undefined ? { id } : {}),
+        ...(where !== undefined ? { in: where } : {}),
+      }),
     emit: (type, data) => ask(EMIT, { type, data: data ?? {} }),
     idle: observers.idle,
     known: () =>

@@ -99,6 +99,8 @@ export type Context = {
   disconnect(actor: Actor): Promise<number>;
   /** Renders `item` through the View registered under a name (see Views). */
   render: Render;
+  /** What `work` works out from reads (see `ReadContext.kept`): here, worked out each time. */
+  kept: ReadContext["kept"];
   /**
    * Appends a document to a records collection, and returns its `_id`. It
    * goes with this job's next write, or when the job ends (even failing), so
@@ -122,10 +124,18 @@ export type Context = {
    */
   actor?: Actor;
   /**
+   * Where this work is: its actor's `in` (a space, to the access plugin), as
+   * the way in said it, carried into everything it causes. None: nowhere in
+   * particular (the system's work, an app without spaces).
+   */
+  in?: string;
+  /**
    * This context acting as someone else: a person (a webhook mapping a number
-   * to its person), or the system (no argument), which no rule restricts.
-   * Trusted code only; what it does records the actor it acts as, `via` its
-   * own.
+   * to its person), the system (no argument), which no rule restricts, or a
+   * named grant of the system's (`grant("hand-over")`). Trusted code only;
+   * what it does records the actor it acts as, `via` its own, and stays where
+   * the work is (`in`) unless `actor` says where (`in`, or `in: undefined` for
+   * nowhere).
    */
   as(actor?: Actor): Context;
   /** The event a Processor is handling. */
@@ -155,6 +165,17 @@ export type ReadContext = {
   adapters: Adapters;
   /** Who is reading; what they don't reach, the rules keep out already. */
   actor?: Actor;
+  /** Where the reading is: its actor's `in`. */
+  in?: string;
+  /**
+   * What `work` works out from reads, kept until a commit changes something
+   * it read: asked again by `key` meanwhile, it answers at once. For what a
+   * rule works out on every op from data that changes rarely (who reaches
+   * what). Only the owner keeps it, for its rules (`guard`, `labels`); work
+   * that reads through any other context just runs. `key` names everything
+   * the result depends on besides what it reads.
+   */
+  kept<T>(key: string, work: (ctx: ReadContext) => Promise<T>): Promise<T>;
   /**
    * Calls an unrecorded Action (`record: false`), another plugin's or this
    * one's, with a read-only context: it reads, and records what it used,
@@ -168,6 +189,8 @@ export type ReadContext = {
 export type Merged = {
   resources: Resources;
   adapters: Adapters;
+  /** The names of every plugin's Views: whether one a declaration needs is there. */
+  views: readonly string[];
   /** Every plugin's Actions, by name: whether one a declaration names is there. */
   actions: Readonly<Record<string, ActionDef>>;
   /** Calls an unrecorded Action, as a read does (another plugin's check: `models.check`). */
@@ -230,6 +253,8 @@ export type ViewContext<Shown = unknown> = {
   viewer?: Viewer;
   /** Who it renders as; what they don't reach, the rules keep out already. */
   actor?: Actor;
+  /** Where it's shown: its actor's `in`. */
+  in?: string;
   /** What the caller asked for (`mode`: a density, …). Open-ended. */
   hints: Record<string, unknown>;
   /**
@@ -317,8 +342,12 @@ export type CollectionDef = {
 
 export type ActionDef = {
   /**
-   * Who may call it from outside: an actor's call runs only if this says
-   * yes. Without it, actors can't call it (the system and plugin code can).
+   * Who may call it: an actor's call runs only if this says yes, from
+   * outside and from code acting for them (`ctx.call` in a tool, a
+   * Processor, another Action) alike; for an agent, it must say yes for whom
+   * it works for too (`for`). Without it, it's internal: actors can't call
+   * it from outside, and code may, as whoever it acts for. Code that goes on
+   * where the actor couldn't acts as a grant of the system's (`ctx.as`).
    * Which documents a call reaches is the rules' business, not this.
    */
   allow?(actor: Actor, input: unknown): boolean;

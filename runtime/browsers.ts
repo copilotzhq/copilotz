@@ -11,7 +11,10 @@
  *   `admitted` and `writeOutside`, owner.ts: only where a rule speaks for
  *   the collection's writes, never its private fields, within its reach);
  *   Actions, with its own call id when it gives one; declared events; reads
- *   it no longer needs.
+ *   it no longer needs. A call, an event or a write says where its page is
+ *   (`in`, the space it shows): the actor's for that work, which is where
+ *   it's recorded and where what it causes is. It's never wider than the
+ *   person: what an agent does there reaches only where it is too.
  * - **What it's told:** a read's new result once a commit changes it, over
  *   one session stream per connection. A read is watched by observing a View
  *   that makes it, as the person: what the rules read to know their reach is
@@ -120,6 +123,23 @@ export function toldTo(actor: Actor | undefined, error: unknown): Failure {
   const said = failure(error);
   if (actor?.kind !== "contact" || said.public) return said;
   return { message: "Something went wrong.", ...(said.code ? { code: said.code } : {}) };
+}
+
+/**
+ * The actor of a browser's call, where its page says it is (`in`: 1 to 200
+ * characters): the connection's, there. Nothing said: the connection's, as
+ * it is. Where is only ever said, never proved: it's what work there is
+ * recorded with, and what an agent's work there is narrowed to.
+ */
+export function placed(actor: Actor, given: unknown): Actor {
+  if (given === undefined || given === null) return actor;
+  if (typeof given !== "string" || !given || given.length > 200) {
+    throw Object.assign(new Error("Where a call is (`in`) is 1 to 200 characters."), {
+      code: "invalid",
+      public: true,
+    });
+  }
+  return { ...actor, in: given };
 }
 
 /**
@@ -522,19 +542,19 @@ export function createBrowsers(env: {
         }
         return null;
       case WRITE:
-        return await env.write(connection.actor, body.op as WriteOp);
+        return await env.write(placed(connection.actor, body.in), body.op as WriteOp);
       case CALL:
         return await env.call(
           String(body.action),
           body.input ?? {},
-          connection.actor,
+          placed(connection.actor, body.in),
           typeof body.id === "string" ? body.id : undefined,
         );
       case EMIT:
         await env.emit(
           String(body.type),
           (body.data ?? {}) as Record<string, unknown>,
-          connection.actor,
+          placed(connection.actor, body.in),
         );
         return null;
     }

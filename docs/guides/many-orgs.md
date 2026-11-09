@@ -97,8 +97,8 @@ Whatever has one address for every org lives in the directory's runtime. Stripe'
 ## Examples
 
 - `examples/web-node/orgs.ts` runs it in memory, on Node.
-- `examples/terminal-agent/orgs.ts` runs it on Deno, with each org a tenant of one PostgreSQL schema,
-  and staff's operations.
+- `examples/terminal-agent/orgs.ts` runs it on Deno, with each org a tenant of one PostgreSQL
+  schema, and staff's operations.
 
 [Build Compass, Chapter 41](../build-compass/part-13-from-one-person-to-many/41-many-orgs-and-billing.md)
 builds it step by step, with each org's usage priced in that org alone.

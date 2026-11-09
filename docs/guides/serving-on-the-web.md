@@ -61,17 +61,18 @@ off its path: under an org's `/o/acme`, the path `/o/acme/x` is `/x` (the `page.
 
 Beside the request, a route gets 4 things:
 
-- `runtime`, the runtime as trusted code. What it calls runs as the system, or as the actor it names.
+- `runtime`, the runtime as trusted code. What it calls runs as the system, or as the actor it
+  names.
 - `actor`, who the request is.
 - `params`, the pattern's parameters: `/hooks/whatsapp/:name` gives `params.name`.
 - `cookies`, the request's cookies, and the route's to set and clear.
 
-What a route throws is answered by its code: `invalid` is a 400, `unauthorized` a 401, `forbidden`
-a 403, `not_found` a 404 and `too_many` a 429. Anything else is a 500.
+What a route throws is answered by its code: `invalid` is a 400, `unauthorized` a 401, `forbidden` a
+403, `not_found` a 404 and `too_many` a 429. Anything else is a 500.
 
-Patterns are matched in a fixed order. The more specific pattern comes first, and the catch-all
-`/*` comes last. A later plugin's route replaces an earlier one with the same pattern, and `null`
-removes it.
+Patterns are matched in a fixed order. The more specific pattern comes first, and the catch-all `/*`
+comes last. A later plugin's route replaces an earlier one with the same pattern, and `null` removes
+it.
 
 A key can also be a whole URL pattern with a host, such as a preview's. It then takes every request
 to the hosts it matches, whatever the path.
@@ -107,8 +108,8 @@ Every cookie is `HttpOnly`, on the whole site (`Path=/`), and never has a `Domai
 one in its place. Only over plain http to this machine, or to one on its network (a private address,
 a `.local` name), does it keep its plain name.
 
-A cookie is `SameSite=Lax` unless its plugin asks for `Strict`, as a site visitor's does. A
-response that sets one is never cached.
+A cookie is `SameSite=Lax` unless its plugin asks for `Strict`, as a site visitor's does. A response
+that sets one is never cached.
 
 The app renames cookies with a `cookies` resource, such as
 `{ names: { session: "dir" }, suffix: "_acme" }`. That's how runtimes that share a host keep theirs
@@ -121,8 +122,8 @@ its socket, `/oxian`, as an untrusted worker bound to that actor, under the acce
 
 Requests from other sites are refused. A request that may change something (anything but GET, HEAD
 and OPTIONS), sent by another site's page, without an `Authorization` header, gets a 403. The
-browser's `Origin` or `Sec-Fetch-Site` header says where it came from. So another site can't sign its
-visitors in, or act with their cookies. Webhooks send no `Origin`, and pass.
+browser's `Origin` or `Sec-Fetch-Site` header says where it came from. So another site can't sign
+its visitors in, or act with their cookies. Webhooks send no `Origin`, and pass.
 
 Behind a front of the app's own, such as a Cloudflare worker, the `caller` resource's `front` secret
 says which requests the front vouches for. The host it forwards (`x-forwarded-host`) is then the
@@ -247,16 +248,15 @@ plugins: [
 ];
 ```
 
-Signing out is `POST /signout`. It ends the session, disconnects its browsers and clears the
-cookie.
+Signing out is `POST /signout`. It ends the session, disconnects its browsers and clears the cookie.
 
 ## The sign-in page's words
 
 The sign-in page is the app's, in every word. Beside the form it shows the app's logo (its theme's
 `logo`), its name (the page's title) and its own pitch.
 
-Both come from the `signInPage` resource of the browser's plugins, the ones `web({ plugins })`
-runs. It merges over Copilotz's, as the theme does:
+Both come from the `signInPage` resource of the browser's plugins, the ones `web({ plugins })` runs.
+It merges over Copilotz's, as the theme does:
 
 - `words` patch one by one, by key. `SIGN_IN_WORDS`, from `copilotz/web`, lists them all, with their
   blanks such as `{email}` and `{seconds}`.
@@ -354,8 +354,8 @@ Tests need no listener:
 await runtime.fetch(new Request("http://localhost/hooks/ping", init));
 ```
 
-To connect a client in the process as someone, add `testWho` from `copilotz/testing` to the
-plugins, and take its tickets from `/connect` with `ticketFor(runtime, actor)`.
+To connect a client in the process as someone, add `testWho` from `copilotz/testing` to the plugins,
+and take its tickets from `/connect` with `ticketFor(runtime, actor)`.
 
 ## Related
 

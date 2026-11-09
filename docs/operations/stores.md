@@ -18,17 +18,17 @@ conformance suite, `stores/tests/`, holds all three to it.
 [stores/README.md](../../stores/README.md) describes each one. It lists exactly which parts of the
 MongoDB collection API they support, and how.
 
-| Import                     | What it has                                                                                  |
-| -------------------------- | -------------------------------------------------------------------------------------------- |
-| `copilotz/stores/memory`   | `memoryStore()`: in memory, the reference                                                    |
-| `copilotz/stores/sqlite`   | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                             |
+| Import                     | What it has                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `copilotz/stores/memory`   | `memoryStore()`: in memory, the reference                                                                    |
+| `copilotz/stores/sqlite`   | `sqliteStore({ path })`: `node:sqlite` or `bun:sqlite`, one file                                             |
 | `copilotz/stores/postgres` | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`… |
-| `copilotz/stores/latency`  | `withLatency(store, ms)`: a store with round trips, to measure                               |
+| `copilotz/stores/latency`  | `withLatency(store, ms)`: a store with round trips, to measure                                               |
 
 ## SQLite
 
-SQLite opens `node:sqlite` on Node and Deno, and `bun:sqlite` on Bun. It also takes any database with
-the same small API, through `sqliteStore({ path, open })`, such as a Durable Object's.
+SQLite opens `node:sqlite` on Node and Deno, and `bun:sqlite` on Bun. It also takes any database
+with the same small API, through `sqliteStore({ path, open })`, such as a Durable Object's.
 
 ## PostgreSQL
 
@@ -43,10 +43,10 @@ each apart. An org's rows copy elsewhere unchanged with `copyTenant`.
 Blobs are strings over 16 KiB and the files people send. They live in the store by default. They can
 also go elsewhere:
 
-| Import                 | What it has                                                                                         |
-| ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `copilotz/blobs/files` | `fileBlobs({ dir })`: blobs as files                                                                |
-| `copilotz/blobs/http`  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                     |
+| Import                 | What it has                                                                                               |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| `copilotz/blobs/files` | `fileBlobs({ dir })`: blobs as files                                                                      |
+| `copilotz/blobs/http`  | `httpBlobs({ url, headers })`: blobs in a bucket (S3, GCS, R2…)                                           |
 | `copilotz/blobs/gcs`   | `gcsBlobs({ bucket, prefix })`: blobs in a Google Cloud Storage bucket, as the instance's service account |
 
 ## Related

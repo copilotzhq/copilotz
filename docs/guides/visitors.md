@@ -48,9 +48,9 @@ Someone signed in comes in as themselves.
 
 ## What a visitor reaches
 
-A visitor reaches what any contact does: their chat, and what's said and filed there,
-`/files/<id>` included. They never see the agent's private steps: its tools' calls, what each
-returned, or a step's words before they're known to be an answer.
+A visitor reaches what any contact does: their chat, and what's said and filed there, `/files/<id>`
+included. They never see the agent's private steps: its tools' calls, what each returned, or a
+step's words before they're known to be an answer.
 
 Its page reads only what it names of its own: its chat's messages by `thread`, and its chats by its
 memberships, `{ member: "contact:<id>" }`. A read that names none is refused, never watched.
@@ -89,8 +89,8 @@ proxy's, the runtime warns once.
 A site may have a `budget`: what its visitors' turns may be charged in a day, in the usage ledger's
 prices. It needs the usage plugin. Past it, visitors wait for the next day.
 
-A site may also have a `challenge`: an Action of the app's that checks what the page answered
-coming in, such as a CAPTCHA's token, before a newcomer is let in:
+A site may also have a `challenge`: an Action of the app's that checks what the page answered coming
+in, such as a CAPTCHA's token, before a newcomer is let in:
 
 ```ts
 web({ arrive: { name: "site", challenge: token } });

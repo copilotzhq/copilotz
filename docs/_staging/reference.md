@@ -1,11 +1,11 @@
 # STAGING: reference (not published)
 
 > **Staging, not a page.** This file holds the old README's content destined for the reference
-> pages, copied verbatim from the README of 1.0.0-rc.31 (`git show v1.0.0-rc.31:README.md`), so nothing is lost while the reference waits for a runtime
-> change. It's not in `docs/manifest.json`, and the website doesn't show it. Headings, links and
-> code are as they were in the README: relative links are relative to the repository's root, not to
-> this folder. Rewrite it into `docs/reference/` in the guide voice, check every claim against the
-> code, then delete this file.
+> pages, copied verbatim from the README of 1.0.0-rc.31 (`git show v1.0.0-rc.31:README.md`), so
+> nothing is lost while the reference waits for a runtime change. It's not in `docs/manifest.json`,
+> and the website doesn't show it. Headings, links and code are as they were in the README: relative
+> links are relative to the repository's root, not to this folder. Rewrite it into `docs/reference/`
+> in the guide voice, check every claim against the code, then delete this file.
 >
 > Already moved elsewhere, and not repeated here: serving on the web, many orgs, visitors, apps
 > without a page and the REST API (`docs/guides/`); installing a computer (`docs/guides/`); stores,
@@ -22,7 +22,6 @@
 
 ## From the old README: Install
 
-
 ```sh
 npm install copilotz                 # Node 24+ (npm, pnpm, yarn)
 bun add copilotz                     # Bun
@@ -35,7 +34,6 @@ beside it: `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sq
 PostgreSQL in the process, and `@types/react` for the front ends' types.
 
 ## From the old README: A first app
-
 
 ```ts
 import { createRuntime, definePlugin } from "copilotz";

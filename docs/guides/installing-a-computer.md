@@ -84,14 +84,14 @@ line doesn't need that.
 - `computer list` says which apps it's connected to, and where their spaces are.
 - `computer disconnect <app-url>` leaves one app.
 
-Its commands run in bash. On Windows they run in PowerShell, 7 when it's there, else 5.1. Agents
-are told which.
+Its commands run in bash. On Windows they run in PowerShell, 7 when it's there, else 5.1. Agents are
+told which.
 
 ## Updates
 
-A computer older than the app's release updates itself as it connects. The app tells it the
-version, and its binary's URL, size and SHA-256. The computer checks them, checks that the new one
-runs, swaps it in and starts again.
+A computer older than the app's release updates itself as it connects. The app tells it the version,
+and its binary's URL, size and SHA-256. The computer checks them, checks that the new one runs,
+swaps it in and starts again.
 
 ## Many apps on one machine
 

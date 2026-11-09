@@ -7,8 +7,8 @@ order: 2
 
 # Maintenance
 
-When an app's operators can't reach its database, the `maintenance` plugin answers for it over
-HTTP. A client's network that keeps their database user out is the usual reason.
+When an app's operators can't reach its database, the `maintenance` plugin answers for it over HTTP.
+A client's network that keeps their database user out is the usual reason.
 
 ## Turning it on
 
@@ -16,7 +16,16 @@ The plugin comes from `copilotz/plugins/interfaces`. It answers under `/maintena
 the app gives it:
 
 ```ts
-resources: { maintenance: { key: process.env.MAINTENANCE_KEY } }
+import { maintenance } from "copilotz/plugins/interfaces";
+
+const runtime = await createRuntime({
+  store,
+  plugins: [
+    ...plugins,
+    maintenance,
+    definePlugin({ name: "app", resources: { maintenance: { key: process.env.MAINTENANCE_KEY } } }),
+  ],
+});
 ```
 
 It's the one place an app runs SQL of its own. Plugin code never does.
@@ -39,14 +48,14 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
 
 ## Keys
 
-Give one `key`, or several in `keys` while one rotates: add the new one, move clients, then drop
-the old one.
+Give one `key`, or several in `keys` while one rotates: add the new one, move clients, then drop the
+old one.
 
 Each key is at least 32 random characters. A short one, or one plainly not random, stops the app
 from starting.
 
-Every request shows a key, as `Authorization: Bearer <key>`, compared in constant time. Without a key
-configured, every request is unauthorized, the same answer as a wrong key.
+Every request shows a key, as `Authorization: Bearer <key>`, compared in constant time. Without a
+key configured, every request is unauthorized, the same answer as a wrong key.
 
 ## Who it acts as
 
@@ -98,8 +107,8 @@ its timeout.
 Raw SQL writes run inside the owner (`runtime.maintenance.write`, see `runtime/maintain.ts`), for
 what operations can't do.
 
-Each runs alone among the owner's writes: those running end first, and the next ones wait for it.
-It runs in a transaction fenced by the owner's epoch, so an owner that lost the store can't run one.
+Each runs alone among the owner's writes: those running end first, and the next ones wait for it. It
+runs in a transaction fenced by the owner's epoch, so an owner that lost the store can't run one.
 Its `maintenance.sql` event goes in the same commit: the statement, its params, the rows it changed
 in any table, and who.
 
@@ -197,8 +206,8 @@ rolling a write back, and says what's more:
 - `dblink` or `postgres_fdw` in the database;
 - a trigger on the store's tables, which the store never makes.
 
-The checks name every catalog they read as `pg_catalog`'s, after setting the search path back to
-it, so nothing a statement made stands in for them.
+The checks name every catalog they read as `pg_catalog`'s, after setting the search path back to it,
+so nothing a statement made stands in for them.
 
 ### Signing it in
 
@@ -228,8 +237,8 @@ grants below, naming `"maintenance@PROJECT.iam"`.
 
 ### The grants
 
-Elsewhere, run this as the store's role (the schema's owner), once the app has started once and
-made the schema. The first line needs a role that may create roles:
+Elsewhere, run this as the store's role (the schema's owner), once the app has started once and made
+the schema. The first line needs a role that may create roles:
 
 ```sql
 -- LOGIN and nothing else; never grant it a role. (On Cloud SQL with IAM, gcloud makes it.)
@@ -310,6 +319,6 @@ could turn SQL into commands on the database server, or into access to its files
 - a role that may run `pg_read_file`, `pg_read_binary_file`, `lo_import`, `lo_export` or adminpack's
   file functions.
 
-Cloud SQL's `postgres` user isn't a superuser. It's a member of `cloudsqlsuperuser`, which isn't
-one either. From PostgreSQL 16 it passes. On 15 or earlier its `CREATEROLE` is refused, so use a
-role of its own there.
+Cloud SQL's `postgres` user isn't a superuser. It's a member of `cloudsqlsuperuser`, which isn't one
+either. From PostgreSQL 16 it passes. On 15 or earlier its `CREATEROLE` is refused, so use a role of
+its own there.

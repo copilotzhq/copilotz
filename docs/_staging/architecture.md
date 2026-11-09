@@ -1,11 +1,12 @@
 # STAGING: architecture (not published)
 
 > **Staging, not a page.** This file holds the old README's content destined for the architecture
-> pages, copied verbatim from the README of 1.0.0-rc.31 (`git show v1.0.0-rc.31:README.md`), so nothing is lost while the architecture waits for a runtime
-> change. It's not in `docs/manifest.json`, and the website doesn't show it. Headings, links and
-> code are as they were in the README: relative links are relative to the repository's root, not to
-> this folder. Rewrite it into `docs/architecture/` in the guide voice, check every claim against
-> the code, then delete this file.
+> pages, copied verbatim from the README of 1.0.0-rc.31 (`git show v1.0.0-rc.31:README.md`), so
+> nothing is lost while the architecture waits for a runtime change. It's not in
+> `docs/manifest.json`, and the website doesn't show it. Headings, links and code are as they were
+> in the README: relative links are relative to the repository's root, not to this folder. Rewrite
+> it into `docs/architecture/` in the guide voice, check every claim against the code, then delete
+> this file.
 >
 > The Shape section's bullets on the design system and on words are in `reference.md`, beside this
 > file. The Layout section and the layers' import rules are in `CONTRIBUTING.md`.

@@ -39,8 +39,7 @@ any GET with Accept: text/event-stream: the result, then each new result after a
 ```
 
 `PATCH`, `PUT` and `DELETE` also work on the collection itself, with `?filter=<json>` in place of an
-id. They then change the first document that matches, and `?upsert=true` inserts one when none
-does.
+id. They then change the first document that matches, and `?upsert=true` inserts one when none does.
 
 An `Idempotency-Key` on an Action call is the call's id. Sent again, the call answers what the first
 did, without doing it twice.
@@ -52,8 +51,8 @@ about writes. `sys.*` collections never do.
 
 Private fields are never returned, filtered by or written.
 
-Every write is the caller's own. The owner's guard keeps it within their reach, the schema checks it,
-and it's recorded as its events.
+Every write is the caller's own. The owner's guard keeps it within their reach, the schema checks
+it, and it's recorded as its events.
 
 Plugins' collections that only their Actions may change say so in their rules. Spaces and
 memberships, sessions, keys, messages, routines and computers are some of them.

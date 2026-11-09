@@ -92,8 +92,8 @@ Each layer imports only what it may. `testing/boundaries.test.ts` fails otherwis
 - Stores, exporters and hosts import the runtime.
 - A plugin imports the runtime, the hosts' toolkits, its own files and other plugins' `contract.ts`.
   The web host's toolkit comes through `hosts/web/mod.ts` only, plus `hosts/web/words.ts`.
-- Tests, examples and a theme's own `mod.ts` and `terminal.ts` compose the layers, so they may import
-  anything.
+- Tests, examples and a theme's own `mod.ts` and `terminal.ts` compose the layers, so they may
+  import anything.
 
 A host runs the app in a place, such as the web or the terminal, and uses the runtime's public API
 only. A shell is that place's root View (`web.shell`, `terminal.shell`), and it's a plugin. A
@@ -102,8 +102,8 @@ feature's front end there is its own Views and commands.
 ## How a plugin is laid out
 
 Inside a theme, each plugin is laid out by primitive: `collections/`, `actions/`, `events/`,
-`processors/`, `views/`, `resources/`, `adapters/`, `routes/`. There's one file per declaration,
-and `shared/` holds what several use. Its `mod.ts` only assembles them.
+`processors/`, `views/`, `resources/`, `adapters/`, `routes/`. There's one file per declaration, and
+`shared/` holds what several use. Its `mod.ts` only assembles them.
 
 Its front ends are its own (`web.tsx`, `terminal.ts`), loaded only where they draw. The theme
 gathers them, as `plugins/agents/web.tsx` does.
@@ -157,8 +157,8 @@ conversations live in your Personal space.
 - `/agents` lists who works in a space, with ● on the one that answers new chats.
 - `/agent Maya: writes launch copy` makes an agent there, `@maya`. `/default maya` has it answer new
   chats, and `/remove agent:maya` takes it out.
-- People join by accepting an invitation: `/invitations`, then `/accept <n>`.
-  `--as=bob@example.com` is a person with that email.
+- People join by accepting an invitation: `/invitations`, then `/accept <n>`. `--as=bob@example.com`
+  is a person with that email.
 - `/file <path> [message]` sends a file.
 - `/computer connect` in a space gives the command that connects a computer to it.
 - `/approve once|thread|always|no` answers what agents wait on.
@@ -173,8 +173,8 @@ made back to the owner.
 ### In the browser
 
 You sign in by name or email, on this machine only. With `GOOGLE_CLIENT_ID` set you can sign in with
-Google. With `EMAIL=1` you sign in with an email and a password, and its codes and links are
-written to the terminal. `EMAIL_INVITE=<address>` invites someone as it starts.
+Google. With `EMAIL=1` you sign in with an email and a password, and its codes and links are written
+to the terminal. `EMAIL_INVITE=<address>` invites someone as it starts.
 
 Where you are is the address (`/thread/<id>`, `?in=<space>`), so links, back and forward, and 2 tabs
 work.
@@ -190,8 +190,8 @@ The composer also records voice messages.
 Releases are tags. A `v1.*` tag publishes that version to JSR and npm, once the suite passes on
 every runtime.
 
-1. **The release commit.** On a branch, one commit named "Release X.Y.Z" sets the version
-   everywhere it's named:
+1. **The release commit.** On a branch, one commit named "Release X.Y.Z" sets the version everywhere
+   it's named:
    - `deno.json` and `package.json`;
    - `package-lock.json`, in its 2 places;
    - the computer program's version files: `plugins/compute/computers/program/version.ts`, the
@@ -213,8 +213,8 @@ every runtime.
 The tag runs `.github/workflows/publish.yml`. It checks that the tag names the version `deno.json`,
 `package.json` and the computer program say. It runs the test workflow. It makes the tag's GitHub
 release with the computer program: built on a Mac, or the last release's binaries when the program
-hasn't changed. Then it publishes to JSR (`@copilotz/copilotz`) and to npm (`copilotz`), both through
-GitHub's OIDC, with no token.
+hasn't changed. Then it publishes to JSR (`@copilotz/copilotz`) and to npm (`copilotz`), both
+through GitHub's OIDC, with no token.
 
 A version with a pre-release part, such as `-rc.31`, goes to npm's `next` tag, so
 `npm install copilotz` keeps the last stable one.

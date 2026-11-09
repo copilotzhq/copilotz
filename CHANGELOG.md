@@ -1,3 +1,10 @@
+## 1.0.0-rc.34 — 2026-11-09
+
+rc.33, released whole. rc.33's publish stopped before npm: packing its tarballs, npm took
+`dist/npm` for a GitHub repository. JSR has `@copilotz/copilotz@1.0.0-rc.33`, and nothing else has
+rc.33. This release is rc.33's code, with the publish workflow's paths starting with `./`. Upgrading
+from rc.32 is as rc.33 says, below, with each version 1.0.0-rc.34.
+
 ## 1.0.0-rc.33 — 2026-11-09
 
 **Upgrading.** Copilotz's product plugins are packages of their own, released with it at its version

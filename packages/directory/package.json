@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/directory",
-  "version": "1.0.0-rc.33",
+  "version": "1.0.0-rc.34",
   "private": true,
   "type": "module",
   "description": "Many orgs behind one address: who signs in, which orgs they belong to, and going between them. A Copilotz plugin.",

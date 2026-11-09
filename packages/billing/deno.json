@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/billing",
-  "version": "1.0.0-rc.33",
+  "version": "1.0.0-rc.34",
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
@@ -8,7 +8,7 @@
     "./contract": "./contract.ts"
   },
   "imports": {
-    "copilotz": "jsr:@copilotz/copilotz@1.0.0-rc.33"
+    "copilotz": "jsr:@copilotz/copilotz@1.0.0-rc.34"
   },
   "publish": {
     "exclude": ["**/tests/", "**/*.test.ts", "**/*.test.tsx", "package.json"]

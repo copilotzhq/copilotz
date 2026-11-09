@@ -178,7 +178,8 @@ jobs:
       - name: Every package's tarball, on the release
         run: |
           mkdir -p dist/tarballs
-          for dir in dist/npm dist/packages/*/; do
+          # Each path starts with ./: npm takes a bare `dist/npm` for the GitHub repository dist/npm.
+          for dir in ./dist/npm ./dist/packages/*/; do
             npm pack "$dir" --pack-destination dist/tarballs
           done
           gh release upload "$TAG" dist/tarballs/*.tgz --clobber

@@ -154,8 +154,9 @@ try {
     );
   };
   const ana: Actor = { kind: "person", id: "ana" };
-  // Where it works: `in` (and `at`, which the agent carried before `in`).
-  const north: Actor = { kind: "agent", id: "north", for: ana, at: "p8", in: "p8" };
+  // Where it works. (Before `in`, an agent carried where it worked as `at`, which labels read:
+  // the figures from before were taken with `at: "p8"` too.)
+  const north: Actor = { kind: "agent", id: "north", for: ana, in: "p8" };
   const nowhere: Actor = { kind: "agent", id: "north", for: ana };
   let n = 0;
   for (

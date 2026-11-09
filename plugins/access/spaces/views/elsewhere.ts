@@ -3,8 +3,11 @@
  * the other spaces an agent can read for the person it works for, so it
  * knows where to look (a tool given a space, such as `recall` with `in`)
  * when what it needs isn't here, and the spaces it can hand work to, with who
- * answers there. Each turn, not in the system text: a new
- * space or member anywhere never costs a conversation its prompt cache.
+ * answers there. An agent reaches only where it works and what that draws on
+ * (design/work.md), so the other spaces it can read are listed only in its
+ * person's Personal space, where it reaches all they do; elsewhere, it hands
+ * work over. Each turn, not in the system text: a new space or member
+ * anywhere never costs a conversation its prompt cache.
  */
 import type { Actor, ViewContext } from "../../../../runtime/mod.ts";
 import { agentsShown, SEND } from "../../../agents/chat/contract.ts";

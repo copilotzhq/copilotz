@@ -43,17 +43,17 @@ const offer = (_agent: string, thread: Thread, ctx: ViewContext) => {
   return !!spaces?.find((s) => s._id === thread.in)?.can?.includes("write");
 };
 
-/** The conversation's space and the person the agent works for, or why there are none. */
-async function whereFor(ctx: ToolContext) {
+/**
+ * Where the agent works and the person it works for, or why there are none: computers are the
+ * person's, so their Actions run as them, here (`ctx.as` keeps where the work is).
+ */
+function whereFor(ctx: ToolContext) {
   const principal = principalOf(ctx.actor);
   if (principal?.kind !== "person") {
     return { missing: "Computers are a person's, and you aren't working for one here." };
   }
-  const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread });
-  if (!thread?.in) {
-    return { missing: "This conversation isn't in a space, so no computer goes here." };
-  }
-  return { person: principal.id, space: thread.in, as: ctx.as(principal) };
+  if (!ctx.in) return { missing: "This conversation isn't in a space, so no computer goes here." };
+  return { person: principal.id, space: ctx.in, as: ctx.as(principal) };
 }
 
 const errorOf = (error: unknown) => `Error: ${error instanceof Error ? error.message : error}`;
@@ -109,7 +109,7 @@ const listComputers = tool({
     "make one now.",
   input: { type: "object", properties: {} },
   run: async (_input, ctx) => {
-    const where = await whereFor(ctx);
+    const where = whereFor(ctx);
     if ("missing" in where) return where.missing;
     const { person, space, as } = where;
     const known = await knownTo(ctx, person, space);
@@ -158,7 +158,7 @@ const createComputer = tool({
     },
   },
   run: async (input, ctx) => {
-    const where = await whereFor(ctx);
+    const where = whereFor(ctx);
     if ("missing" in where) return where.missing;
     const { person, space, as } = where;
     try {
@@ -208,7 +208,7 @@ const manageComputer = tool({
     required: ["computer", "action"],
   },
   run: async (input, ctx) => {
-    const where = await whereFor(ctx);
+    const where = whereFor(ctx);
     if ("missing" in where) return where.missing;
     const { person, space, as } = where;
     try {

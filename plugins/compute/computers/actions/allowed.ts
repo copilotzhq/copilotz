@@ -28,7 +28,7 @@ export const allowedAction = defineAction({
     additionalProperties: false,
   },
   run: async (ctx, input): Promise<true | string> => {
-    const where = await whereFor(ctx, input.thread, `agent:${input.agent}`, input.computer, {
+    const where = await whereFor(ctx, `agent:${input.agent}`, input.computer, {
       asleep: input.kind === "destroy",
     });
     if ("missing" in where) return where.missing;

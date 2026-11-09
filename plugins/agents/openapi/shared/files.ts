@@ -120,7 +120,6 @@ export async function withFiles(
   });
 
   if (!ctx.thread) throw new Error("A file from an API is kept in a conversation: there's none");
-  const thread = await ctx.db.collection<{ in?: string }>("thread").findOne({ _id: ctx.thread });
   const files = ctx.db.collection("file");
   const refs = new Map<string, OpenApiFile>();
   for (const f of found) {
@@ -136,7 +135,8 @@ export async function withFiles(
           size: f.size,
           data: f.data,
           thread: ctx.thread,
-          ...(thread?.in ? { in: thread.in } : {}),
+          // Where the conversation is: its files are its parts.
+          ...(ctx.in ? { in: ctx.in } : {}),
           // A tool's output, as its step is: a contact in the conversation never reads it.
           private: true,
           at: new Date().toISOString(),

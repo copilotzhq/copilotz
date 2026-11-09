@@ -102,11 +102,8 @@ export function skillsShown(
   return read.value ? merged(ctx, agent, read.value) : undefined;
 }
 
-/** The skills `agent` has in the thread a tool runs in. */
-export async function skillsFor(ctx: Context, agent: string, thread: string): Promise<Shown[]> {
-  const found = await ctx.db.collection<{ in?: string }>("thread").findOne({ _id: thread });
-  const space = found?.in
-    ? await ctx.db.collection<SkillDoc>("skill").find(...spaceRead(found.in))
-    : [];
+/** The skills `agent` has where a tool runs (`ctx.in`, its conversation's space). */
+export async function skillsFor(ctx: Context, agent: string): Promise<Shown[]> {
+  const space = ctx.in ? await ctx.db.collection<SkillDoc>("skill").find(...spaceRead(ctx.in)) : [];
   return merged(ctx, agent, space);
 }

@@ -19,10 +19,6 @@ import { cardNamed, named, onBoard } from "../shared/said.ts";
 
 type Ctx = ToolContext;
 
-/** The space the agent's conversation is in. */
-const spaceOf = async (ctx: Ctx) =>
-  (await ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread }))?.in;
-
 const inSpace = (_agent: string, thread: Thread) => !!thread.in;
 
 const NOWHERE = "This conversation isn't in a space, so there's no board here.";
@@ -143,7 +139,7 @@ const listBoards = tool({
     "many cards are in each column. Read one with read_board.",
   input: { type: "object", properties: {} },
   run: async (_, ctx) => {
-    const space = await spaceOf(ctx);
+    const space = ctx.in;
     if (!space) return NOWHERE;
     const boards = await boardsOf(ctx, space);
     if (!boards.length) return "No boards in this space yet. Make one with create_board.";
@@ -179,7 +175,7 @@ const readBoard = tool({
     properties: { board: { type: "string", description: "Its name or id." } },
   },
   run: async ({ board: typed }, ctx) => {
-    const space = await spaceOf(ctx);
+    const space = ctx.in;
     if (!space) return NOWHERE;
     const board = await boardNamed(ctx, space, typed);
     if (typeof board === "string") return board;
@@ -239,7 +235,7 @@ const createBoard = tool({
     required: ["name"],
   },
   run: async ({ name, description, columns }, ctx) => {
-    const space = await spaceOf(ctx);
+    const space = ctx.in;
     if (!space) return NOWHERE;
     try {
       const made = await ctx.call<{ board: string; name: string; columns: Column[] }>(
@@ -289,7 +285,7 @@ const createCard = tool({
     required: ["title"],
   },
   run: async (input, ctx) => {
-    const space = await spaceOf(ctx);
+    const space = ctx.in;
     if (!space) return NOWHERE;
     const board = await boardNamed(ctx, space, input.board);
     if (typeof board === "string") return board;
@@ -345,7 +341,7 @@ const updateCard = tool({
     required: ["card"],
   },
   run: async (input, ctx) => {
-    const space = await spaceOf(ctx);
+    const space = ctx.in;
     if (!space) return NOWHERE;
     const board = input.board ? await boardNamed(ctx, space, input.board) : undefined;
     if (typeof board === "string") return board;
@@ -411,7 +407,7 @@ const moveCard = tool({
     required: ["card", "column"],
   },
   run: async (input, ctx) => {
-    const space = await spaceOf(ctx);
+    const space = ctx.in;
     if (!space) return NOWHERE;
     const board = input.board ? await boardNamed(ctx, space, input.board) : undefined;
     if (typeof board === "string") return board;

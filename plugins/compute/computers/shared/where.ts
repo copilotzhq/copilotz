@@ -7,7 +7,6 @@
  */
 import type { Context } from "../../../../runtime/mod.ts";
 import { personOf } from "../../../../runtime/mod.ts";
-import type { Thread } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
 import type { Scope } from "./workloads.ts";
 import { nameOf, namesFor } from "../../../access/spaces/contract.ts";
@@ -76,13 +75,12 @@ export function named(desks: Desk[], name: string): { desk: Desk } | { missing: 
 }
 
 /**
- * Where an agent works in a thread: on the computer it names (`computer`),
- * else the space's default, else one online; or why it can't (no person, no
- * computer here, that one offline).
+ * Where an agent works (`ctx.in`, its conversation's space): on the computer
+ * it names (`computer`), else the space's default, else one online; or why it
+ * can't (no person, no computer here, that one offline).
  */
 export async function whereFor(
   ctx: Context,
-  thread: string,
   who: string,
   computer?: string,
   /** What's being done doesn't need the computer running (asking to destroy it). */
@@ -90,12 +88,7 @@ export async function whereFor(
 ): Promise<Where | { missing: string }> {
   const person = personOf(ctx.actor);
   if (!person) return { missing: "There's no person this work is for, so no computer to use." };
-  // Read as the agent (for its person): a conversation they don't reach has no computer for them.
-  const found = await ctx.db.collection<Thread>("thread").findOne({ _id: thread });
-  if (!found) {
-    return { missing: "There's no computer for this conversation: it isn't one of yours." };
-  }
-  const space = found.in;
+  const space = ctx.in;
   if (!space) {
     return { missing: "This conversation isn't in a space, so there's no computer here." };
   }

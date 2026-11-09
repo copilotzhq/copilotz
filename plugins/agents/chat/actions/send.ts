@@ -31,15 +31,9 @@
  * false`).
  * People's messages go as ever.
  */
-import {
-  type Actor,
-  type Context,
-  defineAction,
-  failure,
-  peopleOrContacts,
-} from "../../../../runtime/mod.ts";
+import { type Actor, type Context, defineAction, failure } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
-import { drafter, type File, MOST_FILES } from "../collections/file.ts";
+import { drafter, type File, MOST_FILES, themselves } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import {
@@ -173,8 +167,8 @@ export const sendAction = defineAction({
     },
     additionalProperties: false,
   },
-  // People and contacts write as themselves: their own messages.
-  allow: peopleOrContacts,
+  // People and contacts write as themselves: their own messages, never an agent its person's.
+  allow: themselves,
   run: async (ctx, input) => {
     const said = input.text ?? input.tap?.title ?? "";
     if (!said.trim() && !input.files?.length) {

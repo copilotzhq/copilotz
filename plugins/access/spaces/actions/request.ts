@@ -1,5 +1,5 @@
 /** `request.grant` and `request.deny`: a space's managers decide on a request to join it. */
-import { type Context, defineAction, forbidden, people } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, forbidden, inPerson } from "../../../../runtime/mod.ts";
 import type { Request } from "../collections/request.ts";
 import { joinable } from "../shared/personal.ts";
 import { must } from "../shared/can.ts";
@@ -22,7 +22,7 @@ export const grantAction = defineAction({
     required: ["id"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const found = await decide(ctx, input.id);
     joinable(await ctx.as().db.collection("space").findOne({ _id: found.space }), found.member);
@@ -40,7 +40,7 @@ export const denyAction = defineAction({
     required: ["id"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const found = await decide(ctx, input.id);
     await ctx.as().db.collection("request").deleteOne({ _id: found._id });

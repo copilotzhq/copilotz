@@ -7,7 +7,7 @@
  * (nothing by default: publishing is always asked), then its disk, in the
  * first placement; its first wake formats it. Answers `{ computer }`.
  */
-import { defineAction, failure, people } from "../../../../runtime/mod.ts";
+import { defineAction, failure, people, personOf } from "../../../../runtime/mod.ts";
 import { hostFor } from "../shared/host.ts";
 import { diskOf } from "../shared/names.ts";
 import { mayCreate } from "../shared/may.ts";
@@ -41,7 +41,9 @@ export const createAction = defineAction({
     const placement = set.placements[0];
     if (!placement) throw invalid("The app has no placement for cloud computers.");
     const host = await hostFor(ctx, placement);
-    const owner = ctx.actor!.id;
+    // Its person's, made by their agent too.
+    const owner = personOf(ctx.actor);
+    if (!owner) throw forbidden("A cloud computer is a person's.");
     const { id } = await ctx.call<{ id: string }>("computer.provision", {
       owner,
       name: input.name ?? `${size.label} cloud computer`,

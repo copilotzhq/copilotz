@@ -35,7 +35,7 @@ export const grant = defineCollection({
   queries: {
     /** What the asker has let agents do. */
     mine: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: (grants) => grants.find({}, { sort: { at: 1 } }),
     },
     /** What the asker lets for what they set up to run, at any version of it. */

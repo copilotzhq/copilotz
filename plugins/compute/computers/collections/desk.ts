@@ -11,7 +11,7 @@
  * Its computer's name, whether it's online, and what it is are kept here
  * too, for the space's members: the computer itself is its owner's alone.
  */
-import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people, personOf } from "../../../../runtime/mod.ts";
 
 const deskSchema = {
   type: "object",
@@ -59,7 +59,7 @@ export const desk = defineCollection({
     of: {
       allow: people,
       run: (desks, params: { computer: string }, ctx) =>
-        desks.find({ computer: params.computer, owner: ctx.actor?.id ?? "" }, {
+        desks.find({ computer: params.computer, owner: personOf(ctx.actor) ?? "" }, {
           sort: { at: 1 },
         }),
     },

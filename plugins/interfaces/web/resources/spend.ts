@@ -15,17 +15,23 @@
  *
  * Nothing else is looked at.
  */
-import { failure, principalOf } from "../../../../runtime/mod.ts";
+import { failure, grant, principalOf } from "../../../../runtime/mod.ts";
 import type { ModelUse, UseContext, UseListener } from "../../../models/contract.ts";
 import { BUDGET } from "../shared/budget.ts";
 import { siteOf } from "../shared/lines.ts";
 
-/** The budgeted line a call is made for, and its visitor: none for anyone else. */
+/**
+ * The budgeted line a call is made for, and its visitor: none for anyone else.
+ * Pricing and charging what a visitor used is the line's own bookkeeping, not
+ * something the visitor asks for: done as its grant (`web.budget`) where the
+ * call is a job's.
+ */
 function budgeted(ctx: UseContext) {
   const visitor = principalOf(ctx.actor);
   if (visitor?.kind !== "contact" || typeof visitor.web !== "string" || !ctx.call) return;
   const line = siteOf(ctx, visitor.web);
-  return line?.budget ? { line: line.name, contact: visitor.id, call: ctx.call } : undefined;
+  const books = ctx.as?.(grant("web.budget")).call ?? ctx.call;
+  return line?.budget ? { line: line.name, contact: visitor.id, call: books } : undefined;
 }
 
 async function used(ctx: UseContext, use: ModelUse): Promise<void> {

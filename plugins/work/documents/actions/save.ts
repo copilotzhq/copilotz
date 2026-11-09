@@ -7,7 +7,7 @@
  * `conflict`, saying who saved what's there now, and nothing is written.
  * The same title and text as now saves nothing (`unchanged`).
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { namesFor } from "../../../access/spaces/contract.ts";
 import { type DocumentVersion, versionId } from "../collections/document-version.ts";
 import { merge, mergeField } from "../shared/merge.ts";
@@ -30,7 +30,7 @@ export const saveAction = defineAction({
     required: ["document", "base", "text"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const author = { by: keyOf(ctx.actor!) };
     const asked = input.title === undefined ? undefined : input.title.trim() || UNTITLED;

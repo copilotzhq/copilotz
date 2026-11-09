@@ -6,7 +6,7 @@
  * orders; when there's no room left between them, the column is numbered
  * again. The board and the column are read in the same commit as the move.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Board, Card, Place } from "../contract.ts";
 import { invalid, notFound, readOnly, said } from "../shared/errors.ts";
 import { keyOf, POSITION } from "../shared/fields.ts";
@@ -27,7 +27,7 @@ export const moveCardAction = defineAction({
     required: ["card"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const places = [input.before, input.after, input.at].filter((p) => p !== undefined);
     if (places.length > 1) {

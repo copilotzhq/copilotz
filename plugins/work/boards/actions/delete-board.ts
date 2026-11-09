@@ -3,7 +3,7 @@
  * space (the rules say), in one commit. Conversations that mention it keep
  * what they said.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { readOnly, said } from "../shared/errors.ts";
 import { boardOf } from "../shared/load.ts";
 
@@ -15,7 +15,7 @@ export const deleteBoardAction = defineAction({
     required: ["board"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await boardOf(ctx, input.board);
     await ctx.transaction(async (tx) => {

@@ -4,7 +4,7 @@
  * what's shared there). For other plugins and front ends, which reach spaces
  * only by name: computers check it before someone uses a space's computer.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { may } from "../shared/can.ts";
 
 export const canAction = defineAction({
@@ -20,7 +20,7 @@ export const canAction = defineAction({
   },
   // A question, asked on every preview request: it records nothing.
   record: false,
-  allow: (actor) => actor.kind === "person" || actor.kind === "agent",
+  allow: people,
   run: async (ctx, input) => {
     return { can: await may(ctx, input.verb, input.space) };
   },

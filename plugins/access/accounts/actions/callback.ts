@@ -6,7 +6,7 @@
  * said), which the route sends them to Connected accounts with. Unrecorded:
  * the code stays out of the log.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson } from "../../../../runtime/mod.ts";
 import { codeOf } from "../shared/errors.ts";
 import { finish } from "../shared/flow.ts";
 
@@ -25,7 +25,7 @@ export const callbackAction = defineAction({
     required: ["provider"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: inPerson,
   run: async (ctx, input): Promise<{ connected: string } | { failed: string; why: string }> => {
     const { provider, code, state, error } = input;
     try {

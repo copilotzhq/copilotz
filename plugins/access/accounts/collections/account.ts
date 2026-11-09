@@ -10,7 +10,13 @@
  * Queries, for people: `account.providers`, what can be connected and how;
  * `account.uses`, which of some models would run on the asker's accounts.
  */
-import { defineCollection, type Infer, people, type ReadContext } from "../../../../runtime/mod.ts";
+import {
+  defineCollection,
+  type Infer,
+  people,
+  personOf,
+  type ReadContext,
+} from "../../../../runtime/mod.ts";
 import type { ProviderShown, Uses, UsesParams } from "../contract.ts";
 import { providersOf } from "../shared/settings.ts";
 import { usesOf } from "../shared/uses.ts";
@@ -57,7 +63,7 @@ export const account = defineCollection({
     uses: {
       allow: people,
       run: async (accounts, params: UsesParams, ctx): Promise<Uses> =>
-        usesOf(ctx, await accounts.find({ person: ctx.actor!.id }), params),
+        usesOf(ctx, await accounts.find({ person: personOf(ctx.actor) ?? "" }), params),
     },
   },
 });

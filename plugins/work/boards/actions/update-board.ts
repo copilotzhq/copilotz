@@ -6,7 +6,7 @@
  * when it's empty; one with cards only when `into` says which kept column
  * they go to (at its bottom, in their order). All in one commit.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Card } from "../contract.ts";
 import { changeColumns, MOST_COLUMNS } from "../shared/columns.ts";
 import { invalid, readOnly, said } from "../shared/errors.ts";
@@ -40,7 +40,7 @@ export const updateBoardAction = defineAction({
     required: ["board"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await boardOf(ctx, input.board);
     const name = input.name?.trim();

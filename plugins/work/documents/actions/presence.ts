@@ -6,7 +6,7 @@
  * saying it often costs the log nothing. Entries no page has spoken for in
  * a while go as anyone speaks.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { presenceId, STALE_MS } from "../collections/document-presence.ts";
 import type { Document } from "../collections/document.ts";
 import { keyOf } from "../shared/text.ts";
@@ -25,7 +25,7 @@ export const presenceAction = defineAction({
     required: ["document", "page", "state"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const doc = await ctx.db.collection<Document>("document").findOne({ _id: input.document });
     if (!doc) return { present: false };

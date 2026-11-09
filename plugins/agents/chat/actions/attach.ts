@@ -14,8 +14,8 @@
  * sender holds `MOST_DRAFTS` drafts at most: the oldest beyond go. What
  * isn't sent within a day goes too (`chat.prune`).
  */
-import { defineAction, failure, peopleOrContacts } from "../../../../runtime/mod.ts";
-import { BASE64, drafter, FILE_DATA, sizeOf } from "../collections/file.ts";
+import { defineAction, failure } from "../../../../runtime/mod.ts";
+import { BASE64, drafter, FILE_DATA, sizeOf, themselves } from "../collections/file.ts";
 import { letIn } from "../shared/contact-send.ts";
 import { now } from "../shared/agents.ts";
 import { MEDIA_TYPE, MEDIA_TYPE_LENGTH } from "./send.ts";
@@ -54,7 +54,7 @@ export const attachAction = defineAction({
     required: ["name", "data"],
     additionalProperties: false,
   },
-  allow: peopleOrContacts,
+  allow: themselves,
   run: async (ctx, input): Promise<{ id: string; size: number }> => {
     const by = drafter(ctx.actor);
     if (!by) throw failure("forbidden", "Only people and contacts send files.");

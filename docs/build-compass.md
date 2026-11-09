@@ -84,6 +84,10 @@ Three things people often get wrong, and the track shows each one running:
 - Node 24 or newer (the guide uses Node; Copilotz also runs on Deno, Bun and Cloudflare Workers).
 - An OpenAI API key is optional. Without one, agents answer with Copilotz's offline fake model, and
   every test in the guide runs without a key.
+- The track and its course are built on Copilotz `1.0.0-rc.29`, and install that version. To move
+  your Compass to a later release, follow the upgrade notes for rc.30 to rc.32 in the
+  [CHANGELOG](../CHANGELOG.md): files upload on their own, `allow` is asked of tools too, and an
+  agent's work reaches only the space it works in.
 
 ```sh
 mkdir compass && cd compass

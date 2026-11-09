@@ -64,11 +64,11 @@ test("a call: a contact in a chat of its own, the tool run as it, a step, the ag
   });
 });
 
-test("the tool runs as the contact: its client, its chat; its callId and trigger the step", async () => {
+test("the tool runs as the contact: its client, its chat, its line's space; its callId and trigger the step", async () => {
   await setup(async (s) => {
     const who = JSON.parse(said(await s.call("whoami", {}, { session: "conv-1" })));
     const { contact, thread } = await chatOf("conv-1");
-    assertEquals([who.kind, who.id], ["contact", contact]);
+    assertEquals([who.kind, who.id, who.in], ["contact", contact, "line"]);
     assertEquals([who.mcp, who.client, who.agent, who.thread], [
       "chatgpt",
       "ChatGPT",

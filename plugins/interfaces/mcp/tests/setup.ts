@@ -8,11 +8,12 @@
  * `search` (read-only; its View leaves a secret out), `pick` (writes the
  * chat's booking, as the contact), `peek` (reads any chat's booking),
  * `status` (read-only: says what `paid` is now), `whoami` (says who it runs
- * as, and its call's ids), `boom` (a bare throw, with secrets in it),
+ * as, where, and its call's ids), `boom` (a bare throw, with secrets in it),
  * `refuse` and `later` (public refusals: the runtime's code, the app's own),
  * `coded` (a coded failure that isn't public), `driver` (a library's error,
- * with a string code), `slow` (takes a while), `staff` (offered only to
- * people) and `raw` (no View: never offered). Each counts its runs (`runs`).
+ * with a string code), `slow` (takes a while) and `staff` (offered only to
+ * people); and `raw`, which has no View, so a line offering it doesn't start.
+ * Each counts its runs (`runs`).
  *
  * And for an owner that stops mid-call: a store that stops at a write
  * (`stopping`), and waits on what tests watch for (`until`, `within`).
@@ -187,6 +188,7 @@ export const app = definePlugin({
             id: who?.id,
             mcp: ctx.actor?.mcp,
             client: ctx.actor?.client,
+            in: ctx.in,
             agent: ctx.agent,
             thread: ctx.thread,
             trigger: ctx.trigger,

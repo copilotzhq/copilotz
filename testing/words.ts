@@ -2,6 +2,7 @@
  * For testing that a front end shows no English of its own once the app gives its words
  * (`copilotz/testing/words`): every known key says `«key»`, a front end is drawn with that table,
  * and whatever English it defines that still shows is a word it forgot to take from the table.
+ * And a front end's words as a list (`wordsList`), for its WORDS.md.
  */
 import { knownWords, type Phrase, type Words } from "../hosts/web/words.ts";
 
@@ -36,3 +37,27 @@ export function englishLeft(markup: string, area: string): string[] {
   }
   return [...left];
 }
+
+/**
+ * Words by key with their English, as a Markdown list grouped by area (`shell.goHome` under
+ * `## shell`), sorted: what `hosts/web/WORDS.md` is made of, and a package's WORDS.md.
+ */
+export function wordsList(words: Record<string, Phrase>): string[] {
+  const lines: string[] = [];
+  let area = "";
+  for (const [key, phrase] of Object.entries(words).sort(([a], [b]) => a.localeCompare(b))) {
+    const [head] = key.split(".");
+    if (head !== area) {
+      lines.push("", `## ${head}`, "", "| Key | English |", "|---|---|"), area = head;
+    }
+    const english = typeof phrase === "string"
+      ? phrase
+      : Object.entries(phrase).map(([form, text]) => `${form}: ${text}`).join(" / ");
+    lines.push(`| \`${key}\` | ${english.replace(/\|/g, "\\|").replace(/\n/g, " ")} |`);
+  }
+  return lines;
+}
+
+/** Phrases as an area defines them (`defineWords(area, phrases)`), by their whole keys. */
+export const keyed = (area: string, phrases: Record<string, Phrase>): Record<string, Phrase> =>
+  Object.fromEntries(Object.entries(phrases).map(([key, phrase]) => [`${area}.${key}`, phrase]));

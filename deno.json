@@ -45,7 +45,8 @@
     "./testing/words": "./testing/words.ts"
   },
   "workspace": [
-    "./packages/work"
+    "./packages/work",
+    "./packages/directory"
   ],
   "tasks": {
     "chat": "deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/chat.ts",
@@ -114,6 +115,7 @@
     "exclude": [
       "plugins/models/shared/catalog.json",
       "hosts/web/WORDS.md",
+      "packages/*/WORDS.md",
       "package-lock.json"
     ]
   },

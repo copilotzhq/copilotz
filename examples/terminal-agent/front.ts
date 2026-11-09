@@ -15,7 +15,7 @@ import { chatWeb } from "../../plugins/agents/chat/web.tsx";
 import { teamWeb } from "../../plugins/agents/team/web.tsx";
 import { memoryWeb } from "../../plugins/agents/memory/web.tsx";
 import { spacesWeb } from "../../plugins/access/spaces/web.tsx";
-import { directoryWeb } from "../../plugins/access/directory/web.tsx";
+import { directoryWeb } from "@copilotz/directory/web";
 import { computersWeb } from "../../plugins/compute/computers/web.tsx";
 import { skillsWeb } from "../../plugins/agents/skills/web.tsx";
 import { routinesWeb } from "../../plugins/agents/routines/web.tsx";

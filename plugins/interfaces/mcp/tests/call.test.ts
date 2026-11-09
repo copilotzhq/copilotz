@@ -29,6 +29,7 @@ import {
   state,
   stopping,
   until,
+  untilAnswered,
   within,
   type Write,
 } from "./setup.ts";
@@ -38,6 +39,23 @@ const SCOPE = { line: "chatgpt" };
 const chatOf = (session: string, subject?: string) =>
   conversationOf(SECRET, SCOPE, { session, ...(subject ? { subject } : {}) });
 const FAILED = "Something went wrong running that tool. Try again in a moment.";
+
+/** What a call stopped past the line's `stop` may answer before it runs again. */
+const STOPPING = /^(Still working on it|It was stopped before it finished)/;
+
+/**
+ * A store with the conversation of `session` made already, under the line's own limits: a test
+ * of a stop then finds the call's tool running, not its conversation still being made (a
+ * conversation's first call does that, slower than the stop a test sets on a slow machine).
+ */
+async function chatMade(session: string) {
+  const store = memoryStore();
+  await setup(async (s) => {
+    const made = said(await s.call("search", { to: "Rio" }, { session }));
+    assertEquals(made, "2 trips: Rio 10:30, Rio 14:00");
+  }, { store });
+  return store;
+}
 
 test("a call: a contact in a chat of its own, the tool run as it, a step, the agents' reading", async () => {
   await setup(async (s) => {
@@ -583,9 +601,13 @@ test("past the line's timeout, the model is told it's still working; asked again
     const late = await s.call("slow", {}, { session: "c", id: 1 });
     assertEquals(late.body.result?.isError, true);
     assertMatch(said(late), /^Still working on it/);
-    // It goes on: asked again (any request id), it waits for the same run, then answers from it.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assertEquals(own(said(await s.call("slow", {}, { session: "c", id: 1 }))), "Done, slowly.");
+    // It goes on: asked again (any request id), it waits for the same run, then answers from it;
+    // asked while it still runs past the timeout, it's still working.
+    const answered = await untilAnswered(
+      () => s.call("slow", {}, { session: "c", id: 1 }),
+      "the slow call answered",
+    );
+    assertEquals(own(answered), "Done, slowly.");
     assertEquals(runs.slow, 1);
     const { thread } = await chatOf("c");
     const [step] = await s.steps(thread);
@@ -604,8 +626,11 @@ test("a tool that ignores its signal, past the timeout: one effect, however ofte
     // Each is told it's still working, or, once it's done, what it did.
     assertMatch(said(asks[0]), /^Still working on it/);
     assert(asks.every((a) => /^(Still working on it|Charged once)/.test(own(said(a)))));
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const answered = said(await s.call("charge", {}, { session: "pay", id: 1 }));
+    // Asked again until it's done (meanwhile, it's still working): what it did, said again.
+    const answered = await untilAnswered(
+      () => s.call("charge", {}, { session: "pay", id: 1 }),
+      "the charge answered",
+    );
     assertMatch(answered, AGAIN);
     assertMatch(own(answered), /^Charged once, with key mcp:/);
     assertEquals(charges.length, 1);
@@ -614,30 +639,31 @@ test("a tool that ignores its signal, past the timeout: one effect, however ofte
 
 test("a call still running past stop is stopped; asked again, it runs again as itself (retry)", async () => {
   await setup(async (s) => {
-    const ask = () => s.call("hang", { ms: 300 }, { session: "h", id: 1 });
+    const ask = () => s.call("hang", { ms: 400 }, { session: "h", id: 1 });
     assertMatch(said(await ask()), /^Still working on it/);
-    // Stopped at 0.1 s; asked again after, it runs again as the same call, told it's a retry.
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const rerun = JSON.parse(said(await ask()));
+    // Stopped at 0.2 s; asked again (meanwhile, it's still working, or it was stopped), it runs
+    // again as the same call, told it's a retry.
+    const rerun = JSON.parse(own(await untilAnswered(ask, "the call ran again", STOPPING)));
     assertEquals(rerun.retry, true);
     assertMatch(rerun.callId, /^mcp:mcp-[0-9a-f]{32}:[0-9a-f]{16}:[0-9a-f]{16}@/);
     // The first, ignoring its signal, ended too: with the same callId, the key to do it once.
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await until(() => hangs.length >= 2, "the first call's tool ended too");
     assertEquals(hangs, [rerun.callId, rerun.callId]);
-  }, { line: { limits: { timeout: 0.03, stop: 0.1 } } });
+  }, { store: await chatMade("h"), line: { limits: { timeout: 0.03, stop: 0.2 } } });
 });
 
 test("after a stop, the model asking again under a new request id runs the same call again", async () => {
   await setup(async (s) => {
-    assertMatch(said(await s.call("hang", { ms: 300 }, { session: "h", id: 1 })), /^Still working/);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    // Stopped at 0.1 s. Asked again with another id: the same step, the same callId, a retry.
-    const again = JSON.parse(said(await s.call("hang", { ms: 300 }, { session: "h", id: 2 })));
+    const ask = (id: number) => s.call("hang", { ms: 400 }, { session: "h", id });
+    assertMatch(said(await ask(1)), /^Still working/);
+    // Stopped at 0.2 s. Asked again with another id (meanwhile, it's still working, or it was
+    // stopped): the same step, the same callId, a retry.
+    const again = JSON.parse(own(await untilAnswered(() => ask(2), "it ran again", STOPPING)));
     assertEquals(again.retry, true);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await until(() => hangs.length >= 2, "the first call's tool ended too");
     assertEquals(hangs.length, 2);
     assertEquals(new Set(hangs).size, 1);
-  }, { line: { limits: { timeout: 0.03, stop: 0.1 } } });
+  }, { store: await chatMade("h"), line: { limits: { timeout: 0.03, stop: 0.2 } } });
 });
 
 test("an owner restarted mid-call: asked again under any id, the same call runs again as itself", async () => {

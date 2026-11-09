@@ -1,3 +1,14 @@
+## 1.0.0-rc.35 — 2026-11-09
+
+**Fixed: a retried call's nested calls.** A call run again under its id (a retry after a failure or
+a stop) looked up its own nested recorded calls without its actor. In a person's or contact's job
+the runtime then refused the lookup ("This job can't act as that"), and the retry failed. It now
+asks as whom the call works for. This affected any person or contact Action retried after it made a
+nested recorded call, and retried Processor deliveries; it has been so since the authority checks.
+
+The MCP line's tests now wait for what they assert rather than for fixed times (they flaked on macOS
+runners). Nothing to do when upgrading from rc.34.
+
 ## 1.0.0-rc.34 — 2026-11-09
 
 rc.33, released whole. rc.33's publish stopped before npm: packing its tarballs, npm took `dist/npm`

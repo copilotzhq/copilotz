@@ -138,8 +138,10 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
     ...(contact && actor.kind === "contact" ? [contact] : []),
   ];
   const sourced: Filter | undefined = also.length > 1 ? { $and: also } : also[0];
+  // A query naming a space it reaches goes to the store as it is.
   const named = filter?.[field];
-  if (typeof named === "string" && spaces.includes(named)) return sourced ?? true;
+  const there = typeof named === "string" ? reach.get(named) : undefined;
+  if (there && !there.on && there.can.has(verb)) return sourced ?? true;
   const and = (f: Filter) => sourced ? { $and: [f, sourced] } : f;
   // Documents shared on their own, and their parts (a chat shared with a contact, its messages):
   // each only where it lives, so nothing written as one of them lands in another space.

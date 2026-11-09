@@ -224,7 +224,7 @@ test("an agent asked by another works as itself, for the same person", async () 
     await rt.call("chat.send", { text: "go", in: space, to: ["a"] }, { actor: cy });
     await rt.idle();
     assert(saw, "b's tool ran");
-    assertEquals([saw.kind, saw.id, (saw.for as Actor).id, saw.at], ["agent", "b", "cy", space]);
+    assertEquals([saw.kind, saw.id, (saw.for as Actor).id, saw.in], ["agent", "b", "cy", space]);
   });
 });
 

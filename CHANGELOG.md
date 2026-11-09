@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.32 — 2026-11-09
 
 **Upgrading.** `people` now lets in an agent working for a person, and an Action's `allow` is asked
 of code acting for someone too (a tool's `ctx.call`, a Processor's, another Action's), not only of

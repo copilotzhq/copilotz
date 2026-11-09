@@ -36,12 +36,13 @@ Its named queries read for callers, as the rules let them:
 
 Of its 3 Actions, people may call 2; agents, contacts and someone signed out may call none.
 
-| Action           | Person | Agent | Contact | Anyone | Key | What it does                                                                   |
-| ---------------- | ------ | ----- | ------- | ------ | --- | ------------------------------------------------------------------------------ |
-| `api_key.create` | yes    | no    | no      | no     | no  | Makes a developer key that acts as you in one space; its secret is shown once. |
-| `api_key.revoke` | yes    | no    | no      | no     | no  | Revokes a developer key: one of yours, or one in a space you manage.           |
+| Action           | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                   |
+| ---------------- | ------ | ----- | ------- | ------ | --- | ------- | ------------------------------------------------------------------------------ |
+| `api_key.create` | yes    | no    | no      | no     | no  | no      | Makes a developer key that acts as you in one space; its secret is shown once. |
+| `api_key.revoke` | yes    | no    | no      | no     | no  | no      | Revokes a developer key: one of yours, or one in a space you manage.           |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `api_key.used`: its plugins, its schedules and the system.
 
@@ -59,7 +60,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`spaces`](spaces.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## What it does on its own
 

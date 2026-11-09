@@ -32,32 +32,33 @@ and only those who reach the space reach it.
 
 Its named queries read for callers, as the rules let them:
 
-| Query                  | Who outside runs it                                      |
-| ---------------------- | -------------------------------------------------------- |
-| `file.about`           | people, contacts and keys                                |
-| `message.conversation` | people and keys                                          |
-| `message.history`      | people and keys                                          |
-| `message.questions`    | people or keys, depending on input                       |
-| `message.visible`      | the app's code                                           |
-| `thread.agents`        | people and keys                                          |
-| `thread.prompt`        | people and keys; agents for a person, depending on input |
-| `thread.recent`        | people and keys                                          |
+| Query                  | Who outside runs it                                                |
+| ---------------------- | ------------------------------------------------------------------ |
+| `file.about`           | people, agents for a person, contacts, keys and routines           |
+| `message.conversation` | people, agents for a person, keys and routines                     |
+| `message.history`      | people, agents for a person, keys and routines                     |
+| `message.questions`    | people, keys or routines, depending on input                       |
+| `message.visible`      | the app's code                                                     |
+| `thread.agents`        | people, agents for a person, keys and routines                     |
+| `thread.prompt`        | people, keys and routines; agents for a person, depending on input |
+| `thread.recent`        | people, agents for a person, keys and routines                     |
 
 ## What it lets callers do
 
-Of its 12 Actions, people may call 6; contacts may call 2; agents and someone signed out may call
-none.
+Of its 12 Actions, people may call 6; agents may call 3; contacts may call 2; someone signed out may
+call none.
 
-| Action        | Person | Agent | Contact | Anyone | Key | What it does                                                              |
-| ------------- | ------ | ----- | ------- | ------ | --- | ------------------------------------------------------------------------- |
-| `chat.attach` | yes    | no    | yes     | no     | yes | Uploads a file to send: a draft that a message of yours sends, by its id. |
-| `chat.fork`   | yes    | no    | no      | no     | yes |                                                                           |
-| `chat.move`   | yes    | no    | no      | no     | yes | Moves a conversation, with everything in it, to another space.            |
-| `chat.open`   | yes    | no    | no      | no     | yes | Opens an empty chat in a space.                                           |
-| `chat.send`   | yes    | no    | yes     | no     | yes |                                                                           |
-| `chat.stop`   | yes    | no    | no      | no     | yes | Stops agents' turns in a conversation (and its subthreads).               |
+| Action        | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                              |
+| ------------- | ------ | ----- | ------- | ------ | --- | ------- | ------------------------------------------------------------------------- |
+| `chat.attach` | yes    | no    | yes     | no     | yes | yes     | Uploads a file to send: a draft that a message of yours sends, by its id. |
+| `chat.fork`   | yes    | yes   | no      | no     | yes | yes     |                                                                           |
+| `chat.move`   | yes    | no    | no      | no     | no  | no      | Moves a conversation, with everything in it, to another space.            |
+| `chat.open`   | yes    | yes   | no      | no     | yes | yes     | Opens an empty chat in a space.                                           |
+| `chat.send`   | yes    | no    | yes     | no     | yes | yes     |                                                                           |
+| `chat.stop`   | yes    | yes   | no      | no     | yes | yes     | Stops agents' turns in a conversation (and its subthreads).               |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `chat.erase`, `chat.import`, `chat.prune`, `chat.quiet`, `chat.say`
 and `chat.shown`: its plugins, its schedules and the system.
@@ -96,7 +97,7 @@ It also reads `agentModel`, `agentSources`, `agents`, `contactSend`, `context`, 
 
 The runtime doesn't start without [`models`](models.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## What it does on its own
 

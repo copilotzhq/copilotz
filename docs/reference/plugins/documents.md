@@ -29,26 +29,26 @@ space, and only those who reach the space reach it.
 
 Its named queries read for callers, as the rules let them:
 
-| Query                     | Who outside runs it |
-| ------------------------- | ------------------- |
-| `document.list`           | people and keys     |
-| `document.recent`         | people and keys     |
-| `documentVersion.history` | people and keys     |
+| Query                     | Who outside runs it                            |
+| ------------------------- | ---------------------------------------------- |
+| `document.list`           | people, agents for a person, keys and routines |
+| `document.recent`         | people, agents for a person, keys and routines |
+| `documentVersion.history` | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
-Of its 6 Actions, people may call all 6; agents, contacts and someone signed out may call none.
+Of its 6 Actions, people and agents may call all 6; contacts and someone signed out may call none.
 
 | Action              | Person | Agent | Contact | Anyone | Key | What it does                                                                                                                   |
 | ------------------- | ------ | ----- | ------- | ------ | --- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `document.create`   | yes    | no    | no      | no     | yes | Makes a document in a space.                                                                                                   |
-| `document.delete`   | yes    | no    | no      | no     | yes | Deletes a document and its history.                                                                                            |
-| `document.presence` | yes    | no    | no      | no     | yes | Says who has a document open, and whether they're editing it.                                                                  |
-| `document.rename`   | yes    | no    | no      | no     | yes | Renames a document.                                                                                                            |
-| `document.restore`  | yes    | no    | no      | no     | yes | Brings back an old version of a document, as its next version.                                                                 |
-| `document.save`     | yes    | no    | no      | no     | yes | Saves a document's new text (and title) as its next version, merging with what others saved since the version it started from. |
+| `document.create`   | yes    | yes   | no      | no     | yes | Makes a document in a space.                                                                                                   |
+| `document.delete`   | yes    | yes   | no      | no     | yes | Deletes a document and its history.                                                                                            |
+| `document.presence` | yes    | yes   | no      | no     | yes | Says who has a document open, and whether they're editing it.                                                                  |
+| `document.rename`   | yes    | yes   | no      | no     | yes | Renames a document.                                                                                                            |
+| `document.restore`  | yes    | yes   | no      | no     | yes | Brings back an old version of a document, as its next version.                                                                 |
+| `document.save`     | yes    | yes   | no      | no     | yes | Saves a document's new text (and title) as its next version, merging with what others saved since the version it started from. |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names.
 
 Agents act through its 5 tools, as whoever they work for:
 
@@ -78,7 +78,7 @@ Nothing to set. It reads `agents`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It moves to its own package, `@copilotz/work`, for `copilotz` `^1.0.0-rc.31`. Until then, it ships
+It moves to its own package, `@copilotz/work`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
 in `copilotz`.
 
 ## Listing

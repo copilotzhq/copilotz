@@ -45,7 +45,7 @@ Nothing to set. It reads `hosts`, resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It moves to its own package, `@copilotz/directory`, for `copilotz` `^1.0.0-rc.31`. Until then, it
+It moves to its own package, `@copilotz/directory`, for `copilotz` `^1.0.0-rc.32`. Until then, it
 ships in `copilotz`.
 
 ## Listing

@@ -21,12 +21,13 @@ It keeps nothing of its own.
 
 Of its 4 Actions, people may call 2; agents, contacts and someone signed out may call none.
 
-| Action             | Person | Agent | Contact | Anyone | Key | What it does                                                           |
-| ------------------ | ------ | ----- | ------- | ------ | --- | ---------------------------------------------------------------------- |
-| `billing.checkout` | yes    | no    | no      | no     | no  | A page where the org buys credits, or subscribes to a plan.            |
-| `billing.portal`   | yes    | no    | no      | no     | no  | A page where the org manages what it pays: card, invoices, cancelling. |
+| Action             | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                           |
+| ------------------ | ------ | ----- | ------- | ------ | --- | ------- | ---------------------------------------------------------------------- |
+| `billing.checkout` | yes    | no    | no      | no     | no  | no      | A page where the org buys credits, or subscribes to a plan.            |
+| `billing.portal`   | yes    | no    | no      | no     | no  | no      | A page where the org manages what it pays: card, invoices, cancelling. |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `billing.sellable` and `stripe.seats`: its plugins, its schedules and
 the system.
@@ -55,7 +56,7 @@ It also reads `billing` and `org`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`credits`](credits.md): add it too.
 
-It moves to its own package, `@copilotz/billing`, for `copilotz` `^1.0.0-rc.31`. Until then, it
+It moves to its own package, `@copilotz/billing`, for `copilotz` `^1.0.0-rc.32`. Until then, it
 ships in `copilotz`.
 
 ## What it does on its own

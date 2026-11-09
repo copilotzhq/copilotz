@@ -37,7 +37,7 @@ Nothing to set. It reads `apiPresets`, resource kinds the app and other plugins 
 
 The runtime doesn't start without [`api`](api.md) and [`web-shell`](web-shell.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

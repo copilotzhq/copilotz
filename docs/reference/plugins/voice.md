@@ -31,12 +31,13 @@ space reach it.
 
 Of its 9 Actions, people may call 2; agents, contacts and someone signed out may call none.
 
-| Action          | Person | Agent | Contact | Anyone | Key | What it does                                                                  |
-| --------------- | ------ | ----- | ------- | ------ | --- | ----------------------------------------------------------------------------- |
-| `voice.block`   | yes    | no    | no      | no     | no  | Blocks the caller behind a phone call's chat (for so many days, or for good). |
-| `voice.unblock` | yes    | no    | no      | no     | no  | Lifts a block on a caller, by its id.                                         |
+| Action          | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                  |
+| --------------- | ------ | ----- | ------- | ------ | --- | ------- | ----------------------------------------------------------------------------- |
+| `voice.block`   | yes    | no    | no      | no     | no  | no      | Blocks the caller behind a phone call's chat (for so many days, or for good). |
+| `voice.unblock` | yes    | no    | no      | no     | no  | no      | Lifts a block on a caller, by its id.                                         |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `voice.admit`, `voice.hangup`, `voice.heard`, `voice.over`,
 `voice.prune`, `voice.ring` and `voice.start`: its plugins, its schedules and the system.
@@ -94,7 +95,7 @@ You set it in `resources.voice`: 4 settings are required, and 1 is a secret, kep
 The runtime doesn't start without [`chat`](chat.md), [`spaces`](spaces.md) and
 [`contacts`](contacts.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## What it does on its own
 

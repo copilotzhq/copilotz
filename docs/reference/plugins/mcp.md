@@ -32,7 +32,7 @@ Of its 3 Actions, people, agents, contacts and someone signed out may call none.
 | ---------- | ------ | ----- | ------- | ------ | --- | --------------------------------------------------------------- |
 | `mcp.call` | no     | no    | no      | no     | no  | One call to one of the app's tools, from a model outside (MCP). |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names.
 
 Only the app's own code calls `mcp.conversation` and `mcp.prune`: its plugins, its schedules and the
 system.
@@ -74,7 +74,7 @@ It also reads `caller`, `org`, `tools` and `widgets`, resource kinds the app and
 The runtime doesn't start without [`chat`](chat.md), [`spaces`](spaces.md) and
 [`contacts`](contacts.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## What it does on its own
 

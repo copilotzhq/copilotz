@@ -25,22 +25,22 @@ It keeps 3 collections.
 
 Its named queries read for callers, as the rules let them:
 
-| Query          | Who outside runs it |
-| -------------- | ------------------- |
-| `usage.list`   | the app's code      |
-| `usage.totals` | people and keys     |
+| Query          | Who outside runs it                            |
+| -------------- | ---------------------------------------------- |
+| `usage.list`   | the app's code                                 |
+| `usage.totals` | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
-Of its 7 Actions, people may call 3; agents, contacts and someone signed out may call none.
+Of its 7 Actions, people and agents may call 3; contacts and someone signed out may call none.
 
 | Action           | Person | Agent | Contact | Anyone | Key | What it does                                                                                                                                                               |
 | ---------------- | ------ | ----- | ------- | ------ | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `usage.activity` | yes    | no    | no      | no     | yes | What was done, newest first (agents' turns, computers' sessions, apps' days), with what each was charged: everyone's for the org's owners and admins, your own for others. |
-| `usage.org`      | yes    | no    | no      | no     | yes | Usage totals across the whole org, for its owners and admins; your own for others.                                                                                         |
-| `usage.quote`    | yes    | no    | no      | no     | yes | What a use would be charged now (its price), without recording it.                                                                                                         |
+| `usage.activity` | yes    | yes   | no      | no     | yes | What was done, newest first (agents' turns, computers' sessions, apps' days), with what each was charged: everyone's for the org's owners and admins, your own for others. |
+| `usage.org`      | yes    | yes   | no      | no     | yes | Usage totals across the whole org, for its owners and admins; your own for others.                                                                                         |
+| `usage.quote`    | yes    | yes   | no      | no     | yes | What a use would be charged now (its price), without recording it.                                                                                                         |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names.
 
 Only the app's own code calls `usage.close`, `usage.quotes`, `usage.record` and `usage.rerate`: its
 plugins, its schedules and the system.
@@ -70,7 +70,7 @@ plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## What it does on its own
 

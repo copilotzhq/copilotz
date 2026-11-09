@@ -26,23 +26,25 @@ reach it.
 
 Its named queries read for callers, as the rules let them:
 
-| Query           | Who outside runs it |
-| --------------- | ------------------- |
-| `agent.known`   | people and keys     |
-| `agent.options` | people and keys     |
+| Query           | Who outside runs it                            |
+| --------------- | ---------------------------------------------- |
+| `agent.known`   | people, agents for a person, keys and routines |
+| `agent.options` | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
-Of its 5 Actions, people may call 4; agents, contacts and someone signed out may call none.
+Of its 5 Actions, people may call 4; agents may call 1; contacts and someone signed out may call
+none.
 
-| Action         | Person | Agent | Contact | Anyone | Key | What it does                                                                       |
-| -------------- | ------ | ----- | ------- | ------ | --- | ---------------------------------------------------------------------------------- |
-| `agent.create` | yes    | no    | no      | no     | yes | Makes an agent, where you say; it's called by a name made from what it's shown as. |
-| `agent.delete` | yes    | no    | no      | no     | yes | Removes an agent people made, from everywhere it works.                            |
-| `agent.draft`  | yes    | no    | no      | no     | yes | Writes instructions for an agent from its name and what it should do.              |
-| `agent.update` | yes    | no    | no      | no     | yes | Changes an agent people made: what it's shown as, does, is told, uses.             |
+| Action         | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                       |
+| -------------- | ------ | ----- | ------- | ------ | --- | ------- | ---------------------------------------------------------------------------------- |
+| `agent.create` | yes    | no    | no      | no     | no  | no      | Makes an agent, where you say; it's called by a name made from what it's shown as. |
+| `agent.delete` | yes    | no    | no      | no     | no  | no      | Removes an agent people made, from everywhere it works.                            |
+| `agent.draft`  | yes    | yes   | no      | no     | yes | yes     | Writes instructions for an agent from its name and what it should do.              |
+| `agent.update` | yes    | no    | no      | no     | no  | no      | Changes an agent people made: what it's shown as, does, is told, uses.             |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `agent.define`: its plugins, its schedules and the system.
 
@@ -63,7 +65,7 @@ fill.
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It moves to its own package, `@copilotz/team`, for `copilotz` `^1.0.0-rc.31`. Until then, it ships
+It moves to its own package, `@copilotz/team`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
 in `copilotz`.
 
 ## Listing

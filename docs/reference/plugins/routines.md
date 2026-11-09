@@ -28,25 +28,25 @@ reach the space reach it.
 
 Its named queries read for callers, as the rules let them:
 
-| Query          | Who outside runs it |
-| -------------- | ------------------- |
-| `routine.list` | people and keys     |
-| `routine.runs` | people and keys     |
+| Query          | Who outside runs it                            |
+| -------------- | ---------------------------------------------- |
+| `routine.list` | people, agents for a person, keys and routines |
+| `routine.runs` | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
-Of its 8 Actions, people may call 6; agents, contacts and someone signed out may call none.
+Of its 8 Actions, people and agents may call 6; contacts and someone signed out may call none.
 
 | Action           | Person | Agent | Contact | Anyone | Key | What it does                                                             |
 | ---------------- | ------ | ----- | ------- | ------ | --- | ------------------------------------------------------------------------ |
-| `routine.create` | yes    | no    | no      | no     | yes | Makes a routine: a message sent to an agent on a schedule, in a space.   |
-| `routine.delete` | yes    | no    | no      | no     | yes | Deletes a routine; the chats it posted in stay.                          |
-| `routine.pause`  | yes    | no    | no      | no     | yes | Pauses a routine: it doesn't run until it's resumed.                     |
-| `routine.resume` | yes    | no    | no      | no     | yes | Resumes a paused routine: it runs on its schedule again, from now.       |
-| `routine.run`    | yes    | no    | no      | no     | yes | Runs a routine now: its message goes to its agent at once.               |
-| `routine.update` | yes    | no    | no      | no     | yes | Changes a routine: its name, message, agent, schedule or where it posts. |
+| `routine.create` | yes    | yes   | no      | no     | yes | Makes a routine: a message sent to an agent on a schedule, in a space.   |
+| `routine.delete` | yes    | yes   | no      | no     | yes | Deletes a routine; the chats it posted in stay.                          |
+| `routine.pause`  | yes    | yes   | no      | no     | yes | Pauses a routine: it doesn't run until it's resumed.                     |
+| `routine.resume` | yes    | yes   | no      | no     | yes | Resumes a paused routine: it runs on its schedule again, from now.       |
+| `routine.run`    | yes    | yes   | no      | no     | yes | Runs a routine now: its message goes to its agent at once.               |
+| `routine.update` | yes    | yes   | no      | no     | yes | Changes a routine: its name, message, agent, schedule or where it posts. |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names.
 
 Only the app's own code calls `routine.fire` and `routine.origin`: its plugins, its schedules and
 the system.
@@ -78,7 +78,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

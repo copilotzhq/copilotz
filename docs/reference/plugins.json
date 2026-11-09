@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "runtime": "1.0.0-rc.31",
+  "runtime": "1.0.0-rc.32",
   "plugins": [
     {
       "format": 1,
@@ -11,9 +11,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -141,6 +141,7 @@
                 "contact": "no",
                 "anonymous": "no",
                 "key": "no",
+                "routine": "no",
                 "maintenance": "no"
               },
               "helper": "inPerson"
@@ -240,6 +241,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -268,6 +270,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -351,9 +354,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -441,7 +444,7 @@
       "package": {
         "name": "@copilotz/work"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [
         {
@@ -667,12 +670,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
+          "helper": "people",
           "tool": "create_board"
         },
         {
@@ -695,12 +700,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         },
         {
           "name": "board.update",
@@ -766,12 +773,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         },
         {
           "name": "card.create",
@@ -830,12 +839,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
+          "helper": "people",
           "tool": "create_card"
         },
         {
@@ -858,12 +869,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         },
         {
           "name": "card.move",
@@ -900,12 +913,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
+          "helper": "people",
           "tool": "move_card"
         },
         {
@@ -983,12 +998,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
+          "helper": "people",
           "tool": "update_card"
         }
       ],
@@ -1253,7 +1270,7 @@
       "package": {
         "name": "@copilotz/work"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -1340,9 +1357,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -1434,10 +1451,11 @@
               "name": "about",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "yes",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "peopleOrContacts"
@@ -1908,10 +1926,11 @@
               "name": "conversation",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -1920,10 +1939,11 @@
               "name": "history",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -1936,6 +1956,7 @@
                 "contact": "no",
                 "anonymous": "no",
                 "key": "some",
+                "routine": "some",
                 "maintenance": "no"
               },
               "note": "depends on input"
@@ -2088,10 +2109,11 @@
               "name": "agents",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -2104,6 +2126,7 @@
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "note": "depends on input"
@@ -2112,10 +2135,11 @@
               "name": "recent",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -2312,9 +2336,9 @@
             "contact": "yes",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          },
-          "helper": "peopleOrContacts"
+          }
         },
         {
           "name": "chat.erase",
@@ -2361,10 +2385,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -2534,10 +2559,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "chat.open",
@@ -2579,10 +2605,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -2819,9 +2846,9 @@
             "contact": "yes",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          },
-          "helper": "peopleOrContacts"
+          }
         },
         {
           "name": "chat.shown",
@@ -2886,10 +2913,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -3174,9 +3202,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -3287,9 +3315,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -3431,9 +3459,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -3483,8 +3511,10 @@
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
-              }
+              },
+              "helper": "people"
             }
           ]
         }
@@ -3565,6 +3595,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -3656,9 +3687,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -3702,7 +3733,7 @@
       "package": {
         "name": "@copilotz/billing"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [
         {
@@ -4168,6 +4199,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -4220,6 +4252,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -4246,10 +4279,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -4312,6 +4346,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -4363,6 +4398,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -4407,6 +4443,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -4452,10 +4489,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -4514,6 +4552,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -4769,7 +4808,7 @@
       "package": {
         "name": "@copilotz/billing"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -4829,9 +4868,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -4918,7 +4957,7 @@
       "package": {
         "name": "@copilotz/directory"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [
         {
@@ -6073,7 +6112,7 @@
       "package": {
         "name": "@copilotz/directory"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -6157,7 +6196,7 @@
       "package": {
         "name": "@copilotz/work"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [
         {
@@ -6245,23 +6284,27 @@
               "name": "list",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
-              }
+              },
+              "helper": "people"
             },
             {
               "name": "recent",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
-              }
+              },
+              "helper": "people"
             }
           ]
         },
@@ -6425,12 +6468,14 @@
               "name": "history",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
-              }
+              },
+              "helper": "people"
             }
           ]
         }
@@ -6481,12 +6526,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         },
         {
           "name": "document.delete",
@@ -6508,12 +6555,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         },
         {
           "name": "document.presence",
@@ -6548,12 +6597,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         },
         {
           "name": "document.rename",
@@ -6580,12 +6631,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         },
         {
           "name": "document.restore",
@@ -6612,12 +6665,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         },
         {
           "name": "document.save",
@@ -6653,12 +6708,14 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         }
       ],
       "tools": [
@@ -6842,7 +6899,7 @@
       "package": {
         "name": "@copilotz/work"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -6927,9 +6984,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -7098,9 +7155,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -7783,9 +7840,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -7909,9 +7966,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -8238,9 +8295,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -8449,10 +8506,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "session.start",
@@ -8543,9 +8601,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -8616,6 +8674,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "yes"
           },
           "helper": "isMaintenance"
@@ -8675,6 +8734,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "yes"
           },
           "helper": "isMaintenance"
@@ -8837,9 +8897,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -9039,6 +9099,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           }
         },
@@ -9121,7 +9182,7 @@
         {
           "kind": "setting",
           "path": "mcp.<name>.tools",
-          "summary": "The tools it offers, by name (the `tools` resource's), each with how it's offered (`{}` as it is). Only these: an app lists what a model outside may call. Each needs its `tool:<name>` View (`llm`), what a model reads of it: a tool without one isn't offered.",
+          "summary": "The tools it offers, by name (the `tools` resource's), each with how it's offered (`{}` as it is). Only these: an app lists what a model outside may call. Each needs its `tool:<name>` View (`llm`), what a model reads of it: without one, the app doesn't start.",
           "required": true,
           "type": "Record<string, McpTool | null>"
         },
@@ -9288,7 +9349,7 @@
               "name": "tools",
               "type": "Record<string, McpTool | null>",
               "optional": false,
-              "doc": "The tools it offers, by name (the `tools` resource's), each with how it's offered (`{}` as it is). Only these: an app lists what a model outside may call. Each needs its `tool:<name>` View (`llm`), what a model reads of it: a tool without one isn't offered.",
+              "doc": "The tools it offers, by name (the `tools` resource's), each with how it's offered (`{}` as it is). Only these: an app lists what a model outside may call. Each needs its `tool:<name>` View (`llm`), what a model reads of it: without one, the app doesn't start.",
               "secret": false
             },
             {
@@ -9374,9 +9435,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -9461,10 +9522,11 @@
               "name": "list",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -9604,10 +9666,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         }
       ],
       "tools": [
@@ -9836,9 +9899,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -9914,9 +9977,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -9967,9 +10030,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10031,9 +10094,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -10403,10 +10466,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -10576,9 +10640,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10828,9 +10892,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -10962,10 +11026,11 @@
               "name": "list",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -10974,10 +11039,11 @@
               "name": "runs",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -11171,10 +11237,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people",
@@ -11200,10 +11267,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people",
@@ -11269,10 +11337,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -11297,10 +11366,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -11325,10 +11395,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -11426,10 +11497,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -11627,9 +11699,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -11711,9 +11783,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -11796,10 +11868,11 @@
               "name": "files",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -11808,10 +11881,11 @@
               "name": "list",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -11820,10 +11894,11 @@
               "name": "read",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -11952,10 +12027,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -11980,10 +12056,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -12046,10 +12123,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -12150,9 +12228,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -12227,9 +12305,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -12293,10 +12371,11 @@
               "name": "mine",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -12391,8 +12470,10 @@
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
-              }
+              },
+              "helper": "people"
             },
             {
               "name": "pictures",
@@ -12402,8 +12483,10 @@
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
-              }
+              },
+              "helper": "people"
             }
           ]
         },
@@ -12461,10 +12544,11 @@
               "name": "open",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -12520,22 +12604,25 @@
             {
               "name": "handoffs",
               "callers": {
-                "person": "no",
+                "person": "yes",
                 "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
-                "key": "no",
+                "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
-              }
+              },
+              "helper": "people"
             },
             {
               "name": "reached",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -12568,10 +12655,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "invitation.decline",
@@ -12595,10 +12683,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "invitation.send",
@@ -12630,10 +12719,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "member.remove",
@@ -12676,10 +12766,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "member.set",
@@ -12726,10 +12817,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "org.invite",
@@ -12762,10 +12854,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "org.invites",
@@ -12778,10 +12871,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -12825,10 +12919,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -12844,10 +12939,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -12877,10 +12973,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "org.rename",
@@ -12906,10 +13003,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "org.role",
@@ -12943,10 +13041,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "org.seats",
@@ -12992,10 +13091,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "request.deny",
@@ -13019,10 +13119,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "request.grant",
@@ -13049,10 +13150,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "share",
@@ -13080,10 +13182,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "space.agent",
@@ -13108,10 +13211,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -13139,10 +13243,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -13178,8 +13283,10 @@
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
-          }
+          },
+          "helper": "people"
         },
         {
           "name": "space.create",
@@ -13209,10 +13316,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "space.keep",
@@ -13256,10 +13364,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "space.personal",
@@ -13272,10 +13381,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -13305,10 +13415,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -13499,9 +13610,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -13591,9 +13702,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -13776,7 +13887,7 @@
       "package": {
         "name": "@copilotz/billing"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -13811,6 +13922,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -13830,6 +13942,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -13999,7 +14112,7 @@
       "package": {
         "name": "@copilotz/billing"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -14175,7 +14288,7 @@
       "package": {
         "name": "@copilotz/team"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [
         {
@@ -14249,10 +14362,11 @@
               "name": "known",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -14261,10 +14375,11 @@
               "name": "options",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -14339,10 +14454,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "agent.define",
@@ -14388,10 +14504,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         },
         {
           "name": "agent.draft",
@@ -14424,10 +14541,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -14485,10 +14603,11 @@
             "agent": "no",
             "contact": "no",
             "anonymous": "no",
-            "key": "yes",
+            "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
-          "helper": "people"
+          "helper": "inPerson"
         }
       ],
       "tools": [],
@@ -14560,7 +14679,7 @@
       "package": {
         "name": "@copilotz/team"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -14626,9 +14745,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -14729,6 +14848,7 @@
                 "contact": "no",
                 "anonymous": "no",
                 "key": "some",
+                "routine": "some",
                 "maintenance": "no"
               },
               "note": "depends on input"
@@ -14772,6 +14892,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "some",
+            "routine": "some",
             "maintenance": "no"
           },
           "note": "depends on input"
@@ -14836,6 +14957,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "some",
+            "routine": "some",
             "maintenance": "no"
           },
           "note": "depends on input"
@@ -14878,9 +15000,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -14941,7 +15063,7 @@
       "package": {
         "name": "@copilotz/team"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [
         {
@@ -14985,10 +15107,11 @@
               "name": "agent",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -14997,10 +15120,11 @@
               "name": "offered",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -15043,6 +15167,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -15098,6 +15223,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -15193,7 +15319,7 @@
       "package": {
         "name": "@copilotz/team"
       },
-      "runtime": "^1.0.0-rc.31",
+      "runtime": "^1.0.0-rc.32",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -15255,9 +15381,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -15394,10 +15520,11 @@
               "name": "totals",
               "callers": {
                 "person": "yes",
-                "agent": "no",
+                "agent": "yes",
                 "contact": "no",
                 "anonymous": "no",
                 "key": "yes",
+                "routine": "yes",
                 "maintenance": "no"
               },
               "helper": "people"
@@ -15607,10 +15734,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -15664,10 +15792,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -15705,10 +15834,11 @@
           "private": [],
           "callers": {
             "person": "yes",
-            "agent": "no",
+            "agent": "yes",
             "contact": "no",
             "anonymous": "no",
             "key": "yes",
+            "routine": "yes",
             "maintenance": "no"
           },
           "helper": "people"
@@ -15970,9 +16100,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -16022,9 +16152,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -16077,9 +16207,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -16408,6 +16538,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -16580,6 +16711,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -16962,9 +17094,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -17486,9 +17618,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -17675,9 +17807,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -17764,9 +17896,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -18034,9 +18166,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [
         {
@@ -18542,6 +18674,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -18591,6 +18724,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -18628,6 +18762,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -18655,6 +18790,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -18682,6 +18818,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -18713,6 +18850,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -18814,6 +18952,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -18841,6 +18980,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -18868,6 +19008,7 @@
             "contact": "no",
             "anonymous": "no",
             "key": "no",
+            "routine": "no",
             "maintenance": "no"
           },
           "helper": "inPerson"
@@ -19286,9 +19427,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.31"
+        "version": "1.0.0-rc.32"
       },
-      "runtime": "1.0.0-rc.31",
+      "runtime": "1.0.0-rc.32",
       "layer": "standard",
       "keeps": [],
       "indexes": [],

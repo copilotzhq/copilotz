@@ -27,23 +27,23 @@ reach the space reach it.
 
 Its named queries read for callers, as the rules let them:
 
-| Query         | Who outside runs it |
-| ------------- | ------------------- |
-| `skill.files` | people and keys     |
-| `skill.list`  | people and keys     |
-| `skill.read`  | people and keys     |
+| Query         | Who outside runs it                            |
+| ------------- | ---------------------------------------------- |
+| `skill.files` | people, agents for a person, keys and routines |
+| `skill.list`  | people, agents for a person, keys and routines |
+| `skill.read`  | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
-Of its 3 Actions, people may call all 3; agents, contacts and someone signed out may call none.
+Of its 3 Actions, people and agents may call all 3; contacts and someone signed out may call none.
 
 | Action         | Person | Agent | Contact | Anyone | Key | What it does                                                             |
 | -------------- | ------ | ----- | ------- | ------ | --- | ------------------------------------------------------------------------ |
-| `skill.create` | yes    | no    | no      | no     | yes | Makes a skill in a space: know-how its agents read when a task needs it. |
-| `skill.delete` | yes    | no    | no      | no     | yes | Deletes a skill, with its files.                                         |
-| `skill.update` | yes    | no    | no      | no     | yes | Changes a skill: its name, when it's for, its instructions, its files.   |
+| `skill.create` | yes    | yes   | no      | no     | yes | Makes a skill in a space: know-how its agents read when a task needs it. |
+| `skill.delete` | yes    | yes   | no      | no     | yes | Deletes a skill, with its files.                                         |
+| `skill.update` | yes    | yes   | no      | no     | yes | Changes a skill: its name, when it's for, its instructions, its files.   |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names.
 
 Agents act through its tool, as whoever they work for:
 
@@ -70,7 +70,7 @@ Nothing to set. It reads `skills`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

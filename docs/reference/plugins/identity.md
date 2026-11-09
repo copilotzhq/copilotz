@@ -33,11 +33,12 @@ Its named queries read for callers, as the rules let them:
 
 Of its 5 Actions, people may call 1; agents, contacts and someone signed out may call none.
 
-| Action        | Person | Agent | Contact | Anyone | Key | What it does                            |
-| ------------- | ------ | ----- | ------- | ------ | --- | --------------------------------------- |
-| `session.end` | yes    | no    | no      | no     | yes | Ends the session whose secret is shown. |
+| Action        | Person | Agent | Contact | Anyone | Key | Routine | What it does                            |
+| ------------- | ------ | ----- | ------- | ------ | --- | ------- | --------------------------------------- |
+| `session.end` | yes    | no    | no      | no     | no  | no      | Ends the session whose secret is shown. |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `credential.revoke`, `person.email`, `person.set` and `session.start`:
 its plugins, its schedules and the system.
@@ -63,7 +64,7 @@ Nothing to set: it works as it comes.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

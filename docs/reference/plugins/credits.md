@@ -26,20 +26,22 @@ It keeps 4 collections, 1 of them on the record.
 
 ## What it lets callers do
 
-Of its 16 Actions, people may call 8; agents, contacts and someone signed out may call none.
+Of its 16 Actions, people may call 8; agents may call 2; contacts and someone signed out may call
+none.
 
-| Action            | Person | Agent | Contact | Anyone | Key | What it does                                                                      |
-| ----------------- | ------ | ----- | ------- | ------ | --- | --------------------------------------------------------------------------------- |
-| `billing.budget`  | yes    | no    | no      | no     | no  | Sets the org's limit for a month, or removes it.                                  |
-| `billing.grant`   | yes    | no    | no      | no     | no  | Gives the org credits, or takes some away.                                        |
-| `billing.notice`  | yes    | no    | no      | no     | yes | What to say above the composer about what the org can spend, if anything.         |
-| `billing.pay`     | yes    | no    | no      | no     | no  | Keeps money that came in by hand, and the credits it bought.                      |
-| `billing.redeem`  | yes    | no    | no      | no     | no  | Adds a gift code's credits to the org.                                            |
-| `billing.setPlan` | yes    | no    | no      | no     | no  | Puts the org on a plan, or a contract of its own terms.                           |
-| `billing.state`   | yes    | no    | no      | no     | yes | Where the org stands: whether it can spend; its plan and credits for who runs it. |
-| `billing.waive`   | yes    | no    | no      | no     | no  | Waives the org's usage or seats, or lifts that.                                   |
+| Action            | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                      |
+| ----------------- | ------ | ----- | ------- | ------ | --- | ------- | --------------------------------------------------------------------------------- |
+| `billing.budget`  | yes    | no    | no      | no     | no  | no      | Sets the org's limit for a month, or removes it.                                  |
+| `billing.grant`   | yes    | no    | no      | no     | no  | no      | Gives the org credits, or takes some away.                                        |
+| `billing.notice`  | yes    | yes   | no      | no     | yes | yes     | What to say above the composer about what the org can spend, if anything.         |
+| `billing.pay`     | yes    | no    | no      | no     | no  | no      | Keeps money that came in by hand, and the credits it bought.                      |
+| `billing.redeem`  | yes    | no    | no      | no     | no  | no      | Adds a gift code's credits to the org.                                            |
+| `billing.setPlan` | yes    | no    | no      | no     | no  | no      | Puts the org on a plan, or a contract of its own terms.                           |
+| `billing.state`   | yes    | yes   | no      | no     | yes | yes     | Where the org stands: whether it can spend; its plan and credits for who runs it. |
+| `billing.waive`   | yes    | no    | no      | no     | no  | no      | Waives the org's usage or seats, or lifts that.                                   |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `billing.apply`, `billing.check`, `billing.may`, `billing.plan`,
 `billing.priceList`, `billing.settle`, `billing.spent` and `billing.tier`: its plugins, its
@@ -76,7 +78,7 @@ It also reads `directory` and `org`, resource kinds the app and other plugins fi
 
 The runtime doesn't start without [`usage`](usage.md): add it too.
 
-It moves to its own package, `@copilotz/billing`, for `copilotz` `^1.0.0-rc.31`. Until then, it
+It moves to its own package, `@copilotz/billing`, for `copilotz` `^1.0.0-rc.32`. Until then, it
 ships in `copilotz`.
 
 ## What it does on its own

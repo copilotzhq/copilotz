@@ -36,19 +36,20 @@ space reach it.
 
 Of its 11 Actions, people may call 9; agents, contacts and someone signed out may call none.
 
-| Action                 | Person | Agent | Contact | Anyone | Key | What it does                                                                      |
-| ---------------------- | ------ | ----- | ------- | ------ | --- | --------------------------------------------------------------------------------- |
-| `whatsapp.block`       | yes    | no    | no      | no     | no  | Blocks the phone behind a WhatsApp chat, or lets it in again.                     |
-| `whatsapp.connect`     | yes    | no    | no      | no     | no  | Connects a WhatsApp Business number to a space you manage.                        |
-| `whatsapp.credentials` | yes    | no    | no      | no     | no  | Replaces a connected WhatsApp number's access token or app secret.                |
-| `whatsapp.disconnect`  | yes    | no    | no      | no     | no  | Disconnects a WhatsApp number from its space.                                     |
-| `whatsapp.link`        | yes    | no    | no      | no     | no  | A code to send a WhatsApp number from your phone, to link it to you.              |
-| `whatsapp.move`        | yes    | no    | no      | no     | no  | Where your messages from WhatsApp go: a space you may write in.                   |
-| `whatsapp.set`         | yes    | no    | no      | no     | no  | Opens a WhatsApp number to anyone (a customer line), or closes it.                |
-| `whatsapp.unlink`      | yes    | no    | no      | no     | no  | Unlinks your phone from a WhatsApp number.                                        |
-| `whatsapp.webhook`     | yes    | no    | no      | no     | no  | Where a WhatsApp number's webhook is, and its verify token, for Meta's dashboard. |
+| Action                 | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                      |
+| ---------------------- | ------ | ----- | ------- | ------ | --- | ------- | --------------------------------------------------------------------------------- |
+| `whatsapp.block`       | yes    | no    | no      | no     | no  | no      | Blocks the phone behind a WhatsApp chat, or lets it in again.                     |
+| `whatsapp.connect`     | yes    | no    | no      | no     | no  | no      | Connects a WhatsApp Business number to a space you manage.                        |
+| `whatsapp.credentials` | yes    | no    | no      | no     | no  | no      | Replaces a connected WhatsApp number's access token or app secret.                |
+| `whatsapp.disconnect`  | yes    | no    | no      | no     | no  | no      | Disconnects a WhatsApp number from its space.                                     |
+| `whatsapp.link`        | yes    | no    | no      | no     | no  | no      | A code to send a WhatsApp number from your phone, to link it to you.              |
+| `whatsapp.move`        | yes    | no    | no      | no     | no  | no      | Where your messages from WhatsApp go: a space you may write in.                   |
+| `whatsapp.set`         | yes    | no    | no      | no     | no  | no      | Opens a WhatsApp number to anyone (a customer line), or closes it.                |
+| `whatsapp.unlink`      | yes    | no    | no      | no     | no  | no      | Unlinks your phone from a WhatsApp number.                                        |
+| `whatsapp.webhook`     | yes    | no    | no      | no     | no  | no      | Where a WhatsApp number's webhook is, and its verify token, for Meta's dashboard. |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `whatsapp.number` and `whatsapp.receive`: its plugins, its schedules
 and the system.
@@ -96,7 +97,7 @@ It also reads `additions`, `links` and `spaces`, resource kinds the app and othe
 The runtime doesn't start without [`chat`](chat.md), [`spaces`](spaces.md) and
 [`contacts`](contacts.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## What it does on its own
 

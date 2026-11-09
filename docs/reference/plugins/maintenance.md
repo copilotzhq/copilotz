@@ -27,7 +27,7 @@ Of its 2 Actions, people, agents, contacts and someone signed out may call none.
 | `maintenance.read`  | no     | no    | no      | no     | no  | yes         | One collection read (find…aggregate) or named query, for the app's operators. |
 | `maintenance.write` | no     | no    | no      | no     | no  | yes         | One collection operation (insertOne…deleteMany), for the app's operators.     |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names.
 
 It answers 1 route over HTTP:
 
@@ -58,7 +58,7 @@ It also reads `org`, resource kinds the app and other plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

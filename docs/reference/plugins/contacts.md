@@ -27,19 +27,20 @@ reach it.
 
 Its named queries read for callers, as the rules let them:
 
-| Query           | Who outside runs it                  |
-| --------------- | ------------------------------------ |
-| `contact.names` | people, agents for a person and keys |
+| Query           | Who outside runs it                            |
+| --------------- | ---------------------------------------------- |
+| `contact.names` | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
 Of its 3 Actions, people may call 1; agents, contacts and someone signed out may call none.
 
-| Action           | Person | Agent | Contact | Anyone | Key | What it does                                                           |
-| ---------------- | ------ | ----- | ------- | ------ | --- | ---------------------------------------------------------------------- |
-| `contact.forget` | yes    | no    | no      | no     | no  | Erases a contact: its access, its record, and with `chats`, its chats. |
+| Action           | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                           |
+| ---------------- | ------ | ----- | ------- | ------ | --- | ------- | ---------------------------------------------------------------------- |
+| `contact.forget` | yes    | no    | no      | no     | no  | no      | Erases a contact: its access, its record, and with `chats`, its chats. |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `contact.chat` and `contact.start`: its plugins, its schedules and the
 system.
@@ -62,7 +63,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`spaces`](spaces.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

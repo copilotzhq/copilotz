@@ -25,9 +25,9 @@ It keeps 2 collections, 1 of them on the record.
 
 Its named queries read for callers, as the rules let them:
 
-| Query        | Who outside runs it                |
-| ------------ | ---------------------------------- |
-| `shell.mine` | people or keys, depending on input |
+| Query        | Who outside runs it                          |
+| ------------ | -------------------------------------------- |
+| `shell.mine` | people, keys or routines, depending on input |
 
 ## What it lets callers do
 
@@ -38,8 +38,8 @@ Of its 2 Actions, people may call all 2; agents, contacts and someone signed out
 | `shell.print` | depends | no    | no      | no     | depends | Prints text, or an item through its kind's View, on a person's screen. |
 | `shell.set`   | depends | no    | no      | no     | depends | Changes a person's shell state: what's open, what was listed.          |
 
-A key calls what its person may, when its scope names the Action. "depends": its `allow` reads the
-input to decide.
+An agent works for a person, and calls what both may. A key calls only what its scope names.
+"depends": its `allow` reads the input to decide.
 
 ## Where it shows
 
@@ -53,7 +53,7 @@ Nothing to set: it works as it comes.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

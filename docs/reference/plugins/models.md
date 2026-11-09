@@ -23,13 +23,13 @@ It keeps 1 collection.
 
 ## What it lets callers do
 
-Of its 10 Actions, people may call 1; agents, contacts and someone signed out may call none.
+Of its 10 Actions, people and agents may call 1; contacts and someone signed out may call none.
 
 | Action           | Person | Agent | Contact | Anyone | Key | What it does                                    |
 | ---------------- | ------ | ----- | ------- | ------ | --- | ----------------------------------------------- |
-| `models.offered` | yes    | no    | no      | no     | yes | The providers and models an agent can be given. |
+| `models.offered` | yes    | yes   | no      | no     | yes | The providers and models an agent can be given. |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names.
 
 Only the app's own code calls `embeddings.embed`, `image.generate`, `llm.generate`, `llm.stream`,
 `models.check`, `models.efforts`, `models.keyable`, `models.price` and `transcription.transcribe`:
@@ -54,7 +54,7 @@ resource kinds the app and other plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

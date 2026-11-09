@@ -36,7 +36,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`team`](team.md) and [`web-shell`](web-shell.md): add them too.
 
-It moves to its own package, `@copilotz/team`, for `copilotz` `^1.0.0-rc.31`. Until then, it ships
+It moves to its own package, `@copilotz/team`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
 in `copilotz`.
 
 ## Listing

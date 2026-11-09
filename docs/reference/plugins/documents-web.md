@@ -38,7 +38,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It moves to its own package, `@copilotz/work`, for `copilotz` `^1.0.0-rc.31`. Until then, it ships
+It moves to its own package, `@copilotz/work`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
 in `copilotz`.
 
 ## Listing

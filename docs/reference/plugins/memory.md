@@ -27,21 +27,22 @@ reach it.
 
 Its named queries read for callers, as the rules let them:
 
-| Query             | Who outside runs it |
-| ----------------- | ------------------- |
-| `memory.core`     | the app's code      |
-| `memory.list`     | people and keys     |
-| `memory.relevant` | the app's code      |
+| Query             | Who outside runs it                            |
+| ----------------- | ---------------------------------------------- |
+| `memory.core`     | the app's code                                 |
+| `memory.list`     | people, agents for a person, keys and routines |
+| `memory.relevant` | the app's code                                 |
 
 ## What it lets callers do
 
 Of its 2 Actions, people may call 1; agents, contacts and someone signed out may call none.
 
-| Action        | Person | Agent | Contact | Anyone | Key | What it does                     |
-| ------------- | ------ | ----- | ------- | ------ | --- | -------------------------------- |
-| `memory.move` | yes    | no    | no      | no     | yes | Moves a memory to another space. |
+| Action        | Person | Agent | Contact | Anyone | Key | Routine | What it does                     |
+| ------------- | ------ | ----- | ------- | ------ | --- | ------- | -------------------------------- |
+| `memory.move` | yes    | no    | no      | no     | no  | no      | Moves a memory to another space. |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `memory.import`: its plugins, its schedules and the system.
 
@@ -79,7 +80,7 @@ You set it in `resources.memory`.
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

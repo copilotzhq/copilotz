@@ -70,7 +70,7 @@ It also reads `agents`, `caller` and `org`, resource kinds the app and other plu
 
 The runtime doesn't start without [`contacts`](contacts.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## What it does on its own
 

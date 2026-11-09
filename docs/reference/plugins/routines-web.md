@@ -37,7 +37,7 @@ Nothing to set. It reads `routinePanels`, resource kinds the app and other plugi
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.31`.
+It ships with `copilotz@1.0.0-rc.32`.
 
 ## Listing
 

@@ -24,21 +24,22 @@ It keeps 1 collection, on the record: every change to it is an event.
 
 Its named queries read for callers, as the rules let them:
 
-| Query                 | Who outside runs it |
-| --------------------- | ------------------- |
-| `modelChoice.agent`   | people and keys     |
-| `modelChoice.offered` | people and keys     |
+| Query                 | Who outside runs it                            |
+| --------------------- | ---------------------------------------------- |
+| `modelChoice.agent`   | people, agents for a person, keys and routines |
+| `modelChoice.offered` | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
 Of its 3 Actions, people may call 2; agents, contacts and someone signed out may call none.
 
-| Action         | Person | Agent | Contact | Anyone | Key | What it does                                                            |
-| -------------- | ------ | ----- | ------- | ------ | --- | ----------------------------------------------------------------------- |
-| `tiers.choose` | yes    | no    | no      | no     | no  | Chooses the tier of models the app's agents use, in the org or a space. |
-| `tiers.pick`   | yes    | no    | no      | no     | no  | Picks the model one of the app's agents uses, in the org or a space.    |
+| Action         | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                            |
+| -------------- | ------ | ----- | ------- | ------ | --- | ------- | ----------------------------------------------------------------------- |
+| `tiers.choose` | yes    | no    | no      | no     | no  | no      | Chooses the tier of models the app's agents use, in the org or a space. |
+| `tiers.pick`   | yes    | no    | no      | no     | no  | no      | Picks the model one of the app's agents uses, in the org or a space.    |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `tiers.model`: its plugins, its schedules and the system.
 
@@ -57,7 +58,7 @@ kinds the app and other plugins fill.
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It moves to its own package, `@copilotz/team`, for `copilotz` `^1.0.0-rc.31`. Until then, it ships
+It moves to its own package, `@copilotz/team`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
 in `copilotz`.
 
 ## Listing

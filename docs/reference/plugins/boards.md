@@ -28,19 +28,19 @@ space reach it.
 
 ## What it lets callers do
 
-Of its 7 Actions, people may call all 7; agents, contacts and someone signed out may call none.
+Of its 7 Actions, people and agents may call all 7; contacts and someone signed out may call none.
 
 | Action         | Person | Agent | Contact | Anyone | Key | What it does                                                                                       |
 | -------------- | ------ | ----- | ------- | ------ | --- | -------------------------------------------------------------------------------------------------- |
-| `board.create` | yes    | no    | no      | no     | yes | Makes a board in a space, with the usual columns unless given its own.                             |
-| `board.delete` | yes    | no    | no      | no     | yes | Deletes a board, with its cards.                                                                   |
-| `board.update` | yes    | no    | no      | no     | yes | Changes a board: its name, description, columns, or whether it's archived.                         |
-| `card.create`  | yes    | no    | no      | no     | yes | Adds a card to a board: a title, and maybe its column, description, assignee, labels and due date. |
-| `card.delete`  | yes    | no    | no      | no     | yes | Deletes a card.                                                                                    |
-| `card.move`    | yes    | no    | no      | no     | yes | Moves a card: to a column, before or after another card, or to its top or bottom.                  |
-| `card.update`  | yes    | no    | no      | no     | yes | Changes a card: its title, description, assignee, labels or due date (null clears).                |
+| `board.create` | yes    | yes   | no      | no     | yes | Makes a board in a space, with the usual columns unless given its own.                             |
+| `board.delete` | yes    | yes   | no      | no     | yes | Deletes a board, with its cards.                                                                   |
+| `board.update` | yes    | yes   | no      | no     | yes | Changes a board: its name, description, columns, or whether it's archived.                         |
+| `card.create`  | yes    | yes   | no      | no     | yes | Adds a card to a board: a title, and maybe its column, description, assignee, labels and due date. |
+| `card.delete`  | yes    | yes   | no      | no     | yes | Deletes a card.                                                                                    |
+| `card.move`    | yes    | yes   | no      | no     | yes | Moves a card: to a column, before or after another card, or to its top or bottom.                  |
+| `card.update`  | yes    | yes   | no      | no     | yes | Changes a card: its title, description, assignee, labels or due date (null clears).                |
 
-A key calls what its person may, when its scope names the Action.
+An agent works for a person, and calls what both may. A key calls only what its scope names.
 
 Agents act through its 6 tools, as whoever they work for:
 
@@ -71,7 +71,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It moves to its own package, `@copilotz/work`, for `copilotz` `^1.0.0-rc.31`. Until then, it ships
+It moves to its own package, `@copilotz/work`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
 in `copilotz`.
 
 ## Listing

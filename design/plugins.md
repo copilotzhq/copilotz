@@ -109,9 +109,12 @@ credits' composer note imported the directory's browser half (`useOrgs`, `asStaf
 
 1. **Official packages.** This: Copilotz's own product plugins as packages, built only on Copilotz's
    entry points and each other's contracts, the shape any plugin outside will have.
-2. **The declaration extractor** (`feat/declare`, in parallel). It reads what each plugin declares
-   (collections and their schemas, Actions and who may call them, events, Views, routes, resources,
-   settings) and generates the reference pages and the hub's data from the code, not from prose.
+2. **The declaration extractor** (`feat/declare`: `copilotz/describe` and `scripts/describe.ts`; see
+   CONTRIBUTING.md). It reads what each plugin declares (collections and their schemas, Actions and
+   who may call them, events, Views, routes, resources, settings) and generates the reference pages
+   (`docs/reference/plugins/`) and the hub's data (`plugins.json`) from the code, not from prose:
+   the standard plugins from Copilotz's entry points, the packages' from theirs, each in the layer
+   `scripts/describe/catalog.ts` says.
 3. **A hub index.** A `hub/` folder of entries, one per listed package (its name, registry and
    repository, what it adds), checked by CI against what the extractor finds in the package as
    published.
@@ -123,11 +126,13 @@ credits' composer note imported the directory's browser half (`useOrgs`, `asStaf
 
 A plugin is listed on the hub when:
 
-- **every collection has a schema;**
+- **every collection has a schema** that names its fields;
 - **every Action declares `allow`, or is internal** (without one, only the app's own code calls it,
   never a request);
-- **its routes live under its name** (`/<plugin>/…`);
-- **every setting is in its contract** (its resource's shape, typed and documented).
+- **its routes live under its name** (`/<plugin>/…`), and none takes a whole host;
+- **every setting is in its contract:** each setting it reads is a type its contract exports.
+
+A declaration's `listing` says which rules a plugin breaks.
 
 The rule on routes is for hub-listed plugins. The standard plugins and the official packages may
 declare app-level paths, and their declarations show them first, as what they take of the app's

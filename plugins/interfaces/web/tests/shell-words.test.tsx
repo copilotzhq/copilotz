@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../../testing/mod.ts";
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import { setWords } from "../../../../hosts/web/words.ts";
-import { englishLeft, pseudoWords } from "../../../../hosts/web/tests/pseudo.ts";
+import { englishLeft, pseudoWords } from "../../../../testing/words.ts";
 import { ORG_ROLES, orgRoleName } from "../shared/orgs.ts";
 import { toggleLabel } from "../shared/panel.ts";
 import { Me } from "../views/me.tsx";

@@ -20,7 +20,11 @@ export type Standing = {
 };
 
 /** The roles in an org, in the order they let more, each with what it lets (said when read). */
-export const ORG_ROLES = [
+export const ORG_ROLES: readonly {
+  readonly value: "owner" | "admin" | "member" | "guest";
+  readonly label: string;
+  readonly lets: string;
+}[] = [
   {
     value: "owner",
     get label() {

@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import type { ViewContext } from "../../../runtime/mod.ts";
 import { setWords } from "../../../hosts/web/words.ts";
-import { englishLeft, pseudoWords } from "../../../hosts/web/tests/pseudo.ts";
+import { englishLeft, pseudoWords } from "../../../testing/words.ts";
 import type { ConsoleOrg, GiftCode, Orgs } from "../directory/contract.ts";
 import { codeStatus, dayOf, dollarsOf, newCodeOf, statusOf } from "../directory/views/web/codes.ts";
 import { standingName } from "../directory/views/web/lists.ts";

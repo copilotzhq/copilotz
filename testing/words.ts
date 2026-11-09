@@ -1,9 +1,9 @@
 /**
- * For testing that a front end shows no English of its own once the app gives its words: every
- * known key says `«key»`, a front end is drawn with that table, and whatever English it defines
- * that still shows is a word it forgot to take from the table.
+ * For testing that a front end shows no English of its own once the app gives its words
+ * (`copilotz/testing/words`): every known key says `«key»`, a front end is drawn with that table,
+ * and whatever English it defines that still shows is a word it forgot to take from the table.
  */
-import { knownWords, type Phrase, type Words } from "../words.ts";
+import { knownWords, type Phrase, type Words } from "../hosts/web/words.ts";
 
 /** Every known key (of `area`, or all), saying `«area.key»` in each plural form. */
 export function pseudoWords(area?: string): Words {

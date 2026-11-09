@@ -10,7 +10,7 @@ import { test } from "../../../testing/mod.ts";
 import type { ViewContext } from "../../../runtime/mod.ts";
 import { merge } from "../../../runtime/registry.ts";
 import { setWords } from "../../../hosts/web/words.ts";
-import { englishLeft, pseudoWords } from "../../../hosts/web/tests/pseudo.ts";
+import { englishLeft, pseudoWords } from "../../../testing/words.ts";
 import type { Invitation, Member, Reached, Request } from "../spaces/contract.ts";
 import { spacesWeb } from "../spaces/web.tsx";
 import { Agents, type Roster } from "../spaces/views/web/agents.tsx";

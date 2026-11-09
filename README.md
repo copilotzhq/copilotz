@@ -267,7 +267,7 @@ their front ends from `/web` and `/terminal` beside it.
 
 - **[Getting Started](docs/getting-started.md)** builds a salon's booking app: one booking, then who
   sees what, its own web page and its own agent, ChatGPT, Claude and Gemini over MCP, a chat on its
-  site and WhatsApp. Its chapters are coming.
+  site and WhatsApp, in 10 chapters.
 - **[Build Compass](docs/build-compass.md)** is the deep track. In 41 chapters you build Compass, a
   workspace where people and agents share chats, a board and documents, and with it every part of
   the runtime's contract. [The video course](#), in Portuguese and English, follows the same

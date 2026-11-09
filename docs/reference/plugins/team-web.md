@@ -1,0 +1,44 @@
+---
+title: "team-web"
+description: "Team's web front end, for the browser: making and changing agents."
+---
+
+<!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
+
+# team-web
+
+Team's web front end, for the browser: making and changing agents.
+
+```ts
+import { teamWeb } from "copilotz/plugins/agents/web";
+```
+
+## What it keeps
+
+It keeps nothing of its own.
+
+## What it lets callers do
+
+Nobody calls it: it has no Actions, tools or routes.
+
+## Where it shows
+
+Its Views show on the web.
+
+- **On the web:** `agent`, `agent.add`, `agent.palette`, `model.pick`.
+- **What it adds to resources:** `palette` (`agents`), `spaceInvite` (`agents`).
+
+## What it needs
+
+Nothing to set: it works as it comes.
+
+## What it requires
+
+The runtime doesn't start without [`team`](team.md) and [`web-shell`](web-shell.md): add them too.
+
+It moves to its own package, `@copilotz/team`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
+in `copilotz`.
+
+## Listing
+
+It keeps every listing rule.

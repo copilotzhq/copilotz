@@ -273,8 +273,12 @@ export type Owner = {
 
 const SYSTEM = "sys.";
 const WRITES = ["insert", "update", "replace", "delete"];
-/** A held transaction with no op for this long is rolled back. */
-const HOLD_IDLE_MS = 30_000;
+/**
+ * A held transaction with no op for this long is rolled back (its executor
+ * stuck, or gone unnoticed). Short: it holds the store's writer, the app's
+ * only one, and every other write waits for it.
+ */
+const HOLD_IDLE_MS = 5_000;
 /** An idle owner saves Processor cursors this long after their last advance. */
 const CURSOR_FLUSH_MS = 200;
 const DAY = 86_400_000;
@@ -381,6 +385,10 @@ export async function createOwner(
     commits: metrics.histogram("copilotz.commit.duration", {
       unit: "ms",
       description: "Commits to the store",
+    }),
+    transactions: metrics.histogram("copilotz.transaction.duration", {
+      unit: "ms",
+      description: "Transactions executors held open: how long each held the store's writer",
     }),
     events: metrics.counter("copilotz.events", { description: "Events committed" }),
     lag: metrics.gauge("copilotz.processor.lag", {
@@ -1240,6 +1248,25 @@ export async function createOwner(
   type Held = { job: string; send(request: HeldRequest): Promise<unknown> };
   const held = new Map<string, Held>();
   const heldBy = new Map<string, Set<string>>();
+  /**
+   * A running job's transactions that ended under it, not by its own `end`: an
+   * op in one failed or was refused, or it sat idle. They stay closed to it,
+   * so its next op can't begin another by the same id, without what was
+   * rolled back.
+   */
+  const endedBy = new Map<string, Set<string>>();
+  const ended = (job: string, id: string) => {
+    if (!pinned.has(job)) return;
+    if (!endedBy.has(job)) endedBy.set(job, new Set());
+    endedBy.get(job)!.add(id);
+  };
+  /** Ends a job's transaction under it, a request in it refused: rolled back, closed to it. */
+  const refuse = async (job: string, id: string) => {
+    ended(job, id);
+    const transaction = held.get(id);
+    if (transaction?.job !== job) return;
+    await transaction.send({ tx: id, ops: [], end: "abort" }).catch(() => {});
+  };
 
   const hold = (id: string, job: string): Held => {
     type Message = {
@@ -1249,6 +1276,7 @@ export async function createOwner(
     const inbox: Message[] = [];
     let wake: (() => void) | undefined;
     let closed = false;
+    let idle = false;
     let ending: { reply: PromiseWithResolvers<unknown>; value: unknown } | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const send: Held["send"] = (request) => {
@@ -1256,10 +1284,10 @@ export async function createOwner(
       clearTimeout(timer);
       if (request.end) closed = true;
       else {
-        timer = setTimeout(
-          () => send({ tx: id, ops: [], end: "abort" }).catch(() => {}),
-          HOLD_IDLE_MS,
-        );
+        timer = setTimeout(() => {
+          idle = true;
+          send({ tx: id, ops: [], end: "abort" }).catch(() => {});
+        }, HOLD_IDLE_MS);
       }
       const reply = Promise.withResolvers<unknown>();
       inbox.push({ request, reply });
@@ -1271,8 +1299,14 @@ export async function createOwner(
       return inbox.shift()!;
     };
     const later: Later = { ops: [] };
+    // How long it held the store's writer: from when the store began it to its commit or rollback.
+    let began: number | undefined;
+    const measured = (outcome: "commit" | "abort" | "idle" | "error") => {
+      if (began !== undefined) measure.transactions.record(performance.now() - began, { outcome });
+    };
     commit(
       async (tx, seen) => {
+        began = performance.now();
         for (;;) {
           const { request, reply } = await next();
           let value: unknown;
@@ -1307,9 +1341,15 @@ export async function createOwner(
       true,
       later,
     ).then(
-      () => ending!.reply.resolve(ending!.value),
+      () => {
+        measured("commit");
+        ending!.reply.resolve(ending!.value);
+      },
       (error) => {
         closed = true;
+        const outcome = error !== aborted ? "error" : idle ? "idle" : "abort";
+        measured(outcome);
+        if (outcome !== "abort") ended(job, id);
         for (const { reply } of inbox.splice(0)) reply.reject(error);
         if (error === aborted) ending?.reply.resolve(undefined);
         else ending?.reply.reject(error);
@@ -1352,11 +1392,20 @@ export async function createOwner(
       }
       return disconnect(first.actor);
     }
-    const lowered = request.ops.map((op) => timers.lower(op, request.actor));
-    lowered.forEach(known);
-    const guarded = await guard(lowered, request.actor);
-    const { keep } = guarded;
-    const ops = await label(guarded.ops, request.actor, job);
+    let ops: StoreOp[], keep: Map<string, Filter>;
+    try {
+      const lowered = request.ops.map((op) => timers.lower(op, request.actor));
+      lowered.forEach(known);
+      const guarded = await guard(lowered, request.actor);
+      keep = guarded.keep;
+      ops = await label(guarded.ops, request.actor, job);
+    } catch (error) {
+      // Refused before it reaches its transaction (by the rules, say), a request ends it, as a
+      // failed op in it does: else the transaction would keep the store's writer, and every
+      // other write would wait, until it sat idle long enough.
+      if ("tx" in request) await refuse(job, request.tx);
+      throw error;
+    }
     const saw = (op: ReadOp, value: unknown) => notice(job, request.actor, op, value);
     if (!("tx" in request)) {
       const [first, ...rest] = ops;
@@ -1377,6 +1426,7 @@ export async function createOwner(
     if (transaction && transaction.job !== job) throw invalid("Not this job's transaction.");
     if (!transaction) {
       if (request.end === "abort") return Promise.resolve(undefined);
+      if (endedBy.get(job)?.has(request.tx)) throw invalid("The transaction is closed.");
       transaction = hold(request.tx, job);
     }
     return transaction.send({ ...request, ops, keep, saw });
@@ -1722,6 +1772,7 @@ export async function createOwner(
         held.get(id)?.send({ tx: id, ops: [], end: "abort" }).catch(() => {});
       }
       heldBy.delete(handle.operationId);
+      endedBy.delete(handle.operationId);
       labelled.delete(handle.operationId);
       pinned.delete(handle.operationId);
     }

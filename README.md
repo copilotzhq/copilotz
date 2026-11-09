@@ -22,7 +22,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.30"`),
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.31"`),
 and the imports below are the same everywhere. Some pieces need a package of their own, installed
 beside it: `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for
 PostgreSQL in the process, and `@types/react` for the front ends' types.
@@ -631,7 +631,7 @@ and an app serves it from there by default:
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.30" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.31" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 
@@ -1125,7 +1125,8 @@ add: each plugin instruments itself.
   to `createRuntime({ metrics })` (and to remote executors); plugin code records with `ctx.metrics`.
   Recorded:
   - the runtime: `copilotz.job.duration` (by kind, name, outcome), `copilotz.op.duration` and
-    `copilotz.op.roundtrip`, `copilotz.commit.duration`, `copilotz.events`,
+    `copilotz.op.roundtrip`, `copilotz.commit.duration`, `copilotz.transaction.duration` (how long
+    each transaction held open kept the writer, by outcome), `copilotz.events`,
     `copilotz.processor.lag`, `copilotz.executors`, `copilotz.cache.reads`;
   - model calls, by OpenTelemetry's GenAI conventions: `gen_ai.client.operation.duration`,
     `gen_ai.client.token.usage`, and `copilotz.llm.time_to_first_token`;
@@ -1734,7 +1735,9 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   is the record already kept, so sending twice is safe.
 - **One writer per store:** each write auto-commits as one short transaction, and
   `ctx.transaction(tx => …)` makes several writes and their events atomic. Slow I/O, such as model
-  calls, never holds the writer.
+  calls, never holds the writer. An op in a transaction that fails, a write the rules refuse
+  included, ends it: it rolls back, and its later ops fail, even when the error is caught. One with
+  no op for 5 seconds rolls back too.
 - **Stream-first:** committed events and live frames go to subscribers immediately, and observed
   Views run again as soon as what they read commits.
 - **Who acts:** an outside call may bind an actor (`runtime.call(action, input, { actor })`, and

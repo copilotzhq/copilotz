@@ -35,6 +35,11 @@ export type Graph = {
  * are sent with the next op or the commit, so an error from one surfaces
  * there (it still aborts the whole transaction). Work made only of them is
  * one call, which a store may run as a single statement.
+ *
+ * An op that fails, a write the rules refuse included, ends the transaction:
+ * it rolls back, and its later ops fail ("The transaction is closed."), even
+ * when the error is caught. It holds the store's writer, so keep slow work out
+ * of it: one with no op for 5 seconds rolls back too.
  */
 export type TransactionScope = {
   db: { collection<T = Record<string, unknown>>(name: string): Collection<T> };

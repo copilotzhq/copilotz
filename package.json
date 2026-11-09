@@ -55,7 +55,7 @@
   "scripts": {
     "test": "node --test --test-concurrency=1 \"**/*.test.ts\"",
     "test:bun": "bun test --timeout 60000",
-    "build": "node scripts/npm/build.ts"
+    "build": "node scripts/npm/build.ts --all"
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",

@@ -1,32 +1,44 @@
 ---
-title: "Getting Started: build Compass"
-description: "Build Compass, a workspace where you and AI agents work together, on Copilotz 1.0: import the agentic core, then rebuild Copilotz's own plugins for one person, one primitive at a time."
-section: Getting Started
+title: "Build Compass: a workspace for people and agents"
+description: "The deep track: build Compass, a workspace where people and agents share chats, a board and documents, and learn the runtime's contract by building each part of it, one primitive at a time."
+section: Build Compass
 order: 1
 status: stable
 ---
 
-# Getting Started: build Compass
+# Build Compass: a workspace for people and agents
 
-Compass is a workspace where people and a team of AI agents work together: conversations, spaces, a
-board, documents. It runs on Copilotz, and almost all of it is Copilotz's own plugins. In this guide
-you build it yourself, for one person on their own machine:
+Compass is a workspace where people and a team of AI agents share chats, a board and documents. In
+this track you build it yourself, for one person on their own machine, in 41 chapters.
 
-- **You import the agentic core** as it is: `models` (talking to model providers) and `chat`
-  (conversations, agents and their tools).
-- **You rebuild the rest of Compass's plugins**: identity, spaces, the board… Each one keeps the
-  contract of Copilotz's own plugin of the same name (its collections, Actions, events, Views,
-  resources and tools), so Copilotz's chat and web front ends work with yours in its place. What you
-  leave out is only what exists because several people share an app: invitations, roles, orgs,
-  billing.
+It's the deep dive into the contract the runtime keeps for every caller, whichever way they come in:
 
-By the end you know how Copilotz's plugins are built, because you built them, and you have the
-pattern for putting agents inside your own product: your product's features as plugins, on the same
-primitives, beside the agents.
+- **Who is asking, for whom, and where.** Every call carries an actor, such as you or an agent
+  working for you, and its work happens in a space.
+- **What can be done.** Each thing anyone can do is an Action. A click, an agent's tool and a
+  script call the same one.
+- **What anyone sees.** A View shows the data in one place: the browser, the terminal or the model's
+  prompt. Observed Views stay live.
+- **The rules, checked at the data.** They filter every read and write, whichever way the call came
+  in.
+- **The record.** Every write and every Action call is an event that names who acted.
+
+You import 2 of Copilotz's plugins as they are: `models`, which talks to model providers, and
+`chat`, which runs conversations, agents and their tools. You rebuild the rest of Compass's plugins
+yourself: identity, spaces, the board, documents, memory and more. Each keeps the contract of
+Copilotz's plugin of the same name (its collections, Actions, events, Views, resources and tools), so
+Copilotz's web and terminal front ends work with yours in its place. You leave out only what exists
+because several people share an app: invitations, roles, orgs and billing. The last part runs
+Compass on Copilotz's own plugins, which have them.
+
+By the end you know how the runtime and its plugins work, because you built them. You drag a card
+in the browser. North reads the same board in its prompt, a script moves a card over the REST API,
+and an assistant reaches the board over MCP. All of them go through the same Actions, under the same
+rules, on the same record.
 
 ## How Copilotz works, in one minute
 
-An app is a list of **plugins**. A plugin is a plain object made of six primitives, and the runtime
+An app is a list of **plugins**. A plugin is a plain object made of 6 primitives, and the runtime
 knows nothing else:
 
 | Primitive      | What it is                                                                                                                        |
@@ -38,12 +50,24 @@ knows nothing else:
 | **Resource**   | configuration as named plain objects, by kind (`agents`, `tools`, `provider`…); a later plugin patches an earlier one's           |
 | **Adapter**    | one implementation of a port, by name: a model provider's protocol, an embedder                                                   |
 
-Plugins reach each other only through the runtime, by name: they call each other's Actions, plug
-into each other's resource kinds, and hear each other's events. One owner writes everything to one
-store (in memory, SQLite or PostgreSQL), so every change is on the record, and every screen follows
-it live.
+Plugins reach each other only through the runtime, by name. They call each other's Actions, plug into
+each other's resource kinds, and hear each other's events. One owner writes everything to one store
+(in memory, SQLite or PostgreSQL), so every change is on the record, and every screen follows it
+live.
 
-Three things people often get wrong, and the guide shows each one running:
+Each part of the contract has chapters of its own:
+
+- **Who and where:** a who, a route and a rule for one person (Chapter 3), spaces (Chapters 7 and 8),
+  and sign-in for many people (Chapter 40).
+- **Actions:** the board's 7 Actions, the only way to change it (Chapter 9), and the tools that call
+  them for North (Chapter 11).
+- **Views:** a charter in North's prompt (Chapter 2), the board on the web and in the terminal
+  (Chapter 10), and chat's history View replaced (Chapter 17).
+- **The record:** the events one message leaves (Chapter 1), the store's tables (Chapter 5), and
+  every save a version that says who, what and when (Chapter 12).
+- **Every way in:** the REST API, the client and MCP (Chapters 33 to 35).
+
+Three things people often get wrong, and the track shows each one running:
 
 - **Two kinds of events.** A collection write records `<collection>.created`, `.updated` or
   `.deleted`. An Action call records `action.started`, then `action.completed` or `action.failed`. A

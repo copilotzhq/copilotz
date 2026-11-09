@@ -236,6 +236,11 @@ turn used is in its org's ledger, priced, and in no other.
 
 ## What you have now
 
-The whole arc: a harness for one person on their own machine, rebuilt plugin by plugin to Copilotz's
-contracts, and the same app, on Copilotz's own plugins, serving many people in many orgs, each with
-its own data and its own bill. `npm run dev` is still Compass for you alone.
+The whole arc: a workspace for one person on their own machine, rebuilt plugin by plugin to
+Copilotz's contracts. Then the same app, on Copilotz's own plugins, serves many people in many orgs,
+each with its own data and its own bill. `npm run dev` is still Compass for you alone.
+
+The contract held at every step. Every call said who was asking, and for whom. People and agents
+changed things through Actions, every screen was a View, and the rules were checked at the data. The
+record kept who did what. The browser, the terminal, your agents, the REST API, the client and MCP
+all came in through that one contract.

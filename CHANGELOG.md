@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.33 — 2026-11-09
 
 **Upgrading.** Copilotz's product plugins are packages of their own, released with it at its version
 ([design](design/plugins.md)). Their names (collections, Actions, events, Views, routes, resources)

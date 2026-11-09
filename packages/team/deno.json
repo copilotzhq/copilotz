@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/team",
-  "version": "1.0.0-rc.32",
+  "version": "1.0.0-rc.33",
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
@@ -8,7 +8,7 @@
     "./contract": "./contract.ts"
   },
   "imports": {
-    "copilotz": "jsr:@copilotz/copilotz@1.0.0-rc.32"
+    "copilotz": "jsr:@copilotz/copilotz@1.0.0-rc.33"
   },
   "publish": {
     "exclude": ["**/tests/", "**/*.test.ts", "**/*.test.tsx", "package.json"]

@@ -12,7 +12,7 @@ import type { Client } from "../../hosts/web/mod.ts";
 import { definePlugin, type Plugins } from "../../runtime/mod.ts";
 import { webShell } from "../../plugins/interfaces/web/mod.ts";
 import { chatWeb } from "../../plugins/agents/chat/web.tsx";
-import { teamWeb } from "../../plugins/agents/team/web.tsx";
+import { teamWeb } from "@copilotz/team/web";
 import { memoryWeb } from "../../plugins/agents/memory/web.tsx";
 import { spacesWeb } from "../../plugins/access/spaces/web.tsx";
 import { directoryWeb } from "@copilotz/directory/web";

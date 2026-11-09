@@ -47,7 +47,8 @@
   "workspace": [
     "./packages/work",
     "./packages/directory",
-    "./packages/billing"
+    "./packages/billing",
+    "./packages/team"
   ],
   "tasks": {
     "chat": "deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/chat.ts",

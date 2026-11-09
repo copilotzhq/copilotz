@@ -5,7 +5,8 @@
  */
 import { type Client, web } from "../../hosts/web/mod.ts";
 import { webShell } from "../../plugins/interfaces/web/mod.ts";
-import { chatWeb, memoryWeb, teamWeb } from "../../plugins/agents/web.tsx";
+import { chatWeb, memoryWeb } from "../../plugins/agents/web.tsx";
+import { teamWeb } from "@copilotz/team/web";
 import { spacesWeb } from "../../plugins/access/spaces/web.tsx";
 import { directoryWeb } from "@copilotz/directory/web";
 

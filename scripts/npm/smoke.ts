@@ -78,13 +78,13 @@ console.log(\`  \${url ? "postgres" : "memory"}: \${reply.from}: \${reply.text}\
 
 const BROWSER = `import { web } from "copilotz/web";
 import { webShell } from "copilotz/plugins/interfaces/web";
-import { chatWeb, memoryWeb, teamWeb } from "copilotz/plugins/agents/web";
+import { chatWeb, memoryWeb } from "copilotz/plugins/agents/web";
 import { spacesWeb } from "copilotz/plugins/access/web";
 import { computersWeb } from "copilotz/plugins/compute/web";
 
 await web({
   root: document.getElementById("app")!,
-  plugins: [webShell, chatWeb, spacesWeb, teamWeb, memoryWeb, computersWeb],
+  plugins: [webShell, chatWeb, spacesWeb, memoryWeb, computersWeb],
 });
 `;
 

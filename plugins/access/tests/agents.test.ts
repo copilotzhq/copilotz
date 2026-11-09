@@ -1,23 +1,18 @@
 /**
  * Agents as members: each works only where it's a member. A new space
  * starts with the app's default agents, the first answering its new chats;
- * its managers make agents there, add ones they've met, choose who answers,
- * and take them out. One agent works in several spaces, changed only by who
- * manage the space it belongs to.
+ * its managers add others, choose who answers, and take them out. (Agents
+ * people make are `@copilotz/team`'s, tested there.)
  */
-import { assert, assertEquals } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { type Actor, createRuntime, definePlugin, type Runtime } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../models/mod.ts";
 import { type Agent, chat, type Message } from "../../agents/chat/mod.ts";
-import { team } from "../../agents/team/mod.ts";
 import { access } from "../mod.ts";
-import { join } from "./join.ts";
 import { test } from "../../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
-const bob: Actor = { kind: "person", id: "bob" };
-const cy: Actor = { kind: "person", id: "cy" };
 const refused = (promise: Promise<unknown>) =>
   promise.then(() => "done", (error) => (error as { code?: string }).code ?? "failed");
 
@@ -45,7 +40,7 @@ const start = async () => {
   });
   return await createRuntime({
     store: memoryStore(),
-    plugins: [models, chat, ...access, team, app],
+    plugins: [models, chat, ...access, app],
   });
 };
 
@@ -123,80 +118,6 @@ test("a viewer agent reads a space but doesn't answer there; a chat is with whom
     assertEquals(await ask(rt, ana, launch, "hello"), ["scout: I scout."], "still, as editor");
     await add(rt, launch, "scout", ana, "viewer");
     assertEquals(await ask(rt, ana, launch, "hello"), ["lead: I lead."]);
-    // What an agent is made with: models an agent talks with.
-    const options = await rt.query<{ models: string[] }>("agent.options", {}, { actor: ana });
-    assertEquals(options.models, ["s/one"]);
-  } finally {
-    await rt.close();
-  }
-});
-
-test("managers make agents where they belong; others add the ones they've met", async () => {
-  const rt = await start();
-  try {
-    const space = async (name: string, by: Actor) =>
-      (await rt.call<{ space: string }>("space.create", { name }, { actor: by })).space;
-    const launch = await space("Launch", ana);
-    await join(rt, launch, bob, "editor", ana);
-
-    // An editor can't make one in Launch; its manager can, then adds it.
-    const make = (actor: Actor) =>
-      rt.call<{ agent: string }>("agent.create", {
-        in: launch,
-        name: "Maya",
-        description: "Writes launch copy",
-        instructions: "I write.",
-      }, { actor });
-    assertEquals(await refused(make(bob)), "forbidden");
-    const { agent } = await make(ana);
-    assertEquals(agent, "maya");
-    assertEquals((await make(ana)).agent, "maya-2", "another Maya is called apart");
-    await add(rt, launch, agent, ana);
-    assertEquals(await ask(rt, bob, launch, "@maya draft it"), ["maya: I write."]);
-    const seen = await rt.query<Here>("thread.agents", { in: launch }, { actor: bob });
-    assertEquals(seen.here.sort(), ["lead", "maya"]);
-    assertEquals([seen.agents.maya.name, seen.agents.maya.description], [
-      "Maya",
-      "Writes launch copy",
-    ]);
-
-    // Only Launch's managers change it.
-    assertEquals(
-      await refused(
-        rt.call("agent.update", { agent, instructions: "I don't." }, { actor: bob }),
-      ),
-      "forbidden",
-    );
-    await rt.call("agent.update", { agent, instructions: "I write well." }, { actor: ana });
-    assertEquals(await ask(rt, bob, launch, "@maya again"), ["maya: I write well."]);
-
-    // Bob met Maya in Launch: he adds it to his own space. Cy never did.
-    const bobs = await space("Bob's", bob);
-    await add(rt, bobs, agent, bob);
-    assertEquals(await ask(rt, bob, bobs, "@maya hi"), ["maya: I write well."]);
-    const cys = await space("Cy's", cy);
-    assertEquals(await refused(add(rt, cys, agent, cy)), "invalid");
-    const strange = await rt.query<Here>("thread.agents", { in: cys, names: [agent] }, {
-      actor: cy,
-    });
-    assert(!strange.agents[agent], "Cy doesn't see Maya");
-    // Whom each has met, to add: the app's agents, and Maya for Bob, not for Cy.
-    const known = (actor: Actor) =>
-      rt.query<Record<string, Agent>>("agent.known", {}, { actor }).then((k) => Object.keys(k));
-    assertEquals((await known(bob)).sort(), ["lead", "maya", "maya-2", "scout"]);
-    assertEquals((await known(cy)).sort(), ["lead", "scout"]);
-
-    // Removed, it leaves every space it worked in.
-    await rt.call("space.agent", { space: bobs, agent }, { actor: bob });
-    await rt.call("agent.delete", { agent }, { actor: ana });
-    await rt.idle();
-    assertEquals((await rt.query<Here>("thread.agents", { in: bobs }, { actor: bob })).default, [
-      "lead",
-    ]);
-    assertEquals(await refused(ask(rt, bob, launch, "@maya hi")), "done");
-    assertEquals((await rt.query<Here>("thread.agents", { in: launch }, { actor: ana })).here, [
-      "lead",
-    ]);
   } finally {
     await rt.close();
   }

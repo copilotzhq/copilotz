@@ -1,0 +1,12 @@
+{
+  "name": "@copilotz/team",
+  "version": "1.0.0-rc.32",
+  "private": true,
+  "type": "module",
+  "description": "Agents people make, and the models an org's agents think with (tiers). A Copilotz plugin.",
+  "exports": {
+    ".": "./mod.ts",
+    "./web": "./web.tsx",
+    "./contract": "./contract.ts"
+  }
+}

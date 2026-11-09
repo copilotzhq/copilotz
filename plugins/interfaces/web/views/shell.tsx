@@ -6,12 +6,15 @@
  * page whose kind the `panel` resource is `on` offers the side panel, for
  * the space the person works in. The command palette lists what front ends
  * offer there (the `palette` resource), for where the person is: the space,
- * the address, the page open (`{ kind, id }`) and its parameters.
+ * the address, the page open (`{ kind, id }`) and its parameters. Where a
+ * front end fills the `orgs` slot, its switcher is drawn with the same hints
+ * as the sidebar's, and its overlay with none.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import { EmptyState } from "../../../../hosts/web/mod.ts";
 import { userMenuOf } from "../shared/menu.ts";
+import { orgsSlotOf } from "../shared/orgs.ts";
 import { pageOf, sourcesOf } from "../shared/palette.ts";
 import { offered, type Panel } from "../shared/panel.ts";
 import { Frame } from "./frame.tsx";
@@ -43,6 +46,9 @@ export const shellView = (
       ctx.show("web.default", given, { ...asked, of: kind })
     : ctx.show("home", {}, asked);
   const panel = ctx.resources.panel as Panel | null | undefined;
+  // Where the app serves many orgs, the front end that knows them fills the slot.
+  const slot = orgsSlotOf(ctx.resources.orgs);
+  const around = { ...hints, path: where.path };
   const viewer = ctx.viewer?.name ?? "";
   const label = ctx.viewer?.label;
   return (
@@ -63,6 +69,16 @@ export const shellView = (
       menu={userMenuOf(ctx.resources.userMenu)}
       call={ctx.call}
       panel={offered(panel, kind ?? "home", space) ? { ...panel, space: space! } : undefined}
+      {...(slot
+        ? {
+          orgs: {
+            switcher: ctx.show(slot.switcher, {}, around),
+            // The same wherever the page is: what it shows outlives going elsewhere.
+            ...(slot.overlay ? { overlay: ctx.show(slot.overlay, {}, {}) } : {}),
+            ...(slot.use ? { use: slot.use } : {}),
+          },
+        }
+        : {})}
       sidebar={sections.map(([key, section]) => (
         <section
           key={key}
@@ -70,7 +86,7 @@ export const shellView = (
           aria-labelledby={section.title ? `copilotz-section-${key}` : undefined}
         >
           {section.title ? <h2 id={`copilotz-section-${key}`}>{section.title}</h2> : null}
-          {ctx.show(section.view, {}, { ...hints, path: where.path })}
+          {ctx.show(section.view, {}, around)}
         </section>
       ))}
     >

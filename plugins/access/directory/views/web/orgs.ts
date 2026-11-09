@@ -1,14 +1,16 @@
 /**
- * The directory's web part, for the browser: what the directory's routes say
- * of the orgs the signed-in person belongs to, when the app serves many
- * behind one address, and going between them. An app that serves one org
- * has none of this, and `useOrgs()` says so (`none`): the shell then shows
- * no switcher. Other plugins' front ends (the shell's switcher, the org
- * page, staff's console) import it through the directory's contract.ts.
+ * The directory's browser half: what the directory's routes say of the orgs
+ * the signed-in person belongs to, when the app serves many behind one
+ * address, and going between them. A server that serves one org has none of
+ * this, and `useOrgs()` says so (`none`): the switcher then shows nothing.
+ * The directory's front end (web.tsx: the switcher, the org page, staff's
+ * console) is built on it; other plugins' front ends import it through the
+ * directory's contract.ts.
  *
  * - `useOrgs()`: who's signed in, the org they're in, their orgs (the last
  *   entered first), the invitations waiting for them, and whether they're
- *   platform staff; `refreshOrgs()` asks again (after renaming one).
+ *   platform staff; `refreshOrgs()` asks again, as does the page hearing that
+ *   an org changed (the web shell's `orgsChanged()`, after renaming one).
  * - `enterOrg`, `createOrg`, `answerOrgInvite`: each goes into an org (the
  *   directory hands the person to it, which sets its session), and the page
  *   starts over at that org's home, after a short transition
@@ -23,7 +25,8 @@
  * (see routes/orgs.ts and routes/console.ts).
  */
 import { useSyncExternalStore } from "react";
-import { say } from "./words.ts";
+import { onOrgsChanged } from "../../../../interfaces/web/contract.ts";
+import { sayOrg } from "./words.ts";
 
 export type Org = { id: string; name: string; kind: "personal" | "team"; suspended?: true };
 
@@ -134,6 +137,9 @@ export function refreshOrgs(): Promise<OrgsState> {
   return loadOrgs();
 }
 
+// An org changed elsewhere in the page (its owners renamed it in spaces' About): ask again.
+onOrgsChanged(() => void refreshOrgs());
+
 /** The orgs, as they stand, kept current. */
 export function useOrgs(): OrgsState {
   const now = useSyncExternalStore(store.subscribe, store.get, store.get);
@@ -150,7 +156,7 @@ export const asStaff = (orgs: Orgs): boolean => orgs.asStaff === true;
 
 /** What an org is called where it shows: everyone's own is "Personal". */
 export const orgName = (org: Pick<Org, "name" | "kind">): string =>
-  org.kind === "personal" ? say("personalOrg") : org.name;
+  org.kind === "personal" ? sayOrg("personalOrg") : org.name;
 
 /** What a refusal's status means: not let (403), not done by this app (501), or not so (else). */
 const codeOf = (status: number) =>

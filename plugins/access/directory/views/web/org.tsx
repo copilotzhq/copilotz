@@ -8,7 +8,7 @@
  * admins run it from here; the others see what it is, and who's in it.
  */
 import type { ReactNode } from "react";
-import type { ViewContext } from "../../../../runtime/mod.ts";
+import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
   Badge,
   Button,
@@ -21,21 +21,24 @@ import {
   Skeleton,
   Tabs,
   Title,
-} from "../../../../hosts/web/mod.ts";
-import { orgName, useOrgs } from "../../../access/directory/contract.ts";
-import { chosenSection, type OrgSection, runs, sectionsOf, standingName } from "../shared/orgs.ts";
-import { useStanding } from "../shared/standing.ts";
-import { OrgFace } from "./orgs.tsx";
+} from "../../../../../hosts/web/mod.ts";
+import { orgName, useOrgs } from "./orgs.ts";
+import { type OrgSection, runs, useStanding } from "../../../../interfaces/web/contract.ts";
+import { chosenSection, sectionsOf, standingName } from "./lists.ts";
+import { OrgFace, style } from "./switcher.tsx";
 import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export const orgView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => (
-  <OrgPage
-    given={ctx.resources.orgSettings}
-    tab={(ctx.hints.query as Record<string, string> | undefined)?.tab}
-    call={ctx.call}
-  />
+  <>
+    {style}
+    <OrgPage
+      given={ctx.resources.orgSettings}
+      tab={(ctx.hints.query as Record<string, string> | undefined)?.tab}
+      call={ctx.call}
+    />
+  </>
 );
 
 /** The section's address. */

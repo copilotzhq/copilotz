@@ -32,17 +32,16 @@
  * resource: `{ label, icon?, href, order? }`, pages of the person's own,
  * such as Connected accounts), then signing out.
  *
- * Where the app serves many orgs (the web host's `useOrgs`),
- * the shell is where you are among them: the org switcher at the top of the
- * sidebar (your orgs, Personal first; invitations, answered in place; a new
- * org; going into one shows a short transition, then its home), the user
- * menu at its foot, and orgs in the palette. In an org as platform staff, a
- * line in the warning colour runs along the top, and the switcher says so.
- * The org's page (`/org`) is made of sections front ends add (the
- * `orgSettings` resource: `{ title, view, icon?, order?, roles? }`, each a
- * View given item `{ _id }` and hints `{ org, role, staff, mode }`), and
- * staff's console (`/console`) lists every org, to enter, rename, suspend,
- * move, export or delete. The resource kinds' shapes are in contract.ts.
+ * The shell knows no orgs. Where the app serves many, the front end that
+ * knows them fills the `orgs` slot (`@copilotz/directory`'s `directoryWeb`):
+ * its switcher at the top of the sidebar, beside the app's mark; its overlay
+ * beside every page; and, from its hook, entries in the user menu, groups in
+ * the palette and the person's email. That front end draws the org's page
+ * (`/org`), made of sections front ends add (the `orgSettings` resource:
+ * `{ title, view, icon?, order?, roles? }`, each a View given item `{ _id }`
+ * and hints `{ org, role, staff, mode }`), and staff's console (`/console`).
+ * The person's standing in the org (spaces' `org.me`) is `useStanding`, for
+ * any front end. The resource kinds' shapes are in contract.ts.
  *
  * ```ts
  * resources: {
@@ -50,28 +49,25 @@
  *   panel: { view: "space.panel", on: ["thread"], title: "Space" },
  *   palette: { spaces: { view: "spaces.palette", order: 10 } },
  *   orgSettings: { members: { title: "Members", view: "org.members", icon: "users", order: 20 } },
+ *   orgs: { switcher: "orgs.switcher", overlay: "orgs.overlay", use: useShellOrgs },
  *   userMenu: { accounts: { label: "Connected accounts", icon: "lock", href: "/accounts" } },
  * }
  * ```
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
-import { consoleView } from "./views/console.tsx";
 import { defaultView } from "./views/default.tsx";
-import { orgView } from "./views/org.tsx";
 import { shellView } from "./views/shell.tsx";
 
 export type { Section } from "./views/shell.tsx";
 export type { Panel } from "./shared/panel.ts";
 export type { PaletteSource } from "./shared/palette.ts";
-export type { OrgSection } from "./shared/orgs.ts";
+export type { OrgSection, OrgsShown, OrgsSlot, Standing } from "./shared/orgs.ts";
 export type { UserMenuEntry } from "./shared/menu.ts";
 
 export const webShell: Plugin = definePlugin({
   name: "web-shell",
   views: {
     "web.shell": shellView,
-    org: orgView,
-    console: consoleView,
     "web.default": defaultView,
   },
 });

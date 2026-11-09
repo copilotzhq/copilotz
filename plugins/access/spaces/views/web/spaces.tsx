@@ -49,6 +49,7 @@ export const spacesView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode =
         under={under}
         viewer={ctx.viewer?.name ?? ""}
         names={namesIn(ctx, ownersOf(spaces, ctx.viewer?.name))}
+        call={ctx.call}
         create={async (name) => {
           const { space } = await ctx.call<{ space: string }>("space.create", { name });
           go(spacePath(space));

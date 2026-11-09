@@ -2,9 +2,9 @@
  * Gift codes in staff's console, as words: where each stands, and what a person
  * types turned into what's asked for. Pure.
  */
-import { formatDate, formatNumber } from "../../../../hosts/web/words.ts";
-import type { GiftCode } from "../../../access/directory/contract.ts";
-import { say } from "../views/words.ts";
+import { formatDate, formatNumber } from "../../../../../hosts/web/words.ts";
+import type { GiftCode } from "./orgs.ts";
+import { say } from "./words.ts";
 
 export type CodeStatus = "waiting" | "claimed" | "revoked" | "expired";
 

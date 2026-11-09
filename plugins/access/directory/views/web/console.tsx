@@ -11,7 +11,7 @@
  * console-codes.tsx): gift codes of credits, made, listed and taken back.
  */
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
-import type { ViewContext } from "../../../../runtime/mod.ts";
+import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
   Avatar,
   Badge,
@@ -32,7 +32,7 @@ import {
   Tabs,
   Time,
   Title,
-} from "../../../../hosts/web/mod.ts";
+} from "../../../../../hosts/web/mod.ts";
 import {
   type ConsoleOrg,
   consoleOrgs,
@@ -42,13 +42,17 @@ import {
   moveOrg,
   updateOrg,
   useOrgs,
-} from "../../../access/directory/contract.ts";
-import { type ConsoleFilter, consoleList, consoleTotals, SCHEMA } from "../shared/orgs.ts";
+} from "./orgs.ts";
+import { type ConsoleFilter, consoleList, consoleTotals, SCHEMA } from "./lists.ts";
 import { GiftCodes } from "./console-codes.tsx";
+import { style } from "./switcher.tsx";
 import { say } from "./words.ts";
 
 export const consoleView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => (
-  <Console tab={(ctx.hints.query as Record<string, string> | undefined)?.tab} />
+  <>
+    {style}
+    <Console tab={(ctx.hints.query as Record<string, string> | undefined)?.tab} />
+  </>
 );
 
 /** What staff are doing to an org, in a dialog. */

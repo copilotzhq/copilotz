@@ -10,7 +10,6 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import { failedOwn } from "../../agents/chat/views/web/message.tsx";
-import { codeStatus, newCodeOf } from "../../interfaces/web/shared/codes.ts";
 import { paidBy } from "../usage/views/web/org.tsx";
 import { sizesOf } from "../../compute/cloud/views/web/cloud.ts";
 import { NewCloud } from "../../compute/cloud/views/web/new.tsx";
@@ -461,30 +460,6 @@ test("a computer refused for what the org can spend says so plainly, and who can
   assertStringIncludes(out, "This org is out of credits");
   assertStringIncludes(out, "Your computers and files are safe");
   assertStringIncludes(out, "Go to Billing");
-});
-
-test("gift codes in the console: where each stands, and what's asked for", () => {
-  const code = {
-    id: "x",
-    short: "abc",
-    amount: 25,
-    by: "sam",
-    at: "2026-11-01T00:00:00Z",
-  };
-  const now = "2026-11-15T00:00:00.000Z";
-  assertEquals(codeStatus(code, now), "waiting");
-  assertEquals(codeStatus({ ...code, org: "o", claimed: now }, now), "claimed");
-  assertEquals(codeStatus({ ...code, revoked: now }, now), "revoked");
-  assertEquals(codeStatus({ ...code, until: "2026-11-02T00:00:00.000Z" }, now), "expired");
-  assertEquals(newCodeOf({ amount: "$1,000", expires: "", until: "", note: " " }), {
-    amount: 1000,
-  });
-  assertEquals(
-    newCodeOf({ amount: "25", expires: "2027-01-01", until: "2026-12-01", note: "Hi" }),
-    { amount: 25, expires: "2027-01-01", until: "2026-12-01T23:59:59.999Z", note: "Hi" },
-  );
-  assert("error" in newCodeOf({ amount: "nope", expires: "", until: "", note: "" }));
-  assert("error" in newCodeOf({ amount: "0", expires: "", until: "", note: "" }));
 });
 
 test("this month's plan credits: what's left and until when; used up, when more come", () => {

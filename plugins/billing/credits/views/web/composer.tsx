@@ -11,7 +11,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { Button, IconButton, Notice } from "../../../../../hosts/web/mod.ts";
-import { useOrgs } from "../../../../access/directory/contract.ts";
+import { useStanding } from "../../../../interfaces/web/contract.ts";
 import { type Notice as Said, noticeKey, noticeSaid } from "./numbers.ts";
 import { STYLE } from "./style.ts";
 
@@ -41,8 +41,8 @@ function Note(
     working: boolean;
   },
 ): ReactNode {
-  const orgs = useOrgs();
-  const here = orgs.status === "ready" ? orgs.here : undefined;
+  // The org it's in (spaces' `org.me`, where the app serves many): its notes are kept apart.
+  const here = useStanding(call)?.org;
   const [said, setSaid] = useState<Said | null>(null);
   const [gone, setGone] = useState<string>();
 

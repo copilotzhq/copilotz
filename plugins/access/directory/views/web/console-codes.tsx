@@ -19,15 +19,15 @@ import {
   Notice,
   Skeleton,
   Time,
-} from "../../../../hosts/web/mod.ts";
+} from "../../../../../hosts/web/mod.ts";
 import {
   type ConsoleOrg,
   createGiftCode,
   type GiftCode,
   giftCodes,
   revokeGiftCode,
-} from "../../../access/directory/contract.ts";
-import { codeStatus, dayOf, dollarsOf, newCodeOf, statusOf } from "../shared/codes.ts";
+} from "./orgs.ts";
+import { codeStatus, dayOf, dollarsOf, newCodeOf, statusOf } from "./codes.ts";
 import { say } from "./words.ts";
 
 const STYLE = `

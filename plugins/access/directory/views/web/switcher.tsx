@@ -1,14 +1,25 @@
 /**
- * Orgs in the shell, when the app serves many (`useOrgs`): the switcher at
- * the top of the sidebar, where the app's identity sits (the org you're in,
- * your standing there; opened, your orgs, Personal first-class, invitations
- * waiting with a badge, to join or decline in place, a new org, the org's
- * settings, and for staff, every org), the small dialog that makes an org,
- * and going between them: a short transition while the page starts over in
- * the other org, and a word once it's there. Staff in an org that isn't
- * theirs see it, quietly and all the time: what they do is on its record.
+ * Orgs in the shell, when the app serves many (`useOrgs`), through the web
+ * shell's `orgs` slot: the switcher at the top of the sidebar, where the
+ * app's identity sits (`orgs.switcher`: the org you're in, your standing
+ * there; opened, your orgs, Personal first-class, invitations waiting with a
+ * badge, to join or decline in place, a new org, the org's settings, and for
+ * staff, every org); beside every page (`orgs.overlay`), the small dialog
+ * that makes an org and going between them: a short transition while the
+ * page starts over in the other org, and a word once it's there; and what
+ * the shell's menu and palette list (`useShellOrgs`). Staff in an org that
+ * isn't theirs see it, quietly and all the time (a line along the top of
+ * the window): what they do is on its record.
  */
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
   Avatar,
   Badge,
@@ -17,6 +28,7 @@ import {
   Field,
   Icon,
   Input,
+  lang,
   message,
   Notice,
   type PaletteGroup,
@@ -25,10 +37,11 @@ import {
   Popover,
   Spinner,
   Time,
-} from "../../../../hosts/web/mod.ts";
+} from "../../../../../hosts/web/mod.ts";
 import {
   answerOrgInvite,
   arrived,
+  asStaff,
   createOrg,
   enterOrg,
   type Org,
@@ -36,11 +49,125 @@ import {
   orgName,
   type Orgs,
   type Switching,
+  useOrgs,
   useSwitching,
-} from "../../../access/directory/contract.ts";
-import { orgRoleName, runs, type Standing, standingName } from "../shared/orgs.ts";
-import { lang } from "../../../../hosts/web/mod.ts";
+} from "./orgs.ts";
+import {
+  orgRoleName,
+  type OrgsShown,
+  runs,
+  type Standing,
+  useStanding,
+} from "../../../../interfaces/web/contract.ts";
+import { standingName } from "./lists.ts";
+import { STYLE } from "./style.ts";
 import { say } from "./words.ts";
+
+type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
+
+/** The directory front end's styles, with whatever of it is drawn. */
+export const style = <style href="directory-web" precedence="copilotz">{STYLE}</style>;
+
+/**
+ * The switcher (`orgs.switcher`, the `orgs` slot's): where you are among your orgs, at the top
+ * of the sidebar, once they're known (the shell draws it once `useShellOrgs` answers).
+ */
+export const switcherView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => (
+  <Switcher call={ctx.call} />
+);
+
+function Switcher({ call }: { call: Call }): ReactNode {
+  const orgs = useOrgs();
+  const ready = orgs.status === "ready";
+  const standing = useStanding(call, ready);
+  if (!ready) return null;
+  return (
+    <>
+      {style}
+      <OrgSwitcher
+        orgs={orgs.value}
+        here={orgs.here}
+        standing={standing}
+        staff={asStaff(orgs.value)}
+        onNew={openNewOrg}
+      />
+    </>
+  );
+}
+
+/**
+ * Beside every page (`orgs.overlay`, the `orgs` slot's), outside the sidebar, which is a drawer
+ * on a phone: the line along the top while in an org as staff, the dialog that makes an org,
+ * and going into one.
+ */
+export const overlayView = (): ReactNode => <Overlay />;
+
+function Overlay(): ReactNode {
+  const orgs = useOrgs();
+  const making = useSyncExternalStore(newOrg.subscribe, newOrg.get, newOrg.get);
+  const ready = orgs.status === "ready";
+  return (
+    <>
+      {style}
+      {ready && asStaff(orgs.value)
+        ? (
+          <div className="copilotz-staff-line" role="note">
+            <span className="copilotz-sr">{say("staffLine")}</span>
+          </div>
+        )
+        : null}
+      {ready ? <NewOrg open={making} onClose={closeNewOrg} /> : null}
+      <Switching />
+    </>
+  );
+}
+
+/**
+ * What the shell's own parts list of the person's orgs (the `orgs` slot's hook): their email,
+ * the org's page and (for staff) every org in their menu, and orgs in the palette. Nothing until
+ * the orgs are known, or where the server serves one.
+ */
+export function useShellOrgs(call: Call): OrgsShown | undefined {
+  const orgs = useOrgs();
+  const ready = orgs.status === "ready";
+  const standing = useStanding(call, ready);
+  if (!ready) return undefined;
+  const { value, here } = orgs;
+  return {
+    email: value.email,
+    menu: [
+      ...(here
+        ? [{
+          label: runs(standing) ? say("orgSettings") : say("aboutOrg"),
+          icon: "settings" as const,
+          href: "/org",
+        }]
+        : []),
+      ...(value.staff
+        ? [{ label: say("allOrgsConsole"), icon: "server" as const, href: "/console" }]
+        : []),
+    ],
+    palette: orgsPalette(value, here, standing),
+  };
+}
+
+/** Whether the dialog that makes an org is open: the switcher opens it, the overlay draws it. */
+let making = false;
+const makers = new Set<() => void>();
+const newOrg = {
+  subscribe(listener: () => void) {
+    makers.add(listener);
+    return () => makers.delete(listener);
+  },
+  get: () => making,
+};
+const setMaking = (open: boolean) => {
+  making = open;
+  for (const listener of makers) listener();
+};
+/** Opens the dialog that makes an org. */
+export const openNewOrg = (): void => setMaking(true);
+const closeNewOrg = () => setMaking(false);
 
 /** The words a phrase gives to find an item by (its keywords), apart. */
 const keywords = (key: Parameters<typeof say>[0]) => say(key).split(/\s+/).filter(Boolean);

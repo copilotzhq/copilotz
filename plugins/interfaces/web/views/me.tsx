@@ -1,10 +1,9 @@
 /**
  * Who's signed in, at the foot of the sidebar, and their menu: what front
  * ends put there (the `userMenu` resource: `{ label, icon?, href, order? }`,
- * Connected accounts, say); where the app serves many orgs, the org's
- * settings (or what it is, for those who don't run it) and, for staff,
- * every org; then signing out (of every org). With nothing in it, signing
- * out is a button of its own.
+ * Connected accounts, say), then what the `orgs` slot lists where the app
+ * serves many orgs (the org's settings; every org, for staff), then signing
+ * out (of every org). With nothing in it, signing out is a button of its own.
  */
 import { type ReactNode, useState } from "react";
 import {
@@ -16,17 +15,14 @@ import {
   signOut,
 } from "../../../../hosts/web/mod.ts";
 import type { UserMenuEntry } from "../shared/menu.ts";
-import { runs, type Standing } from "../shared/orgs.ts";
 import { say } from "./words.ts";
 
 export function Me(
-  { name, email, menu = [], orgs }: {
+  { name, email, menu = [] }: {
     name: string;
     email?: string | null;
-    /** What front ends put in the menu, in their order. */
+    /** What front ends put in the menu, in their order (and the `orgs` slot's, after). */
     menu?: UserMenuEntry[];
-    /** Where the app serves many orgs: whether they're in one, their standing there, staff. */
-    orgs?: { here: boolean; standing?: Standing; staff: boolean };
   },
 ): ReactNode {
   const [leaving, setLeaving] = useState(false);
@@ -34,19 +30,11 @@ export function Me(
     setLeaving(true);
     void signOut();
   };
-  const own: MenuItem[] = [
-    ...menu.map(({ label, icon, href }) => ({ label, href, ...(icon ? { icon } : {}) })),
-    ...(orgs?.here
-      ? [{
-        label: runs(orgs.standing) ? say("orgSettings") : say("aboutOrg"),
-        icon: "settings" as const,
-        href: "/org",
-      }]
-      : []),
-    ...(orgs?.staff
-      ? [{ label: say("allOrgsConsole"), icon: "server" as const, href: "/console" }]
-      : []),
-  ];
+  const own: MenuItem[] = menu.map(({ label, icon, href }) => ({
+    label,
+    href,
+    ...(icon ? { icon } : {}),
+  }));
   const who = (
     <>
       <Avatar name={name} size={32} />

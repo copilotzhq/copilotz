@@ -1,6 +1,6 @@
 /**
  * The terminal agent's front ends, for the browser: the web shell, the
- * features' web front ends (chat, spaces, team, memory, computers, skills,
+ * features' web front ends (chat, spaces, orgs, team, memory, computers, skills,
  * routines, connected accounts, usage, developer keys, WhatsApp), the app's own
  * Notes tab on a space's page (notes-web.tsx), home's suggestions for what
  * this app's agents do well, and the toolkit's gallery (`/gallery`).
@@ -15,6 +15,7 @@ import { chatWeb } from "../../plugins/agents/chat/web.tsx";
 import { teamWeb } from "../../plugins/agents/team/web.tsx";
 import { memoryWeb } from "../../plugins/agents/memory/web.tsx";
 import { spacesWeb } from "../../plugins/access/spaces/web.tsx";
+import { directoryWeb } from "../../plugins/access/directory/web.tsx";
 import { computersWeb } from "../../plugins/compute/computers/web.tsx";
 import { skillsWeb } from "../../plugins/agents/skills/web.tsx";
 import { routinesWeb } from "../../plugins/agents/routines/web.tsx";
@@ -41,6 +42,8 @@ export const front: Plugins = [
   webShell,
   chatWeb,
   spacesWeb,
+  // Where it serves many orgs (orgs.ts): the switcher, the org's page, staff's console.
+  directoryWeb,
   teamWeb,
   memoryWeb,
   computersWeb,

@@ -42,7 +42,7 @@ the memory resource's extractor model."
 
 The runtime doesn't start without [`memory`](memory.md) and [`models`](models.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.33`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

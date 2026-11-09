@@ -39,7 +39,7 @@ Nothing to set: it works as it comes.
 The runtime doesn't start without [`usage`](usage.md) and [`terminal-shell`](terminal-shell.md): add
 them too.
 
-It ships with `copilotz@1.0.0-rc.33`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

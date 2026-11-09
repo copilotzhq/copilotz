@@ -80,7 +80,7 @@ Nothing to set. It reads `agents`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It ships in a package of its own, `@copilotz/work@1.0.0-rc.33`, for `copilotz` `1.0.0-rc.33`:
+It ships in a package of its own, `@copilotz/work@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## Listing

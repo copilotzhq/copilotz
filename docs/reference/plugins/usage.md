@@ -72,7 +72,7 @@ plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.33`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

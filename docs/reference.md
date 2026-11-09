@@ -19,7 +19,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.33"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.34"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
@@ -76,7 +76,7 @@ other entry point is for the process that runs the runtime, or the terminal.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.33` goes with `copilotz@1.0.0-rc.33`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.34` goes with `copilotz@1.0.0-rc.34`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.

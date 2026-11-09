@@ -53,7 +53,7 @@ It also reads `billing` and `org`, resource kinds the app and other plugins fill
 
 It builds on no other plugin.
 
-It ships in a package of its own, `@copilotz/billing@1.0.0-rc.33`, for `copilotz` `1.0.0-rc.33`:
+It ships in a package of its own, `@copilotz/billing@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## Listing

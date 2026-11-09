@@ -103,7 +103,7 @@ resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.33`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

@@ -247,7 +247,11 @@ export const callAction = defineAction({
     if (answered) return { ...await again(ctx, line, answered), ran: true, again: true };
     if (fresh) await opened(ctx, line, contact, thread);
 
-    const ran = await runTool(ctx, input.tool, input.input, {
+    // The tool works where its conversation is (`ctx.in`): its line's space, or wherever its
+    // people moved its chat.
+    const here = there?.in ?? line.in;
+    const placed = here === ctx.in ? ctx : ctx.as({ ...ctx.actor!, in: here });
+    const ran = await runTool(placed, input.tool, input.input, {
       agent: line.client,
       thread,
       trigger: step,

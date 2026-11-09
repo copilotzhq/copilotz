@@ -86,13 +86,17 @@ async function session(
   },
 ): Promise<Who | undefined> {
   const as = actor ? { actor } : {};
-  // The runtime as this person: everything commands do is theirs.
+  // Where they work (`/space` moves them), which their calls say (`in`).
+  let here = space;
+  const placed = (): Actor => ({ ...actor!, ...(here ? { in: here } : {}) });
+  // The runtime as this person: everything commands do is theirs, where they work.
   const runtime: Runtime = actor
     ? {
       ...options.runtime,
-      call: (action, input, o = {}) => options.runtime.call(action, input, { ...o, actor }),
+      call: (action, input, o = {}) =>
+        options.runtime.call(action, input, { ...o, actor: placed() }),
       query: (name, params, o = {}) => options.runtime.query(name, params, { ...o, actor }),
-      emit: (type, data, o = {}) => options.runtime.emit(type, data, { ...o, actor }),
+      emit: (type, data, o = {}) => options.runtime.emit(type, data, { ...o, actor: placed() }),
     }
     : options.runtime;
   const stdout = options.stdout ?? process.stdout;
@@ -102,7 +106,10 @@ async function session(
     me,
     runtime,
     state: () => runtime.query<ShellState>("shell.mine", { person: me }),
-    set: async (fields) => void await runtime.call("shell.set", { person: me, ...fields }),
+    set: async (fields) => {
+      if (typeof fields.space === "string") here = fields.space;
+      await runtime.call("shell.set", { person: me, ...fields });
+    },
     show: async (kind, item, hints) => {
       for (const one of Array.isArray(item) ? item : [item]) {
         await runtime.call("shell.print", {
@@ -182,6 +189,7 @@ async function session(
   // Where they work: kept, unless they've moved elsewhere already.
   const state = await runtime.query<ShellState>("shell.mine", { person: me });
   if (space && !state.space) await runtime.call("shell.set", { person: me, space });
+  here = state.space ?? space;
   const screen = runtime.observe("terminal.shell", { person: me }, {
     ...as,
     viewer: { name: me, kind: "person" },

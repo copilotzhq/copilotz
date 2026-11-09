@@ -61,7 +61,7 @@ export const arriveAction = defineAction({
       const line = siteOf(ctx, visit.line)!;
       const left = (visit.issued + line.days * DAY - now) / DAY;
       return {
-        actor: { kind: "contact", id: contact, web: line.name, from: visit.tags },
+        actor: { kind: "contact", id: contact, web: line.name, from: visit.tags, in: line.in },
         secret,
         days: left,
       };

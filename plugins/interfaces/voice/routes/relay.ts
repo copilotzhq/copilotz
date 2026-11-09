@@ -297,7 +297,8 @@ export function talk(
     playedBy = Date.now();
     clearTimeout(timers.turn);
     timers.turn = setTimeout(tooLong, limits.turn * 1000);
-    const contact: Actor = { kind: "contact", id: on.contact };
+    // The caller, in its line's space.
+    const contact: Actor = { kind: "contact", id: on.contact, in: line.in };
     latest = { message: "", at: new Date().toISOString() };
     try {
       const { message } = await runtime.call<{ message: string }>("chat.send", {
@@ -430,19 +431,19 @@ export function talk(
     });
     started.then((on) => {
       if (over) return;
-      const contact: Actor = { kind: "contact", id: on.contact };
+      const contact: Actor = { kind: "contact", id: on.contact, in: line.in };
       // Twilio says the greeting itself.
       if (on.greeting) done.add(on.greeting);
       const { thread, since } = on;
-      // Read as the line's agent working for the caller: only what both may read, and of that,
-      // what a contact would (answers, not steps), the View keeps to.
+      // Read as the line's agent working for the caller, there: only what both may read, and of
+      // that, what a contact would (answers, not steps), the View keeps to.
       seeing = runtime.observe<Saying>("voice_call", {
         _id: call._id,
         thread,
         contact: on.contact,
         since,
       }, {
-        actor: { kind: "agent", id: on.agent, for: contact },
+        actor: { kind: "agent", id: on.agent, for: contact, in: line.in },
         viewer: { kind: "contact", name: `contact:${on.contact}` },
       });
       seeing.subscribe(saying);

@@ -4,7 +4,7 @@
  * comes back to the chat it came from, and the agent carries on from it.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
+import { type Actor, createRuntime, definePlugin, type Event } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
 import { chat, type Message, tool } from "../chat/mod.ts";
@@ -129,11 +129,28 @@ test("work handed to another space opens a chat its members see, and its answer 
     });
     const pm = await team(rt, "Project", "lead");
     await join(rt, pm, bob, "editor", ana);
+    const events: Event[] = [];
+    rt.subscribe((item) => item.kind === "event" && events.push(item.event));
     const { thread } = await rt.call<{ thread: string }>("chat.send", {
       text: `hand ${pm}: please whoami`,
       in: personal,
     }, { actor: ana });
     await rt.idle();
+
+    // On the record: the hand-over, a grant of its own, by North for Ana from where it works;
+    // what it wrote is in the other space.
+    const opened = events.find((e) =>
+      e.type === "thread.created" && (e.data.doc as { in?: string }).in === pm
+    )!;
+    const by = opened.actor!;
+    const via = by.via as Actor;
+    assertEquals([by.kind, by.id, by.in], ["system", "chat.hand-over", personal]);
+    assertEquals([via.kind, via.id, (via.for as Actor).id, via.in], [
+      "agent",
+      "north",
+      "ana",
+      personal,
+    ]);
 
     // A chat in that space, with whoever answers there, working for Ana, as itself.
     const chats = await rt.query<{ _id: string; title?: string; in: string }[]>("thread.recent", {
@@ -143,7 +160,7 @@ test("work handed to another space opens a chat its members see, and its answer 
     const there = await history(rt, chats[0]._id, bob);
     const asked = there.find((m) => m.from === "north")!;
     assertEquals([asked.text, asked.to, asked.via?.kind], ["please whoami", ["lead"], "delegated"]);
-    assertEquals([seen.lead?.kind, seen.lead?.id, (seen.lead?.for as Actor)?.id, seen.lead?.at], [
+    assertEquals([seen.lead?.kind, seen.lead?.id, (seen.lead?.for as Actor)?.id, seen.lead?.in], [
       "agent",
       "lead",
       "ana",
@@ -180,7 +197,7 @@ test("a chain of hand-overs works, each for the same person", async () => {
       in: personal,
     }, { actor: ana });
     await rt.idle();
-    assertEquals([seen.dev?.id, (seen.dev?.for as Actor)?.id, seen.dev?.at], ["dev", "ana", dev]);
+    assertEquals([seen.dev?.id, (seen.dev?.for as Actor)?.id, seen.dev?.in], ["dev", "ana", dev]);
     const here = await history(rt, thread);
     assert(here.some((m) => m.from === "lead" && m.via?.kind === "delegated"));
     assertEquals(here.at(-1)!.from, "north");
@@ -307,7 +324,7 @@ test("the same agent in another space is other work, and reads it as input", asy
     await rt.idle();
 
     // It worked there, as itself, for Ana, with what it was handed as input.
-    assertEquals([seen.north?.id, (seen.north?.for as Actor)?.id, seen.north?.at], [
+    assertEquals([seen.north?.id, (seen.north?.for as Actor)?.id, seen.north?.in], [
       "north",
       "ana",
       solo,
@@ -354,7 +371,7 @@ test("whoever the space says answers takes it, even the agent that sent it", asy
     });
     await rt.call("chat.send", { text: `hand ${space}: whoami`, in: personal }, { actor: ana });
     await rt.idle();
-    assertEquals(seen.north?.at, space);
+    assertEquals(seen.north?.in, space);
     assertEquals(seen.lead, undefined);
 
     // The context says so; and naming another still reaches them.
@@ -363,6 +380,6 @@ test("whoever the space says answers takes it, even the agent that sent it", asy
       actor: ana,
     });
     await rt.idle();
-    assertEquals(seen.lead?.at, space);
+    assertEquals(seen.lead?.in, space);
   });
 });

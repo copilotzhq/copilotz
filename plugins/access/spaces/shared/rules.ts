@@ -111,8 +111,11 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
     return { $or: [{ space: { $in: where(reach, "manage") } }, { member: memberKey(actor) }] };
   }
   if (collection === "space" || collection === "member") {
-    // Who's where isn't content: an agent reads it as far as the person it works for reaches.
-    const by = access === "read" && actor.for ? await reachOf(actor.for as Actor, ctx) : reach;
+    // Who's where isn't content: an agent reads it as far as the person it works for reaches, and
+    // anyone reads it wherever their work is (`in` narrows what's in spaces, not who's in them).
+    const by = access !== "read"
+      ? reach
+      : await reachOf(actor.for ? actor.for as Actor : { ...actor, in: undefined }, ctx);
     const spaces = where(by, access === "read" ? "read" : "manage");
     if (collection === "space") return { _id: { $in: spaces } };
     // Where a contact is a member, asked by its own key: it finds its chats so. (Anyone else

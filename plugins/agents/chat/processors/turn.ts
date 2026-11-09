@@ -2,6 +2,7 @@
 import {
   type Context,
   type Event,
+  grant,
   principalOf,
   type ProcessorDef,
 } from "../../../../runtime/mod.ts";
@@ -326,8 +327,10 @@ const turn = async (ctx: Context, event: Event) => {
       ...sends.filter((s) => s.message!.expectReply !== false).map((s) => s.message!._id),
       ...questions.map((q) => q._id),
     ];
-    // Handing work to another space is trusted code's: the agent doesn't work there.
-    const writer = sends.some((s) => s.across) ? ctx.as() : ctx;
+    // Handing work to another space is trusted code's, a grant of its own: the agent doesn't work
+    // there. On the record, it's the hand-over, for whom the agent works, from where it works; what
+    // it writes there says where (`in`), and the turn there works there, for the same person.
+    const writer = sends.some((s) => s.across) ? ctx.as(grant("chat.hand-over")) : ctx;
     const deliveries = await Promise.all(
       sends.map((s) => delivery(writer, s.message!, s.message!.subthread)),
     );

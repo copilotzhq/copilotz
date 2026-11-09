@@ -324,6 +324,326 @@
           "description": "What the runtime and its plugins measure, the OpenTelemetry way: the meter, OTLP and Prometheus, and every metric recorded, copilotz.transaction.duration included."
         }
       ]
+    },
+    {
+      "title": "Reference",
+      "items": [
+        {
+          "title": "Reference",
+          "slug": "reference",
+          "description": "What you import and what you declare, exactly. The entry points, the primitives a plugin is made of, who calls what for whom and where, the events the log keeps, schedules, and a page for every plugin."
+        },
+        {
+          "title": "Plugins",
+          "slug": "reference/plugins",
+          "description": "Every plugin Copilotz exports: what it keeps, who may call what, where it shows, what it needs."
+        },
+        {
+          "title": "api",
+          "slug": "reference/plugins/api",
+          "description": "Developer keys: what code calls the app with, as someone, over the runtime's REST API (`/api/`) or its socket (see runtime/api.ts and runtime/client.ts): `Authorization: Bearer <key>`."
+        },
+        {
+          "title": "api-web",
+          "slug": "reference/plugins/api-web",
+          "description": "The developer API's web front end, for the browser."
+        },
+        {
+          "title": "boards",
+          "slug": "reference/plugins/boards",
+          "description": "Boards: kanban boards in a space, for people and agents, the team's operational source of truth: one real outcome per card, with its owner, what done looks like, an honest column, and any blocker."
+        },
+        {
+          "title": "boards-web",
+          "slug": "reference/plugins/boards-web",
+          "description": "Boards' web front end, for the browser."
+        },
+        {
+          "title": "chat",
+          "slug": "reference/plugins/chat",
+          "description": "Chat: threads where people and agents talk."
+        },
+        {
+          "title": "chat-terminal",
+          "slug": "reference/plugins/chat-terminal",
+          "description": "Chat's terminal front end, for the process that draws the terminal: how a conversation, a message, its author and a reply being written look there, and chat's commands."
+        },
+        {
+          "title": "chat-web",
+          "slug": "reference/plugins/chat-web",
+          "description": "Chat's web front end, for the browser: home (a new chat), how a chat looks with what agents are writing right now, a message and its files, where you type, and at the top of the sidebar, starting one."
+        },
+        {
+          "title": "contacts",
+          "slug": "reference/plugins/contacts",
+          "description": "Contacts: people outside the org who talk to its agents, such as a WhatsApp customer writing to a business's number."
+        },
+        {
+          "title": "contacts-web",
+          "slug": "reference/plugins/contacts-web",
+          "description": "Contacts on the web: their names, wherever a page shows who wrote (spaces' `names` resource, for the browser): \"Ana\", not \"someone\"."
+        },
+        {
+          "title": "credits",
+          "slug": "reference/plugins/credits",
+          "description": "Credits: what an org has to spend, and the check that stops it at its limit."
+        },
+        {
+          "title": "credits-web",
+          "slug": "reference/plugins/credits-web",
+          "description": "Credits' web front end: the org page's Billing section (the web shell's `orgSettings`)."
+        },
+        {
+          "title": "dev-sign-in",
+          "slug": "reference/plugins/dev-sign-in",
+          "description": "Dev sign-in: people sign in by the name they type, from this machine only, for trying an app out (with the identity plugin)."
+        },
+        {
+          "title": "directory",
+          "slug": "reference/plugins/directory",
+          "description": "The directory plugin, and what each org's runtime gets of it: `directory.member(dir, org)` (see shared/member.ts), with the org as `org.info` says it."
+        },
+        {
+          "title": "directory-member",
+          "slug": "reference/plugins/directory-member",
+          "description": "`member(dir, org)`: the plugin each org's runtime gets from the directory (`dir`, its runtime) that serves it, beside the app's own plugins."
+        },
+        {
+          "title": "documents",
+          "slug": "reference/plugins/documents",
+          "description": "Documents: shared Markdown in a space, for people and agents — the canonical artifact of the thing being made, and its working memory."
+        },
+        {
+          "title": "documents-web",
+          "slug": "reference/plugins/documents-web",
+          "description": "Documents' web front end, for the browser."
+        },
+        {
+          "title": "email",
+          "slug": "reference/plugins/email",
+          "description": "Email: sending it, and signing in with it."
+        },
+        {
+          "title": "email-sign-in",
+          "slug": "reference/plugins/email-sign-in",
+          "description": "Email: sending it, and signing in with it."
+        },
+        {
+          "title": "google-sign-in",
+          "slug": "reference/plugins/google-sign-in",
+          "description": "Google sign-in: `google.sign-in` turns a Google ID token into a person and a session (with the identity plugin)."
+        },
+        {
+          "title": "history",
+          "slug": "reference/plugins/history",
+          "description": "Summarizes each thread's older messages as they leave its tail, and sends agents the outline and the recent messages whole (it replaces chat's `history` View)."
+        },
+        {
+          "title": "identity",
+          "slug": "reference/plugins/identity",
+          "description": "Identity: who people are and what proves it."
+        },
+        {
+          "title": "maintenance",
+          "slug": "reference/plugins/maintenance",
+          "description": "Maintenance: HTTP endpoints for an app's operators, for when they can't reach its database themselves (a client's network that keeps their database user out)."
+        },
+        {
+          "title": "mcp",
+          "slug": "reference/plugins/mcp",
+          "description": "MCP: models outside the app (ChatGPT, Claude, any MCP client) call the app's tools."
+        },
+        {
+          "title": "memory",
+          "slug": "reference/plugins/memory",
+          "description": "Memory: what agents know across conversations."
+        },
+        {
+          "title": "memory-extraction",
+          "slug": "reference/plugins/memory-extraction",
+          "description": "Memories that arrive on their own: the extractor model reads every few messages."
+        },
+        {
+          "title": "memory-terminal",
+          "slug": "reference/plugins/memory-terminal",
+          "description": "Memory's terminal front end: how a memory looks there, and `/memories`."
+        },
+        {
+          "title": "memory-web",
+          "slug": "reference/plugins/memory-web",
+          "description": "Memory's web front end, for the browser: what agents remember (the `memories` View, as the terminal's `/memories` lists it: ★ for core memories, always in mind)."
+        },
+        {
+          "title": "models",
+          "slug": "reference/plugins/models",
+          "description": "Models: talking to models, one way for every kind."
+        },
+        {
+          "title": "openapi",
+          "slug": "reference/plugins/openapi",
+          "description": "OpenAPI: an HTTP API's operations as Actions and as tools for agents, made from its OpenAPI 3 spec."
+        },
+        {
+          "title": "routines",
+          "slug": "reference/plugins/routines",
+          "description": "Routines: a message sent to an agent on a schedule, in a space (\"every weekday at 9:00, ask @researcher for the news on X\")."
+        },
+        {
+          "title": "routines-web",
+          "slug": "reference/plugins/routines-web",
+          "description": "Routines' web front end, for the browser."
+        },
+        {
+          "title": "skills",
+          "slug": "reference/plugins/skills",
+          "description": "Skills: know-how an agent reads only when it needs it."
+        },
+        {
+          "title": "skills-web",
+          "slug": "reference/plugins/skills-web",
+          "description": "Skills' web front end, for the browser."
+        },
+        {
+          "title": "spaces",
+          "slug": "reference/plugins/spaces",
+          "description": "Spaces: who reaches what, for every collection that shares its documents."
+        },
+        {
+          "title": "spaces-terminal",
+          "slug": "reference/plugins/spaces-terminal",
+          "description": "Access's terminal front end: how spaces look there, and `/spaces`, `/space`, `/work`, `/invite`, `/invitations`, `/accept`, `/decline`, and requests to join."
+        },
+        {
+          "title": "spaces-web",
+          "slug": "reference/plugins/spaces-web",
+          "description": "Spaces' web front end."
+        },
+        {
+          "title": "stripe",
+          "slug": "reference/plugins/stripe",
+          "description": "Stripe: one way an org pays, for `credits`, which never asks it anything."
+        },
+        {
+          "title": "stripe-webhook",
+          "slug": "reference/plugins/stripe-webhook",
+          "description": "Stripe's webhook, `POST /__stripe/<seller>`, where the app's accounts send their events (see routes/webhook.ts)."
+        },
+        {
+          "title": "team",
+          "slug": "reference/plugins/team",
+          "description": "Team: agents people make, beside those the app declares in code."
+        },
+        {
+          "title": "team-web",
+          "slug": "reference/plugins/team-web",
+          "description": "Team's web front end, for the browser: making and changing agents."
+        },
+        {
+          "title": "terminal",
+          "slug": "reference/plugins/terminal",
+          "description": "The terminal plugin: a command line's data, built from the same primitives as everything else, which every process has."
+        },
+        {
+          "title": "terminal-shell",
+          "slug": "reference/plugins/terminal-shell",
+          "description": "The terminal's front end, for the process that draws: the `shell` View (what's open, the scrollback, where you type), where you type's prompt, and the View any kind without its own falls back to."
+        },
+        {
+          "title": "tiers",
+          "slug": "reference/plugins/tiers",
+          "description": "Tiers: which models the app's agents think with, chosen by what the work needs rather than model by model."
+        },
+        {
+          "title": "tiers-web",
+          "slug": "reference/plugins/tiers-web",
+          "description": "Tiers' web front end, for the browser."
+        },
+        {
+          "title": "usage",
+          "slug": "reference/plugins/usage",
+          "description": "Usage: what was used, what it cost, and what to charge for it, as a ledger."
+        },
+        {
+          "title": "usage-terminal",
+          "slug": "reference/plugins/usage-terminal",
+          "description": "Usage's terminal front end: how totals look there, and `/usage`."
+        },
+        {
+          "title": "usage-web",
+          "slug": "reference/plugins/usage-web",
+          "description": "Usage's web front end: where the app serves many orgs, the org page's Usage section (the web shell's `orgSettings`)."
+        },
+        {
+          "title": "voice",
+          "slug": "reference/plugins/voice",
+          "description": "Voice: people call the app's phone number and talk to its agents, through Twilio's ConversationRelay (Twilio hears them and speaks for the agent; the app gets and sends text)."
+        },
+        {
+          "title": "web-lines",
+          "slug": "reference/plugins/web-lines",
+          "description": "Web sites (`resources.web.<name>`, declared in the app's settings, with the app's secret, `links`)."
+        },
+        {
+          "title": "web-page",
+          "slug": "reference/plugins/web-page",
+          "description": "The page: the app's code, its files, its manifest and worker, and the page itself."
+        },
+        {
+          "title": "web-shell",
+          "slug": "reference/plugins/web-shell",
+          "description": "The web shell: the web's root View, which the web host observes for the address it's at (`hosts/web`)."
+        },
+        {
+          "title": "webTools",
+          "slug": "reference/plugins/webTools",
+          "description": "Web tools: agents that search the web and read a page, without a computer."
+        },
+        {
+          "title": "whatsapp",
+          "slug": "reference/plugins/whatsapp",
+          "description": "WhatsApp: people talk to their agents from WhatsApp, through Meta's Cloud API."
+        },
+        {
+          "title": "whatsapp-web",
+          "slug": "reference/plugins/whatsapp-web",
+          "description": "WhatsApp's web front end, for the browser."
+        }
+      ]
+    },
+    {
+      "title": "Architecture",
+      "items": [
+        {
+          "title": "Architecture",
+          "slug": "architecture",
+          "description": "How Copilotz works underneath: one contract for every caller, one owner that writes, and the promises the runtime keeps whichever way a call comes in."
+        },
+        {
+          "title": "The owner",
+          "slug": "architecture/the-owner",
+          "description": "One owner holds the store and commits every write; executors run plugin code; the rules apply at every op; and 2 caches keep reads cheap without ever going stale."
+        },
+        {
+          "title": "Events, Processors and schedules",
+          "slug": "architecture/events",
+          "description": "Every change is an event written in the commit that made it; Processors react to events from durable cursors; and time is one more caller of Actions."
+        },
+        {
+          "title": "Views",
+          "slug": "architecture/views",
+          "description": "A View turns data into what one place shows; the runtime renders it once or observes it, running again only the parts a commit changed, for whoever is looking, where they are."
+        },
+        {
+          "title": "The ways in",
+          "slug": "architecture/transports",
+          "description": "Every way into an app says who the caller is and where they work, then reaches the same Actions, Views and rules: the browser's socket, the REST API and its client, MCP, and the other doors."
+        },
+        {
+          "title": "Topology and runtimes",
+          "slug": "architecture/topology",
+          "description": "Where the owner, its executors, plugins' workers and browsers run, what a turn costs, many runtimes behind one address, and the JavaScript runtimes Copilotz runs on."
+        }
+      ]
     }
   ]
 }

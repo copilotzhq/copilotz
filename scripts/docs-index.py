@@ -10,7 +10,7 @@
 # never one. A section the list below doesn't name stops the script, so no page goes missing.
 import glob, json, os, re, sys
 
-SECTIONS = ["Getting Started", "Build Compass", "Guides", "Operations"]
+SECTIONS = ["Getting Started", "Build Compass", "Guides", "Operations", "Reference", "Architecture"]
 # The tracks whose chapters are listed on their index page, and shown as "Ch <n>: <title>".
 TRACKS = {"Getting Started": "getting-started", "Build Compass": "build-compass"}
 # Names that keep their capital at the start of a chapter's line in the list.

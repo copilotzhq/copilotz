@@ -7,7 +7,13 @@
  * the agent working for them (it's shared with them on its own, as their
  * chats are), and no one else's.
  */
-import { type Actor, defineCollection, type Infer, principalOf } from "../../../../runtime/mod.ts";
+import {
+  type Actor,
+  defineCollection,
+  type Infer,
+  people,
+  principalOf,
+} from "../../../../runtime/mod.ts";
 import { namesOf } from "../../spaces/contract.ts";
 
 const contactSchema = {
@@ -35,7 +41,7 @@ export const contact = defineCollection({
      * the spaces' `names` resource asks here for ids that start so.
      */
     names: {
-      allow: (actor) => actor.kind === "person" || actor.kind === "agent",
+      allow: people,
       run: async (contacts, params: { ids?: unknown }) => {
         const given = Array.isArray(params?.ids) ? params.ids : [];
         const ids = [

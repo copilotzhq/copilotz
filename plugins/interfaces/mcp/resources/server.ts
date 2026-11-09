@@ -61,15 +61,7 @@ import type { Widgets } from "../../../../hosts/web/mod.ts";
 import { addressKey, callIdOf, threadOf, userOf } from "../shared/keys.ts";
 import { appOnly, PATH, READ, type Server, serverOf } from "../shared/settings.ts";
 import { busy, hold, isBusy } from "./running.ts";
-import {
-  called,
-  conversationHere,
-  listed,
-  mirrored,
-  offeredOf,
-  type Said,
-  usable,
-} from "./tools.ts";
+import { called, conversationHere, listed, mirrored, offeredOf, type Said } from "./tools.ts";
 import {
   appCalled,
   CALL,
@@ -342,7 +334,7 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
         if (params.cursor !== undefined) {
           return failed(status(PARAMS), rpc, PARAMS, "No such cursor");
         }
-        const names = await offeredOf(c.runtime, c.line, usable(c.runtime, c.line));
+        const names = await offeredOf(c.runtime, c.line, Object.keys(c.line.tools));
         const template = await templateOf(c.line, c.widgets, c.origin);
         return ok({
           tools: listed(c.line, c.resources, names, c.runtime.describe().actions, template?.uri),
@@ -383,7 +375,7 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
         // What only the widgets call exists only where they do.
         if (
           typeof tool !== "string" || (theirs && !template) ||
-          (tool !== READ && !usable(c.runtime, c.line).includes(tool))
+          (tool !== READ && !Object.hasOwn(c.line.tools, tool))
         ) {
           return failed(status(PARAMS), rpc, PARAMS, `Unknown tool: ${String(tool).slice(0, 128)}`);
         }

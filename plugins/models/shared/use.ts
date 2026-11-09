@@ -29,13 +29,16 @@ export type ModelUse = {
 
 /**
  * What a listener reaches: the resources, Actions to ask, where a job records
- * (missing in plain calls), and who the call was made as.
+ * (missing in plain calls), who the call was made as, and, in a job, the
+ * system to act as (`as`: a grant), for bookkeeping that isn't the actor's to
+ * ask for (none in a read).
  */
 export type UseContext = Pick<Context, "resources"> & {
   actor?: Actor;
   call?: ReadContext["call"];
   record?: Context["record"];
   metrics?: Context["metrics"];
+  as?: Context["as"];
 };
 
 /** A model call about to be made: which port, which model, and whom it's for. */
@@ -89,14 +92,11 @@ export async function used(ctx: UseContext, use: ModelUse): Promise<void> {
   }));
 }
 
-/** What asking before a call reaches: a `UseContext`, and the system to ask as (none in a read). */
-type Asking = UseContext & { as?: Context["as"] };
-
 /**
  * A model with its org's own key for its provider, which goes before the
  * app's. A provider only an org's key reaches, without one, is told so.
  */
-export async function keyed(ctx: Asking, m: Resolved): Promise<Resolved> {
+export async function keyed(ctx: UseContext, m: Resolved): Promise<Resolved> {
   const keys = ctx.resources.modelKeys as ModelKeys | undefined;
   if (!keys || !keyable(m.provider)) return m;
   // From a read there's no system to ask as, and so no key: only the app's.
@@ -121,7 +121,7 @@ export async function keyed(ctx: Asking, m: Resolved): Promise<Resolved> {
  * trying again won't help.
  */
 export async function mayRun(
-  ctx: Asking,
+  ctx: UseContext,
   m: Resolved,
   meter: string,
   tags?: Record<string, string>,

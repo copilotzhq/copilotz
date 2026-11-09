@@ -143,15 +143,15 @@ export function aboutOf(given: unknown, scope: Scope, ctx: ToolContext, trigger?
   return scope.people.length === 1 ? `person:${scope.people[0]}` : "everyone";
 }
 
-/** Who is in the conversation, for a tool: from the thread's latest shared messages. */
+/**
+ * Who is in the conversation, for a tool: from the thread's latest shared
+ * messages; and where it is (`ctx.in`), where what's learned stays.
+ */
 export async function scopeFor(ctx: ToolContext): Promise<Scope> {
-  const [recent, thread] = await Promise.all([
-    ctx.db.collection<Message>("message").find(
-      { thread: ctx.thread, private: { $ne: true } },
-      { sort: { at: -1 }, limit: 50 },
-    ),
-    ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread }),
-  ]);
+  const recent = await ctx.db.collection<Message>("message").find(
+    { thread: ctx.thread, private: { $ne: true } },
+    { sort: { at: -1 }, limit: 50 },
+  );
   const agents = await agentsNamed(ctx, recent.flatMap((m) => [m.from, ...m.to]));
   const people = peopleIn(recent, agents);
   return {
@@ -159,6 +159,6 @@ export async function scopeFor(ctx: ToolContext): Promise<Scope> {
     thread: ctx.thread,
     people,
     names: await namesFor(ctx, people),
-    ...(thread?.in ? { in: thread.in } : {}),
+    ...(ctx.in ? { in: ctx.in } : {}),
   };
 }

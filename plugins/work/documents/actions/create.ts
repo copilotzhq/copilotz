@@ -3,7 +3,7 @@
  * rules say), its first version: a title ("Untitled" until they name it)
  * and, if they start from something, its text.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { keyOf, LIMIT, TITLE, UNTITLED } from "../shared/text.ts";
 import { create, plainly } from "../shared/write.ts";
 
@@ -19,7 +19,7 @@ export const createAction = defineAction({
     required: ["in"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const title = input.title?.trim() || UNTITLED;
     return await ctx.transaction((tx) =>

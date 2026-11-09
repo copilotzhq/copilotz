@@ -1,5 +1,5 @@
 /** `space.personal`: your Personal space (one per person), made the first time it's asked for. */
-import { defineAction, people } from "../../../../runtime/mod.ts";
+import { defineAction, forbidden, people, personOf } from "../../../../runtime/mod.ts";
 import { PERSONAL } from "../shared/personal.ts";
 import { seat } from "../shared/agents.ts";
 import { memberKey } from "../shared/reach.ts";
@@ -10,9 +10,11 @@ export const personalAction = defineAction({
   input: { type: "object", additionalProperties: false },
   allow: people,
   run: async (ctx) => {
-    const id = `personal:${ctx.actor!.id}`;
-    // Its person's, even asked by a key of theirs.
-    const who = memberKey({ kind: "person", id: ctx.actor!.id });
+    // Its person's, even asked by a key of theirs, or their agent.
+    const person = personOf(ctx.actor);
+    if (!person) throw forbidden("A Personal space is a person's.");
+    const id = `personal:${person}`;
+    const who = memberKey({ kind: "person", id: person });
     const system = ctx.as();
     if (!await system.db.collection("space").findOne({ _id: id })) {
       await system.transaction(async (tx) => {
@@ -27,13 +29,13 @@ export const personalAction = defineAction({
           _id: id,
           name: "Personal",
           kind: PERSONAL,
-          owner: ctx.actor!.id,
+          owner: person,
           ...await seat(tx, ctx, id),
         });
       });
     }
     // Pages ask this as they open: how they show is kept (from before profiles, too).
-    await keepProfileOf(ctx, ctx.actor!.id);
+    await keepProfileOf(ctx, person);
     return { space: id };
   },
 });

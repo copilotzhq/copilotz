@@ -1,4 +1,119 @@
-## Unreleased
+## 1.0.0-rc.32 — 2026-11-09
+
+**Upgrading.** `people` now lets in an agent working for a person, and an Action's `allow` is asked
+of code acting for someone too (a tool's `ctx.call`, a Processor's, another Action's), not only of
+outside callers. Go through your Actions:
+
+- Say `inPerson` for what only the person decides (consent, keys, who's in a space, money,
+  publishing): it never lets in an agent, a key or a routine's work. Say `people` for the rest. An
+  `allow` written as `(actor) => actor.kind === "person"` keeps your own tools' agents out: say
+  `people`.
+- An Action whose run takes `ctx.actor.id` for a person's id, or checks something only when
+  `ctx.actor.kind === "person"`, reads `personOf(ctx.actor)` instead (an agent's id isn't its
+  person's).
+- A tool calling an Action its agent's person couldn't is refused (`forbidden`): let them in, or go
+  beyond on purpose with a named grant, `ctx.as(grant("<why>"))`.
+- An agent's work reaches only where it is (its chat's space) and what that space draws on: a tool
+  that read across its person's spaces from a shared chat finds less. Have the space draw on the
+  other (`member.set` of a space), work from the person's Personal space, or hand the work over.
+- Tools read where they are from `ctx.in`, not their chat's `in`.
+- A developer key no longer calls what's now `inPerson` (`space.create`, `member.*`, `invitation.*`,
+  `share`, `chat.move`, `agent.create`…), even listed in its scope.
+- An MCP line listing a tool without its `tool:<name>` View doesn't start: add the View.
+
+```ts
+import { grant, inPerson, people, personOf } from "@copilotz/copilotz";
+
+"invoice.send": defineAction({ allow: inPerson, … }),       // only the person decides
+"invoice.draft": defineAction({ allow: people, run: (ctx) => draft(personOf(ctx.actor)) }),
+// a tool, in its chat's space; going beyond its person on purpose, on the record:
+run: async (input, ctx) => await ctx.as(grant("availability")).call("slots.all", { in: ctx.in }),
+```
+
+- **Who, for whom, where** ([design](design/work.md)). All work runs as an actor, for whom it's done
+  (`for`) and where (`in`, an opaque id: a space, to the access plugin), which the runtime carries
+  as it carries the actor: into nested calls, tools, the Processors a call's events wake, its timers
+  and the Views observed for it; every event records it; `guard` and `allow` see it; contexts say it
+  (`ctx.in`, on Actions, Processors, tools, queries and Views). `ctx.as` stays where the work is
+  unless told where. Every way in says it: a browser's calls (its page's space;
+  `client.call(…,
+  { in })`), the terminal (where its person works), a key (its space), WhatsApp,
+  voice, web and MCP lines (theirs), routines (theirs), a chat's turn (its chat's).
+- **An agent's work reaches only where it is.** Reach for work done for someone is the person's
+  reach ∩ the agent's memberships ∩ its space and what that draws on, at the role it draws on it
+  with; in the person's own Personal space, all they reach. North working for Ana in a shared space
+  reached every space of Ana's (the core agents are members of all of them), and only labels kept
+  Finance from Launch's members: now it reads Launch and its sources. A person acting themselves
+  isn't narrowed; a tool or routine acting as them is. An agent actor's `at` is `in`.
+- **`allow` is asked wherever someone acts:** from outside as before, and from code acting for an
+  actor (`ctx.call`, a timer, a read's unrecorded calls); for an agent, of whom it works for too
+  (`allows`). Actions without one stay internal. Going beyond is a named grant (`grant`), on the
+  record as the grant, `via` whose work it was, and counted (`copilotz.elevated.ops`).
+- **Copilotz's own Actions say which:** `inPerson` for sessions, connected accounts, who's in a
+  space or the org, `share`, `chat.move`, `memory.move`, `agent.create/update/delete`,
+  `computer.code`, `computer.work` and `app.publish`, beside those that were; `people` for the rest,
+  boards and documents included (their agents' own tools couldn't call them). `chat.send` and
+  `chat.attach` let in people and contacts writing as themselves, never an agent. Code that took the
+  actor's id for its person's (`space.personal`, invitations, accounts, desks, cloud computers,
+  usage) asks `personOf`; an environment changes only by its space's managers, whoever asks.
+- **Reach is kept in the owner** per who, for whom and where, until a commit changes a membership or
+  a space it read (`ReadContext.kept`: what rules work out from reads, let go exactly when what they
+  read changes; `cache.kept`, 1,000). An agent's turn works out its reach once, not on every op.
+  With narrowing, an agent's work for a person in one of 1,000 spaces (`examples/work-bench.ts`)
+  takes a fifth of the time: a turn's 13 ops, 4.4 ms median (21.5 before), 5.3 ms at p95 (22.9); the
+  person's own, 4.7 ms (11.7). Nothing measured got slower.
+- **Tools know where they are** (`ctx.in`): documents, boards, computers, cloud computers, apps,
+  memory, skills, routines and an API's files no longer read their chat to find its space. What's
+  learned stays where it's learned.
+- **Handing work to another space** writes under its grant (`chat.hand-over`, and `chat.hand-back`
+  for the answer), for the same person, in the new space; its check is the person's, anywhere.
+- **mcp:** a listed tool without its `tool:<name>` View stops the app from starting (it was left
+  out, said once in the log). A line's contact, its widgets and its tools work in its space.
+- **Model-use listeners** get `as` in a job; a web line's budget prices its visitors' use as its
+  grant (`web.budget`).
+- **Startup checks** see the Views' names (`merged.views`).
+
+## 1.0.0-rc.31 — 2026-11-08
+
+- **A write the rules refuse in a transaction no longer holds up every write.** Refused before it
+  reached its transaction, it left the transaction open, holding the store's writer: the Action's
+  failure and every other write in the app waited 30 s, until it was rolled back as idle. Now it
+  ends its transaction at once, as an op that fails in one does: it rolls back, and its later ops
+  fail ("The transaction is closed."), even when the error is caught. Code that caught a failed op
+  and wrote on used to commit what came after it. A transaction with no op for 5 s (30 s before)
+  rolls back, and `copilotz.transaction.duration` measures how long each one held the writer.
+- **Boards** no longer read a new card back inside its transaction: one round trip less per card.
+
+## 1.0.0-rc.30 — 2026-11-08
+
+**Upgrading.** `chat.send` no longer takes a file's content. Upload each file first with
+`chat.attach` (`{ name, type, data, voice? }`, as `files` took it), and send what it answers by id:
+
+```ts
+const { id } = await runtime.call("chat.attach", {
+  name: "plan.pdf",
+  type: "application/pdf",
+  data,
+});
+await runtime.call("chat.send", { text: "The plan", files: [{ id }] });
+```
+
+Call both as the same sender: a draft is sent only by its uploader's message. An API key that sends
+files needs `chat.attach` in its scope: the "Chat" preset has it now, and a key made with it before
+is made again (or given `chat.attach`).
+
+- **Files of about 10 MB go, ten to a message.** `chat.send` carried every file's content, on record
+  with what it wrote too, in one call, and a call carries at most 16 MiB to the owner: a file past
+  about 6 MB was refused (`payload_too_large`). Now each file is its own call (`chat.attach`,
+  unrecorded), kept as its sender's draft (`draft`, in no conversation: nobody else reads it, a rule
+  of chat's own), and the message names it: its commit makes it the conversation's, under the rules
+  as the message is. The web composer uploads each file as it's chosen (reading, uploading, its
+  size, or why it couldn't), so sending is instant; a voice message uploads once, also when it's
+  sent again without a transcript. WhatsApp uploads what a phone sends the same way.
+- **Drafts are bounded:** a sender holds 20 at most (the oldest go past them), and `chat.prune`
+  (chat's schedule, every hour) drops those not sent within a day. A contact's upload is let in by
+  the `contactSend` hooks as a message to nobody carrying it: a web line's file rules apply as it's
+  uploaded, and it counts against the visitor's limits.
 
 ## 1.0.0-rc.29 — 2026-11-07
 

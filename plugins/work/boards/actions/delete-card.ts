@@ -2,7 +2,7 @@
  * `card.delete`: removes a card from its board, by an editor of its space
  * (the rules say).
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { readOnly, said } from "../shared/errors.ts";
 import { cardOf } from "../shared/load.ts";
 
@@ -14,7 +14,7 @@ export const deleteCardAction = defineAction({
     required: ["card"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await cardOf(ctx, input.card);
     const gone = await ctx.db.collection("card").deleteOne({ _id: found._id }).catch(said());

@@ -9,7 +9,7 @@ import { plan } from "./aggregate.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import { type Clock, type Scheduled, systemClock, TIMERS } from "./schedules.ts";
 import { createTimers } from "./timers.ts";
-import { callIdOf, inScope } from "./actor.ts";
+import { allows, callIdOf, inScope } from "./actor.ts";
 import { createApi } from "./api.ts";
 import type { IndexSpec, ScalarType } from "./store.ts";
 import { createHypervisor, type Hypervisor, type HypervisorOptions } from "@oxian/oxian-js";
@@ -17,6 +17,7 @@ import type {
   Guard,
   Plugins,
   ProcessorDef,
+  ReadContext,
   RenderOptions,
   Resources,
   ViewDef,
@@ -25,7 +26,14 @@ import type {
 import { type Blobs, hydrate, isBlobRef, offload, refuseBlobKeys } from "./blobs.ts";
 import { createCache } from "./cache.ts";
 import { createMaintenance, type Maintenance } from "./maintain.ts";
-import { createObservers, type Observation, type ObserveOptions } from "./observe.ts";
+import {
+  createObservers,
+  type Dep,
+  depOf,
+  type Observation,
+  type ObserveOptions,
+} from "./observe.ts";
+import { createKept } from "./kept.ts";
 import { reading, startup } from "./reads.ts";
 import {
   BROWSER,
@@ -273,8 +281,12 @@ export type Owner = {
 
 const SYSTEM = "sys.";
 const WRITES = ["insert", "update", "replace", "delete"];
-/** A held transaction with no op for this long is rolled back. */
-const HOLD_IDLE_MS = 30_000;
+/**
+ * A held transaction with no op for this long is rolled back (its executor
+ * stuck, or gone unnoticed). Short: it holds the store's writer, the app's
+ * only one, and every other write waits for it.
+ */
+const HOLD_IDLE_MS = 5_000;
 /** An idle owner saves Processor cursors this long after their last advance. */
 const CURSOR_FLUSH_MS = 200;
 const DAY = 86_400_000;
@@ -337,8 +349,11 @@ export async function createOwner(
     blobs?: Blobs;
     /** Strings over this many bytes become blobs (default 16 KiB). */
     blobThreshold?: number;
-    /** The read cache's size, or false to read the store every time. */
-    cache?: { documents?: number; queries?: number } | false;
+    /**
+     * The read cache's size, and how many answers the rules work out it keeps
+     * (`kept`: see kept.ts), or false to read the store every time.
+     */
+    cache?: { documents?: number; queries?: number; kept?: number } | false;
     /** Where the owner records its metrics (jobs, ops, commits, events, lag, cache). */
     metrics?: Metrics;
     /** What plugin code (`ctx.fetch`) calls outside services with (default: the platform's). */
@@ -382,6 +397,10 @@ export async function createOwner(
       unit: "ms",
       description: "Commits to the store",
     }),
+    transactions: metrics.histogram("copilotz.transaction.duration", {
+      unit: "ms",
+      description: "Transactions executors held open: how long each held the store's writer",
+    }),
     events: metrics.counter("copilotz.events", { description: "Events committed" }),
     lag: metrics.gauge("copilotz.processor.lag", {
       unit: "{event}",
@@ -390,6 +409,10 @@ export async function createOwner(
     executors: metrics.gauge("copilotz.executors", { description: "Executors connected" }),
     cache: metrics.counter("copilotz.cache.reads", {
       description: "Reads the owner's cache answered (hit) or passed to the store (miss)",
+    }),
+    elevated: metrics.counter("copilotz.elevated.ops", {
+      description:
+        "Ops trusted code made beyond the actor it acted for, as the system or a named grant",
     }),
   };
   // A Processor filter the reference can't evaluate fails here, not when an event arrives.
@@ -578,6 +601,8 @@ export async function createOwner(
       if (!fleeting.has(collection)) cache?.apply(collection, changes);
       if (collection === TIMERS) timers.changed(changes);
     }
+    // What the rules worked out from what changed goes, before anything reacting reads it.
+    kept?.changed(seen);
     for (const [name, seq] of saving) if (unsaved.get(name) === seq) unsaved.delete(name);
     for (const event of events) {
       measure.events.add(1, { type: event.type });
@@ -719,6 +744,9 @@ export async function createOwner(
     ...options.cache,
     onRead: (hit) => measure.cache.add(1, { result: hit ? "hit" : "miss" }),
   });
+  const kept = options.cache === false
+    ? undefined
+    : createKept(options.cache?.kept !== undefined ? { max: options.cache.kept } : {});
   const cached = (op: ReadOp): Promise<unknown> => {
     switch (op.op) {
       case "find":
@@ -796,7 +824,10 @@ export async function createOwner(
   ) => {
     const def = declared(type, data);
     const { actor } = options;
-    if (actor && actor.kind !== "system" && (!def.allow?.(actor) || actor.scope !== undefined)) {
+    if (
+      actor && actor.kind !== "system" &&
+      (!def.allow || !allows(def.allow, actor, undefined) || actor.scope !== undefined)
+    ) {
       throw forbidden(`${actor.kind} ${actor.id} may not emit "${type}".`);
     }
     await write(
@@ -811,19 +842,8 @@ export async function createOwner(
     views: registry.views,
     reads: (track, actor) => {
       // An actor's Views see what they reach, and what the rules read to
-      // know it (memberships) is what they read too: they follow its changes.
-      const rules = actor
-        ? reading(
-          registry,
-          (op) => {
-            track(op);
-            return answer(store, op as ReadOp);
-          },
-          () => crypto.randomUUID(),
-          metrics,
-          outside,
-        )
-        : ruleReads;
+      // know it (memberships) is what they read too, kept or not: they follow its changes.
+      const rules = actor ? ruling(track) : ruleReads;
       return reading(
         registry,
         async (op) => {
@@ -947,14 +967,27 @@ export async function createOwner(
     return values;
   };
 
-  // Who reaches what: the plugins' rules, as filters (see `Guard`). They read freely.
-  const ruleReads = reading(
-    registry,
-    (op) => answer(store, op as ReadOp),
-    (_, doc) => typeof doc._id === "string" ? doc._id : crypto.randomUUID(),
-    metrics,
-    outside,
-  );
+  // Who reaches what: the plugins' rules, as filters (see `Guard`). They read freely, and what
+  // they work out over and over (reach) is kept until a commit changes what it read (kept.ts).
+  // `track` hears each read, kept or not: an observed View follows what its rules read.
+  function ruling(track?: (dep: Dep) => void): ReadContext {
+    return reading(
+      registry,
+      (op) => {
+        if (track) {
+          const dep = depOf(op);
+          if (dep) track(dep);
+        }
+        return answer(store, op as ReadOp);
+      },
+      (_, doc) => typeof doc._id === "string" ? doc._id : crypto.randomUUID(),
+      metrics,
+      outside,
+      undefined,
+      (key, work, ctx) => kept ? kept.get(key, (heard) => work(ruling(heard)), track) : work(ctx),
+    );
+  }
+  const ruleReads = ruling();
   /** An actor's rule on a collection, for an operation with this filter; none: unrestricted. */
   const rule = async (
     actor: Actor,
@@ -1015,7 +1048,7 @@ export async function createOwner(
   ) => {
     if (!actor || actor.kind === "system") return true;
     const def = registry.collections[collection]?.queries?.[query];
-    return typeof def === "object" && def.allow(actor, params) &&
+    return typeof def === "object" && allows(def.allow, actor, params) &&
       inScope(actor, "query", `${collection}.${query}`);
   };
   const both = (filter: Filter | undefined, rule: Filter): Filter =>
@@ -1240,6 +1273,25 @@ export async function createOwner(
   type Held = { job: string; send(request: HeldRequest): Promise<unknown> };
   const held = new Map<string, Held>();
   const heldBy = new Map<string, Set<string>>();
+  /**
+   * A running job's transactions that ended under it, not by its own `end`: an
+   * op in one failed or was refused, or it sat idle. They stay closed to it,
+   * so its next op can't begin another by the same id, without what was
+   * rolled back.
+   */
+  const endedBy = new Map<string, Set<string>>();
+  const ended = (job: string, id: string) => {
+    if (!pinned.has(job)) return;
+    if (!endedBy.has(job)) endedBy.set(job, new Set());
+    endedBy.get(job)!.add(id);
+  };
+  /** Ends a job's transaction under it, a request in it refused: rolled back, closed to it. */
+  const refuse = async (job: string, id: string) => {
+    ended(job, id);
+    const transaction = held.get(id);
+    if (transaction?.job !== job) return;
+    await transaction.send({ tx: id, ops: [], end: "abort" }).catch(() => {});
+  };
 
   const hold = (id: string, job: string): Held => {
     type Message = {
@@ -1249,6 +1301,7 @@ export async function createOwner(
     const inbox: Message[] = [];
     let wake: (() => void) | undefined;
     let closed = false;
+    let idle = false;
     let ending: { reply: PromiseWithResolvers<unknown>; value: unknown } | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const send: Held["send"] = (request) => {
@@ -1256,10 +1309,10 @@ export async function createOwner(
       clearTimeout(timer);
       if (request.end) closed = true;
       else {
-        timer = setTimeout(
-          () => send({ tx: id, ops: [], end: "abort" }).catch(() => {}),
-          HOLD_IDLE_MS,
-        );
+        timer = setTimeout(() => {
+          idle = true;
+          send({ tx: id, ops: [], end: "abort" }).catch(() => {});
+        }, HOLD_IDLE_MS);
       }
       const reply = Promise.withResolvers<unknown>();
       inbox.push({ request, reply });
@@ -1271,8 +1324,14 @@ export async function createOwner(
       return inbox.shift()!;
     };
     const later: Later = { ops: [] };
+    // How long it held the store's writer: from when the store began it to its commit or rollback.
+    let began: number | undefined;
+    const measured = (outcome: "commit" | "abort" | "idle" | "error") => {
+      if (began !== undefined) measure.transactions.record(performance.now() - began, { outcome });
+    };
     commit(
       async (tx, seen) => {
+        began = performance.now();
         for (;;) {
           const { request, reply } = await next();
           let value: unknown;
@@ -1307,9 +1366,15 @@ export async function createOwner(
       true,
       later,
     ).then(
-      () => ending!.reply.resolve(ending!.value),
+      () => {
+        measured("commit");
+        ending!.reply.resolve(ending!.value);
+      },
       (error) => {
         closed = true;
+        const outcome = error !== aborted ? "error" : idle ? "idle" : "abort";
+        measured(outcome);
+        if (outcome !== "abort") ended(job, id);
         for (const { reply } of inbox.splice(0)) reply.reject(error);
         if (error === aborted) ending?.reply.resolve(undefined);
         else ending?.reply.reject(error);
@@ -1352,11 +1417,24 @@ export async function createOwner(
       }
       return disconnect(first.actor);
     }
-    const lowered = request.ops.map((op) => timers.lower(op, request.actor));
-    lowered.forEach(known);
-    const guarded = await guard(lowered, request.actor);
-    const { keep } = guarded;
-    const ops = await label(guarded.ops, request.actor, job);
+    // Trusted code going on beyond whom it acted for: as the system, or a grant, on the record.
+    if (request.actor?.kind === "system" && request.actor.via) {
+      measure.elevated.add(request.ops.length, { grant: request.actor.id });
+    }
+    let ops: StoreOp[], keep: Map<string, Filter>;
+    try {
+      const lowered = request.ops.map((op) => timers.lower(op, request.actor));
+      lowered.forEach(known);
+      const guarded = await guard(lowered, request.actor);
+      keep = guarded.keep;
+      ops = await label(guarded.ops, request.actor, job);
+    } catch (error) {
+      // Refused before it reaches its transaction (by the rules, say), a request ends it, as a
+      // failed op in it does: else the transaction would keep the store's writer, and every
+      // other write would wait, until it sat idle long enough.
+      if ("tx" in request) await refuse(job, request.tx);
+      throw error;
+    }
     const saw = (op: ReadOp, value: unknown) => notice(job, request.actor, op, value);
     if (!("tx" in request)) {
       const [first, ...rest] = ops;
@@ -1377,6 +1455,7 @@ export async function createOwner(
     if (transaction && transaction.job !== job) throw invalid("Not this job's transaction.");
     if (!transaction) {
       if (request.end === "abort") return Promise.resolve(undefined);
+      if (endedBy.get(job)?.has(request.tx)) throw invalid("The transaction is closed.");
       transaction = hold(request.tx, job);
     }
     return transaction.send({ ...request, ops, keep, saw });
@@ -1722,6 +1801,7 @@ export async function createOwner(
         held.get(id)?.send({ tx: id, ops: [], end: "abort" }).catch(() => {});
       }
       heldBy.delete(handle.operationId);
+      endedBy.delete(handle.operationId);
       labelled.delete(handle.operationId);
       pinned.delete(handle.operationId);
     }
@@ -2029,6 +2109,7 @@ export async function createOwner(
       // SQL changed what nothing follows: forget what came from documents, then tell.
       wrote: (events) => {
         cache?.clear();
+        kept?.clear();
         committed([], events);
         observers.stale();
         void timers.wake();
@@ -2065,8 +2146,9 @@ export async function createOwner(
       const def = registry.actions[action];
       if (!def) return Promise.reject(invalid(`Unknown action "${action}"`));
       const { actor } = options;
-      // An actor calls only what lets them, and what their scope lists (a key's).
-      if (actor && actor.kind !== "system" && !def.allow?.(actor, input)) {
+      // An actor calls only what lets them (an agent, for whom it works for too), and what their
+      // scope lists (a key's).
+      if (actor && actor.kind !== "system" && (!def.allow || !allows(def.allow, actor, input))) {
         return Promise.reject(forbidden(`${actor.kind} ${actor.id} may not call "${action}".`));
       }
       if (actor && actor.kind !== "system" && !inScope(actor, "call", action)) {

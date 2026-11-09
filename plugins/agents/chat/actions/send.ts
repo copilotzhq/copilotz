@@ -9,7 +9,10 @@
  * to, else the thread's agents: never whom it names, though it too may say
  * something to nobody (`to: []`). It replies only to a message of the same conversation that its
  * sender reads. Only agents answering in
- * its space answer there: naming one that doesn't fails (`not_here`). Audio
+ * its space answer there: naming one that doesn't fails (`not_here`). Its
+ * files are the sender's own uploads (`chat.attach`), named by id: a call
+ * carries no file's content, so a message of ten large ones goes as quickly
+ * as one of words. They join its conversation in its own commit. Audio
  * sent with it is transcribed first (what agents read): if that fails,
  * nothing is sent and the call fails with `transcription_failed`;
  * `transcribe: false` sends it as it is. `via` says what sent it for the
@@ -28,15 +31,9 @@
  * false`).
  * People's messages go as ever.
  */
-import {
-  type Actor,
-  type Context,
-  defineAction,
-  failure,
-  peopleOrContacts,
-} from "../../../../runtime/mod.ts";
+import { type Actor, type Context, defineAction, failure } from "../../../../runtime/mod.ts";
 import type { Transcript } from "../../../models/contract.ts";
-import { BASE64, FILE_DATA, sizeOf } from "../collections/file.ts";
+import { drafter, type File, MOST_FILES, themselves } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import {
@@ -48,6 +45,7 @@ import {
   type Roster,
   rosterOf,
 } from "../shared/agents.ts";
+import { letIn } from "../shared/contact-send.ts";
 import { delivery } from "../shared/delivery.ts";
 import { movedBy, startedWith } from "../shared/summary.ts";
 import { settingsOf } from "../shared/types.ts";
@@ -67,43 +65,6 @@ export const MEDIA_TYPE_LENGTH = 127;
  */
 export const MEDIA_TYPE =
   /^[A-Za-z0-9][\w!#$&^.+-]*\/[A-Za-z0-9][\w!#$&^.+-]*(?: *; *[\w!#$&^.+-]+=(?:[\w!#$&^.+-]+|"[ !#-\[\]-~]*"))* *$/;
-
-/**
- * A `contactSend` resource: the Action that lets a contact's message in,
- * asked as the contact before anything's sent, with where it goes (`thread`,
- * when it names one), what it carries (each file's name, media type and
- * size), and `to: []` when it goes to nobody (no agent answers it: no turn
- * to pay for). It refuses it (a limit), or answers where it goes when it names no
- * chat (`thread`: the contact's own) and `transcribe: false` when its audio
- * goes untranscribed.
- */
-export type ContactSend = { action: string };
-
-/** What the app's `contactSend` hooks say of a contact's message, each in turn. */
-async function letIn(
-  ctx: Pick<Context, "resources" | "call">,
-  asked: {
-    thread?: string;
-    files: { name: string; type?: string; size: number }[];
-    to?: [];
-  },
-): Promise<{ thread?: string; transcribe?: false }> {
-  const hooks = Object.values((ctx.resources.contactSend ?? {}) as Record<string, ContactSend>);
-  let said: { thread?: string; transcribe?: false } = {};
-  for (const hook of hooks) {
-    const answer = await ctx.call<{ thread?: unknown; transcribe?: unknown } | null>(hook.action, {
-      ...(asked.thread ? { thread: asked.thread } : {}),
-      files: asked.files,
-      ...(asked.to ? { to: asked.to } : {}),
-    });
-    said = {
-      ...said,
-      ...(typeof answer?.thread === "string" && !said.thread ? { thread: answer.thread } : {}),
-      ...(answer?.transcribe === false ? { transcribe: false as const } : {}),
-    };
-  }
-  return said;
-}
 
 /**
  * The `@word`s in `text` that name someone who can be addressed: an agent
@@ -154,33 +115,14 @@ export const sendAction = defineAction({
       replyTo: { type: "string" },
       /** Where a new thread goes (a space); an existing one stays where it is. */
       in: { type: "string" },
-      /** Files to attach: each its name, media type and content (base64). */
+      /** Files it sends: the sender's own uploads (`chat.attach`), by id, in the order shown. */
       files: {
         type: "array",
-        maxItems: 10,
+        maxItems: MOST_FILES,
         items: {
           type: "object",
-          properties: {
-            name: { type: "string", minLength: 1 },
-            // A media type, as the model is told it: `type/subtype`, with parameters at most.
-            type: { type: "string", maxLength: MEDIA_TYPE_LENGTH, pattern: MEDIA_TYPE.source },
-            data: { type: "string", maxLength: FILE_DATA, pattern: BASE64 },
-            /** A recording's length (ms) and its loudness over time, for its player. */
-            voice: {
-              type: "object",
-              properties: {
-                duration: { type: "number", minimum: 0 },
-                peaks: {
-                  type: "array",
-                  maxItems: 64,
-                  items: { type: "number", minimum: 0, maximum: 1 },
-                },
-              },
-              required: ["duration"],
-              additionalProperties: false,
-            },
-          },
-          required: ["name", "data"],
+          properties: { id: { type: "string", minLength: 1 } },
+          required: ["id"],
           additionalProperties: false,
         },
       },
@@ -225,8 +167,8 @@ export const sendAction = defineAction({
     },
     additionalProperties: false,
   },
-  // People and contacts write as themselves: their own messages.
-  allow: peopleOrContacts,
+  // People and contacts write as themselves: their own messages, never an agent its person's.
+  allow: themselves,
   run: async (ctx, input) => {
     const said = input.text ?? input.tap?.title ?? "";
     if (!said.trim() && !input.files?.length) {
@@ -234,6 +176,25 @@ export const sendAction = defineAction({
         code: "invalid",
       });
     }
+    // Its files: the sender's drafts, which only the system reads before they're sent.
+    const by = drafter(ctx.actor)!;
+    const drafts = ctx.as().db.collection<File>("file");
+    const ids = (input.files ?? []).map((f) => f.id);
+    if (new Set(ids).size < ids.length) {
+      throw failure("invalid", "A message sends each file once.", { public: true });
+    }
+    const mine = ids.length
+      ? await drafts.find({ _id: { $in: ids }, draft: by }, { projection: { data: 0 } })
+      : [];
+    const unsent = ids.find((id) => !mine.some((f) => f._id === id));
+    if (unsent) {
+      throw failure(
+        "not_found",
+        `No file "${unsent}" of yours to send: upload it first (chat.attach).`,
+        { public: true },
+      );
+    }
+    const attached = ids.map((id) => mine.find((f) => f._id === id)!);
     // A contact talks with whom its chat is with: what it says names nobody else, and the app
     // lets it in first (its line's limits, the files it takes, its own chat).
     const contact = ctx.actor?.kind === "contact";
@@ -247,11 +208,7 @@ export const sendAction = defineAction({
     const allowed = contact
       ? await letIn(ctx, {
         ...(input.thread ? { thread: input.thread } : {}),
-        files: (input.files ?? []).map((f) => ({
-          name: f.name,
-          ...(f.type ? { type: f.type } : {}),
-          size: sizeOf(f.data),
-        })),
+        files: attached.map((f) => ({ name: f.name, type: f.type, size: f.size })),
         ...(nobody ? { to: [] as [] } : {}),
       })
       : {};
@@ -290,14 +247,15 @@ export const sendAction = defineAction({
     const chosen = to.filter((name) => agents[name]);
     const joined = existing ? members : chosen.length ? chosen : members;
     const id = crypto.randomUUID();
-    // What audio says, before anything is sent: agents read it.
-    const transcripts = await Promise.all((input.files ?? []).map(async (f) => {
+    // What audio says, before anything is sent: agents read it. Each recording read on its own.
+    const transcripts = await Promise.all(attached.map(async (f) => {
       if (input.transcribe === false || allowed.transcribe === false) return undefined;
-      if (!f.type?.startsWith("audio/")) return undefined;
+      if (!f.type.startsWith("audio/")) return undefined;
+      const audio = (await drafts.findOne({ _id: f._id, draft: by }))?.data ?? "";
       try {
         const heard = await ctx.call<Transcript>("transcription.transcribe", {
           model: settingsOf(ctx).transcriber ?? "transcribe",
-          audio: f.data,
+          audio,
           type: f.type,
           filename: f.name,
           tags: { thread: threadId, purpose: "transcription", ...(where ? { space: where } : {}) },
@@ -310,29 +268,36 @@ export const sendAction = defineAction({
         );
       }
     }));
-    const files = (input.files ?? []).map((f, i) => ({
-      _id: `${id}:file.${i}`,
-      name: f.name,
-      type: f.type ?? "application/octet-stream",
-      size: sizeOf(f.data),
-      data: f.data,
-      ...(f.voice ? { voice: f.voice } : {}),
-      ...(transcripts[i] !== undefined ? { transcript: transcripts[i] } : {}),
-      thread: threadId,
-      ...(where ? { in: where } : {}),
-      at: now(),
-    }));
+    // The drafts go where the message goes, with what their audio says, drafts still: nobody
+    // else reads them yet. Only the system reaches a draft in no conversation; once there, its
+    // sender's commit below sends it, under the rules as the message is.
+    // One an earlier send placed and didn't send loses what that send gave it.
+    for (const [i, f] of attached.entries()) {
+      const heard = transcripts[i];
+      const unset = {
+        ...(where ? {} : { in: "" }),
+        ...(heard === undefined ? { transcript: "" } : {}),
+      };
+      await drafts.updateOne({ _id: f._id, draft: by }, {
+        $set: {
+          thread: threadId,
+          ...(where ? { in: where } : {}),
+          ...(heard !== undefined ? { transcript: heard } : {}),
+        },
+        ...(Object.keys(unset).length ? { $unset: unset } : {}),
+      });
+    }
     const sent = {
       _id: id,
-      ...(files.length
+      ...(attached.length
         ? {
-          files: files.map((f) => ({
+          files: attached.map((f, i) => ({
             id: f._id,
             name: f.name,
             type: f.type,
             size: f.size,
             ...(f.voice ? { voice: f.voice } : {}),
-            ...(f.transcript !== undefined ? { transcript: f.transcript } : {}),
+            ...(transcripts[i] !== undefined ? { transcript: transcripts[i] } : {}),
           })),
         }
         : {}),
@@ -363,7 +328,17 @@ export const sendAction = defineAction({
           at: sent.at,
         });
       }
-      if (files.length) await tx.db.collection("file").insertMany(files);
+      if (ids.length) {
+        const { matchedCount } = await tx.db.collection("file").updateMany(
+          { _id: { $in: ids }, draft: by },
+          { $unset: { draft: "" } },
+        );
+        if (matchedCount < ids.length) {
+          throw failure("not_found", "A file of this message is gone: upload it again.", {
+            public: true,
+          });
+        }
+      }
       await tx.db.collection("message").insertOne(sent);
       await deliver(tx);
     });

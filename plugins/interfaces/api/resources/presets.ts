@@ -10,9 +10,10 @@ import type { ApiPreset } from "../contract.ts";
 export const presets: Record<string, ApiPreset> = {
   chat: {
     title: "Chat",
-    description: "Send messages to the agents here, stop a reply, and read the conversations.",
+    description:
+      "Send messages (and files) to the agents here, stop a reply, and read the conversations.",
     scope: {
-      call: ["chat.send", "chat.stop"],
+      call: ["chat.send", "chat.attach", "chat.stop"],
       query: ["thread.recent", "message.conversation"],
     },
     order: 10,

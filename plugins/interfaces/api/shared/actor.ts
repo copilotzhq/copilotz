@@ -14,7 +14,7 @@
  */
 import type { Actor, Resources, Scope, Who } from "../../../../runtime/mod.ts";
 
-export type KeyActor = { kind: "person"; id: string; key: string; scope: Scope };
+export type KeyActor = { kind: "person"; id: string; key: string; scope: Scope; in: string };
 
 /** A key's last use is noted at most this often. */
 const USED_EVERY_MS = 60_000;

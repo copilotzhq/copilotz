@@ -5,7 +5,7 @@
  * in keeps their role) or turns it down. Its managers take one back the same
  * way. Sending answers the same whether the address has an account or not.
  */
-import { type Context, defineAction, people } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, inPerson } from "../../../../runtime/mod.ts";
 import type { Invitation } from "../collections/invitation.ts";
 import { joinable } from "../shared/personal.ts";
 import { may, must } from "../shared/can.ts";
@@ -46,7 +46,7 @@ export const sendInvitationAction = defineAction({
     required: ["space", "email"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const email = input.email.trim().toLowerCase();
     if (!EMAIL.test(email)) throw refused("invalid", "That isn't an email address.");
@@ -95,7 +95,7 @@ export const acceptInvitationAction = defineAction({
     required: ["invitation"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const found = await answerable(ctx, input.invitation);
     if (!found.mine) throw refused("forbidden", "No such invitation for you.");
@@ -122,7 +122,7 @@ export const declineInvitationAction = defineAction({
     required: ["invitation"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const found = await answerable(ctx, input.invitation);
     await ctx.as().db.collection("invitation").deleteOne({ _id: found._id });

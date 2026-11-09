@@ -43,7 +43,6 @@ async function on(
   // A computer that sleeps (a cloud computer) is woken first.
   const where = await whereAwake(
     ctx,
-    ctx.thread,
     `agent:${ctx.agent}`,
     typeof computer === "string" && computer ? computer : undefined,
   );
@@ -343,12 +342,10 @@ tools.preview = tool({
     },
   },
   run: async (input, ctx) => {
-    // As the agent reads it: a conversation its person doesn't reach has no space for it.
-    const thread = await ctx.db.collection<{ in?: string }>("thread").findOne({ _id: ctx.thread });
-    if (!thread?.in) return "This conversation isn't in a space, so there's no computer here.";
+    if (!ctx.in) return "This conversation isn't in a space, so there's no computer here.";
     try {
       const { url } = await ctx.call<{ url: string }>("computer.preview", {
-        in: thread.in,
+        in: ctx.in,
         ...(input.job ? { job: input.job } : {}),
         ...(input.port ? { port: input.port } : {}),
         ...(input.computer ? { computer: input.computer } : {}),

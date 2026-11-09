@@ -2,6 +2,7 @@
 import {
   type Context,
   type Event,
+  grant,
   principalOf,
   type ProcessorDef,
 } from "../../../../runtime/mod.ts";
@@ -41,18 +42,16 @@ import {
   type Turn,
 } from "../shared/types.ts";
 
-/** Runs a turn: started by `turn.requested`, or resumed when its wait is over. */
 /**
  * A turn someone started (a person, or a contact in its chat) acts as its
- * agent, for them: with the access plugin, it reaches only what both reach
- * (an agent is a member of spaces, like a person). Without anyone, it runs
- * as the system.
+ * agent, for them, where its conversation is (`in`, the thread's space):
+ * with the access plugin, it reaches only what both reach there (an agent is
+ * a member of spaces, like a person), and its tools know where they are
+ * (`ctx.in`). Without anyone, it runs as the system.
  */
-const asAgent = (ctx: Context, agent: string, at?: string): Context => {
+const asAgent = (ctx: Context, agent: string, where?: string): Context => {
   const principal = principalOf(ctx.actor);
-  return principal
-    ? ctx.as({ kind: "agent", id: agent, for: principal, ...(at ? { at } : {}) })
-    : ctx;
+  return principal ? ctx.as({ kind: "agent", id: agent, for: principal, in: where }) : ctx;
 };
 
 /** The space a thread is in, where its turns work: what they write elsewhere needs a person. */
@@ -86,8 +85,8 @@ export const turnProcessor: ProcessorDef = {
   run: async (ctx, event) => {
     const { agent, thread } = turnOf(event);
     // Only someone's turn needs to know where it works.
-    const at = principalOf(ctx.actor) ? await spaceOf(ctx, thread) : undefined;
-    return await turn(asAgent(ctx, agent, at), event);
+    const where = principalOf(ctx.actor) ? await spaceOf(ctx, thread) : undefined;
+    return await turn(asAgent(ctx, agent, where), event);
   },
 };
 
@@ -328,8 +327,10 @@ const turn = async (ctx: Context, event: Event) => {
       ...sends.filter((s) => s.message!.expectReply !== false).map((s) => s.message!._id),
       ...questions.map((q) => q._id),
     ];
-    // Handing work to another space is trusted code's: the agent doesn't work there.
-    const writer = sends.some((s) => s.across) ? ctx.as() : ctx;
+    // Handing work to another space is trusted code's, a grant of its own: the agent doesn't work
+    // there. On the record, it's the hand-over, for whom the agent works, from where it works; what
+    // it writes there says where (`in`), and the turn there works there, for the same person.
+    const writer = sends.some((s) => s.across) ? ctx.as(grant("chat.hand-over")) : ctx;
     const deliveries = await Promise.all(
       sends.map((s) => delivery(writer, s.message!, s.message!.subthread)),
     );

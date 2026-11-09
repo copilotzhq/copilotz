@@ -1,10 +1,10 @@
 /**
  * The line's tools, as the MCP route answers about them:
  *
- * - **Which:** those the line lists that have a `tool:<name>` View (`llm`):
- *   what a model outside reads of a tool is the app's choice, never its
- *   output as it is, so a tool without one isn't offered (and the route
- *   says so once, in the log). One whose `offer` says no to a contact isn't
+ * - **Which:** those the line lists, each with its `tool:<name>` View
+ *   (`llm`): what a model outside reads of a tool is the app's choice, never
+ *   its output as it is, so a line listing one without it stops the app
+ *   from starting (see `problemOf`). One whose `offer` says no to a contact isn't
  *   listed (see views/offered.ts), and isn't run. Listing asks offers for a
  *   stand-in contact in no chat yet, the same for everyone (kept a minute):
  *   an offer that depends on the chat is listed unless it says no to the
@@ -69,34 +69,6 @@ type Schema = { type?: unknown; properties?: Record<string, unknown>; [key: stri
 
 const toolsOf = (resources: Resources) => (resources.tools ?? {}) as Record<string, Tool>;
 
-/** Lines already told about in the log, by runtime: once each. */
-const told = new WeakMap<object, Set<string>>();
-
-/**
- * The tools the line lists that have their `tool:<name>` View (an Action offered to the widgets
- * needs none: its result goes to the widget alone); the others, said once in the log.
- */
-export function usable(
-  runtime: Pick<Runtime, "describe">,
-  line: Server,
-): string[] {
-  const { views } = runtime.describe();
-  const names = Object.keys(line.tools);
-  const shown = names.filter((name) =>
-    line.tools[name].action !== undefined || views.includes(`tool:${name}`)
-  );
-  const left = names.filter((name) => !shown.includes(name));
-  const seen = told.get(runtime) ?? new Set<string>();
-  told.set(runtime, seen);
-  if (left.length && !seen.has(line.name)) {
-    seen.add(line.name);
-    console.error(
-      `mcp.${line.name}: not offered, without a tool:<name> View: ${left.join(", ")}`,
-    );
-  }
-  return shown;
-}
-
 /**
  * Of `names`, those a contact is offered, before any conversation (a
  * stand-in contact, in no chat yet): only tools whose `offer` is a function
@@ -139,6 +111,7 @@ async function standIn(
     id: "c-mcp-listing",
     mcp: line.name,
     client: line.client,
+    in: line.in,
   };
   const item: Offering = {
     tools: names,
@@ -422,7 +395,11 @@ export async function called(
         ...(user ? { user } : {}),
         ...(counted ? { address: counted } : {}),
       },
-      { actor: { kind: "contact", id: contact, mcp: line.name, client: line.client }, id },
+      // In its line's space, where its conversations are.
+      {
+        actor: { kind: "contact", id: contact, mcp: line.name, client: line.client, in: line.in },
+        id,
+      },
     );
     // A call still running past `stop` is stopped: one that changes things runs again as itself
     // when it's asked again (its receipt isn't done).

@@ -19,7 +19,8 @@
  *   marked read (with "typing…") and becomes `chat.send`, as them, in
  *   their WhatsApp conversation, in the space they chose (their Personal
  *   space unless they said otherwise). Photos, documents, video and voice
- *   notes come as its files (chat transcribes audio as it's sent). A reply
+ *   notes come as its files, each uploaded as them first (`chat.attach`;
+ *   chat transcribes audio as it's sent). A reply
  *   quoting an agent's message, or one sent while an agent waits on their
  *   answer there, answers it. `/new`, `/space` and `/help` are commands
  *   (see shared/commands.ts).
@@ -201,10 +202,11 @@ async function customer(
   const contact = await contactOf(ctx, on, received, phone, event);
   await markRead(on.graph, message.id, true).catch(() => {});
   const lines = CUSTOMERS[on.number.language ?? "en"];
-  const brings = await broughtBy(ctx, on, from, message, lines);
+  // The customer, in its number's space.
+  const as = ctx.as({ kind: "contact", id: contact, in: on.number.in });
+  const brings = await broughtBy(ctx, on, from, message, as, lines);
   if (!brings) return;
 
-  const as = ctx.as({ kind: "contact", id: contact });
   // Answered once they've been quiet a moment: a burst of short messages gets one answer.
   const quiet = Math.round((on.number.quiet ?? QUIET) * 1000);
   const sending = (thread: string) =>
@@ -329,32 +331,42 @@ async function chatFor(
 
 /**
  * What a message brings to say: its words, and its file (fetched from
- * Meta). Undefined when there's nothing to pass on, once the phone was told
- * why (a file too large, a kind of message agents can't read).
+ * Meta, and uploaded to send as whoever says it, `as`). Undefined when
+ * there's nothing to pass on, once the phone was told why (a file too
+ * large, a kind of message agents can't read).
  */
 async function broughtBy(
   ctx: Context,
   on: Connected,
   from: string,
   message: WaMessage,
+  as: Context,
   lines?: Lines,
 ) {
   const words = wordsOf(message).trim();
   const media = mediaOf(message);
-  const files: { name: string; type: string; data: string }[] = [];
+  const files: { id: string }[] = [];
   if (media) {
     try {
       const got = await fetchMedia(on.graph, media.id, MAX_FILE_BYTES);
-      files.push({ name: media.name, type: got.type || media.type, data: got.data });
+      const { id } = await as.call<{ id: string }>("chat.attach", {
+        name: media.name,
+        type: got.type || media.type,
+        data: got.data,
+      });
+      files.push({ id });
     } catch (error) {
-      if ((error as { code?: string }).code !== "too_large") throw error;
-      await say(
-        ctx,
-        on,
-        from,
-        lines?.large ?? `${(error as Error).message} Send a smaller one, or a link to it.`,
-      );
-      return undefined;
+      if ((error as { code?: string }).code === "too_large") {
+        await say(
+          ctx,
+          on,
+          from,
+          lines?.large ?? `${(error as Error).message} Send a smaller one, or a link to it.`,
+        );
+        return undefined;
+      }
+      if (await told(ctx, on, from, error, lines)) return undefined;
+      throw error;
     }
   }
   if (!words && !files.length) {
@@ -433,12 +445,14 @@ async function linked(
   await markRead(on.graph, message.id, true).catch(() => {});
   const command = message.type === "text" ? commandOf(wordsOf(message).trim()) : undefined;
   if (command) return await commanded(ctx, on, from, phone, command);
-  const brings = await broughtBy(ctx, on, from, message);
+  // They write where their messages go: the space they chose, else their Personal space.
+  const space = await spaceOf(ctx, person, phone.space);
+  const there = ctx.as({ ...person, in: space._id });
+  const brings = await broughtBy(ctx, on, from, message, there);
   if (!brings) return;
 
-  const space = await spaceOf(ctx, person, phone.space);
   const sending = (thread: string) =>
-    written(ctx, on, as, person.id, thread, message, { ...brings, in: space._id });
+    written(ctx, on, there, person.id, thread, message, { ...brings, in: space._id });
   try {
     await sending(phone.thread ?? await opened(ctx, on, phone, event));
   } catch (error) {

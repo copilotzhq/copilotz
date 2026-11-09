@@ -34,7 +34,8 @@ async function handOver(
   const fail = (why: string) => ({ output: `Not sent: ${why}` });
   const principal = principalOf(ctx.actor);
   if (!principal) return fail("you aren't working for anyone who could send this there.");
-  const as = ctx.as(principal);
+  // Whether its person may write there, wherever they are: the agent itself works here only.
+  const as = ctx.as({ ...principal, in: undefined });
   const can = await as.call<{ can: boolean }>("space.can", { space, verb: "write" })
     .then((r) => r.can, () => false);
   if (!can) return fail(`the person you work for can't write in the space "${space}".`);

@@ -3,7 +3,7 @@
  * verified (the system calls it: a sign-in plugin's Action, never a person);
  * `session.end` ends the one a person shows.
  */
-import { defineAction, people } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson } from "../../../../runtime/mod.ts";
 import { hash, secret } from "../collections/credential.ts";
 
 /** How long a session lasts unless its sign-in says (30 days). */
@@ -46,7 +46,7 @@ export const endSession = defineAction({
     required: ["secret"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const ended = await ctx.as().db.collection("credential").deleteOne({
       _id: await hash(input.secret),

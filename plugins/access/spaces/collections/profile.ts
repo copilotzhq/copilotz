@@ -6,7 +6,7 @@
  * this is what's shown in its place, in pages and in agents' prompts. Only
  * the system writes it.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 import { namesOf, peopleIn } from "../shared/names.ts";
 
 const profileSchema = {
@@ -29,7 +29,7 @@ export const profile = defineCollection({
      * profiles only through it.
      */
     names: {
-      allow: (actor) => actor.kind === "person" || actor.kind === "agent",
+      allow: people,
       run: async (profiles, params: { ids?: unknown }) => {
         const given = Array.isArray(params?.ids) ? params.ids : [];
         const ids = peopleIn(given.filter((id): id is string => typeof id === "string"))
@@ -40,7 +40,7 @@ export const profile = defineCollection({
     },
     /** Pictures by id (`{ ids }`), for faces beside those names: only those who have one. */
     pictures: {
-      allow: (actor) => actor.kind === "person" || actor.kind === "agent",
+      allow: people,
       run: async (profiles, params: { ids?: unknown }) => {
         const given = Array.isArray(params?.ids) ? params.ids : [];
         const ids = peopleIn(given.filter((id): id is string => typeof id === "string"))

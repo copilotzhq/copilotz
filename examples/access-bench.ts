@@ -187,7 +187,7 @@ try {
   }
   const contact: Actor = { kind: "contact", id: "k4242" };
   const staff: Actor = { kind: "person", id: "staff" };
-  const desk: Actor = { kind: "agent", id: "desk", for: contact, at: "line" };
+  const desk: Actor = { kind: "agent", id: "desk", for: contact, in: "line" };
   await time(
     "line: staff · one chat",
     () => runtime.query("note.latest", { chat: "c4242" }, { actor: staff }),

@@ -23,6 +23,7 @@ import type {
   WorkerKind,
 } from "./define.ts";
 import type { ScheduleDef } from "./schedules.ts";
+import { allows } from "./actor.ts";
 
 /** Everything crossing the runtime boundary is JSON: undefined fields disappear. */
 export const json = <T>(value: T): T =>
@@ -245,6 +246,7 @@ export async function checked(registry: Registry, call: Merged["call"]): Promise
     resources: registry.resources,
     adapters: registry.adapters,
     actions: registry.actions,
+    views: Object.keys(registry.views),
     call,
   };
   for (const { name, check } of registry.checks) {
@@ -281,6 +283,13 @@ export async function readCall<R>(
     let check = inputChecks.get(def);
     if (!check) inputChecks.set(def, check = compile(def.input, `action "${name}" input`));
     check(normalized);
+  }
+  // A read for someone calls what lets them, as any code acting for them does.
+  const { actor } = reads;
+  if (def.allow && actor && actor.kind !== "system" && !allows(def.allow, actor, normalized)) {
+    throw Object.assign(new Error(`${actor.kind} ${actor.id} may not call "${name}".`), {
+      code: "forbidden",
+    });
   }
   const refuse = () => {
     throw invalid(`"${name}" was called from a read: it can't write`);

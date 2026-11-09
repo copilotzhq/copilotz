@@ -6,14 +6,11 @@
  * Launch writes an answer that carries Finance: only those who see Finance
  * read it, until someone shares it.
  */
-import { defineAction, defineCollection, definePlugin } from "../../runtime/mod.ts";
-import { type Thread, tool } from "../../plugins/agents/mod.ts";
+import { defineAction, defineCollection, definePlugin, people } from "../../runtime/mod.ts";
+import { tool } from "../../plugins/agents/mod.ts";
 
 export type Note = { _id: string; in: string; text: string; by: string; at?: string };
 type Space = { _id: string; name: string };
-
-const spaceOf = async (ctx: Parameters<Parameters<typeof tool>[0]["run"]>[1]) =>
-  (await ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread }))?.in;
 
 export const notes = definePlugin({
   name: "notes",
@@ -45,7 +42,7 @@ export const notes = definePlugin({
         required: ["in", "text"],
         additionalProperties: false,
       },
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (ctx, input) => {
         const { insertedId } = await ctx.db.collection("note").insertOne({
           in: input.in,
@@ -65,7 +62,7 @@ export const notes = definePlugin({
         required: ["note", "to"],
         additionalProperties: false,
       },
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (ctx, input) => {
         const { matchedCount } = await ctx.db.collection("note").updateOne(
           { _id: input.note },
@@ -82,7 +79,7 @@ export const notes = definePlugin({
         required: ["note"],
         additionalProperties: false,
       },
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (ctx, input) => {
         const { deletedCount } = await ctx.db.collection("note").deleteOne({ _id: input.note });
         return { removed: deletedCount > 0 };
@@ -96,7 +93,7 @@ export const notes = definePlugin({
         description: "Write a short note where this conversation is, for later.",
         input: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
         run: async ({ text }, ctx) => {
-          const space = await spaceOf(ctx);
+          const space = ctx.in;
           if (!space) return "This conversation isn't in a space: nowhere to write.";
           await ctx.db.collection("note").insertOne({
             in: space,
@@ -116,7 +113,7 @@ export const notes = definePlugin({
           const id = space
             ? spaces.find((p) => p._id === space || p.name.toLowerCase() === space.toLowerCase())
               ?._id
-            : await spaceOf(ctx);
+            : ctx.in;
           if (!id) return `No space "${space}" that you can see.`;
           const found = await ctx.db.collection<Note>("note").find({ in: id }, {
             sort: { _id: 1 },

@@ -40,7 +40,15 @@ const app = definePlugin({
     "test.allowed": defineAction({
       input: { type: "object" },
       allow: () => true,
-      run: (ctx, input) => ctx.call("computer.allowed", input),
+      run: async (ctx, input) => {
+        // Where its chat is (`in`, on the actor), as its turn's work is.
+        const { thread } = input as { thread: string };
+        const there = await ctx.as().db.collection<{ in?: string }>("thread").findOne({
+          _id: thread,
+        });
+        const placed = there?.in ? ctx.as({ ...ctx.actor!, in: there.in }) : ctx;
+        return await placed.call("computer.allowed", input);
+      },
     }),
     "test.tool": defineAction({
       input: {
@@ -48,9 +56,12 @@ const app = definePlugin({
         properties: { tool: { type: "string" }, thread: { type: "string" }, input: {} },
       },
       allow: () => true,
-      run: (ctx, input) =>
+      run: async (ctx, input) =>
         tools[input.tool!].run((input.input ?? {}) as Record<string, unknown>, {
-          ...ctx,
+          // As a turn's tools run: where its chat is (`in`, on the actor).
+          ...await ctx.as().db.collection<{ in?: string }>("thread")
+            .findOne({ _id: input.thread! })
+            .then((t) => t?.in ? ctx.as({ ...ctx.actor!, in: t.in }) : ctx),
           agent: "assistant",
           thread: input.thread!,
           trigger: "test",

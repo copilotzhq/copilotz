@@ -28,7 +28,13 @@
  * Works with the chat plugin: it reads `message` and adds `context` entries
  * and tools that chat gives its agents.
  */
-import { defineAction, definePlugin, failure, people, type Plugin } from "../../../runtime/mod.ts";
+import {
+  defineAction,
+  definePlugin,
+  failure,
+  inPerson,
+  type Plugin,
+} from "../../../runtime/mod.ts";
 import { importAction } from "./actions/import.ts";
 import { memoryCollection } from "./collections/memory.ts";
 import { memoryProgress } from "./collections/progress.ts";
@@ -66,7 +72,7 @@ export const memory: Plugin = definePlugin({
         required: ["memory", "to"],
         additionalProperties: false,
       },
-      allow: people,
+      allow: inPerson,
       run: async (ctx, input) => {
         const { matchedCount } = await ctx.db.collection("memory").updateOne(
           { _id: input.memory },

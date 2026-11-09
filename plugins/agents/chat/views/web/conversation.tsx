@@ -181,6 +181,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
         )
         : null}
       <Composer
+        attach={(file) => ctx.call<{ id: string }>("chat.attach", { ...file, thread: t._id })}
         send={async (text, files, options) => {
           await ctx.call("chat.send", {
             thread: t._id,

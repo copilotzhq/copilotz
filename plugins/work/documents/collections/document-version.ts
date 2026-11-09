@@ -12,7 +12,7 @@
  * Its query `history` (`{ document }`) lists them newest first, without
  * their text: what a document's History shows.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 import type { Without } from "../shared/text.ts";
 
@@ -58,7 +58,7 @@ export const documentVersion = defineCollection({
   indexes: [["document", "version"], ["in"]],
   queries: {
     history: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (versions, params: { document: string; limit?: number }) => {
         if (typeof params?.document !== "string") return [];
         const found = await versions.find(

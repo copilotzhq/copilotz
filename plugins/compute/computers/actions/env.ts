@@ -21,9 +21,12 @@ import { seal } from "../shared/seal.ts";
 import { settingsOf } from "../shared/settings.ts";
 import { may } from "../../../access/spaces/contract.ts";
 
-/** Whether whoever asks may change the space's environment: its managers, or the system. */
+/**
+ * Whether whoever asks may change the space's environment: its managers, or the system (an
+ * agent never manages a space, so never changes it).
+ */
 async function mustManage(ctx: Context, space: string) {
-  if (ctx.actor?.kind === "person" && !await may(ctx, "manage", space)) {
+  if (ctx.actor && ctx.actor.kind !== "system" && !await may(ctx, "manage", space)) {
     throw Object.assign(new Error("Only those who manage this space can change its environment."), {
       code: "forbidden",
     });

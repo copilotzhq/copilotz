@@ -2,7 +2,7 @@
  * `document.delete`: a document gone, with every version of it and who had
  * it open, by someone who may change it (the rules say). In one commit.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { fail, load, plainly } from "../shared/write.ts";
 
 export const deleteAction = defineAction({
@@ -13,7 +13,7 @@ export const deleteAction = defineAction({
     required: ["document"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     return await ctx.transaction(async (tx) => {
       const doc = await load(tx.db, input.document);

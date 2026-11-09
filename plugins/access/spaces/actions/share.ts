@@ -3,7 +3,7 @@
  * its sources. Only someone who reaches all of them, and may write where it
  * is, can: they choose to show what came from there.
  */
-import { defineAction, forbidden, people } from "../../../../runtime/mod.ts";
+import { defineAction, forbidden, inPerson } from "../../../../runtime/mod.ts";
 import { reachOf } from "../shared/reach.ts";
 import type { Shared } from "../shared/rules.ts";
 
@@ -15,7 +15,7 @@ export const shareAction = defineAction({
     required: ["collection", "id"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const field = ((ctx.resources.shared ?? {}) as Shared)[input.collection]?.field ?? "in";
     const system = ctx.as();

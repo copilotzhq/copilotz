@@ -31,13 +31,15 @@ const offer = (_agent: string, thread: Thread, ctx: ViewContext) => {
   return !!spaces?.find((s) => s._id === thread.in)?.can?.includes("write");
 };
 
-/** The conversation's space and the person the agent works for, or why there are none. */
-async function whereFor(ctx: ToolContext) {
+/**
+ * Where the agent works and the person it works for, or why there are none. A routine is its
+ * person's, and runs as them: made as them, here (`ctx.as` keeps where the work is).
+ */
+function whereFor(ctx: ToolContext) {
   const person = personOf(ctx.actor);
-  const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread });
   if (!person) return { missing: "Routines are a person's, and you aren't working for one here." };
-  if (!thread?.in) return { missing: "This conversation isn't in a space: nowhere to keep it." };
-  return { person, space: thread.in, as: ctx.as({ kind: "person", id: person }) };
+  if (!ctx.in) return { missing: "This conversation isn't in a space: nowhere to keep it." };
+  return { person, space: ctx.in, as: ctx.as({ kind: "person", id: person }) };
 }
 
 /** A routine, as an agent reads it: one line, with its id (who made it by name). */
@@ -98,7 +100,7 @@ const scheduleRoutine = tool({
     required: ["text", "schedule"],
   },
   run: async (input, ctx) => {
-    const where = await whereFor(ctx);
+    const where = whereFor(ctx);
     if ("missing" in where) return where.missing;
     try {
       const made = await where.as.call<{ routine: string; next?: string }>("routine.create", {
@@ -138,7 +140,7 @@ const listRoutines = tool({
   description: "The routines in this space: what each sends, to whom, when it runs next.",
   input: { type: "object", properties: {} },
   run: async (_input, ctx) => {
-    const where = await whereFor(ctx);
+    const where = whereFor(ctx);
     if ("missing" in where) return where.missing;
     const found = await where.as.db.collection("routine").query<Listed[]>("list", {
       in: where.space,
@@ -160,7 +162,7 @@ const cancelRoutine = tool({
     required: ["routine"],
   },
   run: async ({ routine }, ctx) => {
-    const where = await whereFor(ctx);
+    const where = whereFor(ctx);
     if ("missing" in where) return where.missing;
     const here = await where.as.db.collection<Routine>("routine").find({ in: where.space });
     const found = here.find((r) => r._id === routine) ??
@@ -186,7 +188,7 @@ const nameChat = tool({
     required: ["name"],
   },
   run: async ({ name }, ctx) => {
-    const where = await whereFor(ctx);
+    const where = whereFor(ctx);
     if ("missing" in where) return where.missing;
     const title = String(name).replace(/\s+/g, " ").trim().slice(0, 120);
     if (!title) return "A name says something.";

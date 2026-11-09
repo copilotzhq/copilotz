@@ -394,10 +394,11 @@ function requires(d: Declaration, options: PageOptions): string[] {
     "",
   );
   if (d.layer === "package" && d.package) {
+    const at = d.package.version ? `${d.package.name}@${d.package.version}` : d.package.name;
     out.push(
-      `It moves to its own package, ${code(d.package.name)}` +
+      `It ships in a package of its own, ${code(at)}` +
         (d.runtime ? `, for \`copilotz\` ${code(d.runtime)}` : "") +
-        ". Until then, it ships in `copilotz`.",
+        ": install it beside `copilotz`.",
       "",
     );
   } else if (d.package) {

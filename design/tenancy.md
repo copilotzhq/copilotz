@@ -58,6 +58,12 @@ A small runtime of its own, holding only what routing needs:
 People inside an org are known by their verified email, the same in every org, so the directory's
 membership and the org's own people line up without a mapping.
 
+Since 2026-11-09 the directory is a product package, `@copilotz/directory` (see
+[plugins.md](plugins.md)): an app serving one org has none of it. Its front end (`directoryWeb`)
+fills the web shell's `orgs` slot (the switcher, going between orgs, staff's line) and draws the
+org's page (`/org`) and the platform console (`/console`); the roles in an org, below, stay the
+spaces plugin's, in every org's runtime.
+
 ## Signing in and entering an org
 
 - **Sign in once,** at the directory, with its sign-in routes (`/signin/google`, `/signin/dev`): its

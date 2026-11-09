@@ -2,13 +2,14 @@
  * Every plugin Copilotz exports, by the layer it ships in (agreed for 1.0):
  *
  * - **standard:** with `copilotz` itself;
- * - **package:** in a package of its own (`@copilotz/work`…), still in this
- *   repository until it moves;
+ * - **package:** in a product package of its own, in this repository
+ *   (`packages/<name>`, `@copilotz/<name>`: see design/plugins.md);
  * - **private:** moving to Compass, so never on the public pages.
  *
- * Plugins are found in the package's entry points (`deno.json`'s
- * `exports`): a plugin no layer names stops the docs from being made, so
- * none goes missing. A function that makes a plugin (`openapi`) is described
+ * Plugins are found in the entry points (Copilotz's `deno.json`'s `exports`,
+ * and each package's): a plugin no layer names stops the docs from being
+ * made, so none goes missing, and one exported where its layer doesn't say
+ * (a package's by Copilotz) stops them too. A function that makes a plugin (`openapi`) is described
  * as an example makes it.
  */
 import type { Plugin } from "../../runtime/mod.ts";
@@ -121,6 +122,7 @@ export const LAYERS: Record<string, Placed | "skip"> = {
   documents: work,
   documentsWeb: work,
   directory: directory,
+  directoryWeb: directory,
   "directory.member": {
     ...directory,
     make: (member) =>

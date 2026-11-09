@@ -31,14 +31,8 @@ import {
   postgresPool,
   postgresStore,
 } from "../../stores/sql/postgres/mod.ts";
-import {
-  devSignIn,
-  directory,
-  googleSignIn,
-  identity,
-  type Operations,
-  type OrgInfo,
-} from "../../plugins/access/mod.ts";
+import { devSignIn, googleSignIn, identity } from "../../plugins/access/mod.ts";
+import { directory, type Operations, type OrgInfo } from "@copilotz/directory";
 import { type Code, webPage } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
 import { plugins } from "./app.ts";

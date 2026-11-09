@@ -26,12 +26,12 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `console`, `org`, `web.default`, `web.shell`.
+- **On the web:** `web.default`, `web.shell`.
 
 ## What it needs
 
-Nothing to set. It reads `orgSettings`, `palette`, `panel`, `sidebar` and `userMenu`, resource kinds
-the app and other plugins fill.
+Nothing to set. It reads `orgs`, `palette`, `panel`, `sidebar` and `userMenu`, resource kinds the
+app and other plugins fill.
 
 ## What it requires
 

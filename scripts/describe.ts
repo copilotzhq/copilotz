@@ -10,7 +10,8 @@
  *
  * Without an export, a module's default plugin, or else every plugin it
  * exports. `--docs` describes every plugin Copilotz exports (its entry
- * points, `deno.json`'s `exports`) into `docs/reference/plugins/<name>.md`,
+ * points, `deno.json`'s `exports`) and every product package does
+ * (`packages/<name>`'s) into `docs/reference/plugins/<name>.md`,
  * with `docs/reference/plugins.json` beside them (the hub's seed): each in
  * the layer scripts/describe/catalog.ts says, and those moving to Compass
  * left out.
@@ -68,22 +69,23 @@ const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
  */
 function packageOf(module: string): { package?: Declaration["package"]; runtime?: string } {
   for (let dir = dirname(module); dir !== dirname(dir); dir = dirname(dir)) {
-    for (const file of ["package.json", "deno.json"]) {
-      const path = join(dir, file);
-      if (!existsSync(path)) continue;
-      const config = readJson(path);
-      if (typeof config.name !== "string") continue;
-      const pkg = { name: config.name as string, version: config.version as string | undefined };
-      if (["copilotz", "@copilotz/copilotz"].includes(pkg.name)) {
-        return { package: pkg, runtime: pkg.version };
-      }
-      const deps = { ...config.dependencies, ...config.peerDependencies } as Record<string, string>;
-      const imports = Object.values(config.imports ?? {}) as string[];
-      const runtime = deps.copilotz ??
+    // Both, where both are (a package of this repo has its deno.json beside its package.json).
+    const configs = ["package.json", "deno.json"].map((file) => join(dir, file))
+      .filter((path) => existsSync(path)).map(readJson);
+    const config = configs.find((c) => typeof c.name === "string");
+    if (!config) continue;
+    const pkg = { name: config.name as string, version: config.version as string | undefined };
+    if (["copilotz", "@copilotz/copilotz"].includes(pkg.name)) {
+      return { package: pkg, runtime: pkg.version };
+    }
+    const runtime = configs.map((c) => {
+      const deps = { ...c.dependencies, ...c.peerDependencies } as Record<string, string>;
+      const imports = Object.values(c.imports ?? {}) as string[];
+      return deps.copilotz ??
         imports.map((spec) => spec.match(/^(?:npm:copilotz|jsr:@copilotz\/copilotz)@([^/]+)/)?.[1])
           .find(Boolean);
-      return { package: pkg, ...(runtime ? { runtime } : {}) };
-    }
+    }).find(Boolean);
+    return { package: pkg, ...(runtime ? { runtime } : {}) };
   }
   return {};
 }
@@ -165,17 +167,34 @@ type Found = {
   placed: Placed;
 };
 
-/** Every plugin in the package's entry points, by its layer. */
+/** The product packages here (`packages/<name>`), each with its deno.json. */
+const packagesHere = () =>
+  existsSync(join(ROOT, "packages"))
+    ? [...Deno.readDirSync(join(ROOT, "packages"))]
+      .filter((entry) =>
+        entry.isDirectory && existsSync(join(ROOT, "packages", entry.name, "deno.json"))
+      )
+      .map((entry) => join(ROOT, "packages", entry.name)).sort()
+    : [];
+
+/**
+ * Every plugin in the entry points, by its layer: Copilotz's (`deno.json`'s `exports`, by
+ * `package.json`'s name) and each product package's (`packages/<name>`, `@copilotz/<name>`).
+ */
 async function catalog(): Promise<{ found: Found[]; unplaced: string[] }> {
-  const config = readJson(join(ROOT, "deno.json"));
   const npm = readJson(join(ROOT, "package.json")).name as string;
+  const entries: [entry: string, as: string, sub: string][] = [];
+  for (const [home, name] of [[ROOT, npm], ...packagesHere().map((home) => [home, ""])]) {
+    const config = readJson(join(home, "deno.json"));
+    for (const [sub, path] of Object.entries(config.exports as Record<string, string>)) {
+      entries.push([join(home, path), `${name || config.name}${sub.slice(1)}`, sub]);
+    }
+  }
   const found: Found[] = [];
   const unplaced: string[] = [];
   const seen = new Set<unknown>();
-  for (const [sub, path] of Object.entries(config.exports as Record<string, string>)) {
-    const entry = join(ROOT, path);
+  for (const [entry, as, sub] of entries) {
     const module = await import(urlOf(entry)) as Record<string, unknown>;
-    const as = `${npm}${sub.slice(1)}`;
     for (const [name, value] of exportsOf(module)) {
       if (seen.has(value)) continue;
       const placed = LAYERS[name];
@@ -200,7 +219,7 @@ async function catalog(): Promise<{ found: Found[]; unplaced: string[] }> {
       }
       if (!isPlugin(value)) continue;
       seen.add(value);
-      if (!placed) unplaced.push(`${name} (${sub})`);
+      if (!placed) unplaced.push(`${name} (${as === npm ? sub : as})`);
       else if (placed !== "skip") found.push({ plugin: value, name, module: as, entry, placed });
     }
   }
@@ -238,6 +257,17 @@ async function docs(check: boolean) {
       `No layer says where these ship (scripts/describe/catalog.ts): ${unplaced.join(", ")}`,
     );
   }
+  // A package's plugin is exported by that package, and Copilotz's by Copilotz.
+  const astray = all.filter(({ placed, module }) =>
+    placed.layer === "package"
+      ? module !== placed.package && !module.startsWith(`${placed.package}/`)
+      : module.startsWith("@copilotz/")
+  ).map(({ name, module }) => `${name} (${module})`);
+  if (astray.length) {
+    throw new Error(
+      `Exported where scripts/describe/catalog.ts doesn't say they ship: ${astray.join(", ")}`,
+    );
+  }
   const listed = all.filter((f) => f.placed.layer !== "private");
   const left = all.filter((f) => f.placed.layer === "private");
   // What each plugin's code shows, then its declaration; a front end's settings are its plugin's.
@@ -262,8 +292,9 @@ async function docs(check: boolean) {
       reads: own.reads,
       settings: own.settings.filter((s) => !required.has(s.kind)),
       layer: f.placed.layer,
-      package: standard ? { name: npm, version } : { name: f.placed.package! },
-      runtime: standard ? version : `^${version}`,
+      // A package is released with Copilotz, at its version, and runs on that Copilotz.
+      package: standard ? { name: npm, version } : { name: f.placed.package!, version },
+      runtime: version,
     });
     described.push({ d: f.placed.name ? { ...d, name: f.placed.name } : d, f });
   }

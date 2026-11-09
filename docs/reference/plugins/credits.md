@@ -10,7 +10,7 @@ description: "Credits: what an org has to spend, and the check that stops it at 
 Credits: what an org has to spend, and the check that stops it at its limit.
 
 ```ts
-import { credits } from "copilotz/plugins/billing";
+import { credits } from "@copilotz/billing";
 ```
 
 ## What it keeps
@@ -78,8 +78,8 @@ It also reads `directory` and `org`, resource kinds the app and other plugins fi
 
 The runtime doesn't start without [`usage`](usage.md): add it too.
 
-It moves to its own package, `@copilotz/billing`, for `copilotz` `^1.0.0-rc.32`. Until then, it
-ships in `copilotz`.
+It ships in a package of its own, `@copilotz/billing@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+install it beside `copilotz`.
 
 ## What it does on its own
 

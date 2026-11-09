@@ -10,7 +10,7 @@ description: "Credits' web front end: the org page's Billing section (the web sh
 Credits' web front end: the org page's Billing section (the web shell's `orgSettings`).
 
 ```ts
-import { creditsWeb } from "copilotz/plugins/billing/web";
+import { creditsWeb } from "@copilotz/billing/web";
 ```
 
 ## What it keeps
@@ -36,8 +36,8 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It moves to its own package, `@copilotz/billing`, for `copilotz` `^1.0.0-rc.32`. Until then, it
-ships in `copilotz`.
+It ships in a package of its own, `@copilotz/billing@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+install it beside `copilotz`.
 
 ## Listing
 

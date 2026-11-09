@@ -14,7 +14,7 @@ The directory gives each org's runtime this plugin: `directory.member(dir, org)`
 describes it for an org named Acme.
 
 ```ts
-import { directory } from "copilotz/plugins/access";
+import { directory } from "@copilotz/directory";
 ```
 
 ## What it keeps
@@ -45,8 +45,8 @@ Nothing to set. It reads `hosts`, resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It moves to its own package, `@copilotz/directory`, for `copilotz` `^1.0.0-rc.32`. Until then, it
-ships in `copilotz`.
+It ships in a package of its own, `@copilotz/directory@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+install it beside `copilotz`.
 
 ## Listing
 

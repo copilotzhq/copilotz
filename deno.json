@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "1.0.0-rc.32",
+  "version": "1.0.0-rc.33",
   "exports": {
     ".": "./runtime/mod.ts",
     "./stores/memory": "./stores/memory/mod.ts",
@@ -11,22 +11,25 @@
     "./blobs/http": "./stores/blobs/http/mod.ts",
     "./blobs/gcs": "./stores/blobs/gcs/mod.ts",
     "./plugins/models": "./plugins/models/mod.ts",
+    "./plugins/models/contract": "./plugins/models/contract.ts",
     "./plugins/agents": "./plugins/agents/mod.ts",
+    "./plugins/agents/contract": "./plugins/agents/contract.ts",
     "./plugins/agents/web": "./plugins/agents/web.tsx",
     "./plugins/agents/terminal": "./plugins/agents/terminal.ts",
     "./plugins/access": "./plugins/access/mod.ts",
+    "./plugins/access/contract": "./plugins/access/contract.ts",
     "./plugins/access/web": "./plugins/access/web.tsx",
     "./plugins/access/terminal": "./plugins/access/terminal.ts",
     "./plugins/billing": "./plugins/billing/mod.ts",
     "./plugins/billing/web": "./plugins/billing/web.tsx",
     "./plugins/billing/terminal": "./plugins/billing/terminal.ts",
     "./plugins/compute": "./plugins/compute/mod.ts",
+    "./plugins/compute/contract": "./plugins/compute/contract.ts",
     "./plugins/compute/web": "./plugins/compute/web.tsx",
     "./plugins/compute/terminal": "./plugins/compute/computers/terminal.ts",
     "./plugins/compute/downloads": "./plugins/compute/computers/resources/downloads.ts",
-    "./plugins/work": "./plugins/work/mod.ts",
-    "./plugins/work/web": "./plugins/work/web.tsx",
     "./plugins/interfaces": "./plugins/interfaces/mod.ts",
+    "./plugins/interfaces/contract": "./plugins/interfaces/contract.ts",
     "./plugins/interfaces/web": "./plugins/interfaces/web.tsx",
     "./plugins/interfaces/terminal": "./plugins/interfaces/terminal/terminal.ts",
     "./web": "./hosts/web/mod.ts",
@@ -38,8 +41,15 @@
     "./terminal": "./hosts/terminal/mod.ts",
     "./exporters": "./exporters/mod.ts",
     "./describe": "./runtime/describe.ts",
-    "./testing": "./testing/mod.ts"
+    "./testing": "./testing/mod.ts",
+    "./testing/words": "./testing/words.ts"
   },
+  "workspace": [
+    "./packages/work",
+    "./packages/directory",
+    "./packages/billing",
+    "./packages/team"
+  ],
   "tasks": {
     "chat": "deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/chat.ts",
     "test": "deno test -A --unstable-no-legacy-abort",
@@ -90,6 +100,7 @@
   ],
   "publish": {
     "exclude": [
+      "packages/",
       "**/tests/",
       "**/*.test.ts",
       "**/*.test.tsx",
@@ -106,6 +117,7 @@
     "exclude": [
       "plugins/models/shared/catalog.json",
       "hosts/web/WORDS.md",
+      "packages/*/WORDS.md",
       "package-lock.json"
     ]
   },

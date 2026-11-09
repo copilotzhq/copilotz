@@ -1,16 +1,62 @@
 {
   "name": "copilotz",
-  "version": "1.0.0-rc.32",
+  "version": "1.0.0-rc.33",
   "private": true,
   "type": "module",
   "description": "Copilotz: one runtime for Node, Deno, Bun, Cloudflare Workers and the browser.",
   "engines": {
     "node": ">=24"
   },
+  "exports": {
+    ".": "./runtime/mod.ts",
+    "./stores/memory": "./stores/memory/mod.ts",
+    "./stores/sqlite": "./stores/sql/sqlite/mod.ts",
+    "./stores/postgres": "./stores/sql/postgres/mod.ts",
+    "./stores/latency": "./stores/latency/mod.ts",
+    "./blobs/files": "./stores/blobs/files/mod.ts",
+    "./blobs/http": "./stores/blobs/http/mod.ts",
+    "./blobs/gcs": "./stores/blobs/gcs/mod.ts",
+    "./plugins/models": "./plugins/models/mod.ts",
+    "./plugins/models/contract": "./plugins/models/contract.ts",
+    "./plugins/agents": "./plugins/agents/mod.ts",
+    "./plugins/agents/contract": "./plugins/agents/contract.ts",
+    "./plugins/agents/web": "./plugins/agents/web.tsx",
+    "./plugins/agents/terminal": "./plugins/agents/terminal.ts",
+    "./plugins/access": "./plugins/access/mod.ts",
+    "./plugins/access/contract": "./plugins/access/contract.ts",
+    "./plugins/access/web": "./plugins/access/web.tsx",
+    "./plugins/access/terminal": "./plugins/access/terminal.ts",
+    "./plugins/billing": "./plugins/billing/mod.ts",
+    "./plugins/billing/web": "./plugins/billing/web.tsx",
+    "./plugins/billing/terminal": "./plugins/billing/terminal.ts",
+    "./plugins/compute": "./plugins/compute/mod.ts",
+    "./plugins/compute/contract": "./plugins/compute/contract.ts",
+    "./plugins/compute/web": "./plugins/compute/web.tsx",
+    "./plugins/compute/terminal": "./plugins/compute/computers/terminal.ts",
+    "./plugins/compute/downloads": "./plugins/compute/computers/resources/downloads.ts",
+    "./plugins/interfaces": "./plugins/interfaces/mod.ts",
+    "./plugins/interfaces/contract": "./plugins/interfaces/contract.ts",
+    "./plugins/interfaces/web": "./plugins/interfaces/web.tsx",
+    "./plugins/interfaces/terminal": "./plugins/interfaces/terminal/terminal.ts",
+    "./web": "./hosts/web/mod.ts",
+    "./web/words": "./hosts/web/words.ts",
+    "./web/server": "./hosts/web/server.ts",
+    "./web/widget": "./hosts/web/widget.tsx",
+    "./web/theme": "./hosts/web/theme/css.ts",
+    "./web/node": "./hosts/web/node/mod.ts",
+    "./terminal": "./hosts/terminal/mod.ts",
+    "./exporters": "./exporters/mod.ts",
+    "./describe": "./runtime/describe.ts",
+    "./testing": "./testing/mod.ts",
+    "./testing/words": "./testing/words.ts"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "node --test --test-concurrency=1 \"**/*.test.ts\"",
     "test:bun": "bun test --timeout 60000",
-    "build": "node scripts/npm/build.ts"
+    "build": "node scripts/npm/build.ts --all"
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",
@@ -32,6 +78,7 @@
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "copilotz": "file:.",
     "esbuild": "0.28.2",
     "typescript": "6.0.3"
   }

@@ -17,7 +17,6 @@ import {
   type Runtime,
   type ViewContext,
 } from "../../../runtime/mod.ts";
-import { merge } from "../../../runtime/registry.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmRequest } from "../../models/mod.ts";
 import {
@@ -27,16 +26,14 @@ import {
   type Message,
   routines,
   skills,
-  team,
   type Thread,
-  tiers,
   tool,
 } from "../../agents/mod.ts";
-import { access, accounts, contactOf, directory, googleSignIn } from "../mod.ts";
+import { access, accounts, contactOf, googleSignIn } from "../mod.ts";
 import { api, terminalPlugin, whatsapp } from "../../interfaces/mod.ts";
 import { apps, cloud, computers } from "../../compute/mod.ts";
-import { credits, stripe, stripeWebhook, usage } from "../../billing/mod.ts";
-import { test } from "../../../testing/mod.ts";
+import { usage } from "../../billing/mod.ts";
+import { openTo, test } from "../../../testing/mod.ts";
 import { attached } from "../../agents/tests/fixtures/files.ts";
 import { tools as spacesTools } from "../spaces/resources/tools.ts";
 
@@ -481,20 +478,19 @@ test("an Action only people may call refuses a contact", async () => {
 });
 
 test("every Action, query and event stays shut to contacts, but those opened to them", () => {
-  // Each plugin on its own: some are alternatives to each other (the directory's org Actions).
-  const registries = [
+  // Each plugin on its own, asked as a contact would about itself. (Each product package checks
+  // its own the same way.)
+  const contact: Actor = { kind: "contact", id: "c-someone" };
+  const open = openTo(contact, [
     models,
     chat,
     history,
     memory,
-    team,
     skills,
     routines,
-    tiers,
     ...access,
     googleSignIn,
     accounts,
-    directory,
     api,
     terminalPlugin,
     whatsapp,
@@ -502,24 +498,7 @@ test("every Action, query and event stays shut to contacts, but those opened to 
     apps,
     cloud,
     usage,
-    stripeWebhook,
-    credits,
-    stripe,
-  ].flat().map((plugin) => merge([plugin], { elsewhere: true }));
-  const contact: Actor = { kind: "contact", id: "c-someone" };
-  // Asked as they'd ask about themselves: their own id wherever one is named.
-  const own = { person: contact.id, agent: contact.id, id: contact.id };
-  const open = registries.flatMap((registry) => [
-    ...Object.entries(registry.actions).filter(([, def]) => def.allow?.(contact, own))
-      .map(([name]) => name),
-    ...Object.entries(registry.collections).flatMap(([collection, def]) =>
-      Object.entries(def.queries ?? {}).filter(([, query]) =>
-        typeof query === "object" && query.allow(contact, own)
-      ).map(([name]) => `${collection}.${name}`)
-    ),
-    ...Object.entries(registry.events).filter(([, def]) => def.allow?.(contact))
-      .map(([type]) => type),
-  ]).sort();
+  ]);
   // `file.about` is a file as its reader reaches it: a contact, its own chat's; `chat.attach`
   // uploads a file its message then sends. Meta's webhook is WhatsApp's route, which calls
   // `whatsapp.receive` as trusted code: no Action of it is open.

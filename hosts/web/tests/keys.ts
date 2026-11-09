@@ -9,6 +9,7 @@ import "../../../plugins/billing/web.tsx";
 import "../../../plugins/interfaces/web.tsx";
 import "../mod.ts";
 import { knownWords } from "../words.ts";
+import { wordsList } from "../../../testing/words.ts";
 
 export function keysDoc(): string {
   const lines = [
@@ -21,17 +22,7 @@ export function keysDoc(): string {
     "Generated: `deno run -A hosts/web/tests/keys.ts`.",
     "",
   ];
-  let area = "";
-  for (const [key, phrase] of Object.entries(knownWords()).sort(([a], [b]) => a.localeCompare(b))) {
-    const [head] = key.split(".");
-    if (head !== area) {
-      lines.push("", `## ${head}`, "", "| Key | English |", "|---|---|"), area = head;
-    }
-    const english = typeof phrase === "string"
-      ? phrase
-      : Object.entries(phrase).map(([form, text]) => `${form}: ${text}`).join(" / ");
-    lines.push(`| \`${key}\` | ${english.replace(/\|/g, "\\|").replace(/\n/g, " ")} |`);
-  }
+  lines.push(...wordsList(knownWords()));
   return lines.join("\n") + "\n";
 }
 

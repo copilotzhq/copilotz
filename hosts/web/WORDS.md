@@ -171,12 +171,6 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.youLabel` | You |
 | `chat.yourRecording` | Your recording |
 
-## directory
-
-| Key | English |
-|---|---|
-| `directory.personalOrg` | Personal |
-
 ## host
 
 | Key | English |
@@ -266,153 +260,21 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 
 | Key | English |
 |---|---|
-| `shell.aboutOrg` | About this organization |
-| `shell.actions` | Actions |
-| `shell.active` | Active |
-| `shell.allOrgsConsole` | All orgs (console) |
-| `shell.atMost` | At most {count} characters |
-| `shell.cancel` | Cancel |
-| `shell.cantUndo` | This can't be undone |
-| `shell.chooseOrg` | Choose one from the switcher at the top of the sidebar. |
-| `shell.claimBy` | Claim by |
-| `shell.claimedBy` | by {org}, {day} |
-| `shell.claimHint` | Empty: any time. |
 | `shell.close` | Close |
 | `shell.closeSidebar` | Close sidebar |
-| `shell.codeClaimed` | Claimed |
-| `shell.codeExpired` | Expired |
-| `shell.codeMade` | · made {time} |
-| `shell.codeRevoked` | Taken back |
-| `shell.codesCount` | one: {count} code, the newest first / other: {count} codes, the newest first |
-| `shell.codeShortTitle` | Only the start of what's kept: it can't be claimed with this |
-| `shell.codeWaiting` | Waiting |
-| `shell.consoleAbout` | Every org on this app: what each last reported, where its rows live, and what you can do about it. Nothing here reads an org's content. |
-| `shell.consoleShows` | What the console shows |
-| `shell.consoleTitle` | Console |
-| `shell.continueAs` | Continue as {role} |
-| `shell.copyCode` | Copy the code |
-| `shell.copyOrgId` | Copy the org's id |
-| `shell.createNamed` | Create “{name}” |
-| `shell.createOrg` | Create organization |
-| `shell.credits` | Credits |
-| `shell.decline` | Decline |
-| `shell.declineOrgInvite` | Decline {name}'s invitation |
-| `shell.deleteAbout` | Everything in it goes: its people's memberships, spaces, conversations, agents, files and usage. Its people are signed out of it at once. Export its rows first if you may need them. |
-| `shell.deleteForGood` | Delete for good |
-| `shell.deleteMore` | Delete for good… |
-| `shell.deleteTitle` | Delete {name} for good? |
-| `shell.enterAsStaff` | Enter as staff |
-| `shell.enteringAsStaff` | Entering as staff |
-| `shell.exportFirst` | Export its rows (SQL) first |
-| `shell.exportRows` | Export its rows (SQL) |
-| `shell.filterAll` | All |
-| `shell.filterTeams` | Teams |
-| `shell.footAll` | one: {count} organization · the most recently active first / other: {count} organizations · the most recently active first |
-| `shell.footSome` | {shown} of {total} organizations · the most recently active first |
-| `shell.forStaff` | For platform staff |
-| `shell.forStaffAbout` | The console lists every organization, for the people who run this app. |
 | `shell.general` | General |
-| `shell.giftCodes` | Gift codes |
-| `shell.giftCodesAbout` | Credits waiting to be claimed. Someone who runs an org types one in under Billing, and its credits are that org's. |
 | `shell.goHome` | Go home |
-| `shell.goingInto` | Going into {name} |
-| `shell.goIntoAsStaff` | Go into {name} as staff: what you do there is on its record |
-| `shell.heldBack` | {section} is for this org's owners and admins. Ask one of them if you need something changed there. |
-| `shell.hereAsStaff` | You're here as staff |
 | `shell.hidePanel` | Hide the panel |
 | `shell.hidePanelTitled` | Hide the {title} panel |
 | `shell.homeOf` | {brand}: home |
-| `shell.inAsStaff` | You're in {name} as staff. What you do here is on its record. |
-| `shell.inAsStaffTitle` | You're in {name} as platform staff: what you do is on its record |
-| `shell.inItAsStaff` | You're in it as staff |
-| `shell.invitations` | Invitations |
-| `shell.invitationsCount` | {count} invitations |
-| `shell.invitedAs` | You're invited, as {role} |
-| `shell.invitedAsAt` | You're invited, as {role} · {time} |
-| `shell.invitedFromAs` | {from} invited you, as {role} |
-| `shell.invitedFromAsAt` | {from} invited you, as {role} · {time} |
-| `shell.isDeleted` | {name} is deleted. |
-| `shell.isSuspended` | {name} is suspended. |
-| `shell.join` | Join |
-| `shell.joinNamed` | Join {name} |
-| `shell.justYou` | Just you |
-| `shell.keptIt` | Done, I've kept it |
-| `shell.keysAcceptOrgInvite` | invitation accept organization |
-| `shell.keysConsole` | staff console platform suspend |
-| `shell.keysNewOrg` | create team organization org |
-| `shell.keysOrgInvite` | invitation organization |
-| `shell.keysOrgSettings` | members usage invite roles organization |
 | `shell.keysPanel` | side panel toggle |
-| `shell.keysSwitch` | organization org switch |
-| `shell.lapseHint` | Empty: they don't lapse. |
-| `shell.lapseOn` | Credits lapse on |
-| `shell.lastActive` | Last active |
-| `shell.lift` | Lift the suspension |
-| `shell.liftAbout` | Its people can go in again, as before. Nothing in it changed while it was suspended. |
-| `shell.liftMore` | Lift the suspension… |
-| `shell.liftTitle` | Lift the suspension of {name}? |
-| `shell.makeCode` | Make a {amount} code |
-| `shell.makeTheCode` | Make the code |
-| `shell.moreOf` | {name}: more |
-| `shell.moveAbout` | For big orgs: gives it a schema of its own, so its load and its rows stand apart from the shared pool. |
-| `shell.movedOrg` | You're no longer in the org you were in. You're in {name}. |
-| `shell.moveMore` | Move to another schema… |
-| `shell.moveRows` | Move its rows |
-| `shell.moveText` | It's closed for a moment, its rows are copied to the new schema as they are, and it opens there on its next use. Its people may see it reconnect. |
-| `shell.moveTitle` | Move {name} |
-| `shell.name` | Name |
-| `shell.nameIt` | Name it |
-| `shell.newGiftCode` | New gift code |
-| `shell.newOrg` | New organization |
-| `shell.newOrgAbout` | For a team: you'll own it, and invite people by email. |
-| `shell.newOrgMore` | New organization… |
-| `shell.newOrgNameHint` | Usually your team's or company's name. You can change it later. |
-| `shell.newOrgPlaceholder` | e.g. Acme |
-| `shell.newSchema` | New schema |
-| `shell.noCodes` | No gift codes yet |
-| `shell.noCodesAbout` | A gift code gives whoever claims it credits for their org. |
-| `shell.noMatch` | No organization matches |
-| `shell.notePlaceholder` | Conference, November |
 | `shell.nothingHere` | Nothing here |
-| `shell.nothingMatches` | Nothing matches “{search}” |
 | `shell.nothingOpens` | This address doesn't open anything. |
-| `shell.nothingToSet` | Nothing to set here |
-| `shell.nothingToSetAbout` | This app adds no sections to an organization's page. |
 | `shell.nothingToShow` | Nothing to show |
 | `shell.nothingToShowAbout` | There's no page for this here, or it isn't shared with you. |
-| `shell.nothingYet` | Nothing in this list yet. |
-| `shell.notInOrg` | You're not in an organization |
-| `shell.notShownAgain` | This won't be shown again |
-| `shell.notShownAgainAbout` | Only a fingerprint of it is kept, so nobody can look it up later. Copy it now. If it's lost, take this one back and make another. |
-| `shell.notYet` | Not yet |
-| `shell.nowIn` | Now in |
-| `shell.nowLivesIn` | {name} now lives in “{schema}”. |
-| `shell.oneOrg` | One organization here |
-| `shell.oneOrgAbout` | This app serves a single organization, so there's nothing to set here. |
-| `shell.openAgain` | {name} is open again. |
 | `shell.openSidebar` | Open sidebar |
-| `shell.orgAboutGuest` | What {name} is. As a guest, you work in the spaces you're invited to. |
-| `shell.orgAboutMember` | What {name} is, and who's in it. |
-| `shell.orgAboutPersonal` | Your own organization: just you, and what you make alone. |
-| `shell.orgAboutRuns` | Who's in {name}, what it uses, and what it's called. |
-| `shell.orgAboutStaff` | You're here as platform staff: what you do is on {name}'s record. |
-| `shell.organization` | Organization |
-| `shell.organizations` | Organizations |
-| `shell.orgSection` | {name}: {section} |
-| `shell.orgSettings` | Organization settings |
-| `shell.orgSettingsOf` | {name}'s settings |
 | `shell.panel` | Panel |
 | `shell.panelWidth` | Panel width |
-| `shell.people` | People |
-| `shell.personal` | Personal |
-| `shell.personalOrg` | Personal org |
-| `shell.placement` | Placement |
-| `shell.refresh` | Refresh |
-| `shell.rename` | Rename |
-| `shell.renamedTo` | Renamed to “{name}”. |
-| `shell.renameMore` | Rename… |
-| `shell.renameOrg` | Rename organization |
-| `shell.renameOrgAbout` | Its people see the new name at once, everywhere. |
 | `shell.roleAdmin` | Admin |
 | `shell.roleAdminLets` | Invites people, changes roles, and reaches everything in the org |
 | `shell.roleGuest` | Guest |
@@ -421,59 +283,16 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `shell.roleMemberLets` | Works in their spaces, makes new ones, and sees who's in the org |
 | `shell.roleOwner` | Owner |
 | `shell.roleOwnerLets` | Runs the org: everything admins do, and makes or unmakes owners |
-| `shell.sameSchema` | That's where it is now. |
-| `shell.sayDollars` | Say how many dollars of credits. |
-| `shell.schemaRule` | Lowercase letters, digits and _, starting with a letter. |
 | `shell.search` | Search |
-| `shell.searchOrgs` | Search organizations |
-| `shell.searchPlaceholder` | Search by name, id, schema or maker |
 | `shell.searchTitle` | Search spaces and chats, or run a command ({shortcut}) |
 | `shell.showPanel` | Show the panel |
 | `shell.showPanelTitled` | Show the {title} panel |
 | `shell.sidebar` | Sidebar |
 | `shell.signedIn` | Signed in |
-| `shell.signedInAs` | Signed in as {who} |
 | `shell.signOut` | Sign out |
 | `shell.skipToContent` | Skip to content |
-| `shell.spaces` | Spaces |
 | `shell.spacesAndChats` | Spaces and chats |
-| `shell.staff` | Staff |
-| `shell.staffAccess` | Staff access |
-| `shell.staffLine` | You're in this org as platform staff: what you do is on its record. |
-| `shell.status` | Status |
-| `shell.suspend` | Suspend |
-| `shell.suspendAbout` | Nobody but staff goes in until you lift it: its people see that it's suspended. Nothing in it is changed or deleted. |
-| `shell.suspended` | Suspended |
-| `shell.suspendedTitle` | {name} is suspended: nobody goes in for now |
-| `shell.suspendMore` | Suspend… |
-| `shell.suspendTitle` | Suspend {name}? |
-| `shell.switchingTo` | Switching to |
-| `shell.switchOrg` | {name}: switch organization |
-| `shell.switchTo` | Switch to {name} |
-| `shell.takeBack` | Take back |
-| `shell.takeBackAbout` | Nobody can claim it after this, and that can't be undone. If someone still needs it, make them a new one. |
-| `shell.takeBackTitle` | Take back this {amount} code? |
-| `shell.takeItBack` | Take it back |
-| `shell.team` | Team |
-| `shell.teamOrg` | Team org |
-| `shell.teamOrgs` | Team orgs |
-| `shell.termsLapse` | Credits lapse {lapse} |
-| `shell.termsLapseClaim` | Credits lapse {lapse} · claim by {until} |
-| `shell.termsNoLapse` | Credits don't lapse |
-| `shell.termsNoLapseClaim` | Credits don't lapse · claim by {until} |
-| `shell.tryAgain` | Try again |
-| `shell.typeToConfirm` | Type {name} to confirm |
-| `shell.unsupported` | This app doesn't do that yet. ({reason}) |
-| `shell.whatFor` | What it's for |
-| `shell.whatForHint` | Whoever claims it sees this in their history. |
-| `shell.whichOrgs` | Which organizations |
 | `shell.yourAccount` | Your account |
-| `shell.yourCode` | Your {amount} gift code |
-| `shell.youreHere` | You're here |
-| `shell.youreIn` | You're in {name} |
-| `shell.yourOrgs` | Your organizations |
-| `shell.yourOwn` | Your own |
-| `shell.yourOwnOrg` | Your own org |
 
 ## spaces
 
@@ -717,198 +536,6 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `spaces.youNamed` | You ({name}) |
 | `spaces.youreHere` | You're here |
 | `spaces.yourRole` | Your role |
-
-## team
-
-| Key | English |
-|---|---|
-| `team.add` | Add |
-| `team.addAgentTo` | Add {name} to {place} |
-| `team.addAnAgentNote` | Agents work for whoever asks them, and reach only what that person can. |
-| `team.addAnAgentTitle` | Add an agent to {place} |
-| `team.addAnAgentTo` | Add an agent to {place}… |
-| `team.addNamedNote` | It works there at once, as an editor. |
-| `team.addNamedTo` | Add {name} to a space… |
-| `team.addsAs` | Adds as |
-| `team.addToNote` | It works there at once, as an editor: it answers chats there and adds to them. |
-| `team.addToSpace` | Add to a space |
-| `team.addToSpaceMenu` | Add to a space… |
-| `team.addToTitle` | Add {name} to… |
-| `team.agentsYouKnow` | Agents you know |
-| `team.allProviders` | All providers |
-| `team.allWorkHere` | Every agent you know works in {place} already. |
-| `team.anotherEmoji` | Another emoji |
-| `team.answersNewChats` | Answers new chats |
-| `team.answersNewChatsHere` | Answers new chats here |
-| `team.apiKeyLabel` | Your {provider} API key |
-| `team.appAgentNotice` | Part of the app: it's set up in code, so it isn't changed here. To have one of your own like it, start a new agent from it. |
-| `team.archivedSpace` | {place} is archived: restore it to add agents. |
-| `team.askAgent` | Ask {name} |
-| `team.askHandle` | Ask {handle} in any chat here. |
-| `team.belongsHint` | {lets}. It belongs to {place}: those who manage it change it. |
-| `team.calledIn` | Called {handle} in chats |
-| `team.cancel` | Cancel |
-| `team.change` | Change |
-| `team.changeAgent` | Change {name} |
-| `team.chooseModel` | Choose a model |
-| `team.contextSize` | {size} context |
-| `team.createAgent` | Create agent |
-| `team.createNamed` | Create {name} |
-| `team.createNewAgent` | Create a new agent |
-| `team.createNewAgentBody` | Say what it should do; it can write its own instructions. |
-| `team.deleteButton` | Delete {name} |
-| `team.deleteChats` | {bold} with what it said. |
-| `team.deleteChatsBold` | Chats it was in stay as they are, |
-| `team.deleteGone` | {bold} and it can't be brought back. |
-| `team.deleteGoneBold` | Nobody can ask it anything again, |
-| `team.deleteLeaves` | {bold}. Where it answered new chats, another agent there does. |
-| `team.deleteLeavesBold` | It leaves every space it works in |
-| `team.deleteLeavesNamed` | {bold}, {spaces} among them. Where it answered new chats, another agent there does. |
-| `team.deleteMenu` | Delete {name}… |
-| `team.deleteStepKeep` | Keep it |
-| `team.deleteStepNote` | It leaves every space it works in, and nobody can ask it anything again. Chats it was in stay as they are. |
-| `team.deleteTitle` | Delete {name}? |
-| `team.doesHint` | A line or two, for people, and for other agents deciding whom to ask. |
-| `team.doesPlaceholder` | Writes launch copy in our voice, and checks facts with the researcher. |
-| `team.draftNote` | Written for you from what it should do: read them through, and change what you like. |
-| `team.edit` | Edit |
-| `team.editAgent` | Edit {name} |
-| `team.editNamed` | Edit {name} |
-| `team.effort` | {effort} effort |
-| `team.emoji` | Emoji |
-| `team.fieldDoes` | What should it do? |
-| `team.fieldName` | Name |
-| `team.findAgent` | Find an agent |
-| `team.findAgentKnown` | Find an agent you know |
-| `team.findSpace` | Find a space |
-| `team.goHome` | Go home |
-| `team.instructions` | Instructions |
-| `team.instructionsEmptyHint` | Say its name and what it should do, and it can write them for you. |
-| `team.instructionsHint` | What it's told every time it works: who it is, what it does, and how it answers. |
-| `team.justYou` | Just you |
-| `team.keepsHandle` | It keeps its name in chats, @{handle}, whatever it's shown as. |
-| `team.keyNote` | Encrypted, and never shown again. All of this org's agents use it for {provider}, and {provider} charges your account. |
-| `team.keywordAgent` | agent |
-| `team.keywordAnswer` | answer |
-| `team.keywordChange` | change |
-| `team.keywordCopy` | copy |
-| `team.keywordCreate` | create |
-| `team.keywordDefault` | default |
-| `team.keywordInstructions` | instructions |
-| `team.keywordInvite` | invite |
-| `team.keywordJoin` | join |
-| `team.keywordLike` | like |
-| `team.keywordMake` | make |
-| `team.keywordMember` | member |
-| `team.keywordNewChats` | new chats |
-| `team.keywordPersonal` | personal |
-| `team.keywordRename` | rename |
-| `team.keywordWork` | work |
-| `team.knownIntro` | Agents you know, from the app and your spaces |
-| `team.listEnd` | {rest} and {last} |
-| `team.listJoin` | ,  |
-| `team.madeElsewhere` | Made elsewhere |
-| `team.madeIn` | Made in {place} |
-| `team.madeInOther` | Made in another space |
-| `team.makeAnother` | Make another |
-| `team.makeAnswer` | Make it answer new chats |
-| `team.makeAnswerIn` | Make it answer new chats in {place} |
-| `team.makeNamedAnswer` | Make {name} answer new chats |
-| `team.makeNamedAnswerIn` | Make {name} answer new chats in {place} |
-| `team.managersAdd` | Those who manage {place} add agents to it. |
-| `team.managersChangeIt` | Those who manage {place} change it. |
-| `team.managersChangeItElsewhere` | Those who manage the space it belongs to change it. |
-| `team.mediaAudio` | Audio |
-| `team.mediaImage` | Images |
-| `team.mediaPdf` | PDFs |
-| `team.mediaVideo` | Video |
-| `team.model` | Model |
-| `team.modelAndTools` | Model and tools |
-| `team.modelHint` | What it thinks with. |
-| `team.models` | Models |
-| `team.modelsThenJoin` | , then  |
-| `team.moreMenu` | {name}: more |
-| `team.nameHint` | What people call it: Maya is @maya in chats. |
-| `team.namePlaceholder` | Maya |
-| `team.needsKey` | Needs a key |
-| `team.newAgent` | New agent… |
-| `team.newAgentForm` | A new agent |
-| `team.newAgentIn` | New agent in {place} |
-| `team.newAgentInHere` | In {place} |
-| `team.newAgentInNote` | It belongs to the space you pick: those who manage it change it. |
-| `team.newAgentInStep` | New agent in… |
-| `team.newLikeNote` | It starts with its words, model and tools; it belongs to the space you pick. |
-| `team.newLikeTitle` | New agent like {name}, in… |
-| `team.noCreditsUsed` | No credits used |
-| `team.noEmoji` | None: its initial |
-| `team.noKeyForProvider` | This org has no key for {provider}. Its owners and admins can add one. |
-| `team.noneCalled` | No agent you know is called “{search}”. |
-| `team.noSuchAgent` | No agent here by that name |
-| `team.noSuchAgentBody` | It may have been deleted, or it works only in spaces you're not in. |
-| `team.noSuchAgentTitle` | No such agent |
-| `team.nothingMatches` | Nothing matches that. |
-| `team.noTools` | None: it only talks. |
-| `team.notYourSpace` | This space isn't one of yours. |
-| `team.oneOfApps` | One of the app's agents |
-| `team.openPage` | Open its page |
-| `team.orgKey` | This org's key {hint} |
-| `team.otherEmoji` | Other |
-| `team.paletteAgents` | Agents |
-| `team.paletteCreate` | Create |
-| `team.paletteThisAgent` | This agent |
-| `team.paletteThisSpace` | This space |
-| `team.partOfApp` | Part of the app |
-| `team.pasteIt` | Paste it here |
-| `team.personalSpace` | Personal |
-| `team.priceLine` | {input} in · {output} out per 1M tokens |
-| `team.priceOwnKey` | No credits used: your key, at {price} |
-| `team.providerModels` | one: {count} model / other: {count} models |
-| `team.providers` | Providers |
-| `team.readsOnly` | It reads what's here for chats where it's an editor; it doesn't answer here. |
-| `team.readyToUse` | Ready to use |
-| `team.reasoning` | Reasoning |
-| `team.remove` | Remove |
-| `team.replace` | Replace |
-| `team.rewriteForMe` | Rewrite them for me |
-| `team.roleEditor` | Editor |
-| `team.roleViewer` | Viewer |
-| `team.save` | Save |
-| `team.saveChanges` | Save changes |
-| `team.sayNameFirst` | Say its name and what it should do first |
-| `team.searchModels` | Search providers and models |
-| `team.showAll` | Show all {count} |
-| `team.showFewer` | Show fewer |
-| `team.spacesYouManage` | Spaces you manage |
-| `team.startBlank` | Nothing: a blank agent |
-| `team.startFrom` | Start from |
-| `team.startFromIt` | Start a new agent from it… |
-| `team.startFromShort` | Start from it |
-| `team.startingFrom` | Starting from {name}. |
-| `team.startNewFrom` | Start a new agent from {name}… |
-| `team.thinks` | Thinks |
-| `team.tools` | Tools |
-| `team.toolsAll` | All |
-| `team.toolsChoose` | Choose |
-| `team.toolsChooseDone` | Done |
-| `team.toolsLabel` | Tools {count} |
-| `team.toolsMore` | +{count} more |
-| `team.toolsNone` | None |
-| `team.toolsOf` | {chosen} of {offered} |
-| `team.undo` | Undo |
-| `team.useOwnKey` | Use your own key |
-| `team.usesAppKey` | Uses the app's key |
-| `team.withOwnKey` | With your own key |
-| `team.worksHere` | @{id} · works here |
-| `team.worksIn` | Works in {count} |
-| `team.worksInAs` | Works in {place} as |
-| `team.worksNow` | {name} works in {place} now |
-| `team.worksNowhere` | It doesn't work in any of your spaces. |
-| `team.worksNowNames` | one: {names} works in {place} now. / other: {names} work in {place} now. |
-| `team.writeForMe` | Write them for me |
-| `team.writingFor` | Writing {name}'s instructions… |
-| `team.youAreDefaultName` | Maya |
-| `team.youArePlaceholder` | You are {name}. You… |
-| `team.yourKey` | Your key |
 
 ## toolkit
 

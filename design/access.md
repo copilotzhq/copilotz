@@ -43,12 +43,14 @@ boundary: the runtime enforces, so agents can be naive and still safe.
 - **Rules are filters.** Reads are ANDed with the actor's reach; inserts, and the result of every
   update or replace, must match it, so nothing is moved out of reach. A collection without a rule is
   invisible to clients and unchecked for trusted code.
-- **Actions say who may call them from outside** (`allow`: the runtime's `people`, or `inPerson` for
-  what a key must never decide). Record-level access is the rules'. Where trusted code goes on as
-  the system, it first asks `may`, `must` or `mustOwnOr` (the spaces contract), which ask reach:
-  nothing else works that out, so every limit on an actor holds everywhere. Two logged escape
-  hatches for trusted code: acting as a person (a webhook mapping a number to its person) and acting
-  as the system (creating a Personal space at sign-up).
+- **Actions say who may call them** (`allow`: the runtime's `people`, or `inPerson` for what only
+  the person decides, never a key, an agent or a routine), from outside and, since 2026-11-08, from
+  code acting for someone; for an agent, for whom it works too (design/work.md). Record-level access
+  is the rules'. Where trusted code goes on as the system, it first asks `may`, `must` or
+  `mustOwnOr` (the spaces contract), which ask reach: nothing else works that out, so every limit on
+  an actor holds everywhere. Two logged escape hatches for trusted code: acting as a person (a
+  webhook mapping a number to its person) and acting as the system (creating a Personal space at
+  sign-up).
 - **Who:** `personOf` (the runtime's) says whose work this is. A developer key is its person
   (`kind: "person"`, with `key` and `scope`) and a member of its space (`key:<id>`): it reaches what
   its membership and its person both reach, with no org role. Its `scope` (exact names of Actions,
@@ -79,19 +81,23 @@ boundary: the runtime enforces, so agents can be naive and still safe.
 - **Agents are members,** like people: same edges, same roles. Code declares an agent's maximum
   (scopes, tools, whether it may join shared spaces); admins place it within that maximum. The four
   core agents are members of every space by default, listed and removable there.
-- **A turn reaches** the person's reach ∩ the agent's memberships. Agents never change memberships;
-  only an elevated tool can, after a person confirms.
+- **A turn reaches** the person's reach ∩ the agent's memberships ∩ where it works (its chat's
+  space, `in`) and what that draws on; in the person's own Personal space, all they reach
+  (design/work.md, 2026-11-08). Agents never change memberships; only an elevated tool can, after a
+  person confirms.
 - **Broader than the person only through code:** elevated Actions and tools run with a grant of
-  their own and declare what their output reveals (`salary_band` releases an aggregate). The model
-  never holds the grant; the tool's code decides what leaves.
+  their own (`ctx.as(grant("salary_band"))`, on the record as that grant) and declare what their
+  output reveals (`salary_band` releases an aggregate). The model never holds the grant; the tool's
+  code decides what leaves.
 - **No person:** a WhatsApp contact reaches only their conversation, unless a linked phone makes
-  them its person; routines act as their creator.
+  them its person; routines act as their creator, in the routine's space.
 - **Handing work to another space:** an agent may message the agents of any space its person can
   write in (`send_message` with `space`), though it doesn't work there itself. A new chat opens
-  there, which its members see, marked as delegated, for the same person, with what set it going;
-  the answer comes back to the chat it came from. This goes around labels on purpose: what's handed
-  over is what the agent chose to say, and the person accepted that it may repeat something private.
-  The agent is told so.
+  there, which its members see, marked as delegated, for the same person, with what set it going,
+  written under its grant (`chat.hand-over`, on the record with whose work it was and from where);
+  the turn there works there. The answer comes back to the chat it came from. This goes around
+  labels on purpose: what's handed over is what the agent chose to say, and the person accepted that
+  it may repeat something private. The agent is told so.
 
 ## Source labels
 
@@ -104,7 +110,10 @@ boundary: the runtime enforces, so agents can be naive and still safe.
 - **A write into another space** that would reveal foreign sources comes back `needs_share`; chat
   turns it into a question to the requester (a wait).
 - **Labels can creep:** a turn that skimmed many spaces restricts its answer to "only you", plus
-  Share. That's the safe default.
+  Share. That's the safe default. Since 2026-11-08 a turn in a shared space reads only it and what
+  it draws on, which its members all see: labels arise where an agent reaches across a person's
+  spaces (their Personal space), from a person's own writes, and in chats moved from there
+  (design/work.md).
 
 ## Memory
 
@@ -116,7 +125,8 @@ Memories are documents with a home, so no separate permission system:
 
 Private chats reach across all your spaces with nothing to grant. "Remember this everywhere" moves a
 memory; linking spaces as sources shares durably. What North learned in Launch stays in Launch
-otherwise: the same North, recalling what its audience may see.
+otherwise: the same North, recalling what its audience may see. Since 2026-11-08 the runtime holds
+it to that: in Launch, North reaches Launch and its sources alone (design/work.md).
 
 ## For people and for agents
 
@@ -201,7 +211,7 @@ the socket (`Authorization: Bearer <key>`).
   may call writes `message`, `thread` and usage as usual, so the scope gates what the key may ask
   for, and the rules gate what anything may touch.
 - **A key names its space** (`in`) where an Action takes one: there's no default, so REST and the
-  socket behave the same.
+  socket behave the same. Its work is in its space (its actor's `in`, since 2026-11-08).
 - **Making one:** the person picks the space (the one they make it in), a preset (Chat: an editor
   that sends and reads chats; Read only: a viewer that reads them) or a custom pick from what the
   app offers, and a name; the secret shows once. Apps may add presets (`apiPresets`). `GET /api/`
@@ -284,14 +294,14 @@ Also built:
   `agentSources`): one belongs where it was made, whose managers change it, and is read wherever it
   works; a manager adds an agent they've met (one the app declares, or one that belongs to or works
   in a space they reach). Removed, it leaves every space. Reading an agent labels nothing: it's
-  meant for everywhere it works. A turn acts as its agent for its person
-  (`{ kind: "agent", id, for, at }`), reaching what both reach.
+  meant for everywhere it works. A turn acts as its agent for its person where its chat is
+  (`{ kind: "agent", id, for, in }`; `at` until 2026-11-08), reaching what both reach there.
 - **Labels:** the owner keeps, per job, the labels of what it read (a document's space and its
   sources) and hands them to each insert or replace (the runtime's `labels` hook). In a collection
   with `labels: true`, a document written into a space whose members can't all see some of them (not
   the space, nor one it draws on) carries them as `sources`; reading or changing it then needs them
   all reached (`sources: { $not: { $elemMatch: { $nin: reached } } }`, a new operator in every
-  store). An agent writing such a thing anywhere but where it works (`at`), or where labels aren't
+  store). An agent writing such a thing anywhere but where it works (`in`), or where labels aren't
   kept, is refused with `needs_share`. `share` (a person reaching every source and writing there)
   clears them. In the terminal, such a message says "uses Finance: not everyone here can see it",
   and `/share` shows it. Updates keep a document's labels as they are.
@@ -299,8 +309,9 @@ Also built:
 - **Memory homes:** a memory lives in the space it was learned (`in`, from its conversation); the
   memory contexts (core memories, relevant ones each turn) and `recall` keep to the conversation's
   space. To look elsewhere, `recall` takes `in`: a space the agent can read for its person, from the
-  `elsewhere` context (each turn, the other spaces it can read for them, their Personal space
-  first). What it brings from there labels the answer, like any read, so it only looks when it needs
+  `elsewhere` context (each turn, the other spaces it can read for them, their Personal space first;
+  since 2026-11-08, listed only in their Personal space, as an agent elsewhere reaches only where it
+  works). What it brings from there labels the answer, like any read, so it only looks when it needs
   to: searching every space by default would label answers with whatever came up loosely. The list
   is a turn context (told after the conversation, again only when it changes), so a new space or
   member never costs a conversation its cached prompt. Updating a similar memory only matches one

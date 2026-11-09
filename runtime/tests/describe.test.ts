@@ -2,7 +2,8 @@
  * A plugin's declaration: everything it declares, as JSON, read from the
  * plugin and never run (its `allow`s are asked about made-up callers, its
  * startup check runs on its own configuration). A tiny plugin shows each
- * part; Copilotz's own plugins show it holds for real ones.
+ * part; Copilotz's own plugins show it holds for real ones (and each product
+ * package's tests, for its own).
  */
 import { assert, assertEquals, assertFalse } from "@std/assert";
 import {
@@ -24,7 +25,6 @@ import {
   probe,
   underName,
 } from "../describe.ts";
-import { boards } from "../../plugins/work/mod.ts";
 import { chat } from "../../plugins/agents/mod.ts";
 import { googleSignIn, identity } from "../../plugins/access/mod.ts";
 import { api, maintenance, mcp } from "../../plugins/interfaces/mod.ts";
@@ -439,29 +439,7 @@ test("probe, helpers, places, paths and methods", () => {
   assertEquals(methodsOf(() => new Response()), []);
 });
 
-test("describe: Copilotz's boards, chat, mcp, identity, google sign-in, maintenance and api", async () => {
-  // Boards: its collections under the rules, its Actions for people, its tools for agents.
-  const b = await describe(boards);
-  assertEquals(b.requires, ["chat", "spaces"]);
-  assertEquals(b.keeps.map((c) => [c.name, c.shared]), [["board", true], ["card", true]]);
-  for (const a of b.actions) {
-    assertEquals(
-      [
-        a.name,
-        a.helper,
-        a.callers?.person,
-        a.callers?.agent,
-        a.callers?.contact,
-        a.callers?.anonymous,
-      ],
-      [a.name, "people", "yes", "yes", "no", "no"],
-    );
-  }
-  assertEquals(b.actions.find((a) => a.name === "card.create")!.tool, "create_card");
-  assert(b.tools.some((t) => t.name === "read_board"));
-  assertEquals(b.powers, ["guard"]);
-  assert(b.listing.listable);
-
+test("describe: Copilotz's chat, mcp, identity, google sign-in, maintenance and api", async () => {
   // Chat: people and contacts send as themselves, never an agent; its own code says; a route
   // outside its name.
   const c = await describe(chat);

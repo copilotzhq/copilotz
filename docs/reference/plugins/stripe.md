@@ -10,7 +10,7 @@ description: "Stripe: one way an org pays, for `credits`, which never asks it an
 Stripe: one way an org pays, for `credits`, which never asks it anything.
 
 ```ts
-import { stripe } from "copilotz/plugins/billing";
+import { stripe } from "@copilotz/billing";
 ```
 
 ## What it keeps
@@ -56,8 +56,8 @@ It also reads `billing` and `org`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`credits`](credits.md): add it too.
 
-It moves to its own package, `@copilotz/billing`, for `copilotz` `^1.0.0-rc.32`. Until then, it
-ships in `copilotz`.
+It ships in a package of its own, `@copilotz/billing@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+install it beside `copilotz`.
 
 ## What it does on its own
 

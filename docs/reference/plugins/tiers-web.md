@@ -10,7 +10,7 @@ description: "Tiers' web front end, for the browser."
 Tiers' web front end, for the browser.
 
 ```ts
-import { tiersWeb } from "copilotz/plugins/agents/web";
+import { tiersWeb } from "@copilotz/team/web";
 ```
 
 ## What it keeps
@@ -37,8 +37,8 @@ Nothing to set: it works as it comes.
 The runtime doesn't start without [`web-shell`](web-shell.md), [`spaces-web`](spaces-web.md) and
 [`team-web`](team-web.md): add them too.
 
-It moves to its own package, `@copilotz/team`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
-in `copilotz`.
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+install it beside `copilotz`.
 
 ## Listing
 

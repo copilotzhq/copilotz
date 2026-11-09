@@ -46,6 +46,7 @@
     "./web/node": "./hosts/web/node/mod.ts",
     "./terminal": "./hosts/terminal/mod.ts",
     "./exporters": "./exporters/mod.ts",
+    "./describe": "./runtime/describe.ts",
     "./testing": "./testing/mod.ts",
     "./testing/words": "./testing/words.ts"
   },

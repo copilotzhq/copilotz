@@ -106,6 +106,9 @@ same, as data.
 - [`directory-member`](plugins/directory-member.md): `member(dir, org)`: the plugin each org's
   runtime gets from the directory (`dir`, its runtime) that serves it, beside the app's own plugins.
   In `@copilotz/directory`.
+- [`directory-web`](plugins/directory-web.md): The directory's web front end, for apps that serve
+  many orgs behind one address: it fills the web shell's `orgs` slot, and draws the org's pages. In
+  `@copilotz/directory`.
 - [`documents`](plugins/documents.md): Documents: shared Markdown in a space, for people and agents
   — the canonical artifact of the thing being made, and its working memory. In `@copilotz/work`.
 - [`documents-web`](plugins/documents-web.md): Documents' web front end, for the browser. In

@@ -17,6 +17,8 @@ outside callers. Go through your Actions:
   that read across its person's spaces from a shared chat finds less. Have the space draw on the
   other (`member.set` of a space), work from the person's Personal space, or hand the work over.
 - Tools read where they are from `ctx.in`, not their chat's `in`.
+- A developer key no longer calls what's now `inPerson` (`space.create`, `member.*`, `invitation.*`,
+  `share`, `chat.move`, `agent.create`…), even listed in its scope.
 - An MCP line listing a tool without its `tool:<name>` View doesn't start: add the View.
 
 ```ts

@@ -201,6 +201,8 @@ Mobizap, Cocria and Compass:
   space into it), work from the person's Personal space, or hand the work over.
 - **Tools say where they are:** read `ctx.in` instead of the chat's `in`. Hosts calling as a person
   in a space may say it (`{ actor: { ...ana, in } }`; a browser client's `call(…, { in })`).
+- **Developer keys** no longer call what's now `inPerson` (`space.create`, `member.*`,
+  `invitation.*`, `share`, `chat.move`, `agent.create`…), even listed in their scope.
 - **MCP:** a line listing a tool without its `tool:<name>` View no longer starts.
 - **An agent actor's `at` is `in`;** a timer set with `at` before runs as it was, not narrowed.
 
@@ -211,5 +213,5 @@ Mobizap, Cocria and Compass:
 - **Narrowing a person's own work** by the page they're on: not done (it would refuse moving a chat
   from one space's page to another, and adds nothing a person couldn't do by opening the other
   page).
-- **`space.create` and `agent.*` as `inPerson`** keep keys out too; an app that provisions spaces or
-  agents with a key would call them as the system.
+- **`space.create` and `agent.create/update/delete` as `inPerson`** keep keys out too; an app that
+  provisions spaces or agents with a key would call them as the system.

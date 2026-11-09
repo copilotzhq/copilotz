@@ -5,7 +5,7 @@
  * the space), labels and due date. The board is read in the same commit, so
  * the card never lands in a column that was just removed.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Board, Card } from "../contract.ts";
 import { invalid, notFound, said } from "../shared/errors.ts";
 import {
@@ -42,7 +42,7 @@ export const createCardAction = defineAction({
     required: ["board", "title"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const title = input.title.trim();
     if (!title) throw invalid("A card needs a title.");

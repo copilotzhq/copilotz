@@ -3,7 +3,7 @@
  * any of its title, description, assignee (someone in the space), labels and
  * due date; `null` clears one. Moving it is `card.move`.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { invalid, readOnly, said } from "../shared/errors.ts";
 import {
   ASSIGNEE,
@@ -34,7 +34,7 @@ export const updateCardAction = defineAction({
     required: ["card"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const found = await cardOf(ctx, input.card);
     const set: Record<string, unknown> = {};

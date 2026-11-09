@@ -1,8 +1,10 @@
 /**
  * Memories live where they were learned. What Ana's agent learned in
- * Finance doesn't come up in Launch, by itself or recalled; the agent is
- * told, each turn, where else it can read for Ana, and recalling it from
- * Finance there labels the answer: Bob, in Launch, doesn't see it.
+ * Finance doesn't come up in Launch, by itself or recalled: working in
+ * Launch, it reaches Launch and what Launch draws on, never Ana's other
+ * spaces. In Ana's Personal space, which only she sees, it's told where
+ * else it can read for her, and recalling from Finance there labels the
+ * answer. Once Launch draws on Finance, recalling it there is Launch's own.
  */
 import { assert, assertEquals } from "@std/assert";
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
@@ -83,36 +85,57 @@ test("a memory stays where it was learned; recalled from there, the answer carri
     assertEquals(await listed(bob, "finance"), []);
     const launch = await say(ana, "hello", { in: "launch" });
 
-    // Not in Launch's prompt by itself; where else to look is, each turn, for whom it works.
-    const promptFor = (person: Actor) =>
+    // Not in Launch's prompt, by itself or as somewhere else to look: it works in Launch.
+    const promptFor = (person: Actor, where: string) =>
       runtime.query<Prompt>("thread.prompt", { thread: launch, agent: "lead" }, {
-        actor: { kind: "agent", id: "lead", for: person },
+        actor: { kind: "agent", id: "lead", for: person, in: where },
       });
-    const prompt = await promptFor(ana);
+    const prompt = await promptFor(ana, "launch");
     assert(!JSON.stringify(prompt).includes("10k"), JSON.stringify(prompt.system));
-    assert(!prompt.system.join().includes("finance"), "the list stays out of the cached text");
-    assert(
-      prompt.turn.map((c) => c.text).join().includes("- Finance [in: finance]"),
-      JSON.stringify(prompt.turn),
-    );
-    assert(
-      !(await promptFor(bob)).turn.map((c) => c.text).join().includes("Finance"),
-      "Bob doesn't reach it",
-    );
+    assert(!JSON.stringify(prompt).includes("Finance"), JSON.stringify(prompt.turn));
 
-    // Recalled in Launch, it searches Launch: nothing, and nothing labelled.
-    const texts = async (actor: Actor) =>
-      (await runtime.query<Message[]>("message.history", { thread: launch }, { actor }))
+    // Recalled in Launch, it searches Launch; asked to look in Finance, it can't: nothing either.
+    const texts = async (actor: Actor, thread = launch) =>
+      (await runtime.query<Message[]>("message.history", { thread }, { actor }))
         .filter((m) => !m.private).map((m) => m.text);
     await say(ana, "recall budget", { thread: launch });
-    const nothing = ["hello", "ok", "recall budget", "Recalled: Nothing remembered about that."];
-    assertEquals(await texts(bob), nothing);
-
-    // Recalled from Finance: Ana sees the answer; Bob, who doesn't see Finance, doesn't.
     await say(ana, "recall budget in finance", { thread: launch });
-    const hers = await texts(ana);
+    const nothing = "Recalled: Nothing remembered about that.";
+    const asked = ["hello", "ok", "recall budget", nothing, "recall budget in finance", nothing];
+    assertEquals(await texts(ana), asked);
+    assertEquals(await texts(bob), asked);
+
+    // In Ana's Personal space, only she sees what's said: Finance is somewhere else to look, and
+    // recalled from there, the answer carries it.
+    const { space: personal } = await runtime.call<{ space: string }>("space.personal", {}, {
+      actor: ana,
+    });
+    const mine = await say(ana, "hello", { in: personal });
+    const told = await runtime.query<Prompt>("thread.prompt", { thread: mine, agent: "lead" }, {
+      actor: { kind: "agent", id: "lead", for: ana, in: personal },
+    });
+    assert(!told.system.join().includes("finance"), "the list stays out of the cached text");
+    assert(
+      told.turn.map((c) => c.text).join().includes("- Finance [in: finance]"),
+      JSON.stringify(told.turn),
+    );
+    await say(ana, "recall budget in finance", { thread: mine });
+    const hers = await texts(ana, mine);
     assert(hers.some((text) => text?.includes("budget is 10k")), JSON.stringify(hers));
-    assertEquals(await texts(bob), [...nothing, "recall budget in finance"]);
+    const answer = (await runtime.query<Message[]>("message.history", { thread: mine }, {
+      actor: ana,
+    })).findLast((m) => m.text?.includes("budget is 10k"));
+    assertEquals(answer?.sources, ["finance"]);
+
+    // Once Launch draws on Finance, it's Launch's to look in: found there, for everyone there.
+    await runtime.call("member.set", {
+      space: "finance",
+      member: { kind: "space", id: "launch" },
+      role: "viewer",
+    }, { actor: ana });
+    await say(ana, "recall budget in finance", { thread: launch });
+    const now = await texts(bob);
+    assert(now.at(-1)?.includes("budget is 10k"), JSON.stringify(now));
   } finally {
     await runtime.close();
   }

@@ -43,7 +43,7 @@ export const visitor = defineCollection({
     /**
      * Who a visitor's secret is, while it lasts and its line is still the
      * app's, with its line (`web`) and its networks' tags (`from`), what its
-     * messages and connections count by. One that hasn't spoken yet (no
+     * messages and connections count by, in its line's space (`in`). One that hasn't spoken yet (no
      * record) is who its secret says: nothing is kept for it. Once it's
      * spoken, the contact it is, while that's still there (erased, it's no
      * one at once). The system's alone: the web lines' `who` asks.
@@ -55,10 +55,15 @@ export const visitor = defineCollection({
       if (!visit || !line || visit.issued + line.days * 86_400_000 < Date.now()) return null;
       const contact = await contactOf(ring!, visit);
       const found = await visitors.findOne({ _id: contact }) as Visitor | null;
-      if (!found) return { kind: "contact", id: contact, web: line.name, from: visit.tags };
+      // In its line's space, where its chat is.
+      if (!found) {
+        return { kind: "contact", id: contact, web: line.name, from: visit.tags, in: line.in };
+      }
       if (found.ended || found.line !== line.name) return null;
       const there = await ctx.db.collection("contact").findOne({ _id: contact });
-      return there ? { kind: "contact", id: contact, web: line.name, from: found.tags } : null;
+      return there
+        ? { kind: "contact", id: contact, web: line.name, from: found.tags, in: line.in }
+        : null;
     },
   },
 });

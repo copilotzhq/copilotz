@@ -2,7 +2,7 @@
  * `document.rename`: a document's new title, as its next version (its text
  * as it is), by someone who may change it (the rules say).
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { keyOf, TITLE } from "../shared/text.ts";
 import { commit, fail, load, plainly } from "../shared/write.ts";
 
@@ -17,7 +17,7 @@ export const renameAction = defineAction({
     required: ["document", "title"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const title = input.title.trim();
     if (!title) throw fail("A document needs a title.", "invalid");

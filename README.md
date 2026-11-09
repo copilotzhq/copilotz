@@ -22,7 +22,7 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.31"`),
+On Deno, name it `copilotz` in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.32"`),
 and the imports below are the same everywhere. Some pieces need a package of their own, installed
 beside it: `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for
 PostgreSQL in the process, and `@types/react` for the front ends' types.
@@ -70,8 +70,9 @@ The runtime knows only these, and plugins are made of them:
   (`ctx.db.collection("note").insertOne(…)`, `find`, `updateOne` with `$set`…), with named queries,
   vector fields and indexes. Every write records an event in the same commit.
 - **Actions:** what can be done, with a JSON Schema input and an `allow(actor, input)` saying who
-  may call them. Every call is on the record (`action.started`, `action.completed`), retryable by
-  id, and everything it causes is its caller's.
+  may call them, from outside and from code acting for someone. Every call is on the record
+  (`action.started`, `action.completed`), retryable by id, and everything it causes is its caller's,
+  where its caller is (`in`).
 - **Processors:** what happens when events happen: ordered per key, at least once, from a durable
   cursor, idempotent by deterministic ids.
 - **Views:** a plugin's front end, found by name: text for the model (`llm.thread`, the agents'
@@ -631,7 +632,7 @@ and an app serves it from there by default:
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.31" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.32" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 
@@ -770,6 +771,9 @@ name, never by importing its code.
     last four hours of a conversation, back from its newest message (summaries too, with `history`);
     what's older stays in the chat. The start moves in steps of a tenth of `maxAge`, so prompts keep
     hitting the provider's cache ([design](design/views.md#history-as-views)).
+  - **Tools know where they are:** a turn works where its chat is, so a tool's `ctx.in` is its
+    conversation's space (with the access plugin, all it reaches there), beside `ctx.agent`,
+    `ctx.thread` and `ctx.trigger`.
   - **A tool call runs once:** before a step's tools run, the step's calls are written (an
     `intent`), and what each returns as soon as it does. A retried turn (it failed after its tools
     ran, its executor died, the runtime restarted) goes on with those calls instead of asking its
@@ -927,19 +931,22 @@ name, never by importing its code.
   agents, other spaces) and roles; collections named in the `shared` resource keep to what each
   actor reaches. People join by accepting an invitation to the email they signed in with; sending
   one never says whether the address has an account. Agents are members too, each working only where
-  it's one; a new space has the app's default agents. An answer drawn from a space not everyone in
-  the conversation can see shows only to those who see both, marked, until someone shares it.
+  it's one; a new space has the app's default agents. An agent's work for someone reaches only where
+  it is (`in`) and what that space draws on (in the person's own Personal space, all they reach),
+  kept in the owner per who, for whom and where. An answer drawn from a space not everyone in the
+  conversation can see shows only to those who see both, marked, until someone shares it.
 - **`identity`**: people and their sessions, and who a session's secret proves: its `who` reads the
   session cookie (`credential.actor`); `POST /signout` ends the session, and `GET /me` says whom the
   page shows. Sign-in plugins set the cookie with its contract's `signedIn`.
 - **`contacts`**: people outside the org who talk to its agents (a WhatsApp customer). A contact is
   its own kind of actor (`{ kind: "contact", id }`), never a person: every Action and query stays
-  shut to it unless it says otherwise (`peopleOrContacts`, as `chat.send` does). Its chat lives in
-  the line's space and is shared with it on its own: it reaches that chat, what's said and filed
-  there, and nothing else; the space's people reach it as any chat there, and the agent working for
-  the contact reaches exactly that chat, never its agents' private steps. Agents are told whom
-  they're talking with. The web interface's site chats (`webLines`, `web.<name>`) let a browser that
-  isn't anyone in as a visitor, a contact once it speaks (see "Visitors").
+  shut to it unless it says otherwise (`peopleOrContacts`; `chat.send` lets in people and contacts
+  writing as themselves, never an agent). Its chat lives in the line's space and is shared with it
+  on its own: it reaches that chat, what's said and filed there, and nothing else; the space's
+  people reach it as any chat there, and the agent working for the contact reaches exactly that
+  chat, never its agents' private steps. Agents are told whom they're talking with. The web
+  interface's site chats (`webLines`, `web.<name>`) let a browser that isn't anyone in as a visitor,
+  a contact once it speaks (see "Visitors"). A contact works in its line's space (`in`).
 - **`googleSignIn`**: sign-in with a Google ID token (the `google` resource names your client). Its
   routes: `POST /signin/google`, which Google's button posts its token to, sets the session's
   cookie; `GET /google` gives the page the client id for its button.
@@ -1093,17 +1100,18 @@ filled by the front ends through resources).
   webhook (`/hooks/voice/<name>`) and the call's socket (`/hooks/voice/<name>/relay`), which
   `listen` and `Deno.serve(runtime.fetch)` carry.
 - **`mcp`**: models outside the app (ChatGPT, Claude, any MCP client) call its tools. A server the
-  app declares (`mcp.<name>`: its space, the tools it lists, each with its `tool:<name>` View, how
-  each is shown, who calls, its limits) is an MCP server at `POST /mcp/<name>`: Streamable HTTP,
-  JSON-RPC 2.0, no session, MCP 2026-07-28 and the versions with a handshake. Each conversation
-  (ChatGPT's `openai/session`, or a `chat` handle the app gives a client that names none) is a
-  contact in a chat of its own in the server's space, its ids an HMAC with the `links` secret. A
-  call runs the tool through chat's runner as that contact, is written there as a step, and answers
-  what the app's agents read of it (only public errors say their words); a request sent again to a
-  tool that changes things is answered from the first, and the server's limits (calls at once, a
-  minute, new conversations an hour, by conversation, user, caller's address and in all) refuse the
-  rest. **Widgets** (MCP Apps, ChatGPT's Apps SDK): a tool's calls shown through a web View of the
-  app's (`tools.<name>.widget`), drawn inside the assistant by the widget host
+  app declares (`mcp.<name>`: its space, the tools it lists, each with its `tool:<name>` View,
+  without which the app doesn't start, how each is shown, who calls, its limits) is an MCP server at
+  `POST /mcp/<name>`: Streamable HTTP, JSON-RPC 2.0, no session, MCP 2026-07-28 and the versions
+  with a handshake. Each conversation (ChatGPT's `openai/session`, or a `chat` handle the app gives
+  a client that names none) is a contact in a chat of its own in the server's space, its ids an HMAC
+  with the `links` secret. A call runs the tool through chat's runner as that contact, where its
+  chat is (the Actions it calls asked their `allow` for the contact), is written there as a step,
+  and answers what the app's agents read of it (only public errors say their words); a request sent
+  again to a tool that changes things is answered from the first, and the server's limits (calls at
+  once, a minute, new conversations an hour, by conversation, user, caller's address and in all)
+  refuse the rest. **Widgets** (MCP Apps, ChatGPT's Apps SDK): a tool's calls shown through a web
+  View of the app's (`tools.<name>.widget`), drawn inside the assistant by the widget host
   (`copilotz/web/widget`) in a template made from the app's `widgets` resource
   (`widgets: widgetsOf({ code, plugins })`, from `copilotz/web/server`), seeded with what the View
   reads, answered on the server as the conversation's contact (its first paint asks nothing). What
@@ -1740,17 +1748,28 @@ Copilotz runs on Node (first), Deno and Bun, and is built for Cloudflare Workers
   no op for 5 seconds rolls back too.
 - **Stream-first:** committed events and live frames go to subscribers immediately, and observed
   Views run again as soon as what they read commits.
-- **Who acts:** an outside call may bind an actor (`runtime.call(action, input, { actor })`, and
-  `query`, `emit`, `observe` likewise). Everything it causes is theirs: nested calls, writes, the
-  events they record (`event.actor`: the log is the audit trail), Processors handling those events,
-  and timers it sets. Without one, the system acts.
-  - **Actions say whom they let call them** (`allow(actor, input)`); without `allow`, actors can't.
+- **Who acts, for whom, where:** an outside call may bind an actor
+  (`runtime.call(action, input,
+  { actor })`, and `query`, `emit`, `observe` likewise): who acts,
+  for whom an agent works (`for`), and where the work is (`in`, an opaque id: a space, to the access
+  plugin). Everything it causes is theirs, there: nested calls, writes, the events they record
+  (`event.actor`: the log is the audit trail), Processors handling those events, timers it sets,
+  Views observed for it; contexts say where (`ctx.in`). Without one, the system acts
+  ([design](design/work.md)).
+  - **Actions say whom they let call them** (`allow(actor, input)`), asked from outside and of code
+    acting for someone (`ctx.call` in a tool, a Processor, another Action); for an agent, of whom it
+    works for too. Without `allow`, an Action is internal: code calls it, actors from outside can't.
+    The runtime's `people` lets in people, their keys and an agent working for one; `inPerson` only
+    the person themselves (never a key, an agent or a routine's work), for what only they decide;
+    `peopleOrContacts` contacts too.
   - **Rules are filters** (a plugin's `guard(actor, { collection, filter }, ctx)`): reads, updates
     and deletes reach only what matches; inserts, and what updates leave, must match. The owner
     applies them to every op an actor's work makes; the access plugin declares them for the
     collections it shares.
   - **Trusted code acts as someone else, on the record:** `ctx.as(person)`, or `ctx.as()` for the
-    system, which no rule restricts; its events say `via` whom.
+    system, which no rule restricts, or a named grant of the system's (`ctx.as(grant("hand-over"))`,
+    counted as `copilotz.elevated.ops`); its events say `via` whom, and stay where the work is
+    unless it says where.
   - Remote executors prove the deployment key, compared in constant time.
   - **Private fields** (`private: ["token"]` on a collection): what an actor's queries and Views
     read comes without them; Actions and Processors acting for them still read them. No event holds

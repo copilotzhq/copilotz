@@ -3,7 +3,7 @@
  * rules say), with the team's usual columns (Backlog, To do, Doing,
  * Blocked, In review, Done) unless it's given its own.
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { columnsNamed, DEFAULT_COLUMNS, MOST_COLUMNS } from "../shared/columns.ts";
 import { invalid, said } from "../shared/errors.ts";
 import { COLUMN_NAME, DESCRIPTION, keyOf, NAME, newId } from "../shared/fields.ts";
@@ -22,7 +22,7 @@ export const createBoardAction = defineAction({
     required: ["in", "name"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     const name = input.name.trim();
     if (!name) throw invalid("A board needs a name.");

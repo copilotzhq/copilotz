@@ -202,7 +202,8 @@ async function customer(
   const contact = await contactOf(ctx, on, received, phone, event);
   await markRead(on.graph, message.id, true).catch(() => {});
   const lines = CUSTOMERS[on.number.language ?? "en"];
-  const as = ctx.as({ kind: "contact", id: contact });
+  // The customer, in its number's space.
+  const as = ctx.as({ kind: "contact", id: contact, in: on.number.in });
   const brings = await broughtBy(ctx, on, from, message, as, lines);
   if (!brings) return;
 
@@ -444,12 +445,14 @@ async function linked(
   await markRead(on.graph, message.id, true).catch(() => {});
   const command = message.type === "text" ? commandOf(wordsOf(message).trim()) : undefined;
   if (command) return await commanded(ctx, on, from, phone, command);
-  const brings = await broughtBy(ctx, on, from, message, as);
+  // They write where their messages go: the space they chose, else their Personal space.
+  const space = await spaceOf(ctx, person, phone.space);
+  const there = ctx.as({ ...person, in: space._id });
+  const brings = await broughtBy(ctx, on, from, message, there);
   if (!brings) return;
 
-  const space = await spaceOf(ctx, person, phone.space);
   const sending = (thread: string) =>
-    written(ctx, on, as, person.id, thread, message, { ...brings, in: space._id });
+    written(ctx, on, there, person.id, thread, message, { ...brings, in: space._id });
   try {
     await sending(phone.thread ?? await opened(ctx, on, phone, event));
   } catch (error) {

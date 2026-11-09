@@ -128,12 +128,13 @@ const actionsOf = (line: Server): Record<string, string> =>
     ),
   );
 
-/** The conversation's contact, as its widgets' Views see it. */
+/** The conversation's contact, as its widgets' Views see it: in its line's space. */
 const contactActor = (line: Server, contact: string): Actor => ({
   kind: "contact",
   id: contact,
   mcp: line.name,
   client: line.client,
+  in: line.in,
 });
 
 /**

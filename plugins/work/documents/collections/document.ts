@@ -9,7 +9,7 @@
  * - `recent`: the latest saved anywhere the asker reaches (`{ limit }`),
  *   said the same way: what the command palette goes to.
  */
-import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
+import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 import { excerptOf, type Without } from "../shared/text.ts";
 
 const documentSchema = {
@@ -60,7 +60,7 @@ export const document = defineCollection({
   indexes: [["in"], ["in", "savedAt"], ["savedAt"]],
   queries: {
     list: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (docs, params: { in: string }) => {
         if (typeof params?.in !== "string") return [];
         const found = await docs.find({ in: params.in }, { sort: { savedAt: -1 } });
@@ -68,7 +68,7 @@ export const document = defineCollection({
       },
     },
     recent: {
-      allow: (actor) => actor.kind === "person",
+      allow: people,
       run: async (docs, params: { limit?: number } = {}) => {
         const limit = Math.min(Math.max(Number(params?.limit) || 30, 1), 100);
         const found = await docs.find({}, { sort: { savedAt: -1 }, limit });

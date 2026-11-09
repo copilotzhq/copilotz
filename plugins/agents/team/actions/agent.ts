@@ -8,7 +8,7 @@
  * change one where it belongs is the rules' business (with the access
  * plugin: those who manage that space).
  */
-import { type Context, defineAction, invalid, people } from "../../../../runtime/mod.ts";
+import { type Context, defineAction, inPerson, invalid, people } from "../../../../runtime/mod.ts";
 import type { Completion } from "../../../models/contract.ts";
 import { agentsOf, defaults, modelOf, SEND, type Tool } from "../../chat/contract.ts";
 import type { AgentDoc } from "../collections/agent.ts";
@@ -85,7 +85,7 @@ export const createAgentAction = defineAction({
     required: ["name"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input: Fields & { in?: string; from?: string; name: string }) => {
     const base = input.from ? agentsOf(ctx)[input.from] : undefined;
     if (input.from && !base) throw invalid(`No agent "${input.from}" to start from.`);
@@ -123,7 +123,7 @@ export const updateAgentAction = defineAction({
     required: ["agent"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input: Fields & { agent: string }) => {
     const { agent, ...given } = input;
     const found = await ctx.db.collection<AgentDoc>("agent").findOne({ _id: agent });
@@ -152,7 +152,7 @@ export const deleteAgentAction = defineAction({
     required: ["agent"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const known = await ctx.db.collection("agent").findOne({ _id: input.agent });
     if (!known) throw invalid(`No agent "${input.agent}" to remove.`);

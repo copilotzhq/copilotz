@@ -60,12 +60,16 @@ export type ApiKey = {
 /** A key as it's kept. */
 export type StoredKey = Infer<typeof keySchema> & ApiKey;
 
-/** A key's actor: its person, with which key it is and what it may use. */
-export const actorOf = (key: Pick<ApiKey, "_id" | "person" | "scope">): KeyActor => ({
+/**
+ * A key's actor: its person, with which key it is and what it may use, working in its space
+ * (`in`), which is all it reaches.
+ */
+export const actorOf = (key: Pick<ApiKey, "_id" | "person" | "scope" | "in">): KeyActor => ({
   kind: "person",
   id: key.person,
   key: key._id,
   scope: key.scope,
+  in: key.in,
 });
 
 export const apiKey = defineCollection({

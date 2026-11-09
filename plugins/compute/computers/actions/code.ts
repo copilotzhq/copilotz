@@ -9,7 +9,7 @@
  * the folder its spaces go in on that computer (`folder`): the org's name,
  * plain, `personal` for one's own (it's named for them).
  */
-import { defineAction, people } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson } from "../../../../runtime/mod.ts";
 import type { Downloads } from "../resources/downloads.ts";
 import { plainName } from "../shared/folder.ts";
 import { code, hash } from "../shared/secret.ts";
@@ -25,7 +25,7 @@ export const codeAction = defineAction({
     properties: { in: { type: "string" } },
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const space = input.in ??
       (await ctx.call<{ space: string }>("space.personal", {})).space;

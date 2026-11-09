@@ -103,6 +103,7 @@ export function presenter(views: Views, reads: () => ReadContext): Render {
       name,
       ...(options.viewer ? { viewer: options.viewer } : {}),
       ...(source.actor ? { actor: source.actor } : {}),
+      ...(source.in !== undefined ? { in: source.in } : {}),
       hints,
       show: (name, item, hints = {}) => views[name]?.(item, context(name, hints)),
       call: once,

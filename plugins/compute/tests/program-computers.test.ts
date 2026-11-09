@@ -47,9 +47,12 @@ const app = definePlugin({
         },
       },
       allow: () => true,
-      run: (ctx, input) =>
+      run: async (ctx, input) =>
         tools[input.tool!].run(input.input ?? {}, {
-          ...ctx,
+          // As a turn's tools run: where its chat is (`in`, on the actor).
+          ...await ctx.as().db.collection<{ in?: string }>("thread")
+            .findOne({ _id: input.thread! })
+            .then((t) => t?.in ? ctx.as({ ...ctx.actor!, in: t.in }) : ctx),
           agent: "assistant",
           thread: input.thread!,
           trigger: "test",

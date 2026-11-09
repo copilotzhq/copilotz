@@ -10,6 +10,17 @@ import { isRead } from "./ops.ts";
 import { invalid, json, readCall, type Registry } from "./registry.ts";
 import type { Actor, Edge } from "./store.ts";
 import { presenter } from "./views.ts";
+import { whereOf } from "./actor.ts";
+
+/** What keeps what rules work out (`ReadContext.kept`): the owner's, for its rules' reads. */
+export type Keeper = <T>(
+  key: string,
+  work: (ctx: ReadContext) => Promise<T>,
+  ctx: ReadContext,
+) => Promise<T>;
+
+/** Keeps nothing: what's worked out is worked out each time. */
+const unkept: Keeper = (_key, work, ctx) => work(ctx);
 
 export function reading(
   registry: Registry,
@@ -18,10 +29,12 @@ export function reading(
   metrics: Metrics,
   fetch: typeof globalThis.fetch,
   actor?: Actor,
+  keeper: Keeper = unkept,
 ): ReadContext {
   const reads: Run = (op) =>
     isRead(op) ? run(op) : Promise.reject(invalid("Queries are read-only"));
   const query = querying(registry, reads, record, metrics, fetch, actor);
+  const where = whereOf(actor);
   const ctx: ReadContext = {
     db: { collection: (name) => collection(name, reads, query) },
     graph: { edges: (query) => reads({ op: "edges", query }) as Promise<Edge[]> },
@@ -35,6 +48,8 @@ export function reading(
     resources: registry.resources,
     adapters: registry.adapters,
     ...(actor ? { actor } : {}),
+    ...(where !== undefined ? { in: where } : {}),
+    kept: (key, work) => keeper(key, work, ctx),
     call: (action, input) => readCall(registry, ctx, ctx.call, action, input),
   };
   return ctx;
@@ -80,6 +95,7 @@ export function startup(
     graph: { edges: none },
     render: none,
     record: none,
+    kept: none,
     metrics,
     fetch,
     resources: registry.resources,

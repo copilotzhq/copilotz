@@ -1,5 +1,10 @@
 /** Delivering a message: the turns it starts and the waits it checks off; and agents' answers. */
-import type { Context, Resources, TransactionScope } from "../../../../runtime/mod.ts";
+import {
+  type Context,
+  grant,
+  type Resources,
+  type TransactionScope,
+} from "../../../../runtime/mod.ts";
 import type { LlmState } from "../../../models/contract.ts";
 import { CUT_SHORT, type Intent, NOT_SENT } from "../collections/intent.ts";
 import type { Message } from "../collections/message.ts";
@@ -162,7 +167,8 @@ export const answer = async (
       ...(outside ? { sources: [thread!.in!] } : {}),
     }
     : undefined;
-  const writer = returned ? ctx.as() : ctx;
+  // Back where it came from, which the agent doesn't work in: a grant of its own, on the record.
+  const writer = returned ? ctx.as(grant("chat.hand-back")) : ctx;
   const deliver = await delivery(
     writer,
     returned ?? reply,

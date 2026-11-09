@@ -14,7 +14,7 @@ import {
 } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
-import { chat, type Thread, tool } from "../../agents/chat/mod.ts";
+import { chat, tool } from "../../agents/chat/mod.ts";
 import { chatTerminal } from "../../agents/chat/terminal.ts";
 import { team } from "../../agents/team/mod.ts";
 import { terminalPlugin } from "../../interfaces/terminal/mod.ts";
@@ -146,6 +146,8 @@ const scripted: LlmAdapter = {
 };
 
 test("an answer drawn from Finance stays with those who see Finance, until Ana shares it", async () => {
+  // Her agent works where she does: in Launch, it reads Launch alone; in her Personal space, which
+  // only she sees, all she reaches. A chat moved from there keeps what it drew on.
   const notes = definePlugin({
     name: "notes",
     collections: {
@@ -172,8 +174,7 @@ test("an answer drawn from Finance stays with those who see Finance, until Ana s
           description: "Write a note here.",
           input: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
           run: async ({ text }, ctx) => {
-            const t = await ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread });
-            await ctx.db.collection("note").insertOne({ in: t!.in, text });
+            await ctx.db.collection("note").insertOne({ in: ctx.in, text });
             return "Noted.";
           },
         }),
@@ -209,13 +210,20 @@ test("an answer drawn from Finance stays with those who see Finance, until Ana s
   });
   try {
     await runtime.call("person.set", { person: "bob", email: "bob@example.com" });
-    await session(runtime, "ana", [
+    const launch = await session(runtime, "ana", [
       "/space Finance",
       "note: budget is 10k",
       "/space Launch",
       "/invite bob@example.com viewer",
       "read finance",
     ]);
+    assertStringIncludes(launch, "lead › Notes: none");
+    const personal = await session(runtime, "ana", [
+      "/work personal:ana",
+      "read finance",
+      "/move Launch",
+    ]);
+    assertStringIncludes(personal, "lead › Notes: budget is 10k");
     const before = await session(runtime, "bob", [
       "/invitations",
       "/accept 1",

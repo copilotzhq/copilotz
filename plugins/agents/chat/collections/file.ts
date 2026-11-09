@@ -113,6 +113,15 @@ export const FILE_DATA = 14_000_000;
 export const MOST_FILES = 10;
 
 /**
+ * Who writes as themselves (`chat.send`, `chat.attach`): people (and their
+ * keys) and contacts, whose messages and files are their own. Never an
+ * agent, whomever it works for: its words are its turn's, never its
+ * person's.
+ */
+export const themselves = (actor: { kind: string }): boolean =>
+  actor.kind === "person" || actor.kind === "contact";
+
+/**
  * Whose drafts are whose: a person by id, a contact as `contact:<id>`
  * (as messages name their sender), the system as `system`; anyone else
  * (an agent) has none.

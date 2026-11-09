@@ -4,6 +4,7 @@ import {
   type Filter,
   type Infer,
   people,
+  personOf,
   type ReadCollection,
 } from "../../../../runtime/mod.ts";
 import { categoriesOf, rollupsOf } from "../shared/settings.ts";
@@ -76,11 +77,12 @@ export const usage = defineCollection({
         params: { filter?: Filter; by?: string[]; units?: string[] } = {},
         ctx,
       ) => {
-        const person = ctx.actor?.kind === "person";
+        // Anyone but the system sees their person's own (an agent, its person's).
+        const person = !!ctx.actor && ctx.actor.kind !== "system";
         const found = await totals(
           records as ReadCollection<UsageRecord>,
           person
-            ? { ...params, filter: { ...params.filter, "tags.person": ctx.actor!.id } }
+            ? { ...params, filter: { ...params.filter, "tags.person": personOf(ctx.actor) ?? "" } }
             : params,
           { db: ctx.db, rollups: rollupsOf(ctx), categories: categoriesOf(ctx) },
         );

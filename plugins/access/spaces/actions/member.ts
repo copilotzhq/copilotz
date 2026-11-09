@@ -12,7 +12,13 @@
  * key (`{ kind: "key", id }`) is seated by the plugin that made it, with
  * the role what it may do says; its managers take it out (which revokes it).
  */
-import { type Context, defineAction, forbidden, invalid, people } from "../../../../runtime/mod.ts";
+import {
+  type Context,
+  defineAction,
+  forbidden,
+  inPerson,
+  invalid,
+} from "../../../../runtime/mod.ts";
 import { mustKnow, unseat } from "../shared/agents.ts";
 import { keepsAManager } from "../shared/managers.ts";
 import { joinable } from "../shared/personal.ts";
@@ -68,7 +74,7 @@ export const setMemberAction = defineAction({
     required: ["space", "member", "role"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     if (input.space === ORG) throw forbidden("Org roles change with org.role.");
     // A key's role follows from what it may do: only trusted code (its plugin's) seats one.
@@ -118,7 +124,7 @@ export const removeMemberAction = defineAction({
     required: ["space", "member"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     if (input.space === ORG) throw forbidden("People leave the org with org.remove.");
     const place = await manages(ctx, input.space, input.on);

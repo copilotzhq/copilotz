@@ -4,7 +4,7 @@
  * an app of the space, under `name`. Asking is their own yes. It answers at
  * once, building; the app goes live in a few minutes (see app.build).
  */
-import { defineAction, people } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson } from "../../../../runtime/mod.ts";
 import { failure } from "../shared/errors.ts";
 import { publish } from "../shared/publish.ts";
 import { may } from "../../../access/spaces/contract.ts";
@@ -30,7 +30,7 @@ export const publishAction = defineAction({
     required: ["name"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const person = ctx.actor!.id;
     const space = input.in ?? (await ctx.call<{ space: string }>("space.personal", {})).space;

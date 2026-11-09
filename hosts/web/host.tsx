@@ -258,8 +258,13 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
       ...(space ? { space } : {}),
       ...(query ? { query } : {}),
     };
+    // Where the page is: a space's page is in that space, any other where the person works. What
+    // its Views call is done there (`in`, the work's), as the shell says (`hints.in`).
+    const [kind, ...rest] = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    const here = kind === "space" && rest.length ? rest.join("/") : space;
     const shell = client.observe("web.shell", where, {
       viewer,
+      ...(here ? { actor: { ...first.actor, in: here } } : {}),
       part: (part, key) => <Part key={key} part={part} />,
     });
     draw(<Part part={shell} />);

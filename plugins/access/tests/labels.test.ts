@@ -24,7 +24,7 @@ import { tempFile, test } from "../../../testing/mod.ts";
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
 /** An agent working for Ana in Launch. */
-const north: Actor = { kind: "agent", id: "north", for: ana, at: "launch" };
+const north: Actor = { kind: "agent", id: "north", for: ana, in: "launch" };
 
 type Doc = { _id: string; in: string; text: string; sources?: string[] };
 const text = { type: "string" } as const;
@@ -133,36 +133,53 @@ each("an answer from a space not everyone sees carries it, until it's shared", a
   assertEquals(await answers(rt, bob), ["budget + plan", "plan"]);
 });
 
-each("an agent can't take what it read where not everyone may see it", async (rt) => {
-  // In Launch, where it works, its answer carries Finance, as Ana's would.
+each("an agent works where it is, and takes nothing from elsewhere", async (rt) => {
+  // In Launch, it reads Launch alone: Finance isn't there for it, so its answer carries nothing.
   await rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "answer" }, {
     actor: north,
   });
-  assertEquals(await answers(rt, bob), []);
-  assertEquals(await answers(rt, ana), ["budget + plan"]);
-  // Into a collection that keeps no labels, or anywhere else: refused.
-  await assertRejects(
-    () =>
-      rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "note" }, {
-        actor: north,
-      }),
-    Error,
-    "has to share it",
-  );
+  assertEquals(await answers(rt, bob), ["plan"]);
+  await rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "note" }, {
+    actor: north,
+  });
+  // Nor does it write anywhere else, though it works in Marketing too: handing work over is a
+  // person's (or trusted code's) to do.
   await rt.call("space.create", { id: "marketing", name: "Marketing" }, { actor: ana });
   await hire(rt, "marketing");
   await assertRejects(
     () =>
-      rt.call("summarize", { from: ["finance"], into: "marketing", as: "answer" }, {
-        actor: north,
+      rt.call("summarize", { from: ["launch"], into: "marketing", as: "note" }, { actor: north }),
+    Error,
+    "out of your reach",
+  );
+  // In Ana's Personal space only she sees what's said: there it reaches all she does, and what
+  // it writes carries where it came from.
+  const { space: personal } = await rt.call<{ space: string }>("space.personal", {}, {
+    actor: ana,
+  });
+  await hire(rt, personal);
+  const mine: Actor = { ...north, in: personal };
+  await rt.call("summarize", { from: ["launch", "finance"], into: personal, as: "answer" }, {
+    actor: mine,
+  });
+  // (Launch's notes: Ana's, and the one it wrote there.)
+  assertEquals(await answers(rt, ana), ["budget + plan + plan", "plan"]);
+  assertEquals(await answers(rt, bob), ["plan"]);
+  // It can't take that anywhere else, nor where labels aren't kept: a person has to share it.
+  await assertRejects(
+    () =>
+      rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "answer" }, {
+        actor: mine,
       }),
     Error,
     "has to share it",
   );
-  // Even Launch's own notes don't go to Marketing without a person: it's another space.
-  await assertRejects(() =>
-    rt.call("summarize", { from: ["launch"], into: "marketing", as: "note" }, { actor: north })
+  await assertRejects(
+    () =>
+      rt.call("summarize", { from: ["launch", "finance"], into: personal, as: "note" }, {
+        actor: mine,
+      }),
+    Error,
+    "has to share it",
   );
-  // Where it works, from there, it writes freely: nothing to carry.
-  await rt.call("summarize", { from: ["launch"], into: "launch", as: "note" }, { actor: north });
 });

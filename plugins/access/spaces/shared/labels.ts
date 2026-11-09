@@ -127,7 +127,8 @@ export const labels: Labels = {
     }
     const foreign = [...found];
     if (!foreign.length) return doc;
-    const elsewhere = typeof actor.at === "string" && actor.at !== space;
+    // Where it works (`in`): an agent writing elsewhere what not everyone there can see is refused.
+    const elsewhere = typeof actor.in === "string" && actor.in !== space;
     if (actor.kind === "agent" && (elsewhere || !shared!.labels)) {
       throw needsShare(foreign, await described(foreign, ctx));
     }

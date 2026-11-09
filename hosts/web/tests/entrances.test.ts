@@ -261,11 +261,12 @@ test("a visitor: let in by a line its page names, nothing made until it speaks, 
       first.set!,
       /^visitor=vis_site\.[\w-]{22}\.[0-9a-z]+\.32-[0-9a-f]{16}~24-[0-9a-f]{16}\.[0-9a-f]{32}; HttpOnly; SameSite=Strict; Path=\/; Max-Age=\d{7}$/,
     );
-    // The visitor the server issued: its line, and its networks' tags (an IPv4 address, its /24),
-    // what its messages are counted by; never the address.
+    // The visitor the server issued: its line, where it works (the line's space), and its
+    // networks' tags (an IPv4 address, its /24), what its messages are counted by; never the
+    // address.
     const actor = (await visitorOf(runtime, first.cookie!))!;
     const { from: _, ...whoIs } = actor;
-    assertEquals(whoIs, { kind: "contact", id: visitor.id, web: "site" });
+    assertEquals(whoIs, { kind: "contact", id: visitor.id, web: "site", in: "visitors" });
     assertEquals((actor.from as string[]).map((tag) => tag.split("-")[0]), ["32", "24"]);
     assert(!JSON.stringify(actor).includes("203.0.113"));
     // Coming in made nothing, however many come: no contact, chat, membership, nor record.

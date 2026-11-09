@@ -19,10 +19,6 @@ import { type Author, commit, create, type Written } from "../shared/write.ts";
 type Ctx = ToolContext;
 type Db = Ctx["db"];
 
-/** The space the agent's conversation is in. */
-const spaceOf = async (ctx: Ctx) =>
-  (await ctx.db.collection<Thread>("thread").findOne({ _id: ctx.thread }))?.in;
-
 const inSpace = (_agent: string, thread: Thread) => !!thread.in;
 
 const author = (ctx: Ctx): Author => {
@@ -91,7 +87,7 @@ async function change(
   how: (doc: Document) => { title?: string; text: string } | string,
   kind: DocumentVersion["kind"],
 ): Promise<string> {
-  const space = await spaceOf(ctx);
+  const space = ctx.in;
   if (!space) return "This conversation isn't in a space: there are no documents here.";
   try {
     return await ctx.transaction(async (tx) => {
@@ -120,7 +116,7 @@ const listDocuments = tool({
     "read_document before you change it.",
   input: { type: "object", properties: {} },
   run: async (_, ctx) => {
-    const space = await spaceOf(ctx);
+    const space = ctx.in;
     if (!space) return "This conversation isn't in a space: there are no documents here.";
     const docs = await ctx.db.collection<Document>("document").find({ in: space }, {
       sort: { savedAt: -1 },
@@ -152,7 +148,7 @@ const readDocument = tool({
     required: ["document"],
   },
   run: async ({ document, version }, ctx) => {
-    const space = await spaceOf(ctx);
+    const space = ctx.in;
     if (!space) return "This conversation isn't in a space: there are no documents here.";
     const doc = await named(ctx.db, space, document);
     if (typeof doc === "string") return doc;
@@ -205,7 +201,7 @@ const writeDocument = tool({
         "write",
       );
     }
-    const space = await spaceOf(ctx);
+    const space = ctx.in;
     if (!space) return "This conversation isn't in a space: there's nowhere to write.";
     const name = title?.trim();
     if (!name) return "A new document needs a title.";

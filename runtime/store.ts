@@ -40,9 +40,10 @@ export type Projection = Record<string, 0 | 1 | boolean>;
 /**
  * Who acts: bound once by an outside call (a person, a key, a device, a
  * channel), carried by everything it causes. The runtime gives it no meaning
- * beyond `kind` and `id`; plugins (access) do. None: the system.
+ * beyond `kind` and `id`, and `in`, where the work is, which it only carries
+ * (see actor.ts); plugins (access) do. None: the system.
  */
-export type Actor = { kind: string; id: string; [more: string]: unknown };
+export type Actor = { kind: string; id: string; in?: string; [more: string]: unknown };
 
 export type Event = {
   seq: number;

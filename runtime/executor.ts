@@ -14,6 +14,8 @@ import { refuseBlobKeys } from "./blobs.ts";
 import { querying as queryingOver, reading as readingOver } from "./reads.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import type { Actor, Doc, Edge, Event } from "./store.ts";
+import { allows, whereOf } from "./actor.ts";
+import { forbidden } from "./errors.ts";
 import {
   decode,
   DISPATCH,
@@ -189,7 +191,7 @@ export function createExecutor(
     actor?: Actor,
   ): Context => {
     const run: Run = (op) => job.send({ ops: [op], cause, ...(actor ? { actor } : {}) });
-    return {
+    const ctx: Context = {
       db: { collection: (name) => collection(name, run, querying(run, job.record, actor)) },
       graph: {
         link: (from, type, to, data) =>
@@ -207,7 +209,9 @@ export function createExecutor(
       branch: (key) =>
         context(job, cause, event, scheduled, `${numbering ?? crypto.randomUUID()}/${key}`, actor),
       ...(actor ? { actor } : {}),
-      // Acting as someone else, or as the system: what it does says on whose behalf.
+      ...(whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
+      // Acting as someone else, or as the system: what it does says on whose behalf, and stays
+      // where the work is unless it says where.
       as: (other) =>
         context(
           job,
@@ -216,9 +220,18 @@ export function createExecutor(
           scheduled,
           numbering,
           other
-            ? { ...other, ...(actor ? { via: actor } : {}) }
+            ? {
+              ...other,
+              ...(actor ? { via: actor } : {}),
+              ...(!("in" in other) && whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
+            }
             : actor
-            ? { kind: "system", id: "system", via: actor }
+            ? {
+              kind: "system",
+              id: "system",
+              via: actor,
+              ...(whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
+            }
             : undefined,
         ),
       schedule: async (action, input, when) => {
@@ -240,6 +253,8 @@ export function createExecutor(
           }),
         ),
       render: presenter(registry.views, () => reading(run, job.record, actor)),
+      // Kept only in the owner, for its rules: here it's worked out each time.
+      kept: (_key, work) => work(ctx),
       record: job.record,
       metrics,
       fetch: outside,
@@ -251,6 +266,7 @@ export function createExecutor(
       retry: job.retry,
       signal: job.signal,
     };
+    return ctx;
   };
 
   /** A job's workers: work sent on through the owner, stopped when the job is. */
@@ -326,6 +342,14 @@ export function createExecutor(
     inputs[name]?.(normalized);
     // An Action's input may hold no `$blob` key (see blobs.ts), as the owner checks outside calls'.
     refuseBlobKeys(normalized);
+    // Code acting for someone calls what lets them, as they would from outside (an agent, for
+    // whom it works for too); what has no `allow` is internal, code's to call. Going on where
+    // they couldn't is a grant of the system's (`ctx.as`), on record as one.
+    if (
+      action.allow && actor && actor.kind !== "system" && !allows(action.allow, actor, normalized)
+    ) {
+      throw forbidden(`${actor.kind} ${actor.id} may not call "${name}".`);
+    }
     if (action.record === false) {
       return await action.run(
         context(job, parent, undefined, given?.scheduled, parent, actor),

@@ -10,9 +10,30 @@
  * reach, and has no org role, so even an admin's key reaches only its space,
  * at its role. Everything that asks what someone may do asks here, so those
  * limits hold everywhere.
+ *
+ * **Where the work is.** Work for someone (an agent's, a key's) that is
+ * somewhere (`actor.in`, a space) reaches only there, and what that space
+ * draws on, at most with the role it draws on it with: the person's reach ∩
+ * the agent's memberships ∩ where it works. So North working for Ana in
+ * Launch reaches Launch and its sources, never Ana's other spaces, whose
+ * words would otherwise end up before Launch's members. Ana's own Personal
+ * space is the one exception: only she sees it, so her agents there reach
+ * all she does. Work done as a person for them (`onBehalf`: a tool acting
+ * as its agent's person, a routine as its maker) is narrowed the same way. A
+ * person acting themselves isn't (they reach what they reach from any page),
+ * nor is code acting as them for themselves, nor work that's nowhere in
+ * particular.
+ *
+ * **Kept.** Reach is asked on every op an actor's work makes. It's kept in
+ * the owner by everything it depends on (who, for whom, where: `reachKey`)
+ * until a commit changes a membership or a space it read (the runtime's
+ * `kept`), and an agent's keeps its person's and its own memberships apart,
+ * so they're worked out once for every place it works. What's kept is
+ * shared: callers never change a `Reach` they're given.
  */
-import type { Actor, ReadContext } from "../../../../runtime/mod.ts";
+import { type Actor, onBehalf, type ReadContext, whereOf } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
+import { PERSONAL } from "./personal.ts";
 
 export type Verb = "read" | "write" | "manage";
 /**
@@ -70,8 +91,13 @@ export const rolesOf = (ctx: Pick<ReadContext, "resources">): Record<string, Ver
 
 /**
  * Spaces reached from `key`, through the spaces it's in, each with the verbs
- * along the path: one query per level (the owner keeps them cached).
+ * along the path: one query per level (the owner keeps them cached), with
+ * where each document reached on its own lives; kept apart, as an agent's
+ * are the same wherever it works and whomever for.
  */
+const membershipsOf = (key: string, ctx: ReadContext): Promise<Reach> =>
+  ctx.kept(`spaces.members:${key}`, async (ctx) => await housed(await walk(key, ctx), ctx));
+
 async function walk(key: string, ctx: ReadContext): Promise<Reach> {
   const roles = rolesOf(ctx);
   const members = ctx.db.collection<Member>("member");
@@ -118,9 +144,40 @@ async function everything(ctx: ReadContext): Promise<Reach> {
 
 /**
  * What `actor` reaches; an agent acting for someone (`for`), what both
- * reach; a key, what it and its person both reach.
+ * reach; a key, what it and its person both reach; either, somewhere
+ * (`in`), only there and what it draws on. Kept (see the module's header):
+ * never change what it answers.
  */
-export async function reachOf(actor: Actor, ctx: ReadContext): Promise<Reach> {
+export function reachOf(actor: Actor, ctx: ReadContext): Promise<Reach> {
+  return ctx.kept(`spaces.reach:${reachKey(actor)}`, (ctx) => reaching(actor, ctx));
+}
+
+/**
+ * What an actor's reach depends on besides what it reads: who, a key, staff,
+ * for whom (as theirs), and where, for work for someone (a person's own
+ * isn't narrowed, so it's the same on every page).
+ */
+export function reachKey(actor: Actor): string {
+  return JSON.stringify([
+    actor.kind,
+    actor.id,
+    keyOf(actor) ?? null,
+    actor.staff === true,
+    actor.for && typeof actor.for === "object" ? reachKey(actor.for as Actor) : null,
+    narrows(actor) ? whereOf(actor) ?? null : null,
+  ]);
+}
+
+/**
+ * Whether where an actor's work is narrows what it reaches: work for someone
+ * (an agent's, a key's), or done as a person for them (`onBehalf`: a routine,
+ * a tool acting as its agent's person); never a person's own, nor code
+ * acting as them for themselves.
+ */
+const narrows = (actor: Actor): boolean =>
+  !!worksFor(actor) || (actor.kind === "person" && onBehalf(actor));
+
+async function reaching(actor: Actor, ctx: ReadContext): Promise<Reach> {
   const reach = await unlimited(actor, ctx);
   // A space put away is read and managed, not written in, until it's brought back: nor what's in it.
   const archived = new Set(
@@ -133,7 +190,45 @@ export async function reachOf(actor: Actor, ctx: ReadContext): Promise<Reach> {
       reach.set(key, { ...held, can: new Set([...held.can].filter((v) => v !== "write")) });
     }
   }
-  return reach;
+  const where = whereOf(actor);
+  return narrows(actor) && where !== undefined
+    ? await narrowed(reach, where, worksFor(actor) ?? actor, ctx)
+    : reach;
+}
+
+/**
+ * `reach`, for work done in `space` for `principal`: only that space, and
+ * what it draws on, with at most the verbs it draws on it with (its role
+ * there), documents shared on their own where they live. In the
+ * principal's own Personal space, all of it: nobody else sees what's said
+ * there.
+ */
+async function narrowed(
+  reach: Reach,
+  space: string,
+  principal: Actor,
+  ctx: ReadContext,
+): Promise<Reach> {
+  const found = await ctx.db.collection<{ kind?: string; owner?: string }>("space").findOne({
+    _id: space,
+  });
+  if (found?.kind === PERSONAL && principal.kind === "person" && found.owner === principal.id) {
+    return reach;
+  }
+  const drawn = await reachOf({ kind: "space", id: space }, ctx);
+  const all = new Set<Verb>(ALL);
+  const within: Reach = new Map();
+  for (const [key, held] of reach) {
+    const at = held.on ? held.home : key;
+    const can = at === space
+      ? all
+      : at !== undefined && !drawn.get(at)?.on
+      ? drawn.get(at)?.can
+      : undefined;
+    const verbs = can ? [...held.can].filter((verb) => can.has(verb)) : [];
+    if (verbs.length) within.set(key, { ...held, can: new Set(verbs) });
+  }
+  return within;
 }
 
 /** Whom an actor works for: an agent, whoever it acts for (`for`); a key, the person whose it is. */
@@ -147,12 +242,12 @@ async function unlimited(actor: Actor, ctx: ReadContext): Promise<Reach> {
     if (actor.kind === "person" && actor.staff === true) return await everything(ctx);
     const role = await orgRoleOf(actor, ctx);
     if (runsOrg(role)) return await everything(ctx);
-    const own = await housed(await walk(memberKey(actor), ctx), ctx);
+    const own = new Map(await membershipsOf(memberKey(actor), ctx));
     // Members see who's in the org; guests only the spaces they're in.
     if (role === "member") own.set(ORG, { can: new Set<Verb>(["read"]) });
     return own;
   }
-  const own = await housed(await walk(memberKey(actor), ctx), ctx);
+  const own = await membershipsOf(memberKey(actor), ctx);
   const theirs = await reachOf(principal, ctx);
   const both: Reach = new Map();
   /** `held` (one side's), with only the verbs the other side's `other` allows too. */
@@ -212,7 +307,21 @@ export async function homeOf(key: string, ctx: ReadContext): Promise<string | un
   return typeof home === "string" ? home : undefined;
 }
 
-/** The spaces (or documents) reached where `verb` is allowed. */
-export const where = (reach: Reach, verb: Verb, on?: string) =>
-  [...reach].filter(([, r]) => r.can.has(verb) && (on === undefined ? !r.on : r.on === on))
-    .map(([space]) => on === undefined ? space : space.slice(on.length + 1));
+/** Lists made of a reach, by verb and kind: a reach is kept, so they're made once each. */
+const listed = new WeakMap<Reach, Map<string, readonly string[]>>();
+
+/** The spaces (or documents) reached where `verb` is allowed. Shared: never change it. */
+export const where = (reach: Reach, verb: Verb, on?: string): string[] => {
+  let lists = listed.get(reach);
+  if (!lists) listed.set(reach, lists = new Map());
+  const key = `${verb}\u0000${on ?? ""}`;
+  let found = lists.get(key);
+  if (!found) {
+    found = Object.freeze(
+      [...reach].filter(([, r]) => r.can.has(verb) && (on === undefined ? !r.on : r.on === on))
+        .map(([space]) => on === undefined ? space : space.slice(on.length + 1)),
+    );
+    lists.set(key, found);
+  }
+  return found as string[];
+};

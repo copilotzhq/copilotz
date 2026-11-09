@@ -114,7 +114,7 @@ export type DeclaredServer = {
    * The tools it offers, by name (the `tools` resource's), each with how
    * it's offered (`{}` as it is). Only these: an app lists what a model
    * outside may call. Each needs its `tool:<name>` View (`llm`), what a
-   * model reads of it: a tool without one isn't offered.
+   * model reads of it: without one, the app doesn't start.
    */
   tools: Record<string, McpTool | null>;
   /** What it's called, its version, and what the model is told about using it. */
@@ -257,6 +257,7 @@ export function problemOf(
   line: DeclaredServer,
   resources: Resources,
   actions: readonly string[] = [],
+  views: readonly string[] = [],
 ): string | undefined {
   if (!/^[\w-]{1,60}$/.test(name)) return "its name is letters, digits, - and _";
   if (typeof line?.in !== "string" || !line.in) return "needs its in (the space its chats live in)";
@@ -300,6 +301,10 @@ export function problemOf(
       own = Object.hasOwn(tools, tool) ? tools[tool] ?? undefined : undefined;
       if (tool === SEND) return `${SEND} is agents' own, not a tool to offer`;
       if (!own) return `offers "${tool}", which isn't one of the app's tools`;
+      // What a model outside reads of a call is the app's choice, never its output as it is.
+      if (!views.includes(`tool:${tool}`)) {
+        return `offers "${tool}" without its tool:${tool} View: what a model outside reads of it`;
+      }
       const input = own.input as
         | { type?: unknown; properties?: Record<string, unknown> }
         | undefined;

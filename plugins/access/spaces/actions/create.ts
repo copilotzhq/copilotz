@@ -3,7 +3,7 @@
  * it, with the app's default agents working there. Not one the app declares
  * (see shared/declared.ts): those are the app's, made by `space.keep`.
  */
-import { defineAction, people } from "../../../../runtime/mod.ts";
+import { defineAction, inPerson } from "../../../../runtime/mod.ts";
 import { seat } from "../shared/agents.ts";
 import { declaredOf } from "../shared/declared.ts";
 import { memberKey, orgRoleOf } from "../shared/reach.ts";
@@ -16,7 +16,7 @@ export const createAction = defineAction({
     required: ["name"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     // A guest's, through a key of theirs too: the person's role says.
     const person = { kind: ctx.actor!.kind, id: ctx.actor!.id };

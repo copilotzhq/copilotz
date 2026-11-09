@@ -2,7 +2,7 @@
  * `document.restore`: an old version brought back, as a new one (its title
  * and text over what's there now; the versions between stay in History).
  */
-import { defineAction } from "../../../../runtime/mod.ts";
+import { defineAction, people } from "../../../../runtime/mod.ts";
 import { type DocumentVersion, versionId } from "../collections/document-version.ts";
 import { keyOf } from "../shared/text.ts";
 import { commit, fail, load, plainly } from "../shared/write.ts";
@@ -18,7 +18,7 @@ export const restoreAction = defineAction({
     required: ["document", "version"],
     additionalProperties: false,
   },
-  allow: (actor) => actor.kind === "person",
+  allow: people,
   run: async (ctx, input) => {
     return await ctx.transaction(async (tx) => {
       const doc = await load(tx.db, input.document);

@@ -42,20 +42,20 @@ const publish = tool({
     if (!input.job && !input.port) {
       return "Which port does it serve? Give its job (one serving a port) or the port.";
     }
-    // Read as the agent (for its person): a conversation they don't reach has no space for them.
-    const thread = await ctx.db.collection<{ in?: string }>("thread").findOne({ _id: ctx.thread });
-    if (!thread?.in) {
+    // Where it works: a conversation in no space has no computer to publish from.
+    const space = ctx.in;
+    if (!space) {
       return "This conversation isn't in a space, so there's no computer to publish from.";
     }
-    if (!await may(ctx, "write", thread.in)) return "You can't publish from this space.";
+    if (!await may(ctx, "write", space)) return "You can't publish from this space.";
     // Its person reads where it'll be: "wants to publish Shop at https://shop.copilotz.app".
-    const address = await addressFor(ctx, thread.in, input.name).catch(() => undefined);
+    const address = await addressFor(ctx, space, input.name).catch(() => undefined);
     // Asked of whoever answers on the computer that runs the job (not the default's), when only
     // the job says which.
     const computer = input.computer ??
       (input.job
         ? await ctx.call<{ computer: string }>("computer.scope", {
-          in: thread.in,
+          in: space,
           who: `agent:${ctx.agent}`,
           job: input.job,
         }).then((where) => where.computer, () => undefined)
@@ -72,7 +72,7 @@ const publish = tool({
     try {
       const published = await publishApp(ctx, {
         ...input,
-        in: thread.in,
+        in: space,
         who: `agent:${ctx.agent}`,
         by: person,
       });

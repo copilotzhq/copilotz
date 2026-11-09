@@ -7,7 +7,14 @@
  * only they managed to someone who stays; their Personal space stays, where
  * the org's admins still reach it.
  */
-import { type Context, defineAction, forbidden, invalid, people } from "../../../../runtime/mod.ts";
+import {
+  type Context,
+  defineAction,
+  forbidden,
+  inPerson,
+  invalid,
+  people,
+} from "../../../../runtime/mod.ts";
 import { ORG, ORG_ROLES, type OrgRole, orgRoleOf, rolesOf, runsOrg } from "../shared/reach.ts";
 import { keepProfileOf } from "../shared/profile.ts";
 
@@ -71,7 +78,7 @@ export const orgRoleAction = defineAction({
     required: ["person", "role"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const mine = await runs(ctx);
     const theirs = await orgRoleOf({ kind: "person", id: input.person }, ctx.as());
@@ -95,7 +102,7 @@ export const removeFromOrgAction = defineAction({
     required: ["person"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const mine = await runs(ctx);
     const theirs = await orgRoleOf({ kind: "person", id: input.person }, ctx.as());
@@ -198,7 +205,7 @@ export const inviteToOrgAction = defineAction({
     required: ["email"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const mine = await runs(ctx);
     void mine;
@@ -232,7 +239,7 @@ export const uninviteAction = defineAction({
     required: ["email"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     await runs(ctx);
     await directoryOf(ctx).cancel(input.email.toLowerCase());
@@ -297,7 +304,7 @@ export const renameOrgAction = defineAction({
     required: ["name"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     const mine = await standing(ctx);
     if (mine !== "owner" && mine !== "staff") throw forbidden("Only the org's owners rename it.");

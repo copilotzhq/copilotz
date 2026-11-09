@@ -26,7 +26,7 @@ const readSkill = tool({
     required: ["name"],
   },
   run: async ({ name, file }, ctx) => {
-    const listed = await skillsFor(ctx, ctx.agent, ctx.thread);
+    const listed = await skillsFor(ctx, ctx.agent);
     const found = listed.find((s) => s.name === name.trim());
     if (!found) {
       return `No skill "${name}" here.` +

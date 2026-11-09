@@ -50,7 +50,8 @@ export const space = defineCollection({
      * may write in (not someone else's Personal one), each with who answers there.
      */
     handoffs: {
-      allow: (actor) => actor.kind === "agent",
+      // An agent's (a person asking has none): `allow` lets in an agent and its person alike.
+      allow: people,
       run: async (spaces, _, ctx) => {
         const person = ctx.actor?.for as Actor | undefined;
         if (!person) return [];

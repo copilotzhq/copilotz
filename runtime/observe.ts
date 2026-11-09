@@ -45,7 +45,10 @@ export type Observation<R = unknown> = Observed<R> & {
 
 export type ObserveOptions = {
   viewer?: Viewer;
-  /** Whose reads: the View shows what they reach, and its handlers act as them. */
+  /**
+   * Whose reads: the View shows what they reach, and its handlers act as
+   * them, where they are (`actor.in`, the View's `ctx.in`).
+   */
   actor?: Actor;
   hints?: Record<string, unknown>;
   /** What `ctx.show` returns: the shown View as a part, with its key. */
@@ -127,7 +130,7 @@ type Nested = {
 };
 
 /** The reads a run made, as dependencies. */
-const depOf = (op: Op): Dep | undefined => {
+export const depOf = (op: Op): Dep | undefined => {
   switch (op.op) {
     case "find":
     case "findOne":
@@ -302,6 +305,7 @@ export function createObservers(env: {
     name,
     ...(p.viewer ? { viewer: p.viewer } : {}),
     ...(p.actor ? { actor: p.actor } : {}),
+    ...(typeof p.actor?.in === "string" ? { in: p.actor.in } : {}),
     hints,
     show: (name, item, hints = {}) => show(p, run, db, name, item, hints),
     call: (action, input) => env.call(action, input, p.actor),

@@ -25,9 +25,67 @@
  * `space` is a kind of member (a space that is a member of another), and a
  * starting point for `reachOf`; it never acts.
  *
+ * **Who, for whom, where.** All work runs as an actor (who), for whom it's
+ * done (`for`, an agent's person or contact), and where (`in`): an opaque id,
+ * as `id` is, that the runtime carries the way it carries the actor, since
+ * it's the actor's. So everything a call causes is where the call was: its
+ * nested calls, its tools, the Processors its events wake, its timers and
+ * the Views observed for it; every event records it; `guard` and `allow` see
+ * it; contexts say it (`ctx.in`). Each way in says it (a page's space, a
+ * line's), and work done nowhere in particular (the system's, an app without
+ * spaces) has none. What a place means (who's in it, what it draws on) is the
+ * access plugin's (`plugins/access/spaces`): there, an agent's work reaches
+ * only where it is (design/work.md).
+ *
  * Everyone who needs the person behind an actor asks here.
  */
 import type { Actor } from "./store.ts";
+
+/**
+ * Whether a person's work is done for them rather than by them: through a
+ * key, set going by something (`origin`: a routine), or by code acting as
+ * them on an agent's behalf (`via` one, or a key, or such work). What only a
+ * person decides (`inPerson`) never comes this way, and where it is narrows
+ * what it reaches (the access plugin).
+ */
+export function onBehalf(actor: Actor): boolean {
+  for (let a: Actor | undefined = actor, hops = 0; a && hops < 5; hops++) {
+    if (typeof a.key === "string" || a.origin || (a !== actor && a.kind === "agent")) return true;
+    a = a.via as Actor | undefined;
+  }
+  return false;
+}
+
+/** Where an actor's work is (`in`), if it's anywhere. */
+export const whereOf = (actor: Actor | undefined): string | undefined =>
+  typeof actor?.in === "string" ? actor.in : undefined;
+
+/**
+ * Whether an Action's (or a query's, an event's) `allow` lets `actor` in: an
+ * agent only when it lets in whom it works for (`for`) too, so an agent never
+ * reaches what its person couldn't call. The runtime asks it wherever an
+ * actor calls: from outside, and in code acting for someone (`ctx.call`).
+ */
+export function allows<I>(
+  allow: (actor: Actor, input: I) => boolean,
+  actor: Actor,
+  input: I,
+): boolean {
+  if (!allow(actor, input)) return false;
+  const behalf = actor.kind === "agent" && actor.for && typeof actor.for === "object"
+    ? actor.for as Actor
+    : undefined;
+  return !behalf || allows(allow, behalf, input);
+}
+
+/**
+ * A named grant: the system, for one reason (`ctx.as(grant("hand-over"))`).
+ * Going beyond what an actor may is trusted code's to decide, never a
+ * model's, and it says so: what it does is recorded as the grant, `via`
+ * whose work it was, and `in` where that was. The rules let the system
+ * through, so code using one decides what leaves it.
+ */
+export const grant = (name: string): Actor => ({ kind: "system", id: name });
 
 /**
  * Who an actor is, for counting what they hold and ending them (browsers,

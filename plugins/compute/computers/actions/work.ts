@@ -9,7 +9,7 @@
  * a while by it; what only reads (a panel polling its jobs) neither wakes it
  * nor keeps it awake, so a page left open lets it sleep.
  */
-import { defineAction, forbidden, people } from "../../../../runtime/mod.ts";
+import { defineAction, forbidden, inPerson } from "../../../../runtime/mod.ts";
 import type { Desk } from "../collections/desk.ts";
 import { failed } from "../shared/failed.ts";
 import { jobEnv } from "../shared/env.ts";
@@ -51,7 +51,7 @@ export const workAction = defineAction({
     required: ["desk", "work"],
     additionalProperties: false,
   },
-  allow: people,
+  allow: inPerson,
   run: async (ctx, input) => {
     // The rules reach only the desks of spaces the person is in; working there takes more.
     const desk = await ctx.db.collection<Desk>("desk").findOne({ _id: input.desk });

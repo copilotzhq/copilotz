@@ -8,9 +8,10 @@
  *   (`resources.mcp.<name>`), at `POST /mcp/<name>` (under many orgs,
  *   `/o/<org>/mcp/<name>`): the space its conversations' chats live in, the
  *   tools it offers (`tools`, by name: only these, each with its
- *   `tool:<name>` View, what a model reads of it), how each is shown (its
- *   title, hints such as `readOnly`, what ChatGPT says while and after it
- *   runs), who calls (`client`, `ChatGPT`), its limits. Anyone may call it:
+ *   `tool:<name>` View, what a model reads of it, without which the app
+ *   doesn't start), how each is shown (its title, hints such as
+ *   `readOnly`, what ChatGPT says while and after it runs), who calls
+ *   (`client`, `ChatGPT`), its limits. Anyone may call it:
  *   no sign-in yet. In ChatGPT, the app's connector points at that URL.
  * - **A conversation** is a contact (someone outside the org) in a chat of
  *   its own in the server's space: they reach that chat and nothing else; the
@@ -25,8 +26,9 @@
  *   goes on as itself (`mcp.conversation` says which). Erased (`contact.forget`,
  *   `chat.erase`), a conversation is over for good (see processors/).
  * - **A call** (see actions/call.ts) runs the tool through chat's runner,
- *   as the conversation's contact, and is written in the chat as a step,
- *   as an agent's is; its answer is what the app's own agents read of it
+ *   as the conversation's contact, where its chat is (`ctx.in`: the
+ *   server's space), and is written in the chat as a step, as an agent's
+ *   is; its answer is what the app's own agents read of it
  *   (the tool's View); an error says its message only when it's public
  *   (`failure(code, message, { public: true })`). A request sent again to a
  *   tool that changes things is answered from the first; a read-only tool
@@ -76,10 +78,14 @@
  *   data back (a saved buyer's details, past orders): a leaked key would
  *   read them. A tool that only writes, or reads what the conversation
  *   itself said, risks only that conversation.
- * - **A tool's own Action calls** are plugin code, as an agent's tools'
- *   are on WhatsApp: their `allow` isn't asked (the rules still keep them to
- *   the contact's chat). A tool offered here may call trusted Actions for
- *   the contact: offer only tools whose every call is safe for anyone.
+ * - **A tool's own Action calls** are asked their `allow` for the contact,
+ *   as anywhere code acts for someone (an Action not open to contacts,
+ *   `peopleOrContacts`, refuses it), and the rules keep what they read and
+ *   write to the contact's chat. What still reaches past the contact is what
+ *   its code chooses: Actions without an `allow` (internal: code calls them
+ *   for anyone), a grant (`ctx.as(grant(…))`), and collections no rule
+ *   speaks for (trusted code reads them whole). Those are what to review in
+ *   a tool before a line offers it.
  *
  * ```ts
  * plugins: [models, chat, ...access, mcp]
@@ -147,7 +153,13 @@ export const mcp: Plugin = definePlugin({
       );
     }
     for (const [name, line] of servers) {
-      const problem = problemOf(name, line, merged.resources, Object.keys(merged.actions));
+      const problem = problemOf(
+        name,
+        line,
+        merged.resources,
+        Object.keys(merged.actions),
+        merged.views,
+      );
       if (problem) throw new Error(`mcp.${name} ${problem}`);
     }
   },

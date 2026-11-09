@@ -147,7 +147,13 @@ export const mcp: Plugin = definePlugin({
       );
     }
     for (const [name, line] of servers) {
-      const problem = problemOf(name, line, merged.resources, Object.keys(merged.actions));
+      const problem = problemOf(
+        name,
+        line,
+        merged.resources,
+        Object.keys(merged.actions),
+        merged.views,
+      );
       if (problem) throw new Error(`mcp.${name} ${problem}`);
     }
   },

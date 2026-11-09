@@ -281,7 +281,7 @@ test("tools/list: the line's tools in order, titled, with every hint, status lin
     const { tools } = (await s.legacy("tools/list")).body.result as {
       tools: Record<string, unknown>[];
     };
-    // Not `staff` (its offer says no to contacts), nor `raw` (no View).
+    // Not `staff` (its offer says no to contacts).
     assertEquals(tools.map((t) => t.name), OFFERED);
     const [search, pick] = tools;
     assertEquals(search.title, "Search trips");
@@ -358,12 +358,10 @@ test("an offer that throws: that tool isn't offered, the others are", async () =
   }, { line: { tools: { ...LINE.tools, shaky: {} } }, plugins: [shaky] });
 });
 
-test("a tool without its View, or whose offer says no, is neither listed nor run", async () => {
+test("a tool whose offer says no is neither listed nor run; one not listed, unknown", async () => {
   await setup(async (s) => {
-    for (const name of ["raw", "staff"]) {
-      const listed = (await s.legacy("tools/list")).body.result as { tools: { name: string }[] };
-      assert(!listed.tools.some((t) => t.name === name));
-    }
+    const listed = (await s.legacy("tools/list")).body.result as { tools: { name: string }[] };
+    assert(!listed.tools.some((t) => t.name === "staff"));
     const raw = await s.call("raw", {}, { session: "s" });
     assertEquals(raw.body.error?.code, -32602);
     const staff = await s.call("staff", {}, { session: "s" });
@@ -397,6 +395,12 @@ test("at start: a line's mistakes stop the app", async () => {
     }).then((runtime) => runtime.close());
   await assertRejects(() => start({}, false), Error, "links");
   await assertRejects(() => start({ tools: { nope: {} } }), Error, "isn't one of the app's tools");
+  // A tool without its View: what a model outside reads of it is the app's to say.
+  await assertRejects(
+    () => start({ tools: { ...LINE.tools, raw: {} } }),
+    Error,
+    "without its tool:raw View",
+  );
   await assertRejects(() => start({ tools: { send_message: {} } }), Error, "send_message");
   await assertRejects(
     () => start({ tools: { search: { invoking: "x".repeat(65) } } }),

@@ -305,12 +305,11 @@ export const LINE: DeclaredServer = {
     charge: {},
     hang: {},
     staff: {},
-    raw: {},
   },
 };
 
-/** The tools the line offers a contact: all but `staff` (people only) and `raw` (no View). */
-export const OFFERED = Object.keys(LINE.tools).filter((name) => name !== "staff" && name !== "raw");
+/** The tools the line offers a contact: all but `staff` (people only). */
+export const OFFERED = Object.keys(LINE.tools).filter((name) => name !== "staff");
 
 /** How the app knows who calls: its front says, with its secret. */
 export const CALLER: CallerSettings = { header: "cf-connecting-ip", front: FRONT };

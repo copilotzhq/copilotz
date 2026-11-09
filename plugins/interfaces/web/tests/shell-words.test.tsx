@@ -57,7 +57,8 @@ function Panels(): ReactNode {
 }
 
 function draw(): string {
-  const parts: ReactNode[] = [
+  const parts: ReactNode[] = [];
+  parts.push(
     <Me
       name="Ana"
       email="ana@example.com"
@@ -67,7 +68,7 @@ function draw(): string {
     <Panels />,
     defaultView({ _id: "x" }, ctx({ of: "note" })),
     defaultView({ _id: "x", title: "Plan", body: "Hi" }, ctx({ of: "note" })),
-  ];
+  );
   return parts.map((node) => renderToStaticMarkup(<>{node}</>)).join("\n")
     .replace(/<style[\s\S]*?<\/style>/g, "");
 }

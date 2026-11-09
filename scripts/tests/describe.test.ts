@@ -113,12 +113,20 @@ test("page: the five sections, in order, in the docs' voice", async () => {
   assert(text.includes("The access rules cover `note`"));
   assert(
     text.includes(
-      "Of its 4 Actions, people may call 3; contacts may call 1; agents and someone signed out may call none.",
+      "Of its 4 Actions, people may call 3; agents may call 2; contacts may call 1; someone signed out may call none.",
     ),
   );
   // A row per Action open to callers, its first sentence ending as one does.
-  assertMatch(text, /\| `note\.add` +\| yes +\| no +\| no +\| no +\| yes +\| Adds a note\. +\|/);
-  assertMatch(text, /\| `note\.purge` +\| yes +\| no +\| no +\| no +\| no +\|/);
+  // A routine's column, since `inPerson` keeps it out where `people` lets it in.
+  assert(
+    text.includes("| Action | Person | Agent | Contact | Anyone | Key | Routine | What it does |"),
+  );
+  assertMatch(text, /\| `note\.add` \| yes \| yes \| no \| no \| yes \| yes \| Adds a note\. \|/);
+  assertMatch(
+    text,
+    /\| `note\.purge` \| yes \| no \| no \| no \| no \| no \| Purges your notes\. \|/,
+  );
+  assert(text.includes("A routine is work done for a person, which they set going."));
   assert(text.includes("| Reads a note. |") || /Reads a note\. +\|/.test(text));
   assert(text.includes("Only the app's own code calls `note.sweep`"));
   assertMatch(text, /\| `add_note` \| Add a note\. +\| `note\.add` \|/);

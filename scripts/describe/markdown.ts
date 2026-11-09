@@ -44,6 +44,7 @@ const COLUMNS: [CallerKind, string][] = [
   ["contact", "Contact"],
   ["anonymous", "Anyone"],
   ["key", "Key"],
+  ["routine", "Routine"],
   ["maintenance", "Maintenance"],
 ];
 
@@ -133,6 +134,7 @@ function who(callers: Callers): string {
     contact: "contacts",
     anonymous: "anyone",
     key: "keys",
+    routine: "routines",
     maintenance: "the maintenance key",
   };
   const yes = COLUMNS.filter(([k]) => callers[k] === "yes").map(([k]) => names[k]);
@@ -181,8 +183,11 @@ function callers(d: Declaration): string[] {
     out.push(lead(outside, d.actions.length), "");
   }
   if (outside.length) {
+    // A routine's column where it isn't its person's; the maintenance key's where it calls any.
     const columns = COLUMNS.filter(([kind]) =>
-      kind !== "maintenance" || outside.some((a) => a.callers?.maintenance !== "no")
+      kind === "routine"
+        ? outside.some((a) => a.callers?.routine !== a.callers?.person)
+        : kind !== "maintenance" || outside.some((a) => a.callers?.maintenance !== "no")
     );
     out.push(table(
       ["Action", ...columns.map(([, label]) => label), "What it does"],
@@ -194,7 +199,10 @@ function callers(d: Declaration): string[] {
     ));
     out.push("");
     const notes = [
-      "A key calls what its person may, when its scope names the Action.",
+      "An agent works for a person, and calls what both may. A key calls only what its scope names.",
+      columns.some(([kind]) => kind === "routine")
+        ? "A routine is work done for a person, which they set going."
+        : "",
       outside.some((a) => Object.values(a.callers!).includes("some"))
         ? `"depends": its \`allow\` reads the input to decide.`
         : "",

@@ -24,10 +24,13 @@ Most of a declaration is the plugin's own data:
 
 - **What it keeps:** its collections, their schemas and named queries, and the collections its
   `shared` resource puts under the access rules.
-- **Who may call what:** its Actions. `allow` is a function, so it's asked about made-up callers: a
-  person, an agent working for one, a contact, someone anonymous, a key and the maintenance key.
-  Each gets a minimal input from the Action's schema. An `allow` that reads the input, or throws,
-  lets that caller in only `some` of the time: it depends on input. `run` never runs.
+- **Who may call what:** its Actions. `allow` is a function, so it's asked about made-up callers,
+  each working in a space (`in`): a person, an agent working for one, a contact, someone anonymous,
+  a key, a routine (a person's work done for them) and the maintenance key. Each gets a minimal
+  input from the Action's schema, and an agent is let in only where whom it works for is too, as the
+  runtime asks it (`allows`). An `allow` that reads the input, or throws, lets that caller in only
+  `some` of the time: it depends on input. `run` never runs. An `allow` that is one of the runtime's
+  helpers is named: `people`, `inPerson`, `contacts`, `peopleOrContacts`.
 - **Where it shows:** its Views, by their names. `web.*` is the web, `terminal.*` the terminal, and
   `llm.*`, `context:*`, `tool:*` and `mcp:*` the model's prompt. A front end's other Views show
   where its shell is (`requires: ["web-shell"]`).

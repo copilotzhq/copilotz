@@ -27,7 +27,7 @@ import {
 import { boards } from "../../plugins/work/mod.ts";
 import { chat } from "../../plugins/agents/mod.ts";
 import { googleSignIn, identity } from "../../plugins/access/mod.ts";
-import { maintenance, mcp } from "../../plugins/interfaces/mod.ts";
+import { api, maintenance, mcp } from "../../plugins/interfaces/mod.ts";
 import { test } from "../../testing/mod.ts";
 
 let ran = 0;
@@ -199,20 +199,34 @@ test("describe: a plugin's data, by part, without running it", async () => {
   assertEquals(action("note.add").summary, "Adds a note to a space. Its text is Markdown.");
   assertEquals(action("note.add").helper, "people");
   assertEquals(action("note.add").tool, "add_note");
-  const add = action("note.add").callers!;
-  assertEquals([add.person, add.key, add.contact, add.anonymous, add.maintenance], [
-    "yes",
-    "yes",
-    "no",
-    "no",
-    "no",
-  ]);
+  // `people`: a person, an agent working for one, a key, a routine; never a contact.
+  assertEquals(action("note.add").callers, {
+    person: "yes",
+    agent: "yes",
+    contact: "no",
+    anonymous: "no",
+    key: "yes",
+    routine: "yes",
+    maintenance: "no",
+  });
+  // `inPerson`: the person themselves, never an agent, a key or work done for them.
   const forget = action("note.forget");
-  assertEquals(
-    [forget.helper, forget.callers!.person, forget.callers!.key, forget.callers!.agent],
-    ["inPerson", "yes", "no", "no"],
-  );
-  assertEquals(action("note.reply").callers!.contact, "yes");
+  assertEquals(forget.helper, "inPerson");
+  assertEquals(forget.callers, {
+    person: "yes",
+    agent: "no",
+    contact: "no",
+    anonymous: "no",
+    key: "no",
+    routine: "no",
+    maintenance: "no",
+  });
+  const reply = action("note.reply");
+  assertEquals([reply.helper, reply.callers!.contact, reply.callers!.agent], [
+    "peopleOrContacts",
+    "yes",
+    "yes",
+  ]);
   assertEquals([action("note.open").helper, action("note.open").callers!.anonymous], [
     "anyone",
     "yes",
@@ -382,14 +396,26 @@ test("probe, helpers, places, paths and methods", () => {
     contact: "no",
     anonymous: "no",
     key: "no",
+    routine: "no",
     maintenance: "no",
   });
   assertEquals(probe((actor) => actor.kind === "maintenance").maintenance, "yes");
+  // Every caller works somewhere (`in`); an agent works for a person, and both must be let in.
+  assertEquals(probe((actor) => actor.in === "probe-space").agent, "yes");
+  assertEquals(probe((actor) => actor.kind === "agent").agent, "no");
 
   assertEquals(helperOf(people), "people");
+  assertEquals(helperOf(inPerson), "inPerson");
   assertEquals(helperOf(() => true), undefined);
   assertEquals(helperOf((actor: { kind: string }) => actor.kind === "person"), undefined);
   assertEquals(helperOf(undefined), undefined);
+  // By name, only when it lets in whom the helper does.
+  function isMaintenance(actor: { kind: string }) {
+    return actor.kind === "maintenance";
+  }
+  assertEquals(helperOf(isMaintenance), "isMaintenance");
+  const people2 = { people: (actor: { kind: string }) => actor.kind === "person" }.people;
+  assertEquals(helperOf(people2), undefined);
 
   assertEquals(placeOf("web.message"), "web");
   assertEquals(placeOf("terminal.thread"), "terminal");
@@ -413,32 +439,37 @@ test("probe, helpers, places, paths and methods", () => {
   assertEquals(methodsOf(() => new Response()), []);
 });
 
-test("describe: Copilotz's boards, chat, mcp, identity, google sign-in and maintenance", async () => {
+test("describe: Copilotz's boards, chat, mcp, identity, google sign-in, maintenance and api", async () => {
   // Boards: its collections under the rules, its Actions for people, its tools for agents.
   const b = await describe(boards);
   assertEquals(b.requires, ["chat", "spaces"]);
   assertEquals(b.keeps.map((c) => [c.name, c.shared]), [["board", true], ["card", true]]);
   for (const a of b.actions) {
-    assertEquals([a.name, a.callers?.person, a.callers?.contact, a.callers?.anonymous], [
-      a.name,
-      "yes",
-      "no",
-      "no",
-    ]);
+    assertEquals(
+      [
+        a.name,
+        a.helper,
+        a.callers?.person,
+        a.callers?.agent,
+        a.callers?.contact,
+        a.callers?.anonymous,
+      ],
+      [a.name, "people", "yes", "yes", "no", "no"],
+    );
   }
   assertEquals(b.actions.find((a) => a.name === "card.create")!.tool, "create_card");
   assert(b.tools.some((t) => t.name === "read_board"));
   assertEquals(b.powers, ["guard"]);
   assert(b.listing.listable);
 
-  // Chat: contacts send; its own code says; a route outside its name.
+  // Chat: people and contacts send as themselves, never an agent; its own code says; a route
+  // outside its name.
   const c = await describe(chat);
   const send = c.actions.find((a) => a.name === "chat.send")!;
-  assertEquals([send.helper, send.callers!.contact, send.callers!.anonymous], [
-    "peopleOrContacts",
-    "yes",
-    "no",
-  ]);
+  assertEquals(
+    [send.callers!.person, send.callers!.contact, send.callers!.agent, send.callers!.anonymous],
+    ["yes", "yes", "no", "no"],
+  );
   assert(c.actions.find((a) => a.name === "chat.say")!.internal);
   assertEquals(c.schedules.map((s) => [s.name, s.when]), [["chat.prune", "every 1h"]]);
   assert(c.listens.includes("turn.requested"));
@@ -473,7 +504,21 @@ test("describe: Copilotz's boards, chat, mcp, identity, google sign-in and maint
       contact: "no",
       anonymous: "no",
       key: "no",
+      routine: "no",
       maintenance: "yes",
     });
   }
+
+  // Developer keys: only a person themselves makes one.
+  const k = await describe(api);
+  const create = k.actions.find((a) => a.name === "api_key.create")!;
+  assertEquals(
+    [create.helper, create.callers!.person, create.callers!.key, create.callers!.agent],
+    [
+      "inPerson",
+      "yes",
+      "no",
+      "no",
+    ],
+  );
 });

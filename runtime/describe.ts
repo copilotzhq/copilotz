@@ -12,8 +12,9 @@
  *   and which collections the access rules cover (its `shared` resource).
  * - **Who may call what** (`actions`): each Action, with who outside may
  *   call it. `allow` is a function, so it's asked about made-up callers (a
- *   person, an agent working for one, a contact, someone anonymous, a key,
- *   the maintenance key) with a minimal input from the Action's schema. `run`
+ *   person, an agent working for one, a contact, someone anonymous, a key, a
+ *   routine, the maintenance key), each working in a space, with a minimal
+ *   input from the Action's schema, as the runtime asks it (`allows`). `run`
  *   is never called. An `allow` that reads the input to decide, or throws,
  *   lets that caller in only "some" of the time: it depends on input.
  * - **The rest:** the tools it gives agents, its Views by where they show
@@ -28,7 +29,7 @@
  * the same. `listing(declaration)` says whether a hub can list it. The
  * field names are the hub's (`keeps`, `needs`, `listens`, `powers`).
  */
-import * as actors from "./actor.ts";
+import { allows } from "./actor.ts";
 import type {
   ActionDef,
   CollectionDef,
@@ -51,7 +52,14 @@ import type { Actor, Filter } from "./store.ts";
 export const DECLARATION_FORMAT = 1;
 
 /** The made-up callers `allow` is asked about. */
-export type CallerKind = "person" | "agent" | "contact" | "anonymous" | "key" | "maintenance";
+export type CallerKind =
+  | "person"
+  | "agent"
+  | "contact"
+  | "anonymous"
+  | "key"
+  | "routine"
+  | "maintenance";
 
 /**
  * Whether `allow` lets a caller in: `some` when it depends on input (it reads
@@ -65,13 +73,33 @@ export type Callers = Record<CallerKind, Admission>;
 /** What a `some` means, in words. */
 export const DEPENDS = "depends on input";
 
-/** The callers, as `allow` is asked about them. A key is its person's, with a scope of its own. */
+/** Where the made-up callers' work is (`in`): a space, as a way in says it. */
+const HERE = "probe-space";
+
+/**
+ * The callers, as `allow` is asked about them, each with where its work is
+ * (`in`): a person; an agent working for one (`for`); a contact; someone
+ * signed out; a key, its person's with a scope of its own; a routine, a
+ * person's work done for them (`origin`); and the maintenance key. A key and
+ * a routine are what `inPerson` keeps out, and `people` lets in.
+ */
 export const PROBES: Record<CallerKind, Actor> = {
-  person: { kind: "person", id: "probe-person" },
-  agent: { kind: "agent", id: "probe-agent", for: { kind: "person", id: "probe-person" } },
-  contact: { kind: "contact", id: "probe-contact" },
+  person: { kind: "person", id: "probe-person", in: HERE },
+  agent: {
+    kind: "agent",
+    id: "probe-agent",
+    for: { kind: "person", id: "probe-person", in: HERE },
+    in: HERE,
+  },
+  contact: { kind: "contact", id: "probe-contact", in: HERE },
   anonymous: { kind: "anonymous", id: "" },
-  key: { kind: "person", id: "probe-person", key: "probe-key", scope: {} },
+  key: { kind: "person", id: "probe-person", key: "probe-key", scope: {}, in: HERE },
+  routine: {
+    kind: "person",
+    id: "probe-person",
+    origin: { kind: "routine", id: "probe-routine" },
+    in: HERE,
+  },
   maintenance: { kind: "maintenance", id: "maintenance" },
 };
 
@@ -425,17 +453,8 @@ function watched(value: unknown): { value: unknown; read: () => boolean } {
 
 type Allow = (actor: Actor, input: unknown) => boolean;
 
-/**
- * Whether `allow` lets `actor` in, as the runtime asks it: where the runtime
- * asks an agent's `allow` about whom it works for too (its `allows`), so
- * does this.
- */
-const admits = (allow: Allow, actor: Actor, input: unknown): boolean => {
-  const allows = (actors as Record<string, unknown>).allows as
-    | ((allow: Allow, actor: Actor, input: unknown) => boolean)
-    | undefined;
-  return allows ? allows(allow, actor, input) : !!allow(actor, input);
-};
+/** Whether `allow` lets `actor` in, as the runtime asks it: an agent, and whom it works for. */
+const admits = (allow: Allow, actor: Actor, input: unknown): boolean => allows(allow, actor, input);
 
 /** Asks `allow` about each made-up caller, with `input`: whom it lets in. */
 // deno-lint-ignore no-explicit-any
@@ -453,20 +472,30 @@ export function probe(allow: (actor: Actor, input: any) => unknown, input: unkno
   return callers;
 }
 
-const HELPERS: [Helper, unknown][] = [
+const isMaintenance = (actor: Actor): boolean => actor.kind === "maintenance";
+
+const HELPERS: [Helper, Allow][] = [
   ["people", people],
   ["inPerson", inPerson],
   ["contacts", contacts],
   ["peopleOrContacts", peopleOrContacts],
+  ["isMaintenance", isMaintenance],
 ];
 
-/** Which runtime helper an `allow` is, when it's one (itself, or by its name). */
+/**
+ * Which runtime helper an `allow` is: the helper itself, or a function of its
+ * name that lets in exactly whom it does (the maintenance plugin's
+ * `isMaintenance`, a helper from another copy of the runtime). A plugin's
+ * own function of the same name that lets in others isn't one.
+ */
 export function helperOf(allow: unknown): Helper | undefined {
   if (typeof allow !== "function") return undefined;
   const same = HELPERS.find(([, helper]) => helper === allow);
   if (same) return same[0];
-  const names = [...HELPERS.map(([name]) => name), "isMaintenance"];
-  return names.includes(allow.name) ? allow.name as Helper : undefined;
+  const named = HELPERS.find(([name]) => name === allow.name);
+  if (!named) return undefined;
+  const callers = probe(allow as Allow);
+  return JSON.stringify(callers) === JSON.stringify(probe(named[1])) ? named[0] : undefined;
 }
 
 /** Who outside an `allow` lets in: nobody (internal) without one; `anyone` when it says yes to all. */

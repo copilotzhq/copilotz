@@ -19,12 +19,23 @@
  *   (`resources.google … as GoogleSettings`), what its doc says (the `google`
  *   resource), or its name (`MaintenanceSettings`, `maintenance`).
  */
-import { dirname, join, resolve } from "node:path";
+import { posix, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { SettingDeclaration, SettingField } from "../../runtime/describe.ts";
 
 // deno-lint-ignore no-explicit-any
 type Json = any;
+
+/**
+ * Paths here are posix on every OS (`D:/app/x.ts` on Windows): what a file
+ * imports is joined to it with `posix`, and a file URL's path loses its `\`.
+ */
+export const toPosix = (path: string): string => path.replaceAll("\\", "/");
+const pathOf = (url: string) => toPosix(fileURLToPath(url));
+const { dirname, join } = posix;
+/** What `spec` imports from `file`: a path, posix, absolute or relative as `file` is. */
+const resolved = (file: string, spec: string) =>
+  posix.normalize(join(dirname(toPosix(file)), spec));
 
 const run = async (args: string[]): Promise<Json> => {
   const output = await new Deno.Command(Deno.execPath(), {
@@ -68,13 +79,9 @@ const graphOf = (file: string): Promise<Graph> => {
         for (const module of info.modules ?? []) {
           if (!local(module.specifier)) continue;
           const deps = module.dependencies ?? [];
-          graph.set(fileURLToPath(module.specifier), {
-            code: deps.map((d: Json) => d.code?.specifier).filter(local).map((s: string) =>
-              fileURLToPath(s)
-            ),
-            types: deps.map((d: Json) => d.type?.specifier).filter(local).map((s: string) =>
-              fileURLToPath(s)
-            ),
+          graph.set(pathOf(module.specifier), {
+            code: deps.map((d: Json) => d.code?.specifier).filter(local).map(pathOf),
+            types: deps.map((d: Json) => d.type?.specifier).filter(local).map(pathOf),
           });
         }
         return graph;
@@ -251,7 +258,7 @@ function importsIn(source: string, file: string): Map<string, Named> {
   const at = /^import\s+(type\s+)?([\s\S]*?)\s+from\s+["']([^"']+)["']/gm;
   for (const [, type, what, spec] of source.matchAll(at)) {
     if (type || !local(spec)) continue;
-    const path = resolve(dirname(file), spec);
+    const path = resolved(file, spec);
     for (const [there, here] of bindings(what.match(/\{([\s\S]*)\}/)?.[1] ?? "")) {
       out.set(here, { file: path, name: there });
     }
@@ -271,11 +278,14 @@ function reexportsIn(source: string, file: string) {
   const at = /^export\s+(type\s+)?(\*|\{[\s\S]*?\})\s+from\s+["']([^"']+)["']/gm;
   for (const [, type, what, spec] of source.matchAll(at)) {
     if (type || !local(spec)) continue;
-    const path = resolve(dirname(file), spec);
-    if (what === "*") stars.push(path);
-    else {for (const [there, here] of bindings(what.slice(1, -1))) {
-        named.set(here, { file: path, name: there });
-      }}
+    const path = resolved(file, spec);
+    if (what === "*") {
+      stars.push(path);
+      continue;
+    }
+    for (const [there, here] of bindings(what.slice(1, -1))) {
+      named.set(here, { file: path, name: there });
+    }
   }
   // `export { a as b }`, of its own.
   const aliases = new Map<string, string>();
@@ -460,8 +470,7 @@ async function fieldsOf(
     const symbol = (await symbolsOf(file)).get(name);
     const declared = symbol?.declarations?.find((d: Json) => d.kind === "typeAlias");
     if (declared) {
-      const at = fileURLToPath(declared.location.filename);
-      return fieldsOf(declared.def?.tsType, at, depth + 1);
+      return fieldsOf(declared.def?.tsType, pathOf(declared.location.filename), depth + 1);
     }
   }
   return { fields: [] };
@@ -547,9 +556,9 @@ async function settingsIn(
 // ---------------------------------------------------------------------------
 
 export type Found = {
-  /** The file that declares the plugin. */
+  /** The file that declares the plugin, relative to the root scanned, posix (`plugins/x/mod.ts`). */
   home: string;
-  /** Its files: those its code runs. */
+  /** Its files: those its code runs, as `home` is. */
   files: string[];
   /** The resource kinds its code reads. */
   reads: string[];
@@ -560,13 +569,16 @@ export type Found = {
 
 /**
  * What a plugin's code shows: `entry` is the module it's exported from,
- * `exportName` the export, `pluginName` its name (to find where it's declared).
+ * `exportName` the export, `pluginName` its name (to find where it's
+ * declared). Its files are said relative to `root` (the working directory).
  */
 export async function found(
   entry: string,
   exportName: string,
   pluginName: string,
+  root: string = Deno.cwd(),
 ): Promise<Found> {
+  entry = toPosix(entry);
   const exported = await symbolsOf(entry);
   // Where it's declared: the file that names it, else where its export says.
   let home: string | undefined;
@@ -578,7 +590,7 @@ export async function found(
   }
   const symbol = exportName === "default" ? undefined : exported.get(exportName);
   const at = symbol?.declarations?.[0]?.location?.filename;
-  home ??= at ? fileURLToPath(at) : entry;
+  home ??= at ? pathOf(at) : entry;
   const folder = folderOf(home);
   const code = await runs(home, folder, pluginName);
   const reads = readsIn(code.text);
@@ -599,9 +611,10 @@ export async function found(
     await Deno.readTextFile(home),
     exportName === "default" ? undefined : exportName,
   );
+  const under = (file: string) => toPosix(relative(root, file));
   return {
-    home,
-    files: code.files,
+    home: under(home),
+    files: code.files.map(under),
     reads,
     settings: await settingsIn(typed, code.text, reads, contract),
     ...(summary ? { summary } : {}),

@@ -15,6 +15,7 @@ import {
   found,
   readsIn,
   summaryIn,
+  toPosix,
   uncommented,
   usedIn,
 } from "../describe/sources.ts";
@@ -185,7 +186,8 @@ test("sources: reads, comments, sentences, summaries", () => {
 });
 
 test("sources: a declaration uses what it names, file by file, never the rest", () => {
-  const file = "/app/plugins/mail/mod.ts";
+  // Paths are as the file's is, here relative to the app's root, and posix on every OS.
+  const file = "plugins/mail/mod.ts";
   const source = [
     'import { send } from "./actions/send.ts";',
     'import { signIn as enter } from "./actions/sign-in.ts";',
@@ -209,7 +211,7 @@ test("sources: a declaration uses what it names, file by file, never the rest", 
     "});",
   ].join("\n");
   const names = (wants: { file: string; name: string }[]) =>
-    wants.map((w) => `${w.file.replace("/app/", "")}#${w.name}`).sort();
+    wants.map((w) => `${w.file}#${w.name}`).sort();
   // Each plugin of the file: its own declaration, and the local ones it names.
   const mail = usedIn(source, file, { plugin: "mail" });
   assertEquals(names(mail.wants), [
@@ -228,6 +230,12 @@ test("sources: a declaration uses what it names, file by file, never the rest", 
   assertEquals(names(usedIn(source, file, { names: ["Mail"] }).wants), [
     "plugins/mail/contract.ts#Mail",
   ]);
+  // A Windows path is walked as posix too.
+  assertEquals(names(usedIn(source, "D:\\app\\plugins\\mail\\mod.ts", { plugin: "mail" }).wants), [
+    "D:/app/plugins/mail/actions/send.ts#send",
+    "D:/app/runtime/mod.ts#definePlugin",
+  ]);
+  assertEquals(toPosix("D:\\app\\x.ts"), "D:/app/x.ts");
   assert(usedIn("const a = 1;", file, { names: ["b"] }).whole);
   assert(usedIn(source, file, { plugin: "other" }).whole);
 });
@@ -237,8 +245,10 @@ test({
   ignore: runtime !== "deno",
   fn: async () => {
     const access = join(ROOT, "plugins/access/mod.ts");
-    const google = await found(access, "googleSignIn", "google-sign-in");
-    assert(google.home.endsWith("plugins/access/google/mod.ts"));
+    const google = await found(access, "googleSignIn", "google-sign-in", ROOT);
+    // Its files, relative to the root scanned and posix on every OS.
+    assertEquals(google.home, "plugins/access/google/mod.ts");
+    assert(google.files.every((f) => f.startsWith("plugins/access/google/") && !f.includes("\\")));
     assertEquals(google.reads, ["google"]);
     assertEquals(google.settings.map((s) => [s.kind, s.type, s.inContract]), [[
       "google",
@@ -249,14 +259,19 @@ test({
     assertMatch(google.summary!, /^Google sign-in: /);
 
     // Two plugins in one file: the email port reads what its own declaration does.
-    const email = await found(access, "email", "email");
-    const signIn = await found(access, "emailSignIn", "email-sign-in");
+    const email = await found(access, "email", "email", ROOT);
+    const signIn = await found(access, "emailSignIn", "email-sign-in", ROOT);
     assert(email.files.length < signIn.files.length);
     assert(email.reads.includes("email"));
     assert(signIn.reads.includes("emailSignIn"));
 
     // A map of entries: each WhatsApp number's settings, its token a secret.
-    const whatsapp = await found(join(ROOT, "plugins/interfaces/mod.ts"), "whatsapp", "whatsapp");
+    const whatsapp = await found(
+      join(ROOT, "plugins/interfaces/mod.ts"),
+      "whatsapp",
+      "whatsapp",
+      ROOT,
+    );
     const numbers = whatsapp.settings.find((s) => s.kind === "whatsapp")!;
     assert(numbers.each);
     assert(numbers.fields.some((f) => f.name === "token" && f.secret));

@@ -4,9 +4,19 @@
       "title": "Getting Started",
       "items": [
         {
-          "title": "Getting Started: build Compass",
+          "title": "Getting Started",
+          "slug": "getting-started",
+          "description": "Build a salon's booking app on Copilotz 1.0: one app that people, its own agent and outside assistants use through the same Actions and rules. Coming soon."
+        }
+      ]
+    },
+    {
+      "title": "Build Compass",
+      "items": [
+        {
+          "title": "Build Compass: a workspace for people and agents",
           "slug": "build-compass",
-          "description": "Build Compass on Copilotz 1.0: import the agentic core, rebuild Copilotz's other plugins for one person, one primitive at a time."
+          "description": "The deep track: build Compass, a workspace where people and agents share chats, a board and documents, and learn the runtime's contract by building each part of it, one primitive at a time."
         },
         {
           "title": "Ch 1: One agent, one message",
@@ -146,7 +156,7 @@
         {
           "title": "Ch 28: Agents that schedule",
           "slug": "build-compass/part-8-skills-and-routines/28-agents-that-schedule",
-          "description": "\\\"Remind me every Monday\\\" from a chat: four tools that make, list and cancel routines as the person the agent works for, post back where they were asked, and let an agent name a run's chat for what it found."
+          "description": "\"Remind me every Monday\" from a chat: four tools that make, list and cancel routines as the person the agent works for, post back where they were asked, and let an agent name a run's chat for what it found."
         },
         {
           "title": "Ch 29: Search, an adapter port",
@@ -212,6 +222,56 @@
           "title": "Ch 41: Many orgs and billing",
           "slug": "build-compass/part-13-from-one-person-to-many/41-many-orgs-and-billing",
           "description": "One address, many orgs: a directory runtime signs people in and knows their orgs, and each org is a Compass of its own, opened when used and closed when idle. With Copilotz's usage ledger, what each org's agents use is recorded and priced in that org alone."
+        }
+      ]
+    },
+    {
+      "title": "Guides",
+      "items": [
+        {
+          "title": "Serving on the web",
+          "slug": "guides/serving-on-the-web",
+          "description": "The runtime answers HTTP itself: runtime.fetch, plugins' routes and who, the page on Node and in the browser, sign-in and its page's words, and apps with no page at all."
+        },
+        {
+          "title": "Many orgs behind one address",
+          "slug": "guides/many-orgs",
+          "description": "One app, many orgs: a directory runtime signs people in and knows their orgs, and each org is a runtime of its own, opened when used and closed when idle."
+        },
+        {
+          "title": "Visitors: a chat on your site",
+          "slug": "guides/visitors",
+          "description": "A public site where anyone chats with the app's agent, signed in or not: site chats, what a visitor reaches, and the limits that keep it safe to open."
+        },
+        {
+          "title": "The REST API and the client",
+          "slug": "guides/rest-and-the-client",
+          "description": "Every app answers a REST API at /api/, checked as the socket is, and connect is its client for scripts: the endpoint list, developer keys, and the client's collections."
+        },
+        {
+          "title": "Installing a computer",
+          "slug": "guides/installing-a-computer",
+          "description": "People connect their own machines for their agents to work on: where the computer program comes from, the one line that installs it, and what it does on the machine."
+        }
+      ]
+    },
+    {
+      "title": "Operations",
+      "items": [
+        {
+          "title": "Stores",
+          "slug": "operations/stores",
+          "description": "Where an app keeps what it keeps: memory, SQLite or PostgreSQL, with the same MongoDB semantics in all three, and blobs in the store, in files or in a bucket."
+        },
+        {
+          "title": "Maintenance",
+          "slug": "operations/maintenance",
+          "description": "SQL over HTTP for an app's operators when they can't reach its database: the endpoints, the key, the record, the limits, and the PostgreSQL role it runs as."
+        },
+        {
+          "title": "Metrics",
+          "slug": "operations/metrics",
+          "description": "What the runtime and its plugins measure, the OpenTelemetry way: the meter, OTLP and Prometheus, and every metric recorded, copilotz.transaction.duration included."
         }
       ]
     }

@@ -15,8 +15,8 @@ It's the deep dive into the contract the runtime keeps for every caller, whichev
 
 - **Who is asking, for whom, and where.** Every call carries an actor, such as you or an agent
   working for you, and its work happens in a space.
-- **What can be done.** Each thing anyone can do is an Action. A click, an agent's tool and a
-  script call the same one.
+- **What can be done.** Each thing anyone can do is an Action. A click, an agent's tool and a script
+  call the same one.
 - **What anyone sees.** A View shows the data in one place: the browser, the terminal or the model's
   prompt. Observed Views stay live.
 - **The rules, checked at the data.** They filter every read and write, whichever way the call came
@@ -26,14 +26,14 @@ It's the deep dive into the contract the runtime keeps for every caller, whichev
 You import 2 of Copilotz's plugins as they are: `models`, which talks to model providers, and
 `chat`, which runs conversations, agents and their tools. You rebuild the rest of Compass's plugins
 yourself: identity, spaces, the board, documents, memory and more. Each keeps the contract of
-Copilotz's plugin of the same name (its collections, Actions, events, Views, resources and tools), so
-Copilotz's web and terminal front ends work with yours in its place. You leave out only what exists
-because several people share an app: invitations, roles, orgs and billing. The last part runs
+Copilotz's plugin of the same name (its collections, Actions, events, Views, resources and tools),
+so Copilotz's web and terminal front ends work with yours in its place. You leave out only what
+exists because several people share an app: invitations, roles, orgs and billing. The last part runs
 Compass on Copilotz's own plugins, which have them.
 
-By the end you know how the runtime and its plugins work, because you built them. You drag a card
-in the browser. North reads the same board in its prompt, a script moves a card over the REST API,
-and an assistant reaches the board over MCP. All of them go through the same Actions, under the same
+By the end you know how the runtime and its plugins work, because you built them. You drag a card in
+the browser. North reads the same board in its prompt, a script moves a card over the REST API, and
+an assistant reaches the board over MCP. All of them go through the same Actions, under the same
 rules, on the same record.
 
 ## How Copilotz works, in one minute
@@ -50,15 +50,15 @@ knows nothing else:
 | **Resource**   | configuration as named plain objects, by kind (`agents`, `tools`, `provider`…); a later plugin patches an earlier one's           |
 | **Adapter**    | one implementation of a port, by name: a model provider's protocol, an embedder                                                   |
 
-Plugins reach each other only through the runtime, by name. They call each other's Actions, plug into
-each other's resource kinds, and hear each other's events. One owner writes everything to one store
-(in memory, SQLite or PostgreSQL), so every change is on the record, and every screen follows it
-live.
+Plugins reach each other only through the runtime, by name. They call each other's Actions, plug
+into each other's resource kinds, and hear each other's events. One owner writes everything to one
+store (in memory, SQLite or PostgreSQL), so every change is on the record, and every screen follows
+it live.
 
 Each part of the contract has chapters of its own:
 
-- **Who and where:** a who, a route and a rule for one person (Chapter 3), spaces (Chapters 7 and 8),
-  and sign-in for many people (Chapter 40).
+- **Who and where:** a who, a route and a rule for one person (Chapter 3), spaces (Chapters 7 and
+  8), and sign-in for many people (Chapter 40).
 - **Actions:** the board's 7 Actions, the only way to change it (Chapter 9), and the tools that call
   them for North (Chapter 11).
 - **Views:** a charter in North's prompt (Chapter 2), the board on the web and in the terminal
@@ -164,8 +164,8 @@ it.
 7. [Spaces](build-compass/part-2-your-own-plugins/07-spaces.md): rebuild Copilotz's spaces plugin
    for one person by its contract: what chat and other plugins ask of it, a rule that keeps shared
    documents in real spaces, and a parity test against Copilotz's own.
-8. [Spaces on the web](build-compass/part-2-your-own-plugins/08-spaces-on-the-web.md): give spaces
-   a web front end: React Views the web shell places by name, a page for each space, and resource
+8. [Spaces on the web](build-compass/part-2-your-own-plugins/08-spaces-on-the-web.md): give spaces a
+   web front end: React Views the web shell places by name, a page for each space, and resource
    kinds that let other plugins add tabs without knowing your code.
 
 **Part 3: the board**
@@ -177,9 +177,9 @@ it.
 10. [The board on screen](build-compass/part-3-the-board/10-the-board-on-screen.md): show the same
     board in two places with Views: a Board tab on every space's page, plugged in through a resource
     kind, and a terminal View printed by a command. Both stay live.
-11. [The board for North](build-compass/part-3-the-board/11-the-board-for-north.md): the third
-    place the board shows is the model's prompt: six tools, offered wherever a conversation is in a
-    space, that call the same Actions people use, and read back as plain text.
+11. [The board for North](build-compass/part-3-the-board/11-the-board-for-north.md): the third place
+    the board shows is the model's prompt: six tools, offered wherever a conversation is in a space,
+    that call the same Actions people use, and read back as plain text.
 
 **Part 4: documents**
 
@@ -229,14 +229,14 @@ it.
 
 **Part 7: the team**
 
-23. [East, South and West](build-compass/part-7-the-team/23-east-south-and-west.md): north gets a
+23. [East, South and West](build-compass/part-7-the-team/23-east-south-and-west.md): North gets a
     team: three more of the app's own agents, each with its own way of working and its own model
     alias, in every space, with the charter in each one's prompt.
-24. [Asking in parallel](build-compass/part-7-the-team/24-asking-in-parallel.md): north brings
+24. [Asking in parallel](build-compass/part-7-the-team/24-asking-in-parallel.md): North brings
     teammates in with chat's send_message: questions that don't depend on each other go out in one
     step, the teammates work at the same time, and North resumes once, with every reply.
 25. [Reading other conversations](build-compass/part-7-the-team/25-reading-other-conversations.md):
-    compass's coordination plugin, rebuilt for one person: two tools that let an agent list and read
+    Compass's coordination plugin, rebuilt for one person: two tools that let an agent list and read
     the other conversations of its space, through chat's own queries, storing nothing.
 
 **Part 8: skills and routines**
@@ -248,7 +248,7 @@ it.
     rebuild Copilotz's routines for one person: a message sent to an agent on a schedule, with time
     as one more caller of Actions, every run recorded, and tests that move time with a manual clock.
 28. [Agents that schedule](build-compass/part-8-skills-and-routines/28-agents-that-schedule.md):
-    \"Remind me every Monday\" from a chat: four tools that make, list and cancel routines as the
+    "Remind me every Monday" from a chat: four tools that make, list and cancel routines as the
     person the agent works for, post back where they were asked, and let an agent name a run's chat
     for what it found.
 
@@ -265,8 +265,8 @@ it.
 
 **Part 10: testing**
 
-31. [Fakes at the edges](build-compass/part-10-testing/31-fakes-at-the-edges.md): test Compass as
-    a person uses it, offline and in milliseconds: the app as app.ts makes it, run for real, with
+31. [Fakes at the edges](build-compass/part-10-testing/31-fakes-at-the-edges.md): test Compass as a
+    person uses it, offline and in milliseconds: the app as app.ts makes it, run for real, with
     fakes only where it meets the world: a scripted model, a manual clock, and a model provider
     served on your machine.
 32. [Parity](build-compass/part-10-testing/32-parity.md): what every rebuilt plugin's parity test
@@ -280,9 +280,9 @@ it.
     Compass: the runtime answers /api/ itself, as whoever identity's who says a request is, so a
     script on your machine reads your board and moves a card through the same Actions and rules as a
     click.
-34. [The client](build-compass/part-11-other-ways-in/34-the-client.md): copilotz's client,
-    connect, reaches the running server as plugin code reaches the store, over the socket or over
-    HTTP; its watch hears every commit, so a script prints your board again whenever a card moves.
+34. [The client](build-compass/part-11-other-ways-in/34-the-client.md): Copilotz's client, connect,
+    reaches the running server as plugin code reaches the store, over the socket or over HTTP; its
+    watch hears every commit, so a script prints your board again whenever a card moves.
 35. [Your board over MCP](build-compass/part-11-other-ways-in/35-your-board-over-mcp.md): an
     assistant on your machine (Claude Code, any MCP client) calls the board's tools, the same ones
     North uses: Compass's own mcp plugin, with Copilotz's contract, for one person, each call
@@ -290,10 +290,10 @@ it.
 
 **Part 12: shipping**
 
-36. [PostgreSQL and blobs](build-compass/part-12-shipping/36-postgresql-and-blobs.md): run the
-    same Compass on PostgreSQL when DATABASE_URL says so, and keep large values once, as files in a
+36. [PostgreSQL and blobs](build-compass/part-12-shipping/36-postgresql-and-blobs.md): run the same
+    Compass on PostgreSQL when DATABASE_URL says so, and keep large values once, as files in a
     folder of their own, with Copilotz's postgresStore and fileBlobs.
-37. [Watching it run](build-compass/part-12-shipping/37-watching-it-run.md): copilotz measures
+37. [Watching it run](build-compass/part-12-shipping/37-watching-it-run.md): Copilotz measures
     itself: the runtime's jobs and commits, and every model call by OpenTelemetry's GenAI
     conventions. Give it a meter, read the numbers at /metrics as Prometheus text or in the
     terminal, and send them to an OpenTelemetry collector.
@@ -309,10 +309,10 @@ it.
     every plugin you rebuilt kept Copilotz's contract, so one setting runs Compass on Copilotz's own
     plugins instead, the real Compass's. A test runs the same end-to-end scenario on both lists, and
     shows where they differ on purpose.
-40. [Sign-in and people](build-compass/part-13-from-one-person-to-many/40-sign-in-and-people.md):
-    on Copilotz's identity, a request is whoever its session proves, so people sign in: by email and
-    a password, with codes written to the log on this machine, or by name. Then a space gets
-    members: Ana invites Bruno to Launch, he accepts, and he reads its board.
+40. [Sign-in and people](build-compass/part-13-from-one-person-to-many/40-sign-in-and-people.md): on
+    Copilotz's identity, a request is whoever its session proves, so people sign in: by email and a
+    password, with codes written to the log on this machine, or by name. Then a space gets members:
+    Ana invites Bruno to Launch, he accepts, and he reads its board.
 41. [Many orgs and billing](build-compass/part-13-from-one-person-to-many/41-many-orgs-and-billing.md):
     one address, many orgs: a directory runtime signs people in and knows their orgs, and each org
     is a Compass of its own, opened when used and closed when idle. With Copilotz's usage ledger,

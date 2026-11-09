@@ -1,6 +1,8 @@
 ---
 title: "chat-terminal"
 description: "Chat's terminal front end, for the process that draws the terminal: how a conversation, a message, its author and a reply being written look there, and chat's commands."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

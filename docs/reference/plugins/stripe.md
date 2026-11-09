@@ -1,6 +1,8 @@
 ---
 title: "stripe"
 description: "Stripe: one way an org pays, for `credits`, which never asks it anything."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

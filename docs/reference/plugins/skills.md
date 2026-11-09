@@ -1,6 +1,8 @@
 ---
 title: "skills"
 description: "Skills: know-how an agent reads only when it needs it."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

@@ -1,6 +1,8 @@
 ---
 title: "spaces-terminal"
 description: "Access's terminal front end: how spaces look there, and `/spaces`, `/space`, `/work`, `/invite`, `/invitations`, `/accept`, `/decline`, and requests to join."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

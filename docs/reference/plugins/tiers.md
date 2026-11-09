@@ -1,6 +1,8 @@
 ---
 title: "tiers"
 description: "Tiers: which models the app's agents think with, chosen by what the work needs rather than model by model."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

@@ -1,6 +1,8 @@
 ---
 title: "terminal"
 description: "The terminal plugin: a command line's data, built from the same primitives as everything else, which every process has."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

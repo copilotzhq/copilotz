@@ -1,6 +1,8 @@
 ---
 title: "usage-terminal"
 description: "Usage's terminal front end: how totals look there, and `/usage`."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

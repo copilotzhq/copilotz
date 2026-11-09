@@ -1,6 +1,8 @@
 ---
 title: "memory-terminal"
 description: "Memory's terminal front end: how a memory looks there, and `/memories`."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

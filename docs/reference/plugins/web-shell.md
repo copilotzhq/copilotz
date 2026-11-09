@@ -1,6 +1,8 @@
 ---
 title: "web-shell"
 description: "The web shell: the web's root View, which the web host observes for the address it's at (`hosts/web`)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

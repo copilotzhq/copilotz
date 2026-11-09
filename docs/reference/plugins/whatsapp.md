@@ -1,6 +1,8 @@
 ---
 title: "whatsapp"
 description: "WhatsApp: people talk to their agents from WhatsApp, through Meta's Cloud API."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

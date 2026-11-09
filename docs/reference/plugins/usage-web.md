@@ -1,6 +1,8 @@
 ---
 title: "usage-web"
 description: "Usage's web front end: where the app serves many orgs, the org page's Usage section (the web shell's `orgSettings`)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

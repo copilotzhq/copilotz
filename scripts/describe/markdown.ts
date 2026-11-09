@@ -23,6 +23,8 @@ export type PageOptions = {
   example?: string;
   /** The plugins with pages of their own: those are links. */
   pages?: Set<string>;
+  /** Where the docs site lists the page (its frontmatter's `section` and `order`). */
+  listed?: { section: string; order: number };
 };
 
 const code = (text: string) => `\`${text}\``;
@@ -459,6 +461,9 @@ export function page(d: Declaration, options: PageOptions = {}): string {
     "---",
     `title: ${JSON.stringify(d.name)}`,
     `description: ${JSON.stringify(summary)}`,
+    ...(options.listed
+      ? [`section: ${JSON.stringify(options.listed.section)}`, `order: ${options.listed.order}`]
+      : []),
     "---",
     "",
     "<!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->",

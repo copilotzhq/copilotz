@@ -1,6 +1,8 @@
 ---
 title: "memory-web"
 description: "Memory's web front end, for the browser: what agents remember (the `memories` View, as the terminal's `/memories` lists it: ★ for core memories, always in mind)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

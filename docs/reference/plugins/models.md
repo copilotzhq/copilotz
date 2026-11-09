@@ -1,6 +1,8 @@
 ---
 title: "models"
 description: "Models: talking to models, one way for every kind."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

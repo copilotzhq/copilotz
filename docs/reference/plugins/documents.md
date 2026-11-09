@@ -1,6 +1,8 @@
 ---
 title: "documents"
 description: "Documents: shared Markdown in a space, for people and agents — the canonical artifact of the thing being made, and its working memory."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

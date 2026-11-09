@@ -1,6 +1,8 @@
 ---
 title: "credits-web"
 description: "Credits' web front end: the org page's Billing section (the web shell's `orgSettings`)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

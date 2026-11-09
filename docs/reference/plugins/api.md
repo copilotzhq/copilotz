@@ -1,6 +1,8 @@
 ---
 title: "api"
 description: "Developer keys: what code calls the app with, as someone, over the runtime's REST API (`/api/`) or its socket (see runtime/api.ts and runtime/client.ts): `Authorization: Bearer <key>`."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

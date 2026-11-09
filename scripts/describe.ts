@@ -284,6 +284,7 @@ async function docs(check: boolean) {
       export: f.name,
       frontEnds,
       pages,
+      listed: { section: "Reference", order: 3 },
       ...(f.placed.example ? { example: f.placed.example } : {}),
     });
   }
@@ -336,6 +337,9 @@ function index(declarations: Declaration[]): string {
     "---",
     'title: "Plugins"',
     `description: "Every plugin Copilotz exports: what it keeps, who may call what, where it shows, what it needs."`,
+    // The docs site lists it after docs/reference.md, and every plugin's page after it.
+    'section: "Reference"',
+    "order: 2",
     "---",
     "",
     "<!-- Made by scripts/describe.ts from the plugins themselves: run it again rather than edit this page. -->",

@@ -1,6 +1,8 @@
 ---
 title: "mcp"
 description: "MCP: models outside the app (ChatGPT, Claude, any MCP client) call the app's tools."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

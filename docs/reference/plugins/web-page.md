@@ -1,6 +1,8 @@
 ---
 title: "web-page"
 description: "The page: the app's code, its files, its manifest and worker, and the page itself."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

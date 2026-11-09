@@ -1,6 +1,8 @@
 ---
 title: "contacts-web"
 description: "Contacts on the web: their names, wherever a page shows who wrote (spaces' `names` resource, for the browser): \"Ana\", not \"someone\"."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

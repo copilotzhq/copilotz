@@ -1,6 +1,8 @@
 ---
 title: "contacts"
 description: "Contacts: people outside the org who talk to its agents, such as a WhatsApp customer writing to a business's number."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

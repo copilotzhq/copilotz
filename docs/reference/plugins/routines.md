@@ -1,6 +1,8 @@
 ---
 title: "routines"
 description: "Routines: a message sent to an agent on a schedule, in a space (\"every weekday at 9:00, ask @researcher for the news on X\")."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

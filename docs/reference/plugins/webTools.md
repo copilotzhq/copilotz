@@ -1,6 +1,8 @@
 ---
 title: "webTools"
 description: "Web tools: agents that search the web and read a page, without a computer."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

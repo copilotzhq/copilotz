@@ -1,6 +1,8 @@
 ---
 title: "usage"
 description: "Usage: what was used, what it cost, and what to charge for it, as a ledger."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

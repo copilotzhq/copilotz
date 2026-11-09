@@ -1,6 +1,8 @@
 ---
 title: "terminal-shell"
 description: "The terminal's front end, for the process that draws: the `shell` View (what's open, the scrollback, where you type), where you type's prompt, and the View any kind without its own falls back to."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

@@ -1,6 +1,8 @@
 ---
 title: "Plugins"
 description: "Every plugin Copilotz exports: what it keeps, who may call what, where it shows, what it needs."
+section: "Reference"
+order: 2
 ---
 
 <!-- Made by scripts/describe.ts from the plugins themselves: run it again rather than edit this page. -->

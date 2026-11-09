@@ -1,6 +1,8 @@
 ---
 title: "boards"
 description: "Boards: kanban boards in a space, for people and agents, the team's operational source of truth: one real outcome per card, with its owner, what done looks like, an honest column, and any blocker."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

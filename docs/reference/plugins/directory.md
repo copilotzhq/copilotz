@@ -1,6 +1,8 @@
 ---
 title: "directory"
 description: "The directory plugin, and what each org's runtime gets of it: `directory.member(dir, org)` (see shared/member.ts), with the org as `org.info` says it."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

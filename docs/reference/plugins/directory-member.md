@@ -1,6 +1,8 @@
 ---
 title: "directory-member"
 description: "`member(dir, org)`: the plugin each org's runtime gets from the directory (`dir`, its runtime) that serves it, beside the app's own plugins."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

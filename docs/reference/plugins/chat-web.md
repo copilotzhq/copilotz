@@ -1,6 +1,8 @@
 ---
 title: "chat-web"
 description: "Chat's web front end, for the browser: home (a new chat), how a chat looks with what agents are writing right now, a message and its files, where you type, and at the top of the sidebar, starting one."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

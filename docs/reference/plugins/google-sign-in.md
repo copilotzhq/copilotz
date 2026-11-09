@@ -1,6 +1,8 @@
 ---
 title: "google-sign-in"
 description: "Google sign-in: `google.sign-in` turns a Google ID token into a person and a session (with the identity plugin)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

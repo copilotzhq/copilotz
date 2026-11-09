@@ -1,6 +1,8 @@
 ---
 title: "openapi"
 description: "OpenAPI: an HTTP API's operations as Actions and as tools for agents, made from its OpenAPI 3 spec."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

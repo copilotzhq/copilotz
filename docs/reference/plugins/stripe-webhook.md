@@ -1,6 +1,8 @@
 ---
 title: "stripe-webhook"
 description: "Stripe's webhook, `POST /__stripe/<seller>`, where the app's accounts send their events (see routes/webhook.ts)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

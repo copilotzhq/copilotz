@@ -1,6 +1,8 @@
 ---
 title: "dev-sign-in"
 description: "Dev sign-in: people sign in by the name they type, from this machine only, for trying an app out (with the identity plugin)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

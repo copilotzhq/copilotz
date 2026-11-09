@@ -1,6 +1,8 @@
 ---
 title: "voice"
 description: "Voice: people call the app's phone number and talk to its agents, through Twilio's ConversationRelay (Twilio hears them and speaks for the agent; the app gets and sends text)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

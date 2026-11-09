@@ -1,6 +1,8 @@
 ---
 title: "team"
 description: "Team: agents people make, beside those the app declares in code."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

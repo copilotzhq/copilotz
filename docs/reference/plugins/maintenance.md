@@ -1,6 +1,8 @@
 ---
 title: "maintenance"
 description: "Maintenance: HTTP endpoints for an app's operators, for when they can't reach its database themselves (a client's network that keeps their database user out)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

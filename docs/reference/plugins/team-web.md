@@ -1,6 +1,8 @@
 ---
 title: "team-web"
 description: "Team's web front end, for the browser: making and changing agents."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

@@ -1,6 +1,8 @@
 ---
 title: "credits"
 description: "Credits: what an org has to spend, and the check that stops it at its limit."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->

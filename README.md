@@ -162,7 +162,7 @@ OPENAI_API_KEY=sk-… node salon.ts    # or bun salon.ts, or deno run -A salon.t
 ```
 
 On Deno, map the name `copilotz` in `deno.json`
-(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.32"`) so the imports read the same everywhere.
+(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.34"`) so the imports read the same everywhere.
 Copilotz runs on Node, Deno and Bun, and it's built on web standards for Cloudflare Workers and the
 browser.
 
@@ -301,7 +301,7 @@ their front ends from `/web` and `/terminal` beside it.
 
 ## Status
 
-Copilotz 1.0 is a release candidate, `1.0.0-rc.32`. It's a new runtime, and it doesn't read 0.x
+Copilotz 1.0 is a release candidate, `1.0.0-rc.34`. It's a new runtime, and it doesn't read 0.x
 data. Copilotz 0.x lives on the [`v0`](https://github.com/copilotzhq/copilotz/tree/v0) branch, and
 [CHANGELOG.md](CHANGELOG.md) says what each release changed, and how to upgrade.
 

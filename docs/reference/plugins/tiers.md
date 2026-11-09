@@ -13,7 +13,7 @@ Tiers: which models the app's agents think with, chosen by what the work needs r
 model.
 
 ```ts
-import { tiers } from "copilotz/plugins/agents";
+import { tiers } from "@copilotz/team";
 ```
 
 ## What it keeps
@@ -60,8 +60,8 @@ kinds the app and other plugins fill.
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It moves to its own package, `@copilotz/team`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
-in `copilotz`.
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.33`, for `copilotz` `1.0.0-rc.33`:
+install it beside `copilotz`.
 
 ## Listing
 

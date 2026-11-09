@@ -113,7 +113,10 @@ export const ROLES = [
  * only reads it, for chats where it's an editor. Labels are read when shown,
  * so they follow the app's words.
  */
-export const AGENT_ROLES = [
+export const AGENT_ROLES: readonly [
+  { readonly value: "editor"; readonly label: string; readonly lets: string },
+  { readonly value: "viewer"; readonly label: string; readonly lets: string },
+] = [
   {
     value: "editor",
     get label() {

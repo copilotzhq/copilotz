@@ -20,7 +20,7 @@ import {
   LazyView,
   NavItem,
 } from "../../../../../hosts/web/mod.ts";
-import { asStaff, useOrgs } from "../../../directory/contract.ts";
+import { useStanding } from "../../../../interfaces/web/contract.ts";
 import type { Member, Reached, SpaceSidebar } from "../../contract.ts";
 import { nameOf } from "../../shared/names.ts";
 import { ORG } from "../../shared/reach.ts";
@@ -30,6 +30,10 @@ import { listed, spaceName, theirsAlone } from "./who.ts";
 import { say } from "./words.ts";
 
 type Folds = Record<string, boolean>;
+type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
+
+/** Where no one asks (a test's tree): no standing. */
+const noCall: Call = () => Promise.reject(new Error("no call"));
 
 const foldsOf = (key: string): Folds => {
   try {
@@ -45,7 +49,18 @@ const ARCHIVED = "copilotz:archived";
 const ACROSS = "copilotz:across";
 
 export function SpaceTree(
-  { spaces: reached, archived: shelved, joined = [], here, path, under, viewer, names, create }: {
+  {
+    spaces: reached,
+    archived: shelved,
+    joined = [],
+    here,
+    path,
+    under,
+    viewer,
+    names,
+    create,
+    call,
+  }: {
     spaces: Reached[];
     /** Those archived, listed apart. */
     archived: Reached[];
@@ -61,16 +76,20 @@ export function SpaceTree(
     /** Whose other people's Personal spaces are, by name (`namesIn`). */
     names: Record<string, string>;
     create(name: string): Promise<void>;
+    /** How it asks the person's standing in the org (`org.me`): staff, and whether there are orgs. */
+    call?: Call;
   },
 ): ReactNode {
   // Those who run the org (and staff) reach every space in it: the ones they're in show as
   // anyone's do; the rest of the org's, apart.
-  const orgs = useOrgs();
+  const standing = useStanding(call ?? noCall, !!call);
   const role = joined.find((m) => m.space === ORG)?.role;
-  const staff = orgs.status === "ready" && asStaff(orgs.value);
+  // In the org as platform staff (an app serving many orgs gives their sessions that).
+  const staff = standing?.staff === true;
   const runs = role === "owner" || role === "admin" || staff;
-  // Where there are orgs, everyone in one but its guests reads their own role there.
-  const guest = orgs.status === "ready" && !staff && !role;
+  // Where there are orgs (`org.me` names the org), everyone in one but its guests reads their own
+  // role there.
+  const guest = !!standing?.org && !staff && !role;
   const theirs = new Set(joined.map((m) => m.space));
   const mine = (s: Reached) =>
     !runs || theirs.has(s._id) || (s.kind === "personal" && s.owner === viewer);

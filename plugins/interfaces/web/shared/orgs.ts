@@ -1,16 +1,30 @@
 /**
- * Orgs in the shell, as words and lists: a role and what it lets, the org
- * page's sections (the `orgSettings` resource) in their order and for whom,
- * and the console's orgs as staff search and sort them.
+ * Orgs in the shell: the person's standing in the org they're in (spaces'
+ * `org.me`), a role and what it lets, the shape of the org page's sections
+ * (the `orgSettings` resource), and the `orgs` slot, which the front end
+ * that knows the app's orgs fills (`@copilotz/directory`'s `directoryWeb`):
+ * the shell knows none itself.
  */
-import type { IconName } from "../../../../hosts/web/mod.ts";
+import type { IconName, PaletteGroup } from "../../../../hosts/web/mod.ts";
+import type { UserMenuEntry } from "./menu.ts";
 import { say } from "../views/words.ts";
 
-/** Someone's standing in the org they're in: their role, and whether they're platform staff. */
-export type Standing = { role: string | null; staff: boolean };
+/**
+ * Someone's standing in the org they're in (spaces' `org.me`): their role, whether they're
+ * platform staff, and, where the app serves many orgs, which org it is.
+ */
+export type Standing = {
+  role: string | null;
+  staff: boolean;
+  org?: { id: string; name: string; kind: string };
+};
 
 /** The roles in an org, in the order they let more, each with what it lets (said when read). */
-export const ORG_ROLES = [
+export const ORG_ROLES: readonly {
+  readonly value: "owner" | "admin" | "member" | "guest";
+  readonly label: string;
+  readonly lets: string;
+}[] = [
   {
     value: "owner",
     get label() {
@@ -58,10 +72,6 @@ export const orgRoleName = (role: string | null | undefined): string =>
 export const runs = (standing: Standing | undefined): boolean =>
   !!standing && (standing.staff || standing.role === "owner" || standing.role === "admin");
 
-/** How someone stands, in a word: their role ("Owner"), or "Staff" for staff who aren't in it. */
-export const standingName = (standing: Standing | undefined): string =>
-  !standing ? "" : standing.role ? orgRoleName(standing.role) : standing.staff ? say("staff") : "";
-
 /**
  * An `orgSettings` resource: a section of the org's page, from the plugin it
  * belongs to. Its View gets item `{ _id }` (the org's id) and hints `{ org,
@@ -76,67 +86,61 @@ export type OrgSection = {
   roles?: string[];
 };
 
-/** The sections someone sees, in their order (lowest first), each with its key. */
-export function sectionsOf(
-  given: unknown,
-  standing: Standing | undefined,
-): (OrgSection & { key: string })[] {
-  return Object.entries((given ?? {}) as Record<string, OrgSection | null>)
-    .flatMap(([key, section]) => section?.view && section.title ? [{ ...section, key }] : [])
-    .filter((section) =>
-      standing?.staff || !section.roles ||
-      (!!standing?.role && section.roles.includes(standing.role))
-    )
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.key.localeCompare(b.key));
-}
+/** How the shell calls Actions. */
+type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
-/** The section the address asks for (`?tab=`), or the first. */
-export const chosenSection = <S extends { key: string }>(sections: S[], asked?: string) =>
-  sections.find((s) => s.key === asked) ?? sections[0];
-
-/** An org as staff's console lists it. */
-export type Listed = {
-  id: string;
-  name: string;
-  kind: string;
-  members: number;
-  suspended?: boolean;
-  placement?: { schema: string };
-  summary?: { people?: number; spaces?: number; active?: string };
-  at: string;
+/**
+ * The `orgs` resource: where the app serves many orgs, what the shell shows of
+ * where the person is among them, filled by the front end that knows them
+ * (`@copilotz/directory`'s `directoryWeb`). The shell draws it when it's there;
+ * without it, there's no switcher, and nothing of orgs in the menu or the palette.
+ *
+ * - `switcher`: a View at the top of the sidebar, beside the app's mark (in
+ *   place of its whole logo), with hints `{ in, path }`, once `use` answers.
+ * - `overlay`: a View drawn once beside every page, outside the sidebar (a
+ *   drawer, on a phone): what going between orgs shows over the page.
+ * - `use`: what the shell's own parts list for the person's orgs, kept
+ *   current: a React hook the frame calls on every draw, given how it calls
+ *   Actions. Their email under their name, entries in their menu (after the
+ *   `userMenu` ones), and groups in the command palette. Nothing while it
+ *   doesn't know yet, or where the server serves one org: the top of the
+ *   sidebar is then the app's whole logo, as without the slot.
+ *
+ * ```ts
+ * resources: { orgs: { switcher: "orgs.switcher", overlay: "orgs.overlay", use: useShellOrgs } }
+ * ```
+ */
+export type OrgsSlot = {
+  switcher: string;
+  overlay?: string;
+  use?(call: Call): OrgsShown | undefined;
 };
 
-/** Which orgs the console shows. */
-export type ConsoleFilter = "all" | "team" | "personal" | "suspended";
+/** What the `orgs` slot's hook gives the shell's own parts. */
+export type OrgsShown = {
+  /** The person's email, under their name. */
+  email?: string | null;
+  /** Entries in their menu, after the front ends' own (the org's page; every org, for staff). */
+  menu?: UserMenuEntry[];
+  /** Groups in the command palette (switching, invitations, a new org). */
+  palette?: PaletteGroup[];
+};
 
-/** The orgs matching what's typed (name, id, schema, who made it) and the filter, busiest first. */
-export function consoleList<O extends Listed & { by?: string }>(
-  orgs: O[],
-  search: string,
-  filter: ConsoleFilter,
-): O[] {
-  const words = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  return orgs
-    .filter((o) => filter === "all" || (filter === "suspended" ? !!o.suspended : o.kind === filter))
-    .filter((o) => {
-      const text = [o.name, o.id, o.placement?.schema ?? "", o.by ?? ""].join(" ").toLowerCase();
-      return words.every((word) => text.includes(word));
-    })
-    .sort((a, b) =>
-      (b.summary?.active ?? b.at).localeCompare(a.summary?.active ?? a.at) ||
-      a.name.localeCompare(b.name)
-    );
+/** The `orgs` resource as given, or nothing where it names no switcher. */
+export const orgsSlotOf = (given: unknown): OrgsSlot | undefined => {
+  const slot = given as Partial<OrgsSlot> | null | undefined;
+  return typeof slot?.switcher === "string" && slot.switcher ? slot as OrgsSlot : undefined;
+};
+
+const changes = new Set<() => void>();
+
+/** Says, in the page, that the org changed (its owners renamed it): whatever shows orgs asks again. */
+export function orgsChanged(): void {
+  for (const listener of changes) listener();
 }
 
-/** The console's totals: orgs, those of teams, people across them, and those suspended. */
-export function consoleTotals(orgs: Listed[]) {
-  return {
-    orgs: orgs.length,
-    teams: orgs.filter((o) => o.kind === "team").length,
-    people: orgs.reduce((n, o) => n + (o.summary?.people ?? o.members), 0),
-    suspended: orgs.filter((o) => o.suspended).length,
-  };
+/** Hears that the org changed (`orgsChanged`), until the function it returns is called. */
+export function onOrgsChanged(listener: () => void): () => void {
+  changes.add(listener);
+  return () => changes.delete(listener);
 }
-
-/** A schema name the console takes for moving an org: lowercase letters, digits and `_`. */
-export const SCHEMA = /^[a-z][a-z0-9_]{0,62}$/;

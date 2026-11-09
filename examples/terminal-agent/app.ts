@@ -19,9 +19,9 @@ import {
   planning,
   routines,
   skills,
-  team,
   tool,
 } from "../../plugins/agents/mod.ts";
+import { team } from "@copilotz/team";
 import { usage } from "../../plugins/billing/mod.ts";
 import { terminalPlugin } from "../../plugins/interfaces/terminal/mod.ts";
 import { api } from "../../plugins/interfaces/api/mod.ts";

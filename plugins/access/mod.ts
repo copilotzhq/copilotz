@@ -15,9 +15,11 @@
  *   the log on a laptop);
  * - `accounts`: outside accounts people connect for their agents to use (a
  *   ChatGPT plan, as a model provider); its front end is `accountsWeb`
- *   (accounts/web.tsx);
- * - `directory`: who signs in and which orgs they belong to, for apps that
- *   serve many orgs (see design/tenancy.md).
+ *   (accounts/web.tsx).
+ *
+ * Who signs in and which orgs they belong to, for apps that serve many orgs,
+ * is `@copilotz/directory` (see design/tenancy.md); the roles in an org are
+ * spaces'.
  *
  *   plugins: [...access, googleSignIn, { name: "app", resources: { shared: { note: {} } } }]
  *
@@ -37,7 +39,6 @@ export * from "./google/mod.ts";
 export * from "./dev/mod.ts";
 export * from "./email/mod.ts";
 export * from "./accounts/mod.ts";
-export * from "./directory/mod.ts";
 
 /**
  * Spaces, identity and contacts, which every app with people has; Google

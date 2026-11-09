@@ -31,12 +31,14 @@ URLs and cookie names are the same as with one runtime. `directory.member` keeps
 
 ## The code
 
-<!-- TODO split -->
+The directory is its own package, `@copilotz/directory`, at Copilotz's version
+(`npm install @copilotz/directory`, `deno add jsr:@copilotz/directory`).
 
 ```ts
 import { createRuntime, definePlugin, type Runtime, runtimes } from "copilotz";
 import { memoryStore } from "copilotz/stores/memory";
-import { devSignIn, directory, identity, type OrgInfo } from "copilotz/plugins/access";
+import { devSignIn, identity } from "copilotz/plugins/access";
+import { directory, type OrgInfo } from "@copilotz/directory";
 import { webPage } from "copilotz/web/server";
 import { themeOf } from "copilotz/web/theme";
 import { bundle, listen } from "copilotz/web/node";
@@ -94,9 +96,11 @@ host is then an org's claimed one, answered by that org's host routes alone.
 ## What stays in the directory
 
 Whatever has one address for every org lives in the directory's runtime. Stripe's webhook is one
-(`stripeWebhook`, with the `stripe` resource's `orgs`). The cloud pool's socket is another.
+(`stripeWebhook` from `@copilotz/billing`, with the `stripe` resource's `orgs`). The cloud pool's
+socket is another.
 
-<!-- TODO split -->
+In the browser, `directoryWeb` (from `@copilotz/directory/web`) fills the web shell's `orgs` slot:
+the org switcher, the org's page and staff's console. Without it, the shell shows no orgs.
 
 ## Examples
 

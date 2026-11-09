@@ -238,8 +238,8 @@ needs and what it requires. The plugin hub lists plugins from it, and every page
 `docs/reference/plugins/` is made from it.
 
 ```sh
-deno run -A scripts/describe.ts plugins/work/mod.ts boards              # the declaration, as JSON
-deno run -A scripts/describe.ts plugins/work/mod.ts boards --markdown   # its reference page
+deno run -A scripts/describe.ts packages/work/mod.ts boards             # the declaration, as JSON
+deno run -A scripts/describe.ts packages/work/mod.ts boards --markdown  # its reference page
 deno run -A scripts/describe.ts --docs                                  # every page, and plugins.json
 deno run -A scripts/describe.ts --docs --check                          # fails when one is stale
 ```

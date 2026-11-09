@@ -257,18 +257,18 @@ their front ends from `/web` and `/terminal` beside it.
 **The rest**
 
 - **Agents:** `history` summarizes long chats, and `memory` with `memoryExtraction` remembers across
-  them. `team` lets people make agents, `skills` gives them know-how, `routines` runs them on a
-  schedule and `tiers` picks their models. `openapi` turns an API's spec into tools, and `webTools`
-  searches and reads the web.
-- **Work:** `boards` for kanban, and `documents` for Markdown whose saves are versions that merge.
-  <!-- TODO split: boards and documents move to @copilotz/work; team and tiers to @copilotz/team; directory to @copilotz/directory; credits and stripe to @copilotz/billing -->
+  them. `skills` gives them know-how, and `routines` runs them on a schedule. `openapi` turns an
+  API's spec into tools, and `webTools` searches and reads the web.
 - **Access:** `access` for spaces, people and contacts, with `googleSignIn`, `emailSignIn` and
-  `email`, and `devSignIn` for this machine. `accounts` connects a person's own accounts, and
-  `directory` puts many orgs behind one address.
-- **Billing:** `usage` keeps a ledger of what every model call used and cost. `credits` stops an org
-  at what it can spend, and `stripe` with `stripeWebhook` takes its payments.
+  `email`, and `devSignIn` for this machine. `accounts` connects a person's own accounts.
+- **Billing:** `usage` keeps a ledger of what every model call used and cost.
 - **Compute:** `computers`, people's own machines, where agents run commands once their person says
   yes.
+- **Product packages,** released with Copilotz at its version: `@copilotz/work` has `boards` for
+  kanban and `documents` for Markdown whose saves are versions that merge. `@copilotz/team` lets
+  people make agents (`team`) and pick their models (`tiers`). `@copilotz/directory` puts many orgs
+  behind one address. `@copilotz/billing` stops an org at what it can spend (`credits`), and takes
+  its payments (`stripe`, `stripeWebhook`).
 - **Stores:** `memoryStore`, `sqliteStore` and `postgresStore`. One conformance suite holds them to
   the same behavior, so moving from memory to PostgreSQL changes one line. Blobs stay in the store,
   or go to files with `fileBlobs`, a bucket with `httpBlobs` or Google Cloud Storage with

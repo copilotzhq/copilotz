@@ -59,7 +59,7 @@ It also reads `spending`, resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.33`.
 
 ## Listing
 

@@ -28,7 +28,7 @@ import models from "../../models/mod.ts";
 import { chat, type ToolContext } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
-import { credits, usage, type UsageRecord } from "../../billing/mod.ts";
+import { usage, type UsageRecord } from "../../billing/mod.ts";
 import {
   cloud,
   type CloudComputer,
@@ -124,8 +124,8 @@ async function setup(
     settings?: Record<string, unknown>;
     jobs?: () => Job[];
     booting?: { hold: boolean };
-    /** With credits and its check. */
-    credits?: boolean;
+    /** With what the org can spend, and its check (a wallet, as an app's credits would be). */
+    wallet?: boolean;
   } = {},
 ) {
   const topic = `cloud-test.${crypto.randomUUID()}`;
@@ -137,19 +137,11 @@ async function setup(
       chat,
       ...access,
       usage,
-      ...(options.credits ? [credits] : []),
+      ...(options.wallet ? [wallet()] : []),
       computers,
       cloud,
       cloudPool,
       app(world.host, options.settings),
-      ...(options.credits
-        ? [
-          definePlugin({
-            name: "plans",
-            resources: { billing: { plans: { free: { title: "Free" } } } },
-          }),
-        ]
-        : []),
     ],
     transports: [{ type: "in-process", config: { topic } }],
     // Time moves only when a test says (no tick fires on its own).
@@ -163,6 +155,43 @@ async function setup(
     await world.close();
     await rt.close();
   }
+}
+
+/**
+ * What the org can spend, as an app's credits keep it (`@copilotz/billing`'s, say): the
+ * `spending` port computers ask before they wake, and the ledger telling it what each use cost.
+ */
+function wallet() {
+  let balance = 0;
+  const verdict = () =>
+    balance > 0
+      ? { ok: true }
+      : { ok: false, why: "credits", message: "This org is out of credits." };
+  const ask = defineAction({
+    record: false,
+    input: { type: "object", properties: { purpose: { type: "string" } } },
+    run: verdict,
+  });
+  return definePlugin({
+    name: "wallet",
+    actions: {
+      "wallet.grant": defineAction({
+        input: { type: "object", properties: { amount: { type: "number" } }, required: ["amount"] },
+        run: (_ctx, { amount }) => void (balance += amount),
+      }),
+      "wallet.check": ask,
+      "wallet.may": ask,
+      "wallet.spent": defineAction({
+        record: false,
+        input: { type: "object", properties: { price: { type: "number" } }, required: ["price"] },
+        run: (_ctx, { price }) => void (balance -= price),
+      }),
+    },
+    resources: {
+      spending: { check: "wallet.check", may: "wallet.may" },
+      usage: { spent: "wallet.spent" },
+    },
+  });
 }
 
 const recordsOf = <T>(rt: Awaited<ReturnType<typeof createRuntime>>, collection: string) =>
@@ -489,8 +518,7 @@ test("who makes cloud computers, and who sees them", async () => {
 
 test("an org that can't spend: nothing's made or woken, what's awake sleeps, and a grant brings it back", async () => {
   await setup(async (rt, world) => {
-    const staff: Actor = { kind: "person", id: "sam", staff: true };
-    await rt.call("billing.grant", { amount: 1, reason: "enough to start" }, { actor: staff });
+    await rt.call("wallet.grant", { amount: 1 });
     const { computer: id } = await rt.call<{ computer: string }>("cloud.create", {
       size: "small",
     }, { actor: ana });
@@ -532,10 +560,10 @@ test("an org that can't spend: nothing's made or woken, what's awake sleeps, and
     assertEquals([offered.create, offered.why], [false, "credits"]);
 
     // A grant, and it wakes.
-    await rt.call("billing.grant", { amount: 5000, reason: "more" }, { actor: staff });
+    await rt.call("wallet.grant", { amount: 5000 });
     assertEquals(await rt.call("cloud.wake", { computer: id }), { state: "awake" });
     await rt.call("cloud.release", { computer: id });
-  }, { credits: true });
+  }, { wallet: true });
 });
 
 test("a cloud computer shared into a space: its members see how it is, on its desk there", async () => {

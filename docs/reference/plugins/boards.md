@@ -13,7 +13,7 @@ Boards: kanban boards in a space, for people and agents, the team's operational 
 real outcome per card, with its owner, what done looks like, an honest column, and any blocker.
 
 ```ts
-import { boards } from "copilotz/plugins/work";
+import { boards } from "@copilotz/work";
 ```
 
 ## What it keeps
@@ -73,8 +73,8 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It moves to its own package, `@copilotz/work`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
-in `copilotz`.
+It ships in a package of its own, `@copilotz/work@1.0.0-rc.33`, for `copilotz` `1.0.0-rc.33`:
+install it beside `copilotz`.
 
 ## Listing
 

@@ -8,7 +8,8 @@
 import process from "node:process";
 import { definePlugin, type Plugins } from "../../runtime/mod.ts";
 import { models } from "../../plugins/models/mod.ts";
-import { chat, history, memory, team, tool } from "../../plugins/agents/mod.ts";
+import { chat, history, memory, tool } from "../../plugins/agents/mod.ts";
+import { team } from "@copilotz/team";
 import { access } from "../../plugins/access/mod.ts";
 
 const apiKey = process.env.OPENAI_API_KEY;

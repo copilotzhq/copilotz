@@ -11,10 +11,11 @@
  * it. Besides what front ends list there, the shell offers its own: the
  * side panel, going home, signing out.
  *
- * Where the app serves many orgs (see orgs.tsx), the top of the sidebar is
- * the org switcher beside the app's mark, the foot is the user menu, and
- * the palette lists orgs too; in an org as staff, a line in the warning
- * colour runs along the top of the window, all the time.
+ * Where the app serves many orgs, the front end that knows them fills the
+ * `orgs` slot (see shared/orgs.ts): the top of the sidebar is its switcher
+ * beside the app's mark, its overlay is drawn beside every page, and what
+ * its hook lists joins the user menu and the palette. Without it, the top of
+ * the sidebar is the app's whole logo.
  */
 import {
   type CSSProperties,
@@ -37,18 +38,22 @@ import {
   type PaletteGroup,
   signOut,
 } from "../../../../hosts/web/mod.ts";
-import { asStaff, useOrgs } from "../../../access/directory/contract.ts";
+import type { OrgsShown, OrgsSlot } from "../shared/orgs.ts";
 import { apple, opens, type PaletteSource, shortcutOf } from "../shared/palette.ts";
 import { toggleLabel } from "../shared/panel.ts";
 import type { UserMenuEntry } from "../shared/menu.ts";
-import { useStanding } from "../shared/standing.ts";
 import { STYLE } from "../shared/style.ts";
 import { Me } from "./me.tsx";
-import { NewOrg, orgsPalette, OrgSwitcher, Switching } from "./orgs.tsx";
 import { say } from "./words.ts";
 import { type Offered, PanelSheet, PanelToggle, SidePanel, usePanel } from "./panel.tsx";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
+
+/** The `orgs` slot as drawn: its Views, and its hook. */
+export type Orgs = { switcher: ReactNode; overlay?: ReactNode; use?: OrgsSlot["use"] };
+
+/** Where no front end fills the slot: nothing of orgs. */
+const none = (): OrgsShown | undefined => undefined;
 
 /** Where the sidebar becomes a drawer (as the style says). */
 const PHONE = "(max-width: 760px)";
@@ -63,7 +68,7 @@ const phone = {
 };
 
 export function Frame(
-  { path, brand, viewer, label, sidebar, menu, call, panel, palette, children }: {
+  { path, brand, viewer, label, sidebar, menu, call, panel, palette, orgs, children }: {
     /** Where the page is: going elsewhere closes the drawer, and the panel's sheet. */
     path: string;
     /** The app's name, which its logo says (or shows). */
@@ -75,27 +80,28 @@ export function Frame(
     sidebar: ReactNode;
     /** What front ends put in the person's menu (the `userMenu` resource). */
     menu: UserMenuEntry[];
-    /** How the shell calls Actions (the person's standing in their org: `org.me`). */
+    /** How the shell calls Actions (given to the `orgs` slot's hook). */
     call: Call;
     /** The side panel, when the page offers it. */
     panel?: Offered;
     /** What fills the command palette, and where the person is, for its Views. */
     palette: { sources: PaletteSource[]; hints: Record<string, unknown> };
+    /** Where the app serves many orgs: the `orgs` slot, as its front end fills it. */
+    orgs?: Orgs;
     children: ReactNode;
   },
 ): ReactNode {
-  const narrow = useSyncExternalStore(phone.subscribe, phone.matches);
+  // Drawn on a server (a test), it is not a phone.
+  const narrow = useSyncExternalStore(phone.subscribe, phone.matches, () => false);
   const [open, setOpen] = useState(false);
   useEffect(() => setOpen(false), [path, narrow]);
   const side = usePanel(viewer, path, narrow);
   const panelId = useId();
   const mac = apple();
-  const orgsState = useOrgs();
-  const orgs = orgsState.status === "ready" ? orgsState.value : undefined;
-  const here = orgsState.status === "ready" ? orgsState.here : undefined;
-  const staff = orgs ? asStaff(orgs) : false;
-  const standing = useStanding(call, !!orgs);
-  const [making, setMaking] = useState(false);
+  // The app's orgs, as the slot's front end lists them: the same hook on every draw. Until it
+  // answers (or where there's one org), the top of the sidebar is the app's whole logo.
+  const shown = (orgs?.use ?? none)(call);
+  const switcher = shown ? orgs?.switcher : undefined;
 
   // ⌘K (Ctrl+K) opens the palette over any page, and closes it; not over another dialog.
   // Heard first (capturing), so a field that keeps its keys (a terminal's) doesn't swallow it.
@@ -117,7 +123,7 @@ export function Frame(
     setOpen(false);
     openPalette();
   };
-  const own: PaletteGroup[] = [...(orgs ? orgsPalette(orgs, here, standing) : []), {
+  const own: PaletteGroup[] = [...(shown?.palette ?? []), {
     title: say("general"),
     order: 90,
     items: [
@@ -144,8 +150,8 @@ export function Frame(
 
   const content = (
     <>
-      <div className="copilotz-sidebar-head" data-orgs={orgs ? "" : undefined}>
-        {orgs
+      <div className="copilotz-sidebar-head" data-orgs={switcher ? "" : undefined}>
+        {switcher
           ? (
             <>
               <a
@@ -155,16 +161,7 @@ export function Frame(
               >
                 <Logo name={brand} size={24} />
               </a>
-              <OrgSwitcher
-                orgs={orgs}
-                here={here}
-                standing={standing}
-                staff={staff}
-                onNew={() => {
-                  setOpen(false);
-                  setMaking(true);
-                }}
-              />
+              {switcher}
             </>
           )
           : (
@@ -192,9 +189,8 @@ export function Frame(
         ? (
           <Me
             name={label ?? viewer}
-            email={orgs?.email}
-            menu={menu}
-            {...(orgs ? { orgs: { here: !!here, standing, staff: orgs.staff } } : {})}
+            email={shown?.email}
+            menu={[...menu, ...(shown?.menu ?? [])]}
           />
         )
         : null}
@@ -202,17 +198,8 @@ export function Frame(
   );
 
   return (
-    <div className="copilotz-shell" data-staff={staff || undefined}>
+    <div className="copilotz-shell">
       <style href="web-shell" precedence="copilotz">{STYLE}</style>
-      {staff
-        ? (
-          <div className="copilotz-staff-line" role="note">
-            <span className="copilotz-sr">
-              {say("staffLine")}
-            </span>
-          </div>
-        )
-        : null}
       <Button
         className="copilotz-skip"
         onClick={() => document.getElementById("copilotz-main")?.focus()}
@@ -264,8 +251,7 @@ export function Frame(
       </div>
       {panel && narrow ? <PanelSheet panel={panel} state={side} id={panelId} /> : null}
       <Palette sources={palette.sources} hints={palette.hints} own={own} />
-      {orgs ? <NewOrg open={making} onClose={() => setMaking(false)} /> : null}
-      <Switching />
+      {orgs?.overlay ?? null}
     </div>
   );
 }

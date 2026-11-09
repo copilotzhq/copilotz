@@ -20,10 +20,10 @@ import {
   message,
   Notice,
 } from "../../../../../hosts/web/mod.ts";
-import { refreshOrgs } from "../../../directory/contract.ts";
 import {
   ORG_ROLES,
   orgRoleName,
+  orgsChanged,
   runs,
   type Standing,
 } from "../../../../interfaces/web/contract.ts";
@@ -165,7 +165,8 @@ function Rename({ org, owner, call }: { org: Org; owner: boolean; call: Call }):
     setBusy(true);
     try {
       await call("org.rename", { name: name.trim() });
-      await refreshOrgs();
+      // The switcher (the shell's `orgs` slot) follows.
+      orgsChanged();
       setSaid({ saved: true });
     } catch (e) {
       setSaid({ error: message(e) });

@@ -2,8 +2,9 @@
  * One test suite on every runtime: `deno test`, `node --test` and `bun test`.
  * Tests use `test` and the helpers here instead of a runtime's own APIs:
  * temporary files, environment variables, a local HTTP server, a child
- * process, serving an owner's Hypervisor to remote executors, and saying
- * who a request is (`testWho`, `ticketFor`).
+ * process, serving an owner's Hypervisor to remote executors, saying
+ * who a request is (`testWho`, `ticketFor`), and what a kind of caller is let
+ * into (`openTo`).
  *
  * Only tests import this module; library code uses web standards alone.
  */
@@ -13,7 +14,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hypervisor } from "@oxian/oxian-js";
-import { type Actor, definePlugin, type Plugin } from "../runtime/mod.ts";
+import { type Actor, definePlugin, type Plugin, type Plugins } from "../runtime/mod.ts";
+import { merge } from "../runtime/registry.ts";
 
 type Fn = () => unknown;
 type Options = { name: string; fn: Fn; ignore?: boolean };
@@ -194,4 +196,33 @@ export async function ticketFor(
   );
   if (!response.ok) throw new Error(`ticketFor: /connect answered ${response.status}`);
   return (await response.json() as { ticket: string }).ticket;
+}
+
+/**
+ * What `actor` is let into of each of `plugins`, each on its own (some are
+ * alternatives to each other): the Actions whose `allow` admits it, the named
+ * queries that do, and the events it may hear, asked as it would ask about
+ * itself (its own id wherever one is named), sorted. For checking that a kind
+ * of caller (a contact, a key) reaches only what's opened to it:
+ *
+ * ```ts
+ * assertEquals(openTo({ kind: "contact", id: "c-1" }, [boards, documents]), []);
+ * ```
+ */
+export function openTo(actor: Actor, plugins: Plugins): string[] {
+  const own = { person: actor.id, agent: actor.id, id: actor.id };
+  return plugins.flat(Infinity as 1).flatMap((plugin) => {
+    const registry = merge([plugin as Plugin], { elsewhere: true });
+    return [
+      ...Object.entries(registry.actions).filter(([, def]) => def.allow?.(actor, own))
+        .map(([name]) => name),
+      ...Object.entries(registry.collections).flatMap(([collection, def]) =>
+        Object.entries(def.queries ?? {}).filter(([, query]) =>
+          typeof query === "object" && query.allow(actor, own)
+        ).map(([name]) => `${collection}.${name}`)
+      ),
+      ...Object.entries(registry.events).filter(([, def]) => def.allow?.(actor))
+        .map(([type]) => type),
+    ];
+  }).sort();
 }

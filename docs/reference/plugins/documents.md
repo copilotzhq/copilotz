@@ -13,7 +13,7 @@ Documents: shared Markdown in a space, for people and agents — the canonical a
 being made, and its working memory.
 
 ```ts
-import { documents } from "copilotz/plugins/work";
+import { documents } from "@copilotz/work";
 ```
 
 ## What it keeps
@@ -80,8 +80,8 @@ Nothing to set. It reads `agents`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It moves to its own package, `@copilotz/work`, for `copilotz` `^1.0.0-rc.32`. Until then, it ships
-in `copilotz`.
+It ships in a package of its own, `@copilotz/work@1.0.0-rc.33`, for `copilotz` `1.0.0-rc.33`:
+install it beside `copilotz`.
 
 ## Listing
 

@@ -1,8 +1,9 @@
 /**
  * The person's standing in the org they're in (spaces' `org.me`: their role,
- * and whether they're platform staff), asked once per page and shared by
- * whatever shows it: the switcher, the user menu, the org's page. Asked
- * again (`restand`) once it may have changed: they changed their own role.
+ * whether they're platform staff, and which org, where there are many),
+ * asked once per page and shared by whatever shows it: the spaces in the
+ * sidebar, the switcher, the org's page, a composer's note. Asked again
+ * (`restand`) once it may have changed: they changed their own role.
  */
 import { useEffect, useSyncExternalStore } from "react";
 import type { Standing } from "./orgs.ts";

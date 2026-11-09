@@ -16,7 +16,6 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
 import { chat, tool } from "../../agents/chat/mod.ts";
 import { chatTerminal } from "../../agents/chat/terminal.ts";
-import { team } from "../../agents/team/mod.ts";
 import { terminalPlugin } from "../../interfaces/terminal/mod.ts";
 import { terminalShell } from "../../interfaces/terminal/terminal.ts";
 import { plain, terminal } from "../../../hosts/terminal/mod.ts";
@@ -361,53 +360,6 @@ test("one terminal, two people: /as hands it to someone else, in their own space
     assertStringIncludes(bob, "bob › /threads");
     assertStringIncludes(bob, "plan it");
     assert(!bob.includes("my diary"), bob);
-  } finally {
-    await runtime.close();
-  }
-});
-
-test("in a terminal, a manager makes an agent where they work, and has it answer there", async () => {
-  const app = definePlugin({
-    name: "app",
-    resources: {
-      shared: { thread: {}, message: {} },
-      provider: { echo: { adapter: "echo" } },
-      agents: { lead: { instructions: "Hi.", model: "echo/lead", default: true } },
-    },
-    adapters: { llm: { echo } },
-  });
-  const runtime = await createRuntime({
-    store: memoryStore(),
-    plugins: [
-      models,
-      chat,
-      ...access,
-      team,
-      terminalPlugin,
-      app,
-      terminalShell,
-      chatTerminal,
-      accessTerminal,
-    ],
-  });
-  try {
-    const out = await session(runtime, "ana", [
-      "/space Launch",
-      "/agents",
-      "/agent Maya: writes launch copy",
-      "/agents",
-      "@maya hello",
-      "/default maya",
-      "/remove agent:lead",
-      "/agents",
-    ]);
-    assertStringIncludes(out, "● @lead");
-    assertStringIncludes(out, "Maya works here now: @maya.");
-    assertStringIncludes(out, "@maya Maya — writes launch copy");
-    assertStringIncludes(out, "maya › ok: ana: @maya hello");
-    assertStringIncludes(out, "@maya answers new chats here.");
-    assert(out.trimEnd().endsWith("/default <name> answers new chats."), out);
-    assertStringIncludes(out.slice(out.lastIndexOf("/agents")), "● @maya");
   } finally {
     await runtime.close();
   }

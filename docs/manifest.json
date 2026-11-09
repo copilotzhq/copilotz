@@ -409,6 +409,11 @@
           "description": "`member(dir, org)`: the plugin each org's runtime gets from the directory (`dir`, its runtime) that serves it, beside the app's own plugins."
         },
         {
+          "title": "directory-web",
+          "slug": "reference/plugins/directory-web",
+          "description": "The directory's web front end, for apps that serve many orgs behind one address: it fills the web shell's `orgs` slot, and draws the org's pages."
+        },
+        {
           "title": "documents",
           "slug": "reference/plugins/documents",
           "description": "Documents: shared Markdown in a space, for people and agents — the canonical artifact of the thing being made, and its working memory."

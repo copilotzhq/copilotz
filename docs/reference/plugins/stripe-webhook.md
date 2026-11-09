@@ -13,7 +13,7 @@ Stripe's webhook, `POST /__stripe/<seller>`, where the app's accounts send their
 routes/webhook.ts).
 
 ```ts
-import { stripeWebhook } from "copilotz/plugins/billing";
+import { stripeWebhook } from "@copilotz/billing";
 ```
 
 ## What it keeps
@@ -53,8 +53,8 @@ It also reads `billing` and `org`, resource kinds the app and other plugins fill
 
 It builds on no other plugin.
 
-It moves to its own package, `@copilotz/billing`, for `copilotz` `^1.0.0-rc.32`. Until then, it
-ships in `copilotz`.
+It ships in a package of its own, `@copilotz/billing@1.0.0-rc.33`, for `copilotz` `1.0.0-rc.33`:
+install it beside `copilotz`.
 
 ## Listing
 

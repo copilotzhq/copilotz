@@ -19,59 +19,78 @@ bun add copilotz                     # Bun
 deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
 ```
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.32"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.33"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
-process, and `@types/react` for the front ends' types.
+process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
+too, at Copilotz's version (`npm install @copilotz/work`, `deno add jsr:@copilotz/work`): see
+[Product packages](#product-packages).
 
 ## Entry points
 
 The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 
-<!-- TODO split: boards, documents, directory, credits, stripe, team and tiers move to packages of their own. -->
-
-| Import                                 | What it has                                                                                                                                |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, the access helpers (`people`, `inPerson`, `grant`…), `connect` (the client)… |
-| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference every store is held to                                                                           |
-| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: one file, on `node:sqlite` or `bun:sqlite`                                                                        |
-| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`, `exportTenant`, `dropTenant`  |
-| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                                             |
-| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: large values as files                                                                                                |
-| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: large values in a bucket (S3, GCS, R2…)                                                                     |
-| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: large values in Google Cloud Storage, as the instance's service account                                    |
-| `copilotz/plugins/models`              | `models`: language models, embeddings, transcription and images, with the models.dev catalog                                               |
-| `copilotz/plugins/agents`              | `chat` and its `tool`, `history`, `memory`, `memoryExtraction`, `team`, `skills`, `routines`, `tiers`, `openapi`, `webTools`               |
-| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `memoryWeb`, `teamWeb`, `skillsWeb`, `routinesWeb`, `tiersWeb`                                            |
-| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                                                |
-| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `googleSignIn`, `emailSignIn`, `email`, `devSignIn`, `accounts`, `directory`                  |
-| `copilotz/plugins/access/web`          | `spacesWeb`, `contactsWeb`, `accountsWeb`, and the directory's browser half (`useOrgs`, `enterOrg`…)                                       |
-| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                                           |
-| `copilotz/plugins/billing`             | `usage` (the ledger), `credits`, `stripe`, `stripeWebhook`                                                                                 |
-| `copilotz/plugins/billing/web`         | `usageWeb`, `creditsWeb`                                                                                                                   |
-| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                                            |
-| `copilotz/plugins/compute`             | `computers` (people's machines, where agents work), `cloud`, `apps`, and their hosts                                                       |
-| `copilotz/plugins/compute/web`         | `computersWeb`, `cloudWeb`, `appsWeb`                                                                                                      |
-| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                                                        |
-| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                                              |
-| `copilotz/plugins/work`                | `boards` (kanban) and `documents` (Markdown whose saves are versions)                                                                      |
-| `copilotz/plugins/work/web`            | `boardsWeb`, `documentsWeb`                                                                                                                |
-| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`                          |
-| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                                                  |
-| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                                                  |
-| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`, `surface`, `remind`)              |
-| `copilotz/web/words`                   | the words alone, without the toolkit: `defineWords`, `wordsOf`, `formatDate`…                                                              |
-| `copilotz/web/server`                  | the page's server half: `webPage` (the page, as a plugin), `widgetsOf`                                                                     |
-| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (MCP Apps, ChatGPT)                                                        |
-| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                                            |
-| `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)                           |
-| `copilotz/terminal`                    | the terminal host, `terminal({ runtime, me })`, and its toolkit                                                                            |
-| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                                                   |
-| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`…                                          |
-| `copilotz/describe`                    | `describe(plugin)`: what a plugin declares, as JSON. Coming in the next release                                                            |
+| Import                                 | What it has                                                                                                                                               |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `copilotz`                             | the runtime: `createRuntime`, `definePlugin`, `defineAction`, the access helpers (`people`, `inPerson`, `grant`…), `connect` (the client)…                |
+| `copilotz/stores/memory`               | `memoryStore()`: in memory, the reference every store is held to                                                                                          |
+| `copilotz/stores/sqlite`               | `sqliteStore({ path })`: one file, on `node:sqlite` or `bun:sqlite`                                                                                       |
+| `copilotz/stores/postgres`             | `postgresStore({ url, schema, tenant })` (a server, or PGlite in the process), `postgresPool`, `copyTenant`, `exportTenant`, `dropTenant`                 |
+| `copilotz/stores/latency`              | `withLatency(store, ms)`: a store with round trips, to measure                                                                                            |
+| `copilotz/blobs/files`                 | `fileBlobs({ dir })`: large values as files                                                                                                               |
+| `copilotz/blobs/http`                  | `httpBlobs({ url, headers })`: large values in a bucket (S3, GCS, R2…)                                                                                    |
+| `copilotz/blobs/gcs`                   | `gcsBlobs({ bucket, prefix })`: large values in Google Cloud Storage, as the instance's service account                                                   |
+| `copilotz/plugins/models`              | `models`: language models, embeddings, transcription and images, with the models.dev catalog                                                              |
+| `copilotz/plugins/agents`              | `chat` and its `tool`, `history`, `memory`, `memoryExtraction`, `skills`, `routines`, `openapi`, `webTools`                                               |
+| `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`                                                                                  |
+| `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                                                               |
+| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `googleSignIn`, `emailSignIn`, `email`, `devSignIn`, `accounts`                                              |
+| `copilotz/plugins/access/web`          | `spacesWeb`, `contactsWeb`, `accountsWeb`                                                                                                                 |
+| `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                                                          |
+| `copilotz/plugins/billing`             | `usage`: the ledger, and the port an app's pricing plugs into (`spending`)                                                                                |
+| `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                                                                |
+| `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                                                           |
+| `copilotz/plugins/compute`             | `computers` (people's machines, where agents work), `cloud`, `apps`, and their hosts                                                                      |
+| `copilotz/plugins/compute/web`         | `computersWeb`, `cloudWeb`, `appsWeb`                                                                                                                     |
+| `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                                                                       |
+| `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                                                             |
+| `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`                                         |
+| `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                                                                 |
+| `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                                                                 |
+| `copilotz/plugins/<theme>/contract`    | each theme's plugins' contracts (`access`, `agents`, `models`, `interfaces`, `compute`): shapes, and the little code with them, for plugins built on them |
+| `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`, `surface`, `remind`)                             |
+| `copilotz/web/words`                   | the words alone, without the toolkit: `defineWords`, `wordsOf`, `formatDate`…                                                                             |
+| `copilotz/web/server`                  | the page's server half: `webPage` (the page, as a plugin), `widgetsOf`                                                                                    |
+| `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (MCP Apps, ChatGPT)                                                                       |
+| `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                                                           |
+| `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)                                          |
+| `copilotz/terminal`                    | the terminal host, `terminal({ runtime, me })`, and its toolkit                                                                                           |
+| `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                                                                  |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`, `openTo`…                                               |
+| `copilotz/testing/words`               | testing a front end's words (`pseudoWords`, `englishLeft`), and listing them (`wordsList`)                                                                |
+| `copilotz/describe`                    | `describe(plugin)`: what a plugin declares, as JSON                                                                                                       |
 
 The browser loads only `copilotz/web`, the front ends under `…/web`, and what they import. Every
 other entry point is for the process that runs the runtime, or the terminal.
+
+## Product packages
+
+What a product does its own way, rather than what every app needs, is a package of its own, released
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.33` goes with `copilotz@1.0.0-rc.33`. Each
+has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
+and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
+and JSR.
+
+| Package               | What it has                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `@copilotz/work`      | `boards` (kanban) and `documents` (shared Markdown with versions and merges); `boardsWeb`, `documentsWeb`    |
+| `@copilotz/directory` | `directory`: many orgs behind one address; `directoryWeb`, the org switcher, the org's page, staff's console |
+| `@copilotz/billing`   | `credits` (plans, credits, budgets), `stripe`, `stripeWebhook`; `creditsWeb`                                 |
+| `@copilotz/team`      | `team` (agents people make), `tiers` (the models an org's agents think with); `teamWeb`, `tiersWeb`          |
+
+They import Copilotz by its entry points alone, as an app's own plugins would. Their collections,
+Actions, events, Views and resources keep the names they had inside Copilotz, so an app's data stays
+as it is.
 
 ## Who, for whom, where
 
@@ -620,32 +639,23 @@ Each plugin's page is read from the plugin itself: what it keeps, who may call e
 shows, what it needs, and what it builds on. [The index](reference/plugins.md) lists them all, and
 `reference/plugins.json` has the same as data.
 
-<!-- TODO split: say which of these come from their own package once the packages are released. -->
-
 - **Models:** [`models`](reference/plugins/models.md).
 - **Agents:** [`chat`](reference/plugins/chat.md) ([web](reference/plugins/chat-web.md),
   [terminal](reference/plugins/chat-terminal.md)), [`history`](reference/plugins/history.md),
   [`memory`](reference/plugins/memory.md) ([web](reference/plugins/memory-web.md),
   [terminal](reference/plugins/memory-terminal.md)) with
-  [`memoryExtraction`](reference/plugins/memory-extraction.md), [`team`](reference/plugins/team.md)
-  ([web](reference/plugins/team-web.md)), [`skills`](reference/plugins/skills.md)
-  ([web](reference/plugins/skills-web.md)), [`routines`](reference/plugins/routines.md)
-  ([web](reference/plugins/routines-web.md)), [`tiers`](reference/plugins/tiers.md)
-  ([web](reference/plugins/tiers-web.md)), [`openapi`](reference/plugins/openapi.md),
-  [`webTools`](reference/plugins/webTools.md).
+  [`memoryExtraction`](reference/plugins/memory-extraction.md),
+  [`skills`](reference/plugins/skills.md) ([web](reference/plugins/skills-web.md)),
+  [`routines`](reference/plugins/routines.md) ([web](reference/plugins/routines-web.md)),
+  [`openapi`](reference/plugins/openapi.md), [`webTools`](reference/plugins/webTools.md).
 - **Access:** [`spaces`](reference/plugins/spaces.md) ([web](reference/plugins/spaces-web.md),
   [terminal](reference/plugins/spaces-terminal.md)), [`identity`](reference/plugins/identity.md),
   [`contacts`](reference/plugins/contacts.md) ([web](reference/plugins/contacts-web.md)),
   [`googleSignIn`](reference/plugins/google-sign-in.md),
   [`emailSignIn`](reference/plugins/email-sign-in.md), [`email`](reference/plugins/email.md),
-  [`devSignIn`](reference/plugins/dev-sign-in.md), [`directory`](reference/plugins/directory.md) and
-  what each org gets of it, [`directory.member`](reference/plugins/directory-member.md).
+  [`devSignIn`](reference/plugins/dev-sign-in.md).
 - **Billing:** [`usage`](reference/plugins/usage.md) ([web](reference/plugins/usage-web.md),
-  [terminal](reference/plugins/usage-terminal.md)), [`credits`](reference/plugins/credits.md)
-  ([web](reference/plugins/credits-web.md)), [`stripe`](reference/plugins/stripe.md),
-  [`stripeWebhook`](reference/plugins/stripe-webhook.md).
-- **Work:** [`boards`](reference/plugins/boards.md) ([web](reference/plugins/boards-web.md)),
-  [`documents`](reference/plugins/documents.md) ([web](reference/plugins/documents-web.md)).
+  [terminal](reference/plugins/usage-terminal.md)).
 - **The doors:** [`webPage`](reference/plugins/web-page.md),
   [`webShell`](reference/plugins/web-shell.md), [`webLines`](reference/plugins/web-lines.md),
   [`terminalPlugin`](reference/plugins/terminal.md),
@@ -653,6 +663,20 @@ shows, what it needs, and what it builds on. [The index](reference/plugins.md) l
   ([web](reference/plugins/api-web.md)), [`mcp`](reference/plugins/mcp.md),
   [`whatsapp`](reference/plugins/whatsapp.md) ([web](reference/plugins/whatsapp-web.md)),
   [`voice`](reference/plugins/voice.md), [`maintenance`](reference/plugins/maintenance.md).
+
+From the [product packages](#product-packages):
+
+- **`@copilotz/work`:** [`boards`](reference/plugins/boards.md)
+  ([web](reference/plugins/boards-web.md)), [`documents`](reference/plugins/documents.md)
+  ([web](reference/plugins/documents-web.md)).
+- **`@copilotz/team`:** [`team`](reference/plugins/team.md) ([web](reference/plugins/team-web.md)),
+  [`tiers`](reference/plugins/tiers.md) ([web](reference/plugins/tiers-web.md)).
+- **`@copilotz/directory`:** [`directory`](reference/plugins/directory.md)
+  ([web](reference/plugins/directory-web.md)) and what each org gets of it,
+  [`directory.member`](reference/plugins/directory-member.md).
+- **`@copilotz/billing`:** [`credits`](reference/plugins/credits.md)
+  ([web](reference/plugins/credits-web.md)), [`stripe`](reference/plugins/stripe.md),
+  [`stripeWebhook`](reference/plugins/stripe-webhook.md).
 
 The compute plugins (`computers`, `cloud`, `apps`) and `accounts` have no page here.
 [Installing a computer](guides/installing-a-computer.md) covers what an app serves for computers.

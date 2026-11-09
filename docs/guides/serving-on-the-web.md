@@ -187,7 +187,8 @@ The browser's code runs the web host with the front ends it shows:
 // browser.tsx
 import { web } from "copilotz/web";
 import { webShell } from "copilotz/plugins/interfaces/web";
-import { chatWeb, memoryWeb, teamWeb } from "copilotz/plugins/agents/web";
+import { chatWeb, memoryWeb } from "copilotz/plugins/agents/web";
+import { teamWeb } from "@copilotz/team/web";
 import { spacesWeb } from "copilotz/plugins/access/web";
 
 await web({

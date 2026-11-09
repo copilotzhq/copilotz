@@ -7,7 +7,7 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { setWords } from "../../../hosts/web/mod.ts";
-import { englishLeft, pseudoWords } from "../../../hosts/web/tests/pseudo.ts";
+import { englishLeft, pseudoWords } from "../../../testing/words.ts";
 import type { ViewContext } from "../../../runtime/mod.ts";
 import type { Memory } from "../memory/collections/memory.ts";
 import { MemoryCard } from "../memory/views/web/card.tsx";

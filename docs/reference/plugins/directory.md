@@ -13,7 +13,7 @@ The directory plugin, and what each org's runtime gets of it: `directory.member(
 shared/member.ts), with the org as `org.info` says it.
 
 ```ts
-import { directory } from "copilotz/plugins/access";
+import { directory } from "@copilotz/directory";
 ```
 
 ## What it keeps
@@ -65,7 +65,7 @@ It answers 14 routes over HTTP:
 
 ## Where it shows
 
-It has no Views: it shows nowhere on its own.
+It has no Views of its own: its front ends show it, [`directory-web`](directory-web.md).
 
 - **What it adds to resources:** `cookies` (`names`).
 
@@ -87,8 +87,8 @@ It also reads `caller`, resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It moves to its own package, `@copilotz/directory`, for `copilotz` `^1.0.0-rc.32`. Until then, it
-ships in `copilotz`.
+It ships in a package of its own, `@copilotz/directory@1.0.0-rc.33`, for `copilotz` `1.0.0-rc.33`:
+install it beside `copilotz`.
 
 ## Listing
 

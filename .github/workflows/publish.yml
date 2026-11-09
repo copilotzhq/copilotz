@@ -1,19 +1,28 @@
 # Publishes a Copilotz 1.x release. Pushing a tag `v1.*` (`v1.0.0-rc.1`,
 # `v1.0.0`, `v1.2.3`) checks that it names the version deno.json,
-# package.json and the computer program say, runs the whole test workflow,
-# then makes the tag's GitHub release with the computer program (its binaries,
-# install scripts and manifest: built on a Mac, or, when the program is the
-# same as the last release's, that release's, so computers don't update to
-# what they have; `scripts/computer/build.ts --reuse`), and then publishes
-# that version to JSR (`@copilotz/copilotz`) and to npm (`copilotz`, built
-# from the sources, with provenance), both through GitHub's OIDC: no token.
-# On npm that is trusted publishing: the package's settings trust this
-# repository's publish.yml. A version already on npm (published by hand) is
-# left as it is. A version with a pre-release part (`-rc.1`) goes to npm's
-# `next` tag, so `npm install copilotz` keeps the last stable one. The
-# package's `computerDownloads()` reads its own release, so it's published
-# after it. Nothing else publishes: not a push, not a pull request, not a tag
-# outside 1.x.
+# package.json, the computer program and every product package (each
+# packages/<name>: its deno.json, its package.json and the Copilotz it
+# imports) say, runs the whole test workflow, then makes the tag's GitHub
+# release with the computer program (its binaries, install scripts and
+# manifest: built on a Mac, or, when the program is the same as the last
+# release's, that release's, so computers don't update to what they have;
+# `scripts/computer/build.ts --reuse`), and then publishes that version to JSR
+# (`@copilotz/copilotz`, then each `@copilotz/<name>`) and to npm (`copilotz`,
+# then each `@copilotz/<name>`, built from the sources, with provenance), both
+# through GitHub's OIDC: no token. On npm that is trusted publishing: each
+# package's settings trust this repository's publish.yml. A version already on
+# npm (published by hand) is left as it is. A version with a pre-release part
+# (`-rc.1`) goes to npm's `next` tag, so `npm install copilotz` keeps the last
+# stable one. The package's `computerDownloads()` reads its own release, so
+# it's published after it. Nothing else publishes: not a push, not a pull
+# request, not a tag outside 1.x.
+#
+# Every package's npm tarball (`copilotz-<version>.tgz`, `copilotz-<name>-<version>.tgz`) is
+# attached to the release before anything is published, so an app installs them from the
+# release's URLs whatever the registries say. The product packages publish after Copilotz, each
+# on its own: one a registry doesn't know yet (its first version is the maintainer's, by hand,
+# and the registry is told to trust this workflow), or one that fails, is said in the log and
+# holds up neither Copilotz, nor the release, nor the others.
 name: Publish
 
 on:
@@ -46,6 +55,17 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME, deno.json $deno, package.json $npm, the computer program $program: they must agree"
             exit 1
           fi
+          # Each product package, in lockstep: its deno.json, its package.json, the Copilotz it imports.
+          for dir in packages/*/; do
+            [ -f "$dir/deno.json" ] || continue
+            said="$(jq -r .version "$dir/deno.json") $(jq -r .version "$dir/package.json") $(jq -r '.imports.copilotz // "none"' "$dir/deno.json" | sed 's|^jsr:@copilotz/copilotz@||')"
+            for one in $said; do
+              if [ "$one" != "$version" ]; then
+                echo "::error::tag $GITHUB_REF_NAME, ${dir%/} says $said (deno.json, package.json, its copilotz): they must agree (node scripts/version.ts $version)"
+                exit 1
+              fi
+            done
+          done
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [[ "$version" == *-* ]]; then echo "tag=next" >> "$GITHUB_OUTPUT"; else echo "tag=latest" >> "$GITHUB_OUTPUT"; fi
 
@@ -107,30 +127,90 @@ jobs:
         with:
           deno-version: v2.x
       - run: deno publish
+      # Each product package, after Copilotz, which it imports at this version. JSR publishes one
+      # it knows and that's linked to this repository (jsr.io: create it under @copilotz, link the
+      # repository in its settings); else it's said, and skipped. One failing holds up no other.
+      - name: The product packages
+        continue-on-error: true
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          failed=""
+          for dir in packages/*/; do
+            [ -f "$dir/deno.json" ] || continue
+            name=$(jq -r .name "$dir/deno.json")
+            if curl -sf "https://jsr.io/$name/meta.json" | jq -e --arg v "$VERSION" '.versions[$v]' > /dev/null; then
+              echo "::notice::$name@$VERSION is on JSR already"
+              continue
+            fi
+            if (cd "$dir" && deno publish); then continue; fi
+            if ! curl -sf "https://api.jsr.io/scopes/copilotz/packages/${name#@copilotz/}" -o /dev/null; then
+              echo "::notice::$name isn't on JSR yet: create it under @copilotz on jsr.io and link it to this repository; the next release publishes it"
+            else
+              echo "::warning::$name@$VERSION wasn't published to JSR (is it linked to this repository on jsr.io?)"
+            fi
+            failed="$failed $name"
+          done
+          if [ -n "$failed" ]; then echo "::warning::not on JSR at $VERSION:$failed"; exit 1; fi
 
   npm:
-    name: npm
+    name: npm, and the release's tarballs
     needs: [version, test, computer]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # The tarballs go on the release.
+      contents: write
       id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.version.outputs.version }}
+      DIST_TAG: ${{ needs.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      # Copilotz and every product package, built from the sources, installed together from their
+      # tarballs and used there.
+      - run: npm ci && npm run build && node scripts/npm/smoke.ts
+      - name: Every package's tarball, on the release
+        run: |
+          mkdir -p dist/tarballs
+          for dir in dist/npm dist/packages/*/; do
+            npm pack "$dir" --pack-destination dist/tarballs
+          done
+          gh release upload "$TAG" dist/tarballs/*.tgz --clobber
       - id: npm
         name: Whether npm has this version already
         run: |
-          if npm view "copilotz@${{ needs.version.outputs.version }}" version > /dev/null 2>&1; then
-            echo "::notice::copilotz@${{ needs.version.outputs.version }} is on npm already"
+          if npm view "copilotz@$VERSION" version > /dev/null 2>&1; then
+            echo "::notice::copilotz@$VERSION is on npm already"
             echo "published=true" >> "$GITHUB_OUTPUT"
           fi
-      - if: steps.npm.outputs.published != 'true'
-        run: npm ci && npm run build && node scripts/npm/smoke.ts
       # Trusted publishing (npm 11.5.1 or later, as Node 24 has): no token, provenance included.
       - if: steps.npm.outputs.published != 'true'
-        run: npm publish --access public --tag ${{ needs.version.outputs.tag }}
+        run: npm publish --access public --tag "$DIST_TAG"
         working-directory: dist/npm
+      # Each product package, after Copilotz, its peer at this version. npm publishes one it has
+      # (its first version is published by hand, from the release's tarball, and its settings then
+      # trust this workflow); else it's said, and skipped. One failing holds up no other.
+      - name: The product packages
+        continue-on-error: true
+        run: |
+          failed=""
+          for dir in dist/packages/*/; do
+            name=$(jq -r .name "$dir/package.json")
+            tarball="copilotz-${name#@copilotz/}-$VERSION.tgz"
+            if ! npm view "$name" name > /dev/null 2>&1; then
+              echo "::notice::$name isn't on npm yet: publish its first version by hand (npm publish $tarball --access public --tag $DIST_TAG, the release's), then trust this repository's publish.yml in its settings; skipped"
+              continue
+            fi
+            if npm view "$name@$VERSION" version > /dev/null 2>&1; then
+              echo "::notice::$name@$VERSION is on npm already"
+              continue
+            fi
+            (cd "$dir" && npm publish --access public --tag "$DIST_TAG") || failed="$failed $name"
+          done
+          if [ -n "$failed" ]; then echo "::warning::not on npm at $VERSION:$failed"; exit 1; fi

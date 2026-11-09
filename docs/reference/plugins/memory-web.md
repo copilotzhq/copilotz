@@ -40,7 +40,7 @@ Nothing to set: it works as it comes.
 The runtime doesn't start without [`memory`](memory.md) and [`web-shell`](web-shell.md): add them
 too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.33`.
 
 ## Listing
 

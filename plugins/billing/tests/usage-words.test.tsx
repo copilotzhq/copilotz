@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import { setWords } from "../../../hosts/web/words.ts";
-import { englishLeft, pseudoWords } from "../../../hosts/web/tests/pseudo.ts";
+import { englishLeft, pseudoWords } from "../../../testing/words.ts";
 import {
   ActivityCard,
   Breakdown,

@@ -1,7 +1,7 @@
 /**
  * Runtimes by id, each opened on its first use and closed once it's idle:
  * what an app serving many runtimes behind one address keeps (a directory's
- * orgs, see plugins/access/directory). The app says how to open one
+ * orgs, see `@copilotz/directory`). The app says how to open one
  * (`open(id)`: its store, its plugins; undefined when there's no such one),
  * and the pool does the rest:
  *

@@ -4,8 +4,7 @@
  * (a new version, a new worker) and only ever handles the page, the code and
  * the host's own files, and the page links them. The icons are drawn from
  * the mark's paths without an image library: real PNGs, the mark where it
- * should be. And the browser's orgs: a server with many answers them, one
- * with one org answers none.
+ * should be.
  */
 import { assert, assertEquals, assertMatch } from "@std/assert";
 import { createRuntime, definePlugin } from "../../../runtime/mod.ts";
@@ -15,14 +14,6 @@ import { webPage } from "../server.ts";
 import { manifestOf, precacheOf, versionOf, workerOf } from "../pwa.ts";
 import { themeOf } from "../theme/css.ts";
 import { coverage, iconPng, outlines, rgbaOf } from "../theme/png.ts";
-import {
-  asStaff,
-  currentOrg,
-  loadOrgs,
-  orgName,
-  type Orgs,
-  refreshOrgs,
-} from "../../../plugins/access/directory/web.ts";
 
 const brand = definePlugin({
   name: "brand",
@@ -144,36 +135,4 @@ test("icons are drawn from the mark's paths: a PNG, the mark in its middle", asy
     [rgbaOf("#fff"), rgbaOf("#11223380"), rgbaOf("rgb(1 2 3 / 50%)"), rgbaOf("var(--x)")],
     [[255, 255, 255, 255], [17, 34, 51, 128], [1, 2, 3, 128], undefined],
   );
-});
-
-test("the browser's orgs: a server with many answers them; one with one org, none", async () => {
-  const orgs: Orgs = {
-    person: "ana",
-    email: "ana@example.com",
-    current: "o-1",
-    orgs: [{ id: "p-1", name: "ana", kind: "personal" }, { id: "o-1", name: "Acme", kind: "team" }],
-    invites: [],
-    staff: false,
-    asStaff: false,
-  };
-  const fetched = globalThis.fetch;
-  try {
-    globalThis.fetch = (() => Promise.resolve(Response.json(orgs))) as typeof fetch;
-    const many = await refreshOrgs();
-    assertEquals(many.status === "ready" && many.here?.name, "Acme");
-    globalThis.fetch = (() =>
-      Promise.resolve(
-        new Response("<!doctype html>", { headers: { "content-type": "text/html" } }),
-      )) as typeof fetch;
-    assertEquals((await refreshOrgs()).status, "none");
-    assertEquals((await loadOrgs()).status, "none");
-  } finally {
-    globalThis.fetch = fetched;
-  }
-  assertEquals(currentOrg(orgs)?.id, "o-1");
-  assertEquals(orgName(orgs.orgs[0]), "Personal");
-  assertEquals(asStaff(orgs), false);
-  // Staff in an org of their own are its people, until they go in as staff.
-  assertEquals(asStaff({ ...orgs, staff: true }), false);
-  assertEquals(asStaff({ ...orgs, staff: true, asStaff: true }), true);
 });

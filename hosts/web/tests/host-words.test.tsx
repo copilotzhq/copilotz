@@ -26,7 +26,7 @@ import { Terminal } from "../toolkit/terminal.tsx";
 import { Time } from "../toolkit/time.tsx";
 import { ago } from "../toolkit/ago.ts";
 import { setWords } from "../words.ts";
-import { englishLeft, pseudoWords } from "./pseudo.ts";
+import { englishLeft, pseudoWords } from "../../../testing/words.ts";
 
 const areas = ["host", "palette", "toolkit"];
 

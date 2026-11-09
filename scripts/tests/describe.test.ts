@@ -140,7 +140,11 @@ test("page: the five sections, in order, in the docs' voice", async () => {
       "The runtime doesn't start without [`chat`](chat.md) and `spaces`: add them too.",
     ),
   );
-  assert(text.includes("It moves to its own package, `@copilotz/notes`, for `copilotz` `^1.0.0`."));
+  assert(
+    text.includes(
+      "It ships in a package of its own, `@copilotz/notes`, for `copilotz` `^1.0.0`: install it beside `copilotz`.",
+    ),
+  );
   assert(text.includes("- `notes.sweep` calls `note.sweep`, cron 0 3 * * * (UTC)."));
   assert(text.includes("It keeps every listing rule."));
   assertFalse(/\n\n\n/.test(text));
@@ -291,11 +295,15 @@ test({
         stdout: "piped",
         stderr: "piped",
       }).output();
-    const json = await cli("plugins/work/mod.ts", "boards");
+    const json = await cli("packages/work/mod.ts", "boards");
     assert(json.success, new TextDecoder().decode(json.stderr));
     const d = JSON.parse(new TextDecoder().decode(json.stdout));
-    assertEquals([d.name, d.package?.name, d.runtime !== undefined], ["boards", "copilotz", true]);
-    const markdown = await cli("plugins/work/mod.ts", "boards", "--markdown");
+    assertEquals([d.name, d.package?.name, d.runtime !== undefined], [
+      "boards",
+      "@copilotz/work",
+      true,
+    ]);
+    const markdown = await cli("packages/work/mod.ts", "boards", "--markdown");
     assert(new TextDecoder().decode(markdown.stdout).includes("## What it keeps"));
     const wrong = await cli("plugins/agents/mod.ts", "openapi");
     assertFalse(wrong.success);

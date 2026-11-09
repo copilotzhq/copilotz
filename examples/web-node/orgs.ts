@@ -22,7 +22,8 @@ import {
   type Store,
 } from "../../runtime/mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
-import { devSignIn, directory, identity, type OrgInfo } from "../../plugins/access/mod.ts";
+import { devSignIn, identity } from "../../plugins/access/mod.ts";
+import { directory, type OrgInfo } from "@copilotz/directory";
 import { type Code, webPage } from "../../hosts/web/server.ts";
 import { themeOf } from "../../hosts/web/theme/css.ts";
 import { bundle, listen } from "../../hosts/web/node/mod.ts";

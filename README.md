@@ -23,7 +23,7 @@ over MCP. The agent thinks with an OpenAI model, so the file needs an `OPENAI_AP
 call needs no model.
 
 ```ts
-import { type Actor, createRuntime, defineAction, definePlugin, people } from "copilotz";
+import { type Actor, createRuntime, defineAction, definePlugin, peopleOrContacts } from "copilotz";
 import { memoryStore } from "copilotz/stores/memory";
 import { models } from "copilotz/plugins/models";
 import { chat, tool } from "copilotz/plugins/agents";
@@ -42,8 +42,8 @@ const salon = definePlugin({
   actions: {
     "booking.make": defineAction({
       input: booking,
-      // Who may call it from outside. The rules below hold for every caller.
-      allow: people,
+      // Asked of every caller, tools included: people, agents working for them, and contacts.
+      allow: peopleOrContacts,
       run: (ctx, input) => ctx.db.collection("booking").insertOne(input),
     }),
   },
@@ -61,12 +61,8 @@ const salon = definePlugin({
       book: tool({
         description: "Books a slot, like 'Wed 15:00'.",
         input: { type: "object", properties: { slot: { type: "string" } }, required: ["slot"] },
-        run: async ({ slot }, ctx) => {
-          const chat = await ctx.db.collection<{ in: string }>("thread").findOne({
-            _id: ctx.thread,
-          });
-          return ctx.call("booking.make", { slot, in: chat!.in, thread: ctx.thread });
-        },
+        // A tool works where its chat is (ctx.in), for whoever the chat is with.
+        run: ({ slot }, ctx) => ctx.call("booking.make", { slot, in: ctx.in, thread: ctx.thread }),
       }),
     },
     agents: {
@@ -85,19 +81,21 @@ const runtime = await createRuntime({
   plugins: [models, chat, ...access, mcp, salon],
 });
 
-// The record: every write names who made it, and for whom.
+// The record: every write names who made it, for whom, and where.
 const who = (a: Actor): string => `${a.kind} ${a.id}${a.for ? `, for ${who(a.for as Actor)}` : ""}`;
 runtime.subscribe((item) => {
   if (item.kind !== "event" || item.event.type !== "booking.created") return;
   const { doc } = item.event.data as { doc: { slot: string } };
-  console.log(`${doc.slot} booked by ${who(item.event.actor!)}`);
+  console.log(`${doc.slot} booked by ${who(item.event.actor!)}, in ${item.event.actor!.in}`);
 });
 
 // Ana books a slot herself, then asks the app's agent for another.
 const ana: Actor = { kind: "person", id: "ana" };
 const { space } = await runtime.call<{ space: string }>("space.personal", {}, { actor: ana });
-await runtime.call("booking.make", { slot: "Tue 10:00", in: space }, { actor: ana });
-await runtime.call("chat.send", { text: "Book me Wed 15:00 too.", in: space }, { actor: ana });
+// She works in her own space, and says so, as the app's page does.
+const here = { actor: { ...ana, in: space } };
+await runtime.call("booking.make", { slot: "Tue 10:00", in: space }, here);
+await runtime.call("chat.send", { text: "Book me Wed 15:00 too.", in: space }, here);
 await runtime.idle();
 
 // Someone's assistant books over MCP, naming its conversation as ChatGPT does.
@@ -127,9 +125,9 @@ await runtime.close();
 It printed this:
 
 ```
-Tue 10:00 booked by person ana
-Wed 15:00 booked by agent concierge, for person ana
-Thu 09:00 booked by contact c-5c57fa89cbd474cea4610f8b
+Tue 10:00 booked by person ana, in personal:ana
+Wed 15:00 booked by agent concierge, for person ana, in personal:ana
+Thu 09:00 booked by contact c-5c57fa89cbd474cea4610f8b, in desk
 {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Thu 09:00"}]}}
 ana sees: Tue 10:00, Wed 15:00
 ```
@@ -138,12 +136,16 @@ ana sees: Tue 10:00, Wed 15:00
   her. The concierge called it through the `book` tool, as an agent working for Ana. The assistant
   posted a JSON-RPC `tools/call` to `/mcp/salon` and ran the same tool. MCP has no sign-in yet, so
   it came in as a contact, with a chat of its own.
+- **`allow` was asked at every door.** It's asked of a tool's `ctx.call` too, for the agent and for
+  whom it works. So `booking.make` says `peopleOrContacts`: with `people`, the assistant's call
+  would have been refused, because a contact isn't a person.
 - **The rules held at every door.** `shared` puts bookings under the access rules, which filter
   every read and write of them. The same `bookings` View showed Ana her 2 bookings and the assistant
   its 1. Had Ana named the front desk's space instead of hers, the rules would have refused the
   write.
-- **The record says who, and for whom.** Each write is an event naming its actor, so the log tells
-  Ana from the agent working for her, and both from a stranger's assistant.
+- **The record says who, for whom, and where.** Each write is an event naming its actor and where it
+  worked. The log tells Ana from the agent working for her, and both from a stranger's assistant at
+  the front desk. The tool never looked its space up: `ctx.in` is where its chat is.
 
 ## Install and run
 
@@ -172,25 +174,26 @@ Copilotz is a runtime with one contract, and every way in is a thin layer over i
 web page · terminal · REST API · client · MCP and widgets · WhatsApp · voice · your agents
                                         │
                                         ▼
-         who is asking ............ an actor, on every call
+         who, for whom, where ..... an actor, on every call
          what can be done ......... Actions
          what anyone sees ......... Views
          what they may touch ...... the rules, checked at the data
          what happened ............ the record
 ```
 
-A door speaks its protocol and says who the caller is. The web reads a session cookie, and the REST
-API a developer key. MCP, WhatsApp and the phone make a stranger a contact, with a chat of their
-own. From there it's the same for everyone: the work is an Action, what anyone sees is a View, the
-rules decide what's in reach, and the record keeps it. Your own agents are one more client. `chat`
-runs the model, and its tools call your Actions as the agent, on someone's behalf.
+A door speaks its protocol and says who the caller is, and where they work. The web reads a session
+cookie, and the page says its space. The REST API reads a developer key, which works in its space.
+MCP, WhatsApp and the phone make a stranger a contact, with a chat of their own in the line's space.
+From there it's the same for everyone: the work is an Action, what anyone sees is a View, the rules
+decide what's in reach, and the record keeps it. Your own agents are one more client. `chat` runs
+the model, and its tools call your Actions as the agent, for its person, where the chat is.
 
 The contract is built from 6 primitives, and the runtime knows nothing else. An app is a list of
 plugins, yours and Copilotz's, each made of them.
 
 | Primitive       | What it is                                                                                       | What it replaces                                        |
 | --------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
-| **Actions**     | What can be done, by name, with a JSON Schema input and an `allow` for callers from outside      | your API endpoints and your agent's tools, at once      |
+| **Actions**     | What can be done, by name, with a JSON Schema input and an `allow` asked of every caller         | your API endpoints and your agent's tools, at once      |
 | **Views**       | How data shows in one place: React in the browser, Ink in the terminal, text in a model's prompt | your UI, your terminal output and your prompt templates |
 | **Processors**  | What happens when events happen, in order per key, at least once, from a durable cursor          | your job queue and your event handlers                  |
 | **Collections** | Documents with a JSON Schema, read and written with the MongoDB collection API                   | your data layer                                         |
@@ -203,17 +206,27 @@ its code.
 
 ## Why it's safe to open your app to AI
 
+An agent reaches what its person reaches, in the space it works in, and `allow` holds for tools too.
 The runtime keeps these promises at every door, so your plugins don't have to.
 
-- **Every caller is someone.** It's a person, an agent working for one, a contact or the system, and
-  that actor goes with everything the call causes.
+- **Every caller is someone, somewhere.** It's a person, an agent working for one, a contact,
+  someone signed out or the system. Where the work happens (`in`) goes with the caller, into
+  everything the call causes.
+- **`allow` is asked of every caller.** That's a person's page, a key, and a tool or any code acting
+  for someone. For an agent, it's asked for the agent and for its person, so an agent never calls
+  what its person couldn't. Going further takes a grant named in code (`ctx.as(grant("…"))`), and
+  the record shows it.
+- **What only a person decides stays theirs.** Actions that say `inPerson`, such as inviting someone
+  or making a key, refuse agents, keys and routines, whomever they work for.
+- **Where an agent works bounds what it reaches.** It reaches what its person does, but only in
+  spaces it's a member of, and only in its chat's space and what that space draws on. In the
+  person's own Personal space, it reaches everything the person does.
 - **The rules are checked at the data.** In every collection they cover, they filter each read and
   write an actor's work makes, whichever door it came in by.
-- **An agent reaches only what its person reaches,** and only in the spaces it's a member of.
 - **A model never holds your keys.** Tools use them in code, for the person. A connected account's
   tokens are a private field that no View, event or actor's read gets.
-- **Everything is on the record.** Every write and Action call is an event naming who acted and for
-  whom. Only what a plugin declares stays off it, like live state kept in memory.
+- **Everything is on the record.** Every write and Action call is an event naming who acted, for
+  whom and where. Only what a plugin declares stays off it, like live state kept in memory.
 - **Retries don't duplicate.** A call sent again with its id answers from the log. A tool call that
   already returned isn't run again, and an MCP call that changes things, sent again, is answered
   from the first.
@@ -232,7 +245,7 @@ their front ends from `/web` and `/terminal` beside it.
   the page. `listen` and `bundle` serve and bundle it on Node.
 - **The terminal:** `copilotz/terminal` draws the app in a terminal around `terminalShell`.
 - **REST and the client:** the runtime answers a REST API at `/api/`, and `connect` is its client
-  for scripts. `api` gives people developer keys, each with a scope.
+  for scripts. `api` gives people developer keys, each working in one space, with a scope.
 - **MCP:** `mcp` offers your tools to ChatGPT, Claude and any MCP client. `copilotz/web/widget`
   draws your web Views inside them, through MCP Apps and ChatGPT's Apps SDK.
 - **WhatsApp and the phone:** `whatsapp`, through Meta's Cloud API, and `voice`, for calls through
@@ -248,6 +261,7 @@ their front ends from `/web` and `/terminal` beside it.
   schedule and `tiers` picks their models. `openapi` turns an API's spec into tools, and `webTools`
   searches and reads the web.
 - **Work:** `boards` for kanban, and `documents` for Markdown whose saves are versions that merge.
+  <!-- TODO split: boards and documents move to @copilotz/work; team and tiers to @copilotz/team; directory to @copilotz/directory; credits and stripe to @copilotz/billing -->
 - **Access:** `access` for spaces, people and contacts, with `googleSignIn`, `emailSignIn` and
   `email`, and `devSignIn` for this machine. `accounts` connects a person's own accounts, and
   `directory` puts many orgs behind one address.
@@ -278,16 +292,18 @@ their front ends from `/web` and `/terminal` beside it.
   [installing a computer](docs/guides/installing-a-computer.md).
 - **Operations:** [stores](docs/operations/stores.md), [maintenance](docs/operations/maintenance.md)
   and [metrics](docs/operations/metrics.md).
-- **Reference** and **Architecture** are coming: every entry point, primitive and resource kind, and
-  the owner, its executors, the store and the log.
-  <!-- TODO: link docs/reference/ and docs/architecture/ once they exist (their content waits in docs/_staging/) -->
-- **[Design records](design/)**: the decisions behind Views, access, memory and tenancy.
+- **[Reference](docs/reference.md)** lists every entry point, primitive, event type and schedule,
+  with a page for each plugin, read from the plugin itself.
+- **[Architecture](docs/architecture.md)** shows how the runtime keeps its contract: the owner and
+  its executors, the store, events and Views, the ways in, and the invariants.
+- **[Design records](design/)** hold the decisions behind Views, access, work (who, for whom,
+  where), memory and tenancy.
 
 ## Status
 
 Copilotz 1.0 is a release candidate, `1.0.0-rc.32`. It's a new runtime, and it doesn't read 0.x
 data. Copilotz 0.x lives on the [`v0`](https://github.com/copilotzhq/copilotz/tree/v0) branch, and
-[CHANGELOG.md](CHANGELOG.md) says what each release changed.
+[CHANGELOG.md](CHANGELOG.md) says what each release changed, and how to upgrade.
 
 To work on Copilotz itself, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

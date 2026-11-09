@@ -1,6 +1,8 @@
 ---
 title: "spaces"
 description: "Spaces: who reaches what, for every collection that shares its documents."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -101,7 +103,7 @@ resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

@@ -1,6 +1,8 @@
 ---
 title: "voice"
 description: "Voice: people call the app's phone number and talk to its agents, through Twilio's ConversationRelay (Twilio hears them and speaks for the agent; the app gets and sends text)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -95,7 +97,7 @@ You set it in `resources.voice`: 4 settings are required, and 1 is a secret, kep
 The runtime doesn't start without [`chat`](chat.md), [`spaces`](spaces.md) and
 [`contacts`](contacts.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

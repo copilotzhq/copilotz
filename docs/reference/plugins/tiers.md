@@ -1,6 +1,8 @@
 ---
 title: "tiers"
 description: "Tiers: which models the app's agents think with, chosen by what the work needs rather than model by model."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -58,7 +60,7 @@ kinds the app and other plugins fill.
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It ships in a package of its own, `@copilotz/team@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## Listing

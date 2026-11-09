@@ -1,6 +1,8 @@
 ---
 title: "tiers-web"
 description: "Tiers' web front end, for the browser."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -37,7 +39,7 @@ Nothing to set: it works as it comes.
 The runtime doesn't start without [`web-shell`](web-shell.md), [`spaces-web`](spaces-web.md) and
 [`team-web`](team-web.md): add them too.
 
-It ships in a package of its own, `@copilotz/team@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## Listing

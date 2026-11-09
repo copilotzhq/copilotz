@@ -1,6 +1,8 @@
 ---
 title: "chat-terminal"
 description: "Chat's terminal front end, for the process that draws the terminal: how a conversation, a message, its author and a reply being written look there, and chat's commands."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -40,7 +42,7 @@ Nothing to set. It reads `agents`, resource kinds the app and other plugins fill
 The runtime doesn't start without [`chat`](chat.md) and [`terminal-shell`](terminal-shell.md): add
 them too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

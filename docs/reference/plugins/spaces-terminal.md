@@ -1,6 +1,8 @@
 ---
 title: "spaces-terminal"
 description: "Access's terminal front end: how spaces look there, and `/spaces`, `/space`, `/work`, `/invite`, `/invitations`, `/accept`, `/decline`, and requests to join."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -40,7 +42,7 @@ Nothing to set: it works as it comes.
 The runtime doesn't start without [`spaces`](spaces.md) and [`terminal-shell`](terminal-shell.md):
 add them too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

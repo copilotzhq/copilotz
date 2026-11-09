@@ -1,6 +1,8 @@
 ---
 title: "skills"
 description: "Skills: know-how an agent reads only when it needs it."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -70,7 +72,7 @@ Nothing to set. It reads `skills`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

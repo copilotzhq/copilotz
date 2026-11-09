@@ -1,6 +1,8 @@
 ---
 title: "email-sign-in"
 description: "Email: sending it, and signing in with it."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -67,7 +69,7 @@ the secret."
 
 The runtime doesn't start without [`identity`](identity.md) and [`email`](email.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

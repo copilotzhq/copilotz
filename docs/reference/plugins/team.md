@@ -1,6 +1,8 @@
 ---
 title: "team"
 description: "Team: agents people make, beside those the app declares in code."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -65,7 +67,7 @@ fill.
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships in a package of its own, `@copilotz/team@1.0.0-rc.32`, for `copilotz` `1.0.0-rc.32`:
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
 install it beside `copilotz`.
 
 ## Listing

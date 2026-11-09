@@ -1,6 +1,8 @@
 ---
 title: "memory-extraction"
 description: "Memories that arrive on their own: the extractor model reads every few messages."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -40,7 +42,7 @@ the memory resource's extractor model."
 
 The runtime doesn't start without [`memory`](memory.md) and [`models`](models.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## What it does on its own
 

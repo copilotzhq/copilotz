@@ -1,6 +1,8 @@
 ---
 title: "dev-sign-in"
 description: "Dev sign-in: people sign in by the name they type, from this machine only, for trying an app out (with the identity plugin)."
+section: "Reference"
+order: 3
 ---
 
 <!-- Made by scripts/describe.ts from the plugin itself: run it again rather than edit this page. -->
@@ -41,7 +43,7 @@ Nothing to set. It reads `links`, resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.32`.
+It ships with `copilotz@1.0.0-rc.34`.
 
 ## Listing
 

@@ -1,0 +1,654 @@
+{
+  "sections": [
+    {
+      "title": "Getting Started",
+      "items": [
+        {
+          "title": "Getting Started: one app, for people and for AI",
+          "slug": "getting-started",
+          "description": "Build a salon's booking app on Copilotz 1.0, then open the same app to its own agent, to ChatGPT, Claude and Gemini over MCP, to a chat on its site and to WhatsApp, under the same Actions, rules and record."
+        },
+        {
+          "title": "Ch 1: One booking",
+          "slug": "getting-started/01-one-booking",
+          "description": "A salon's bookings as a Copilotz plugin: a collection, an Action, a View and a resource. Sam books a slot, and the record says he did."
+        },
+        {
+          "title": "Ch 2: Who sees what",
+          "slug": "getting-started/02-who-sees-what",
+          "description": "Staff and customers: people and contacts, a space for the desk, and one rule at the data that filters every read and checks every write, whoever calls. Then the first tests."
+        },
+        {
+          "title": "Ch 3: Its own web page",
+          "slug": "getting-started/03-its-own-web-page",
+          "description": "The desk on the web: Copilotz's web shell with a Bookings tab, drawn by a React View that reads two named queries, as the reader, live. Its buttons are the same Actions."
+        },
+        {
+          "title": "Ch 4: Its own agent",
+          "slug": "getting-started/04-its-own-agent",
+          "description": "The concierge: the salon's agent, with four tools that call the same Actions, a text View for each that the model reads, acting for whoever it talks with. Tested with a scripted model, and talked to in the terminal."
+        },
+        {
+          "title": "Ch 5: ChatGPT, Claude and Gemini, over MCP",
+          "slug": "getting-started/05-chatgpt-claude-and-gemini-over-mcp",
+          "description": "The concierge's tools, opened to assistants outside at /mcp/salon. Each conversation is a contact with a chat of its own at the desk, under the same rules, and Sam's tab shows what they book."
+        },
+        {
+          "title": "Ch 6: The same bookings, every way in",
+          "slug": "getting-started/06-the-same-bookings-every-way-in",
+          "description": "The payoff: one test drives the desk's page, the salon's agent and an assistant over MCP at once, reads the record of who acted for whom, and proves the rules held at each. Then a tour with a real model."
+        },
+        {
+          "title": "Ch 7: A widget in the assistant",
+          "slug": "getting-started/07-a-widget-in-the-assistant",
+          "description": "The desk's Bookings View, drawn inside ChatGPT and Claude under the tool's answer, with what it reads answered ahead as the conversation's contact. Its buttons are the same Actions, and only the widget may press them."
+        },
+        {
+          "title": "Ch 8: A chat on your site",
+          "slug": "getting-started/08-a-chat-on-your-site",
+          "description": "Anyone who opens the salon's site can chat with the concierge: their first message makes them a customer, with a chat of their own, and a panel beside it books into that chat."
+        },
+        {
+          "title": "Ch 9: WhatsApp",
+          "slug": "getting-started/09-whatsapp",
+          "description": "A WhatsApp number open to anyone: Meta's webhook comes in signed, the concierge answers through the Graph API, and each customer is a contact with a chat of their own. Offline, the Graph API is a fake."
+        },
+        {
+          "title": "Ch 10: Shipping the salon",
+          "slug": "getting-started/10-shipping-the-salon",
+          "description": "The salon, kept and online: SQLite on your machine, PostgreSQL with a lease for deploys, a secret that keeps conversations themselves, a public origin without dev sign-in, staff invited by email, and the desk made once."
+        }
+      ]
+    },
+    {
+      "title": "Build Compass",
+      "items": [
+        {
+          "title": "Build Compass: a workspace for people and agents",
+          "slug": "build-compass",
+          "description": "The deep track: build Compass, a workspace where people and agents share chats, a board and documents, and learn the runtime's contract by building each part of it, one primitive at a time."
+        },
+        {
+          "title": "Ch 1: One agent, one message",
+          "slug": "build-compass/part-1-an-agent-of-your-own/01-one-agent-one-message",
+          "description": "Compose a runtime from two of Copilotz's plugins and one of your own, send an agent a message, and read the events it leaves."
+        },
+        {
+          "title": "Ch 2: North, in your terminal",
+          "slug": "build-compass/part-1-an-agent-of-your-own/02-north-in-your-terminal",
+          "description": "Move North into a plugin of your own, laid out by primitive; give the team a charter as a View in North's prompt; talk to North in Copilotz's terminal and see exactly what it's sent."
+        },
+        {
+          "title": "Ch 3: Compass in the browser",
+          "slug": "build-compass/part-1-an-agent-of-your-own/03-compass-in-the-browser",
+          "description": "Rebuild Copilotz's identity plugin for one person on their own machine (a collection, an Action, a who, a route and a rule), then serve Compass's web page in its own look."
+        },
+        {
+          "title": "Ch 4: Today, every turn",
+          "slug": "build-compass/part-2-your-own-plugins/04-today-every-turn",
+          "description": "Tell every agent today's date with a turn context, and see why a prompt has a stable part and a part that changes: the provider's prompt cache."
+        },
+        {
+          "title": "Ch 5: One store",
+          "slug": "build-compass/part-2-your-own-plugins/05-one-store",
+          "description": "Keep Compass in one SQLite file: what the store's tables hold, each collection as a SQL view, and why the store has one writer at a time."
+        },
+        {
+          "title": "Ch 6: Chats that name themselves",
+          "slug": "build-compass/part-2-your-own-plugins/06-chats-that-name-themselves",
+          "description": "Write a Processor: it hears chat's message.created events and names new chats with a small model. Then test it with a scripted model, swapped in through resources and an adapter."
+        },
+        {
+          "title": "Ch 7: Spaces",
+          "slug": "build-compass/part-2-your-own-plugins/07-spaces",
+          "description": "Rebuild Copilotz's spaces plugin for one person by its contract: what chat and other plugins ask of it, a rule that keeps shared documents in real spaces, and a parity test against Copilotz's own."
+        },
+        {
+          "title": "Ch 8: Spaces on the web",
+          "slug": "build-compass/part-2-your-own-plugins/08-spaces-on-the-web",
+          "description": "Give spaces a web front end: React Views the web shell places by name, a page for each space, and resource kinds that let other plugins add tabs without knowing your code."
+        },
+        {
+          "title": "Ch 9: The board's data and Actions",
+          "slug": "build-compass/part-3-the-board/09-the-boards-data-and-actions",
+          "description": "Rebuild Copilotz's boards: two collections that must always agree, seven Actions that are the only way to change them, and transactions that commit what several documents must agree on together."
+        },
+        {
+          "title": "Ch 10: The board on screen",
+          "slug": "build-compass/part-3-the-board/10-the-board-on-screen",
+          "description": "Show the same board in two places with Views: a Board tab on every space's page, plugged in through a resource kind, and a terminal View printed by a command. Both stay live."
+        },
+        {
+          "title": "Ch 11: The board for North",
+          "slug": "build-compass/part-3-the-board/11-the-board-for-north",
+          "description": "The third place the board shows is the model's prompt: six tools, offered wherever a conversation is in a space, that call the same Actions people use, and read back as plain text."
+        },
+        {
+          "title": "Ch 12: Documents and their versions",
+          "slug": "build-compass/part-4-documents/12-documents-and-their-versions",
+          "description": "Rebuild Copilotz's documents plugin for one person by its contract: Markdown in a space, every save a version that says who, what and when, an old version brought back as a new one, and a stale save refused."
+        },
+        {
+          "title": "Ch 13: Saves that merge, or refuse",
+          "slug": "build-compass/part-4-documents/13-saves-that-merge-or-refuse",
+          "description": "Two saves from the same version merge line by line, a three-way merge against the version both started from, and are refused only where they touch the same lines; and who has a document open is live, in a collection kept in memory."
+        },
+        {
+          "title": "Ch 14: Documents on the web and in the terminal",
+          "slug": "build-compass/part-4-documents/14-documents-on-the-web-and-in-the-terminal",
+          "description": "The same documents shown by Views in two places: a Documents tab on every space, a page to write and save each version, live as others save, and /doc in the terminal."
+        },
+        {
+          "title": "Ch 15: Documents for North",
+          "slug": "build-compass/part-4-documents/15-documents-for-north",
+          "description": "Documents' third reader is the model: five tools, offered wherever a conversation is in a space, that read and write through the same commit as your saves, each change a version by the agent, for you."
+        },
+        {
+          "title": "Ch 16: A line for every message",
+          "slug": "build-compass/part-5-long-conversations/16-a-line-for-every-message",
+          "description": "Rebuild Copilotz's history plugin, starting with its Processor: as messages leave the recent tail, each gets a line, and pairs of lines merge up a binary tree, with a cheap model only for what's long."
+        },
+        {
+          "title": "Ch 17: The outline in North's prompt",
+          "slug": "build-compass/part-5-long-conversations/17-the-outline-in-norths-prompt",
+          "description": "Replace chat's history View: an agent is sent the summary lines first, then the recent messages whole, and chat reads only those, from where the history plugin says they start."
+        },
+        {
+          "title": "Ch 18: Zoom",
+          "slug": "build-compass/part-5-long-conversations/18-zoom",
+          "description": "A summary line never replaces its messages: the zoom tool, offered once a thread is summarized, opens a line into the two it was made from, down to the message itself, whole."
+        },
+        {
+          "title": "Ch 19: Memories found by meaning",
+          "slug": "build-compass/part-6-memory/19-memories-found-by-meaning",
+          "description": "Rebuild the store half of Copilotz's memory plugin: statements about a person, an agent, a conversation or everyone, kept with an embedding, found by meaning and by words, and updated instead of repeated."
+        },
+        {
+          "title": "Ch 20: Recall in the prompt",
+          "slug": "build-compass/part-6-memory/20-recall-in-the-prompt",
+          "description": "Memory reaches agents as three of chat's contexts: how to use it in the cached system part, the core memories when a conversation begins, and each turn the memories relevant to what was last said."
+        },
+        {
+          "title": "Ch 21: Remember, recall, forget",
+          "slug": "build-compass/part-6-memory/21-remember-recall-forget",
+          "description": "Three tools with Copilotz's names and inputs let agents keep, search and drop memories; the charter says what's worth keeping, and the terminal and the web show what's kept."
+        },
+        {
+          "title": "Ch 22: Memories on their own",
+          "slug": "build-compass/part-6-memory/22-memories-on-their-own",
+          "description": "Rebuild Copilotz's memoryExtraction: a Processor counts each conversation's shared messages and, every few, asks a cheap model to write down what's worth keeping, through the same keep as remember."
+        },
+        {
+          "title": "Ch 23: East, South and West",
+          "slug": "build-compass/part-7-the-team/23-east-south-and-west",
+          "description": "North gets a team: three more of the app's own agents, each with its own way of working and its own model alias, in every space, with the charter in each one's prompt."
+        },
+        {
+          "title": "Ch 24: Asking in parallel",
+          "slug": "build-compass/part-7-the-team/24-asking-in-parallel",
+          "description": "North brings teammates in with chat's send_message: questions that don't depend on each other go out in one step, the teammates work at the same time, and North resumes once, with every reply."
+        },
+        {
+          "title": "Ch 25: Reading other conversations",
+          "slug": "build-compass/part-7-the-team/25-reading-other-conversations",
+          "description": "Compass's coordination plugin, rebuilt for one person: two tools that let an agent list and read the other conversations of its space, through chat's own queries, storing nothing."
+        },
+        {
+          "title": "Ch 26: Skills",
+          "slug": "build-compass/part-8-skills-and-routines/26-skills",
+          "description": "Rebuild Copilotz's skills plugin for one person: know-how an agent reads only when a task calls for it, listed by name in the cached part of its prompt and read with one tool."
+        },
+        {
+          "title": "Ch 27: Routines on a schedule",
+          "slug": "build-compass/part-8-skills-and-routines/27-routines-on-a-schedule",
+          "description": "Rebuild Copilotz's routines for one person: a message sent to an agent on a schedule, with time as one more caller of Actions, every run recorded, and tests that move time with a manual clock."
+        },
+        {
+          "title": "Ch 28: Agents that schedule",
+          "slug": "build-compass/part-8-skills-and-routines/28-agents-that-schedule",
+          "description": "\"Remind me every Monday\" from a chat: four tools that make, list and cancel routines as the person the agent works for, post back where they were asked, and let an agent name a run's chat for what it found."
+        },
+        {
+          "title": "Ch 29: Search, an adapter port",
+          "slug": "build-compass/part-9-the-web-for-agents/29-search-an-adapter-port",
+          "description": "Rebuild Copilotz's web tools for one person, starting with web_search: a tool that knows no search engine and asks an adapter port, so DuckDuckGo, Serper or an offline fake answers, all through the runtime's fetch."
+        },
+        {
+          "title": "Ch 30: Reading a page safely",
+          "slug": "build-compass/part-9-the-web-for-agents/30-reading-a-page-safely",
+          "description": "read_page fetches a page an agent chose and hands back its main text, marked as data: http(s) only, private and metadata addresses refused on every redirect, within a time, a size and a kind of content, and a few pages per turn."
+        },
+        {
+          "title": "Ch 31: Fakes at the edges",
+          "slug": "build-compass/part-10-testing/31-fakes-at-the-edges",
+          "description": "Test Compass as a person uses it, offline and in milliseconds: the app as app.ts makes it, run for real, with fakes only where it meets the world: a scripted model, a manual clock, and a model provider served on your machine."
+        },
+        {
+          "title": "Ch 32: Parity",
+          "slug": "build-compass/part-10-testing/32-parity",
+          "description": "What every rebuilt plugin's parity test does, in one small helper: the same scenario on Copilotz's plugin and on yours, with ids and times taken out; and the parity test identity was missing, with testWho saying who each request is."
+        },
+        {
+          "title": "Ch 33: The REST API",
+          "slug": "build-compass/part-11-other-ways-in/33-the-rest-api",
+          "description": "Other programs reach Compass: the runtime answers /api/ itself, as whoever identity's who says a request is, so a script on your machine reads your board and moves a card through the same Actions and rules as a click."
+        },
+        {
+          "title": "Ch 34: The client",
+          "slug": "build-compass/part-11-other-ways-in/34-the-client",
+          "description": "Copilotz's client, connect, reaches the running server as plugin code reaches the store, over the socket or over HTTP; its watch hears every commit, so a script prints your board again whenever a card moves."
+        },
+        {
+          "title": "Ch 35: Your board over MCP",
+          "slug": "build-compass/part-11-other-ways-in/35-your-board-over-mcp",
+          "description": "An assistant on your machine (Claude Code, any MCP client) calls the board's tools, the same ones North uses: Compass's own mcp plugin, with Copilotz's contract, for one person, each call written in a chat of yours."
+        },
+        {
+          "title": "Ch 36: PostgreSQL and blobs",
+          "slug": "build-compass/part-12-shipping/36-postgresql-and-blobs",
+          "description": "Run the same Compass on PostgreSQL when DATABASE_URL says so, and keep large values once, as files in a folder of their own, with Copilotz's postgresStore and fileBlobs."
+        },
+        {
+          "title": "Ch 37: Watching it run",
+          "slug": "build-compass/part-12-shipping/37-watching-it-run",
+          "description": "Copilotz measures itself: the runtime's jobs and commits, and every model call by OpenTelemetry's GenAI conventions. Give it a meter, read the numbers at /metrics as Prometheus text or in the terminal, and send them to an OpenTelemetry collector."
+        },
+        {
+          "title": "Ch 38: A computer for your agents",
+          "slug": "build-compass/part-12-shipping/38-a-computer-for-your-agents",
+          "description": "Run Copilotz's computers plugin, unchanged, on Compass's spaces: a machine you connect with a one-time code, where North gets a terminal, jobs, files, a browser and web search, and asks before it runs anything. One change to spaces makes it fit: you are a member of your spaces, the way Copilotz's keep it."
+        },
+        {
+          "title": "Ch 39: Swapping in Copilotz's plugins",
+          "slug": "build-compass/part-13-from-one-person-to-many/39-swapping-in-copilotzs-plugins",
+          "description": "Every plugin you rebuilt kept Copilotz's contract, so one setting runs Compass on Copilotz's own plugins instead, the real Compass's. A test runs the same end-to-end scenario on both lists, and shows where they differ on purpose."
+        },
+        {
+          "title": "Ch 40: Sign-in and people",
+          "slug": "build-compass/part-13-from-one-person-to-many/40-sign-in-and-people",
+          "description": "On Copilotz's identity, a request is whoever its session proves, so people sign in: by email and a password, with codes written to the log on this machine, or by name. Then a space gets members: Ana invites Bruno to Launch, he accepts, and he reads its board."
+        },
+        {
+          "title": "Ch 41: Many orgs and billing",
+          "slug": "build-compass/part-13-from-one-person-to-many/41-many-orgs-and-billing",
+          "description": "One address, many orgs: a directory runtime signs people in and knows their orgs, and each org is a Compass of its own, opened when used and closed when idle. With Copilotz's usage ledger, what each org's agents use is recorded and priced in that org alone."
+        }
+      ]
+    },
+    {
+      "title": "Guides",
+      "items": [
+        {
+          "title": "Serving on the web",
+          "slug": "guides/serving-on-the-web",
+          "description": "The runtime answers HTTP itself: runtime.fetch, plugins' routes and who, the page on Node and in the browser, sign-in and its page's words, and apps with no page at all."
+        },
+        {
+          "title": "Many orgs behind one address",
+          "slug": "guides/many-orgs",
+          "description": "One app, many orgs: a directory runtime signs people in and knows their orgs, and each org is a runtime of its own, opened when used and closed when idle."
+        },
+        {
+          "title": "Visitors: a chat on your site",
+          "slug": "guides/visitors",
+          "description": "A public site where anyone chats with the app's agent, signed in or not: site chats, what a visitor reaches, and the limits that keep it safe to open."
+        },
+        {
+          "title": "The REST API and the client",
+          "slug": "guides/rest-and-the-client",
+          "description": "Every app answers a REST API at /api/, checked as the socket is, and connect is its client for scripts: the endpoint list, developer keys, and the client's collections."
+        },
+        {
+          "title": "Installing a computer",
+          "slug": "guides/installing-a-computer",
+          "description": "People connect their own machines for their agents to work on: where the computer program comes from, the one line that installs it, and what it does on the machine."
+        }
+      ]
+    },
+    {
+      "title": "Operations",
+      "items": [
+        {
+          "title": "Stores",
+          "slug": "operations/stores",
+          "description": "Where an app keeps what it keeps: memory, SQLite or PostgreSQL, with the same MongoDB semantics in all three, and blobs in the store, in files or in a bucket."
+        },
+        {
+          "title": "Maintenance",
+          "slug": "operations/maintenance",
+          "description": "SQL over HTTP for an app's operators when they can't reach its database: the endpoints, the key, the record, the limits, and the PostgreSQL role it runs as."
+        },
+        {
+          "title": "Metrics",
+          "slug": "operations/metrics",
+          "description": "What the runtime and its plugins measure, the OpenTelemetry way: the meter, OTLP and Prometheus, and every metric recorded, copilotz.transaction.duration included."
+        }
+      ]
+    },
+    {
+      "title": "Reference",
+      "items": [
+        {
+          "title": "Reference",
+          "slug": "reference",
+          "description": "What you import and what you declare, exactly. The entry points, the primitives a plugin is made of, who calls what for whom and where, the events the log keeps, schedules, and a page for every plugin."
+        },
+        {
+          "title": "Plugins",
+          "slug": "reference/plugins",
+          "description": "Every plugin Copilotz exports: what it keeps, who may call what, where it shows, what it needs."
+        },
+        {
+          "title": "api",
+          "slug": "reference/plugins/api",
+          "description": "Developer keys: what code calls the app with, as someone, over the runtime's REST API (`/api/`) or its socket (see runtime/api.ts and runtime/client.ts): `Authorization: Bearer <key>`."
+        },
+        {
+          "title": "api-web",
+          "slug": "reference/plugins/api-web",
+          "description": "The developer API's web front end, for the browser."
+        },
+        {
+          "title": "boards",
+          "slug": "reference/plugins/boards",
+          "description": "Boards: kanban boards in a space, for people and agents, the team's operational source of truth: one real outcome per card, with its owner, what done looks like, an honest column, and any blocker."
+        },
+        {
+          "title": "boards-web",
+          "slug": "reference/plugins/boards-web",
+          "description": "Boards' web front end, for the browser."
+        },
+        {
+          "title": "chat",
+          "slug": "reference/plugins/chat",
+          "description": "Chat: threads where people and agents talk."
+        },
+        {
+          "title": "chat-terminal",
+          "slug": "reference/plugins/chat-terminal",
+          "description": "Chat's terminal front end, for the process that draws the terminal: how a conversation, a message, its author and a reply being written look there, and chat's commands."
+        },
+        {
+          "title": "chat-web",
+          "slug": "reference/plugins/chat-web",
+          "description": "Chat's web front end, for the browser: home (a new chat), how a chat looks with what agents are writing right now, a message and its files, where you type, and at the top of the sidebar, starting one."
+        },
+        {
+          "title": "contacts",
+          "slug": "reference/plugins/contacts",
+          "description": "Contacts: people outside the org who talk to its agents, such as a WhatsApp customer writing to a business's number."
+        },
+        {
+          "title": "contacts-web",
+          "slug": "reference/plugins/contacts-web",
+          "description": "Contacts on the web: their names, wherever a page shows who wrote (spaces' `names` resource, for the browser): \"Ana\", not \"someone\"."
+        },
+        {
+          "title": "credits",
+          "slug": "reference/plugins/credits",
+          "description": "Credits: what an org has to spend, and the check that stops it at its limit."
+        },
+        {
+          "title": "credits-web",
+          "slug": "reference/plugins/credits-web",
+          "description": "Credits' web front end: the org page's Billing section (the web shell's `orgSettings`)."
+        },
+        {
+          "title": "dev-sign-in",
+          "slug": "reference/plugins/dev-sign-in",
+          "description": "Dev sign-in: people sign in by the name they type, from this machine only, for trying an app out (with the identity plugin)."
+        },
+        {
+          "title": "directory",
+          "slug": "reference/plugins/directory",
+          "description": "The directory plugin, and what each org's runtime gets of it: `directory.member(dir, org)` (see shared/member.ts), with the org as `org.info` says it."
+        },
+        {
+          "title": "directory-member",
+          "slug": "reference/plugins/directory-member",
+          "description": "`member(dir, org)`: the plugin each org's runtime gets from the directory (`dir`, its runtime) that serves it, beside the app's own plugins."
+        },
+        {
+          "title": "directory-web",
+          "slug": "reference/plugins/directory-web",
+          "description": "The directory's web front end, for apps that serve many orgs behind one address: it fills the web shell's `orgs` slot, and draws the org's pages."
+        },
+        {
+          "title": "documents",
+          "slug": "reference/plugins/documents",
+          "description": "Documents: shared Markdown in a space, for people and agents — the canonical artifact of the thing being made, and its working memory."
+        },
+        {
+          "title": "documents-web",
+          "slug": "reference/plugins/documents-web",
+          "description": "Documents' web front end, for the browser."
+        },
+        {
+          "title": "email",
+          "slug": "reference/plugins/email",
+          "description": "Email: sending it, and signing in with it."
+        },
+        {
+          "title": "email-sign-in",
+          "slug": "reference/plugins/email-sign-in",
+          "description": "Email: sending it, and signing in with it."
+        },
+        {
+          "title": "google-sign-in",
+          "slug": "reference/plugins/google-sign-in",
+          "description": "Google sign-in: `google.sign-in` turns a Google ID token into a person and a session (with the identity plugin)."
+        },
+        {
+          "title": "history",
+          "slug": "reference/plugins/history",
+          "description": "Summarizes each thread's older messages as they leave its tail, and sends agents the outline and the recent messages whole (it replaces chat's `history` View)."
+        },
+        {
+          "title": "identity",
+          "slug": "reference/plugins/identity",
+          "description": "Identity: who people are and what proves it."
+        },
+        {
+          "title": "maintenance",
+          "slug": "reference/plugins/maintenance",
+          "description": "Maintenance: HTTP endpoints for an app's operators, for when they can't reach its database themselves (a client's network that keeps their database user out)."
+        },
+        {
+          "title": "mcp",
+          "slug": "reference/plugins/mcp",
+          "description": "MCP: models outside the app (ChatGPT, Claude, any MCP client) call the app's tools."
+        },
+        {
+          "title": "memory",
+          "slug": "reference/plugins/memory",
+          "description": "Memory: what agents know across conversations."
+        },
+        {
+          "title": "memory-extraction",
+          "slug": "reference/plugins/memory-extraction",
+          "description": "Memories that arrive on their own: the extractor model reads every few messages."
+        },
+        {
+          "title": "memory-terminal",
+          "slug": "reference/plugins/memory-terminal",
+          "description": "Memory's terminal front end: how a memory looks there, and `/memories`."
+        },
+        {
+          "title": "memory-web",
+          "slug": "reference/plugins/memory-web",
+          "description": "Memory's web front end, for the browser: what agents remember (the `memories` View, as the terminal's `/memories` lists it: ★ for core memories, always in mind)."
+        },
+        {
+          "title": "models",
+          "slug": "reference/plugins/models",
+          "description": "Models: talking to models, one way for every kind."
+        },
+        {
+          "title": "openapi",
+          "slug": "reference/plugins/openapi",
+          "description": "OpenAPI: an HTTP API's operations as Actions and as tools for agents, made from its OpenAPI 3 spec."
+        },
+        {
+          "title": "routines",
+          "slug": "reference/plugins/routines",
+          "description": "Routines: a message sent to an agent on a schedule, in a space (\"every weekday at 9:00, ask @researcher for the news on X\")."
+        },
+        {
+          "title": "routines-web",
+          "slug": "reference/plugins/routines-web",
+          "description": "Routines' web front end, for the browser."
+        },
+        {
+          "title": "skills",
+          "slug": "reference/plugins/skills",
+          "description": "Skills: know-how an agent reads only when it needs it."
+        },
+        {
+          "title": "skills-web",
+          "slug": "reference/plugins/skills-web",
+          "description": "Skills' web front end, for the browser."
+        },
+        {
+          "title": "spaces",
+          "slug": "reference/plugins/spaces",
+          "description": "Spaces: who reaches what, for every collection that shares its documents."
+        },
+        {
+          "title": "spaces-terminal",
+          "slug": "reference/plugins/spaces-terminal",
+          "description": "Access's terminal front end: how spaces look there, and `/spaces`, `/space`, `/work`, `/invite`, `/invitations`, `/accept`, `/decline`, and requests to join."
+        },
+        {
+          "title": "spaces-web",
+          "slug": "reference/plugins/spaces-web",
+          "description": "Spaces' web front end."
+        },
+        {
+          "title": "stripe",
+          "slug": "reference/plugins/stripe",
+          "description": "Stripe: one way an org pays, for `credits`, which never asks it anything."
+        },
+        {
+          "title": "stripe-webhook",
+          "slug": "reference/plugins/stripe-webhook",
+          "description": "Stripe's webhook, `POST /__stripe/<seller>`, where the app's accounts send their events (see routes/webhook.ts)."
+        },
+        {
+          "title": "team",
+          "slug": "reference/plugins/team",
+          "description": "Team: agents people make, beside those the app declares in code."
+        },
+        {
+          "title": "team-web",
+          "slug": "reference/plugins/team-web",
+          "description": "Team's web front end, for the browser: making and changing agents."
+        },
+        {
+          "title": "terminal",
+          "slug": "reference/plugins/terminal",
+          "description": "The terminal plugin: a command line's data, built from the same primitives as everything else, which every process has."
+        },
+        {
+          "title": "terminal-shell",
+          "slug": "reference/plugins/terminal-shell",
+          "description": "The terminal's front end, for the process that draws: the `shell` View (what's open, the scrollback, where you type), where you type's prompt, and the View any kind without its own falls back to."
+        },
+        {
+          "title": "tiers",
+          "slug": "reference/plugins/tiers",
+          "description": "Tiers: which models the app's agents think with, chosen by what the work needs rather than model by model."
+        },
+        {
+          "title": "tiers-web",
+          "slug": "reference/plugins/tiers-web",
+          "description": "Tiers' web front end, for the browser."
+        },
+        {
+          "title": "usage",
+          "slug": "reference/plugins/usage",
+          "description": "Usage: what was used, what it cost, and what to charge for it, as a ledger."
+        },
+        {
+          "title": "usage-terminal",
+          "slug": "reference/plugins/usage-terminal",
+          "description": "Usage's terminal front end: how totals look there, and `/usage`."
+        },
+        {
+          "title": "usage-web",
+          "slug": "reference/plugins/usage-web",
+          "description": "Usage's web front end: where the app serves many orgs, the org page's Usage section (the web shell's `orgSettings`)."
+        },
+        {
+          "title": "voice",
+          "slug": "reference/plugins/voice",
+          "description": "Voice: people call the app's phone number and talk to its agents, through Twilio's ConversationRelay (Twilio hears them and speaks for the agent; the app gets and sends text)."
+        },
+        {
+          "title": "web-lines",
+          "slug": "reference/plugins/web-lines",
+          "description": "Web sites (`resources.web.<name>`, declared in the app's settings, with the app's secret, `links`)."
+        },
+        {
+          "title": "web-page",
+          "slug": "reference/plugins/web-page",
+          "description": "The page: the app's code, its files, its manifest and worker, and the page itself."
+        },
+        {
+          "title": "web-shell",
+          "slug": "reference/plugins/web-shell",
+          "description": "The web shell: the web's root View, which the web host observes for the address it's at (`hosts/web`)."
+        },
+        {
+          "title": "webTools",
+          "slug": "reference/plugins/webTools",
+          "description": "Web tools: agents that search the web and read a page, without a computer."
+        },
+        {
+          "title": "whatsapp",
+          "slug": "reference/plugins/whatsapp",
+          "description": "WhatsApp: people talk to their agents from WhatsApp, through Meta's Cloud API."
+        },
+        {
+          "title": "whatsapp-web",
+          "slug": "reference/plugins/whatsapp-web",
+          "description": "WhatsApp's web front end, for the browser."
+        }
+      ]
+    },
+    {
+      "title": "Architecture",
+      "items": [
+        {
+          "title": "Architecture",
+          "slug": "architecture",
+          "description": "How Copilotz works underneath: one contract for every caller, one owner that writes, and the promises the runtime keeps whichever way a call comes in."
+        },
+        {
+          "title": "The owner",
+          "slug": "architecture/the-owner",
+          "description": "One owner holds the store and commits every write; executors run plugin code; the rules apply at every op; and 2 caches keep reads cheap without ever going stale."
+        },
+        {
+          "title": "Events, Processors and schedules",
+          "slug": "architecture/events",
+          "description": "Every change is an event written in the commit that made it; Processors react to events from durable cursors; and time is one more caller of Actions."
+        },
+        {
+          "title": "Views",
+          "slug": "architecture/views",
+          "description": "A View turns data into what one place shows; the runtime renders it once or observes it, running again only the parts a commit changed, for whoever is looking, where they are."
+        },
+        {
+          "title": "The ways in",
+          "slug": "architecture/transports",
+          "description": "Every way into an app says who the caller is and where they work, then reaches the same Actions, Views and rules: the browser's socket, the REST API and its client, MCP, and the other doors."
+        },
+        {
+          "title": "Topology and runtimes",
+          "slug": "architecture/topology",
+          "description": "Where the owner, its executors, plugins' workers and browsers run, what a turn costs, many runtimes behind one address, and the JavaScript runtimes Copilotz runs on."
+        }
+      ]
+    }
+  ]
+}

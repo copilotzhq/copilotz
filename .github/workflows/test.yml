@@ -51,14 +51,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         if: matrix.runtime == 'bun'
       - run: npm ci
-      - name: Format, types, tests, and the JSR package
+      - name: Format, types, tests, and the JSR packages
         if: matrix.runtime == 'deno'
         run: |
           deno fmt --check
           deno task check
           deno task test
           deno publish --dry-run
-      - name: Tests, and the npm package (built, installed from its tarball, used)
+          for dir in packages/*/; do (cd "$dir" && deno publish --dry-run); done
+      - name: Tests, and the npm packages (built, installed together from their tarballs, used)
         if: matrix.runtime == 'node'
         run: |
           npm test

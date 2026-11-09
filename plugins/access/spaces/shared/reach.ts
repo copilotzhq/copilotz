@@ -18,10 +18,11 @@
  * Launch reaches Launch and its sources, never Ana's other spaces, whose
  * words would otherwise end up before Launch's members. Ana's own Personal
  * space is the one exception: only she sees it, so her agents there reach
- * all she does. Code doing work as a person on someone's behalf (`via`: a
- * tool acting as its agent's person, a routine as its maker) is narrowed
- * the same way. A person acting themselves isn't (they reach what they reach
- * from any page), nor is work that's nowhere in particular.
+ * all she does. Work done as a person for them (`onBehalf`: a tool acting
+ * as its agent's person, a routine as its maker) is narrowed the same way. A
+ * person acting themselves isn't (they reach what they reach from any page),
+ * nor is code acting as them for themselves, nor work that's nowhere in
+ * particular.
  *
  * **Kept.** Reach is asked on every op an actor's work makes. It's kept in
  * the owner by everything it depends on (who, for whom, where: `reachKey`)
@@ -30,7 +31,7 @@
  * so they're worked out once for every place it works. What's kept is
  * shared: callers never change a `Reach` they're given.
  */
-import { type Actor, type ReadContext, whereOf } from "../../../../runtime/mod.ts";
+import { type Actor, onBehalf, type ReadContext, whereOf } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
 import { PERSONAL } from "./personal.ts";
 
@@ -169,11 +170,12 @@ export function reachKey(actor: Actor): string {
 
 /**
  * Whether where an actor's work is narrows what it reaches: work for someone
- * (an agent's, a key's), or done as a person by code on someone's behalf
- * (`via`); never a person's own.
+ * (an agent's, a key's), or done as a person for them (`onBehalf`: a routine,
+ * a tool acting as its agent's person); never a person's own, nor code
+ * acting as them for themselves.
  */
 const narrows = (actor: Actor): boolean =>
-  !!worksFor(actor) || (actor.kind === "person" && !!actor.via);
+  !!worksFor(actor) || (actor.kind === "person" && onBehalf(actor));
 
 async function reaching(actor: Actor, ctx: ReadContext): Promise<Reach> {
   const reach = await unlimited(actor, ctx);

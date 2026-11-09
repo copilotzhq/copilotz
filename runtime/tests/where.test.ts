@@ -21,6 +21,7 @@ import {
   manualClock,
   people,
   peopleOrContacts,
+  personOf,
   type Runtime,
   type ViewContext,
 } from "../mod.ts";
@@ -80,12 +81,20 @@ const plugin = definePlugin({
     "do.through": defineAction({
       input: {
         type: "object",
-        properties: { action: text, granted: { type: "boolean" } },
+        properties: {
+          action: text,
+          granted: { type: "boolean" },
+          asPerson: { type: "boolean" },
+        },
         required: ["action"],
       },
       allow: () => true,
-      run: async (ctx, { action, granted }) =>
-        await (granted ? ctx.as(grant("test.beyond")) : ctx).call(action, {}),
+      run: async (ctx, { action, granted, asPerson }) =>
+        await (granted
+          ? ctx.as(grant("test.beyond"))
+          : asPerson
+          ? ctx.as({ kind: "person", id: personOf(ctx.actor)! })
+          : ctx).call(action, {}),
     }),
   },
   processors: {
@@ -185,12 +194,17 @@ test("code acting for someone calls only what lets them; an agent, what lets its
     // From outside, the same: an agent needs its person let in too.
     assertEquals(await rt.call("do.people", {}, { actor: forAna }), "done");
     await assertRejects(() => rt.call("do.agents", {}, { actor: forCarla }), Error, "may not call");
-    // A routine's work (an `origin`) and code acting as a person aren't the person in person.
+    // A routine's work (an `origin`), and code acting as an agent's person, aren't the person in
+    // person; code acting as a person for themselves is.
     await assertRejects(
       () => through({ ...ana, origin: { kind: "routine", id: "r1" } }, "do.inPerson"),
       Error,
       "may not call",
     );
+    const asPerson = (actor: Actor) =>
+      rt.call("do.through", { action: "do.inPerson", asPerson: true }, { actor });
+    await assertRejects(() => asPerson(forAna), Error, "may not call");
+    assertEquals(await asPerson(ana), "done");
   });
 });
 

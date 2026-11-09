@@ -41,6 +41,21 @@
  */
 import type { Actor } from "./store.ts";
 
+/**
+ * Whether a person's work is done for them rather than by them: through a
+ * key, set going by something (`origin`: a routine), or by code acting as
+ * them on an agent's behalf (`via` one, or a key, or such work). What only a
+ * person decides (`inPerson`) never comes this way, and where it is narrows
+ * what it reaches (the access plugin).
+ */
+export function onBehalf(actor: Actor): boolean {
+  for (let a: Actor | undefined = actor, hops = 0; a && hops < 5; hops++) {
+    if (typeof a.key === "string" || a.origin || (a !== actor && a.kind === "agent")) return true;
+    a = a.via as Actor | undefined;
+  }
+  return false;
+}
+
 /** Where an actor's work is (`in`), if it's anywhere. */
 export const whereOf = (actor: Actor | undefined): string | undefined =>
   typeof actor?.in === "string" ? actor.in : undefined;

@@ -30,9 +30,11 @@ export const saidFor = (origin: Pick<Origin, "kind">) => `Yes, for this ${origin
  */
 export async function told(ctx: Context, asked: Approval, text: string): Promise<void> {
   const me = ctx.actor!.id;
+  // In the conversation's space, wherever it was answered from.
   const by = ctx.as({
     ...(asked.for === me ? ctx.actor! : { kind: "person", id: asked.for }),
     ...(asked.origin ? { origin: asked.origin } : {}),
+    in: asked.in,
   });
   const answered = asked.for === me
     ? {}

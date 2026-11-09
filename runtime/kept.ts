@@ -59,9 +59,9 @@ export function createKept(options: { max?: number } = {}) {
 
   return {
     /**
-     * The answer kept under `key`, or `work`'s, kept: `work` reads through
-     * `read`, which hears each of its reads (and passes them to `track`,
-     * if given: what's working it out follows them too).
+     * The answer kept under `key`, or `work`'s, kept: `work` tells what it
+     * reads to the function it's given, which keeps it and passes it on to
+     * `track`, if given (what asks follows those reads too, kept or not).
      */
     async get<T>(
       key: string,
@@ -75,7 +75,7 @@ export function createKept(options: { max?: number } = {}) {
         entries.delete(key);
         entries.set(key, found);
         const value = await found.value as T;
-        if (track) { for (const dep of found.deps) track(dep); }
+        for (const dep of track ? found.deps : []) track!(dep);
         return value;
       }
       misses++;
@@ -83,10 +83,12 @@ export function createKept(options: { max?: number } = {}) {
       const deps: Dep[] = [];
       const entry: Entry = { value: Promise.resolve(), deps };
       entries.set(key, entry);
-      entry.value = work((dep) => {
-        deps.push(dep);
-        track?.(dep);
-      });
+      // Always a promise, even from work that throws at once: what's kept is never half made.
+      entry.value = (async () =>
+        await work((dep) => {
+          deps.push(dep);
+          track?.(dep);
+        }))();
       if (entries.size > max) forget(entries.keys().next().value!);
       let value: T;
       try {

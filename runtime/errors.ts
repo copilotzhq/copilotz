@@ -12,6 +12,7 @@
  * called it is public: "Search trips first."
  */
 import type { Actor } from "./store.ts";
+import { onBehalf } from "./actor.ts";
 
 /** What a failure says about itself beyond its code: whether its message is for any caller. */
 export type FailureOptions = { public?: boolean };
@@ -42,10 +43,10 @@ export const people = (actor: Actor): boolean =>
 /**
  * A person themselves, for what only they decide (consent, keys, who's in a
  * space, their sessions and accounts): never a key, never an agent, whomever
- * it works for, and never work a routine set going for them (`origin`).
+ * it works for, and never work done for them (`onBehalf`: a routine set
+ * going, code acting as them for an agent).
  */
-export const inPerson = (actor: Actor): boolean =>
-  actor.kind === "person" && !actor.key && !actor.origin;
+export const inPerson = (actor: Actor): boolean => actor.kind === "person" && !onBehalf(actor);
 /**
  * A contact: someone outside the org talking to an app's agents (a WhatsApp
  * customer), or an agent working for one.

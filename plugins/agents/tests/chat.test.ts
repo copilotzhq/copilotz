@@ -442,6 +442,77 @@ each("a question to a person waits until they reply to it", async (make) => {
   await runtime.close();
 });
 
+/** A lead that asks ana in a chat of its own, and says what it got once it has her answer. */
+const asksInNewChat = (to = "ana") => ({
+  lead: {
+    tools: ["send_message"],
+    script:
+      (({ turn, last }) =>
+        turn === 0
+          ? { send: [{ to, text: "Which color?", in: "new_thread" }] }
+          : `Got: ${text(last)}`) as Script,
+  },
+  helper: { script: (() => "helper here") as Script },
+});
+
+each(
+  "a person's next message answers the question waiting on them, as a page sends it",
+  async (make) => {
+    const { runtime, calls, send, history } = await start(make, asksInNewChat());
+    const { thread, message } = await send({ text: "Paint the door", from: "ana" });
+    const asked = (await runtime.query<{ _id: string }[]>("thread.recent", {}))
+      .find((t) => t._id !== thread)!._id;
+    const [question] = await history(asked);
+    // What a page sends: the chat and the words, nothing about what they answer.
+    await send({ thread: asked, text: "Blue", from: "ana" });
+    const answer = (await history(asked)).at(-1)!;
+    assertEquals({ to: answer.to, replyTo: answer.replyTo }, {
+      to: ["lead"],
+      replyTo: question._id,
+    });
+    // The lead's turn resumed, once, and answered what started it.
+    const final = (await history(thread)).at(-1)!;
+    assertEquals([final.text, final.replyTo], ["Got: ana: Blue", message]);
+    assertEquals(calls.filter((c) => c.agent === "lead").length, 2);
+    await runtime.close();
+  },
+);
+
+each(
+  "where an agent waits on your answer to what it asked elsewhere, what you tell it there answers",
+  async (make) => {
+    const { runtime, calls, send, history } = await start(make, asksInNewChat());
+    const { thread, message } = await send({ text: "Paint the door", from: "ana" });
+    await send({ thread, text: "I answered in the other chat", from: "ana" });
+    // Not a second turn beside the paused one: that one resumes, and answers what started it.
+    const final = (await history(thread)).at(-1)!;
+    assertEquals([final.text, final.replyTo], ["Got: ana: I answered in the other chat", message]);
+    assertEquals(calls.filter((c) => c.agent === "lead").length, 2);
+    assertEquals(
+      await runtime.query("message.questions", { person: "ana" }, {
+        actor: { kind: "person", id: "ana" },
+      }),
+      [],
+    );
+    await runtime.close();
+  },
+);
+
+each("a message to someone else, or sent for the person, answers no question", async (make) => {
+  const { runtime, calls, send, history } = await start(make, asksInNewChat());
+  const { thread } = await send({ text: "Paint the door", from: "ana" });
+  await send({ thread, text: "hi helper", from: "ana", to: ["helper"] });
+  await send({ thread, text: "Weekly review", from: "ana", via: { kind: "routine", name: "Mon" } });
+  assertEquals((await history(thread)).filter((m) => m.from === "helper").length, 1);
+  // The lead still waits on ana's answer: the routine's message is its own turn's.
+  const open = await runtime.query<Message[]>("message.questions", { person: "ana" }, {
+    actor: { kind: "person", id: "ana" },
+  });
+  assertEquals(open.map((m) => m.text), ["Which color?"]);
+  assert(calls.some((c) => c.agent === "lead" && text(c.messages.at(-1)!).includes("Weekly")));
+  await runtime.close();
+});
+
 each("an agent that fails for good still answers, so whoever waits resumes", async (make) => {
   const { runtime, store, send, history } = await start(make, {
     lead: {

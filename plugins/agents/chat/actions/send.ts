@@ -7,8 +7,11 @@
  * said, agents read it later, and none answers it (what someone did on a
  * page beside the chat). A contact's goes to the sender of what it replies
  * to, else the thread's agents: never whom it names, though it too may say
- * something to nobody (`to: []`). It replies only to a message of the same conversation that its
- * sender reads. Only agents answering in
+ * something to nobody (`to: []`). It replies to the message it names (`replyTo`), one of the
+ * same conversation that its sender reads; naming none, to the question an agent still waits
+ * on its sender for (`awaited`: asked here, else asked elsewhere by an agent whose turn waits
+ * here), so a page need not say what its next message answers; never when sent for the person
+ * (`via`), nor to an agent it doesn't go to. Only agents answering in
  * its space answer there: naming one that doesn't fails (`not_here`). Its
  * files are the sender's own uploads (`chat.attach`), named by id: a call
  * carries no file's content, so a message of ten large ones goes as quickly
@@ -36,6 +39,7 @@ import type { Transcript } from "../../../models/contract.ts";
 import { drafter, type File, MOST_FILES, themselves } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
+import type { Wait } from "../collections/wait.ts";
 import {
   agentsNamed,
   handles,
@@ -93,6 +97,42 @@ async function mentionsIn(
     }
   }
   return mentions(text, named);
+}
+
+/**
+ * The question a message naming none answers: the newest one an agent still
+ * waits on its sender for, asked in this conversation; else asked of them
+ * elsewhere by an agent whose turn waits here (what they tell it here is their
+ * answer, and resumes that turn, not a second one). Only an agent the message
+ * goes to, when it names any (`to`, `@mentions`). Questions here are read as
+ * the sender, as they read them; waits, and what a wait here asked elsewhere
+ * (only its id is used), as the system: they're the agents' own.
+ */
+async function awaited(
+  ctx: Context,
+  thread: string,
+  sender: string,
+  named?: string[],
+): Promise<Message | null> {
+  const system = ctx.as();
+  const waits = system.db.collection<Wait>("wait");
+  const asked = await ctx.db.collection<Message>("message").find(
+    { thread, to: sender, replyTo: { $exists: false }, expectReply: { $ne: false } },
+    { sort: { at: -1 }, limit: 5 },
+  );
+  for (const question of asked) {
+    if (named && !named.includes(question.from)) continue;
+    if (await waits.findOne({ waitingFor: question._id })) return question;
+  }
+  const open = (await waits.find({ thread, "waitingFor.0": { $exists: true } }))
+    .filter((w) => !named || named.includes(w.agent));
+  const ids = open.flatMap((w) => w.waitingFor);
+  if (!ids.length) return null;
+  const [elsewhere] = await system.db.collection<Message>("message").find(
+    { _id: { $in: ids }, to: sender, from: { $in: open.map((w) => w.agent) } },
+    { sort: { at: -1 }, limit: 1 },
+  );
+  return elsewhere ?? null;
 }
 
 /** Who a message is from, pinned to whoever sends it: a person by id, a contact as `contact:<id>`. */
@@ -216,15 +256,26 @@ export const sendAction = defineAction({
     const named = input.thread ?? allowed.thread;
     const threadId = named ?? crypto.randomUUID();
     const existing = named ? await threads.findOne({ _id: threadId }) : null;
-    // What it answers: a message the sender reads, in this conversation (else it answers nothing).
-    const found = input.replyTo
-      ? await ctx.db.collection<Message>("message").findOne({ _id: input.replyTo })
-      : null;
-    const replied = found?.thread === threadId ? found : null;
+    const from = fromOf(ctx.actor) ?? input.from ?? "user";
     const where = existing ? existing.in : input.in;
     const roster = await rosterOf(ctx, where);
     const members = existing ? existing.agents ?? [] : roster.default;
     const mentioned = contact ? [] : await mentionsIn(ctx, said, threadId, roster, members);
+    // What it answers: the message it names, one the sender reads in this conversation; naming
+    // none, the question an agent waits on its sender for (not when sent for them: a routine's).
+    const found = input.replyTo
+      ? await ctx.db.collection<Message>("message").findOne({ _id: input.replyTo })
+      : null;
+    const replied = input.replyTo
+      ? found?.thread === threadId ? found : null
+      : existing && !input.via && !nobody
+      ? await awaited(
+        ctx,
+        threadId,
+        from,
+        contact ? undefined : input.to ?? (mentioned.length ? mentioned : undefined),
+      )
+      : null;
     const asked = (contact ? (nobody ? [] : undefined) : input.to) ??
       (mentioned.length ? mentioned : replied ? [replied.from] : members);
     // Agents answer only where they work: one named that doesn't is refused; one gone, left out.
@@ -302,7 +353,7 @@ export const sendAction = defineAction({
         }
         : {}),
       thread: threadId,
-      from: fromOf(ctx.actor) ?? input.from ?? "user",
+      from,
       ...(where ? { in: where } : {}),
       to: [...to],
       text: said,

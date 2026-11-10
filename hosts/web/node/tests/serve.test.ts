@@ -7,11 +7,26 @@
  * processes.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
+import { createServer } from "node:net";
 import { lease, type PostgresPool, postgresPool } from "../../../../stores/sql/postgres/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import { type App, serve } from "../mod.ts";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A port the system has free, for a test that must know it before listening: one it hands out
+ * itself, never one it keeps back (Windows reserves ranges, and refuses them: `EACCES`).
+ */
+const freePort = () =>
+  new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address() as { port: number };
+      probe.close(() => resolve(port));
+    });
+  });
 async function until(done: () => boolean, what: string) {
   for (let i = 0; i < 100 && !done(); i++) await sleep(50);
   assert(done(), what);
@@ -49,7 +64,7 @@ test("serve: while it waits for the lease, requests are told it's starting; then
   withPool(async (pool) => {
     // A newer deploy holds it, and isn't asked.
     const other = await lease(pool, { revision: 9, ttlMs: 600, lost: () => {} });
-    const port = 40_000 + Math.floor(Math.random() * 20_000);
+    const port = await freePort();
     const closed: number[] = [];
     let opened = false;
     const serving = serve(() => (opened = true, Promise.resolve(app("new", closed))), {

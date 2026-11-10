@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.36 — 2026-11-10
 
 **Upgrading.** Chat has two tools of its own, `list_conversations` and `read_conversation`, for the
 agents that list them in their `tools`. An app that made its own tools under those names drops them

@@ -540,8 +540,16 @@ export type RouteContext = {
  * request is as the browser sent it, on the site it asked for (the front's
  * host) and under the app's base (`/o/<org>/x` is `/x`). What it throws is
  * answered as an error (`failure`'s code: 400, 401, 403, 404, 429, else 500).
+ *
+ * A route with `crossOrigin: true` checks `Origin` itself and reads no
+ * session cookie (`actor` is anonymous, `cookies.get` returns nothing): the
+ * runtime's cross-site refusal (`crossSite`) doesn't stand before it, so a
+ * protocol route with no cookies (such as MCP's) can answer `Origin`s of its
+ * own choice.
  */
-export type Route = (request: Request, ctx: RouteContext) => Response | Promise<Response>;
+export type Route =
+  & ((request: Request, ctx: RouteContext) => Response | Promise<Response>)
+  & { crossOrigin?: boolean };
 
 /** What `who` is given beside the request. */
 export type WhoContext = {

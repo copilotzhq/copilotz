@@ -134,89 +134,144 @@ const failed = (
 const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 
+/** Which `Access-Control-Allow-Origin` a line answers `origin` with; undefined when refused. */
+const allowedOrigin = (line: Server, origin: string | null): string | undefined => {
+  if (origin === null) return undefined;
+  const allowed = line.origins ?? [];
+  if (allowed.includes("*")) return "*";
+  return allowed.includes(origin) ? origin : undefined;
+};
+
+/** CORS headers for an allowed browser `Origin` (and preflight, when the method isn't POST). */
+function corsOf(
+  request: Request,
+  allowed: string | undefined,
+): { cors: Record<string, string>; preflight?: Response } {
+  if (allowed === undefined) return { cors: {} };
+  const cors: Record<string, string> = {
+    "access-control-allow-origin": allowed,
+    "access-control-expose-headers": "mcp-session-id",
+    ...(allowed === "*" ? {} : { vary: "Origin" }),
+  };
+  if (request.method.toUpperCase() !== "O" + "PTIONS") return { cors };
+  const asked = (request.headers.get("access-control-request-headers") ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => /^mcp-param-[a-z0-9-]{1,64}$/.test(h));
+  return {
+    cors,
+    preflight: new Response(null, {
+      status: 204,
+      headers: {
+        ...cors,
+        "access-control-allow-methods": "POST, OPTIONS",
+        "access-control-allow-headers": [
+          "content-type",
+          "accept",
+          "mcp-session-id",
+          "mcp-protocol-version",
+          "mcp-method",
+          "mcp-name",
+          "authorization",
+          ...asked,
+        ].join(", "),
+        "cache-control": "no-store",
+      },
+    }),
+  };
+}
+
 /**
  * Answers a request to `/mcp/<name>`. The app's widgets (the template, and snapshots of what a
  * View reads) are its `widgets` resource, when it has one.
  */
-export const serveMcp: Route = async (request, { runtime }) => {
-  const resources = runtime.describe().resources;
-  const url = new URL(request.url);
-  const name = url.pathname.slice(PATH.length).replace(/\/$/, "");
-  const line = /^[\w-]{1,60}$/.test(name) ? serverOf({ resources }, name) : undefined;
-  if (!line) return respond(404, fault(undefined, REQUEST, "No MCP server here"));
-  if (request.method !== "POST") {
-    return new Response(null, {
-      status: 405,
-      headers: { allow: "POST", "cache-control": "no-store" },
-    });
-  }
-  // A browser's page: only from an origin the line names (none, unless it says).
-  const origin = request.headers.get("origin");
-  if (origin !== null && !(line.origins ?? []).includes(origin)) {
-    return respond(403, fault(undefined, REQUEST, "Not from this origin"));
-  }
-  // Around the app's front, straight to it: refused, when the front vouches for callers.
-  const caller = callerFrom(request, callerOf({ resources }), line.exempt);
-  if (caller === "refused") {
-    return respond(403, fault(undefined, REQUEST, "Not through the app's front"));
-  }
-  if (!/^application\/json\b/i.test(request.headers.get("content-type") ?? "")) {
-    return respond(415, fault(undefined, REQUEST, "Send JSON (application/json)"));
-  }
-  const text = await bodyOf(request, line.limits.body);
-  if (text === undefined) return respond(413, fault(undefined, REQUEST, "Too large"));
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return respond(400, fault(undefined, PARSE, "Parse error"));
-  }
-  const links = linksOf(resources);
-  if (!links) return respond(500, fault(undefined, INTERNAL, "Internal error"));
-  const org = (resources.org as { id?: string } | undefined)?.id;
-  const context: Context = {
-    runtime,
-    line,
-    resources,
-    request,
-    caller,
-    scope: { line: line.name, ...(org ? { org } : {}), secrets: secretsOf(links) },
-    ...(resources.widgets ? { widgets: resources.widgets as Widgets } : {}),
-    origin: linksOf(resources)?.origin,
-  };
-  if (Array.isArray(parsed)) {
-    // Batches were MCP's only in 2025-03-26.
-    const version = request.headers.get("mcp-protocol-version") ?? UNSAID;
-    if (version !== UNSAID || !parsed.length || parsed.length > BATCH) {
-      return respond(
-        400,
-        fault(undefined, REQUEST, `One message a request (from 2025-03-26, ${BATCH} at most)`),
-      );
+export const serveMcp: Route = Object.assign(
+  async (request: Request, { runtime }: Parameters<Route>[1]) => {
+    const resources = runtime.describe().resources;
+    const url = new URL(request.url);
+    const name = url.pathname.slice(PATH.length).replace(/\/$/, "");
+    const line = /^[\w-]{1,60}$/.test(name) ? serverOf({ resources }, name) : undefined;
+    if (!line) return respond(404, fault(undefined, REQUEST, "No MCP server here"));
+    const origin = request.headers.get("origin");
+    const allowed = allowedOrigin(line, origin);
+    const { cors, preflight } = corsOf(request, allowed);
+    if (preflight) return preflight;
+    if (request.method !== "POST") {
+      return new Response(null, {
+        status: 405,
+        headers: { allow: "POST", "cache-control": "no-store" },
+      });
     }
-    // More tool calls than one caller may run at once could never be served: not a busy moment.
-    const calls = parsed.filter((m) => isObject(m) && m.method === "tools/call").length;
-    const most = line.limits.addressAtOnce;
-    if (caller && !caller.exempt && calls > most) {
-      return respond(
-        400,
-        fault(undefined, REQUEST, `A batch takes at most ${most} tool calls (addressAtOnce)`),
-      );
+    // A browser's page: only from an origin the line names (none, unless it says).
+    if (origin !== null && allowed === undefined) {
+      return respond(403, fault(undefined, REQUEST, "Not from this origin"));
     }
-    const bodies = [];
-    for (const message of parsed) {
-      const { body } = await answered(context, message, true);
-      if (body) bodies.push(body);
+    // Around the app's front, straight to it: refused, when the front vouches for callers.
+    const caller = callerFrom(request, callerOf({ resources }), line.exempt);
+    if (caller === "refused") {
+      return respond(403, fault(undefined, REQUEST, "Not through the app's front"), cors);
     }
-    // Every call in it busy: the batch is (and may be sent again).
-    const busyAll = bodies.length > 0 &&
-      bodies.every((b) => (b.error as { code?: number } | undefined)?.code === BUSY);
-    return bodies.length
-      ? respond(busyAll ? 503 : 200, bodies, busyAll ? AGAIN : {})
-      : respond(202);
-  }
-  const { status, body, again } = await answered(context, parsed, false);
-  return respond(status, body, again ? AGAIN : {});
-};
+    if (!/^application\/json\b/i.test(request.headers.get("content-type") ?? "")) {
+      return respond(415, fault(undefined, REQUEST, "Send JSON (application/json)"), cors);
+    }
+    const text = await bodyOf(request, line.limits.body);
+    if (text === undefined) return respond(413, fault(undefined, REQUEST, "Too large"), cors);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return respond(400, fault(undefined, PARSE, "Parse error"), cors);
+    }
+    const links = linksOf(resources);
+    if (!links) return respond(500, fault(undefined, INTERNAL, "Internal error"), cors);
+    const org = (resources.org as { id?: string } | undefined)?.id;
+    const context: Context = {
+      runtime,
+      line,
+      resources,
+      request,
+      caller,
+      scope: { line: line.name, ...(org ? { org } : {}), secrets: secretsOf(links) },
+      ...(resources.widgets ? { widgets: resources.widgets as Widgets } : {}),
+      origin: linksOf(resources)?.origin,
+    };
+    if (Array.isArray(parsed)) {
+      // Batches were MCP's only in 2025-03-26.
+      const version = request.headers.get("mcp-protocol-version") ?? UNSAID;
+      if (version !== UNSAID || !parsed.length || parsed.length > BATCH) {
+        return respond(
+          400,
+          fault(undefined, REQUEST, `One message a request (from 2025-03-26, ${BATCH} at most)`),
+          cors,
+        );
+      }
+      // More tool calls than one caller may run at once could never be served: not a busy moment.
+      const calls = parsed.filter((m) => isObject(m) && m.method === "tools/call").length;
+      const most = line.limits.addressAtOnce;
+      if (caller && !caller.exempt && calls > most) {
+        return respond(
+          400,
+          fault(undefined, REQUEST, `A batch takes at most ${most} tool calls (addressAtOnce)`),
+          cors,
+        );
+      }
+      const bodies = [];
+      for (const message of parsed) {
+        const { body } = await answered(context, message, true);
+        if (body) bodies.push(body);
+      }
+      // Every call in it busy: the batch is (and may be sent again).
+      const busyAll = bodies.length > 0 &&
+        bodies.every((b) => (b.error as { code?: number } | undefined)?.code === BUSY);
+      return bodies.length
+        ? respond(busyAll ? 503 : 200, bodies, busyAll ? { ...AGAIN, ...cors } : cors)
+        : respond(202, undefined, cors);
+    }
+    const { status, body, again } = await answered(context, parsed, false);
+    return respond(status, body, again ? { ...AGAIN, ...cors } : cors);
+  },
+  { crossOrigin: true },
+);
 
 /** A request's id, when it's one JSON-RPC takes. */
 const idOf = (id: unknown): Id | undefined =>
@@ -316,10 +371,13 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
     const wrong = headerProblem(c, method, params, said);
     if (wrong) return failed(400, rpc, wrong.code, wrong.message);
   }
-  const ok = (result: Record<string, unknown>): Answered => ({
-    status: 200,
-    body: { jsonrpc: "2.0", id: rpc, result: modern ? modernOf(c.line, result) : result },
-  });
+  const ok = (result: Record<string, unknown>, cache = false): Answered => {
+    const withCache = cache && modern ? { ...result, ttlMs: TTL_MS, cacheScope: "public" } : result;
+    return {
+      status: 200,
+      body: { jsonrpc: "2.0", id: rpc, result: modern ? modernOf(c.line, withCache) : withCache },
+    };
+  };
   // A method it doesn't have is a 404 to a modern client (MCP 2026-07-28); else errors in the body.
   const status = (code: number) => !batched && modern && code === METHOD ? 404 : 200;
   try {
@@ -338,9 +396,7 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
         const template = await templateOf(c.line, c.widgets, c.origin);
         return ok({
           tools: listed(c.line, c.resources, names, c.runtime.describe().actions, template?.uri),
-          ttlMs: TTL_MS,
-          cacheScope: "public",
-        });
+        }, true);
       }
       case "resources/list":
       case "resources/templates/list":
@@ -351,9 +407,9 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
         // Resources are the widgets' template: without widgets, there are none to ask about.
         if (!await withWidgets(c)) return failed(status(METHOD), rpc, METHOD, "Method not found");
         if (method === "resources/list") {
-          return ok(await resourcesListed(c.line, c.widgets, c.origin));
+          return ok(await resourcesListed(c.line, c.widgets, c.origin), true);
         }
-        if (method === "resources/templates/list") return ok({ resourceTemplates: [] });
+        if (method === "resources/templates/list") return ok({ resourceTemplates: [] }, true);
         const read = await resourceRead(c.line, c.widgets, c.origin, params.uri);
         if (!read) {
           return failed(
@@ -363,7 +419,7 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
             `No such resource: ${String(params.uri).slice(0, 200)}`,
           );
         }
-        return ok(read);
+        return ok(read, true);
       }
       case "tools/call": {
         const tool = params.name;

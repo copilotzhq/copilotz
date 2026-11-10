@@ -76,6 +76,11 @@ test("server/discover, modern: versions, tools, who it is, and every result says
     const listed = await s.modern("tools/list");
     assertEquals(listed.body.result?.resultType, "complete");
     assert(typeof listed.body.result?.ttlMs === "number");
+    assertEquals(listed.body.result?.cacheScope, "public");
+    // Handshake versions omit MCP 2026's cache fields.
+    const legacy = await s.legacy("tools/list");
+    assertEquals("ttlMs" in (legacy.body.result ?? {}), false);
+    assertEquals("cacheScope" in (legacy.body.result ?? {}), false);
   });
 });
 
@@ -106,12 +111,23 @@ test("Origin: a browser's page only from an origin the line names; none, unless 
       headers: { "mcp-protocol-version": "2025-11-25", origin },
     });
   await setup(async (s) => {
-    // The runtime's cross-site rule refuses an Origin that isn't the site's own, before the
-    // route: so the origin a line names that can reach it is the site's own (here, localhost).
-    assertEquals((await ping(s, "http://localhost")).status, 200);
+    // Stateless (no cookies read), so an external origin the line names reaches it with CORS.
+    const allowed = await ping(s, "https://client.example");
+    assertEquals(
+      [allowed.status, allowed.headers.get("access-control-allow-origin")],
+      [200, "https://client.example"],
+    );
+    const preflight = await s.post(undefined, {
+      method: "OPTIONS",
+      headers: { origin: "https://client.example" },
+    });
+    assertEquals(
+      [preflight.status, preflight.headers.get("access-control-allow-origin")],
+      [204, "https://client.example"],
+    );
     const other = await ping(s, "https://evil.example");
     assertEquals([other.status, other.body.id], [403, undefined]);
-  }, { line: { origins: ["http://localhost"] } });
+  }, { line: { origins: ["https://client.example"] } });
   await setup(async (s) => {
     for (
       const origin of [

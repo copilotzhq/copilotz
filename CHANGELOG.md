@@ -1,5 +1,17 @@
 ## Unreleased
 
+- **MCP 2026-07-28 cacheable results, widget read schemas, cross-origin MCP lines, and
+  `/.well-known/`:**
+  - `resources/list`, `resources/templates/list` and `resources/read` now include `ttlMs` and
+    `cacheScope` on MCP `2026-07-28` (`CacheableResult`), and handshake versions (`2025-11-25` and
+    earlier) omit them on `tools/list` and resource results where `CacheableResult` does not exist.
+  - Widget tool inputs (`_reads` and `copilotz_read`'s `reads`) now declare their `items` object
+    schema so strict MCP clients accept `tools/list` when widgets are enabled.
+  - Stateless routes (`Route.crossOrigin`) enforce their own `Origin` rules without reading session
+    cookies, so an MCP line's `origins` (including `"*"`) answers browser preflights (`OPTIONS`) and
+    cross-origin `POST`s with CORS headers while keeping no-browser-origin (`403`) as the default.
+  - `webPage`'s `/*` catch-all leaves `/.well-known/*` as `404` when no plugin serves a route there,
+    instead of answering discovery probes with the HTML page.
 - **A person's next message answers the question an agent waits on them for,** as the web says it
   does ("Waiting on your answer: your next message replies"). `chat.send` finds it when a message
   names none (`replyTo`): the newest question to its sender in that chat that an agent still waits

@@ -314,7 +314,11 @@ export const webPage: Plugin = definePlugin({
       });
     },
     "/*": async (request, { runtime }) => {
-      if (request.method !== "GET" || !navigating(request)) {
+      const path = new URL(request.url).pathname;
+      if (
+        request.method !== "GET" || !navigating(request) ||
+        path === "/.well-known" || path.startsWith("/.well-known/")
+      ) {
         return json({ error: "Not found" }, 404);
       }
       const served = of(runtime);

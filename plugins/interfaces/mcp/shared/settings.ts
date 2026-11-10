@@ -134,7 +134,7 @@ export type DeclaredServer = {
    * model isn't shown the field, and nobody else gets a chat there.
    */
   handles?: boolean;
-  /** The browser origins it answers (`Origin`): none unless said (no browser calls MCP). */
+  /** The browser origins it answers (`Origin`, or `"*"` for any): none unless said (no browser calls MCP). */
   origins?: string[];
   /**
    * Its widgets (with the app's `widgets` resource, `widgetsOf`): the template's options. A server
@@ -333,7 +333,9 @@ export function problemOf(
   const exempt = exemptProblem(line.exempt);
   if (exempt) return exempt;
   for (const origin of line.origins ?? []) {
-    if (!originOk(origin)) return `"${origin}" isn't an origin (https://example.com)`;
+    if (origin !== "*" && !originOk(origin)) {
+      return `"${origin}" isn't an origin (https://example.com, or "*")`;
+    }
   }
   const domain = line.widgets?.domain;
   if (

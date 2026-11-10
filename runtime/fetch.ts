@@ -18,7 +18,9 @@
  * - **The socket** (`/oxian`, and `<base>/oxian`): Oxian's worker protocol,
  *   for browsers (with a ticket), remote executors (with the key) and
  *   plugins' workers. The runtime accepts it itself (see `accept`).
- * - **Requests from other sites** are refused (403, see `crossSite`).
+ * - **Requests from other sites** are refused (403, see `crossSite`), except
+ *   on a route that checks `Origin` itself (`route.crossOrigin`, which reads
+ *   no session cookie).
  * - **`POST /connect`** (internal: the page's client): a one-time ticket for
  *   whoever the request is, `{ ticket, actor }`; 401 for anonymous, 429
  *   (with `retry-after`) past an actor's tickets a minute.
@@ -379,14 +381,15 @@ export function createFetch(deps: {
     site: URL,
   ): Promise<Response> => {
     const { entry, params } = found;
+    const stateless = entry.route.crossOrigin === true;
     try {
-      const actor = await whoOf(request, site);
+      const actor = stateless ? ANONYMOUS : await whoOf(request, site);
       const cookies = cookiesFor(request, site, resources, entry.plugin, owners);
       const response = await entry.route(request, {
         runtime: deps.runtime(),
         actor,
         params,
-        cookies,
+        cookies: stateless ? { ...cookies, get: () => undefined } : cookies,
       });
       if (!(response instanceof Response)) {
         throw new Error(`${entry.plugin}: routes["${entry.key}"] answered no Response`);
@@ -458,13 +461,25 @@ export function createFetch(deps: {
       if (own === false) return plain(404, "Not found");
     }
     if (path === SOCKET) return await socket(request, url);
-    if (crossSite(request, site)) {
-      return json({ error: "Not from this app's page" }, { status: 403 });
+    const otherSite = crossSite(request, site);
+    if (path === CONNECT) {
+      return otherSite
+        ? json({ error: "Not from this app's page" }, { status: 403 })
+        : await connect(inner, site);
     }
-    if (path === CONNECT) return await connect(inner, site);
-    if (path === API || path.startsWith(`${API}/`)) return await rest(inner, site);
+    if (path === API || path.startsWith(`${API}/`)) {
+      return otherSite
+        ? json({ error: "Not from this app's page" }, { status: 403 })
+        : await rest(inner, site);
+    }
     const found = matchRoute(table, at, { hosts: false });
-    if (found) return await answer(found, inner, site);
+    if (found) {
+      if (otherSite && !found.entry.route.crossOrigin) {
+        return json({ error: "Not from this app's page" }, { status: 403 });
+      }
+      return await answer(found, inner, site);
+    }
+    if (otherSite) return json({ error: "Not from this app's page" }, { status: 403 });
     if ((request.method === "GET" || request.method === "HEAD") && path === "/health") {
       return plain(200, "ok");
     }

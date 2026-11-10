@@ -140,16 +140,42 @@ test("tools say who calls them and which template draws them; resources are the 
     assertEquals(by("show_card")._meta!.ui.visibility, ["model", "app"]);
     assertEquals(by("write_card")._meta!.ui, { visibility: ["app"] });
     assertEquals(by("write_card")._meta!["openai/visibility"], "private");
-    assert("_grant" in by("write_card").inputSchema.properties!);
+    const writeProps = by("write_card").inputSchema.properties as Record<
+      string,
+      { items?: { type?: string } }
+    >;
+    assert("_grant" in writeProps);
+    assertEquals(writeProps._reads?.items?.type, "object");
+    const readProps = by("copilotz_read").inputSchema.properties as Record<
+      string,
+      { items?: { type?: string } }
+    >;
+    assertEquals(readProps.reads?.items?.type, "object");
     assertEquals(by("copilotz_read")._meta!.ui, { visibility: ["app"] });
     assertEquals(by("search")._meta!.ui, { visibility: ["model", "app"] });
 
     const init = await s.legacy("initialize", { protocolVersion: "2025-11-25" });
     assertEquals(res(init).capabilities, { tools: {}, resources: {} });
     const list = await s.legacy("resources/list");
+    assertEquals("ttlMs" in res(list), false);
     const [template] = res(list).resources;
     assertEquals([template.uri, template.mimeType], [uri, "text/html;profile=mcp-app"]);
     const read = await s.legacy("resources/read", { uri });
+    assertEquals("ttlMs" in res(read), false);
+    // Modern (2026-07-28): resources/list, resources/templates/list and resources/read carry CacheableResult.
+    for (
+      const [m, p] of [["resources/list", {}], ["resources/templates/list", {}], [
+        "resources/read",
+        { uri },
+      ]] as const
+    ) {
+      const modern = res(await s.modern(m, p));
+      assertEquals([modern.resultType, typeof modern.ttlMs, modern.cacheScope], [
+        "complete",
+        "number",
+        "public",
+      ]);
+    }
     const [page] = res(read).contents;
     assertEquals(page.mimeType, "text/html;profile=mcp-app");
     assertStringIncludes(page.text, '<html lang="pt-BR">');

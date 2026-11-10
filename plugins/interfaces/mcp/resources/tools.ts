@@ -164,6 +164,25 @@ function mcpHintsOf(line: Server, name: string, tool: Pick<Tool, "annotations">)
 export const GRANT = "_grant";
 export const READS = "_reads";
 
+/** One read a widget asks for (`readsOf` in widgets.ts): a named query on a collection, keyed. */
+const READ_ITEM = {
+  type: "object",
+  properties: {
+    key: { type: "string" },
+    read: {
+      type: "object",
+      properties: {
+        collection: { type: "string" },
+        query: { type: "string" },
+        params: { type: "object", additionalProperties: true },
+      },
+      additionalProperties: true,
+    },
+  },
+  required: ["key", "read"],
+  additionalProperties: false,
+} as const;
+
 /** An input as a widget's call takes it: with its grant (and, for an Action, reads to answer). */
 const forWidgets = (input: Schema, reads: boolean): Schema => ({
   ...input,
@@ -175,7 +194,14 @@ const forWidgets = (input: Schema, reads: boolean): Schema => ({
     },
     _call: { type: "string", description: "This call's own id: a retry of it sends the same." },
     ...(reads
-      ? { [READS]: { type: "array", maxItems: 32, description: "Reads to answer after it." } }
+      ? {
+        [READS]: {
+          type: "array",
+          maxItems: 32,
+          items: READ_ITEM,
+          description: "Reads to answer after it.",
+        },
+      }
       : {}),
   },
 });
@@ -187,7 +213,7 @@ const readTool = () => ({
   description: "What a widget of this app reads, as its conversation: named queries only.",
   inputSchema: forWidgets({
     type: "object",
-    properties: { reads: { type: "array", maxItems: 32 } },
+    properties: { reads: { type: "array", maxItems: 32, items: READ_ITEM } },
     required: ["reads"],
   }, false),
   annotations: {

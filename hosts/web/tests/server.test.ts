@@ -122,6 +122,11 @@ test("a page, its code, and what is not a page", async () => {
     const posted = await serve(new Request("http://localhost:8790/thread/t1", { method: "POST" }));
     assertEquals(posted.status, 404);
     await posted.body?.cancel();
+    // Machine discovery paths under /.well-known/ are never the HTML page.
+    const wellKnown = await serve(
+      new Request("http://localhost:8790/.well-known/oauth-protected-resource"),
+    );
+    assertEquals([wellKnown.status, await wellKnown.json()], [404, { error: "Not found" }]);
     const manifest = await serve(new Request("http://localhost:8790/manifest.webmanifest"));
     assertEquals(manifest.headers.get("content-type"), "application/manifest+json; charset=utf-8");
     assertEquals((await manifest.json()).name, "Test");

@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.38 — 2026-11-10
 
 - **MCP 2026-07-28 cacheable results, widget read schemas, cross-origin MCP lines, and
   `/.well-known/`:**

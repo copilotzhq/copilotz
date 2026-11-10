@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "1.0.0-rc.37",
+  "version": "1.0.0-rc.38",
   "exports": {
     ".": "./runtime/mod.ts",
     "./stores/memory": "./stores/memory/mod.ts",

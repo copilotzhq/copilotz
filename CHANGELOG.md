@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.37 — 2026-11-10
 
 **Upgrading.** The web shell says nine new words, which an app in another language gives under
 `shell.<key>` (its words test names any it lacks): `yourName` ("Your name"), `addYourName` ("Add

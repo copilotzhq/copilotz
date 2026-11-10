@@ -9,6 +9,8 @@ const personSchema = {
     picture: { type: "string" },
     /** Where each sign-in method knows them: `{ google: "1234" }`. */
     accounts: { type: "object", additionalProperties: { type: "string" } },
+    /** When they last chose their name, or none (`person.rename`): sign-ins leave it so. */
+    named: { type: "string" },
     at: { type: "string" },
   },
   required: ["at"],

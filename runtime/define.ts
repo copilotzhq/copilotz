@@ -213,9 +213,10 @@ export type ViewDef = (item: any, ctx: ViewContext<any>) => unknown;
 /**
  * Who looks: a View renders relative to it (your own messages, your bubbles).
  * `name` is who they are (a person's id); `label` what they're shown as, when
- * it isn't that (a person's own name, as they signed in).
+ * it isn't that (a person's own name); `email`, where the host knows it, the
+ * address they signed in with (what shows them when they have no name).
  */
-export type Viewer = { name: string; kind?: string; label?: string };
+export type Viewer = { name: string; kind?: string; label?: string; email?: string };
 
 export type RenderOptions = { viewer?: Viewer; hints?: Record<string, unknown> };
 

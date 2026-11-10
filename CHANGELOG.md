@@ -1,3 +1,33 @@
+## Unreleased
+
+**Upgrading.** The web shell says nine new words, which an app in another language gives under
+`shell.<key>` (its words test names any it lacks): `yourName` ("Your name"), `addYourName` ("Add
+your name"), `nameAbout` ("How people and agents here see you."), `nameLabel` ("Name"), `nameEmpty`
+("Leave it empty to go by your email."), `nameNotSaved` ("Your name wasn't saved. {reason}"),
+`nameTryAgain` ("Your name wasn't saved. Try again in a moment."), `cancel` ("Cancel") and `save`
+("Save").
+
+- **A person names themselves** (`person.rename` `{ name }`, identity's). Only a person, for
+  themselves, in person: never a contact, a key, an agent or a routine, and there's no one else to
+  name. The name is one line (spaces, tabs and breaks in a row are one space), trimmed, 80
+  characters at most (said plainly past that); empty, it's cleared, and they have none. It's what
+  everyone sees of them: their menu, home's greeting, the people beside them in a space, agents'
+  prompts (the spaces plugin's profile follows it, else their email's name, as before).
+- **Sign-ins keep the name a person chose,** or their having none: Google's sign-in, email's, and
+  the system's `person.set` (a directory's handoff into an org) no longer set it back. Until a
+  person chooses (their record's `named`: when they last did), sign-ins keep their name current as
+  before.
+- **The person's menu opens with their name,** "Your name" ("Add your name" with none), in a dialog:
+  the field holds it, selected, so typing replaces it; Enter saves; a live preview shows how they'll
+  appear; while it saves the field waits; a refusal is said under it and the dialog stays. So the
+  menu is always a menu now, with or without front ends' entries.
+- **The new name shows at once, everywhere, without reloading:** in this tab and their others. The
+  web host keeps the page's viewer as the person's own record says (it watches it: their name and
+  email), and draws again when it changes; Views read it as before (`ctx.viewer.label`).
+- **No name, no id:** with none, the menu shows the person's email (`ctx.viewer.email`, new, from
+  identity's `/me`), and home greets them plainly ("Good morning"). An app whose ids aren't names
+  (`01JD3X…`) showed the id in both.
+
 ## 1.0.0-rc.36 — 2026-11-10
 
 **Upgrading.** Chat has two tools of its own, `list_conversations` and `read_conversation`, for the

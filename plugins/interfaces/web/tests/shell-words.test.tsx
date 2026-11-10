@@ -63,8 +63,10 @@ function draw(): string {
       name="Ana"
       email="ana@example.com"
       menu={[{ label: "Connected accounts", href: "/accounts" }]}
+      call={noCall}
     />,
-    <Me name="Ana" />,
+    <Me name="Ana" call={noCall} />,
+    <Me email="ana@example.com" call={noCall} />,
     <Panels />,
     defaultView({ _id: "x" }, ctx({ of: "note" })),
     defaultView({ _id: "x", title: "Plan", body: "Hi" }, ctx({ of: "note" })),

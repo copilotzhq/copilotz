@@ -7,6 +7,10 @@
  * React, each part a component redrawn on its own. Where you are is the address: links are
  * followed without reloading, back and forward work, two tabs differ. The
  * connection is kept for `LazyView`, which observes a View on demand.
+ * Whom Views are shown to (`ctx.viewer`) is the person, by their name and
+ * email (identity's `GET /me`, asked while the ticket is), kept as their own
+ * record says: they rename themselves, here or in another tab, and the page
+ * draws again with the new name, without reloading.
  *
  * The page takes the app's theme from the first (signing in included): the
  * front ends' `theme` resources merged over the defaults, as CSS variables
@@ -27,7 +31,7 @@ import { type Client, connect } from "../../runtime/client.ts";
 import type { Observation, Plugins } from "../../runtime/mod.ts";
 import { registerWorker } from "./install.ts";
 import { Part } from "./part.tsx";
-import { session } from "./session.ts";
+import { followViewer, session, type Shown, viewerOf } from "./session.ts";
 import { SignIn, type Ways } from "./signin.tsx";
 import { inviteOf } from "./signin-email.tsx";
 import { signInPageOf } from "./signin-words.ts";
@@ -134,12 +138,11 @@ async function ticket(): Promise<{ ticket: string; actor: Who } | undefined> {
   return await answered(response, "couldntConnect");
 }
 
-/** What the person signed in is shown as: their name (identity's `/me`), else nothing. */
-async function nameOf(): Promise<string | undefined> {
+/** What identity's `/me` says the person signed in is shown as; nothing, for anyone else. */
+async function shownOf(): Promise<Shown> {
   const response = await fetch(`${config().base ?? ""}/me`).catch(() => undefined);
-  if (!response?.ok) return undefined;
-  const me = await response.json().catch(() => null) as { name?: unknown } | null;
-  return typeof me?.name === "string" && me.name ? me.name : undefined;
+  if (!response?.ok) return {};
+  return await response.json().catch(() => null) as Shown | null ?? {};
 }
 
 /**
@@ -208,15 +211,15 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     }
   }
   if (options.arrive) await arriving(options.arrive);
-  // Their name, asked while the ticket is: a person's, as they signed in.
-  const named = options.arrive ? Promise.resolve(undefined) : nameOf();
+  // Their name and email, asked while the ticket is: a person's, as they signed in.
+  const named = options.arrive ? Promise.resolve({}) : shownOf();
   const first = await ticket();
   if (!first) {
     draw(<SignIn signIn={await waysToSignIn()} page={signInPageOf(options.plugins)} />);
     return undefined;
   }
   const person = first.actor.kind === "person";
-  const name = person ? await named : undefined;
+  const me = person ? await named : {};
   let fresh: string | undefined = first.ticket;
   const url = options.url ??
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${
@@ -238,14 +241,9 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     plugins: options.plugins,
   });
   await client.ready;
-  // Who they are (a person by their id; a contact as messages name it), and their name.
-  const viewer = {
-    kind: first.actor.kind,
-    name: person ? first.actor.id : `${first.actor.kind}:${first.actor.id}`,
-    ...(name ? { label: name } : {}),
-  };
+  // Who they are (a person by their id; a contact as messages name it), their name and email.
   session.client = client;
-  session.viewer = viewer;
+  session.viewer = viewerOf(first.actor, me);
   let space = (await options.start?.(client, first.actor))?.space;
 
   let shown: Observation | undefined;
@@ -263,7 +261,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     const [kind, ...rest] = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
     const here = kind === "space" && rest.length ? rest.join("/") : space;
     const shell = client.observe("web.shell", where, {
-      viewer,
+      viewer: session.viewer,
       ...(here ? { actor: { ...first.actor, in: here } } : {}),
       part: (part, key) => <Part key={key} part={part} />,
     });
@@ -291,5 +289,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     go(link.pathname + link.search);
   });
   show();
+  // Renamed (here, or in another tab), every View draws again with their name as it is now.
+  if (person) followViewer(client, first.actor, show);
   return client;
 }

@@ -7,7 +7,8 @@
  * toolkit's `Page` does); a page that offers the panel, and the panel open,
  * keep their header's end clear of its button by `--copilotz-inset-end`.
  * Where a front end fills the `orgs` slot, the top of the sidebar makes room
- * for its switcher beside the app's mark; and the user menu.
+ * for its switcher beside the app's mark; and the user menu, with the dialog
+ * where the person names themselves.
  */
 export const STYLE = `
 .copilotz-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); height: 100dvh;
@@ -33,7 +34,8 @@ export const STYLE = `
   border-top: 1px solid var(--sidebar-border); }
 .copilotz-me-who { flex: 1; min-width: 0; display: grid; line-height: 1.25; }
 .copilotz-me-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.copilotz-me-note { font-size: 12px; color: var(--muted-foreground); }
+.copilotz-me-note { font-size: 12px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 .copilotz-stage { position: relative; display: flex; min-width: 0; min-height: 0; }
 .copilotz-main { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0;
   overflow: clip; outline: none; }
@@ -80,4 +82,9 @@ export const STYLE = `
   cursor: pointer; transition: background-color .12s; }
 .copilotz-me-button:hover, .copilotz-me-button[aria-expanded=true] { background: var(--sidebar-accent); }
 .copilotz-me-chevron { flex: none; color: var(--muted-foreground); }
+/* Their name, in a dialog: how they'll show, over the field */
+.copilotz-me-form { display: grid; gap: 16px; }
+.copilotz-me-preview { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 12px;
+  border: 1px solid var(--sidebar-border); border-radius: var(--radius-lg); background: var(--sidebar);
+  color: var(--sidebar-foreground); }
 `;

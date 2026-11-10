@@ -28,9 +28,18 @@ export const say = defineWords("shell", {
   showPanelTitled: "Show the {title} panel",
   hidePanelTitled: "Hide the {title} panel",
 
-  // The account menu (me.tsx)
+  // The account menu (me.tsx), and naming yourself there
   signedIn: "Signed in",
   yourAccount: "Your account",
+  yourName: "Your name",
+  addYourName: "Add your name",
+  nameAbout: "How people and agents here see you.",
+  nameLabel: "Name",
+  nameEmpty: "Leave it empty to go by your email.",
+  nameNotSaved: "Your name wasn't saved. {reason}",
+  nameTryAgain: "Your name wasn't saved. Try again in a moment.",
+  cancel: "Cancel",
+  save: "Save",
 
   // An address with nothing to show (shell.tsx, default.tsx)
   nothingHere: "Nothing here",

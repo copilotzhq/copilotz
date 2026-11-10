@@ -55,15 +55,8 @@ async function handOver(
   const at = now();
   const fresh = `${id}:thread`;
   const chat = `/thread/${encodeURIComponent(fresh)}?in=${encodeURIComponent(space)}`;
-  const from = `/thread/${encodeURIComponent(t.thread)}${
-    where ? `?in=${encodeURIComponent(where)}` : ""
-  }`;
   // Each end says which space the other is.
-  const spaces = as.db.collection<{ name?: string; kind?: string }>("space");
-  const called = async (id?: string) => {
-    const found = id ? await spaces.findOne({ _id: id }) : null;
-    return found?.kind === "personal" ? "Personal" : found?.name ?? "another space";
-  };
+  const { called, from } = ends(as, t, where);
   return {
     output: `Sent to ${to} in a new chat in that space (${chat})${
       input.expectReply === false ? "." : "; you'll have the reply before you continue."
@@ -93,6 +86,88 @@ async function handOver(
   };
 }
 
+/**
+ * Sends to a chat that's there already (`thread`): another of this space's, or
+ * one in another space, for the same person, who must be able to write there.
+ * Who answers is the agent named, if it answers there, else the chat's own;
+ * the answer comes back to the chat it was sent from (`back`), as a hand-over's
+ * does, and the message there says where it came from.
+ */
+async function toChat(
+  ctx: Context,
+  t: Turn,
+  id: string,
+  input: Record<string, unknown>,
+  thread: string,
+  where?: string,
+): Promise<Send> {
+  const fail = (why: string) => ({ output: `Not sent: ${why}` });
+  const principal = principalOf(ctx.actor);
+  if (!principal) return fail("you aren't working for anyone who could write there.");
+  // The chat as its person reaches it, wherever they are: the agent may work here only.
+  const as = ctx.as({ ...principal, in: undefined });
+  const chat = await as.db.collection<Thread>("thread").findOne({ _id: thread });
+  if (!chat) return fail(`there's no chat "${thread}" the person you work for can read.`);
+  const space = typeof input.space === "string" ? input.space : undefined;
+  if (space && chat.in && space !== chat.in) {
+    return fail(`that chat is in another space ("${chat.in}"), not "${space}".`);
+  }
+  if (chat.in) {
+    const can = await as.call<{ can: boolean }>("space.can", { space: chat.in, verb: "write" })
+      .then((r) => r.can, () => false);
+    if (!can) return fail("the person you work for can't write in that chat's space.");
+  }
+  const roster = await rosterOf(as, chat.in);
+  const own = (chat.agents ?? []).filter((name) => roster.open || roster.here.includes(name));
+  const to = String(input.to ?? "") || own[0] || roster.default[0] || roster.here[0];
+  if (!to) return fail("no agent answers in that chat.");
+  if (to === t.agent && chat.in === where) return fail("you can't message yourself here.");
+  if (!roster.open && !roster.here.includes(to)) {
+    return fail(`nobody called "${to}" answers there. You can message: ${roster.here.join(", ")}.`);
+  }
+  if (!starts(ctx, t.hops + 1)) {
+    return fail(
+      `this conversation reached its limit of ${settingsOf(ctx).maxHops} agent messages in a row.`,
+    );
+  }
+  const text = String(input.text ?? "");
+  if (!text) return fail("the message is empty.");
+  const { called, from } = ends(as, t, where);
+  const title = chat.title ? `"${chat.title.slice(0, 80)}"` : "that chat";
+  return {
+    output: `Sent to ${to} in ${title} (/thread/${encodeURIComponent(thread)}${
+      chat.in ? `?in=${encodeURIComponent(chat.in)}` : ""
+    })${input.expectReply === false ? "." : "; you'll have the reply before you continue."}`,
+    across: true,
+    message: {
+      _id: id,
+      thread,
+      ...(chat.in ? { in: chat.in } : {}),
+      from: t.agent,
+      to: [to],
+      text,
+      hops: t.hops + 1,
+      via: { kind: DELEGATED, name: (await called(where)).slice(0, 120), path: from },
+      back: { thread: t.thread, ...(where ? { in: where } : {}), from: await called(chat.in) },
+      ...(input.expectReply === false ? { expectReply: false } : {}),
+      at: now(),
+    },
+  };
+}
+
+/** What each end of a message sent elsewhere calls the other: a space's name, and the chat's path. */
+function ends(as: Context, t: Turn, where?: string) {
+  const spaces = as.db.collection<{ name?: string; kind?: string }>("space");
+  const called = async (id?: string) => {
+    const found = id ? await spaces.findOne({ _id: id }) : null;
+    return found?.kind === "personal" ? "Personal" : found?.name ?? "another space";
+  };
+  const from = `/thread/${encodeURIComponent(t.thread)}${
+    where ? `?in=${encodeURIComponent(where)}` : ""
+  }`;
+  return { called, from };
+}
+
 /** Checks a `send_message` call and builds what it writes; nothing is written yet. */
 export const prepare = async (
   ctx: Context,
@@ -106,6 +181,9 @@ export const prepare = async (
   /** The space the turn's thread is in: what it writes goes there too. */
   where?: string,
 ): Promise<Send> => {
+  // A chat that's there already, other than this one: wherever it is.
+  const chat = typeof input.thread === "string" && input.thread.trim() ? input.thread : undefined;
+  if (chat && chat !== t.thread) return await toChat(ctx, t, id, input, chat, where);
   const space = typeof input.space === "string" ? input.space : undefined;
   if (space && space !== where) return await handOver(ctx, t, step, id, input, space, where);
   if (space && !input.to) return { output: "Not sent: you're working in that space already." };
@@ -190,6 +268,10 @@ export function sendTool(others: [string, Agent][], people: string[]): LlmTool {
       "in: thread (here, for everyone), subthread (a side conversation hanging from your " +
       "message, where the recipient also sees this conversation so far), new_thread (a " +
       "separate conversation that starts from your message alone).",
+      "thread: a conversation that's there already, by its id (list_conversations lists them): another of " +
+      "this space's, or one in another space where the person you work for can write. Who " +
+      "answers there gets it (to, or the chat's own agent), it says where it came from, and " +
+      "the answer comes back here. Say everything needed: this conversation doesn't go along.",
       "space: to hand work that belongs to another space to who answers there, the id of one " +
       "your context lists: a new chat opens there, which its members see. to is optional, and " +
       "that may be you: you then work there as anyone there would, with that space's memories " +
@@ -204,6 +286,7 @@ export function sendTool(others: [string, Agent][], people: string[]): LlmTool {
         to: { type: "string", description: "One agent or person, by name." },
         text: { type: "string" },
         in: { type: "string", enum: ["thread", "subthread", "new_thread"] },
+        thread: { type: "string", description: "A chat that's there already, by its id." },
         space: { type: "string", description: "Another space's id, to hand work to its agents." },
         expectReply: { type: "boolean", description: "False for a message that needs no answer." },
       },

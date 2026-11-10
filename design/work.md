@@ -62,8 +62,9 @@ archiving, orgs. It gives `in` its meaning:
   the agent's memberships ∩ `in`, and what `in` draws on**, at most with the role `in` holds there
   (a viewer of Marketing reads it, never writes it).
 - **Ana's own Personal space is the exception:** only she sees what's said there, so her agents
-  there reach all she does, and labels mark what they bring in. That's where reaching across her
-  spaces is safe, and it keeps "private chats reach across all your spaces".
+  there reach all she does. That's where reaching across her spaces is safe, and it keeps "private
+  chats reach across all your spaces". What they do there for her is hers, under her authority: what
+  they write anywhere she may carries no label from there (see "Authority", below).
 - **A person acting themselves isn't narrowed,** nor is code acting as them for themselves (asking
   whether they may write somewhere): they reach what they reach from any page, and what they cause
   (a turn) is narrowed where it runs.
@@ -74,6 +75,29 @@ archiving, orgs. It gives `in` its meaning:
   in one space that draws on the others. No sets of spaces: what a space draws on is explicit,
   durable, and shown to its people ("Launch draws on: Marketing"), which a set carried on one call
   wouldn't be. Handing work to another space is the other way.
+
+## Authority: whoever asked (2026-11-10)
+
+An agent works under the authority of whoever asked it (`for`): it may do what they may, never more.
+What it reads is bounded by who will hear its answer: in a shared space, everyone there, so it
+reaches only that space and what it draws on; in its person's own Personal space, only them, so it
+reaches all they do. So Ana's Personal chat is her chief of staff, with her team there working for
+her across her spaces:
+
+- **Tools take a space** (`in`, an id the `elsewhere` context lists): conversations
+  (`list_conversations`, `read_conversation`), boards, documents, routines, `recall`. `workIn` (in
+  chat's contract) checks it with `space.can`, so a refusal says what to do instead of reading
+  empty.
+- **`send_message`'s `thread`** says something in a conversation that's there already, in any space
+  its person can write in: who answers there gets it, it says where it came from, and the answer
+  comes back, as a hand-over's does.
+- **Labels don't stop it:** what her agents write elsewhere for her from her Personal space is hers,
+  as if she'd written it, for whoever sees where it goes (`labels.write`, `ownPersonal`). Labels are
+  about what's read reaching people who can't see its source; they can't tell what she asked for
+  from what an agent did unasked, and she'd do the same herself. The record says who did it, for
+  whom, from where. In shared spaces nothing changes.
+- **Not yet:** from a shared space, writes elsewhere under the asker's authority (reads stay bounded
+  by who hears). It needs reach to say read and write apart.
 
 ## Reach, kept
 
@@ -175,8 +199,8 @@ machine agreed, medians within 3%.)
   grant's, and the turns they start find the person through `via`. `in` says where, not for whom.
 - **`shared`'s `contact` filter stays:** it keeps an agent's private steps from the contact in the
   same chat, which no space can say.
-- **Labels stay:** Ana's Personal space reaches across her spaces, a person's own writes aren't
-  narrowed, and chats move.
+- **Labels stay:** a person's own writes aren't narrowed, and chats move. (Work for Ana from her
+  Personal space no longer takes labels from there: it's hers. See "Authority".)
 - **`account.token`** stays internal and unchanged: whether outside assistants may use connected
   accounts is MCP sign-in's question.
 - **Queries run by plugin code** (`collection.query`) still don't ask `allow`: their reads keep to

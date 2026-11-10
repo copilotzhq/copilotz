@@ -1,3 +1,30 @@
+## Unreleased
+
+**Upgrading.** Chat has two tools of its own, `list_conversations` and `read_conversation`, for the
+agents that list them in their `tools`. An app that made its own tools under those names drops them
+and lists chat's, which do the same and take a space. A Personal space's agents now write elsewhere
+for their person without labels from there (below): an app that relied on that refusal says so in
+its own rules.
+
+- **Agents work under the authority of whoever asked** ([design](design/work.md), "Authority"). In a
+  person's own Personal space, where only they read the answers, their agents reach every space they
+  do, and now act there too. That makes the Personal chat a chief of staff:
+  - **Tools take a space** (`in`, its id, which the `elsewhere` context lists): `list_conversations`
+    and `read_conversation` (new, chat's own), boards (`list_boards`, `read_board`, `create_board`,
+    `create_card`, `update_card`, `move_card`), documents (`list_documents`, `read_document`,
+    `write_document`, `append_document`, `edit_document`), routines (`schedule_routine`,
+    `list_routines`, `cancel_routine`: a routine kept elsewhere starts a new conversation there each
+    run) and `recall`, as before. From a shared space they work only there and in what it draws on,
+    and say so (`workIn`, in the agents' contract, for apps' tools).
+  - **`send_message` takes `thread`:** a conversation that's there already, in this space or any
+    other the person can write in. Who answers there gets it (`to`, or the conversation's own
+    agent), it says where it came from, and the answer comes back, as a hand-over's does.
+  - **What they write elsewhere is the person's:** work for someone from their own Personal space
+    takes no labels from there (`labels.write`, `ownPersonal`). Before, everything an agent wrote
+    from Personal into a space others see was refused (`needs_share`), even a card the person asked
+    for. What's written in the Personal space itself keeps its marks (its conversation may move),
+    and labels guard shared spaces and contacts' chats as before.
+
 ## 1.0.0-rc.35 — 2026-11-09
 
 **Fixed: a retried call's nested calls.** A call run again under its id (a retry after a failure or

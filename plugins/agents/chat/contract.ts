@@ -48,6 +48,11 @@ export { tool } from "./shared/types.ts";
  */
 export { runTool, type ToolAt, type ToolRun, toolText } from "./shared/tools.ts";
 export { type Origin, originKey, originOf } from "./shared/origin.ts";
+/**
+ * Where a tool works: the space its call names (`in`), when the agent's work
+ * reaches it, else where its conversation is; or, in words, why it can't.
+ */
+export { workIn, type WorkVerb } from "./shared/where.ts";
 export type { AgentModel, AgentSource, Roster, RosterSource, Team } from "./shared/agents.ts";
 export { CONTACT_TEXT, MEDIA_TYPE, MEDIA_TYPE_LENGTH } from "./actions/send.ts";
 export type { ContactSend } from "./shared/contact-send.ts";

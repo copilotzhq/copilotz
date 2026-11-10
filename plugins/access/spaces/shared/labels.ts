@@ -10,6 +10,13 @@
  * to choose to show it there. Documents that are members (agents people
  * make, contacts) carry nothing: they're meant for whoever they work with.
  *
+ * What's written elsewhere for someone from their own Personal space carries
+ * nothing either: only they see what's said there, and what their agents do
+ * there for them, anywhere they may, is theirs, as if they'd done it (an
+ * assistant they asked in private), for whoever sees where it goes. The record
+ * says who did it, for whom, and from where. What's written in the Personal
+ * space itself keeps its marks, for the day its conversation moves.
+ *
  * A document that may be shared on its own (a chat: other collections'
  * documents are its parts) labels as itself, and so do its parts (a chat's
  * messages), so a write into one shared with someone outside its space (a
@@ -18,7 +25,7 @@
  */
 import type { Labels, ReadContext } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
-import { docKey, homeOf, reachOf } from "./reach.ts";
+import { docKey, homeOf, ownPersonal, reachOf } from "./reach.ts";
 import { nameOf, namesOf, PROFILE } from "./names.ts";
 import type { Shared } from "./rules.ts";
 
@@ -127,6 +134,10 @@ export const labels: Labels = {
     }
     const foreign = [...found];
     if (!foreign.length) return doc;
+    // Done elsewhere for someone from their own Personal space: theirs, as if they'd written it,
+    // for whoever sees where it goes (on the record as who did it, for them, from there). What's
+    // written in Personal itself keeps its marks: the conversation may move.
+    if (space !== actor.in && await ownPersonal(actor, ctx)) return doc;
     // Where it works (`in`): an agent writing elsewhere what not everyone there can see is refused.
     const elsewhere = typeof actor.in === "string" && actor.in !== space;
     if (actor.kind === "agent" && (elsewhere || !shared!.labels)) {

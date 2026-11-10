@@ -48,7 +48,8 @@ Ana in her own space:
 `in` is opaque to the runtime, as `id` is. It carries it and records it, and a plugin gives it
 meaning. With the access plugin, `in` is a space, and an agent's work for a person reaches only what
 the person reaches, within the agent's own memberships, in that space and what it draws on. In the
-person's own Personal space, that's everything they reach. The decisions behind this are in
+person's own Personal space, that's everything they reach, and what its agents do there for them is
+theirs, wherever it goes: their chief of staff. The decisions behind this are in
 [the work design](../design/work.md).
 
 ## One call, end to end

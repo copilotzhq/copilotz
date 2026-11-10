@@ -13,6 +13,10 @@
  * - An agent that sent messages expecting replies stops, leaving a `wait`
  *   document. Each reply checks itself off; the last one resumes the agent
  *   with every reply in its history. Waiting holds nothing open.
+ * - Agents read other conversations (`list_conversations`, `read_conversation`)
+ *   and say something in one that's there already (send_message's `thread`):
+ *   in their space, or, from their person's Personal space, in any space the
+ *   person reaches, as that person may (design/work.md, "Authority").
  * - People are reached the same way: a question to a person waits until they
  *   reply to it. So does a tool that needs a person's answer to go on (a yes
  *   to run a command, `ctx.ask`): its turn waits with the step's other
@@ -111,6 +115,7 @@ import { historyView } from "./views/history.ts";
 import { messageView } from "./views/message.ts";
 import { participants } from "./views/participants.ts";
 import { prompt } from "./views/prompt.ts";
+import { chatTools } from "./resources/tools.ts";
 
 export * from "./contract.ts";
 export { lineage } from "./shared/lineage.ts";
@@ -163,6 +168,8 @@ export const chat: Plugin = definePlugin({
   // Files uploaded to send that no message sent within a day go.
   schedules: { "chat.prune": { every: "1h", call: "chat.prune", input: {} } },
   resources: {
+    // Agents' own: the latest chats where they work (or another space they reach), and reading one.
+    tools: chatTools,
     // Conversations by title on Usage.
     usageNames: { thread: { tag: "tags.thread", collection: "thread", field: "title" } },
     // With the access plugin, chats live in spaces, and what's in a chat comes with it when it's

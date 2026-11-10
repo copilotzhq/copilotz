@@ -9,7 +9,13 @@
  * the document (`[Title](/document/<id>)`), so agents link it too.
  */
 import { namesFor } from "copilotz/plugins/access/contract";
-import { type Thread, type Tool, tool, type ToolContext } from "copilotz/plugins/agents/contract";
+import {
+  type Thread,
+  type Tool,
+  tool,
+  type ToolContext,
+  workIn,
+} from "copilotz/plugins/agents/contract";
 import type { Document } from "../collections/document.ts";
 import { type DocumentVersion, versionId } from "../collections/document-version.ts";
 import { excerptOf, forOf, kb, keyOf, LIMIT, TITLE } from "../shared/text.ts";
@@ -86,9 +92,11 @@ async function change(
   name: string,
   how: (doc: Document) => { title?: string; text: string } | string,
   kind: DocumentVersion["kind"],
+  there?: string,
 ): Promise<string> {
-  const space = ctx.in;
-  if (!space) return "This conversation isn't in a space: there are no documents here.";
+  const where = await workIn(ctx, there, "write");
+  if (typeof where === "string") return where;
+  const space = where.in;
   try {
     return await ctx.transaction(async (tx) => {
       const doc = await named(tx.db as Db, space, name);
@@ -109,15 +117,24 @@ async function change(
   }
 }
 
+/** Each tool works here, or in another space its work reaches. */
+const ELSEWHERE = " In another space you can work in, give in (its id).";
+
 const listDocuments = tool({
   offer: inSpace,
   description: "List this space's documents, latest saved first: each one's title (a link to " +
     "it), version, size, who saved it last and when, and how it opens. Read one with " +
-    "read_document before you change it.",
-  input: { type: "object", properties: {} },
-  run: async (_, ctx) => {
-    const space = ctx.in;
-    if (!space) return "This conversation isn't in a space: there are no documents here.";
+    "read_document before you change it." + ELSEWHERE,
+  input: {
+    type: "object",
+    properties: {
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
+    },
+  },
+  run: async ({ in: there }, ctx) => {
+    const where = await workIn(ctx, there);
+    if (typeof where === "string") return where;
+    const space = where.in;
     const docs = await ctx.db.collection<Document>("document").find({ in: space }, {
       sort: { savedAt: -1 },
     });
@@ -138,18 +155,20 @@ const listDocuments = tool({
 const readDocument = tool({
   offer: inSpace,
   description: "Read a document of this space, by its title or id: its text (Markdown), with " +
-    "its version and who saved it. With version, an older one, as it was then.",
+    "its version and who saved it. With version, an older one, as it was then." + ELSEWHERE,
   input: {
     type: "object",
     properties: {
       document: { type: "string", minLength: 1, description: "Its title or id." },
       version: { type: "integer", minimum: 1, description: "An older version (default: now)." },
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
     },
     required: ["document"],
   },
-  run: async ({ document, version }, ctx) => {
-    const space = ctx.in;
-    if (!space) return "This conversation isn't in a space: there are no documents here.";
+  run: async ({ document, version, in: there }, ctx) => {
+    const where = await workIn(ctx, there);
+    if (typeof where === "string") return where;
+    const space = where.in;
     const doc = await named(ctx.db, space, document);
     if (typeof doc === "string") return doc;
     const name = agentNamer(ctx);
@@ -179,10 +198,11 @@ const writeDocument = tool({
   offer: inSpace,
   description: "Make a new document in this space (title and text), or, naming one with " +
     "document, replace its whole text (and title, if given). To change part of one, prefer " +
-    "edit_document or append_document: they keep what others wrote. Markdown.",
+    "edit_document or append_document: they keep what others wrote. Markdown." + ELSEWHERE,
   input: {
     type: "object",
     properties: {
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
       title: { type: "string", maxLength: TITLE, description: "Its title." },
       text: { type: "string", maxLength: 4 * LIMIT, description: "Its whole text, in Markdown." },
       document: {
@@ -192,17 +212,19 @@ const writeDocument = tool({
     },
     required: ["text"],
   },
-  run: async ({ title, text, document }, ctx) => {
+  run: async ({ title, text, document, in: there }, ctx) => {
     if (document) {
       return await change(
         ctx,
         document,
         () => ({ title: title?.trim() || undefined, text }),
         "write",
+        there,
       );
     }
-    const space = ctx.in;
-    if (!space) return "This conversation isn't in a space: there's nowhere to write.";
+    const where = await workIn(ctx, there, "write");
+    if (typeof where === "string") return where;
+    const space = where.in;
     const name = title?.trim();
     if (!name) return "A new document needs a title.";
     try {
@@ -226,50 +248,64 @@ const writeDocument = tool({
 const appendDocument = tool({
   offer: inSpace,
   description: "Add text to the end of a document of this space (by its title or id), after a " +
-    "blank line. Markdown.",
+    "blank line. Markdown." + ELSEWHERE,
   input: {
     type: "object",
     properties: {
       document: { type: "string", minLength: 1, description: "Its title or id." },
       text: { type: "string", minLength: 1, maxLength: 4 * LIMIT },
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
     },
     required: ["document", "text"],
   },
-  run: ({ document, text }, ctx) =>
-    change(ctx, document, (doc) => {
-      const was = doc.text.replace(/\s+$/, "");
-      return { text: was ? `${was}\n\n${text.replace(/^\n+/, "")}` : text };
-    }, "append"),
+  run: ({ document, text, in: there }, ctx) =>
+    change(
+      ctx,
+      document,
+      (doc) => {
+        const was = doc.text.replace(/\s+$/, "");
+        return { text: was ? `${was}\n\n${text.replace(/^\n+/, "")}` : text };
+      },
+      "append",
+      there,
+    ),
 });
 
 const editDocument = tool({
   offer: inSpace,
   description: "Change part of a document of this space (by its title or id): replace text " +
     "that occurs exactly once in it (old, copied exactly, with enough around it to be " +
-    "unique) with new text. Read it first.",
+    "unique) with new text. Read it first." + ELSEWHERE,
   input: {
     type: "object",
     properties: {
       document: { type: "string", minLength: 1, description: "Its title or id." },
       old: { type: "string", minLength: 1, description: "The text to replace, exactly." },
       new: { type: "string", description: "What goes in its place." },
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
     },
     required: ["document", "old", "new"],
   },
-  run: ({ document, old, new: next }, ctx) =>
-    change(ctx, document, (doc) => {
-      const at = doc.text.indexOf(old);
-      if (at < 0) {
-        return `The text to replace isn't in ${link(doc)}: read it again (read_document) and ` +
-          "copy it exactly.";
-      }
-      if (doc.text.indexOf(old, at + 1) >= 0) {
-        const times = doc.text.split(old).length - 1;
-        return `The text to replace occurs ${times > 1 ? `${times} times` : "more than once"} ` +
-          `in ${link(doc)}: give more of what's around it.`;
-      }
-      return { text: doc.text.slice(0, at) + next + doc.text.slice(at + old.length) };
-    }, "edit"),
+  run: ({ document, old, new: next, in: there }, ctx) =>
+    change(
+      ctx,
+      document,
+      (doc) => {
+        const at = doc.text.indexOf(old);
+        if (at < 0) {
+          return `The text to replace isn't in ${link(doc)}: read it again (read_document) and ` +
+            "copy it exactly.";
+        }
+        if (doc.text.indexOf(old, at + 1) >= 0) {
+          const times = doc.text.split(old).length - 1;
+          return `The text to replace occurs ${times > 1 ? `${times} times` : "more than once"} ` +
+            `in ${link(doc)}: give more of what's around it.`;
+        }
+        return { text: doc.text.slice(0, at) + next + doc.text.slice(at + old.length) };
+      },
+      "edit",
+      there,
+    ),
 });
 
 export const tools: Record<string, Tool> = {

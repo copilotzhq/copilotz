@@ -9,7 +9,13 @@
  * who's in the space. Answers are short and name the board with its link.
  */
 import { namesFor } from "copilotz/plugins/access/contract";
-import { type Thread, type Tool, tool, type ToolContext } from "copilotz/plugins/agents/contract";
+import {
+  type Thread,
+  type Tool,
+  tool,
+  type ToolContext,
+  workIn,
+} from "copilotz/plugins/agents/contract";
 import type { Board, Card, Column } from "../contract.ts";
 import { columnOf, fold, stageOf } from "../shared/columns.ts";
 import { dueSaid, todayOf } from "../shared/dates.ts";
@@ -21,7 +27,8 @@ type Ctx = ToolContext;
 
 const inSpace = (_agent: string, thread: Thread) => !!thread.in;
 
-const NOWHERE = "This conversation isn't in a space, so there's no board here.";
+/** Each tool works here, or in another space its work reaches. */
+const ELSEWHERE = " In another space you can work in, give in (its id).";
 
 /** At most `most` characters of `text`, on one line. */
 const gist = (text: string | undefined, most = 160) => {
@@ -136,11 +143,17 @@ function cardLine(
 const listBoards = tool({
   offer: inSpace,
   description: "List the boards in this conversation's space: each one's name, link, and how " +
-    "many cards are in each column. Read one with read_board.",
-  input: { type: "object", properties: {} },
-  run: async (_, ctx) => {
-    const space = ctx.in;
-    if (!space) return NOWHERE;
+    "many cards are in each column. Read one with read_board." + ELSEWHERE,
+  input: {
+    type: "object",
+    properties: {
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
+    },
+  },
+  run: async (input, ctx) => {
+    const where = await workIn(ctx, input.in, "read");
+    if (typeof where === "string") return where;
+    const space = where.in;
     const boards = await boardsOf(ctx, space);
     if (!boards.length) return "No boards in this space yet. Make one with create_board.";
     const cards = await ctx.db.collection<Card>("card").find({ in: space });
@@ -158,7 +171,9 @@ const listBoards = tool({
     const active = boards.filter((b) => !b.archived);
     const archived = boards.filter((b) => b.archived);
     return [
-      `${active.length} board${active.length === 1 ? "" : "s"} in this space:`,
+      `${active.length} board${active.length === 1 ? "" : "s"} in ${
+        space === ctx.in ? "this" : "that"
+      } space:`,
       ...active.map(line),
       ...(archived.length ? ["Archived:", ...archived.map(line)] : []),
     ].join("\n");
@@ -169,14 +184,18 @@ const readBoard = tool({
   offer: inSpace,
   description: "Read a board in this space (by its name or id; without one, the space's " +
     "first): its columns in order, with their cards, each with its id, title, owner, labels, " +
-    "due date and a line of its description. Read it before you change it.",
+    "due date and a line of its description. Read it before you change it." + ELSEWHERE,
   input: {
     type: "object",
-    properties: { board: { type: "string", description: "Its name or id." } },
+    properties: {
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
+      board: { type: "string", description: "Its name or id." },
+    },
   },
-  run: async ({ board: typed }, ctx) => {
-    const space = ctx.in;
-    if (!space) return NOWHERE;
+  run: async ({ board: typed, in: there }, ctx) => {
+    const where = await workIn(ctx, there, "read");
+    if (typeof where === "string") return where;
+    const space = where.in;
     const board = await boardNamed(ctx, space, typed);
     if (typeof board === "string") return board;
     const [cards, people] = await Promise.all([
@@ -220,10 +239,12 @@ const readBoard = tool({
 const createBoard = tool({
   offer: inSpace,
   description: "Make a board in this space, for work that takes more than one step. It starts " +
-    "with Backlog, To do, Doing, Blocked, In review and Done, unless you name its columns.",
+    "with Backlog, To do, Doing, Blocked, In review and Done, unless you name its columns." +
+    ELSEWHERE,
   input: {
     type: "object",
     properties: {
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
       name: { type: "string", minLength: 1, maxLength: 80 },
       description: { type: "string", description: "What it's for, in a line or two." },
       columns: {
@@ -234,9 +255,10 @@ const createBoard = tool({
     },
     required: ["name"],
   },
-  run: async ({ name, description, columns }, ctx) => {
-    const space = ctx.in;
-    if (!space) return NOWHERE;
+  run: async ({ name, description, columns, in: there }, ctx) => {
+    const where = await workIn(ctx, there, "write");
+    if (typeof where === "string") return where;
+    const space = where.in;
     try {
       const made = await ctx.call<{ board: string; name: string; columns: Column[] }>(
         "board.create",
@@ -259,10 +281,12 @@ const createCard = tool({
   offer: inSpace,
   description: "Add a card to a board in this space: one real outcome, with its owner " +
     "(assignee), what done looks like and any blocker in its description, and an honest " +
-    "column. The board is the space's first unless you name one; the column, its first.",
+    "column. The board is the space's first unless you name one; the column, its first." +
+    ELSEWHERE,
   input: {
     type: "object",
     properties: {
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
       title: { type: "string", minLength: 1, maxLength: 300 },
       board: { type: "string", description: "The board's name or id." },
       column: { type: "string", description: "The column's name or id." },
@@ -285,8 +309,9 @@ const createCard = tool({
     required: ["title"],
   },
   run: async (input, ctx) => {
-    const space = ctx.in;
-    if (!space) return NOWHERE;
+    const where = await workIn(ctx, input.in, "write");
+    if (typeof where === "string") return where;
+    const space = where.in;
     const board = await boardNamed(ctx, space, input.board);
     if (typeof board === "string") return board;
     const column = input.column ? columnNamed(board, input.column) : board.columns[0];
@@ -323,10 +348,11 @@ const updateCard = tool({
   offer: inSpace,
   description: "Change a card in this space (by its id from read_board, or its title): its " +
     "title, description, assignee, labels (the whole set) or due date. An empty value, or " +
-    "null, clears one. Moving it is move_card.",
+    "null, clears one. Moving it is move_card." + ELSEWHERE,
   input: {
     type: "object",
     properties: {
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
       card: { type: "string", description: "Its id, or its title." },
       board: { type: "string", description: "The board's name or id, if the title is on several." },
       title: { type: "string", minLength: 1, maxLength: 300 },
@@ -341,8 +367,9 @@ const updateCard = tool({
     required: ["card"],
   },
   run: async (input, ctx) => {
-    const space = ctx.in;
-    if (!space) return NOWHERE;
+    const where = await workIn(ctx, input.in, "write");
+    if (typeof where === "string") return where;
+    const space = where.in;
     const board = input.board ? await boardNamed(ctx, space, input.board) : undefined;
     if (typeof board === "string") return board;
     const found = await cardFound(ctx, space, input.card, board);
@@ -395,10 +422,11 @@ const moveCard = tool({
   offer: inSpace,
   description: "Move a card in this space (by its id from read_board, or its title) to a " +
     "column of its board, by the column's name or id: when its state changes, not later. At " +
-    "the column's bottom unless you say top.",
+    "the column's bottom unless you say top." + ELSEWHERE,
   input: {
     type: "object",
     properties: {
+      in: { type: "string", description: "Another space, by its id (your context lists them)." },
       card: { type: "string", description: "Its id, or its title." },
       column: { type: "string", description: "The column's name or id." },
       board: { type: "string", description: "The board's name or id, if the title is on several." },
@@ -407,8 +435,9 @@ const moveCard = tool({
     required: ["card", "column"],
   },
   run: async (input, ctx) => {
-    const space = ctx.in;
-    if (!space) return NOWHERE;
+    const where = await workIn(ctx, input.in, "write");
+    if (typeof where === "string") return where;
+    const space = where.in;
     const board = input.board ? await boardNamed(ctx, space, input.board) : undefined;
     if (typeof board === "string") return board;
     const found = await cardFound(ctx, space, input.card, board);

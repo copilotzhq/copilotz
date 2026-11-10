@@ -140,7 +140,9 @@ A host calling for someone says where too: `runtime.call(action, input, { actor:
 or a client's `call(action, input, { in })`. What a page says is recorded, never proved, and a
 person's own reach isn't narrowed by it. An agent's reach is: its person's reach, within the spaces
 the agent is a member of, within `in` and what `in` draws on. In the person's own Personal space,
-their agents reach all they do. The access plugin keeps that rule ([design](../design/work.md)).
+their agents reach all they do, and what they write elsewhere for them there is theirs (no labels
+from there). Tools that take a space (`in`) work there: check it with `workIn` from the agents'
+contract. The access plugin keeps that rule ([design](../design/work.md)).
 
 From `copilotz`:
 
@@ -400,7 +402,8 @@ REST API at `/api/`) and plugins' routes. Hosts only listen: `Deno.serve(runtime
   The owner asks it on every op an actor's work makes. A collection no rule speaks for never reaches
   an outsider's own reads and writes (REST, the socket).
 - **`labels`** carries what a job read (a document's space) to what it then writes, so an answer
-  drawn from a space not everyone sees is marked.
+  drawn from a space not everyone sees is marked. Work done for someone from their own Personal
+  space carries nothing: it's theirs.
 
 The access plugin declares both, for the collections its `shared` resource names.
 

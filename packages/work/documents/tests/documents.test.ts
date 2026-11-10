@@ -637,3 +637,57 @@ test("people by their profiles' names; the id someone signed in with never shows
   assert.equal(nameOf("person:ana.lima@example.com"), "Ana Lima");
   assert.equal(nameOf("agent:north", (id) => id === "north" ? "North" : undefined), "North");
 });
+
+test("from Personal, an agent writes and reads another space's documents; from a shared one, it can't", async () => {
+  const rt = await start(memoryStore);
+  try {
+    const { space: personal } = await rt.call<{ space: string }>("space.personal", {}, {
+      actor: ana,
+    });
+    const { space: launch } = await rt.call<{ space: string }>("space.create", {
+      name: "Launch",
+    }, { actor: ana });
+    const ask = async (where: string, tool: string, input: Record<string, unknown>) => {
+      await rt.call("chat.send", { in: where, text: `call ${tool} ${JSON.stringify(input)}` }, {
+        actor: ana,
+      });
+      await rt.idle();
+      const said = outputs.splice(0);
+      assert.equal(said.length, 1, `${tool} answered ${said.length} times`);
+      return said[0];
+    };
+
+    // From ana's Personal space: Launch's documents, as she'd keep them.
+    assert.match(
+      await ask(personal, "write_document", { in: launch, title: "Brief", text: "Ship it" }),
+      /^Made \[Brief\]/,
+    );
+    const there = await rt.call<Document[]>("test.peek", {
+      collection: "document",
+      filter: { in: launch },
+    }, { actor: ana });
+    assert.deepEqual(there.map((d) => [d.title, d.in]), [["Brief", launch]]);
+    assert.match(await ask(personal, "list_documents", { in: launch }), /Brief/);
+    assert.match(
+      await ask(personal, "append_document", { in: launch, document: "Brief", text: "Friday" }),
+      /^Saved \[Brief\].* as version 2/,
+    );
+    assert.match(await ask(personal, "read_document", { in: launch, document: "Brief" }), /Friday/);
+
+    // From a space ana shares with bob: only that space.
+    const { space: team } = await rt.call<{ space: string }>("space.create", { name: "Team" }, {
+      actor: ana,
+    });
+    await join(rt, team, bob, "editor");
+    assert.match(
+      await ask(team, "read_document", { in: launch, document: "Brief" }),
+      /You can't read the space/,
+    );
+    assert.match(
+      await ask(team, "write_document", { in: launch, title: "Leak", text: "x" }),
+      /You can't change anything in the space/,
+    );
+  } finally {
+    await rt.close();
+  }
+});

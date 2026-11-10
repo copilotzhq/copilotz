@@ -1,0 +1,217 @@
+/**
+ * An agent in its person's Personal space works across their spaces, as they
+ * can: it lists and reads the chats of another space, says something in one
+ * (send_message's `thread`: who answers there gets it, and the answer comes
+ * back), and keeps a routine there. From a shared space it reaches only that
+ * space, and says so. Sending to a chat needs its person to be able to write
+ * there, wherever the agent is.
+ */
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
+import { memoryStore } from "../../../stores/memory/mod.ts";
+import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
+import { chat, type Message } from "../chat/mod.ts";
+import { routines } from "../routines/mod.ts";
+import type { Routine } from "../routines/collections/routine.ts";
+import { access } from "../../access/mod.ts";
+import { join } from "../../access/tests/join.ts";
+import { test } from "../../../testing/mod.ts";
+
+const ana: Actor = { kind: "person", id: "ana" };
+const bob: Actor = { kind: "person", id: "bob" };
+const text = (m: LlmMessage) => "text" in m ? m.text ?? "" : "";
+
+/** What each tool call returned, by agent, in order. */
+let got: Record<string, string[]> = {};
+
+/**
+ * "do <tool> <json>" calls that tool with that input; what it returns, the agent says
+ * ("<agent> got: …"); anything else, it says it heard it.
+ */
+const script: LlmAdapter = {
+  async *generate({ messages, connection }) {
+    const agent = connection.model;
+    const last = messages.at(-1)!;
+    if (last.role === "tool") {
+      (got[agent] ??= []).push(text(last));
+      yield { type: "text", text: `${agent} got: ${text(last).slice(0, 300)}` };
+      return;
+    }
+    const heard = text(messages.filter((m) => !text(m).startsWith("<context")).at(-1)!);
+    const call = heard.match(/do (\w+) (\{.*\})\s*$/s);
+    if (call) {
+      yield {
+        type: "tool_call",
+        call: { id: crypto.randomUUID(), name: call[1], input: JSON.parse(call[2]) },
+      };
+    } else yield { type: "text", text: `${agent} heard: ${heard.slice(-80)}` };
+  },
+};
+
+const app = definePlugin({
+  name: "app",
+  adapters: { llm: { s: script } },
+  resources: {
+    shared: { thread: {}, message: { labels: true } },
+    provider: { s: { adapter: "s" } },
+    agents: {
+      north: {
+        instructions: "n",
+        model: "s/north",
+        default: true,
+        tools: ["send_message", "list_conversations", "read_conversation", "schedule_routine"],
+      },
+      east: { instructions: "e", model: "s/east", tools: [] },
+    },
+  },
+});
+
+async function setup(
+  fn: (s: {
+    rt: Awaited<ReturnType<typeof createRuntime>>;
+    personal: string;
+    launch: string;
+    /** Launch's chat, where east answered ana. */
+    there: string;
+    say: (said: string, where: { in?: string; thread?: string }) => Promise<string>;
+    history: (thread: string, actor?: Actor) => Promise<Message[]>;
+  }) => Promise<void>,
+) {
+  got = {};
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [models, chat, ...access, routines, app],
+  });
+  try {
+    const { space: personal } = await rt.call<{ space: string }>("space.personal", {}, {
+      actor: ana,
+    });
+    // Launch: east answers there; north is a member too, as an app's core agents are.
+    const { space: launch } = await rt.call<{ space: string }>("space.create", {
+      name: "Launch",
+    }, { actor: ana });
+    await rt.call("member.set", {
+      space: launch,
+      member: { kind: "agent", id: "east" },
+      role: "editor",
+    }, { actor: ana });
+    const say = async (said: string, where: { in?: string; thread?: string }) => {
+      // Without a chat or a space: a new chat in ana's Personal space.
+      const { thread } = await rt.call<{ thread: string }>("chat.send", {
+        text: said,
+        ...(where.thread || where.in ? where : { in: personal }),
+      }, { actor: ana });
+      await rt.idle();
+      return thread;
+    };
+    const there = await say("@east how's the launch going?", { in: launch });
+    await fn({
+      rt,
+      personal,
+      launch,
+      there,
+      say,
+      history: (thread, actor = ana) =>
+        rt.query<Message[]>("message.history", { thread }, { actor }),
+    });
+  } finally {
+    await rt.close();
+  }
+}
+
+test("from Personal, an agent lists and reads another space's chats, and says something in one", async () => {
+  await setup(async ({ launch, there, say, history }) => {
+    // Its chats, there: their ids, titles and latest.
+    const here = await say(`do list_conversations {"in":"${launch}"}`, {});
+    assertStringIncludes(got.north[0], `- ${there}`);
+    assertStringIncludes(got.north[0], "how's the launch going?");
+    assertStringIncludes(got.north[0], "east");
+    // What was said there, without east's private steps.
+    await say(`do read_conversation {"conversation":"${there}"}`, { thread: here });
+    assertStringIncludes(got.north[1], "how's the launch going?");
+    assertStringIncludes(got.north[1], "east heard:");
+
+    // Saying something there: east answers there, and the answer comes back here.
+    await say(
+      `do send_message {"thread":"${there}","text":"Ana wants the launch date by Friday."}`,
+      { thread: here },
+    );
+    // Its turn waited for the answer: what it read next was east's, not the tool's output.
+    const launchSaid = await history(there);
+    const sent = launchSaid.find((m) => m.from === "north" && m.text?.includes("by Friday"))!;
+    assertEquals([sent.to, sent.in, sent.via?.name], [["east"], launch, "Personal"]);
+    assert(launchSaid.some((m) => m.from === "east" && m.text?.includes("by Friday")));
+    const mine = await history(here);
+    const back = mine.find((m) => m.from === "east" && m.to.includes("north"))!;
+    assertStringIncludes(back.text!, "by Friday");
+    // North went on from the answer, to ana.
+    const last = mine.at(-1)!;
+    assertEquals([last.from, last.to], ["north", ["ana"]]);
+    assertStringIncludes(last.text!, "north heard:");
+  });
+});
+
+test("another chat of the same space: said there, answered back", async () => {
+  await setup(async ({ rt, personal, say, history }) => {
+    await rt.call("member.set", {
+      space: personal,
+      member: { kind: "agent", id: "east" },
+      role: "editor",
+    }, { actor: ana });
+    const other = await say("@east a note for later", { in: personal });
+    const here = await say(
+      `do send_message {"thread":"${other}","to":"east","text":"Anything new?"}`,
+      { in: personal },
+    );
+    assert((await history(other)).some((m) => m.from === "north" && m.text === "Anything new?"));
+    assert(
+      (await history(here)).some((m) => m.from === "east" && m.text?.includes("Anything new?")),
+    );
+  });
+});
+
+test("from Personal, a routine kept in another space starts a chat there each run", async () => {
+  await setup(async ({ rt, launch, say }) => {
+    await say(
+      `do schedule_routine {"in":"${launch}","name":"Launch check","text":"How's it going?",` +
+        `"agent":"east","schedule":{"kind":"daily","time":"09:00","timezone":"UTC"}}`,
+      {},
+    );
+    assertStringIncludes(got.north[0], "Made it");
+    const [kept] = await rt.query<Routine[]>("routine.list", { in: launch }, { actor: ana });
+    assertEquals([kept.name, kept.in, kept.post], ["Launch check", launch, "new"]);
+  });
+});
+
+test("from a shared space, an agent reaches only that space, and says how to get work done elsewhere", async () => {
+  await setup(async ({ rt, launch, personal, say }) => {
+    // A space ana shares with bob: north there reaches only it.
+    const { space: shared } = await rt.call<{ space: string }>("space.create", {
+      name: "Team",
+    }, { actor: ana });
+    await join(rt, shared, bob, "editor", ana);
+    await say(`do list_conversations {"in":"${launch}"}`, { in: shared });
+    assertStringIncludes(
+      got.north[0],
+      `You can't read the space "${launch}" from this conversation`,
+    );
+    await say(`do list_conversations {"in":"${personal}"}`, { in: shared });
+    assertStringIncludes(got.north[1], "You can't read the space");
+  });
+});
+
+test("a chat its person can't write in is refused, wherever the agent is", async () => {
+  await setup(async ({ rt, say }) => {
+    // Bob's own space, which ana isn't in: no chat of it is hers to read, or write in.
+    const { space: bobs } = await rt.call<{ space: string }>("space.create", { name: "Bob's" }, {
+      actor: bob,
+    });
+    const { thread: his } = await rt.call<{ thread: string }>("chat.send", {
+      text: "hi",
+      in: bobs,
+    }, { actor: bob });
+    await rt.idle();
+    await say(`do send_message {"thread":"${his}","text":"hello"}`, {});
+    assertStringIncludes(got.north[0], `Not sent: there's no chat "${his}"`);
+  });
+});

@@ -1,3 +1,15 @@
+## Unreleased
+
+- **A person's next message answers the question an agent waits on them for,** as the web says it
+  does ("Waiting on your answer: your next message replies"). `chat.send` finds it when a message
+  names none (`replyTo`): the newest question to its sender in that chat that an agent still waits
+  on; else one asked of them elsewhere by an agent whose turn waits in that chat, so what they tell
+  it there resumes that turn instead of starting a second one beside it. Never for a message sent
+  for them (`via`: a routine's), nor to an agent it doesn't go to (`to`, `@mentions`). Until now
+  only WhatsApp found it (its own lookup is gone; a quoted message still names what it answers): on
+  the web, an answer in the chat an agent opened to ask went to nobody, and the asking turn, with
+  whatever waited on it (an answer to hand back to another space), never resumed.
+
 ## 1.0.0-rc.37 — 2026-11-10
 
 **Upgrading.** The web shell says nine new words, which an app in another language gives under

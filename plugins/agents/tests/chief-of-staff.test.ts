@@ -215,3 +215,52 @@ test("a chat its person can't write in is refused, wherever the agent is", async
     assertStringIncludes(got.north[0], `Not sent: there's no chat "${his}"`);
   });
 });
+
+/**
+ * Personal's north says something in a chat of Launch, where north answers it there: and that
+ * north asks ana something, in a chat of its own. However she answers, its turn there resumes,
+ * and what it then says comes back to Personal.
+ */
+async function handedAndAsked(
+  { there, say }: {
+    there: string;
+    say: (said: string, where: { thread?: string }) => Promise<string>;
+  },
+) {
+  const ask = `do send_message ${
+    JSON.stringify({ to: "ana", in: "new_thread", text: "Which color?" })
+  }`;
+  return await say(
+    `do send_message ${JSON.stringify({ thread: there, to: "north", text: ask })}`,
+    {},
+  );
+}
+
+test("asked something from another space's chat, a person answers where asked, and it comes back", async () => {
+  await setup(async ({ rt, there, say, history }) => {
+    const here = await handedAndAsked({ there, say });
+    const [question] = await rt.query<Message[]>("message.questions", { person: "ana" }, {
+      actor: ana,
+    });
+    assertEquals([question.from, question.text], ["north", "Which color?"]);
+    // As a page sends it: the chat and the words.
+    await say("Blue", { thread: question.thread });
+    assertEquals(await rt.query("message.questions", { person: "ana" }, { actor: ana }), []);
+    const back = (await history(here)).find((m) => m.from === "north" && m.to.includes("north"))!;
+    assertStringIncludes(back.text!, "ana: Blue");
+    const last = (await history(here)).at(-1)!;
+    assertEquals([last.from, last.to], ["north", ["ana"]]);
+    assertStringIncludes(last.text!, "Blue");
+  });
+});
+
+test("told in the chat it was handed, that she answered elsewhere, its turn there resumes and answers back", async () => {
+  await setup(async ({ rt, there, say, history }) => {
+    const here = await handedAndAsked({ there, say });
+    await say("I answered in the other chat", { thread: there });
+    assertEquals(await rt.query("message.questions", { person: "ana" }, { actor: ana }), []);
+    const back = (await history(here)).find((m) => m.from === "north" && m.to.includes("north"))!;
+    assertStringIncludes(back.text!, "I answered in the other chat");
+    assertStringIncludes((await history(here)).at(-1)!.text!, "I answered in the other chat");
+  });
+});

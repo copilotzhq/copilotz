@@ -2,9 +2,11 @@
  * Labels: what a job read goes with what it writes. An answer written in
  * Launch from what's in Finance carries Finance as a source: only those who
  * reach both read it, until someone who does shares it. An agent can't
- * write it anywhere else, nor where labels aren't kept.
+ * write it anywhere else, nor where labels aren't kept. Except an agent
+ * working for someone from their own Personal space: what it does there for
+ * them is theirs, as if they'd done it, wherever they may.
  */
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   type Actor,
   createRuntime,
@@ -165,15 +167,14 @@ each("an agent works where it is, and takes nothing from elsewhere", async (rt) 
   // (Launch's notes: Ana's, and the one it wrote there.)
   assertEquals(await answers(rt, ana), ["budget + plan + plan", "plan"]);
   assertEquals(await answers(rt, bob), ["plan"]);
-  // It can't take that anywhere else, nor where labels aren't kept: a person has to share it.
-  await assertRejects(
-    () =>
-      rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "answer" }, {
-        actor: mine,
-      }),
-    Error,
-    "has to share it",
-  );
+  // What it does from there is Ana's, as if she'd done it: written in Launch, it's for Launch's
+  // people, Finance's budget too, since she asked; and where labels aren't kept, it goes as well.
+  await rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "answer" }, {
+    actor: mine,
+  });
+  assert((await answers(rt, bob)).some((a) => a.includes("budget")), "Ana's to show Bob");
+  // What it writes in her Personal space itself keeps its marks, for the day its chat moves: where
+  // labels aren't kept, a person has to share it.
   await assertRejects(
     () =>
       rt.call("summarize", { from: ["launch", "finance"], into: personal, as: "note" }, {
@@ -182,4 +183,5 @@ each("an agent works where it is, and takes nothing from elsewhere", async (rt) 
     Error,
     "has to share it",
   );
+  // Working for her in Launch, it still takes nothing from elsewhere (above): Bob reads there.
 });

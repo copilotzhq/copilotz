@@ -222,3 +222,45 @@ for (const [name, make] of Object.entries(stores)) {
     }
   });
 }
+
+test("from Personal, an agent keeps another space's board for its person; from a shared one, it can't", async () => {
+  const rt = await start(stores.memory);
+  try {
+    const { space: personal } = await rt.call<{ space: string }>("space.personal", {}, {
+      actor: ana,
+    });
+    const { space: launch } = await rt.call<{ space: string }>("space.create", { name: "Launch" }, {
+      actor: ana,
+    });
+    await join(rt, launch, bob, "editor", ana);
+    const mine = { in: personal } as { in?: string; thread?: string };
+
+    // From ana's Personal space: Launch's board, as she'd keep it, for Launch's people to see.
+    assert.match(
+      await ask(rt, mine, "create_board", { in: launch, name: "Launch plan" }),
+      /^Made the board “Launch plan”/,
+    );
+    assert.match(
+      await ask(rt, mine, "create_card", { in: launch, title: "Ship pricing", column: "to do" }),
+      /^Created “Ship pricing” \[\w+\] in To do/,
+    );
+    assert.match(
+      await ask(rt, mine, "list_boards", { in: launch }),
+      /^1 board in that space:\n- “Launch plan” .*: 1 card/,
+    );
+    const seen = await peekAs(rt, bob, launch);
+    assert.deepEqual(seen.cards.map((c) => c.title), ["Ship pricing"]);
+
+    // From a space ana shares with bob: only that space.
+    const { space: team } = await rt.call<{ space: string }>("space.create", { name: "Team" }, {
+      actor: ana,
+    });
+    await join(rt, team, bob, "editor", ana);
+    assert.match(
+      await ask(rt, { in: team }, "list_boards", { in: launch }),
+      /You can't read the space/,
+    );
+  } finally {
+    await rt.close();
+  }
+});

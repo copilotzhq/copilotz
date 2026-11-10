@@ -10,6 +10,10 @@ status: stable
 
 > Part 7, the team · Requires: Chapter 24 · Code: `lesson-7.3`
 
+> Since 1.0.0-rc.36 these two tools are chat's own (`list_conversations`, `read_conversation`), and
+> take a space (`in`): from a person's Personal space, their agents read every space they reach.
+> Compass uses chat's. This chapter builds them as a plugin of your own, which is how they began.
+
 ## The pain
 
 Yesterday, in another chat in the Launch space, you and North settled the price: 12 a month. Today,

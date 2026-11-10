@@ -1,7 +1,8 @@
 /**
  * Elsewhere, for agents (the chat plugin's `elsewhere` context, each turn):
- * the other spaces an agent can read for the person it works for, so it
- * knows where to look (a tool given a space, such as `recall` with `in`)
+ * the other spaces an agent can work in for the person it works for, so it
+ * knows where to look and act (a tool given a space, `in`: chats, boards,
+ * documents, routines, `recall`; a chat there, send_message's `thread`)
  * when what it needs isn't here, and the spaces it can hand work to, with who
  * answers there. An agent reaches only where it works and what that draws on
  * (design/work.md), so the other spaces it can read are listed only in its
@@ -52,9 +53,11 @@ export const elsewhereView = (thread: { in?: string }, ctx: ViewContext<string>)
   return [
     ...(others.length
       ? [
-        `Other spaces you can read for ${who}, for tools that take a space (\`in\`) when ` +
-        `what you need isn't here. What you read in one marks your answer: here, only those who ` +
-        `can see that space read it, until ${who} shares it.`,
+        `Other spaces you can work in for ${who}, as they can: tools that take a space ` +
+        `(\`in\`) read and change what's there (list_conversations and read_conversation, boards, documents, ` +
+        `routines, recall), and send_message's \`thread\` says something in a chat there, ` +
+        `whose answer comes back here. What you read in one marks your answer: here, only ` +
+        `those who can see that space read it, until ${who} shares it.`,
         ...others.slice(0, LISTED).map(line),
         ...(others.length > LISTED ? [`- and ${others.length - LISTED} more`] : []),
       ]

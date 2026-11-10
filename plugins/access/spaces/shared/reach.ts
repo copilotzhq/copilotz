@@ -209,12 +209,7 @@ async function narrowed(
   principal: Actor,
   ctx: ReadContext,
 ): Promise<Reach> {
-  const found = await ctx.db.collection<{ kind?: string; owner?: string }>("space").findOne({
-    _id: space,
-  });
-  if (found?.kind === PERSONAL && principal.kind === "person" && found.owner === principal.id) {
-    return reach;
-  }
+  if (await personalOf(space, principal, ctx)) return reach;
   const drawn = await reachOf({ kind: "space", id: space }, ctx);
   const all = new Set<Verb>(ALL);
   const within: Reach = new Map();
@@ -229,6 +224,28 @@ async function narrowed(
     if (verbs.length) within.set(key, { ...held, can: new Set(verbs) });
   }
   return within;
+}
+
+/** Whether `space` is `principal`'s own Personal space, which nobody else sees. */
+async function personalOf(space: string, principal: Actor, ctx: ReadContext): Promise<boolean> {
+  if (principal.kind !== "person") return false;
+  const found = await ctx.db.collection<{ kind?: string; owner?: string }>("space").findOne({
+    _id: space,
+  });
+  return found?.kind === PERSONAL && found.owner === principal.id;
+}
+
+/**
+ * Whether an actor's work is done for someone from their own Personal space
+ * (an agent's working for them there, a routine of theirs kept there): theirs,
+ * as if they'd done it, wherever it writes (see labels.ts). Only they see what's
+ * said there, so what they asked for there is theirs to have done anywhere they
+ * may.
+ */
+export async function ownPersonal(actor: Actor, ctx: ReadContext): Promise<boolean> {
+  const where = whereOf(actor);
+  if (where === undefined || !narrows(actor)) return false;
+  return await personalOf(where, worksFor(actor) ?? actor, ctx);
 }
 
 /** Whom an actor works for: an agent, whoever it acts for (`for`); a key, the person whose it is. */

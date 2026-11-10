@@ -9,7 +9,14 @@
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import { personOf } from "../../../../runtime/mod.ts";
-import { type Thread, type Tool, tool, type ToolContext } from "../../chat/contract.ts";
+import {
+  type Thread,
+  type Tool,
+  tool,
+  type ToolContext,
+  workIn,
+  type WorkVerb,
+} from "../../chat/contract.ts";
 import type { Listed, Routine } from "../collections/routine.ts";
 import { chatTitle, routinePath } from "../shared/routines.ts";
 import {
@@ -32,15 +39,28 @@ const offer = (_agent: string, thread: Thread, ctx: ViewContext) => {
 };
 
 /**
- * Where the agent works and the person it works for, or why there are none. A routine is its
- * person's, and runs as them: made as them, here (`ctx.as` keeps where the work is).
+ * Where the routine is (here, or `there`: another space the agent's work reaches) and the person
+ * it works for, or why there are none. A routine is its person's, and runs as them: made as them
+ * (`ctx.as` keeps where the work is).
  */
-function whereFor(ctx: ToolContext) {
+async function whereFor(ctx: ToolContext, there?: unknown, verb: WorkVerb = "write") {
   const person = personOf(ctx.actor);
   if (!person) return { missing: "Routines are a person's, and you aren't working for one here." };
-  if (!ctx.in) return { missing: "This conversation isn't in a space: nowhere to keep it." };
-  return { person, space: ctx.in, as: ctx.as({ kind: "person", id: person }) };
+  const at = await workIn(ctx, there, verb);
+  if (typeof at === "string") return { missing: at };
+  return {
+    person,
+    space: at.in,
+    here: at.in === ctx.in,
+    as: ctx.as({ kind: "person", id: person }),
+  };
 }
+
+/** Each tool works here, or in another space its work reaches. */
+const IN = {
+  type: "string",
+  description: "Another space, by its id (your context lists them).",
+} as const;
 
 /** A routine, as an agent reads it: one line, with its id (who made it by name). */
 const line = (r: Routine, names: Record<string, string> = {}) => {
@@ -73,7 +93,8 @@ const scheduleRoutine = tool({
     "when the time matters and you don't); without one, it's UTC. Where it posts: by default " +
     "back in this chat (reminders, monitoring, anything that reads as one thread). Use post " +
     '"new" when each run is its own piece of work to open later (a daily analysis), and give ' +
-    "chat_name. Tell them what you set up, and where it posts.",
+    "chat_name. Tell them what you set up, and where it posts. In another space you can work " +
+    "in, give in (its id): a routine there starts a new chat there each run.",
   input: {
     type: "object",
     properties: {
@@ -90,6 +111,7 @@ const scheduleRoutine = tool({
         enum: ["new", "same"],
         description: "same (default): always this chat; new: a new chat each run.",
       },
+      in: IN,
       chat_name: {
         type: "string",
         maxLength: 120,
@@ -100,8 +122,10 @@ const scheduleRoutine = tool({
     required: ["text", "schedule"],
   },
   run: async (input, ctx) => {
-    const where = whereFor(ctx);
+    const where = await whereFor(ctx, input.in);
     if ("missing" in where) return where.missing;
+    // A routine elsewhere can't post in this chat, which isn't there: a new chat there each run.
+    const fresh = input.post === "new" || !where.here;
     try {
       const made = await where.as.call<{ routine: string; next?: string }>("routine.create", {
         in: where.space,
@@ -109,7 +133,7 @@ const scheduleRoutine = tool({
         text: input.text,
         agent: input.agent ?? ctx.agent,
         schedule: input.schedule as Given,
-        ...(input.post === "new"
+        ...(fresh
           ? {
             post: "new",
             ...(typeof input.chat_name === "string" ? { chatName: input.chat_name } : {}),
@@ -137,10 +161,11 @@ const scheduleRoutine = tool({
 
 const listRoutines = tool({
   offer,
-  description: "The routines in this space: what each sends, to whom, when it runs next.",
-  input: { type: "object", properties: {} },
-  run: async (_input, ctx) => {
-    const where = whereFor(ctx);
+  description: "The routines in this space: what each sends, to whom, when it runs next. In " +
+    "another space you can read, give in (its id).",
+  input: { type: "object", properties: { in: IN } },
+  run: async (input, ctx) => {
+    const where = await whereFor(ctx, input.in, "read");
     if ("missing" in where) return where.missing;
     const found = await where.as.db.collection("routine").query<Listed[]>("list", {
       in: where.space,
@@ -155,14 +180,15 @@ const listRoutines = tool({
 const cancelRoutine = tool({
   offer,
   description: "Delete one of this space's routines, by its [id] (from list_routines) or its " +
-    "name. Only its maker or a manager here may; the chats it posted in stay.",
+    "name. Only its maker or a manager here may; the chats it posted in stay. In another " +
+    "space, give in (its id).",
   input: {
     type: "object",
-    properties: { routine: { type: "string", minLength: 1 } },
+    properties: { routine: { type: "string", minLength: 1 }, in: IN },
     required: ["routine"],
   },
-  run: async ({ routine }, ctx) => {
-    const where = whereFor(ctx);
+  run: async ({ routine, in: there }, ctx) => {
+    const where = await whereFor(ctx, there);
     if ("missing" in where) return where.missing;
     const here = await where.as.db.collection<Routine>("routine").find({ in: where.space });
     const found = here.find((r) => r._id === routine) ??
@@ -188,7 +214,7 @@ const nameChat = tool({
     required: ["name"],
   },
   run: async ({ name }, ctx) => {
-    const where = whereFor(ctx);
+    const where = await whereFor(ctx);
     if ("missing" in where) return where.missing;
     const title = String(name).replace(/\s+/g, " ").trim().slice(0, 120);
     if (!title) return "A name says something.";

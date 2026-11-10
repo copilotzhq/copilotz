@@ -32,7 +32,8 @@ export const signInAction = defineAction({
       $set: {
         "accounts.google": claims.sub,
         ...(claims.email ? { email: claims.email } : {}),
-        ...(claims.name ? { name: claims.name } : {}),
+        // A name they chose themselves (`person.rename`) stays.
+        ...(claims.name && !known?.named ? { name: claims.name } : {}),
         ...(claims.picture ? { picture: claims.picture } : {}),
         at: known?.at ?? new Date().toISOString(),
       },

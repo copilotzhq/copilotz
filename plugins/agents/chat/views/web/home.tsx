@@ -39,7 +39,8 @@ export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
   const to = String((ctx.hints.query as Record<string, unknown> | undefined)?.to ?? "");
   const suggestions = Object.values((ctx.resources.suggestions ?? {}) as Record<string, unknown>)
     .filter((s): s is string => typeof s === "string");
-  const name = greeted(ctx.viewer?.label ?? ctx.viewer?.name ?? "");
+  // By their name, when they have one: never by their id.
+  const name = greeted(ctx.viewer?.label ?? "");
   const shared = space && space.kind !== "personal";
   // What other front ends show over the greeting.
   const tops = Object.values((ctx.resources.home ?? {}) as Record<string, HomeView | null>)

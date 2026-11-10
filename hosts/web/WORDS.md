@@ -260,6 +260,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 
 | Key | English |
 |---|---|
+| `shell.addYourName` | Add your name |
+| `shell.cancel` | Cancel |
 | `shell.close` | Close |
 | `shell.closeSidebar` | Close sidebar |
 | `shell.general` | General |
@@ -268,6 +270,11 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `shell.hidePanelTitled` | Hide the {title} panel |
 | `shell.homeOf` | {brand}: home |
 | `shell.keysPanel` | side panel toggle |
+| `shell.nameAbout` | How people and agents here see you. |
+| `shell.nameEmpty` | Leave it empty to go by your email. |
+| `shell.nameLabel` | Name |
+| `shell.nameNotSaved` | Your name wasn't saved. {reason} |
+| `shell.nameTryAgain` | Your name wasn't saved. Try again in a moment. |
 | `shell.nothingHere` | Nothing here |
 | `shell.nothingOpens` | This address doesn't open anything. |
 | `shell.nothingToShow` | Nothing to show |
@@ -283,6 +290,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `shell.roleMemberLets` | Works in their spaces, makes new ones, and sees who's in the org |
 | `shell.roleOwner` | Owner |
 | `shell.roleOwnerLets` | Runs the org: everything admins do, and makes or unmakes owners |
+| `shell.save` | Save |
 | `shell.search` | Search |
 | `shell.searchTitle` | Search spaces and chats, or run a command ({shortcut}) |
 | `shell.showPanel` | Show the panel |
@@ -293,6 +301,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `shell.skipToContent` | Skip to content |
 | `shell.spacesAndChats` | Spaces and chats |
 | `shell.yourAccount` | Your account |
+| `shell.yourName` | Your name |
 
 ## spaces
 

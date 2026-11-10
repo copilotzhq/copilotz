@@ -29,7 +29,8 @@ export async function personFor(
 /**
  * Keeps what a sign-in proved about a person: their email (identity's
  * `person.email`, what invitations find people by), the name they gave when
- * they have none, and when they came (`at`, kept from before; an import's).
+ * they have none (and never chose one: `person.rename`), and when they came
+ * (`at`, kept from before; an import's).
  */
 export async function keepPerson(
   ctx: Context,
@@ -42,7 +43,7 @@ export async function keepPerson(
   await people.updateOne({ _id: person }, {
     $set: {
       email: given.email,
-      ...(name && !known?.name ? { name } : {}),
+      ...(name && !known?.name && !known?.named ? { name } : {}),
       at: known?.at ?? given.at ?? new Date().toISOString(),
     },
   }, { upsert: true });

@@ -28,7 +28,9 @@
  * and 30 for where to go ("Spaces", "Chats"), 40 for making something
  * ("Create"), 90 for the shell's own ("General": the panel, signing out).
  *
- * Who's signed in has a menu of what front ends put there (the `userMenu`
+ * Who's signed in shows by their name (with none, their email; never their
+ * id), and has a menu: their name, which they change or clear there
+ * (identity's `person.rename`), what front ends put there (the `userMenu`
  * resource: `{ label, icon?, href, order? }`, pages of the person's own,
  * such as Connected accounts), then signing out.
  *

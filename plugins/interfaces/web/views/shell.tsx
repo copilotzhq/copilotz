@@ -51,12 +51,14 @@ export const shellView = (
   const around = { ...hints, path: where.path };
   const viewer = ctx.viewer?.name ?? "";
   const label = ctx.viewer?.label;
+  const email = ctx.viewer?.email;
   return (
     <Frame
       path={where.path + (where.space ?? "")}
       brand={app}
       viewer={viewer}
       {...(label ? { label } : {})}
+      {...(email ? { email } : {})}
       palette={{
         sources: sourcesOf(ctx.resources.palette),
         hints: {

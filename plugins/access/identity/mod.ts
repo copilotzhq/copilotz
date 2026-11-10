@@ -22,10 +22,12 @@
  *
  * A sign-in method keeps what it verified about someone (`person.set`: their
  * email), and plugins that match people by email ask for it (`person.email`).
- * Each person reads only their own: nobody learns who else has an account.
+ * A person sets the name they go by themselves (`person.rename`), or clears
+ * it; sign-ins then leave it so. Each person reads only their own: nobody
+ * learns who else has an account.
  */
 import { type Actor, definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
-import { emailOf, setPerson } from "./actions/person.ts";
+import { emailOf, renamePerson, setPerson } from "./actions/person.ts";
 import { endSession, revokeCredentials, startSession } from "./actions/session.ts";
 import { credential } from "./collections/credential.ts";
 import { person } from "./collections/person.ts";
@@ -43,6 +45,7 @@ export const identity: Plugin = definePlugin({
     "session.end": endSession,
     "credential.revoke": revokeCredentials,
     "person.set": setPerson,
+    "person.rename": renamePerson,
     "person.email": emailOf,
   },
   // A request is the person its session cookie proves. The cookie is the host's alone

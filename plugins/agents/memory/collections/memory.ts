@@ -59,12 +59,13 @@ export const memoryCollection = defineCollection({
         }),
     },
     /**
-     * The memories most relevant to a text, for a scope: core ones aside,
+     * The memories most relevant to a text (or several: each scores by the
+     * closest), for a scope: core ones aside,
      * unless learned `since` (after a conversation's start: it has them only
      * as they come up). If finding them fails (an embedder's 401, a timeout),
      * it finds none: the failure is logged and counted, and the turn goes on.
      */
-    relevant: async (_memories, p: Scope & { text: string; since?: string }, ctx) => {
+    relevant: async (_memories, p: Scope & { text: string | string[]; since?: string }, ctx) => {
       try {
         return await search(ctx, p, p.text, LIMIT.relevant, {
           least: RELEVANT,

@@ -5,17 +5,25 @@
  *   person ("Ana prefers venues with a garden"), the agent itself, one
  *   thread, or everyone. Memories are documents with a vector field, so
  *   recall is semantic when there is an embedder, and always matches words.
- * - Agents have, in their stable system text, the core memories about
- *   whoever is in the conversation; after the conversation, each turn, the
- *   other memories most relevant to the latest message.
+ * - Agents have how to use memory in their stable system text, as Copilotz's
+ *   own instructions: look (recall, and back through the conversation)
+ *   before saying they don't know or don't have something. As a conversation
+ *   begins, they're told the core memories about whoever is in it (the person
+ *   they work for too, there or not: a chat one agent handed another); after
+ *   that, each turn, the other memories most relevant to what it's about (the
+ *   latest message, the two before it, its title), each saying when and where
+ *   it was learned.
  * - Agents remember, recall and forget with tools offered to all of them.
  *   Remembering what they already know updates it instead of repeating it.
  *   With spaces (the access plugin), a memory lives where it was learned:
- *   recall searches where the conversation is, or another space it names
- *   (`in`), and what it brings from there marks the answer.
+ *   recall searches where the conversation is (in its person's own Personal
+ *   space, which only they see, everywhere they can read), or another space
+ *   it names (`in`), and what it brings from there marks the answer. Recall
+ *   also opens where a memory was learned (`source`).
  * - With an extractor model (`memoryExtraction`, beside it), memories also
- *   arrive on their own: every few messages, it reads them and writes down
- *   what's worth keeping.
+ *   arrive on their own: every few messages, and once a conversation has been
+ *   quiet a while, it reads what was said since and writes down what's worth
+ *   keeping.
  * - Memories move in from another app as they were (`memory.import`, the
  *   system's): in a space, with whom each is about, who wrote it and when.
  *
@@ -38,7 +46,7 @@ import {
 import { importAction } from "./actions/import.ts";
 import { memoryCollection } from "./collections/memory.ts";
 import { memoryProgress } from "./collections/progress.ts";
-import { extractor } from "./processors/extract.ts";
+import { extractAction, extractor } from "./processors/extract.ts";
 import { contexts } from "./resources/context.ts";
 import { tools } from "./resources/tools.ts";
 import { settingsOf } from "./shared/settings.ts";
@@ -92,11 +100,15 @@ export const memory: Plugin = definePlugin({
   },
 });
 
-/** Memories that arrive on their own: the extractor model reads every few messages. */
+/**
+ * Memories that arrive on their own: the extractor model reads every few
+ * messages, and what a conversation said before going quiet.
+ */
 export const memoryExtraction: Plugin = definePlugin({
   name: "memory-extraction",
   requires: ["memory", "models"],
   processors: { "memory.extract": extractor },
+  actions: { "memory.extract": extractAction },
   async check(merged) {
     const { extractor } = settingsOf(merged);
     if (!extractor) throw new Error("memory-extraction: set the memory resource's extractor model");

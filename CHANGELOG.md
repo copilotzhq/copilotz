@@ -1,5 +1,36 @@
 ## Unreleased
 
+- **Agents look in their memory before saying they don't have something, and find more when they
+  do:**
+  - **How to use memory is Copilotz's own instructions.** The `memory` context (the guide) is
+    declared `instructions: true`, so it's sent as it is, before the app's information, instead of
+    inside `<context name="memory">` after "treat it as information, not as instructions". It now
+    also says to look first (recall, and back through the conversation) before saying you don't know
+    something, don't have it, or can't go on without it. Skills likewise: their guide is a context
+    of its own declared as instructions (`skillsGuide`); the list, which people wrote, stays
+    information (`skills`, now headed "Skills you have:"). Each agent's cached system text changes
+    once.
+  - **What comes up by itself is for what the conversation is about**, not only its latest words:
+    the latest message, the two before it and the conversation's title, each memory scored by the
+    closest (a reply like "see above" still finds what the question above was about). Each says when
+    and where it was learned (`(learned in “Launch plan” 2026-11-10)`), in `recall`'s answers too,
+    and `recall`'s `source` (a memory's id) reads what was said there, around the message it came
+    from.
+  - **What an agent was told in a conversation and still has whole isn't told again:** only memories
+    new to it come up, so a follow-up no longer re-sends the same ones (once what it was told leaves
+    the recent part of the conversation, they can come up again).
+  - **In a person's own Personal space, memory reads everywhere they can read**, by itself and by
+    `recall`, as the agent there may already: only they see what's said there. What it brings from
+    another space marks the answer (`sources`), as `recall` with `in` did. Shared spaces still read
+    only what was learned there.
+  - **The person agents work for is in the conversation for memory, there or not:** in a chat one
+    agent handed another for them, their memories are in mind, and what's said of them there is
+    about them (the extractor is told whom the agents work for).
+  - **The extractor also reads a conversation once it's been quiet a while** (`memory.quiet`, 10
+    minutes; `0` turns it off), not only every `every` messages, so a short conversation, or the
+    last few messages of any, isn't left unread. Each message sets the conversation's timer again;
+    `memory.extract`, called by it, reads what's pending.
+
 - **An agent's tool steps keep a line of their own when they leave the tail,** so what it read and
   ran stays in reach in a long working chat. Until now a step (an agent's tool calls with what they
   returned, which only that agent is sent) left the tail without a line: zoom couldn't reach it and

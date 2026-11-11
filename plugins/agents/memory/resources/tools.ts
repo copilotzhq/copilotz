@@ -1,10 +1,21 @@
 /** remember, recall and forget: offered to the agents with memory. */
 import type { Actor, Resources } from "../../../../runtime/mod.ts";
 import { tool } from "../../chat/contract.ts";
-import type { Message } from "../../chat/contract.ts";
+import type { Message, Thread, ToolContext } from "../../chat/contract.ts";
 import type { Memory } from "../collections/memory.ts";
-import { aboutOf, LIMIT, line, now, peopleOf, readable, scopeFor } from "../shared/scope.ts";
-import { namesFor } from "../../../access/spaces/contract.ts";
+import {
+  aboutOf,
+  AROUND,
+  learnedOf,
+  LIMIT,
+  line,
+  now,
+  peopleOf,
+  readable,
+  type Scope,
+  scopeFor,
+} from "../shared/scope.ts";
+import { nameOf, namesFor, withNames } from "../../../access/spaces/contract.ts";
 import { keep, search } from "../shared/search.ts";
 import { applies } from "../shared/settings.ts";
 
@@ -51,32 +62,91 @@ const recall = tool({
   offer,
   description:
     "Search what you remember, by meaning and by words: about the people here, yourself, " +
-    "this conversation and everyone. Recall before answering about anything from earlier " +
-    "conversations, instead of guessing. It searches what was learned where this " +
-    "conversation is; when what you need isn't there (something the person keeps to " +
-    "themselves, another space), give `in`, a space you can read: what you find there " +
-    "marks your answer, so look only when you need to.",
+    "this conversation and everyone. Recall before you answer about anything from before, and " +
+    "before you say you don't know or don't have something, instead of guessing. It searches " +
+    "what was learned where this conversation is (in someone's own Personal space, everywhere " +
+    "they can read); when what you need isn't there (something the person keeps to " +
+    "themselves, another space), give `in`, a space you can read: what you find there marks " +
+    "your answer, so look only when you need to. Each memory says when and where it was " +
+    "learned: when you need more than it says, give `source`, its [id], to read what was said " +
+    "there.",
   input: {
     type: "object",
     properties: {
       query: { type: "string", minLength: 1 },
       in: { type: "string", description: "Another space to search, by its id." },
       limit: { type: "integer" },
+      source: {
+        type: "string",
+        description: "A memory's [id]: what was said where it was learned, instead of a search.",
+      },
     },
-    required: ["query"],
   },
   run: async (input, ctx) => {
     const here = await scopeFor(ctx);
-    const scope = input.in ? { ...here, in: input.in } : here;
+    const scope = input.in ? { ...here, in: input.in, everywhere: false } : here;
+    if (input.source) return await sourceOf(ctx, scope, String(input.source));
+    if (!input.query) return "Give a query to search, or a memory's [id] as source.";
     const found = await search(ctx, scope, input.query, input.limit ?? LIMIT.recall, {
       core: true,
     });
     if (!found.length) return "Nothing remembered about that.";
-    // People by name (notes from before names were known say ids).
-    const names = { ...here.names, ...await namesFor(ctx, found.flatMap(peopleOf)) };
-    return found.map((m) => line(m, ctx.agent, names)).join("\n");
+    // People by name (notes from before names were known say ids); conversations by title.
+    const [names, titles] = await Promise.all([
+      namesFor(ctx, found.flatMap(peopleOf)),
+      titlesOf(ctx, found),
+    ]);
+    return found.map((m) =>
+      line(m, ctx.agent, { ...here.names, ...names }, learnedOf(m, titles, ctx.thread))
+    ).join("\n");
   },
 });
+
+/** The titles of the conversations memories were learned in, where the agent can read them. */
+async function titlesOf(ctx: ToolContext, memories: Memory[]): Promise<Record<string, string>> {
+  const ids = [...new Set(memories.flatMap((m) => m.source?.thread ?? []))];
+  if (!ids.length) return {};
+  const found = await ctx.db.collection<Thread>("thread").find({ _id: { $in: ids } });
+  return Object.fromEntries(found.map((t) => [t._id, t.title ?? ""]));
+}
+
+/**
+ * What was said where a memory was learned: the message it came from, with
+ * a few on each side, as the agent may read them (people's and agents' words,
+ * never anyone's private steps).
+ */
+async function sourceOf(ctx: ToolContext, scope: Scope, id: string): Promise<string> {
+  const memory = await ctx.db.collection<Memory>("memory").findOne({
+    _id: id.replace(/^\[|\]$/g, ""),
+    ...readable({ ...scope, everywhere: true }),
+  });
+  if (!memory) return `No memory ${id} that you can read.`;
+  const from = memory.source;
+  const thread = from?.thread
+    ? await ctx.db.collection<Thread>("thread").findOne({ _id: from.thread })
+    : null;
+  if (!from || !thread) return `Where [${memory._id}] was learned isn't something you can read.`;
+  const messages = ctx.db.collection<Message>("message");
+  const at = from.message ? (await messages.findOne({ _id: from.message }))?.at : undefined;
+  const shared = { thread: thread._id, private: { $ne: true } };
+  const [before, after] = at
+    ? await Promise.all([
+      messages.find({ ...shared, at: { $lte: at } }, { sort: { at: -1 }, limit: AROUND + 1 }),
+      messages.find({ ...shared, at: { $gt: at } }, { sort: { at: 1 }, limit: AROUND }),
+    ])
+    : [await messages.find(shared, { sort: { at: -1 }, limit: AROUND * 2 }), []];
+  const shown = [...before.reverse(), ...after];
+  if (!shown.length) return `Nothing said is left where [${memory._id}] was learned.`;
+  const names = await namesFor(ctx, shown.flatMap((m) => [m.from, ...m.to]));
+  const title = thread.title ? ` “${thread.title}”` : "";
+  return `Where [${memory._id}] was learned, conversation ${thread._id}${title} ` +
+    `(read more with read_conversation, if you have it):\n` +
+    shown.map((m) =>
+      `${m._id === from.message ? "→ " : "- "}${nameOf(m.from, names)}: ${
+        withNames(m.text ?? "", names)
+      }`
+    ).join("\n");
+}
 
 const forget = tool({
   offer,

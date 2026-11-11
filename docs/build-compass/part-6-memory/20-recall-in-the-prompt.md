@@ -57,6 +57,11 @@ export const guideView = (_thread: Thread, ctx: ViewContext) =>
 `ctx.viewer` is the agent the prompt is for; `applies` checks the `memory` resource's `agents` (all
 agents, unless it names some). A View that returns `undefined` adds nothing.
 
+Copilotz's own memory goes further: its guide is the plugin's own fixed words, so it declares the
+context as instructions (`{ place: "system", instructions: true }`), sent as they are rather than as
+information, and it also tells agents to look (recall, and back through the conversation) before
+saying they don't know or don't have something.
+
 ### Core memories, when the conversation begins
 
 Core memories aren't in the system part, though they're stable: the system part is the same in every
@@ -132,6 +137,11 @@ export const recallView = (thread: Thread, ctx: ViewContext) => {
     relevant.value.map((m) => ctx.show("llm.memory", m)).join("\n");
 };
 ```
+
+Copilotz's own `recall` context searches a little wider: the latest message, the two before it and
+the conversation's title, each memory scored by the closest (so "see above" still finds what the
+question above was about); in its person's own Personal space, everywhere they can read; and each
+memory says when and where it was learned, which `recall`'s `source` opens.
 
 Each memory is said by one View, `llm.memory` (`views/memory.ts`, with `shared/said.ts`): a line,
 its subject when it isn't a person, and its id, which the tools of the next chapter take.

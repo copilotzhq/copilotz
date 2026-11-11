@@ -1,6 +1,6 @@
 ---
 title: "memory-extraction"
-description: "Memories that arrive on their own: the extractor model reads every few messages."
+description: "Memories that arrive on their own: the extractor model reads every few messages, and what a conversation said before going quiet."
 section: "Reference"
 order: 3
 ---
@@ -9,7 +9,8 @@ order: 3
 
 # memory-extraction
 
-Memories that arrive on their own: the extractor model reads every few messages.
+Memories that arrive on their own: the extractor model reads every few messages, and what a
+conversation said before going quiet.
 
 ```ts
 import { memoryExtraction } from "copilotz/plugins/agents";
@@ -21,7 +22,8 @@ It keeps nothing of its own.
 
 ## What it lets callers do
 
-Nobody calls it: it has no Actions, tools or routes.
+Only the app's own code calls its 1 Action, `memory.extract`: its plugins, its schedules and the
+system. Nobody outside does.
 
 ## Where it shows
 
@@ -42,7 +44,7 @@ the memory resource's extractor model."
 
 The runtime doesn't start without [`memory`](memory.md) and [`models`](models.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.38`.
 
 ## What it does on its own
 

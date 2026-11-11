@@ -33,7 +33,9 @@ each.
 
 `processors/extract.ts` keeps each conversation's shared messages since the last extraction in
 `memoryProgress` (`collections/progress.ts`: a list of ids per thread, with no events, since nobody
-watches it). Until there are `every` of them (8), it only counts:
+watches it). Until there are `every` of them (8), it only counts. (Copilotz's own also reads what a
+conversation said once it's been quiet a while, `quiet`, with a timer each message sets again, and
+counts the person its agents work for as one of its people, there or not.)
 
 ```ts
 export const extractor: ProcessorDef = {

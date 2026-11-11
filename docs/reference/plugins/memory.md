@@ -71,18 +71,19 @@ Its Views show to the model.
 
 You set it in `resources.memory`.
 
-| Setting            | Type       | Required | What it is                                                                                           |
-| ------------------ | ---------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `memory.embedder`  | `ModelRef` | no       | An embeddings model (`"provider/model"`, …), for semantic recall; without one, recall matches words. |
-| `memory.extractor` | `ModelRef` | no       | A model (`"provider/model"`, …) that extracts memories from conversations on its own.                |
-| `memory.every`     | `number`   | no       | Shared messages per extraction (8).                                                                  |
-| `memory.agents`    | `string[]` | no       | The agents with memory (all by default).                                                             |
+| Setting            | Type       | Required | What it is                                                                                                                                     |
+| ------------------ | ---------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memory.embedder`  | `ModelRef` | no       | An embeddings model (`"provider/model"`, …), for semantic recall; without one, recall matches words.                                           |
+| `memory.extractor` | `ModelRef` | no       | A model (`"provider/model"`, …) that extracts memories from conversations on its own.                                                          |
+| `memory.every`     | `number`   | no       | Shared messages per extraction (8).                                                                                                            |
+| `memory.quiet`     | `number`   | no       | How long a conversation is quiet, in milliseconds, before what it said since its last extraction is read anyway (10 minutes); 0: only `every`. |
+| `memory.agents`    | `string[]` | no       | The agents with memory (all by default).                                                                                                       |
 
 ## What it requires
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.38`.
 
 ## Listing
 

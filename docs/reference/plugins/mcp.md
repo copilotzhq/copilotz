@@ -55,6 +55,12 @@ Its Views show to the model.
 
 You set it in `resources.mcp`: 2 settings are required.
 
+A model tool normally reuses its completed answer for identical input for two minutes. Set
+`tools.<tool>.replay: false` for a check that updates state but must fetch fresh results, such as
+payment reconciliation. Keep its `annotations.readOnly: false`: replay is separate from what the
+tool does. Interrupted calls still recover with their original call ID. Read-only tools and
+widget-only Actions already run without completed-answer replay.
+
 | Setting                   | Type                              | Required | What it is                                                                                                                                                                                            |
 | ------------------------- | --------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `mcp.<name>.in`           | `string`                          | yes      | The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or not).                                                                                                      |

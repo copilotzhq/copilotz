@@ -20,6 +20,7 @@ import {
   closed,
   handleIn,
   hangs,
+  LINE,
   own,
   runs,
   said,
@@ -335,6 +336,36 @@ test("a read-only tool keeps no receipt: the same request always runs, and says 
     const { thread } = await chatOf("c");
     assertEquals((await s.steps(thread)).length, 2);
   });
+});
+
+test("replay false refreshes a mutating check without reusing its completed answer", async () => {
+  await setup(async (s) => {
+    const first = await s.call("status", {}, { session: "c", id: 1 });
+    state.paid = true;
+    const second = await s.call("status", {}, { session: "c", id: 2 });
+    assertEquals([said(first), said(second)], ["Not paid yet.", "Paid."]);
+    assertEquals(runs.status, 2);
+    const { thread } = await chatOf("c");
+    assertEquals((await s.steps(thread)).length, 2);
+    assertEquals((await s.docs("mcp_receipt")).length, 1);
+  }, { line: { tools: { status: { annotations: { readOnly: false }, replay: false } } } });
+});
+
+test("replay false still recovers an interrupted call with its original callId", async () => {
+  await setup(async (s) => {
+    const { thread } = await chatOf("c");
+    await s.call("search", { to: "Rio" }, { session: "c" });
+    const step = "interrupted-check";
+    await s.runtime.call("test.cut", {
+      call: await sameCallOf(thread, "whoami", {}),
+      step,
+    });
+    const who = JSON.parse(said(await s.call("whoami", {}, { session: "c", id: 5 })));
+    assertEquals([who.callId, who.trigger, who.retry], [step, step, true]);
+    const next = JSON.parse(said(await s.call("whoami", {}, { session: "c", id: 6 })));
+    assertNotEquals(next.callId, step);
+    assertEquals(next.retry, false);
+  }, { line: { tools: { ...LINE.tools, whoami: { replay: false } } } });
 });
 
 test("a call cut short runs again as itself: the same step, the same callId, with retry", async () => {

@@ -14,7 +14,7 @@
  *
  * ```ts
  * plugins: [...plugins, await computerDownloads()]
- * plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.39" })]
+ * plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.40" })]
  * plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })]
  * ```
  */

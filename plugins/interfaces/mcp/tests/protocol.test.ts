@@ -430,6 +430,11 @@ test("at start: a line's mistakes stop the app", async () => {
   await assertRejects(() => start({ tools: {} }), Error, "offers no tool");
   await assertRejects(() => start({ client: "booking" }), Error, "agent's name");
   await assertRejects(() => start({ limits: { perMinute: 0 } }), Error, "perMinute");
+  await assertRejects(
+    () => start({ tools: { search: { replay: "false" as never } } }),
+    Error,
+    "replay is true or false",
+  );
   await assertRejects(() => start({ origins: ["chatgpt.com"] }), Error, "origin");
   await assertRejects(
     () => start({ tools: { search: { annotations: { readonly: true } as never } } }),

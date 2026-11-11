@@ -24,6 +24,12 @@ export type McpTool = {
   title?: string;
   /** Its hints (read-only, destructive…), over the tool's own `annotations`. */
   annotations?: ToolAnnotations;
+  /**
+   * Reuse a completed model tool call's answer for identical input (true by default).
+   * Set false for checks that update state and must run fresh. Interrupted calls still retry
+   * as themselves. Read-only tools and widget-only Actions do not reuse completed answers.
+   */
+  replay?: boolean;
   /** What ChatGPT shows while it runs, and once it's done (64 characters at most). */
   invoking?: string;
   invoked?: string;
@@ -318,6 +324,9 @@ export function problemOf(
       if (text !== undefined && (typeof text !== "string" || !text || text.length > STATUS)) {
         return `tools.${tool}.${field} is text of ${STATUS} characters at most`;
       }
+    }
+    if (how.replay !== undefined && typeof how.replay !== "boolean") {
+      return `tools.${tool}.replay is true or false`;
     }
     for (const [hint, value] of Object.entries({ ...own?.annotations, ...how.annotations })) {
       if (!["readOnly", "destructive", "idempotent", "openWorld"].includes(hint)) {

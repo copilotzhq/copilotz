@@ -222,7 +222,10 @@ export const callAction = defineAction({
 
     // Done lately: answered with what it said. Begun, never done (stopped, an owner restarted):
     // run again as the same step, the same callId, told it's a retry.
-    const answered = receipt?.done && now - receipt.at < RESEND_MS ? receipt : undefined;
+    const answered = line.tools[input.tool].replay !== false && receipt?.done &&
+        now - receipt.at < RESEND_MS
+      ? receipt
+      : undefined;
     const cut = receipt && !receipt.done && now - receipt.at < RERUN_MS ? receipt : undefined;
     const step = cut?.step ?? `${input.call}@${now.toString(36)}`;
     // Taken: counted, and (a tool that changes things) noted before it runs, as a new

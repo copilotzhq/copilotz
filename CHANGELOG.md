@@ -1,3 +1,11 @@
+## 1.0.0-rc.40 — 2026-11-11
+
+- **MCP checks can return fresh results while declaring their state changes accurately.** Set
+  `replay: false` on a model tool to skip reuse of its completed answer for identical input, such as
+  a payment check that reconciles the booking. Interrupted calls still recover with the same call
+  ID; existing tools keep their replay behavior. Read-only tools and widget-only Actions already run
+  without completed-answer replay.
+
 ## 1.0.0-rc.39 — 2026-11-10
 
 - **Agents look in their memory before saying they don't have something, and find more when they

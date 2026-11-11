@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.39 — 2026-11-10
 
 - **Agents look in their memory before saying they don't have something, and find more when they
   do:**

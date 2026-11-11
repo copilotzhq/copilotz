@@ -20,10 +20,10 @@ import { history } from "copilotz/plugins/agents";
 
 It keeps 2 collections, 1 of them on the record.
 
-| Collection | Kept as   | Fields                                                                                                                |
-| ---------- | --------- | --------------------------------------------------------------------------------------------------------------------- |
-| `outline`  | documents | `count`, `lines`, `bytes`, `boundary`, `since`, `tail`, `tailAt`, `tailIds`, `tailSteps`, `last`, `complete`, `cutAt` |
-| `summary`  | documents | `thread`, `level`, `index`, `text`, `bytes`, `message`, `at`                                                          |
+| Collection | Kept as   | Fields                                                                                                                         |
+| ---------- | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `outline`  | documents | `count`, `lines`, `bytes`, `boundary`, `since`, `tail`, `tailAt`, `tailIds`, `tailSteps`, `steps`, `last`, `complete`, `cutAt` |
+| `summary`  | documents | `thread`, `level`, `index`, `text`, `bytes`, `message`, `agent`, `at`                                                          |
 
 Its named queries read for callers, as the rules let them:
 
@@ -64,7 +64,7 @@ history resource's summarizer model."
 
 The runtime doesn't start without [`chat`](chat.md) and [`models`](models.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.38`.
 
 ## What it does on its own
 

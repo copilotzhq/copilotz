@@ -155,8 +155,10 @@ if (tokens > config.tail[1]) {
 That's the **sawtooth**: the tail grows a message at a time, and shrinks in one batch. Between
 batches, the start of what an agent is sent doesn't move, so the provider's cache holds it. The four
 newest shared messages always stay whole (`KEPT`), however much they weigh. An agent's tool steps
-(private messages) count in the tail, since their agent is sent them, but leave it without a line:
-summaries keep what was said.
+(private messages) count in the tail, since their agent is sent them, but here leave it without a
+line: summaries keep what was said. Copilotz's own history goes further: each step that leaves gets
+a line in a tree of its agent's own, which only that agent is sent and can zoom into, so what it
+read and ran stays in reach.
 
 The lines that left make the **outline**, which grows the same way: past its maximum (128 KB), the
 pairs that are most overdue merge into their parent until it's back under 64 KB, so older parts of

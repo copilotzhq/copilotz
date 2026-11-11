@@ -17,8 +17,14 @@ const outlineSchema = {
     tailAt: { type: "array", items: { type: "string" } },
     /** And their ids: each is summarized as it leaves the tail. */
     tailIds: { type: "array", items: { type: "string" } },
-    /** Which of them are agents' steps: they leave without a line. */
+    /** Which of them are agents' steps: each leaves as a line of its agent's own (`steps`). */
     tailSteps: { type: "array", items: { type: "boolean" } },
+    /**
+     * Per agent, the lines of its steps that left the tail, which only it is
+     * sent (`Steps`): a tree of its own, so nothing private merges with what
+     * others see.
+     */
+    steps: { type: "object" },
     /** The last message numbered, so a retried delivery knows it's done. */
     last: { type: "string" },
     /**
@@ -36,7 +42,13 @@ const outlineSchema = {
   required: ["count", "lines", "bytes", "boundary", "tail", "tailAt"],
 } as const;
 
-export type Outline = Infer<typeof outlineSchema> & { _id: string };
+export type Outline = Infer<typeof outlineSchema> & {
+  _id: string;
+  steps?: Record<string, Steps>;
+};
+
+/** An agent's steps in a thread: how many have a line, and the lines shown, as the outline's. */
+export type Steps = { count: number; lines: Line[]; bytes: number };
 
 /**
  * A line shown: its level and index in the tree, its size, and when its

@@ -10,12 +10,15 @@
  * to choose to show it there. Documents that are members (agents people
  * make, contacts) carry nothing: they're meant for whoever they work with.
  *
- * What's written elsewhere for someone from their own Personal space carries
- * nothing either: only they see what's said there, and what their agents do
- * there for them, anywhere they may, is theirs, as if they'd done it (an
- * assistant they asked in private), for whoever sees where it goes. The record
- * says who did it, for whom, and from where. What's written in the Personal
- * space itself keeps its marks, for the day its conversation moves.
+ * What's written for someone from their own Personal space is never refused:
+ * only they see what's said there, and what their agents do there for them,
+ * anywhere they may, is theirs, as if they'd done it (an assistant they asked
+ * in private). Written elsewhere, it carries nothing, for whoever sees where
+ * it goes; the record says who did it, for whom, and from where. Written in
+ * the Personal space itself, where labels are kept (its chat's messages), it
+ * keeps its marks, for the day its conversation moves; anything else there
+ * (a board, a document, a file) goes as it is: only they see it, and moving it
+ * is theirs to do.
  *
  * A document that may be shared on its own (a chat: other collections'
  * documents are its parts) labels as itself, and so do its parts (a chat's
@@ -134,10 +137,11 @@ export const labels: Labels = {
     }
     const foreign = [...found];
     if (!foreign.length) return doc;
-    // Done elsewhere for someone from their own Personal space: theirs, as if they'd written it,
-    // for whoever sees where it goes (on the record as who did it, for them, from there). What's
-    // written in Personal itself keeps its marks: the conversation may move.
-    if (space !== actor.in && await ownPersonal(actor, ctx)) return doc;
+    // Done for someone from their own Personal space: theirs, as if they'd written it (on the
+    // record as who did it, for them, from there). Elsewhere, for whoever sees where it goes; in
+    // Personal itself, what keeps labels keeps its marks (the conversation may move), and the
+    // rest goes as it is: only they see it there.
+    if ((space !== actor.in || !shared!.labels) && await ownPersonal(actor, ctx)) return doc;
     // Where it works (`in`): an agent writing elsewhere what not everyone there can see is refused.
     const elsewhere = typeof actor.in === "string" && actor.in !== space;
     if (actor.kind === "agent" && (elsewhere || !shared!.labels)) {

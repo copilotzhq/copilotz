@@ -11,7 +11,8 @@
  * indented. One of yours that waits for agents at work on an earlier one
  * says so, with a way to send it now (`hints.queued`: their ids; see
  * queued.tsx). One that drew on spaces not everyone here sees says so
- * (`hints.sources`: their names), and someone who sees them can share it.
+ * (`hints.sources`: their names; none in a Personal space, where only its
+ * person is), and someone who sees them can share it.
  * One sent for someone by what they set up (`via`: a routine) says so. One
  * that says why its agent couldn't start (the org's limit) is a calm notice,
  * with its link; one where the agent itself failed is an error.

@@ -34,7 +34,7 @@ import { Transcript } from "./transcript.tsx";
 import { waitingOn } from "./waiting.ts";
 import { byAgent, names } from "./who.ts";
 import { say } from "./words.ts";
-import { nameOf, namesIn, picturesIn } from "../../../../access/spaces/contract.ts";
+import { nameOf, namesIn, PERSONAL, picturesIn } from "../../../../access/spaces/contract.ts";
 import { DELEGATED } from "../../shared/types.ts";
 
 /** Messages this close after the one before, from the same author, go under its name. */
@@ -76,8 +76,11 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
   // Who answers in its space, and what each is.
   const team = ctx.db.collection("thread").query<Team>("agents", thread.in ? { in: thread.in } : {})
     .value;
-  // The spaces messages drew on, by name: read once here, for every message that says so.
-  const drawn = [...new Set(said.flatMap((m) => m.sources ?? []))];
+  // The spaces messages drew on, by name: read once here, for every message that says so. Not in
+  // a Personal space (nor until the space is known): only its person is there, who sees all its
+  // agents drew on for them (its messages keep their marks unsaid, for the day the chat moves).
+  const alone = !space || space.kind === PERSONAL;
+  const drawn = alone ? [] : [...new Set(said.flatMap((m) => m.sources ?? []))];
   const sources = drawn.length
     ? ctx.db.collection<Space>("space").find({ _id: { $in: drawn } }).value ?? []
     : [];
@@ -161,7 +164,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
             usual: thread.agents ?? [],
             ...(follows ? { follows: true } : {}),
             ...(asked.has(m._id) ? { asked: true } : {}),
-            ...(m.sources?.length ? { sources: named(m.sources) } : {}),
+            ...(m.sources?.length ? { sources: alone ? [] : named(m.sources) } : {}),
             ...(queued.length ? { queued } : {}),
           });
         })}

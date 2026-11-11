@@ -4,7 +4,8 @@
  * reach both read it, until someone who does shares it. An agent can't
  * write it anywhere else, nor where labels aren't kept. Except an agent
  * working for someone from their own Personal space: what it does there for
- * them is theirs, as if they'd done it, wherever they may.
+ * them is theirs, as if they'd done it, wherever they may; in Personal itself,
+ * what keeps labels keeps its marks, for the day its chat moves.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
@@ -67,6 +68,15 @@ const app = definePlugin({
           text: read.map((n) => n.text).sort().join(" + "),
         });
       },
+    }),
+    "doc.find": defineAction({
+      input: {
+        type: "object",
+        properties: { collection: { type: "string", enum: ["note", "answer"] }, id: text },
+        required: ["collection", "id"],
+      },
+      allow: () => true,
+      run: (ctx, input) => ctx.db.collection<Doc>(input.collection).find({ _id: input.id }),
     }),
     "answer.list": defineAction({
       input: { type: "object" },
@@ -173,15 +183,33 @@ each("an agent works where it is, and takes nothing from elsewhere", async (rt) 
     actor: mine,
   });
   assert((await answers(rt, bob)).some((a) => a.includes("budget")), "Ana's to show Bob");
-  // What it writes in her Personal space itself keeps its marks, for the day its chat moves: where
-  // labels aren't kept, a person has to share it.
-  await assertRejects(
-    () =>
-      rt.call("summarize", { from: ["launch", "finance"], into: personal, as: "note" }, {
-        actor: mine,
-      }),
-    Error,
-    "has to share it",
+  // What it writes in her Personal space itself, where labels are kept, keeps its marks, for the
+  // day its chat moves; anything else there (a note, a board, a file) goes as it is: only she sees
+  // it, and moving it is hers to do.
+  await rt.call("summarize", {
+    id: "p1",
+    from: ["launch", "finance"],
+    into: personal,
+    as: "answer",
+  }, {
+    actor: mine,
+  });
+  const marked = await rt.call<Doc[]>("doc.find", { collection: "answer", id: "p1" }, {
+    actor: ana,
+  });
+  assertEquals(marked.map((d) => d.sources), [["finance", "launch"]]);
+  await rt.call(
+    "summarize",
+    { id: "n1", from: ["launch", "finance"], into: personal, as: "note" },
+    {
+      actor: mine,
+    },
+  );
+  const noted = await rt.call<Doc[]>("doc.find", { collection: "note", id: "n1" }, { actor: ana });
+  assertEquals(noted.map((d) => [d.text, d.sources]), [["budget + plan + plan", undefined]]);
+  assertEquals(
+    await rt.call<Doc[]>("doc.find", { collection: "note", id: "n1" }, { actor: bob }),
+    [],
   );
   // Working for her in Launch, it still takes nothing from elsewhere (above): Bob reads there.
 });

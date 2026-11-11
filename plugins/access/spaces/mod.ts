@@ -26,7 +26,8 @@
  *   used what not everyone in its space can see carries those sources (in
  *   a collection with `labels: true`), and only those who reach them all
  *   read it until someone who does `share`s it. An agent writing it
- *   anywhere else is refused (`needs_share`).
+ *   anywhere else is refused (`needs_share`), unless it works for someone
+ *   from their own Personal space: that's theirs to do, as if they'd done it.
  * - **People by name:** each person's profile (collection `profile`: their
  *   name and picture, as sign-in verified them, kept as it changes), which
  *   anyone in the org reads; wherever an id would show, the name does

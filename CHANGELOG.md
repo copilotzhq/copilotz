@@ -1,4 +1,6 @@
-## 1.0.0-rc.41 — 2026-11-11
+## 1.0.0-rc.42 — 2026-11-11
+
+(rc.41 was tagged but never published: a test failed on Node. This is it.)
 
 - **In a person's own Personal space, what its agents drew on from elsewhere no longer gets in the
   way.** Only that person is there, and they see every space their agents read for them:

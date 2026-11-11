@@ -108,6 +108,10 @@ export const skillsContext = (thread: Thread, ctx: ViewContext<string>) => {
 A context's View gets the conversation, and `ctx.viewer` is the agent the prompt is for: two agents
 in one chat can have different skills.
 
+Copilotz's own plugin splits the two: the guide, its own fixed words, is a context of its own
+declared as instructions (`skillsGuide`, `instructions: true`), and the list, which people wrote,
+stays information.
+
 ### Reading one, when it's needed
 
 `read_skill` (`resources/tools.ts`) is offered wherever the agent has a skill, and gives back its

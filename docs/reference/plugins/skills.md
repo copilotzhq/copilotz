@@ -59,10 +59,10 @@ It also adds rules every read and write keeps to (`guard`).
 
 Its Views show to the model.
 
-- **To the model:** `context:skills`.
+- **To the model:** `context:skills`, `context:skillsGuide`.
 - **Agents' tools:** `read_skill`.
 - **Front ends:** [`skills-web`](skills-web.md).
-- **What it adds to resources:** `context` (`skills`).
+- **What it adds to resources:** `context` (`skills`, `skillsGuide`).
 
 ## What it needs
 
@@ -72,7 +72,7 @@ Nothing to set. It reads `skills`, resource kinds the app and other plugins fill
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.38`.
 
 ## Listing
 

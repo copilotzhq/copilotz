@@ -2,16 +2,19 @@
  * Memories live where they were learned. What Ana's agent learned in
  * Finance doesn't come up in Launch, by itself or recalled: working in
  * Launch, it reaches Launch and what Launch draws on, never Ana's other
- * spaces. In Ana's Personal space, which only she sees, it's told where
- * else it can read for her, and recalling from Finance there labels the
- * answer. Once Launch draws on Finance, recalling it there is Launch's own.
+ * spaces. In Ana's Personal space, which only she sees, what comes up by
+ * itself comes from anywhere she reads, and it's told where else it can
+ * read for her; what it brings from Finance there labels the answer. Once
+ * Launch draws on Finance, recalling it there is Launch's own. Work handed
+ * to Launch for her is hers there: what's said of her is about her, and
+ * what's known of her there is in mind.
  */
 import { assert, assertEquals } from "@std/assert";
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter } from "../../models/mod.ts";
 import { chat, type Message, type Prompt } from "../../agents/chat/mod.ts";
-import { memory } from "../../agents/memory/mod.ts";
+import { type Memory, memory, memoryExtraction } from "../../agents/memory/mod.ts";
 import { access } from "../mod.ts";
 import { join } from "./join.ts";
 import { test } from "../../../testing/mod.ts";
@@ -119,6 +122,23 @@ test("a memory stays where it was learned; recalled from there, the answer carri
       told.turn.map((c) => c.text).join().includes("- Finance [in: finance]"),
       JSON.stringify(told.turn),
     );
+    // What comes up there by itself, from anywhere she reads: where it was learned, and the answer
+    // carries it.
+    await say(ana, "what is the budget", { thread: mine });
+    const prompted = await runtime.query<Prompt>("thread.prompt", { thread: mine, agent: "lead" }, {
+      actor: { kind: "agent", id: "lead", for: ana, in: personal },
+    });
+    // What it was told (as the agent reads it now: without its own messages' private fields).
+    const recalled = [...prompted.history, ...prompted.turn].map((m) =>
+      "text" in m ? m.text ?? "" : ""
+    )
+      .find((t) => t.startsWith('<context name="recall">'));
+    assert(recalled?.includes("- the budget is 10k"), JSON.stringify(prompted));
+    assert(/\[m\w+\] \(learned \d{4}-\d{2}-\d{2}\)/.test(recalled!), recalled);
+    const answered = (await runtime.query<Message[]>("message.history", { thread: mine }, {
+      actor: ana,
+    })).at(-1);
+    assertEquals([answered?.text, answered?.sources], ["ok", ["finance"]]);
     await say(ana, "recall budget in finance", { thread: mine });
     const hers = await texts(ana, mine);
     assert(hers.some((text) => text?.includes("budget is 10k")), JSON.stringify(hers));
@@ -136,6 +156,83 @@ test("a memory stays where it was learned; recalled from there, the answer carri
     await say(ana, "recall budget in finance", { thread: launch });
     const now = await texts(bob);
     assert(now.at(-1)?.includes("budget is 10k"), JSON.stringify(now));
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("work handed to a space for someone is theirs there: about them, with them in mind", async () => {
+  // "hand <space> <text>" hands it there; the extractor reads "she lives in <city>", said of whom
+  // the agents work for, as theirs.
+  const handing: LlmAdapter = {
+    async *generate({ messages, connection }) {
+      const last = messages.findLast((m) => !("text" in m && m.text?.startsWith("<context")))!;
+      const said = "text" in last ? last.text ?? "" : "";
+      if (connection.model === "cheap") {
+        const city = said.includes("The agents here work for ana.")
+          ? /she lives in (\w+)/.exec(said)
+          : null;
+        const memories = city
+          ? [{ text: `Ana lives in ${city[1]}.`, about: "ana", core: true }]
+          : [];
+        return yield { type: "text", text: JSON.stringify({ memories }) };
+      }
+      if (last.role === "tool") return yield { type: "text", text: "sent" };
+      const hand = /hand (\w+) (.+)$/.exec(said);
+      if (hand) {
+        return yield {
+          type: "tool_call",
+          call: { id: "h", name: "send_message", input: { space: hand[1], text: hand[2] } },
+        };
+      }
+      yield { type: "text", text: "ok" };
+    },
+  };
+  const app = definePlugin({
+    name: "app",
+    resources: {
+      shared: { thread: {}, message: { labels: true }, memory: {} },
+      memory: { embedder: "hash/words", extractor: "s/cheap", every: 2 },
+      provider: { s: { adapter: "s" } },
+      agents: {
+        lead: { instructions: "Hi.", model: "s/lead", default: true, tools: ["send_message"] },
+      },
+    },
+    adapters: { llm: { s: handing } },
+  });
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [models, chat, memory, memoryExtraction, ...access, app],
+  });
+  try {
+    await runtime.call("space.create", { id: "launch", name: "Launch" }, { actor: ana });
+    const { space: personal } = await runtime.call<{ space: string }>("space.personal", {}, {
+      actor: ana,
+    });
+    const hand = async (text: string) => {
+      await runtime.call("chat.send", { text, in: personal }, { actor: ana });
+      await runtime.idle();
+    };
+    // Only agents talk in the chat it's handed: what's said of her there is about her, in Launch.
+    await hand("hand launch she lives in Braga");
+    const kept = await runtime.query<Memory[]>("memory.list", { in: "launch" }, { actor: ana });
+    assertEquals(kept.map((m) => [m.text, m.about]), [["Ana lives in Braga.", "person:ana"]]);
+    // Handed there again, a new chat: what's known of her there is in mind from the start.
+    await hand("hand launch plan the garden");
+    const chats = await runtime.query<{ _id: string; title?: string }[]>(
+      "thread.recent",
+      { in: "launch" },
+      { actor: ana },
+    );
+    const garden = chats.find((t) => t.title === "plan the garden")!;
+    const p = await runtime.query<Prompt>("thread.prompt", { thread: garden._id, agent: "lead" }, {
+      actor: { kind: "agent", id: "lead", for: ana, in: "launch" },
+    });
+    const told = [
+      ...p.history.map((m) => "text" in m ? m.text ?? "" : ""),
+      ...p.turn.map((c) => c.text),
+    ];
+    assert(told.some((t) => t.includes("Ana lives in Braga.")), JSON.stringify(told));
   } finally {
     await runtime.close();
   }

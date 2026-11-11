@@ -10,12 +10,13 @@ type Scored = Memory & { _score: number };
 /**
  * The memories most relevant to `text`, best first: by meaning (with an
  * embedder) and by shared words; `core` ones only when asked (or those
- * learned since `coreSince`).
+ * learned since `coreSince`). Several texts (a message and what came before
+ * it): each memory scores by the one it's closest to.
  */
 export async function search(
   ctx: ReadContext | ToolContext,
   scope: Scope,
-  text: string,
+  text: string | string[],
   limit: number,
   o: { core?: boolean; coreSince?: string; least?: number } = {},
 ): Promise<Scored[]> {
@@ -28,20 +29,30 @@ export async function search(
       ? { $or: [{ core: { $ne: true } }, { at: { $gte: o.coreSince } }] }
       : { core: { $ne: true } }),
   };
-  const query = words(text);
-  const [vector] = await vectors(ctx, [text], {
+  const texts = [...new Set([text].flat().filter((t) => t.trim()))];
+  if (!texts.length) return [];
+  const queries = texts.map(words);
+  const found = await vectors(ctx, texts, {
     thread: scope.thread,
     ...(scope.in ? { space: scope.in } : {}),
-  }) ?? [];
-  const candidates: Scored[] = vector
-    ? await memories.nearest(vector, { filter, limit: limit * 4 })
-    : (await memories.find(filter, { sort: { at: -1 }, limit: 500 })).map((m) => ({
-      ...m,
-      _score: 0,
-    }));
-  return candidates
-    .map((m) => ({ ...m, _score: m._score + 0.2 * overlap(query, m.text) }))
-    .filter((m) => m._score >= (o.least ?? 0) && (vector || m._score > 0))
+  });
+  // Each memory, at its closest: by meaning to any of the texts, plus the words it shares with it.
+  const best = new Map<string, Scored>();
+  const score = (m: Scored) => {
+    const total = m._score + 0.2 * Math.max(...queries.map((q) => overlap(q, m.text)));
+    if (total > (best.get(m._id)?._score ?? -Infinity)) best.set(m._id, { ...m, _score: total });
+  };
+  if (found) {
+    const near = await Promise.all(
+      found.map((vector) => memories.nearest(vector, { filter, limit: limit * 4 })),
+    );
+    near.flat().forEach(score);
+  } else {
+    (await memories.find(filter, { sort: { at: -1 }, limit: 500 }))
+      .forEach((m) => score({ ...m, _score: 0 }));
+  }
+  return [...best.values()]
+    .filter((m) => m._score >= (o.least ?? 0) && (found || m._score > 0))
     .sort((a, b) => b._score - a._score)
     .slice(0, limit);
 }

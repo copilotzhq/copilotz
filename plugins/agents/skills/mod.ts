@@ -33,7 +33,7 @@ import { skillFile } from "./collections/skill-file.ts";
 import { tools } from "./resources/tools.ts";
 import { problems } from "./shared/check.ts";
 import { appSkills } from "./shared/skills.ts";
-import { skillsContext } from "./views/context.ts";
+import { skillsContext, skillsGuide } from "./views/context.ts";
 
 export * from "./contract.ts";
 export { planning } from "./resources/planning.ts";
@@ -56,10 +56,10 @@ export const skills: Plugin = definePlugin({
     "skill.update": updateAction,
     "skill.delete": deleteAction,
   },
-  views: { "context:skills": skillsContext },
+  views: { "context:skillsGuide": skillsGuide, "context:skills": skillsContext },
   resources: {
-    // In the stable system text: the skills an agent has, by name.
-    context: { skills: { place: "system" } },
+    // In the stable system text: how to use skills (instructions), then those it has, by name.
+    context: { skillsGuide: { place: "system", instructions: true }, skills: { place: "system" } },
     tools,
     // With the access plugin: a space's skills are its managers' to change, everyone's there to use.
     shared: { skill: { write: "manage" }, skillFile: { write: "manage" } },

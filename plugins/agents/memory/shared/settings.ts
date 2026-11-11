@@ -15,6 +15,11 @@ export type MemorySettings = {
   extractor?: ModelRef;
   /** Shared messages per extraction (8). */
   every?: number;
+  /**
+   * How long a conversation is quiet, in milliseconds, before what it said
+   * since its last extraction is read anyway (10 minutes); 0: only `every`.
+   */
+  quiet?: number;
   /** The agents with memory (all by default). */
   agents?: string[];
 };

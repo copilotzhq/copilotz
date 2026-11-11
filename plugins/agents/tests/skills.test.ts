@@ -122,8 +122,11 @@ test("the app's skills: listed by name and purpose, read on demand, as each agen
     const thread = await say(rt, ana, space, "hello");
     const lead = await prompt(rt, thread, "lead");
     const section = listed(lead)!;
-    // Both, by name: planning before weekly, each on one line, after a short guide.
-    assertStringIncludes(section, "read_skill");
+    // How to use them, as instructions (no data tags), before the list: both, by name, planning
+    // before weekly, each on one line.
+    const guide = lead.system.findIndex((s) => s.startsWith("You have skills:"));
+    assert(guide >= 0 && guide < lead.system.indexOf(section), JSON.stringify(lead.system));
+    assertStringIncludes(lead.system[guide], "read_skill");
     assert(
       section.indexOf("- planning: Plan work") < section.indexOf("- weekly: Write the weekly"),
     );
@@ -135,6 +138,7 @@ test("the app's skills: listed by name and purpose, read on demand, as each agen
     assert(!focused.includes("weekly"));
     const plain = await prompt(rt, thread, "plain");
     assertEquals(listed(plain), undefined);
+    assert(!plain.system.some((s) => s.startsWith("You have skills:")), "no guide without skills");
     assert(!plain.tools.some((t) => t.name === "read_skill"));
 
     // Reading one: its instructions, with its files; then a file; then what isn't there.

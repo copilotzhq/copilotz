@@ -1,12 +1,21 @@
 /**
  * Memory across conversations: agents remember (updating what they already
  * knew), core memories are always in mind, relevant ones come up on their
- * own, recall searches by meaning and words, forget hides, and an extractor
- * writes memories down every few messages. Embeddings are the offline `hash`
- * adapter (word overlap), so similarity is predictable.
+ * own (for what the conversation is about, saying where they were learned),
+ * recall searches by meaning and words and opens where a memory was learned,
+ * forget hides, and an extractor writes memories down every few messages or
+ * once a conversation is quiet. Embeddings are the offline `hash` adapter
+ * (word overlap), so similarity is predictable.
  */
 import { assert, assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
-import { createRuntime, definePlugin, type Store } from "../../../runtime/mod.ts";
+import {
+  type Actor,
+  type Clock,
+  createRuntime,
+  definePlugin,
+  manualClock,
+  type Store,
+} from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../../stores/sql/postgres/mod.ts";
@@ -39,7 +48,11 @@ const text = (m: LlmMessage) => "text" in m ? m.text ?? "" : "";
  * (! for core), "about <who>: remember <text>", "recall <query>", "forget <id>".
  * The extractor turns "I live in <city>" into a core memory.
  */
-async function start(make: () => Store | Promise<Store>, embedder = "hash/words") {
+async function start(
+  make: () => Store | Promise<Store>,
+  embedder = "hash/words",
+  o: { clock?: Clock; quiet?: number } = {},
+) {
   const tools: string[] = [];
   const extractor: string[] = [];
   const script: LlmAdapter = {
@@ -49,7 +62,11 @@ async function start(make: () => Store | Promise<Store>, embedder = "hash/words"
       const last = text(said.at(-1)!);
       if (connection.model === "cheap") {
         extractor.push(last);
-        const city = last.match(/ana[^:]*: I live in (\w+)/);
+        // Her own words, or said of her where its agents work for her.
+        const city = last.match(/ana[^:]*: I live in (\w+)/) ??
+          (last.includes("The agents here work for ana.")
+            ? last.match(/she lives in (\w+)/)
+            : null);
         const memories = city
           ? [{ text: `Ana lives in ${city[1]}.`, about: "ana", core: true }]
           : [];
@@ -71,6 +88,7 @@ async function start(make: () => Store | Promise<Store>, embedder = "hash/words"
       } else if ((m = last.match(/remember(!?) (.+)$/))) {
         yield call("remember", { text: m[2], ...(m[1] ? { core: true } : {}) });
       } else if ((m = last.match(/recall (.+)$/))) yield call("recall", { query: m[1] });
+      else if ((m = last.match(/source (\S+)$/))) yield call("recall", { source: m[1] });
       else if ((m = last.match(/forget (\S+)$/))) yield call("forget", { id: m[1] });
       else yield { type: "text", text: "ok" };
     },
@@ -80,7 +98,12 @@ async function start(make: () => Store | Promise<Store>, embedder = "hash/words"
     resources: {
       provider: { script: { adapter: "script" }, down: { adapter: "down" } },
       agents: { agent: { instructions: "Help.", model: "script/main" } },
-      memory: { embedder, extractor: "script/cheap", every: 4 },
+      memory: {
+        embedder,
+        extractor: "script/cheap",
+        every: 4,
+        ...(o.quiet !== undefined ? { quiet: o.quiet } : {}),
+      },
     },
     adapters: {
       llm: { script },
@@ -93,14 +116,19 @@ async function start(make: () => Store | Promise<Store>, embedder = "hash/words"
   const runtime = await createRuntime({
     store: await make(),
     plugins: [models, chat, memory, memoryExtraction, app],
+    ...(o.clock ? { clock: o.clock } : {}),
   });
-  const say = async (words: string, thread?: string, from = "ana") => {
-    const sent = await runtime.call<{ thread: string }>("chat.send", { thread, text: words, from });
+  const say = async (words: string, thread?: string, from = "ana", actor?: Actor) => {
+    const sent = await runtime.call<{ thread: string }>(
+      "chat.send",
+      { thread, text: words, from },
+      actor ? { actor } : undefined,
+    );
     await runtime.idle();
     return sent.thread;
   };
-  const prompt = (thread: string) =>
-    runtime.query<Prompt>("thread.prompt", { thread, agent: "agent" });
+  const prompt = (thread: string, actor?: Actor) =>
+    runtime.query<Prompt>("thread.prompt", { thread, agent: "agent" }, actor ? { actor } : {});
   const memories = () =>
     runtime.query<Memory[]>("memory.core", {
       agent: "agent",
@@ -138,10 +166,11 @@ each("core memories are in mind in every conversation with the person", async (m
   const { runtime, say, prompt } = await start(make);
   await say("remember! Ana is a landscape architect");
   // A different conversation with Ana: told when it begins. The system text says how to remember,
-  // the same in every conversation (so cached across them).
+  // as instructions (not data), the same in every conversation (so cached across them).
   const other = await say("hello again");
   const p = await prompt(other);
-  assertStringIncludes(p.system.join("\n"), '<context name="memory">');
+  assert(p.system.some((s) => s.startsWith("You remember across conversations.")));
+  assert(!p.system.join("\n").includes('<context name="memory">'));
   assert(!p.system.join("\n").includes("landscape"));
   assertStringIncludes(toldIn(p), '<context name="remembered">');
   assertStringIncludes(toldIn(p), "Ana is a landscape architect");
@@ -259,5 +288,68 @@ each("the extractor writes down what's worth keeping, every few messages", async
   await say("still", thread);
   assertStringIncludes(extractor.at(-1)!, "<known>\n- Ana lives in Porto.");
   assertEquals((await memories()).length, 1, "the same memory again is not repeated");
+  await runtime.close();
+});
+
+each(
+  "what comes up on its own is for what the conversation is about, and says where it was learned",
+  async (make) => {
+    const { runtime, say, prompt } = await start(make);
+    const asked = await say("what is my dog called?");
+    // Learned elsewhere meanwhile; then a reply that names nothing.
+    await say("remember Ana's dog is called Rex");
+    await say("see above", asked);
+    const told = toldIn(await prompt(asked));
+    assertMatch(
+      told,
+      /- Ana's dog is called Rex \[m\w+\] \(learned \d{4}-\d{2}-\d{2}\)/,
+    );
+    // Told already, and still there whole: what comes up next is only what's new.
+    await say("remember Ana's dog is called Rex and is 3 years old");
+    await say("how old is the dog called Rex?", asked);
+    const again = toldIn(await prompt(asked));
+    assertEquals(again.split("- Ana's dog is called Rex [").length - 1, 1, again);
+    assertStringIncludes(again, "- Ana's dog is called Rex and is 3 years old [");
+    // A reply alone, in a conversation about nothing it knows, brings nothing up.
+    const other = await say("see above");
+    assert(!toldIn(await prompt(other)).includes("Rex"));
+    await runtime.close();
+  },
+);
+
+each("recall says where each memory was learned, and opens it", async (make) => {
+  const { runtime, tools, say } = await start(make);
+  const learned = await say("remember Ana's dog is called Rex");
+  const id = tools.at(-1)!.slice(12, -2);
+  await say("recall dog called", learned);
+  assertMatch(tools.at(-1)!, /Rex \[m\w+\] \(learned here \d{4}-\d{2}-\d{2}\)$/);
+  const other = await say("recall dog called");
+  assertMatch(tools.at(-1)!, /Rex \[m\w+\] \(learned \d{4}-\d{2}-\d{2}\)$/);
+  await say(`source ${id}`, other);
+  const opened = tools.at(-1)!;
+  assertStringIncludes(opened, `Where [${id}] was learned, conversation ${learned}`);
+  assertStringIncludes(opened, "→ ana: remember Ana's dog is called Rex");
+  assertStringIncludes(opened, "- agent: done");
+  await say("source m000000", other);
+  assertEquals(tools.at(-1), "No memory m000000 that you can read.");
+  await runtime.close();
+});
+
+each("a quiet conversation is read for memories without waiting for more", async (make) => {
+  const clock = manualClock(Date.now());
+  const { runtime, extractor, say, memories } = await start(make, "hash/words", {
+    clock,
+    quiet: 60_000,
+  });
+  await say("I live in Lisbon");
+  assertEquals(extractor.length, 0, "2 of 4 messages");
+  clock.advance(61_000);
+  await runtime.idle();
+  assertEquals(extractor.length, 1, "quiet: read");
+  assertEquals((await memories()).map((m) => m.text), ["Ana lives in Lisbon."]);
+  // Nothing new since: quiet again reads nothing.
+  clock.advance(61_000);
+  await runtime.idle();
+  assertEquals(extractor.length, 1);
   await runtime.close();
 });

@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.41 — 2026-11-11
 
 - **In a person's own Personal space, what its agents drew on from elsewhere no longer gets in the
   way.** Only that person is there, and they see every space their agents read for them:

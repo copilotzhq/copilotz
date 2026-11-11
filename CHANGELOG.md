@@ -1,3 +1,18 @@
+## Unreleased
+
+- **In a person's own Personal space, what its agents drew on from elsewhere no longer gets in the
+  way.** Only that person is there, and they see every space their agents read for them:
+  - **Agents' work there is no longer refused.** An agent working for someone from their Personal
+    space, having read another space in that turn (a memory that came up by itself, a conversation
+    it read, earlier messages that did), could still write it into any space they may, yet not into
+    their Personal space itself where labels aren't kept (a board, a document, a file, a computer
+    job): `needs_share` ("That would show what came from … to people who can't see it"), and the
+    turn failed. Since rc.39 memory reads everywhere there, so this hit most turns. It now goes as
+    it is; messages there still keep their marks, for the day the chat moves.
+  - **The chat no longer says "Uses …. Not everyone here can see it."** under its messages there.
+    They keep their `sources`; once the chat moves to a shared space, the notice and Share show
+    where they're true.
+
 ## 1.0.0-rc.40 — 2026-11-11
 
 - **MCP checks can return fresh results while declaring their state changes accurately.** Set

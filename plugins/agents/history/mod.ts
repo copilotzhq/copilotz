@@ -7,17 +7,21 @@
  *   lines in pairs (levels 1, 2, …): a binary tree over the thread. A short
  *   message is its own line, two short lines are simply joined, and a
  *   conversation that stays within the tail never calls the model.
+ * - An agent's tool steps (its calls and what they returned, which only it is
+ *   sent) leave the tail the same way, into a tree of that agent's own in the
+ *   thread, so nothing private ever merges with what others see.
  * - An agent is sent the recent messages whole (the tail) and, before them,
- *   the rest as summary lines (the outline): fine for what's recent, coarser
- *   with age. `zoom(id, n)` opens a line into the two it was made from, down
- *   to the message itself, so nothing is lost.
+ *   the rest as summary lines (the outline), its own steps' among them by
+ *   when they were written: fine for what's recent, coarser with age.
+ *   `zoom(id, n)` opens a line into the two it was made from, down to the
+ *   message or the step itself, so nothing is lost.
  * - The tail and the outline grow at their end and shrink in batches (a
  *   sawtooth), so between batches each prompt starts with the last one and
  *   reads it from the provider's prompt cache.
  * - The tail is measured by what a prompt carries for each message, in
  *   estimated tokens: its text, files' content, transcripts, images and PDFs,
- *   and agents' tool steps (which leave it without a line). Until it first
- *   overflows, every message is sent whole.
+ *   and agents' tool steps. Until it first overflows, every message is sent
+ *   whole.
  * - An agent with a window by age (`history: { maxAge }`) is sent only the
  *   lines whose newest message is in it: each line says when that was.
  */

@@ -8,11 +8,12 @@
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { Outline } from "../collections/outline.ts";
 import type { Outlined } from "../shared/lines.ts";
+import { hasLines } from "../shared/summarized.ts";
 
 export const sinceView = (thread: Outlined, ctx: ViewContext): string | null | undefined => {
   const state = ctx.db.collection<Outline>("outline").findOne({ _id: thread._id });
   if (state.status !== "ready") return null;
   const outline = state.value;
-  if (outline?.boundary) return outline.since;
-  return outline?.complete ? "" : undefined;
+  if (hasLines(outline)) return outline.since;
+  return state.value?.complete ? "" : undefined;
 };

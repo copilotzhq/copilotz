@@ -1,3 +1,18 @@
+## Unreleased
+
+- **An agent's tool steps keep a line of their own when they leave the tail,** so what it read and
+  ran stays in reach in a long working chat. Until now a step (an agent's tool calls with what they
+  returned, which only that agent is sent) left the tail without a line: zoom couldn't reach it and
+  `read_conversation` leaves steps out, so what an agent learned from a tool and didn't repeat in a
+  reply was gone for it. Now each step that leaves is a line in a tree of its agent's own in that
+  thread: written as the thread's are (one as it is when short, else by the summarizer from the
+  step's start and end), merged in pairs, within the outline's budget, and committed with the
+  thread's lines, so a prompt's start still changes once a cut. Only that agent is sent its lines,
+  among the thread's by when they were written (`s12+4|…`), and `zoom` opens them the same way
+  (`zoom("s12", 4)`), down to the step whole; another agent's are no line of its own to open.
+  `summary` documents of a step's tree say whose (`agent`), and the `outline` keeps each agent's
+  lines (`steps`). Steps that left before this have no line.
+
 ## 1.0.0-rc.38 — 2026-11-10
 
 - **MCP 2026-07-28 cacheable results, widget read schemas, cross-origin MCP lines, and

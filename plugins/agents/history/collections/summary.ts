@@ -1,4 +1,7 @@
-/** Summary nodes: a binary tree of lines over each thread's shared messages. */
+/**
+ * Summary nodes: a binary tree of lines over each thread's shared messages,
+ * and one over each agent's steps there, which only that agent reads.
+ */
 import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
 
 const summarySchema = {
@@ -12,6 +15,8 @@ const summarySchema = {
     bytes: { type: "integer" },
     /** Level 0: the message it summarizes. */
     message: { type: "string" },
+    /** In an agent's tree of its steps: that agent, the only one it's shown to. */
+    agent: { type: "string" },
     at: { type: "string" },
   },
   required: ["thread", "level", "index", "text", "bytes", "at"],

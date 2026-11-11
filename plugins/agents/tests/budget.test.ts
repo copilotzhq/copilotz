@@ -135,7 +135,7 @@ test("summarized: short messages all stay whole until the budget is spent, not 5
   }
 });
 
-test("summarized: tool steps count, leave without a line, and the latest request stays whole", async () => {
+test("summarized: tool steps count, leave as their agent's own lines, and the latest request stays whole", async () => {
   // Each fetch is about 1,000 tokens: two a task, so the tail overflows on the third task.
   const { runtime, sent, summarized, say, prompt, thread } = await run({ tail: [2_500, 5_000] });
   try {
@@ -148,14 +148,45 @@ test("summarized: tool steps count, leave without a line, and the latest request
     const kept = p.history.filter((m) => m.role === "tool").length;
     assert(kept > 0 && kept <= 4, `${kept} fetches kept`);
     assert(weigh(p.history) < 5_000 + 500, `${weigh(p.history)} tokens`);
-    // Only what was said became lines (short ones, as they are): never the fetches.
+    // What was said became the thread's lines (short ones, as they are), never the fetches; the
+    // fetches that left became lines of the agent's own, each compressed from the step.
     const lines = await runtime.query<Summary[]>("summary.of", { thread: thread() });
-    assert(lines.some((l) => l.text.includes("task 0")), "the first request is a line");
-    assert(lines.every((l) => !l.text.includes("xxxx")), "never a fetch");
-    assertEquals(summarized, [], "short lines need no summarizer");
+    const shared = lines.filter((l) => !l.agent);
+    assert(shared.some((l) => l.text.includes("task 0")), "the first request is a line");
+    assert(shared.every((l) => !l.text.includes("xxxx")), "never a fetch");
+    const steps = lines.filter((l) => l.agent === "agent" && l.level === 0);
+    assert(steps.length > 0, "the fetches that left are the agent's lines");
+    assertEquals(summarized.length, steps.length, "only steps needed the summarizer");
+    assert(summarized.every((s) => s.startsWith("Compaction: compress step")));
+    assertStringIncludes(summarized[0], "fetch({}) → page xxxx");
+    assertStringIncludes(said(p.history), "s0+1|S1");
     // Within a turn, nothing is cut: each call's latest word from ana is its own request.
     const asked = sent.map((messages) => text(messages.findLast((m) => m.role === "user")!));
     assertEquals(asked, [0, 1, 2, 3].flatMap((i) => Array(3).fill(`ana: task ${i}`)));
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("summarized: a prompt's start moves only when its tail cuts, its steps' lines with it", async () => {
+  const { runtime, sent, say } = await run({ tail: [2_500, 5_000] });
+  try {
+    for (let i = 0; i < 8; i++) await say(`task ${i}`);
+    const plain = (messages: LlmMessage[]) =>
+      JSON.stringify(messages.map((m) => ({ ...m, cache: undefined })));
+    const outline = (messages: LlmMessage[]) =>
+      text(messages[0]).startsWith("Earlier in this conversation") ? text(messages[0]) : "";
+    // Each call's prompt starts with the last one's, but where the outline changed: a cut.
+    const breaks: number[] = [];
+    const cuts: number[] = [];
+    for (let i = 1; i < sent.length; i++) {
+      const before = sent[i - 1].slice(0, -1);
+      if (plain(sent[i].slice(0, before.length)) !== plain(before)) breaks.push(i);
+      if (outline(sent[i]) !== outline(sent[i - 1])) cuts.push(i);
+    }
+    assert(cuts.length >= 2, `${cuts.length} cuts`);
+    assertEquals(breaks, cuts);
+    assertStringIncludes(outline(sent.at(-1)!), "\ns0+");
   } finally {
     await runtime.close();
   }

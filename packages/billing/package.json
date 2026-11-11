@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/billing",
-  "version": "1.0.0-rc.40",
+  "version": "1.0.0-rc.41",
   "private": true,
   "type": "module",
   "description": "What an org has to spend (credits, plans, budgets) and paying for it with Stripe, on Copilotz's usage ledger. A Copilotz plugin.",

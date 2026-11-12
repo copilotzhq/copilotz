@@ -1,0 +1,39 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Copilotz",
+  "description": "TypeScript runtime for apps that people and AI agents use alike. Plugins declare collections, Actions, Views and access rules once, and the same Actions serve a web page, a terminal, the app's own agents and MCP clients such as ChatGPT and Claude, with every write on one record. Runs on Node 24+, Deno and Bun.",
+  "excludeFolders": [
+    ".github",
+    "design",
+    "docs/_staging",
+    "examples",
+    "exporters",
+    "hosts",
+    "packages",
+    "runtime",
+    "scripts",
+    "stores",
+    "testing",
+    "tests"
+  ],
+  "excludeFiles": [
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "catalog.json",
+    "deno.json",
+    "manifest.json",
+    "package-lock.json",
+    "package.json",
+    "plugins.json"
+  ],
+  "rules": [
+    "Make every change to data an Action (defineAction) and call it from every way in: pages and tools with ctx.call, scripts with runtime.call. A tool is a thin caller of Actions; don't add a second write path.",
+    "Put access rules at the data (the shared resource or a guard), not inside Action handlers, and set allow (people, contacts, peopleOrContacts or inPerson) on every Action that outside callers use.",
+    "Test offline with a scripted model: an LlmAdapter that plays fixed moves, on memoryStore(), with await runtime.idle() before asserting. Run the tests after every change; none needs an API key or the network.",
+    "Give each agent tool a tool:<name> View that returns short text with ids the model can act on. Views and named queries read and never write; Actions write.",
+    "Throw errors meant for callers as failure(code, message, { public: true }); only a public failure's words reach an outside caller or a model.",
+    "Read who acts with personOf(ctx.actor), not ctx.actor.id (an agent's id is its own), and where with ctx.in.",
+    "Plugins reach each other only through the runtime, by name: declare requires: [\"<plugin>\"] and import only that plugin's contract.ts, never its code."
+  ]
+}

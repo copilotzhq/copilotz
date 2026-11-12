@@ -313,7 +313,7 @@ test("in front of a contact, trusted code goes beyond its caller only in an Acti
   });
 });
 
-test("bug: a tool acting as its agent's person in a contact's chat reads beyond the chat's bound", async () => {
+test("a tool acting as its agent's person in a contact's chat stays within the chat's bound", async () => {
   await setup(async ({ rt, staff, carlas }) => {
     // In the team's chat, as Ana: all the shop reaches.
     assertEquals(
@@ -327,7 +327,7 @@ test("bug: a tool acting as its agent's person in a contact's chat reads beyond 
   });
 });
 
-test("bug: a write refused for approval doesn't say where to (`to`) to whoever called", async () => {
+test("a write refused for approval says where to (`to`, `named`) to whoever called", async () => {
   await setup(async ({ rt, shop, staff, carlas }) => {
     const refused = await rt.call("test.say", { thread: carlas, in: shop }, {
       actor: { kind: "agent", id: "lead", for: ana, in: shop, thread: staff },

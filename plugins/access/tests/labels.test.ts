@@ -222,7 +222,8 @@ each(
       "finance",
       "launch",
     ]]);
-    // Written in Launch (she said yes): Finance alone. Bob, who can't see Finance, reads it all.
+    // Written in Launch (she said yes): Bob, who can't see Finance, reads it all, and its record
+    // names nothing Launch's people can't see.
     await rt.call("summarize", {
       id: "l1",
       from: ["launch", "finance"],
@@ -230,7 +231,7 @@ each(
       as: "answer",
     }, { actor: { ...mine, approved: ["launch"] } });
     assertEquals((await found(rt, "answer", "l1", bob)).map((d) => [d.text, d.drew]), [
-      ["budget + plan", ["finance"]],
+      ["budget + plan", undefined],
     ]);
     // From Launch itself, nothing else: it says nothing.
     await rt.call("summarize", { id: "l2", from: ["launch"], into: "launch", as: "answer" }, {

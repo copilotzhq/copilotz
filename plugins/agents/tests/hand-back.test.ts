@@ -20,6 +20,7 @@ import { type Approval, chat, type Message, type Thread } from "../chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
 import { test } from "../../../testing/mod.ts";
+import { yesToShares } from "./yes.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -103,6 +104,8 @@ async function setup(fn: (s: Setup) => Promise<void>) {
           in: where,
         }, { actor: ana });
         await rt.idle();
+        // Handing it over asks first too (its people can't all see what the work may read).
+        await yesToShares(rt, ana);
         return thread;
       },
       answer: async (approval, answer) => {
@@ -134,7 +137,9 @@ test("from Launch, Scout's answer waits on Ana: Launch's people can't all see Re
     assertStringIncludes(asked.preview!, "scout heard");
     // Nothing went back yet, and North still waits on it.
     assert(!(await said(s, thread)).some(([from]) => from === "scout"));
-    assert(!(await said(s, thread)).some(([from]) => from === "north"));
+    assert(
+      !(await said(s, thread)).some(([from, words]) => from === "north" && words.includes("heard")),
+    );
     // Only these two answers.
     await assertRejects(
       () => s.rt.call("chat.approve", { approval: asked._id, answer: "once" }, { actor: ana }),

@@ -17,6 +17,7 @@ import type { Routine } from "../routines/collections/routine.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
 import { test } from "../../../testing/mod.ts";
+import { yesToShares } from "./yes.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -103,6 +104,8 @@ async function setup(
         ...(where.thread || where.in ? where : { in: personal }),
       }, { actor: ana });
       await rt.idle();
+      // Saying something in another space's chat from Personal asks her first: she says yes.
+      await yesToShares(rt, ana);
       return thread;
     };
     const there = await say("@east how's the launch going?", { in: launch });

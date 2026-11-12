@@ -3,8 +3,10 @@ import { type Context, principalOf } from "../../../../runtime/mod.ts";
 import type { LlmTool } from "../../../models/contract.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
+import { beyond } from "../../../access/spaces/contract.ts";
 import { agentsNamed, now, rosterOf, SEND, type Team } from "./agents.ts";
 import { starts } from "./delivery.ts";
+import { previewOf, type Refused } from "./share.ts";
 import { type Agent, DELEGATED, settingsOf, type Turn } from "./types.ts";
 
 export type Send = {
@@ -13,7 +15,34 @@ export type Send = {
   thread?: Thread;
   /** It goes to another space: trusted code writes it, once its person may. */
   across?: true;
+  /**
+   * Not sent: it would go where not everyone reaches what this work may read
+   * (a share, see share.ts), until the person it's done for says yes to there.
+   */
+  share?: Refused;
 };
+
+/**
+ * Whether what's sent elsewhere goes beyond this work's bound, there (`to`:
+ * a space, or a chat, `thread:<id>`), and isn't approved yet: the share it
+ * waits on, with what it says. Trusted code writes it there, so the rules
+ * don't ask: this does, as they would of the agent's own write.
+ */
+async function beyondHere(
+  ctx: Context,
+  to: string,
+  text: string,
+  approved: string[],
+): Promise<Send | undefined> {
+  const wider = await beyond(ctx, to);
+  if (!wider || approved.includes(wider.to)) return undefined;
+  const preview = previewOf({ text });
+  return {
+    output: `Not sent: that would show ${wider.named} what this conversation may draw on, and ` +
+      "the person you work for has to say yes first.",
+    share: { to: wider.to, named: wider.named, ...(preview ? { preview } : {}) },
+  };
+}
 
 /**
  * Hands work to an agent of another space, in a new chat there that its members
@@ -29,7 +58,8 @@ async function handOver(
   id: string,
   input: Record<string, unknown>,
   space: string,
-  where?: string,
+  where: string | undefined,
+  approved: string[],
 ): Promise<Send> {
   const fail = (why: string) => ({ output: `Not sent: ${why}` });
   const principal = principalOf(ctx.actor);
@@ -52,6 +82,9 @@ async function handOver(
   }
   const text = String(input.text ?? "");
   if (!text) return fail("the message is empty.");
+  // Its members would read it: what this work may read beyond them, its person says yes to first.
+  const waits = await beyondHere(ctx, space, text, approved);
+  if (waits) return waits;
   const at = now();
   const fresh = `${id}:thread`;
   const chat = `/thread/${encodeURIComponent(fresh)}?in=${encodeURIComponent(space)}`;
@@ -99,7 +132,8 @@ async function toChat(
   id: string,
   input: Record<string, unknown>,
   thread: string,
-  where?: string,
+  where: string | undefined,
+  approved: string[],
 ): Promise<Send> {
   const fail = (why: string) => ({ output: `Not sent: ${why}` });
   const principal = principalOf(ctx.actor);
@@ -132,6 +166,9 @@ async function toChat(
   }
   const text = String(input.text ?? "");
   if (!text) return fail("the message is empty.");
+  // Whoever reads that chat would read it: beyond what they reach, its person says yes first.
+  const waits = await beyondHere(ctx, `thread:${thread}`, text, approved);
+  if (waits) return waits;
   const { called, from } = ends(as, t, where);
   const title = chat.title ? `"${chat.title.slice(0, 80)}"` : "that chat";
   return {
@@ -180,12 +217,16 @@ export const prepare = async (
   known: () => Promise<Set<string>>,
   /** The space the turn's thread is in: what it writes goes there too. */
   where?: string,
+  /** Where its person said yes to this call going, beyond what this work's bound shows. */
+  approved: string[] = [],
 ): Promise<Send> => {
   // A chat that's there already, other than this one: wherever it is.
   const chat = typeof input.thread === "string" && input.thread.trim() ? input.thread : undefined;
-  if (chat && chat !== t.thread) return await toChat(ctx, t, id, input, chat, where);
+  if (chat && chat !== t.thread) return await toChat(ctx, t, id, input, chat, where, approved);
   const space = typeof input.space === "string" ? input.space : undefined;
-  if (space && space !== where) return await handOver(ctx, t, step, id, input, space, where);
+  if (space && space !== where) {
+    return await handOver(ctx, t, step, id, input, space, where, approved);
+  }
   if (space && !input.to) return { output: "Not sent: you're working in that space already." };
   const team = await here();
   const to = String(input.to ?? "");

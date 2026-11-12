@@ -22,6 +22,7 @@ import { terminal } from "../../../hosts/terminal/mod.ts";
 import { access } from "../mod.ts";
 import { accessTerminal } from "../spaces/terminal.ts";
 import { test, testWho, ticketFor } from "../../../testing/mod.ts";
+import { yesToShares } from "../../agents/tests/yes.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 
@@ -129,6 +130,8 @@ test("the same who, for whom and where reach the same, whichever way they came i
       probes.length = 0;
       await start();
       await rt.idle();
+      // Handed over from her Personal chat, it waits on her yes: she says it.
+      await yesToShares(rt, ana);
       const there = probes.filter((p) => p.in === launch);
       assertEquals(there.length, 1, `${way}: one probe in Launch (${JSON.stringify(probes)})`);
       return [way, there[0]] as const;

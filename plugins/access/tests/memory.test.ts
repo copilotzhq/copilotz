@@ -18,6 +18,7 @@ import { type Memory, memory, memoryExtraction } from "../../agents/memory/mod.t
 import { access } from "../mod.ts";
 import { join } from "./join.ts";
 import { test } from "../../../testing/mod.ts";
+import { yesToShares } from "../../agents/tests/yes.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -212,6 +213,8 @@ test("work handed to a space for someone is theirs there: about them, with them 
     const hand = async (text: string) => {
       await runtime.call("chat.send", { text, in: personal }, { actor: ana });
       await runtime.idle();
+      // From her Personal space into Launch: she says yes to handing it over.
+      await yesToShares(runtime, ana);
     };
     // Only agents talk in the chat it's handed: what's said of her there is about her, in Launch.
     await hand("hand launch she lives in Braga");

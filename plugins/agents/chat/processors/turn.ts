@@ -34,7 +34,7 @@ import { answer, delivery } from "../shared/delivery.ts";
 import { liveWriter } from "../shared/live.ts";
 import { originOf } from "../shared/origin.ts";
 import { prepare, type Send } from "../shared/send.ts";
-import { previewOf, refusedShare, shareAsk } from "../shared/share.ts";
+import { previewOf, type Refused, refusedShare, shareAsk } from "../shared/share.ts";
 import { audience } from "../../../access/spaces/contract.ts";
 import { noted, startedWith } from "../shared/summary.ts";
 import { runTool, type ToolAt, toolText } from "../shared/tools.ts";
@@ -118,13 +118,46 @@ export const turnProcessor: ProcessorDef = {
 };
 
 /**
- * Runs one of a step's calls, as chat's runner does, in its own branch
- * (`key`). One whose tool's write was refused as a share (somewhere not
- * everyone could see all this work may read: `needs_approval`) asks the
- * person the agent works for, as anything else is asked (shared/share.ts):
- * it's told what it waits for, or, once they said yes (now, or before: in
- * this conversation, for its routine), it runs again with that place
- * approved. A contact's turn has nobody to ask: the refusal is what it reads.
+ * A call that may be a share (somewhere not everyone could see all this work
+ * may read): `attempt` tries it with the places its person said yes to, and
+ * says which place it waits on (`share`), if any. That asks the person the
+ * agent works for, as anything else is asked (shared/share.ts): it's told
+ * what it waits for, or, once they said yes (now, or before: in this
+ * conversation, for its routine), it's tried again with that place approved.
+ * A contact's turn has nobody to ask: what it was refused is what it reads.
+ */
+async function sharing<R extends { output: string; share?: Refused }>(
+  ctx: Context,
+  acting: Acting,
+  input: unknown,
+  at: ToolAt,
+  attempt: (approved: string[]) => Promise<R>,
+): Promise<R | { output: string }> {
+  const approved: string[] = [];
+  let tried = await attempt(approved);
+  const person = personOf(ctx.actor);
+  for (let places = 0; person && tried.share && places < 8; places++) {
+    const refused: Refused = tried.share;
+    if (approved.includes(refused.to)) break;
+    // Who'd see it there, and what it would say (its refusal's words, else the call's own).
+    const preview = refused.preview ?? previewOf(input);
+    const share = { ...await audience(ctx, refused.to), ...(preview ? { preview } : {}) };
+    const asking = { ...acting(approved), ...at } as ToolContext;
+    const said = await ask(
+      asking,
+      shareAsk(share, { person, ...at, in: ctx.in, origin: originOf(ctx.actor) }),
+    );
+    if (said !== true) return { output: said };
+    approved.push(refused.to);
+    tried = await attempt([...approved]);
+  }
+  return tried;
+}
+
+/**
+ * Runs one of a step's tool calls, as chat's runner does, in its own branch
+ * (`key`): a write its tool makes that's refused as a share (`needs_approval`)
+ * waits on its person's yes, and runs again with that place approved.
  */
 async function runCall(
   ctx: Context,
@@ -133,24 +166,11 @@ async function runCall(
   call: { name: string; input: unknown },
   at: ToolAt,
 ): Promise<string> {
-  const approved: string[] = [];
-  let ran = await runTool(acting(approved).branch(key), call.name, call.input, at);
-  const person = personOf(ctx.actor);
-  for (let places = 0; person && places < 8; places++) {
-    const refused = refusedShare(ran.error);
-    if (!refused || approved.includes(refused.to)) break;
-    // Who'd see it there, and what it would say (its refusal's words, else the call's own).
-    const preview = refused.preview ?? previewOf(call.input);
-    const share = { ...await audience(ctx, refused.to), ...(preview ? { preview } : {}) };
-    const asking = { ...acting(approved), ...at } as ToolContext;
-    const said = await ask(
-      asking,
-      shareAsk(share, { person, ...at, in: ctx.in, origin: originOf(ctx.actor) }),
-    );
-    if (said !== true) return said;
-    approved.push(refused.to);
-    ran = await runTool(acting([...approved]).branch(key), call.name, call.input, at);
-  }
+  const ran = await sharing(ctx, acting, call.input, at, async (approved) => {
+    const ran = await runTool(acting(approved).branch(key), call.name, call.input, at);
+    const share = refusedShare(ran.error);
+    return share ? { ...ran, share } : ran;
+  });
   return ran.output;
 }
 
@@ -323,28 +343,39 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
       const returned = resumed?.outputs[i];
       // A call run again once its question was answered: as itself, told the answer.
       const answering = resumed?.again?.[i];
+      // Where it runs, and how it asks its person (a yes it can't go on without).
+      const at = async (): Promise<ToolAt> => ({
+        agent: t.agent,
+        thread: t.thread,
+        trigger: t.trigger,
+        callId: answering?.call ?? `${id}:${i}`,
+        // Only a call that was written and never returned may have run already.
+        retry: !!resumed && !(fresh && answering),
+        ask: (question) => {
+          asks[i] = { to: question.to, text: question.text };
+          return questionOf(i);
+        },
+        ...(answering ? { answer: await answerTo(ctx, answering.question) } : {}),
+      });
       if (messaging && call.name === SEND) {
-        send = await prepare(ctx, t, id, `${id}:${i}`, call.input, here, known, current.in);
-        output = send.output;
+        // Sent elsewhere, beyond what this work's bound shows there, it waits on its person's yes.
+        const sent = await sharing(
+          ctx,
+          acting,
+          call.input,
+          await at(),
+          (approved) =>
+            prepare(ctx, t, id, `${id}:${i}`, call.input, here, known, current.in, approved),
+        );
+        send = sent as Send;
+        output = sent.output;
       } else if (returned !== undefined) {
         // It returned before the retry: it doesn't run again.
         output = returned;
       } else {
         // Only a tool offered to it here; each in a branch of its own, as chat's runner runs them.
         output = offered.some((tool) => tool.name === call.name)
-          ? await runCall(ctx, acting, `${step}.${i}`, call, {
-            agent: t.agent,
-            thread: t.thread,
-            trigger: t.trigger,
-            callId: answering?.call ?? `${id}:${i}`,
-            // Only a call that was written and never returned may have run already.
-            retry: !!resumed && !(fresh && answering),
-            ask: (question) => {
-              asks[i] = { to: question.to, text: question.text };
-              return questionOf(i);
-            },
-            ...(answering ? { answer: await answerTo(ctx, answering.question) } : {}),
-          })
+          ? await runCall(ctx, acting, `${step}.${i}`, call, await at())
           : `Error: Unknown tool "${call.name}"`;
         // What it returned (and asked) is on record at once: a retry won't run it again. If
         // that write fails, a retry runs it again, as itself.

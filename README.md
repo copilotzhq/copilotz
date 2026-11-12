@@ -152,7 +152,7 @@ ana sees: Tue 10:00, Wed 15:00
 ```sh
 npm install copilotz                 # Node 24+ (npm, pnpm, yarn)
 bun add copilotz                     # Bun
-deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
+deno add jsr:@copilotz/copilotz      # Deno 2.9+ (or `deno add npm:copilotz`)
 ```
 
 Save the example as `salon.ts`, and run it with an OpenAI key:
@@ -163,8 +163,8 @@ OPENAI_API_KEY=sk-… node salon.ts    # or bun salon.ts, or deno run -A salon.t
 
 On Deno, map the name `copilotz` in `deno.json`
 (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.45"`) so the imports read the same everywhere.
-Copilotz runs on Node, Deno and Bun, and it's built on web standards for Cloudflare Workers and the
-browser.
+Copilotz runs on Node 24+, Deno 2.9+ and Bun, and it's built on web standards for Cloudflare Workers
+and the browser.
 
 ## How it works
 

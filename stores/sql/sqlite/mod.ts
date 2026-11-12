@@ -38,11 +38,27 @@ export type SqliteStatement = {
 const BUN_SQLITE = "bun:sqlite";
 const NODE_SQLITE = "node:sqlite";
 
+/**
+ * The oldest Deno whose `node:sqlite` the store runs on. Deno 2.5's lacks
+ * numbered parameters (`?1`: "column index out of range"), SQLite's error
+ * codes and `isTransaction`.
+ */
+const DENO = [2, 9];
+
 /** The runtime's own SQLite: Bun's, else `node:sqlite` (Node, Deno). */
 async function builtin(path: string): Promise<SqliteDatabase> {
   if ("Bun" in globalThis) {
     const { Database } = await import(BUN_SQLITE);
     return new Database(path, { create: true });
+  }
+  const deno = (globalThis as { Deno?: { version?: { deno?: string } } }).Deno?.version?.deno;
+  const [major, minor] = (deno ?? "").split(".").map(Number);
+  if (deno && (major < DENO[0] || (major === DENO[0] && minor < DENO[1]))) {
+    throw new Error(
+      `The SQLite store needs Deno ${DENO.join(".")} or later, and this is Deno ${deno}: ` +
+        "its node:sqlite lacks what the store uses (numbered parameters, SQLite's error " +
+        "codes). Upgrade Deno (`deno upgrade`), or use another store.",
+    );
   }
   const { DatabaseSync } = await import(NODE_SQLITE);
   return new DatabaseSync(path);
@@ -211,7 +227,14 @@ const reading = (text: string) => {
 };
 export async function sqliteStore(options: {
   path: string;
-  /** Each connection's page cache (64 MiB) and memory-mapped reads (256 MiB). */
+  /**
+   * Each connection's page cache, in KiB (2048, SQLite's own size), and how
+   * much of the file reads may map into memory, in MiB (none). Two
+   * connections are open, so the cache counts twice, and mapped pages count
+   * in the process's RSS once read: small, for containers. A large file on a
+   * machine with memory to spare reads faster with more (`cacheKiB: 65_536,
+   * mmapMiB: 256`, the sizes before 1.0.0-rc.46).
+   */
   cacheKiB?: number;
   mmapMiB?: number;
   /** Opens a connection (two are opened: one writes, one reads). Default: the runtime's own SQLite. */
@@ -235,9 +258,8 @@ export async function sqliteStore(options: {
     const db = await (options.open ?? builtin)(options.path);
     db.exec(
       "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL; " +
-        // SQLite's default page cache is 2 MB: too small for indexes over a growing file.
-        `PRAGMA cache_size = -${options.cacheKiB ?? 65_536}; PRAGMA mmap_size = ${
-          (options.mmapMiB ?? 256) * 1024 * 1024
+        `PRAGMA cache_size = -${options.cacheKiB ?? 2_048}; PRAGMA mmap_size = ${
+          (options.mmapMiB ?? 0) * 1024 * 1024
         };`,
     );
     return db;

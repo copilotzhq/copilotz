@@ -28,7 +28,22 @@ MongoDB collection API they support, and how.
 ## SQLite
 
 SQLite opens `node:sqlite` on Node and Deno, and `bun:sqlite` on Bun. It also takes any database
-with the same small API, through `sqliteStore({ path, open })`, such as a Durable Object's.
+with the same small API, through `sqliteStore({ path, open })`, such as a Durable Object's. On Deno
+it needs 2.9 or later: an older Deno's `node:sqlite` lacks what the store uses, and the store says
+so when it opens.
+
+The store opens 2 connections to the file, one that writes and one that reads. Each keeps a page
+cache of 2 MiB (`cacheKiB: 2048`, SQLite's own size), and nothing of the file is mapped into memory
+(`mmapMiB: 0`). Both count in the process's memory: the cache once it fills, once per connection,
+and mapped pages once they're read. Small sizes leave a container's memory to the app. A big file on
+a machine with memory to spare reads faster with more:
+
+```ts
+const store = await sqliteStore({ path, cacheKiB: 65_536, mmapMiB: 256 }); // the sizes before rc.46
+```
+
+With the docs app's shape on Deno 2.9 (an MCP server, 1,000 calls), the larger sizes peaked at 263
+MiB and these at 225 MiB.
 
 ## PostgreSQL
 

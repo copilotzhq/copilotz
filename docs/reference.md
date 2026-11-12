@@ -16,7 +16,7 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 ```sh
 npm install copilotz                 # Node 24+ (npm, pnpm, yarn)
 bun add copilotz                     # Bun
-deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
+deno add jsr:@copilotz/copilotz      # Deno 2.9+ (or `deno add npm:copilotz`)
 ```
 
 On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.34"`), and the

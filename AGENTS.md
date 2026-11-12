@@ -15,7 +15,7 @@ A runtime for apps that people and AI use alike. You write the app once: its dat
 who may do it, and how it shows. People use it on a web page or in a terminal, the app's own agents
 through tools, and outside assistants (ChatGPT, Claude, any MCP client) over MCP. Every way in calls
 the same Actions, under the same rules, and every write is on one record of who did what, for whom.
-It runs on Node 24+, Deno and Bun.
+It runs on Node 24+, Deno 2.9+ and Bun.
 
 ## How Copilotz works, in one minute
 

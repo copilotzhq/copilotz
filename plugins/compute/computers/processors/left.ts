@@ -30,7 +30,7 @@ export const leftProcessor: ProcessorDef = {
     }
     for (const desk of await db.collection<Desk>("desk").find({ in: space })) {
       if (desk.owner === person) await removeDesk(ctx, desk);
-      else await db.collection("grant").deleteMany({ desk: desk._id, owner: person });
+      else await db.collection("grant").deleteMany({ on: desk._id, owner: person });
     }
     await db.collection("approval").deleteMany({ in: space, for: person });
   },

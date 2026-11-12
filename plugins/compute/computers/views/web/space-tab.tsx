@@ -32,7 +32,7 @@ import { type Named, namedOf } from "./names.ts";
 import { STYLE } from "./style.ts";
 import { Workspace } from "./workspace.tsx";
 import { nameOf as personName, namesIn } from "../../../../access/spaces/contract.ts";
-import type { Grant } from "../../collections/grant.ts";
+import type { Grant } from "../../../../agents/chat/contract.ts";
 import { Allowed } from "./allowed.tsx";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;

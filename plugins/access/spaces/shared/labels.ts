@@ -20,12 +20,14 @@
  * - **On the record.** A document an agent writes in a collection that keeps
  *   it (`shared: { message: { drew: true } }`) says which other spaces its
  *   job read (`drew`), for whoever moves its conversation (chat.move): never
- *   a gate.
+ *   a gate, and only spaces its own readers reach (what an approved share
+ *   drew on beyond them isn't theirs to learn; trusted code's own reads, as
+ *   the system, are never counted).
  */
 import type { Actor, Labels, ReadContext } from "../../../../runtime/mod.ts";
 import { whereOf } from "../../../../runtime/mod.ts";
-import { CHAT, coverOf, docKey, narrows, ORG, reachOf, sharedWith } from "./reach.ts";
-import { nameOf, namesOf, PROFILE } from "./names.ts";
+import { audienceOf, covers } from "./audience.ts";
+import { CHAT, coverOf, docKey, narrows, sharedWith } from "./reach.ts";
 import type { Shared } from "./rules.ts";
 
 /** The `shared` resource; an entry is a collection's own key, never what objects inherit. */
@@ -54,27 +56,32 @@ async function destinationOf(
   return whole && (await sharedWith(whole, ctx)).length ? whole : space;
 }
 
-/** A place as people say it: a space by its name, a Personal one by its person's. */
-async function described(target: string, ctx: ReadContext): Promise<string> {
-  if (target.startsWith(`${CHAT}:`)) return "this conversation";
-  const space = await ctx.db.collection<{ name: string; kind: string; owner?: string }>("space")
-    .findOne({ _id: target });
-  if (!space) return "another space";
-  if (space.kind !== "personal" || !space.owner) return space.name;
-  const names = namesOf(
-    await ctx.db.collection<{ _id: string; name?: string }>(PROFILE).find({ _id: space.owner }),
-  );
-  return `${nameOf(space.owner, names)}'s Personal space`;
+/** The most of a document a share's ask shows of it. */
+const PREVIEW = 280;
+
+/** What a document says, shortly, for whoever is asked to share it: its text, else its title or name. */
+function previewOf(doc: Record<string, unknown>): string | undefined {
+  const said = [doc.text, doc.title, doc.name].find((v) => typeof v === "string" && v.trim());
+  if (typeof said !== "string") return undefined;
+  const text = said.trim();
+  return text.length > PREVIEW ? `${text.slice(0, PREVIEW - 1).trimEnd()}…` : text;
 }
 
-const needsApproval = (to: string, named: string) =>
-  Object.assign(
+/**
+ * The refusal of a share, saying what its person is asked about: where it
+ * would show (`to`), as people say it (`named`), and what it would say
+ * (`preview`); its `detail`, so that reaches the turn that asks them.
+ */
+const needsApproval = (to: string, named: string, preview?: string) => {
+  const detail = { to, named, ...(preview ? { preview } : {}) };
+  return Object.assign(
     new Error(
       `That would show ${named} what this conversation may draw on, and not everyone there can ` +
         "see it: the person this is done for has to say yes first.",
     ),
-    { code: "needs_approval", to, named },
+    { code: "needs_approval", ...detail, detail },
   );
+};
 
 /** Whether a place was approved for this work (`approved`, set by its turn from a yes). */
 const approved = (actor: Actor, target: string, space: string) =>
@@ -98,21 +105,19 @@ export const labels: Labels = {
     if (!shared || shared.member) return doc;
     const space = doc[shared.field ?? "in"];
     if (typeof space !== "string") return doc;
+    // What everyone it's shown to reaches: checked, and all its record may say.
+    let cover: Set<string> | undefined;
     if (narrows(actor) && whereOf(actor) !== undefined) {
       const target = await destinationOf(collection, doc, space, all, ctx);
-      if (!approved(actor, target, space)) {
-        const cover = await coverOf(target, ctx);
-        const bound = await reachOf(actor, ctx);
-        for (const [key, held] of bound) {
-          if (key === ORG || cover.has(key) || (held.home && cover.has(held.home))) continue;
-          throw needsApproval(target, await described(target, ctx));
-        }
+      cover = await coverOf(target, ctx);
+      if (!approved(actor, target, space) && !await covers(actor, cover, ctx)) {
+        throw needsApproval(target, (await audienceOf(target, ctx)).named, previewOf(doc));
       }
     }
     if (!shared.drew || actor.kind !== "agent") return doc;
     const drew = [
       ...new Set([...(Array.isArray(doc.drew) ? doc.drew as string[] : []), ...read]),
-    ].filter((one) => one !== space).sort();
+    ].filter((one) => one !== space && (!cover || cover.has(one))).sort();
     return drew.length ? { ...doc, drew } : doc;
   },
   async elevate(actor, allow, ctx) {

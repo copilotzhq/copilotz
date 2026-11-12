@@ -58,8 +58,8 @@ export const mirror = (ctx: Context, computer: string, fields: Partial<Desk>) =>
 export async function removeDesk(ctx: Context, desk: Desk) {
   const system = ctx.as().db;
   await system.collection("desk").deleteOne({ _id: desk._id });
-  await system.collection("approval").deleteMany({ desk: desk._id });
-  await system.collection("grant").deleteMany({ desk: desk._id });
+  await system.collection("approval").deleteMany({ on: desk._id });
+  await system.collection("grant").deleteMany({ on: desk._id });
   if (!desk.default) return;
   const [next] = await system.collection<Desk>("desk").find({ in: desk.in }, {
     sort: { seen: -1 },

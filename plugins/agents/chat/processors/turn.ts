@@ -3,6 +3,7 @@ import {
   type Context,
   type Event,
   grant,
+  personOf,
   principalOf,
   type ProcessorDef,
 } from "../../../../runtime/mod.ts";
@@ -28,17 +29,22 @@ import {
   teamOf,
   turnOf,
 } from "../shared/agents.ts";
+import { ask } from "../shared/asks.ts";
 import { answer, delivery } from "../shared/delivery.ts";
 import { liveWriter } from "../shared/live.ts";
+import { originOf } from "../shared/origin.ts";
 import { prepare, type Send } from "../shared/send.ts";
+import { previewOf, refusedShare, shareAsk } from "../shared/share.ts";
+import { audience } from "../../../access/spaces/contract.ts";
 import { noted, startedWith } from "../shared/summary.ts";
-import { runTool, toolText } from "../shared/tools.ts";
+import { runTool, type ToolAt, toolText } from "../shared/tools.ts";
 import {
   type Agent,
   type Prompt,
   settingsOf,
   type Step,
   type Tool,
+  type ToolContext,
   type Turn,
 } from "../shared/types.ts";
 
@@ -48,12 +54,31 @@ import {
  * in it (`thread`): with the access plugin, it reaches only what both reach
  * there, and what everyone the conversation is shared with reaches (an agent
  * is a member of spaces, like a person), and its tools know where they are
- * (`ctx.in`). Without anyone, it runs as the system.
+ * (`ctx.in`). The places its person said yes to sharing into, for one call,
+ * it carries (`approved`). Without anyone, it runs as the system.
  */
-const asAgent = (ctx: Context, agent: string, thread: string, where?: string): Context => {
+const asAgent = (
+  ctx: Context,
+  agent: string,
+  thread: string,
+  where?: string,
+  approved: string[] = [],
+): Context => {
   const principal = principalOf(ctx.actor);
-  return principal ? ctx.as({ kind: "agent", id: agent, for: principal, in: where, thread }) : ctx;
+  return principal
+    ? ctx.as({
+      kind: "agent",
+      id: agent,
+      for: principal,
+      in: where,
+      thread,
+      ...(approved.length ? { approved } : {}),
+    })
+    : ctx;
 };
+
+/** The turn's agent, carrying the places its person said yes to for one call (`approved`). */
+type Acting = (approved?: string[]) => Context;
 
 /** The space a thread is in, where its turns work: what they write elsewhere needs a person. */
 const spaceOf = async (ctx: Context, thread: string) =>
@@ -87,12 +112,50 @@ export const turnProcessor: ProcessorDef = {
     const { agent, thread } = turnOf(event);
     // Only someone's turn needs to know where it works.
     const where = principalOf(ctx.actor) ? await spaceOf(ctx, thread) : undefined;
-    return await turn(asAgent(ctx, agent, thread, where), event);
+    const acting: Acting = (approved) => asAgent(ctx, agent, thread, where, approved);
+    return await turn(acting(), event, acting);
   },
 };
 
+/**
+ * Runs one of a step's calls, as chat's runner does, in its own branch
+ * (`key`). One whose tool's write was refused as a share (somewhere not
+ * everyone could see all this work may read: `needs_approval`) asks the
+ * person the agent works for, as anything else is asked (shared/share.ts):
+ * it's told what it waits for, or, once they said yes (now, or before: in
+ * this conversation, for its routine), it runs again with that place
+ * approved. A contact's turn has nobody to ask: the refusal is what it reads.
+ */
+async function runCall(
+  ctx: Context,
+  acting: Acting,
+  key: string,
+  call: { name: string; input: unknown },
+  at: ToolAt,
+): Promise<string> {
+  const approved: string[] = [];
+  let ran = await runTool(acting(approved).branch(key), call.name, call.input, at);
+  const person = personOf(ctx.actor);
+  for (let places = 0; person && places < 8; places++) {
+    const refused = refusedShare(ran.error);
+    if (!refused || approved.includes(refused.to)) break;
+    // Who'd see it there, and what it would say (its refusal's words, else the call's own).
+    const preview = refused.preview ?? previewOf(call.input);
+    const share = { ...await audience(ctx, refused.to), ...(preview ? { preview } : {}) };
+    const asking = { ...acting(approved), ...at } as ToolContext;
+    const said = await ask(
+      asking,
+      shareAsk(share, { person, ...at, in: ctx.in, origin: originOf(ctx.actor) }),
+    );
+    if (said !== true) return said;
+    approved.push(refused.to);
+    ran = await runTool(acting([...approved]).branch(key), call.name, call.input, at);
+  }
+  return ran.output;
+}
+
 /** One run of an agent's turn: started by `turn.requested`, or resumed when its wait is over. */
-const turn = async (ctx: Context, event: Event) => {
+const turn = async (ctx: Context, event: Event, acting: Acting) => {
   const t = turnOf(event);
   const run = event.id;
   // What it is: the app's, or one people made that works where this thread is.
@@ -269,7 +332,7 @@ const turn = async (ctx: Context, event: Event) => {
       } else {
         // Only a tool offered to it here; each in a branch of its own, as chat's runner runs them.
         output = offered.some((tool) => tool.name === call.name)
-          ? (await runTool(ctx.branch(`${step}.${i}`), call.name, call.input, {
+          ? await runCall(ctx, acting, `${step}.${i}`, call, {
             agent: t.agent,
             thread: t.thread,
             trigger: t.trigger,
@@ -281,7 +344,7 @@ const turn = async (ctx: Context, event: Event) => {
               return questionOf(i);
             },
             ...(answering ? { answer: await answerTo(ctx, answering.question) } : {}),
-          })).output
+          })
           : `Error: Unknown tool "${call.name}"`;
         // What it returned (and asked) is on record at once: a retry won't run it again. If
         // that write fails, a retry runs it again, as itself.

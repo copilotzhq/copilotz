@@ -15,7 +15,8 @@ import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
 import { chat, type ToolContext } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
-import { type Approval, type Computer, computers, type Desk } from "../mod.ts";
+import type { Approval } from "../../agents/chat/mod.ts";
+import { type Computer, computers, type Desk } from "../mod.ts";
 import { tools } from "../computers/resources/tools.ts";
 import { startComputer } from "../computers/program/computer.ts";
 import { host, tempDir, test } from "../../../testing/mod.ts";
@@ -86,7 +87,7 @@ test("the program connects to the plugin; agents work on it once their person sa
       rt.call<unknown>("test.tool", { tool: name, thread, input }, { actor: ana });
     const answer = async (answer: string) => {
       const [asked] = await rt.query<Approval[]>("approval.pending", {}, { actor: ana });
-      await rt.call("computer.approve", { approval: asked._id, answer }, { actor: ana });
+      await rt.call("chat.approve", { approval: asked._id, answer }, { actor: ana });
     };
 
     // She connects it, as `computer connect <url> --code <code> --name laptop` does.

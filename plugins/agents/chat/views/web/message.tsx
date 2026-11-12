@@ -22,7 +22,6 @@ import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
   Avatar,
   Badge,
-  Button,
   Chip,
   CopyButton,
   Icon,

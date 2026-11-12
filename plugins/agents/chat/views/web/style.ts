@@ -1,5 +1,6 @@
 /**
- * Chat's layout on the web: a chat and its messages, the composer, home, a
+ * Chat's layout on the web: a chat and its messages, what agents wait on you
+ * for (over where you type, and in the sidebar), the composer, home, a
  * space's chats (its tab) and its latest (in the sidebar). Only layout, on the theme's variables; the
  * pieces (buttons, chips, notices, markdown…) are the web host's toolkit.
  */
@@ -164,6 +165,49 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   padding: 2px 24px 10px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
   scrollbar-color: var(--input) transparent; }
 .chat-asks:empty, .chat-asks .copilotz-loading { display: none; }
+
+/* What agents wait on you for: a card each, what's asked, then only the answers it takes */
+.asks { display: grid; gap: 8px; }
+.asks > .ask { animation: ask-in .36s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(8px); } }
+.ask { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 12px 14px 12px 12px;
+  border-color: var(--warning-border); box-shadow: var(--shadow-md); }
+.ask-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md);
+  background: var(--warning-soft); color: var(--warning-text); }
+.ask-main { display: grid; gap: 9px; min-width: 0; }
+.ask-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 4px 0 0; font-size: 14.5px; }
+.ask-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-top: 4px; }
+.ask-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.ask-where { margin-left: auto; color: var(--muted-foreground); font-size: 12.5px; white-space: nowrap; }
+.ask-where .copilotz-time { font-size: 12.5px; }
+/* Who'd see it, then, quieter, why it's asked */
+.ask-seen { display: flex; align-items: center; gap: 6px; margin: -3px 0 0; font-size: 13.5px; }
+.ask-seen .copilotz-icon { flex: none; color: var(--muted-foreground); }
+.ask-why { margin: -5px 0 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.45; }
+/* What it would say: a calm quote, a few lines until it's opened */
+.ask-quote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--warning-border);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0; background: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.ask-quote .copilotz-long-text-toggle { margin-top: 2px; }
+.ask-answers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ask-answers .copilotz-button { position: relative; }
+/* Saying no, or keeping it to yourself, sits apart */
+.ask-apart { margin-left: auto; }
+.ask-deny { color: var(--destructive-text); }
+/* Each answer's key, shown once the card has focus: 1, 2, 3… answer */
+.ask-key { position: absolute; top: -7px; right: -7px; display: grid; place-items: center; min-width: 16px; height: 16px;
+  padding: 0 4px; border: 1px solid var(--input); border-radius: var(--radius-full); background: var(--background);
+  color: var(--muted-foreground); font: 600 10px/1 var(--font-sans); opacity: 0; transform: scale(.8);
+  transition: opacity .12s, transform .12s; pointer-events: none; }
+.ask:focus-within .ask-key { opacity: 1; transform: none; }
+.ask-error { margin: 0; color: var(--destructive-text); font-size: 13px; }
+
+/* The sidebar: what agents wait on you for in other chats */
+.asks-waiting { list-style: none; display: grid; gap: 1px; margin: 0; padding: 0; }
+.asks-waiting-mark { display: grid; place-items: center; flex: none; width: 22px; height: 22px;
+  border-radius: var(--radius-full); background: var(--warning-soft); color: var(--warning-text);
+  animation: asks-pulse 2.4s ease-in-out infinite; }
+@keyframes asks-pulse { 50% { background: color-mix(in oklab, var(--warning) 26%, var(--sidebar)); } }
+.asks-waiting-more { margin: 0 10px 4px 41px; color: var(--muted-foreground); font-size: 12px; }
 
 /* Where you type */
 .chat-composer { flex: none; padding: 0 24px max(14px, env(safe-area-inset-bottom));
@@ -336,6 +380,15 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .msg-aside { margin-left: 10px; padding-left: 10px; }
   .chat-composer { padding: 0 10px max(10px, env(safe-area-inset-bottom)); }
   .chat-asks { padding: 2px 10px 8px; }
+  .ask { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  .ask-icon, .ask-key { display: none; }
+  .ask-head, .ask-top { margin: 0; }
+  /* Two columns: the first yes and the answer apart, then the wider yeses (tooltips lay out as their buttons). */
+  .ask-answers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ask-answers .copilotz-button { order: 2; min-width: 0; width: 100%; white-space: normal; text-align: center;
+    line-height: 1.2; }
+  .ask-answers > :first-child .copilotz-button { order: 0; }
+  .ask-answers .ask-apart { order: 1; margin: 0; }
   .voice-rec-meter { gap: 10px; padding: 0 6px 0 8px; }
   .voice-error { flex-wrap: wrap; }
   .voice-error p { flex-basis: calc(100% - 30px); }

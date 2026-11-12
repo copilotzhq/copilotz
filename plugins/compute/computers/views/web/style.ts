@@ -1,13 +1,12 @@
 /**
- * Computers' layout on the web, on the theme's variables: what waits on you
- * (in the sidebar), connecting one, a space's computers (its tab), a
- * computer's page (its header, the space and tabs, the terminal, jobs and
- * files), what agents ask in a chat, and their calls there. Only layout:
- * the pieces are the toolkit's.
+ * Computers' layout on the web, on the theme's variables: a computer's mark,
+ * connecting one, a space's computers (its tab), a computer's page (its
+ * header, the space and tabs, the terminal, jobs and files), what an agent
+ * asks to do on one (inside chat's card for it), and their calls there. Only
+ * layout: the pieces are the toolkit's.
  */
 export const STYLE = `
-/* The sidebar: what waits on you */
-.computers { list-style: none; display: grid; gap: 1px; margin: 0; padding: 0; }
+/* A computer's mark */
 .computer-mark { position: relative; display: grid; place-items: center; flex: none; width: 22px; height: 22px;
   border-radius: var(--radius-sm); background: var(--muted); color: var(--secondary-foreground); }
 .computer-mark-lg { width: 44px; height: 44px; border-radius: var(--radius-lg); background: var(--primary-soft);
@@ -16,11 +15,6 @@ export const STYLE = `
   background: var(--muted-foreground); outline: 2px solid var(--sidebar); opacity: .7; }
 .computer-mark-lg .computer-dot { right: -3px; bottom: -3px; width: 13px; height: 13px; outline: 3px solid var(--background); }
 .computer-mark[data-online] .computer-dot { background: var(--success); opacity: 1; }
-.computers-waiting { display: grid; place-items: center; flex: none; width: 22px; height: 22px;
-  border-radius: var(--radius-full); background: var(--warning-soft); color: var(--warning-text);
-  animation: computers-pulse 2.4s ease-in-out infinite; }
-@keyframes computers-pulse { 50% { background: color-mix(in oklab, var(--warning) 26%, var(--sidebar)); } }
-.computers-more { margin: 0 10px 4px 41px; color: var(--muted-foreground); font-size: 12px; }
 
 /* Connecting one */
 .connect-notice { margin-bottom: 18px; }
@@ -366,7 +360,6 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
   .files-filter { width: 130px; }
 }
 
-/* What agents ask, over where you type */
 /* What you've let agents do: on the Computer tab */
 .computer-allowed { display: grid; gap: 10px; margin-top: 14px; }
 .computer-allowed h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 650; }
@@ -376,6 +369,7 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .computer-allowed li + li { border-top: 1px solid var(--border); }
 .computer-allowed li span { display: grid; gap: 2px; min-width: 0; }
 .computer-allowed small { color: var(--muted-foreground); font-size: 12.5px; }
+.computer-allowed .ask-error, .routine-allowed .ask-error { margin: 0; color: var(--destructive-text); font-size: 13px; }
 /* What a routine may do on its own: on its page */
 .routine-allowed-wrap { display: grid; gap: 12px; }
 .routine-allowed-wrap:empty { display: none; }
@@ -388,18 +382,7 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .routine-allowed-row legend small { margin-left: 8px; color: var(--muted-foreground); font-size: 12.5px; font-weight: 500; }
 .routine-allowed-work { display: flex; flex-wrap: wrap; gap: 8px 20px; }
 .routine-allowed-what { overflow-wrap: anywhere; font-size: 13px; }
-.asks { display: grid; gap: 8px; }
-.asks > .ask { animation: ask-in .36s cubic-bezier(.2, .8, .2, 1) both; }
-@keyframes ask-in { from { opacity: 0; transform: translateY(8px); } }
-.ask { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 12px 14px 12px 12px;
-  border-color: var(--warning-border); box-shadow: var(--shadow-md); animation: ask-in .22s ease-out; }
-@keyframes ask-in { from { opacity: 0; transform: translateY(6px); } }
-.ask-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md);
-  background: var(--warning-soft); color: var(--warning-text); }
-.ask-main { display: grid; gap: 9px; min-width: 0; }
-.ask-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 4px 0 0; font-size: 14.5px; }
-.ask-where { margin-left: auto; color: var(--muted-foreground); font-size: 12.5px; }
-.ask-where .copilotz-time { font-size: 12.5px; }
+/* What an agent asks to do on one, inside chat's card for it (chat draws the card and its answers) */
 .ask-what .copilotz-code-body { padding: 7px 11px; font-size: 13px; }
 .ask-preview .copilotz-code-head code { font-size: 12.5px; font-weight: 600; }
 .ask-publish { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg);
@@ -407,20 +390,6 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .ask-publish-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; font-size: 14.5px; }
 .ask-publish-at { color: var(--primary-text); font-size: 13px; overflow-wrap: anywhere; }
 .ask-publish-from { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
-.ask-answers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.ask-deny { margin-left: auto; color: var(--destructive-text); }
-.ask-error { margin: 0; color: var(--destructive-text); font-size: 13px; }
-@media (max-width: 760px) {
-  .ask { grid-template-columns: minmax(0, 1fr); padding: 12px; }
-  .ask-icon { display: none; }
-  .ask-head { margin: 0; }
-  /* Two rows: Allow once and Deny, then the wider yeses (the tooltips' wrappers lay out as their buttons). */
-  .ask-answers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ask-answers .copilotz-button { order: 2; min-width: 0; width: 100%; white-space: normal; text-align: center;
-    line-height: 1.2; }
-  .ask-answers > :first-child .copilotz-button { order: 0; }
-  .ask-answers > .ask-deny { order: 1; margin: 0; }
-}
 
 /* Agents' calls, in the conversation */
 .step-computer { min-width: 0; }

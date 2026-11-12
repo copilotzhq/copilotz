@@ -1,77 +1,76 @@
 /**
- * What agents wait on you for, over where you type (`computer.asks`): an
- * agent's cards wait for its own turn to be over, never for another agent
- * still working in the conversation; and what's asked in a side thread shows
- * in the conversation too, saying so.
+ * What an agent asks to do on a computer, as chat's card shows it (kind
+ * `computer.ask`, through chat's `askViews`): the agent as it's named, what
+ * it wants to do on which computer, the command itself, what a write would
+ * write, an app it would publish; asked in a side thread, it says so. The
+ * card and its answers are chat's (see the agents plugin's asks-web test).
  */
 import { assert, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ViewContext } from "../../../runtime/mod.ts";
-import type { Approval } from "../computers/collections/approval.ts";
-import { asksView } from "../computers/views/web/asks.tsx";
+import type { Approval } from "../../agents/chat/contract.ts";
+import { computersWeb } from "../computers/web.tsx";
+import { askView } from "../computers/views/web/asks.tsx";
 import { test } from "../../../testing/mod.ts";
 
-const asking = (agent: string, detail: string): Approval =>
+const asking = (work: string, detail: string, more: Partial<Approval> = {}): Approval =>
   ({
-    _id: `a-${agent}`,
+    _id: `a-${work}`,
     owner: "ana",
     for: "ana",
-    desk: "d1",
+    on: "d1",
     computer: "c1",
     name: "laptop",
     thread: "t1",
-    agent,
-    work: "terminal",
+    agent: "east",
+    work,
     detail,
+    answers: ["once", "thread", "always", "deny"],
     status: "pending",
     at: "2026-11-03T21:00:00.000Z",
+    ...more,
   }) as Approval;
 
-/** The cards, as they show with these hints. */
-const shown = (pending: Approval[], hints: Record<string, unknown>) => {
-  const ctx = {
-    db: {
-      collection: () => ({ query: () => ({ status: "ready", value: pending }) }),
-    },
-    resources: {
-      agents: { east: { name: "East", instructions: "" }, south: { name: "South" } },
-    },
-    name: "computer.asks",
-    hints,
-    show: () => null,
-    call: () => Promise.resolve({} as never),
-    emit: () => Promise.resolve(),
-  } as unknown as ViewContext<ReactNode>;
-  return renderToStaticMarkup(<>{asksView({}, ctx)}</>).replace(/<style[\s\S]*?<\/style>/g, "");
+/** The ask, as its card's content shows it with these hints. */
+const shown = (a: Approval, hints: Record<string, unknown> = {}) => {
+  const ctx = { name: "computer.ask", hints, resources: {} } as unknown as ViewContext<ReactNode>;
+  return renderToStaticMarkup(<>{askView(a, ctx)}</>).replace(/<style[\s\S]*?<\/style>/g, "");
 };
 
-test("an agent's OK shows once its turn is over, while another agent works on", () => {
-  const east = asking("east", "ls -la");
-  // East has said why and stopped; South is still working: East's card shows.
-  const html = shown([east], { thread: "t1", working: true, busy: ["south"] });
-  assertStringIncludes(html, "East");
+test("a command shows as the agent is named, on which computer, and as a command", () => {
+  const html = shown(asking("terminal", "ls -la"), { agent: "East" });
+  assertStringIncludes(html, "<b>East</b> wants to run");
+  assertStringIncludes(html, "on laptop");
   assertStringIncludes(html, "ls -la");
-  // While East itself is still writing, its explanation comes first.
-  assert(!shown([east], { thread: "t1", working: true, busy: ["east"] }).includes("ls -la"));
-  // Each agent's by its own turn: South's waits, East's shows.
-  const both = shown([east, asking("south", "rm -rf build")], {
-    thread: "t1",
-    working: true,
-    busy: ["south"],
-  });
-  assert(both.includes("ls -la") && !both.includes("rm -rf build"), both);
-  // Another conversation's asks don't show here.
-  assert(!shown([east], { thread: "t2", busy: [] }).includes("ls -la"));
+  assert(!html.includes("in a side thread"), html);
+  // Its answers are chat's card's, never its own.
+  assert(!html.includes("Yes, this once") && !html.includes("Allow"), html);
 });
 
-test("an OK asked in a side thread shows in its conversation, saying where it was asked", () => {
-  const east = { ...asking("east", "df -h"), thread: "t1-side" };
-  const html = shown([east], { thread: "t1", side: ["t1-side"], busy: [] });
-  assertStringIncludes(html, "df -h");
-  assertStringIncludes(html, "in a side thread");
-  // Not another conversation's side thread.
-  assert(!shown([east], { thread: "t1", side: ["t2-side"], busy: [] }).includes("df -h"));
-  // Seen in the side thread itself, it's just here.
-  assert(!shown([east], { thread: "t1-side", busy: [] }).includes("in a side thread"));
+test("asked in a side thread, it says so", () => {
+  assertStringIncludes(shown(asking("jobs", "npm run dev"), { aside: true }), "in a side thread");
+});
+
+test("a write shows what it would write; publishing, the app and where it'd be", () => {
+  const write = shown(asking("writes", "write src/a.ts", { preview: "# Plan\n- ship" }));
+  assertStringIncludes(write, "wants to write");
+  assertStringIncludes(write, "src/a.ts");
+  assertStringIncludes(write, "# Plan");
+  const publish = shown(
+    asking("publish", "publish Shop from job web on port 3000", {
+      preview: "https://shop.example.test",
+      answers: ["once", "deny"],
+    }),
+  );
+  assertStringIncludes(publish, "<b>Shop</b>");
+  assertStringIncludes(publish, "shop.example.test");
+  assertStringIncludes(publish, "port 3000");
+});
+
+test("each kind of work a computer asks about has its card's words and icon", () => {
+  const views = computersWeb.resources?.askViews as Record<string, { view: string; icon: string }>;
+  for (const work of ["terminal", "jobs", "writes", "publish", "destroy"]) {
+    assert(views[work]?.view === "computer.ask" && views[work].icon, work);
+  }
 });

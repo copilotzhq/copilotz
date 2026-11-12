@@ -7,6 +7,7 @@
  */
 import { type Context, forbidden, personOf } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
+import { audienceOf, type Beyond, beyond as beyondOf, shownAt } from "./audience.ts";
 import { docKey, reachOf, type Verb } from "./reach.ts";
 
 export async function may(
@@ -69,4 +70,30 @@ export async function sharedWith(
 ): Promise<string[]> {
   const found = await ctx.as().db.collection<Member>("member").find({ space: docKey(on, id) });
   return found.map((m) => m.member);
+}
+
+/**
+ * Whether what the caller's work writes to `to` (a space, or a
+ * conversation: `thread:<id>`) would show it to someone who can't see all
+ * that work may read (its bound, reach.ts): where it would show, as people
+ * say it, and how many would see it there. Undefined when everyone there
+ * could, or the caller's work isn't narrowed (a person's own, the
+ * system's). Code that writes somewhere for an agent's work itself (an
+ * answer handed back) asks here first, as the rules do of the work's own
+ * writes. Read as the system: deciding it reads what the caller may not.
+ */
+export async function beyond(ctx: Context, to: string): Promise<Beyond | undefined> {
+  return ctx.actor ? await beyondOf(ctx.actor, to, ctx.as()) : undefined;
+}
+
+/**
+ * Who'd see what's written to `to` (a space, or a conversation:
+ * `thread:<id>`): where it shows, as people say it, and how many would see
+ * it there (a space's people; a conversation shared with contacts, its
+ * contacts). For asking someone about a share. Read as the system.
+ */
+export async function audience(ctx: Context, to: string): Promise<Beyond> {
+  const system = ctx.as();
+  const target = await shownAt(to, system);
+  return { to: target, ...await audienceOf(target, system) };
 }

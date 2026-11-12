@@ -4,7 +4,9 @@
  * an invitation, a person's profile) and of the resource kinds its web front
  * end reads, and how people show by name (`PROFILE`, `nameOf`, `namesOf`,
  * `withNames`: wherever a person's id would show, their name does; a page
- * adds their face, `picturesIn`). They
+ * adds their face, `picturesIn`), and whether what an agent's work writes
+ * somewhere goes beyond what everyone there reaches (`beyond`: an answer
+ * handed back) and who'd see it there (`audience`: a share's ask). They
  * reach the rest by name: its collections (`space`, `member`, `request`,
  * `invitation`, `profile`), its queries `space.reached` (each space with what the asker
  * may do there) and `invitation.mine` (those to the asker's email), and its
@@ -79,7 +81,8 @@ export {
   PROFILE,
   withNames,
 } from "./shared/names.ts";
-export { may, must, mustOwnOr, present, sharedWith } from "./shared/can.ts";
+export { audience, beyond, may, must, mustOwnOr, present, sharedWith } from "./shared/can.ts";
+export type { Beyond } from "./shared/audience.ts";
 export { ORG, runsOrg } from "./shared/reach.ts";
 export { PERSONAL } from "./shared/personal.ts";
 export { AGENT_ROLES } from "./views/web/who.ts";

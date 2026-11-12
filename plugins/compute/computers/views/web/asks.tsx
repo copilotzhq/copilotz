@@ -1,177 +1,59 @@
 /**
- * What agents wait on you for in this conversation and its side threads
- * (kind `computer.asks`, shown over where you type: chat's `conversation`
- * resource, with hints `{ thread, side, busy }`; one from a side thread says
- * so): a card each, "assistant wants to run `npm test`"
- * on which computer, with Allow once · Allow in this conversation · Always
- * allow · Deny (`computer.approve`, whose answer goes into the
- * conversation, and the agent carries on). What a routine's run asks can also
- * be allowed for this routine, so its next runs go on their own. Publishing
- * is asked every time: only once, or not. A write shows what it will write
- * first (its `preview`: a new file's first lines, or an edit's change). What
- * it shows scrolls in a few lines of its own, however long (a command can
- * wrap into dozens), so the answers always show under it. An agent's
- * cards wait for its turn to be over (it's not among the `busy`), so they
- * come once it has said why, gently, however long other agents work on;
- * answered, one goes: `approval.pending` is live. The agent shows as it's
- * named (chat's `agentsShown`).
+ * What an agent asks to do on a computer, on its card in a conversation
+ * (kind `computer.ask`, chat's `askViews` for a computer's kinds of work;
+ * chat draws the card and its answers: once, for this conversation, for the
+ * routine that set it going, always, or no, as the ask takes them). Given the
+ * approval, and hints `{ agent, aside }` (the agent as it's named; asked in a
+ * side thread): "assistant wants to run" on which computer, when, then what:
+ * the command; a write, what it will write first (its `preview`: a new file's
+ * first lines, or an edit's change); publishing, the app, where it'll be,
+ * and what it's built from. What it shows scrolls in a few lines of its own,
+ * however long (a command can wrap into dozens), so the answers always show
+ * under it.
  */
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
-import {
-  Button,
-  Card,
-  CodeBlock,
-  Icon,
-  type IconName,
-  message,
-  Time,
-  Tooltip,
-} from "../../../../../hosts/web/mod.ts";
-import { agentsShown } from "../../../../agents/chat/contract.ts";
-import type { Approval } from "../../collections/approval.ts";
-import { onlyOnce } from "../../shared/settings.ts";
-import { addressOf, asked, previewOf, publishOf, reach, sentence } from "./asked.ts";
+import { CodeBlock, Time } from "../../../../../hosts/web/mod.ts";
+import type { Approval } from "../../../../agents/chat/contract.ts";
+import { addressOf, asked, previewOf, publishOf } from "./asked.ts";
 import { STYLE } from "./style.ts";
 
-type Answer = "once" | "thread" | "origin" | "always" | "deny";
-type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
-
-const ICONS: Record<string, IconName> = {
-  terminal: "terminal",
-  jobs: "play",
-  writes: "pencil",
-  publish: "globe",
-};
-
-export const asksView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
-  const thread = typeof ctx.hints.thread === "string" ? ctx.hints.thread : undefined;
-  const pending = ctx.db.collection("approval").query<Approval[]>("pending", {}).value ?? [];
-  // While an agent is still writing, its explanation comes first; another's work doesn't hold it.
-  const busy = Array.isArray(ctx.hints.busy) ? ctx.hints.busy as string[] : [];
-  // Asked here, or in one of its side threads: answered here all the same.
-  const side = Array.isArray(ctx.hints.side) ? ctx.hints.side as string[] : [];
-  const here = pending.filter((a) =>
-    (a.thread === thread || side.includes(a.thread)) && !busy.includes(a.agent)
-  );
-  if (!thread || !here.length) return null;
-  const agents = agentsShown(ctx, here.map((a) => a.agent));
-  if (!agents) return null;
-  return (
-    <div className="asks" role="region" aria-label="Waiting on you">
-      <style href="computers-web" precedence="copilotz">{STYLE}</style>
-      {here.map((a) => {
-        return (
-          <Ask
-            key={a._id}
-            approval={{ ...a, agent: agents[a.agent]?.name || a.agent }}
-            computer={a.name}
-            aside={a.thread !== thread}
-            call={ctx.call}
-          />
-        );
-      })}
-    </div>
-  );
-};
-
-function Ask(
-  { approval: a, computer, aside, call }: {
-    approval: Approval;
-    computer?: string;
-    /** Asked in a side thread of this conversation. */
-    aside?: boolean;
-    call: Call;
-  },
-): ReactNode {
-  const [busy, setBusy] = useState<Answer>();
-  const [error, setError] = useState<string>();
+export const askView = (a: Approval, ctx: ViewContext<ReactNode>): ReactNode => {
+  const agent = typeof ctx.hints.agent === "string" ? ctx.hints.agent : a.agent;
   const { wants, what, verb } = asked(a);
-  // What a write would write, or an edit change.
-  const preview = a.preview;
-  const answer = async (said: Answer) => {
-    setBusy(said);
-    setError(undefined);
-    try {
-      await call("computer.approve", { approval: a._id, answer: said });
-    } catch (e) {
-      setError(message(e));
-      setBusy(undefined);
-    }
-  };
-  const allow = (said: Exclude<Answer, "deny">, label: string, variant: "primary" | "outline") => (
-    <Tooltip text={reach(said, a, computer)}>
-      <Button
-        size="sm"
-        variant={variant}
-        loading={busy === said}
-        disabled={!!busy}
-        onClick={() => void answer(said)}
-      >
-        {label}
-      </Button>
-    </Tooltip>
-  );
   return (
-    <Card as="article" padding="none" className="ask" aria-label={sentence(a)}>
-      <span className="ask-icon" aria-hidden="true">
-        <Icon name={ICONS[a.work] ?? "tool"} size={16} />
-      </span>
-      <div className="ask-main">
-        <p className="ask-head">
-          <b>{a.agent}</b> {wants}
-          <span className="ask-where">
-            {computer ? <>on {computer} ·</> : null}
-            {aside ? <>in a side thread ·</> : null}
-            <Time at={a.at} />
-          </span>
-        </p>
-        {a.work === "publish" ? <Publish approval={a} /> : a.work === "writes" && preview
-          ? (
-            <CodeBlock
-              className="ask-what ask-preview"
-              title={<code>{what}</code>}
-              code={previewOf(preview, verb)}
-              height={8}
-              label={`What it will write in ${what}`}
-            />
-          )
-          : (
-            <CodeBlock
-              className="ask-what"
-              code={a.work === "writes" ? what : [{ text: "$ ", tone: "muted" }, { text: what }]}
-              height={6}
-              copy={what}
-              label={a.work === "writes" ? "The file" : "The command"}
-            />
-          )}
-        <div className="ask-answers">
-          {allow("once", "Allow once", "primary")}
-          {a.origin && !onlyOnce(a.work)
-            ? allow("origin", `Allow for this ${a.origin.kind}`, "outline")
-            : null}
-          {onlyOnce(a.work) ? null : (
-            <>
-              {allow("thread", "Allow in this conversation", "outline")}
-              {allow("always", "Always allow", "outline")}
-            </>
-          )}
-          <Button
-            size="sm"
-            variant="ghost"
-            className="ask-deny"
-            loading={busy === "deny"}
-            disabled={!!busy}
-            onClick={() => void answer("deny")}
-          >
-            Deny
-          </Button>
-        </div>
-        {error ? <p role="alert" className="ask-error">{error}</p> : null}
-      </div>
-    </Card>
+    <>
+      <style href="computers-web" precedence="copilotz">{STYLE}</style>
+      <p className="ask-head">
+        <b>{agent}</b> {wants}
+        <span className="ask-where">
+          {a.name ? <>on {a.name} ·</> : null}
+          {ctx.hints.aside === true ? <>in a side thread ·</> : null}
+          <Time at={a.at} />
+        </span>
+      </p>
+      {a.work === "publish" ? <Publish approval={a} /> : a.work === "writes" && a.preview
+        ? (
+          <CodeBlock
+            className="ask-what ask-preview"
+            title={<code>{what}</code>}
+            code={previewOf(a.preview, verb)}
+            height={8}
+            label={`What it will write in ${what}`}
+          />
+        )
+        : (
+          <CodeBlock
+            className="ask-what"
+            code={a.work === "writes" ? what : [{ text: "$ ", tone: "muted" }, { text: what }]}
+            height={6}
+            copy={what}
+            label={a.work === "writes" ? "The file" : "The command"}
+          />
+        )}
+    </>
   );
-}
+};
 
 /** What publishing would do: the app, where it'll be, what it's built from, and that it runs on its own. */
 function Publish({ approval: a }: { approval: Approval }): ReactNode {

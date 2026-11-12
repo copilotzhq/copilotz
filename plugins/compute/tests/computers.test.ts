@@ -11,7 +11,8 @@ import models from "../../models/mod.ts";
 import { chat, type Message, type Prompt, type ToolContext } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
-import { type Approval, type Computer, computers, type Desk } from "../mod.ts";
+import type { Approval } from "../../agents/chat/mod.ts";
+import { type Computer, computers, type Desk } from "../mod.ts";
 import { tools } from "../computers/resources/tools.ts";
 import { WORK } from "../computers/shared/workloads.ts";
 import { test } from "../../../testing/mod.ts";
@@ -198,11 +199,11 @@ test("an agent works on its space's computer, in the space's folder, once its pe
     assertEquals([asked.agent, asked.work, asked.detail], ["assistant", "terminal", "ls"]);
     assertEquals(await rt.query("approval.pending", {}, { actor: bob }), []);
 
-    // Yes, in this conversation: her answer is in it, and the command runs, in her space's folder.
-    await rt.call("computer.approve", { approval: asked._id, answer: "thread" }, { actor: ana });
+    // Yes, for this conversation: her answer is in it, and the command runs, in her space's folder.
+    await rt.call("chat.approve", { approval: asked._id, answer: "thread" }, { actor: ana });
     await rt.idle();
     const said = await rt.query<Message[]>("message.history", { thread }, { actor: ana });
-    assert(said.some((m) => m.from === "ana" && m.text === "Yes, in this conversation: ls"));
+    assert(said.some((m) => m.from === "ana" && m.text === "Yes, for this conversation: ls"));
     assertEquals(await tool("terminal", { command: "ls" }), {
       state: "idle",
       commandId: "c1",
@@ -259,7 +260,7 @@ test("an agent works on its space's computer, in the space's folder, once its pe
     // Yes once: used up.
     await tool("write_file", { path: "a.txt", content: "hi" });
     const [write] = await rt.query<Approval[]>("approval.pending", {}, { actor: ana });
-    await rt.call("computer.approve", { approval: write._id, answer: "once" }, { actor: ana });
+    await rt.call("chat.approve", { approval: write._id, answer: "once" }, { actor: ana });
     assertEquals(await tool("write_file", { path: "a.txt", content: "hi" }), { size: 2 });
     assertStringIncludes(
       String(await tool("write_file", { path: "a.txt", content: "hi" })),
@@ -365,7 +366,7 @@ test("a computer shared into a space: its members' agents use it, and they answe
     assertEquals(await rt.query("approval.pending", {}, { actor: ana }), []);
     const [asked] = await rt.query<Approval[]>("approval.pending", {}, { actor: bob });
     assertEquals([asked.owner, asked.for, asked.name], ["bob", "bob", "testbox"]);
-    await rt.call("computer.approve", { approval: asked._id, answer: "thread" }, { actor: bob });
+    await rt.call("chat.approve", { approval: asked._id, answer: "thread" }, { actor: bob });
     await tool("terminal", { command: "ls" });
     const ran = computer.asked.find((a) => a.work === WORK.terminal)!;
     assertEquals(ran.input.scope, { space: launch, folder: "launch", who: "agent:assistant" });

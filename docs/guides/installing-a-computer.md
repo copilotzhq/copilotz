@@ -12,7 +12,7 @@ say yes.
 
 A computer belongs to a space. An agent uses a computer of the space its chat is in, for the person
 it works for, and only where that person reaches. Only the person says yes: an agent, a key or a
-routine can't answer for them, since `computer.approve` is `inPerson`.
+routine can't answer for them, since `chat.approve` is `inPerson`.
 
 ## Where the program comes from
 

@@ -8,7 +8,7 @@
 import { assertEquals } from "@std/assert";
 import type { TerminalOutput } from "../../../hosts/web/mod.ts";
 import type { TerminalInput, TerminalResult } from "../computers/shared/workloads.ts";
-import { asked, previewOf, reach, sentence } from "../computers/views/web/asked.ts";
+import { asked, previewOf, sentence } from "../computers/views/web/asked.ts";
 import { ending, shellSession, where } from "../computers/views/web/shell.ts";
 import { lineDiff } from "../computers/views/web/diff.ts";
 import { listOf, outcome, terminalCall, took } from "../computers/views/web/calls.ts";
@@ -31,15 +31,6 @@ test("what an agent waits on you for, in words", () => {
     ],
   );
   assertEquals(sentence(write), "assistant wants to write src/a.ts");
-  assertEquals(reach("once", run, "laptop"), "assistant may run npm test, this once.");
-  assertEquals(
-    reach("thread", edit, "laptop"),
-    "coder may change files on laptop without asking again, in this conversation.",
-  );
-  assertEquals(
-    reach("always", job),
-    "assistant may start jobs on this computer without asking again, in any conversation.",
-  );
 });
 
 test("what a write would write, as its ask shows it: a new file, an edit's change, cut short", () => {

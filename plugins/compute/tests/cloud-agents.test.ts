@@ -12,7 +12,7 @@ import { chat } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
 import { cloud, type CloudComputer, cloudPool, computers, type Desk } from "../mod.ts";
-import type { Approval } from "../computers/collections/approval.ts";
+import type { Approval } from "../../agents/chat/mod.ts";
 import { test } from "../../../testing/mod.ts";
 import { fakeCloud } from "./fake-cloud.ts";
 
@@ -241,11 +241,11 @@ test("destroying asks its person each time, and only a yes this once does it", a
     assertEquals([asked.work, asked.detail, asked.status], ["destroy", "Doomed", "pending"]);
 
     await assertRejects(
-      () => rt.call("computer.approve", { approval: asked._id, answer: "always" }, { actor: ana }),
+      () => rt.call("chat.approve", { approval: asked._id, answer: "always" }, { actor: ana }),
       Error,
       "asked every time",
     );
-    await rt.call("computer.approve", { approval: asked._id, answer: "once" }, { actor: ana });
+    await rt.call("chat.approve", { approval: asked._id, answer: "once" }, { actor: ana });
     await rt.idle();
     assertStringIncludes(
       await use(rt, space, "manage_computer", destroy, ana, asked_in),

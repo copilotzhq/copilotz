@@ -7,6 +7,7 @@ import type {
   ViewContext,
 } from "../../../../runtime/mod.ts";
 import type { Effort, LlmMessage, LlmTool, ModelRef, ToolCall } from "../../../models/contract.ts";
+import type { IconName } from "../../../../hosts/web/mod.ts";
 import type { Thread } from "../collections/thread.ts";
 
 export type Agent = {
@@ -214,6 +215,16 @@ export type ComposerNote = { view: string; order?: number };
  * and hints `{ thread }`, and `running: true` while it hasn't returned.
  */
 export type ToolViews = Record<string, string | null>;
+
+/**
+ * An `askViews` resource entry: by a kind of ask (an approval's `work`), the
+ * View that says what's asked on its card in a conversation, and the icon
+ * beside it, in place of chat's own words (a computer's command, as a
+ * command). The View gets the approval and hints `{ agent, aside }`: the
+ * agent as it's named, and whether it was asked in a side thread. Chat draws
+ * the card around it and its answers: only those the ask takes.
+ */
+export type AskView = { view: string; icon?: IconName };
 
 /** A tool call, as a `toolViews` View gets it: no `output` while it runs. */
 export type ShownCall = {

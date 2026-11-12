@@ -6,8 +6,7 @@
  * where they are, on the machine.
  */
 import { defineAction, people } from "../../../../runtime/mod.ts";
-import type { Approval } from "../collections/approval.ts";
-import { asking, told } from "../shared/grants.ts";
+import { withdraw } from "../../../agents/chat/contract.ts";
 
 export const forgetAction = defineAction({
   description: "Forgets one of your computers",
@@ -24,15 +23,7 @@ export const forgetAction = defineAction({
       // Its desks too, in every space it's in: the system's to remove.
       await ctx.as().db.collection("desk").deleteMany({ computer: input.computer });
       // A turn waiting on it is told no, and carries on without it.
-      const waiting = await ctx.as().db.collection<Approval>("approval").find({
-        computer: input.computer,
-        status: "pending",
-        question: { $exists: true },
-      });
-      for (const asked of waiting) {
-        if (await asking(ctx, asked)) await told(ctx, asked, `No: ${asked.detail}`);
-      }
-      await ctx.as().db.collection("approval").deleteMany({ computer: input.computer });
+      await withdraw(ctx, { computer: input.computer });
       await ctx.as().db.collection("grant").deleteMany({ computer: input.computer });
     }
     return { forgotten: deletedCount > 0 };

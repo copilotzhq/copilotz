@@ -4,28 +4,14 @@
  * `/computer connect` gives a code to connect one to it (and the command to
  * run on it); `/computer share <n>`, `unshare <n>` and `default <n>` put one
  * of yours in it, take one out, and pick the one agents use; `rename` and
- * `forget` your own. `/approvals` lists what agents wait on you for (it
- * shows above where you type too), and `/approve [n] [once|thread|always|no]`
- * answers (n: which, when several).
+ * `forget` your own. What agents wait on you for there, chat's terminal
+ * shows and answers (`/approvals`, `/approve`).
  */
 import { command, type Commands, dim, type Terminal } from "../../../../hosts/terminal/mod.ts";
-import type { Approval } from "../collections/approval.ts";
 import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
 import { installCommand } from "../program/release.ts";
-import { asker, asks } from "../shared/asks.ts";
-import { onlyOnce } from "../shared/settings.ts";
 import { nameOf } from "../../../access/spaces/contract.ts";
-
-const ANSWERS: Record<string, string> = {
-  once: "once",
-  thread: "thread",
-  conversation: "thread",
-  routine: "origin",
-  always: "always",
-  no: "deny",
-  deny: "deny",
-};
 
 /** One line of `/computers`: a computer in this space (a desk), or one of yours that isn't. */
 type Listed = {
@@ -178,57 +164,6 @@ export const commands: Commands = {
         dim(
           "/computer connect | share <n> | unshare <n> | default <n> | rename <n> <name> | forget <n>",
         ),
-      );
-    },
-  }),
-  "/approvals": command({
-    description: "What your agents wait on you for, on your computers",
-    async run(_, term) {
-      const waiting = await term.runtime.query<Approval[]>("approval.pending", {});
-      if (!waiting.length) return await term.print(dim("Nothing waits on you."));
-      const names = await namesOf(term, waiting.flatMap((a) => a.for ? [a.for] : []));
-      await term.print(
-        waiting.map((a, i) =>
-          `${dim(`[${i + 1}]`)} ${asker(a, term.me, names)} wants to ${asks(a)}${
-            a.name ? dim(` on ${a.name}`) : ""
-          }`
-        ).join("\n") +
-          `\n${dim("/approve <n> once|thread|routine|always|no")}`,
-      );
-    },
-  }),
-  "/approve": command({
-    description: "Answer what an agent waits on you for (once, this conversation, its routine, " +
-      "always, or no)",
-    usage: "[n] [once|thread|routine|always|no]",
-    async run(rest, term) {
-      const words = rest.trim().split(/\s+/).filter(Boolean);
-      const n = /^\d+$/.test(words[0] ?? "") ? Number(words.shift()) : undefined;
-      const answer = ANSWERS[words[0] ?? "once"];
-      const waiting = await term.runtime.query<Approval[]>("approval.pending", {});
-      if (!waiting.length) return await term.print(dim("Nothing waits on you."));
-      const chosen = n ? waiting[n - 1] : waiting.length === 1 ? waiting[0] : undefined;
-      if (!chosen || !answer) {
-        return await term.print(
-          dim(
-            chosen
-              ? "/approve [n] once|thread|routine|always|no"
-              : "Several wait: /approvals lists them; /approve <n> once|thread|routine|always|no",
-          ),
-        );
-      }
-      if (onlyOnce(chosen.work) && answer !== "once" && answer !== "deny") {
-        return await term.print(dim("This is asked every time: once, or no."));
-      }
-      if (answer === "origin" && !chosen.origin) {
-        return await term.print(dim("No routine set this going."));
-      }
-      const { answered } = await term.runtime.call<{ answered: boolean }>("computer.approve", {
-        approval: chosen._id,
-        answer,
-      });
-      await term.print(
-        dim(answered ? "Answered; the agent carries on." : "It was answered already."),
       );
     },
   }),

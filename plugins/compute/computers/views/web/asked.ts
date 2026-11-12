@@ -77,28 +77,6 @@ export const sentence = (a: Asking): string => {
   return `${a.agent} ${wants} ${what}${at ? ` at ${at}` : ""}`;
 };
 
-/** What a yes covers, for whoever's deciding: this once, in this conversation, for its routine, or always. */
-export function reach(
-  answer: "once" | "thread" | "origin" | "always",
-  a: Asking,
-  computer = "this computer",
-): string {
-  const { verb, what } = asked(a);
-  const doing = ({
-    terminal: `run commands on ${computer}`,
-    jobs: `start jobs on ${computer}`,
-    writes: `change files on ${computer}`,
-    publish: `publish apps from ${computer}`,
-  } as Record<string, string>)[a.work] ?? `use ${a.work} on ${computer}`;
-  if (answer === "once") return `${a.agent} may ${verb} ${what}, this once.`;
-  if (answer === "origin") {
-    return `${a.agent} may ${doing} without asking again, whenever “${a.origin?.name}” runs, ` +
-      "until it's changed. It won't cover anything you ask it yourself.";
-  }
-  const where = answer === "thread" ? "in this conversation" : "in any conversation";
-  return `${a.agent} may ${doing} without asking again, ${where}.`;
-}
-
 /** A line of a preview, as a code block shows it. */
 export type PreviewPart = { text: string; tone?: "added" | "removed" | "muted" };
 

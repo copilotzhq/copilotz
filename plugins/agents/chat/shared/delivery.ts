@@ -2,17 +2,20 @@
 import {
   type Context,
   grant,
+  personOf,
   type Resources,
   type TransactionScope,
 } from "../../../../runtime/mod.ts";
 import type { LlmState } from "../../../models/contract.ts";
 import { CUT_SHORT, type Intent, NOT_SENT } from "../collections/intent.ts";
+import type { Approval } from "../collections/approval.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import type { Wait } from "../collections/wait.ts";
 import { agentsNamed, NO_ANSWER, now, SEND } from "./agents.ts";
-import { noted } from "./summary.ts";
-import { sharedWith } from "../../../access/spaces/contract.ts";
+import { originOf } from "./origin.ts";
+import { noted, startedWith } from "./summary.ts";
+import { beyond, nameOf, namesFor } from "../../../access/spaces/contract.ts";
 import { DELEGATED, settingsOf, type Step, type Told, type Turn } from "./types.ts";
 
 /**
@@ -143,37 +146,44 @@ export const answer = async (
     ...(how.knew ? { knew: how.knew } : {}),
     at: now(),
   };
-  // Handed over from another space: the answer goes back there too, where its sender waits;
-  // never into a chat shared with someone outside its space (a contact), who'd read what this
-  // space's work drew on.
-  const outside = back && thread?.in ? (await sharedWith(ctx, "thread", back.thread)).length : 0;
-  const returned = back && !outside
+  // Handed over from another space: the answer goes back there too, where its sender waits, when
+  // everyone there could see all this work may read (from someone's own Personal space, they do).
+  // Otherwise, whoever handed it over says where it goes (`asked`): back there, or to them alone.
+  const wider = back ? await beyond(ctx, `thread:${back.thread}`) : undefined;
+  const asker = wider ? personOf(ctx.actor) : undefined;
+  const returned = back && !wider ? backOf(reply, trigger!, back, thread?.in) : undefined;
+  // What it handed back without asking, which nobody can be asked about: a word that it didn't.
+  const kept = back && wider && !asker
+    ? keptOf(reply, trigger!, back, thread?.in, "The answer stayed where it was written.")
+    : undefined;
+  const asked = back && wider && asker
     ? {
-      ...reply,
       _id: `${run}:back`,
+      owner: asker,
+      for: asker,
+      agent: t.agent,
       thread: back.thread,
       ...(back.in ? { in: back.in } : {}),
-      to: [trigger!.from],
-      via: {
-        kind: DELEGATED,
-        name: (back.from ?? "Another space").slice(0, 120),
-        path: `/thread/${encodeURIComponent(t.thread)}${
-          thread?.in ? `?in=${encodeURIComponent(thread.in)}` : ""
-        }`,
-      },
-      told: undefined,
-      state: undefined,
-      knew: undefined,
+      work: BACK,
+      on: wider.to,
+      detail: wider.named,
+      text: wider.contacts
+        ? `send its answer to ${wider.named}`
+        : `post its answer in ${wider.named}`,
+      name: wider.named,
+      people: wider.people,
+      ...(text.trim() ? { preview: shortly(text) } : {}),
+      answers: ["here", "me"],
+      reply: reply._id,
+      ...(originOf(ctx.actor) ? { origin: originOf(ctx.actor) } : {}),
+      status: "pending",
+      at: now(),
     }
     : undefined;
   // Back where it came from, which the agent doesn't work in: a grant of its own, on the record.
-  const writer = returned ? ctx.as(grant("chat.hand-back")) : ctx;
-  const deliver = await delivery(
-    writer,
-    returned ?? reply,
-    (returned ?? reply).thread,
-    !how.stopped,
-  );
+  const there = returned ?? kept;
+  const writer = there ? ctx.as(grant("chat.hand-back")) : ctx;
+  const deliver = await delivery(writer, there ?? reply, (there ?? reply).thread, !how.stopped);
   await writer.transaction(async (tx) => {
     // What showed live while it was written becomes the reply.
     await tx.db.collection("live").deleteOne({ _id: run }, NO_ANSWER);
@@ -184,14 +194,141 @@ export const answer = async (
     }
     await tx.db.collection("message").insertOne(reply);
     await noted(tx, reply);
-    if (returned) {
-      const { told: _, state: __, knew: ___, ...copy } = returned;
-      await tx.db.collection("message").insertOne(copy);
-      await noted(tx, copy);
+    if (there) {
+      await tx.db.collection("message").insertOne(there);
+      await noted(tx, there);
     }
+    if (asked) await tx.db.collection("approval").insertOne(asked);
     await deliver(tx);
   });
 };
+
+/** An ask about an answer handed back (`approval.work`): post it where it came from, or not. */
+export const BACK = "back";
+
+/** The most of an answer its ask shows. */
+const PREVIEW = 600;
+const shortly = (text: string) =>
+  text.length > PREVIEW ? `${text.slice(0, PREVIEW - 1).trimEnd()}…` : text;
+
+/** Where an answer handed back came from, as its message there says it: the other space's chat. */
+const viaOf = (reply: Pick<Message, "thread">, back: Back, space?: string) => ({
+  kind: DELEGATED,
+  name: (back.from ?? "Another space").slice(0, 120),
+  path: `/thread/${encodeURIComponent(reply.thread)}${
+    space ? `?in=${encodeURIComponent(space)}` : ""
+  }`,
+});
+
+type Back = NonNullable<Message["back"]>;
+
+/**
+ * An answer, as it goes back where its work was handed over from (`back`):
+ * the same words, to whoever handed it over, saying where it came from. It
+ * replies to the message that handed it over: its sender's wait is checked off.
+ */
+const backOf = (
+  reply: Message & { hops: number },
+  trigger: Pick<Message, "from">,
+  back: Back,
+  space?: string,
+): Message & { hops: number } => {
+  const { told: _, state: __, knew: ___, in: ____, ...copy } = reply;
+  return {
+    ...copy,
+    _id: `${reply.turn}:back`,
+    thread: back.thread,
+    ...(back.in ? { in: back.in } : {}),
+    to: [trigger.from],
+    via: viaOf(reply, back, space),
+  };
+};
+
+/**
+ * Not the answer, where its work was handed over from: a word that it went
+ * elsewhere (`said`), so whoever waits there on it goes on without it.
+ */
+const keptOf = (
+  reply: Message & { hops: number },
+  trigger: Pick<Message, "from">,
+  back: Back,
+  space: string | undefined,
+  said: string,
+): Message & { hops: number } => {
+  const { failed: _, stopped: __, ...word } = backOf(reply, trigger, back, space);
+  return { ...word, text: said };
+};
+
+/** What an answer handed back that waits on its asker is about: its answer, and where it was. */
+async function heldOf(ctx: Context, asked: Approval) {
+  const system = ctx.as();
+  const messages = system.db.collection<Message & { hops: number }>("message");
+  const reply = asked.reply ? await messages.findOne({ _id: asked.reply }) : null;
+  const trigger = reply?.replyTo ? await messages.findOne({ _id: reply.replyTo }) : null;
+  if (!reply || !trigger?.back) return undefined;
+  return { reply, trigger, back: trigger.back };
+}
+
+/**
+ * Its asker's answer to where an answer handed back goes: back where its
+ * work was handed over from (`here`), as it would have gone; or to them
+ * alone (`me`), in a conversation of its own in their Personal space, with a
+ * word there that it went to them, so whoever waits on it goes on.
+ */
+export async function handBack(ctx: Context, asked: Approval, to: "here" | "me"): Promise<void> {
+  const held = await heldOf(ctx, asked);
+  if (!held) return;
+  const { reply, trigger, back } = held;
+  const writer = ctx.as(grant("chat.hand-back"));
+  if (to === "here") {
+    const returned = backOf(reply, trigger, back, reply.in);
+    const deliver = await delivery(writer, returned, returned.thread);
+    await writer.transaction(async (tx) => {
+      await tx.db.collection("message").insertOne(returned);
+      await noted(tx, returned);
+      await deliver(tx);
+    });
+    return;
+  }
+  const { space } = await ctx.call<{ space: string }>("space.personal", {});
+  const person = personOf(ctx.actor)!;
+  const names = await namesFor(ctx, [person]);
+  const from = await ctx.as().db.collection<Thread>("thread").findOne({ _id: reply.thread });
+  const at = now();
+  const mine = `${reply.turn}:mine`;
+  const word = keptOf(
+    reply,
+    trigger,
+    back,
+    reply.in,
+    `The answer went to ${nameOf(person, names)} only.`,
+  );
+  const deliver = await delivery(writer, word, word.thread);
+  await writer.transaction(async (tx) => {
+    const message = {
+      _id: `${mine}:answer`,
+      thread: mine,
+      in: space,
+      from: reply.from,
+      to: [person],
+      text: reply.text ?? "",
+      hops: 0,
+      via: viaOf(reply, back, reply.in),
+      at,
+    };
+    await tx.db.collection("thread").insertOne({
+      _id: mine,
+      title: from?.title ?? (reply.text ?? "").slice(0, 80),
+      in: space,
+      at,
+      ...startedWith(message),
+    });
+    await tx.db.collection("message").insertOne(message);
+    await tx.db.collection("message").insertOne(word);
+    await noted(tx, word);
+    await deliver(tx);
+  });
+}
 
 /**
  * The step a turn was taking when it ended without committing it: each call

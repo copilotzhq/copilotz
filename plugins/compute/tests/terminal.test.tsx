@@ -15,7 +15,8 @@ import { terminalPlugin } from "../../interfaces/terminal/mod.ts";
 import { terminalShell } from "../../interfaces/terminal/terminal.ts";
 import { plain, terminal } from "../../../hosts/terminal/mod.ts";
 import { access } from "../../access/mod.ts";
-import { type Approval, type Computer, computers } from "../mod.ts";
+import type { Approval } from "../../agents/chat/mod.ts";
+import { type Computer, computers } from "../mod.ts";
 import { computersTerminal } from "../computers/terminal.ts";
 import { WORK } from "../computers/shared/workloads.ts";
 import { test } from "../../../testing/mod.ts";
@@ -137,7 +138,7 @@ test("a person connects a computer and answers their agent at the terminal", asy
     assertEquals(await notice(), "");
     assertStringIncludes(seen, "[1] lead wants to run ls");
     assertStringIncludes(seen, "Answered; the agent carries on.");
-    assertStringIncludes(seen, "ana → lead › Yes, in this conversation: ls");
+    assertStringIncludes(seen, "ana → lead › Yes, for this conversation: ls");
     assertStringIncludes(seen, 'lead › Got: {"state":"idle","commandId":"c1","stdout":"ran ls"');
     assertStringIncludes(seen, "Nothing waits on you.");
     const left = await runtime.query<Approval[]>("approval.pending", {}, { actor: ana });

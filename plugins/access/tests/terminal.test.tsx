@@ -111,8 +111,14 @@ test("each person's terminal shows what they reach, and refuses what they can't 
     assertStringIncludes(bob, "✗");
     assertStringIncludes(bob, "out of your reach");
     assert(!bob.includes("bob → lead › can I help?"), bob);
-    // Ana moves her diary into Launch, and Bob sees it there.
-    const moved = await session("ana", ["/threads", "/open 2", "/move Launch"]);
+    // Ana moves her diary into Launch, told first who'll see it, and Bob sees it there.
+    const moved = await session("ana", [
+      "/threads",
+      "/open 2",
+      "/move Launch",
+      "/move Launch yes",
+    ]);
+    assertStringIncludes(moved, "Everyone in Launch (2) will see this whole conversation.");
     assertStringIncludes(moved, "Moved to Launch: its members see this conversation now.");
     assertStringIncludes(await session("bob", ["/threads"]), "my diary");
   } finally {
@@ -221,8 +227,11 @@ test("an answer drawn from Finance in Ana's Personal space goes with its chat: m
       "/work personal:ana",
       "read finance",
       "/move Launch",
+      "/move Launch yes",
     ]);
     assertStringIncludes(personal, "lead › Notes: budget is 10k");
+    // Asked first, it says what the chat drew on: Finance, which Launch's people don't reach.
+    assertStringIncludes(personal, "will see this whole conversation. It drew on Finance.");
     // Moved, it's Launch's: Bob reads all of it, and nothing there marks it apart.
     const moved = await session(runtime, "bob", [
       "/invitations",

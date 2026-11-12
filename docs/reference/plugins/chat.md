@@ -17,18 +17,16 @@ import { chat } from "copilotz/plugins/agents";
 
 ## What it keeps
 
-It keeps 9 collections, 6 of them on the record.
+It keeps 7 collections, 4 of them on the record.
 
 | Collection | Kept as                             | Fields                                                                                                                                                                                                                                   |
 | ---------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `approval` | documents                           | `owner`, `for`, `agent`, `thread`, `in`, `work`, `on`, `detail`, `text`, `covers`, `name`, `people`, `preview`, `answers`, `origin`, `call`, `question`, `reply`, `status`, `grant`, `at`, `decided`                                     |
 | `file`     | documents                           | `name`, `type`, `size`, `data`, `draft`, `voice`, `transcript`, `thread`, `in`, `private`, `at`                                                                                                                                          |
-| `grant`    | documents                           | `owner`, `agent`, `work`, `on`, `thread`, `once`, `origin`, `rev`, `at`                                                                                                                                                                  |
 | `intent`   | documents                           | `thread`, `agent`, `step`, `text`, `state`, `told`, `calls`, `outputs`, `asks`, `again`, `at`                                                                                                                                            |
 | `live`     | in memory, gone on restart          | `thread`, `agent`, `turn`, `text`, `calls`, `retry`, `open`, `in`, `at`                                                                                                                                                                  |
 | `message`  | documents                           | `thread`, `from`, `to`, `text`, `toolCalls`, `private`, `replyTo`, `expectReply`, `subthread`, `hops`, `turn`, `failed`, `in`, `files`, `drew`, `stopped`, `tap`, `via`, `back`, `state`, `told`, `knew`, `at`; private: `state`, `told` |
 | `shown`    | records, appended and never changed | `thread`, `in`, `key`, `after`, `medium`, `fallback`, `note`, `at`                                                                                                                                                                       |
-| `thread`   | documents                           | `title`, `renamable`, `agents`, `parent`, `fork`, `in`, `messages`, `opened`, `latest`, `at`                                                                                                                                             |
+| `thread`   | documents                           | `title`, `renamable`, `agents`, `parent`, `fork`, `in`, `about`, `messages`, `opened`, `latest`, `at`                                                                                                                                    |
 | `wait`     | documents                           | `agent`, `thread`, `trigger`, `hops`, `waitingFor`, `received`, `step`, `at`                                                                                                                                                             |
 
 The access rules cover `file`, `live`, `message`, `shown` and `thread`: each document is in a space,
@@ -38,33 +36,31 @@ Its named queries read for callers, as the rules let them:
 
 | Query                  | Who outside runs it                                                |
 | ---------------------- | ------------------------------------------------------------------ |
-| `approval.pending`     | people, agents for a person, keys and routines                     |
 | `file.about`           | people, agents for a person, contacts, keys and routines           |
-| `grant.forOrigin`      | people, agents for a person, keys and routines                     |
-| `grant.mine`           | people, agents for a person, keys and routines                     |
 | `message.conversation` | people, agents for a person, keys and routines                     |
 | `message.history`      | people, agents for a person, keys and routines                     |
 | `message.questions`    | people, keys or routines, depending on input                       |
 | `message.visible`      | the app's code                                                     |
 | `thread.agents`        | people, agents for a person, keys and routines                     |
+| `thread.moving`        | people, agents for a person, keys and routines                     |
 | `thread.prompt`        | people, keys and routines; agents for a person, depending on input |
 | `thread.recent`        | people, agents for a person, keys and routines                     |
 
 ## What it lets callers do
 
-Of its 14 Actions, people may call 8; agents may call 3; contacts may call 2; someone signed out may
+Of its 14 Actions, people may call 7; agents may call 4; contacts may call 2; someone signed out may
 call none.
 
-| Action             | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                              |
-| ------------------ | ------ | ----- | ------- | ------ | --- | ------- | ------------------------------------------------------------------------- |
-| `chat.approve`     | yes    | no    | no      | no     | no  | no      | Answers what an agent waits on you for.                                   |
-| `chat.attach`      | yes    | no    | yes     | no     | yes | yes     | Uploads a file to send: a draft that a message of yours sends, by its id. |
-| `chat.forgetGrant` | yes    | no    | no      | no     | no  | no      | Takes back what you let an agent do without asking.                       |
-| `chat.fork`        | yes    | yes   | no      | no     | yes | yes     |                                                                           |
-| `chat.move`        | yes    | no    | no      | no     | no  | no      | Moves a conversation, with everything in it, to another space.            |
-| `chat.open`        | yes    | yes   | no      | no     | yes | yes     | Opens an empty chat in a space.                                           |
-| `chat.send`        | yes    | no    | yes     | no     | yes | yes     |                                                                           |
-| `chat.stop`        | yes    | yes   | no      | no     | yes | yes     | Stops agents' turns in a conversation (and its subthreads).               |
+| Action        | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                           |
+| ------------- | ------ | ----- | ------- | ------ | --- | ------- | ----------- | -------------------------------------------------------------------------------------- |
+| `chat.attach` | yes    | no    | yes     | no     | yes | yes     | no          | Uploads a file to send: a draft that a message of yours sends, by its id.              |
+| `chat.fork`   | yes    | yes   | no      | no     | yes | yes     | no          |                                                                                        |
+| `chat.move`   | yes    | no    | no      | no     | no  | no      | no          | Moves a conversation, with everything in it, to another space.                         |
+| `chat.notes`  | yes    | yes   | no      | no     | yes | yes     | no          | The notes beside a chat shared outside its space, made the first time.                 |
+| `chat.open`   | yes    | yes   | no      | no     | yes | yes     | no          | Opens an empty chat in a space.                                                        |
+| `chat.send`   | yes    | no    | yes     | no     | yes | yes     | no          |                                                                                        |
+| `chat.stop`   | yes    | yes   | no      | no     | yes | yes     | no          | Stops agents' turns in a conversation (and its subthreads).                            |
+| `chat.unmark` | no     | no    | no      | no     | no  | no      | yes         | Takes the old marks off messages: each goes where only those who could read it see it. |
 
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.
@@ -91,11 +87,11 @@ It also adds rules every read and write keeps to (`guard`).
 
 Its Views show to the model and elsewhere.
 
-- **To the model:** `llm.message`, `llm.thread`.
+- **To the model:** `context:notes`, `llm.message`, `llm.thread`.
 - **Elsewhere:** `context`, `history`, `participants`.
 - **Agents' tools:** `list_conversations`, `read_conversation`.
 - **Front ends:** [`chat-terminal`](chat-terminal.md) and [`chat-web`](chat-web.md).
-- **What it adds to resources:** `usageNames` (`thread`).
+- **What it adds to resources:** `context` (`notes`), `usageNames` (`thread`).
 
 ## What it needs
 
@@ -124,6 +120,8 @@ Some of its work starts without a caller: an event, or the time.
 - `chat.turn` runs on `turn.requested` or `wait.updated`.
 - `chat.prune` calls `chat.prune`, every 1h. Drops files uploaded to send that no message sent
   within a day.
+- `chat.unmark` calls `chat.unmark`, once, when the runtime first starts with it. Takes the old
+  marks off messages: each goes where only those who could read it see it.
 - It emits `turn.requested`. An agent is to take a turn in a thread, because of a message.
 
 ## Listing

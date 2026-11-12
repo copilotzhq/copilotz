@@ -54,8 +54,8 @@
  * - A chat shared with someone outside its space (a contact's) has notes
  *   beside it (`chat.notes`): a thread of its own in the same space, made
  *   the first time it's asked for, where its people work with agents about
- *   it (they reach all the space does, and are told the chat's latest:
- *   the `notes` context), and that the one outside never sees. A reply
+ *   it (they reach all the space does; contacts tells them the chat's
+ *   latest), and that the one outside never sees. A reply
  *   drafted there goes into the chat as its person's own message
  *   (`chat.send`). The notes go wherever the chat goes, and are erased with
  *   it.
@@ -145,7 +145,6 @@ import { agentsOf, modelOf } from "./shared/agents.ts";
 import { contextView } from "./views/context.ts";
 import { historyView } from "./views/history.ts";
 import { messageView } from "./views/message.ts";
-import { notesContextView } from "./views/notes.ts";
 import { participants } from "./views/participants.ts";
 import { prompt } from "./views/prompt.ts";
 import { chatTools } from "./resources/tools.ts";
@@ -168,7 +167,6 @@ export const chat: Plugin = definePlugin({
     context: contextView,
     history: historyView,
     "llm.message": messageView,
-    "context:notes": notesContextView,
   },
   // Every agent's model can be called as configured (the models plugin says); a window by age
   // is in ms.
@@ -214,8 +212,6 @@ export const chat: Plugin = definePlugin({
   resources: {
     // Agents' own: the latest chats where they work (or another space they reach), and reading one.
     tools: chatTools,
-    // An agent in a chat's notes is told whose chat they're about, and its latest.
-    context: { notes: { place: "turn" } },
     // Conversations by title on Usage.
     usageNames: { thread: { tag: "tags.thread", collection: "thread", field: "title" } },
     // With the access plugin, chats live in spaces, and what's in a chat comes with it when it's

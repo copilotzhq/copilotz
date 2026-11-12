@@ -1,15 +1,18 @@
 /**
- * What an agent working in a chat's notes is told (the `notes` context, each
- * turn it says something new): whose chat they're about, that whoever it's
- * shared with outside the space never sees them, and the chat's latest
- * shared messages, so it answers its people about what was said there
+ * What an agent working in a contact's chat's notes (chat's `chat.notes`) is
+ * told, each turn it says something new (the `notes` context): whose chat
+ * they're about, that the contact never sees them, and the chat's latest
+ * shared messages, so it answers the line's people about what was said there
  * without asking them to repeat it. Read as the agent, as it reaches it.
+ * Nothing for any other conversation.
  */
 import type { ViewContext } from "../../../../runtime/mod.ts";
-import type { Message } from "../collections/message.ts";
-import type { Thread } from "../collections/thread.ts";
-import { said } from "../shared/summary.ts";
-import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
+import type { Message, Thread } from "../../../agents/chat/contract.ts";
+import { nameOf, namesIn } from "../../spaces/contract.ts";
+
+/** What a message says: its words, else what its audio says, else its file's name. */
+const said = (m: Message) =>
+  m.text?.trim() || m.files?.find((f) => f.transcript)?.transcript || m.files?.[0]?.name || "";
 
 /** How many of the chat's latest messages it's told. */
 const LATEST = 8;
@@ -39,7 +42,7 @@ export const notesContextView = (thread: Thread, ctx: ViewContext<string>) => {
     : "whoever it's shared with outside this space";
   const title = chat.title ? ` (“${gist(chat.title, 80)}”)` : "";
   const lines = latest.map((m) =>
-    `[${m.at.slice(0, 16).replace("T", " ")}] ${nameOf(m.from, names)}: ${gist(said(m) ?? "")}`
+    `[${m.at.slice(0, 16).replace("T", " ")}] ${nameOf(m.from, names)}: ${gist(said(m))}`
   );
   return `These are your team's notes about conversation ${chat._id}${title}, with ${whom}. ` +
     `Only this space's people read what's said here; ${whom} never see${

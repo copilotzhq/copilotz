@@ -1,3 +1,13 @@
+## Unreleased
+
+- **AGENTS.md, a guide for coding agents.** Claude Code, Codex, Cursor or Gemini building an app
+  with Copilotz finds it in the package (`node_modules/copilotz/AGENTS.md`, and in
+  `@copilotz/copilotz` on JSR): how Copilotz works, how to set up a project and test it offline with
+  a scripted model, the rules the docs insist on, and links to the docs' pages as Markdown. It has
+  each project keep an `AGENTS.md` of its own, with a `CLAUDE.md` that imports it.
+  `testing/agents-md.test.ts` checks that what it imports, links and installs is there, and the npm
+  smoke test that the installed package has it.
+
 ## 1.0.0-rc.44 — 2026-11-12
 
 (rc.43 was tagged but never published: a file wasn't formatted. This is it.)

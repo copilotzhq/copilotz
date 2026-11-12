@@ -2,7 +2,8 @@
  * A release's version, everywhere it's said, in lockstep: Copilotz's deno.json
  * and package.json (and package-lock.json), the computer program's, and every
  * product package's deno.json (its version, and the Copilotz it imports) and
- * package.json; and where the README and the computer's downloads name it.
+ * package.json; and where the README, AGENTS.md and the computer's downloads
+ * name it.
  * The tag's version is the publish workflow's to check (`v<version>`), and
  * the changelog's heading the release's to write.
  *
@@ -31,6 +32,7 @@ const files = [
   "plugins/compute/computers/resources/downloads.ts",
   "plugins/compute/tests/program-platform.test.ts",
   "README.md",
+  "AGENTS.md",
   ...packages.flatMap((dir) => [`${dir}/deno.json`, `${dir}/package.json`]),
 ];
 const quoted = (version: string) => version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

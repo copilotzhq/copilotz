@@ -1,8 +1,9 @@
 /**
  * Time, as a caller of Actions. A timer calls an Action with an input when it
  * comes due: once (`at`), or again and again (`cron` in a timezone, or
- * `every` so long). Plugins declare recurring ones (`schedules`); code sets
- * its own at run time (`ctx.schedule`).
+ * `every` so long). Plugins declare recurring ones (`schedules`), and ones
+ * that run once, when the runtime first starts with them (`once`: a
+ * migration); code sets its own at run time (`ctx.schedule`).
  *
  * Every timer is a document in `sys.timers`, written with whatever else its
  * commit writes. The owner keeps one clock armed for the earliest (see
@@ -21,11 +22,20 @@ export type When =
 
 /**
  * A declared schedule: an Action to call, with its input, by a cron
- * expression (in a timezone; UTC by default) or every so long. Declared
- * schedules recur: a one-off belongs to the code that wants it (`ctx.schedule`).
+ * expression (in a timezone; UTC by default), every so long, or once
+ * (`once: true`): as soon as the runtime starts with it, and never again
+ * while it's declared as it is (a migration of what's kept). One that
+ * didn't finish, its attempts spent, runs again the next time the runtime
+ * starts; one declared otherwise (another input) runs again too. Its Action
+ * must be safe to run again: an owner stopping mid-run runs it again. A
+ * one-off at a time belongs to the code that wants it (`ctx.schedule`).
  */
 export type ScheduleDef =
-  & ({ cron: string; timezone?: string; every?: never } | { every: number | string; cron?: never })
+  & (
+    | { cron: string; timezone?: string; every?: never; once?: never }
+    | { every: number | string; cron?: never; once?: never }
+    | { once: true; cron?: never; every?: never }
+  )
   & {
     call: string;
     input?: unknown;
@@ -40,6 +50,7 @@ export type SchedulePatch = {
   cron?: string | null;
   timezone?: string | null;
   every?: number | string | null;
+  once?: true | null;
   retries?: number | null;
 };
 
@@ -68,6 +79,11 @@ export type Timer = {
   retries: number;
   /** Declared by a plugin: the owner keeps it as the plugins declare it. */
   declared?: true;
+  /**
+   * Declared to run once: kept after it ran (without `at`), so the same
+   * declaration never runs it again; `running` stays until it's done.
+   */
+  once?: true;
   /** A failed occurrence's next attempt: it calls again as that occurrence, its `_id`. */
   retry?: true;
   /** Occurrences called and maybe not yet finished: the owner looks again after a restart. */
@@ -118,11 +134,21 @@ export function timer(
   id: string,
   call: string,
   input: unknown,
-  when: { at?: unknown; cron?: unknown; timezone?: unknown; every?: unknown; retries?: unknown },
+  when: {
+    at?: unknown;
+    cron?: unknown;
+    timezone?: unknown;
+    every?: unknown;
+    once?: unknown;
+    retries?: unknown;
+  },
   now: number,
 ): Timer {
+  const { once } = when;
+  if (once !== undefined && once !== true) throw invalid("`once` is true, or left out");
   const given = [when.at, when.cron, when.every].filter((v) => v !== undefined).length;
-  if (given !== 1) throw invalid("A schedule takes one of `at`, `cron` or `every`");
+  if (once && given) throw invalid("A schedule that runs once takes no `at`, `cron` or `every`");
+  if (!once && given !== 1) throw invalid("A schedule takes one of `at`, `cron` or `every`");
   if (when.timezone !== undefined && when.cron === undefined) {
     throw invalid("`timezone` goes with `cron`");
   }
@@ -149,6 +175,7 @@ export function timer(
     const every = interval(when.every as number | string);
     return { ...base, every, at: new Date(now + every).toISOString() };
   }
+  if (once) return { ...base, once: true, at: new Date(now).toISOString() };
   return { ...base, at: iso(when.at as string | number | Date) };
 }
 
@@ -175,7 +202,7 @@ export function following(t: Timer, due: number, now: number): string | undefine
 export const sameSchedule = (a: Timer, b: Timer) =>
   a.call === b.call && JSON.stringify(a.input) === JSON.stringify(b.input) &&
   a.cron === b.cron && a.timezone === b.timezone && a.every === b.every &&
-  a.retries === b.retries;
+  a.once === b.once && a.retries === b.retries;
 
 /**
  * The call id of a timer's occurrence: the timer and the time it was due

@@ -552,6 +552,7 @@ when to call it.
 schedules: {
   "usage.close": { cron: "10 0 * * *", call: "usage.close", input: {} },
   heartbeat: { every: "5m", call: "health.check" },
+  "notes.migrate": { once: true, call: "notes.migrate", retries: 5 },
 }
 ```
 
@@ -560,6 +561,12 @@ schedules: {
   removes one. At start the owner makes the timers what the plugins declare. A schedule calling an
   unknown Action, with input its Action refuses, or with a bad cron expression stops the runtime
   from starting. Declared ones run as the system.
+- **Run once:** `once: true` runs as soon as the owner starts with it (a deploy) and never again
+  while it's declared as it is: its timer stays, without a time, as the record that it ran. Declared
+  otherwise (another input), it runs again. One that didn't finish, its retries spent, gets another
+  go each time the owner starts, until it's done. For migrations of what's kept: its Action must be
+  safe to run again, as the owner may stop in the middle of it. Only the owner holding the store
+  runs timers, so instances started together run it once.
 - **From code:** `ctx.schedule(action, input, { at | cron | every, id?, retries? })` sets a timer
   with the call's writes, and `ctx.unschedule(id)` removes it. In a transaction, `tx.schedule`
   commits with the rest. Scheduling an id again replaces its timer. Without an `id`, a retried call

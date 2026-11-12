@@ -3,7 +3,9 @@
  * and removed like configuration); code sets its own (`ctx.schedule`). Each
  * occurrence is a call of its own id, a failed one is tried again after a
  * growing wait, one cut short by a stop runs again when the owner starts,
- * and the owner keeps declared timers as the plugins declare them.
+ * and the owner keeps declared timers as the plugins declare them. A
+ * declared one that runs once (a migration) runs as the owner starts, never
+ * again while declared the same, and again each start until it's done.
  */
 import { assertEquals, assertRejects } from "@std/assert";
 import {
@@ -40,6 +42,23 @@ const each = (name: string, fn: (make: () => Store | Promise<Store>) => Promise<
   for (const [store, make] of Object.entries(stores)) {
     test(`${store}: ${name}`, () => fn(make));
   }
+};
+/**
+ * Stores opened again after a close, as a restarted owner opens its own: each
+ * test gets a way to open the same data, again and again.
+ */
+const kept: Record<string, () => () => Store | Promise<Store>> = {
+  memory: () => {
+    const store = memoryStore();
+    return () => store;
+  },
+  sqlite: () => {
+    const path = tempFile(".sqlite");
+    return () => sqliteStore({ path });
+  },
+};
+const restarted = (name: string, fn: (open: () => Store | Promise<Store>) => Promise<void>) => {
+  for (const [store, make] of Object.entries(kept)) test(`${store}: ${name}`, () => fn(make()));
 };
 
 const T0 = "2026-10-27T12:00:00.000Z";
@@ -401,6 +420,88 @@ each(
   },
 );
 
+restarted(
+  "a schedule declared to run once runs as the owner starts, and never again as declared",
+  async (open) => {
+    const once = (input: Record<string, unknown>) =>
+      definePlugin({
+        name: "migrate",
+        schedules: { migrate: { once: true, call: "tick.add", input } },
+      });
+    const first = await boot(await open(), [once({ n: 1 })]);
+    assertEquals(await first.ticks(), [1]);
+    // Kept, as the record that it ran: no time to come due again, nothing running.
+    assertEquals((await first.timers()).map((t) => [t._id, t.at, t.once, t.running]), [
+      ["migrate", undefined, true, undefined],
+    ]);
+    await first.advance(60 * MINUTE);
+    assertEquals(await first.ticks(), [1]);
+    await first.runtime.close();
+    // Started again (a deploy) as declared: nothing runs.
+    const again = await boot(await open(), [once({ n: 1 })], manualClock(at(2 * MINUTE)));
+    assertEquals(await again.ticks(), [1]);
+    await again.runtime.close();
+    // Declared otherwise: it runs again, once, as a call of its own.
+    const store = await open();
+    const changed = await boot(store, [once({ n: 2 })], manualClock(at(3 * MINUTE)));
+    assertEquals(await changed.ticks(), [1, 2]);
+    assertEquals(await calls(store), [
+      `started migrate@${at(0)}#1`,
+      `completed migrate@${at(0)}#1`,
+      `started migrate@${at(3 * MINUTE)}#1`,
+      `completed migrate@${at(3 * MINUTE)}#1`,
+    ]);
+    await changed.runtime.close();
+  },
+);
+
+restarted(
+  "one that runs once and fails is tried again, then again each start until it's done",
+  async (open) => {
+    let down = true;
+    let runs = 0;
+    const flaky = definePlugin({
+      name: "migrate",
+      actions: {
+        "flaky.run": defineAction({
+          input: { type: "object" },
+          run: async (ctx) => {
+            runs++;
+            if (down) throw new Error("not yet");
+            await ctx.db.collection("tick").insertOne({ n: 9 });
+          },
+        }),
+      },
+      schedules: { migrate: { once: true, call: "flaky.run", input: {}, retries: 1 } },
+    });
+    const first = await boot(await open(), [flaky]);
+    // Its first attempt, and one more after 10 s: both fail, and it's given up for now.
+    await first.advance(10_000);
+    await first.advance(60 * MINUTE);
+    assertEquals(runs, 2);
+    assertEquals((await first.timers()).map((t) => [t._id, t.at, t.running?.length]), [
+      ["migrate", undefined, 1],
+    ]);
+    await first.runtime.close();
+    // The next start gives it another go, as the same call: still failing.
+    const second = await boot(await open(), [flaky], manualClock(at(2 * 60 * MINUTE)));
+    assertEquals(runs, 3);
+    await second.runtime.close();
+    // The one after, it's done; and then it's done for good.
+    down = false;
+    const third = await boot(await open(), [flaky], manualClock(at(3 * 60 * MINUTE)));
+    assertEquals(runs, 4);
+    assertEquals(await third.ticks(), [9]);
+    assertEquals((await third.timers()).map((t) => [t._id, t.at, t.running]), [
+      ["migrate", undefined, undefined],
+    ]);
+    await third.runtime.close();
+    const after = await boot(await open(), [flaky], manualClock(at(4 * 60 * MINUTE)));
+    assertEquals(runs, 4);
+    await after.runtime.close();
+  },
+);
+
 each("a host whose clock only rings calls wake()", async (make) => {
   const store = await make();
   let now = Date.parse(T0);
@@ -425,6 +526,8 @@ test("timers that can't run are refused when set, and declared ones stop the sta
       [{ n: 1, when: { cron: "not cron" } }, "Not a cron expression"],
       [{ n: 1, when: { every: "fortnightly" } }, "every must be"],
       [{ n: 1, when: { at: "someday" } }, "Not a time"],
+      // Once is a declared schedule's: code sets a one-off at a time.
+      [{ n: 1, when: { once: true } }, "a declared schedule's"],
     ] as const
   ) {
     await assertRejects(() => runtime.call("remind.set", input), Error, message);

@@ -232,6 +232,8 @@ export type ScheduleDeclaration = {
   cron?: string;
   timezone?: string;
   every?: string | number;
+  /** Runs once, when the runtime first starts with it (a migration). */
+  once?: true;
   /** A change to a schedule another plugin declared. */
   patch?: true;
   removes?: true;
@@ -650,11 +652,13 @@ const schedulesOf = (plugin: Plugin): ScheduleDeclaration[] =>
   Object.entries(plugin.schedules ?? {}).map(
     ([name, def]: [string, ScheduleDef | SchedulePatch | null]): ScheduleDeclaration => {
       if (def === null) return { name, when: "", summary: "", removes: true };
-      const { call, cron, timezone, every } = def as Record<string, unknown>;
+      const { call, cron, timezone, every, once } = def as Record<string, unknown>;
       const when = typeof cron === "string"
         ? `cron ${cron} (${typeof timezone === "string" ? timezone : "UTC"})`
         : typeof every === "string" || typeof every === "number"
         ? `every ${every}${typeof every === "number" ? " ms" : ""}`
+        : once === true
+        ? "once, when the runtime first starts with it"
         : "";
       const action = typeof call === "string" ? plugin.actions?.[call] : undefined;
       return {
@@ -665,6 +669,7 @@ const schedulesOf = (plugin: Plugin): ScheduleDeclaration[] =>
         ...(typeof cron === "string" ? { cron } : {}),
         ...(typeof timezone === "string" ? { timezone } : {}),
         ...(typeof every === "string" || typeof every === "number" ? { every } : {}),
+        ...(once === true ? { once: true as const } : {}),
       };
     },
   ).sort(byName);

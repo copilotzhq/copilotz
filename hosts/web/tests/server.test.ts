@@ -119,6 +119,25 @@ test("a page, its code, and what is not a page", async () => {
     );
     assertEquals(navigated.headers.get("content-type"), "text/html; charset=utf-8");
     await navigated.body?.cancel();
+    // The same, passed on by the service worker (Firefox says `same-origin`): still the page.
+    const passed = await serve(
+      new Request("http://localhost:8790/thread/t1", {
+        headers: {
+          "sec-fetch-mode": "same-origin",
+          "sec-fetch-dest": "document",
+          accept: "text/html",
+        },
+      }),
+    );
+    assertEquals(passed.headers.get("content-type"), "text/html; charset=utf-8");
+    await passed.body?.cancel();
+    const scripted = await serve(
+      new Request("http://localhost:8790/thread/t1", {
+        headers: { "sec-fetch-mode": "same-origin", "sec-fetch-dest": "empty", accept: "*/*" },
+      }),
+    );
+    assertEquals(scripted.status, 404);
+    await scripted.body?.cancel();
     const posted = await serve(new Request("http://localhost:8790/thread/t1", { method: "POST" }));
     assertEquals(posted.status, 404);
     await posted.body?.cancel();

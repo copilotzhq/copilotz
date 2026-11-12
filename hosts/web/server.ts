@@ -188,13 +188,16 @@ ${look(theme)}${installable(title)}<title>${title}</title>
 };
 
 /**
- * Whether a GET is a browser navigating (`Sec-Fetch-Mode: navigate`), or,
- * from one that doesn't say, one asking for a page (`Accept` with HTML, or
- * anything, or none): the page is for them; a script's `fetch` gets a 404.
+ * Whether a GET is a browser navigating (`Sec-Fetch-Mode: navigate`, or a
+ * page's own request passed on by the service worker, which some browsers
+ * send as `same-origin`: its destination is still a document), or, from one
+ * that doesn't say, one asking for a page (`Accept` with HTML, or anything,
+ * or none): the page is for them; a script's `fetch` gets a 404.
  */
 const navigating = (request: Request) => {
   const mode = request.headers.get("sec-fetch-mode");
-  if (mode !== null) return mode === "navigate";
+  const dest = request.headers.get("sec-fetch-dest");
+  if (mode !== null) return mode === "navigate" || dest === "document" || dest === "iframe";
   const accept = request.headers.get("accept");
   return accept === null || accept.includes("text/html") || accept.includes("*/*");
 };

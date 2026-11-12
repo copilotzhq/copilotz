@@ -1,3 +1,12 @@
+## 1.0.0-rc.43 — 2026-11-12
+
+- **The app opens in Firefox again.** Once its service worker was installed, every page load
+  answered `{"error":"Not found"}`: the worker passes a page's own request on, and Firefox sends that
+  as `Sec-Fetch-Mode: same-origin` rather than `navigate`, which the page took for a script's
+  `fetch`. A request whose destination is a document (`Sec-Fetch-Dest: document`, or `iframe`) is
+  now a page too, so browsers that already have the worker are fixed by the server alone; a
+  script's `fetch` still gets a 404.
+
 ## 1.0.0-rc.42 — 2026-11-11
 
 (rc.41 was tagged but never published: a test failed on Node. This is it.)

@@ -298,6 +298,8 @@ their front ends from `/web` and `/terminal` beside it.
   its executors, the store, events and Views, the ways in, and the invariants.
 - **[Design records](design/)** hold the decisions behind Views, access, work (who, for whom,
   where), memory and tenancy.
+- **[AGENTS.md](AGENTS.md)** is the short guide for coding agents (Claude Code, Codex, Cursor,
+  Gemini) building an app with Copilotz. It ships in the package.
 
 ## Status
 

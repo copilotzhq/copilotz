@@ -6,6 +6,8 @@
  * - **An app:** a runtime with the memory store, chat and the fake model,
  *   sends a message and reads the reply; again on PostgreSQL, in a schema of
  *   its own that it drops after, when `COPILOTZ_TEST_POSTGRES_URL` is set.
+ * - **AGENTS.md**, the guide for an app's coding agent, is in the installed
+ *   package.
  * - **Every entry point** loads on Node, and the app and all of them
  *   type-check against the package's declarations (`skipLibCheck: false`).
  * - **The browser's code** bundles from the installed package
@@ -266,6 +268,10 @@ try {
 
   step(`installing ${packages.length ? "them, together," : "it"} into a new project`);
   run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], dir);
+  // The guide for an app's coding agent, where it looks: in the installed package.
+  if (!existsSync(join(dir, "node_modules", ...manifest.name.split("/"), "AGENTS.md"))) {
+    throw new Error(`the installed ${manifest.name} has no AGENTS.md`);
+  }
   if (packages.length) {
     // One Copilotz, the app's: each package's is it (a peer at the same version), not a copy.
     const copies = packages.filter((p) =>

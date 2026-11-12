@@ -201,7 +201,7 @@ every runtime.
    - the computer program's version files: `plugins/compute/computers/program/version.ts`, the
      example in `plugins/compute/computers/resources/downloads.ts`, and
      `plugins/compute/tests/program-platform.test.ts`;
-   - the README's Deno install line;
+   - the README's Deno install line, and the versions in [AGENTS.md](AGENTS.md);
    - the `computerDownloads({ dir })` line in
      [docs/guides/installing-a-computer.md](docs/guides/installing-a-computer.md).
 

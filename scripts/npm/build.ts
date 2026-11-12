@@ -61,9 +61,10 @@ const OPTIONAL: Record<string, string> = {
 };
 /** What the stores need beyond what the sources import: Ominipg loads `pg` for `postgres://` URLs. */
 const EXTRA: Record<string, string> = { pg: "8.23.1" };
-/** Copied beside the code, as they are. */
+/** Copied beside the code, as they are. AGENTS.md is the guide an app's coding agent finds there. */
 const FILES = [
   "README.md",
+  "AGENTS.md",
   "CHANGELOG.md",
   "LICENSE",
   "hosts/web/theme/files/OFL-Manrope.txt",

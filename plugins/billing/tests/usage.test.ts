@@ -18,8 +18,11 @@ import { chat } from "../../agents/chat/mod.ts";
 import { history } from "../../agents/history/mod.ts";
 import { memory, memoryExtraction } from "../../agents/memory/mod.ts";
 import usage, { rate, type UsageRecord } from "../usage/mod.ts";
-import { catalog, lookup } from "../../models/shared/choice.ts";
+import { catalog, loadCatalog, lookup } from "../../models/shared/choice.ts";
 import { tempFile, test } from "../../../testing/mod.ts";
+
+// The tests read the catalog's prices themselves: it's loaded on first use.
+await loadCatalog();
 
 const MILLION = 1_000_000;
 const books = (cost?: Record<string, unknown>, price?: Record<string, unknown>) => ({

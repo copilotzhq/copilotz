@@ -1,7 +1,14 @@
 /** Embedding: the model choice resolved (one model only), and its use told. */
 import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
 import { calledBy, type Endpoint, type Usage } from "./provider.ts";
-import { adapterFor, type ModelInfo, type ModelRef, resolve, type Resolved } from "./choice.ts";
+import {
+  adapterFor,
+  loadCatalog,
+  type ModelInfo,
+  type ModelRef,
+  resolve,
+  type Resolved,
+} from "./choice.ts";
 import { used } from "./use.ts";
 import { measure } from "./telemetry.ts";
 
@@ -54,6 +61,7 @@ export async function embed(
   ctx: Reach,
   request: { model: ModelRef; input: string[]; tags?: Record<string, string> },
 ): Promise<Embedding> {
+  await loadCatalog();
   const m = embedder(ctx, request.model);
   const { dimensions, options } = m.settings as EmbeddingSettings;
   const call = measure(ctx.metrics, m, "embeddings");

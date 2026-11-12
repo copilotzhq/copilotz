@@ -14,8 +14,11 @@ import { anthropic } from "../adapters/llm/anthropic.ts";
 import { gemini } from "../adapters/llm/gemini.ts";
 import { openaiCompletions } from "../adapters/llm/openai-compatible.ts";
 import { openaiResponses } from "../adapters/llm/openai.ts";
-import { lookup, resolve } from "../shared/choice.ts";
+import { loadCatalog, lookup, resolve } from "../shared/choice.ts";
 import { serve, test } from "../../../testing/mod.ts";
+
+// Resolving reads the catalog, loaded on first use: the tests here resolve directly.
+await loadCatalog();
 
 const resources = {
   provider: {

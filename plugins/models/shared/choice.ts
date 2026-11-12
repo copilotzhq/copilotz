@@ -9,9 +9,9 @@
  *   without a slash is an alias from `resources.model`.
  * - The catalog (models.dev, snapshotted in `catalog.json`) fills in what a
  *   provider resource leaves out: its protocol and URL, and per model its
- *   cost, how its reasoning is controlled and its limits.
+ *   cost, how its reasoning is controlled and its limits. It's loaded the
+ *   first time it's needed (`loadCatalog`), not with the plugin.
  */
-import catalogJson from "./catalog.json" with { type: "json" };
 import { invalid } from "../../../runtime/mod.ts";
 import type { Endpoint } from "./provider.ts";
 
@@ -67,7 +67,46 @@ export type Catalog = {
   >;
 };
 
-export const catalog = catalogJson as unknown as Catalog;
+let loaded: Catalog | undefined;
+let loading: Promise<Catalog> | undefined;
+
+/**
+ * Loads the catalog, once: 2 MiB of JSON, some 5 MiB of heap once parsed, so
+ * an app that never resolves a model never pays for it. Whatever resolves a
+ * model (each Action here, `generate`, `embed`…) waits for it first; after
+ * that, `resolve`, `lookup`, `keyable` and `catalog` read it synchronously.
+ */
+export function loadCatalog(): Promise<Catalog> {
+  loading ??= import("./catalog.json", { with: { type: "json" } }).then(
+    (module) => (loaded = module.default as unknown as Catalog),
+    (error) => {
+      loading = undefined;
+      throw error;
+    },
+  );
+  return loading;
+}
+
+const now = (): Catalog => {
+  if (!loaded) throw new Error("The models catalog isn't loaded yet: await loadCatalog() first");
+  return loaded;
+};
+
+/** The catalog, read once it's loaded (`loadCatalog`). */
+export const catalog: Catalog = {
+  get source() {
+    return now().source;
+  },
+  get fetched() {
+    return now().fetched;
+  },
+  get etag() {
+    return now().etag;
+  },
+  get providers() {
+    return now().providers;
+  },
+};
 
 /**
  * A `provider` resource. Everything is optional for a provider the catalog

@@ -10,7 +10,7 @@
  * chosen elsewhere. Only the configuration: nothing is read.
  */
 import { defineAction } from "../../../runtime/mod.ts";
-import { type ModelRef, resolve } from "../shared/choice.ts";
+import { loadCatalog, type ModelRef, resolve } from "../shared/choice.ts";
 import { embedder } from "../shared/embed.ts";
 import { chooseModels } from "../shared/generate.ts";
 import { imagers } from "../shared/image.ts";
@@ -28,7 +28,8 @@ export const check = defineAction({
     required: ["model", "port"],
     additionalProperties: false,
   },
-  run: (ctx, input) => {
+  run: async (ctx, input) => {
+    await loadCatalog();
     const model = input.model as ModelRef;
     if (input.port === "llm") chooseModels(ctx, model);
     else if (input.port === "embeddings") embedder(ctx, model);
@@ -46,7 +47,8 @@ export const efforts = defineAction({
     required: ["model"],
     additionalProperties: false,
   },
-  run: (ctx, input) => {
+  run: async (ctx, input) => {
+    await loadCatalog();
     const [first] = resolve(ctx.resources, input.model as ModelRef);
     const reasoning = first?.info?.reasoning;
     if (reasoning === false) return [];

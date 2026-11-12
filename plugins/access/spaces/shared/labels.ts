@@ -20,7 +20,9 @@
  * - **On the record.** A document an agent writes in a collection that keeps
  *   it (`shared: { message: { drew: true } }`) says which other spaces its
  *   job read (`drew`), for whoever moves its conversation (chat.move): never
- *   a gate.
+ *   a gate, and only spaces its own readers reach (what an approved share
+ *   drew on beyond them isn't theirs to learn; trusted code's own reads, as
+ *   the system, are never counted).
  */
 import type { Actor, Labels, ReadContext } from "../../../../runtime/mod.ts";
 import { whereOf } from "../../../../runtime/mod.ts";
@@ -98,10 +100,12 @@ export const labels: Labels = {
     if (!shared || shared.member) return doc;
     const space = doc[shared.field ?? "in"];
     if (typeof space !== "string") return doc;
+    // What everyone it's shown to reaches: checked, and all its record may say.
+    let cover: Set<string> | undefined;
     if (narrows(actor) && whereOf(actor) !== undefined) {
       const target = await destinationOf(collection, doc, space, all, ctx);
+      cover = await coverOf(target, ctx);
       if (!approved(actor, target, space)) {
-        const cover = await coverOf(target, ctx);
         const bound = await reachOf(actor, ctx);
         for (const [key, held] of bound) {
           if (key === ORG || cover.has(key) || (held.home && cover.has(held.home))) continue;
@@ -112,7 +116,7 @@ export const labels: Labels = {
     if (!shared.drew || actor.kind !== "agent") return doc;
     const drew = [
       ...new Set([...(Array.isArray(doc.drew) ? doc.drew as string[] : []), ...read]),
-    ].filter((one) => one !== space).sort();
+    ].filter((one) => one !== space && (!cover || cover.has(one))).sort();
     return drew.length ? { ...doc, drew } : doc;
   },
   async elevate(actor, allow, ctx) {

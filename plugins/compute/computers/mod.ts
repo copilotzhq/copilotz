@@ -54,6 +54,7 @@ import { envVar } from "./collections/env-var.ts";
 import { preview } from "./collections/preview.ts";
 import { previewRoutes } from "./resources/previews.ts";
 import { tools } from "./resources/tools.ts";
+import { upgradeAsksAction } from "./actions/upgrade-asks.ts";
 import { contextViews } from "./views/context.ts";
 import { UPDATE } from "./program/release.ts";
 import { leftProcessor } from "./processors/left.ts";
@@ -65,6 +66,8 @@ export type { EnvVar } from "./collections/env-var.ts";
 export type { Preview } from "./collections/preview.ts";
 export type { ComputersSettings } from "./shared/settings.ts";
 export type { ComputerWake } from "./shared/wake.ts";
+/** Asks and yeses computers kept before chat kept every ask, kept as chat keeps them now. */
+export { upgradeAsks, type Upgraded } from "./shared/upgrade.ts";
 
 /** Collections a person reaches only their own of. */
 const OWNED = new Set(["computer", "enrollment"]);
@@ -113,8 +116,14 @@ export const computers: Plugin = definePlugin({
     "computer.enrollment": enrollmentAction,
     "computer.running": runningAction,
     "computer.mark": markAction,
+    // Asks and yeses kept the old way, kept as chat keeps them (code's, on a deploy).
+    "computer.upgradeAsks": upgradeAsksAction,
   },
   processors: { "computers.left": leftProcessor },
+  // Asks and yeses kept the old way are kept as chat keeps them, once, as a deploy first starts.
+  schedules: {
+    "computer.upgradeAsks": { once: true, call: "computer.upgradeAsks", input: {}, retries: 5 },
+  },
   // Agents with computer tools know, each turn, whose computer they work on and what waits for a yes.
   views: contextViews,
   // What jobs serve, at addresses of their own, once the app says where (`previews`).

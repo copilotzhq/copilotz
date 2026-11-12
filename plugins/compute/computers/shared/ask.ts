@@ -38,15 +38,34 @@ export type Ask = {
 export const asks = (a: { work: string; detail: string }): string =>
   a.work === "terminal" ? `run ${a.detail}` : a.work === "jobs" ? `start ${a.detail}` : a.detail;
 
-/** What a yes beyond this once lets, on this computer: "run commands on laptop". */
-const covers = (work: Asked, computer: string): string =>
-  ({
-    terminal: `run commands on ${computer}`,
-    jobs: `start jobs on ${computer}`,
-    writes: `change files on ${computer}`,
-    publish: `publish apps from ${computer}`,
-    destroy: `destroy ${computer}`,
-  })[work];
+/**
+ * A computer's ask in words: what it would do, as its person reads it ("run
+ * ls on laptop"), and what a yes beyond this once lets ("run commands on
+ * laptop").
+ */
+export const wordsOf = (a: { work: string; detail: string; name?: string }) => {
+  const computer = a.name ?? "this computer";
+  return {
+    text: `${asks(a)}${a.name ? ` on ${a.name}` : ""}`,
+    covers: ({
+      terminal: `run commands on ${computer}`,
+      jobs: `start jobs on ${computer}`,
+      writes: `change files on ${computer}`,
+      publish: `publish apps from ${computer}`,
+      destroy: `destroy ${computer}`,
+    } as Record<string, string>)[a.work] ?? `use ${a.work} on ${computer}`,
+  };
+};
+
+/**
+ * The answers a computer's ask takes: what's asked every time (publishing,
+ * destroying), once or no; else this once, this conversation, for the
+ * routine that set it going (when one did), always, or no.
+ */
+export const answersFor = (work: string, routine: boolean): Answer[] =>
+  onlyOnce(work)
+    ? ["once", "deny"]
+    : ["once", "thread", ...(routine ? ["origin" as const] : []), "always", "deny"];
 
 /**
  * True: go ahead. A string: what the agent is told instead (see chat's
@@ -73,10 +92,6 @@ export async function allowed(
       ? `destroy ${whose} computer for good, with its files`
       : `${what} on ${whose} computer`;
   const mine = a.owner === a.for;
-  // Asked every time: once, or not. Else for the conversation, the routine that set it going, always.
-  const answers: Answer[] = onlyOnce(a.work)
-    ? ["once", "deny"]
-    : ["once", "thread", ...(originOf(ctx.actor) ? ["origin" as const] : []), "always", "deny"];
   return await ask(ctx, {
     owner: a.owner,
     for: a.for,
@@ -87,11 +102,10 @@ export async function allowed(
     on: a.desk,
     computer: a.computer,
     detail: a.detail,
-    text: `${asks(a)}${a.name ? ` on ${a.name}` : ""}`,
-    covers: covers(a.work, a.name ?? "this computer"),
+    ...wordsOf(a),
     ...(a.name ? { name: a.name } : {}),
     ...(a.preview ? { preview: a.preview } : {}),
-    answers,
+    answers: answersFor(a.work, !!originOf(ctx.actor)),
     doing: doingOn(mine ? "their" : `${owner}'s`),
     question: `May I ${doingOn(mine ? "your" : `${owner}'s`)}?${
       mine ? "" : ` ${owner} answers.`

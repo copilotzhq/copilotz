@@ -96,7 +96,7 @@ export async function start(make: () => Store | Promise<Store>): Promise<Runtime
         name: "app",
         actions: { "test.peek": peek },
         resources: {
-          shared: { thread: {}, message: { labels: true } },
+          shared: { thread: {}, message: { drew: true } },
           provider: { s: { adapter: "s" } },
           agents: {
             north: agent("North", true),

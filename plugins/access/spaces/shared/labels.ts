@@ -121,8 +121,13 @@ export const labels: Labels = {
     return drew.length ? { ...doc, drew } : doc;
   },
   async elevate(actor, allow, ctx) {
-    if (actor.kind !== "agent" || typeof actor.thread !== "string") return true;
-    const outside = await sharedWith(docKey(CHAT, actor.thread), ctx);
+    // The agent at work, however its code went on (as its person, as the system).
+    let agent: Actor | undefined = actor;
+    while (agent && !(agent.kind === "agent" && typeof agent.thread === "string")) {
+      agent = agent.via as Actor | undefined;
+    }
+    if (!agent) return true;
+    const outside = await sharedWith(docKey(CHAT, agent.thread as string), ctx);
     if (!outside.some((member) => member.startsWith("contact:"))) return true;
     // An Action of the app's own (no `allow`) is what its tool chose to do; one people call is
     // let in only if a contact could call it themselves.

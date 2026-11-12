@@ -144,9 +144,9 @@ const scripted: LlmAdapter = {
   },
 };
 
-test("an answer drawn from Finance stays with those who see Finance, until Ana shares it", async () => {
+test("an answer drawn from Finance in Ana's Personal space goes with its chat: moved, everyone there reads it", async () => {
   // Her agent works where she does: in Launch, it reads Launch alone; in her Personal space, which
-  // only she sees, all she reaches. A chat moved from there keeps what it drew on.
+  // only she sees, all she reaches. Moving a chat from there is hers to decide, all of it.
   const notes = definePlugin({
     name: "notes",
     collections: {
@@ -158,7 +158,7 @@ test("an answer drawn from Finance stays with those who see Finance, until Ana s
       }),
     },
     resources: {
-      shared: { thread: {}, message: { labels: true }, note: {} },
+      shared: { thread: {}, message: { drew: true }, note: {} },
       provider: { s: { adapter: "s" } },
       agents: {
         lead: {
@@ -223,20 +223,17 @@ test("an answer drawn from Finance stays with those who see Finance, until Ana s
       "/move Launch",
     ]);
     assertStringIncludes(personal, "lead › Notes: budget is 10k");
-    const before = await session(runtime, "bob", [
+    // Moved, it's Launch's: Bob reads all of it, and nothing there marks it apart.
+    const moved = await session(runtime, "bob", [
       "/invitations",
       "/accept 1",
       "/threads",
       "/open 1",
       "/history",
     ]);
-    assertStringIncludes(before, "ana → lead › read finance");
-    assert(!before.includes("budget is 10k"), before);
-    const shared = await session(runtime, "ana", ["/history", "/share"]);
-    assertStringIncludes(shared, "uses ");
-    assertStringIncludes(shared, "Shared: everyone here sees what came from");
-    const after = await session(runtime, "bob", ["/history"]);
-    assertStringIncludes(after, "lead → ana › Notes: budget is 10k");
+    assertStringIncludes(moved, "ana → lead › read finance");
+    assertStringIncludes(moved, "lead → ana › Notes: budget is 10k");
+    assert(!moved.includes("uses "), moved);
   } finally {
     await runtime.close();
   }

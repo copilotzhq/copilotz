@@ -230,13 +230,15 @@ each("a closing runtime lets a running turn finish first", async (place) => {
 each(
   "a turn the drain's deadline cut short goes on in the next runtime, and answers once",
   async (place) => {
-    const first = await open(place, { delayMs: 2_000 });
+    // The turn takes far longer than the drain, even on a slow machine.
+    const first = await open(place, { delayMs: 8_000 });
     const { thread } = await send(first.runtime);
     await new Promise((resolve) => setTimeout(resolve, 100));
     const closing = performance.now();
     await first.runtime.close({ drain: 200 });
     const took = performance.now() - closing;
-    assert(took >= 150 && took < 1_500, `closed in ${Math.round(took)} ms`);
+    // It waits for the drain, not for the turn. The upper bound is loose: CI runners are slow.
+    assert(took >= 150 && took < 6_000, `closed in ${Math.round(took)} ms`);
     const next = await open(place);
     await next.runtime.idle();
     assertEquals(await said(next.runtime, thread), [

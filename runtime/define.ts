@@ -578,9 +578,9 @@ export type Who = (
  * what it read (`read`: where a document lives), and hands them to each
  * document the job then inserts or replaces (`write`), which returns it as
  * written (saying what it drew on, say) or refuses it (somewhere not everyone
- * may see what the work could read). Trusted code going beyond whom its job
- * acts for asks too (`elevate`, with the `allow` of the Action whose job it
- * is): false refuses it. One plugin, the access plugin, declares them.
+ * may see what the work could read). Trusted code in an Action going beyond
+ * whom it acts for asks too (`elevate`, with the actor it went beyond and
+ * that Action's `allow`): false refuses it. One plugin, the access plugin, declares them.
  */
 export type Labels = {
   read(collection: string, docs: Record<string, unknown>[], ctx: ReadContext): string[];

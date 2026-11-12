@@ -1420,12 +1420,14 @@ export async function createOwner(
     // Trusted code going on beyond whom it acted for: as the system, or a grant, on the record.
     if (request.actor?.kind === "system" && request.actor.via) {
       measure.elevated.add(request.ops.length, { grant: request.actor.id });
-      // In an Action's job, for whom its labels may keep it from going beyond (a contact, say).
-      const action = acting.get(job);
+      // In an Action's code (its own job, or its caller's when it's unrecorded), for whom its
+      // labels may keep it from going beyond (a contact, say).
+      const action = request.action ?? acting.get(job);
       const elevate = registry.labels?.elevate;
       if (elevate && action) {
-        const given = await authority(job);
-        if (given && !await elevate(given, registry.actions[action]?.allow, ruleReads)) {
+        // Whoever went beyond themselves: the code's own actor, whatever job it runs in.
+        const by = request.actor.via as Actor;
+        if (!await elevate(by, registry.actions[action]?.allow, ruleReads)) {
           throw forbidden(`"${action}" goes beyond what everyone in this conversation may see`);
         }
       }

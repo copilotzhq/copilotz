@@ -26,6 +26,10 @@
  * - `POST /maintenance/queries/<collection>.<name>`: a collection's named
  *   query (`booking.stats`), the body its params, read through the owner as
  *   the system on the record: `{ result, ms }`. It checks its params itself.
+ * - `POST /maintenance/actions/<action>`: an Action made for operators, the
+ *   body its input, called as the maintenance actor: only one whose `allow`
+ *   lets it in (`isMaintenance`), such as a plugin's migration run again or
+ *   tried dry. `{ result, ms }`.
  * - `GET /maintenance/blobs/<sha256-…>`: a blob's bytes and type, as a download.
  *
  * Writes take an `Idempotency-Key`: sent again, one answers what it did the
@@ -262,7 +266,7 @@ function actorOf(request: Request): MaintenanceActor {
 }
 
 /** A write's id, from the caller's `Idempotency-Key`, apart for each kind of write. */
-function idOf(request: Request, kind: "sql" | "op"): string | undefined {
+function idOf(request: Request, kind: "sql" | "op" | "action"): string | undefined {
   const given = request.headers.get("idempotency-key");
   if (given === null) return undefined;
   if (!/^[\x21-\x7e]{1,200}$/.test(given)) {
@@ -366,6 +370,7 @@ export const serveMaintenance: Route = async (request, { runtime }) => {
           "POST /maintenance/sql/write": "{ sql, params?, limit?, timeout? }: one that writes",
           "POST /maintenance/collections/<collection>/<op>": [...WRITES, ...READS].join(", "),
           "POST /maintenance/queries/<collection>.<name>": "a named query, the body its params",
+          "POST /maintenance/actions/<action>": "an Action for operators, the body its input",
           "GET /maintenance/blobs/<id>": "a blob's bytes",
         },
       });
@@ -468,6 +473,19 @@ export const serveMaintenance: Route = async (request, { runtime }) => {
       }
       const { rows, cut } = fit(result, bytes);
       return json({ result: rows, ...(cut ? { truncated: true } : {}), ms: elapsed(started) });
+    }
+    const action = /^\/actions\/([^/]+)$/.exec(path);
+    if (action) {
+      method("POST");
+      const name = decodeURIComponent(action[1]);
+      // Only what's made for operators: the runtime asks the Action's `allow` about this actor.
+      if (!runtime.describe().actions[name]) throw fault("not_found", `No action "${name}".`);
+      const input = await bodyOf(request);
+      const id = idOf(request, "action");
+      log("action", { action: name });
+      const started = performance.now();
+      const result = await runtime.call(name, input, { actor, ...(id ? { id } : {}) });
+      return json({ result: within(result, bytes), ms: elapsed(started) });
     }
     const blob = /^\/blobs\/([^/]+)$/.exec(path);
     if (blob) {

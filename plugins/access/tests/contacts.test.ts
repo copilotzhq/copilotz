@@ -21,6 +21,7 @@ import {
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmRequest } from "../../models/mod.ts";
 import {
+  type Approval,
   chat,
   history,
   memory,
@@ -651,27 +652,25 @@ test("a document shared on its own is never a space; memories and people stay ou
   });
 });
 
-test("work handed to another space from a contact's chat is answered there, never back in the chat", async () => {
+test("work isn't handed to another space from a contact's chat: nothing of it comes in", async () => {
   await setup(async ({ runtime, carla, carlas, read }) => {
     const { space } = await runtime.call<{ space: string }>("space.create", { name: "Finance" }, {
       actor: ana,
     });
     financeId = space;
-    // Ana's agent, in Carla's chat, hands it to Finance, which answers in its own chat.
+    // Ana's agent, in Carla's chat, would hand it to Finance: in front of a contact, trusted code
+    // goes beyond its caller only in what a contact may call, and asking whether Ana may write
+    // there isn't. Nothing is sent, so nothing comes back, and nobody is asked about it.
     await runtime.call("chat.send", { thread: carlas, text: "ask finance" }, { actor: ana });
     await runtime.idle();
-    const [there] = await runtime.query<{ _id: string }[]>("thread.recent", { in: space }, {
-      actor: ana,
-    });
-    const answered = await runtime.query<Message[]>("message.history", { thread: there._id }, {
-      actor: ana,
-    });
-    assertEquals(answered.filter((m) => !m.private).map((m) => m.from), ["lead", "lead"]);
-    // Nothing of Finance's comes back into Carla's chat: not for her, nor for Ana there.
+    assertEquals(await runtime.query("thread.recent", { in: space }, { actor: ana }), []);
     const history = await runtime.query<Message[]>("message.history", { thread: carlas }, {
       actor: ana,
     });
+    const [call] = history.flatMap((m) => m.toolCalls ?? []) as { output: string }[];
+    assert(call.output.includes("Not sent"), call.output);
     assert(!history.some((m) => m.via?.kind === "delegated"), JSON.stringify(history));
+    assertEquals(await runtime.query<Approval[]>("approval.pending", {}, { actor: ana }), []);
     assert(!(await read<Message>("message", carla)).some((m) => m.in === space));
   });
 });

@@ -22,7 +22,7 @@ It keeps 5 collections, each on the record: every change to one is an event.
 | Collection   | Kept as   | Fields                                                   |
 | ------------ | --------- | -------------------------------------------------------- |
 | `invitation` | documents | `space`, `name`, `email`, `role`, `by`, `at`             |
-| `member`     | documents | `member`, `space`, `role`, `on`                          |
+| `member`     | documents | `member`, `space`, `role`, `on`, `contacts`              |
 | `profile`    | documents | `name`, `picture`, `at`                                  |
 | `request`    | documents | `space`, `member`, `by`, `reason`, `at`                  |
 | `space`      | documents | `name`, `kind`, `owner`, `archived`, `agent`, `declared` |
@@ -40,7 +40,7 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 28 Actions, people may call 23; agents may call 8; contacts and someone signed out may call
+Of its 27 Actions, people may call 22; agents may call 8; contacts and someone signed out may call
 none.
 
 | Action               | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                                                               |
@@ -60,7 +60,6 @@ none.
 | `org.uninvite`       | yes    | no    | no      | no     | no  | no      | Takes back an invitation to the org.                                                                                       |
 | `request.deny`       | yes    | no    | no      | no     | no  | no      | Turns a request down.                                                                                                      |
 | `request.grant`      | yes    | no    | no      | no     | no  | no      | Lets in whoever a request is for, with a role (viewer by default).                                                         |
-| `share`              | yes    | no    | no      | no     | no  | no      | Shows a labelled document to everyone where it is.                                                                         |
 | `space.agent`        | yes    | yes   | no      | no     | yes | yes     | Chooses the agent that answers a space's new chats: one working there.                                                     |
 | `space.archive`      | yes    | yes   | no      | no     | yes | yes     | Archives a space you manage, or brings it back.                                                                            |
 | `space.can`          | yes    | yes   | no      | no     | yes | yes     | Whether you may read, write in or manage a space.                                                                          |
@@ -103,7 +102,7 @@ resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.45`.
 
 ## What it does on its own
 

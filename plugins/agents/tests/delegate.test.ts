@@ -7,7 +7,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { type Actor, createRuntime, definePlugin, type Event } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
-import { chat, type Message, tool } from "../chat/mod.ts";
+import { type Approval, chat, type Message, tool } from "../chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
 import { test } from "../../../testing/mod.ts";
@@ -198,6 +198,13 @@ test("a chain of hand-overs works, each for the same person", async () => {
     }, { actor: ana });
     await rt.idle();
     assertEquals([seen.dev?.id, (seen.dev?.for as Actor)?.id, seen.dev?.in], ["dev", "ana", dev]);
+    // Dev's answer going back to Project, whose people can't all see Dev: Ana says it goes there.
+    // Project's, back in her Personal space, goes without asking: only she sees it.
+    const [asked] = await rt.query<Approval[]>("approval.pending", {}, { actor: ana });
+    assertEquals([asked.work, asked.agent, asked.on], ["back", "dev", pm]);
+    await rt.call("chat.approve", { approval: asked._id, answer: "here" }, { actor: ana });
+    await rt.idle();
+    assertEquals(await rt.query("approval.pending", {}, { actor: ana }), []);
     const here = await history(rt, thread);
     assert(here.some((m) => m.from === "lead" && m.via?.kind === "delegated"));
     assertEquals(here.at(-1)!.from, "north");

@@ -348,8 +348,7 @@ test("a write refused for approval says where to (`to`, `named`) to whoever call
       actor: { kind: "agent", id: "lead", for: ana, in: shop, thread: staff },
     }).then(() => undefined, (e: { code?: string; to?: string; named?: string }) => e);
     assertEquals(refused?.code, "needs_approval");
-    // What a yes would be for, so a turn can ask for it: lost on the way (the wire keeps only
-    // `message`, `code`, `final` and `public`).
-    assertEquals([refused?.to, refused?.named], [`thread:${carlas}`, "this conversation"]);
+    // What a yes would be for, so a turn can ask for it: a customer's chat, by its customer's name.
+    assertEquals([refused?.to, refused?.named], [`thread:${carlas}`, "Carla"]);
   });
 });

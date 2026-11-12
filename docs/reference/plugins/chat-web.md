@@ -29,21 +29,22 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `chat.palette`, `chats`, `chats.recent`, `file`, `home`, `new-thread`, `web.live`,
-  `web.message`, `web.thread`.
-- **What it adds to resources:** `palette` (`chats`), `sidebar` (`start`), `spaceSidebar` (`chats`),
-  `spaceTabs` (`chats`), `suggestions` (`draft`, `explain`, `names`, `week`).
+- **On the web:** `chat.asks`, `chat.palette`, `chat.waiting`, `chats`, `chats.recent`, `file`,
+  `home`, `new-thread`, `web.live`, `web.message`, `web.thread`.
+- **What it adds to resources:** `conversation` (`asks`), `palette` (`chats`), `sidebar` (`asks`,
+  `start`), `spaceSidebar` (`chats`), `spaceTabs` (`chats`), `suggestions` (`draft`, `explain`,
+  `names`, `week`).
 
 ## What it needs
 
-Nothing to set. It reads `composerNotes`, `conversation`, `home`, `refusals`, `suggestions` and
-`toolViews`, resource kinds the app and other plugins fill.
+Nothing to set. It reads `agentSources`, `agents`, `askViews`, `composerNotes`, `conversation`,
+`home`, `refusals`, `suggestions` and `toolViews`, resource kinds the app and other plugins fill.
 
 ## What it requires
 
 The runtime doesn't start without [`chat`](chat.md) and [`web-shell`](web-shell.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.45`.
 
 ## Listing
 

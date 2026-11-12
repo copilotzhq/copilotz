@@ -162,7 +162,7 @@ OPENAI_API_KEY=sk-… node salon.ts    # or bun salon.ts, or deno run -A salon.t
 ```
 
 On Deno, map the name `copilotz` in `deno.json`
-(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.42"`) so the imports read the same everywhere.
+(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.43"`) so the imports read the same everywhere.
 Copilotz runs on Node, Deno and Bun, and it's built on web standards for Cloudflare Workers and the
 browser.
 

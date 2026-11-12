@@ -408,7 +408,7 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .notes-talk .msg-gutter .copilotz-avatar { --size: 26px !important; }
 .notes-talk .msg-mine { grid-template-columns: minmax(0, 1fr); }
 .notes-talk .msg-aside { margin-left: 10px; padding-left: 10px; }
-.notes-talk .msg-person .msg-bubble { background: var(--card); box-shadow: 0 0 0 1px var(--notes-line); }
+.notes-talk .msg-person .msg-bubble { background: var(--card); outline: 1px solid var(--notes-line); outline-offset: -1px; }
 .notes-talk .chat-asks { padding: 2px 12px 8px; }
 .notes-talk .chat-composer { padding: 0 12px max(12px, env(safe-area-inset-bottom));
   background: linear-gradient(to bottom, transparent, var(--notes-tint) 18px); }
@@ -483,7 +483,7 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
     color: var(--muted-foreground); font: inherit; font-size: 13.5px; font-weight: 600; white-space: nowrap; cursor: pointer;
     transition: background-color .15s, color .15s, box-shadow .15s; }
   .notes-switch button[aria-pressed=true] { background: var(--background); color: var(--foreground); box-shadow: var(--shadow-sm); }
-  .notes-switch .notes-switch-notes[aria-pressed=true] { background: var(--notes-soft); box-shadow: 0 0 0 1px var(--notes-line); }
+  .notes-switch .notes-switch-notes[aria-pressed=true] { background: var(--notes-soft); outline: 1px solid var(--notes-line); outline-offset: -1px; }
   .notes-lane { position: absolute; z-index: 6; inset: 0; width: 100%; border-left: 0; box-shadow: none; animation: none; }
   .chat-split[data-notes=open] > .chat-main { visibility: hidden; }
   .notes-head { min-height: 46px; padding: 6px 8px 6px 14px; }

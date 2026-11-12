@@ -285,7 +285,7 @@ test("a phone its people block goes unheard; too many at once go unanswered; cus
   });
 });
 
-test("only what a customer may read goes to their phone: what draws on the space stays there", async () => {
+test("only what a customer may read goes to their phone: what's kept from them stays there", async () => {
   await setup(async (s) => {
     const { runtime, graph, deliver, launch } = s;
     await open(s);
@@ -296,7 +296,7 @@ test("only what a customer may read goes to their phone: what draws on the space
       thread: chat._id,
       to: `contact:${carla.id}`,
       text: "our margin is 12%",
-      sources: [launch],
+      private: true,
     });
     await runtime.call("test.said", {
       thread: chat._id,

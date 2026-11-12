@@ -3,7 +3,8 @@
  * it: its messages, its files, and the subthreads agents opened from it.
  * Only a person does, who may write in both spaces (the access rules check
  * it): moving shows it to the space's members, which is theirs to decide.
- * Answers marked as drawing on other spaces keep their marks; forks stay
+ * Its answers' record of what they drew on (`drew`) goes with them, for
+ * whoever moves it to see what that shows; forks stay
  * where they are. Not while agents are writing in it: a running turn writes
  * where the conversation was when it started (a waiting one, resumed, reads
  * it again).

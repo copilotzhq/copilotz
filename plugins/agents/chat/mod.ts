@@ -181,7 +181,7 @@ export const chat: Plugin = definePlugin({
     shared: {
       thread: {},
       message: {
-        labels: true,
+        drew: true,
         part: "thread",
         contact: { private: { $ne: true }, toolCalls: { $exists: false } },
       },

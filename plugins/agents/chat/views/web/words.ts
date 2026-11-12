@@ -52,8 +52,6 @@ export const say = defineWords("chat", {
   couldntAnswer: "Couldn't answer.",
   askedInSideThread: "Asked in a side thread",
   waitingOnAnswer: "Waiting on your answer: your next message replies.",
-  usesSources: "Uses {sources}. Not everyone here can see it.",
-  share: "Share",
   stopped: "Stopped",
   copyReply: "Copy reply",
   // What an agent is doing

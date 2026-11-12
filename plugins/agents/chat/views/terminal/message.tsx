@@ -24,11 +24,6 @@ export const messageLine = (m: Message, ctx: ViewContext<ReactNode>) => {
     return <Text dimColor>{`  ⚙ ${m.from}: ${calls.join("; ")}`}</Text>;
   }
   const n = typeof ctx.hints.n === "number" ? `${`[${ctx.hints.n}]`.padStart(4)} ` : "";
-  // Labelled (with the access plugin): the spaces it drew on, by name.
-  const from = m.sources?.length
-    ? ctx.db.collection<{ _id: string; name: string }>("space").find({ _id: { $in: m.sources } })
-    : undefined;
-  const named = m.sources?.map((id) => from?.value?.find((p) => p._id === id)?.name ?? id);
   const asked = m.to.includes(ctx.viewer?.name ?? "") && !m.replyTo && m.expectReply !== false
     ? ctx.db.collection("wait").findOne({ waitingFor: m._id })
     : undefined;
@@ -49,15 +44,6 @@ export const messageLine = (m: Message, ctx: ViewContext<ReactNode>) => {
         ? (
           <Box paddingLeft={2}>
             <Text dimColor>(your next message answers this)</Text>
-          </Box>
-        )
-        : null}
-      {m.sources?.length
-        ? (
-          <Box paddingLeft={2}>
-            <Text color="yellow">
-              uses {named!.join(", ")}: not everyone here can see it. /share shows them.
-            </Text>
           </Box>
         )
         : null}

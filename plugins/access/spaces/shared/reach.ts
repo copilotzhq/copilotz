@@ -18,7 +18,11 @@
  * Launch reaches Launch and its sources, never Ana's other spaces, whose
  * words would otherwise end up before Launch's members. Ana's own Personal
  * space is the one exception: only she sees it, so her agents there reach
- * all she does. Work done as a person for them (`onBehalf`: a tool acting
+ * all she does. Work in a conversation shared on its own with someone
+ * outside its space (`thread`: a contact's chat) reaches only that
+ * conversation, and what its space lets its contacts read (a space it
+ * draws on with `contacts: "read"`): what everyone it's shown to reaches,
+ * never more. Work done as a person for them (`onBehalf`: a tool acting
  * as its agent's person, a routine as its maker) is narrowed the same way. A
  * person acting themselves isn't (they reach what they reach from any page),
  * nor is code acting as them for themselves, nor work that's nowhere in
@@ -165,6 +169,7 @@ export function reachKey(actor: Actor): string {
     actor.staff === true,
     actor.for && typeof actor.for === "object" ? reachKey(actor.for as Actor) : null,
     narrows(actor) ? whereOf(actor) ?? null : null,
+    narrows(actor) ? threadOf(actor) ?? null : null,
   ]);
 }
 
@@ -174,7 +179,7 @@ export function reachKey(actor: Actor): string {
  * a tool acting as its agent's person); never a person's own, nor code
  * acting as them for themselves.
  */
-const narrows = (actor: Actor): boolean =>
+export const narrows = (actor: Actor): boolean =>
   !!worksFor(actor) || (actor.kind === "person" && onBehalf(actor));
 
 async function reaching(actor: Actor, ctx: ReadContext): Promise<Reach> {
@@ -191,9 +196,98 @@ async function reaching(actor: Actor, ctx: ReadContext): Promise<Reach> {
     }
   }
   const where = whereOf(actor);
-  return narrows(actor) && where !== undefined
-    ? await narrowed(reach, where, worksFor(actor) ?? actor, ctx)
-    : reach;
+  if (!narrows(actor) || where === undefined) return reach;
+  const within = await narrowed(reach, where, worksFor(actor) ?? actor, ctx);
+  const thread = threadOf(actor);
+  return thread === undefined ? within : await conversed(within, docKey(CHAT, thread), ctx);
+}
+
+/** Chats: a conversation's documents (`thread`), named so in a key (`thread:t1`). */
+export const CHAT = "thread";
+
+/** The conversation an agent's work answers in (`thread`), if it says. */
+const threadOf = (actor: Actor): string | undefined =>
+  typeof actor.thread === "string" ? actor.thread : undefined;
+
+/** Who a document is shared with on its own (`thread:t1`): contacts in a chat, say. */
+export const sharedWith = async (key: string, ctx: ReadContext): Promise<string[]> =>
+  (await ctx.db.collection<Member>("member").find({ space: key })).map((m) => m.member);
+
+/** The actor a member key names (`contact:c1`, `person:ana`). */
+const actorOf = (member: string): Actor => {
+  const at = member.indexOf(":");
+  return { kind: member.slice(0, at), id: member.slice(at + 1) };
+};
+
+/** What everyone a document is shared with on its own (`outside`) reaches: each side's verbs. */
+async function theirs(outside: string[], ctx: ReadContext): Promise<Reach> {
+  const each = await Promise.all(outside.map((member) => reachOf(actorOf(member), ctx)));
+  const all: Reach = new Map();
+  for (const [key, held] of each[0] ?? []) {
+    if (key === ORG || !each.every((r) => r.has(key))) continue;
+    const can = [...held.can].filter((verb) => each.every((r) => r.get(key)!.can.has(verb)));
+    if (can.length) all.set(key, { ...held, can: new Set(can) });
+  }
+  return all;
+}
+
+/**
+ * `reach`, for work in a conversation (`key`) shared on
+ * its own with someone outside its space: only what they all reach too (the
+ * conversation, a contact's own record, what its space lets contacts read),
+ * at most as `reach` allows it. A conversation nobody outside shares stays as
+ * its space has it.
+ */
+async function conversed(reach: Reach, key: string, ctx: ReadContext) {
+  const outside = await sharedWith(key, ctx);
+  if (!outside.length) return reach;
+  const within: Reach = new Map();
+  for (const [held, other] of await theirs(outside, ctx)) {
+    const mine = reach.get(held) ?? (other.home ? reach.get(other.home) : undefined);
+    const can = mine ? [...other.can].filter((verb) => mine.can.has(verb)) : [];
+    if (can.length) within.set(held, { ...other, can: new Set(can) });
+  }
+  return within;
+}
+
+/**
+ * What a space lets its contacts read: the spaces it draws on saying so
+ * (`contacts: "read"` on its membership there), read only, and not what
+ * those draw on in turn.
+ */
+async function contactsRead(space: string, ctx: ReadContext): Promise<Reach> {
+  const drawn = await ctx.db.collection<Member>("member").find({
+    member: `space:${space}`,
+    contacts: "read",
+  });
+  return new Map(
+    drawn.filter((m) => !m.on && m.space !== ORG).map((m) => [
+      m.space,
+      { can: new Set<Verb>(["read"]) },
+    ]),
+  );
+}
+
+/**
+ * What everyone a document written to `target` is shown to reaches, besides
+ * it: a space, what it draws on (its own Personal space, all its person
+ * reaches); a conversation shared on its own, what everyone it's shared with
+ * reaches.
+ */
+export async function coverOf(target: string, ctx: ReadContext): Promise<Set<string>> {
+  const home = await homeOf(target, ctx);
+  if (home !== undefined) {
+    const outside = await sharedWith(target, ctx);
+    if (outside.length) return new Set([target, ...(await theirs(outside, ctx)).keys()]);
+    target = home;
+  }
+  const space = await ctx.db.collection<{ kind?: string; owner?: string }>("space").findOne({
+    _id: target,
+  });
+  const seen = space?.kind === PERSONAL && space.owner
+    ? await reachOf({ kind: "person", id: space.owner }, ctx)
+    : await reachOf({ kind: "space", id: target }, ctx);
+  return new Set([target, ...seen.keys()]);
 }
 
 /**
@@ -235,19 +329,6 @@ async function personalOf(space: string, principal: Actor, ctx: ReadContext): Pr
   return found?.kind === PERSONAL && found.owner === principal.id;
 }
 
-/**
- * Whether an actor's work is done for someone from their own Personal space
- * (an agent's working for them there, a routine of theirs kept there): theirs,
- * as if they'd done it, wherever it writes (see labels.ts). Only they see what's
- * said there, so what they asked for there is theirs to have done anywhere they
- * may.
- */
-export async function ownPersonal(actor: Actor, ctx: ReadContext): Promise<boolean> {
-  const where = whereOf(actor);
-  if (where === undefined || !narrows(actor)) return false;
-  return await personalOf(where, worksFor(actor) ?? actor, ctx);
-}
-
 /** Whom an actor works for: an agent, whoever it acts for (`for`); a key, the person whose it is. */
 const worksFor = (actor: Actor): Actor | undefined =>
   (actor.for as Actor | undefined) ??
@@ -260,6 +341,15 @@ async function unlimited(actor: Actor, ctx: ReadContext): Promise<Reach> {
     const role = await orgRoleOf(actor, ctx);
     if (runsOrg(role)) return await everything(ctx);
     const own = new Map(await membershipsOf(memberKey(actor), ctx));
+    // A contact reads, too, what the spaces its conversations live in let their contacts read.
+    if (actor.kind === "contact") {
+      const homes = new Set([...own.values()].flatMap((held) => held.home ? [held.home] : []));
+      for (const home of homes) {
+        for (const [key, held] of await contactsRead(home, ctx)) {
+          if (!own.has(key)) own.set(key, held);
+        }
+      }
+    }
     // Members see who's in the org; guests only the spaces they're in.
     if (role === "member") own.set(ORG, { can: new Set<Verb>(["read"]) });
     return own;

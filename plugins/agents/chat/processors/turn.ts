@@ -44,14 +44,15 @@ import {
 
 /**
  * A turn someone started (a person, or a contact in its chat) acts as its
- * agent, for them, where its conversation is (`in`, the thread's space):
- * with the access plugin, it reaches only what both reach there (an agent is
- * a member of spaces, like a person), and its tools know where they are
+ * agent, for them, where its conversation is (`in`, the thread's space) and
+ * in it (`thread`): with the access plugin, it reaches only what both reach
+ * there, and what everyone the conversation is shared with reaches (an agent
+ * is a member of spaces, like a person), and its tools know where they are
  * (`ctx.in`). Without anyone, it runs as the system.
  */
-const asAgent = (ctx: Context, agent: string, where?: string): Context => {
+const asAgent = (ctx: Context, agent: string, thread: string, where?: string): Context => {
   const principal = principalOf(ctx.actor);
-  return principal ? ctx.as({ kind: "agent", id: agent, for: principal, in: where }) : ctx;
+  return principal ? ctx.as({ kind: "agent", id: agent, for: principal, in: where, thread }) : ctx;
 };
 
 /** The space a thread is in, where its turns work: what they write elsewhere needs a person. */
@@ -86,7 +87,7 @@ export const turnProcessor: ProcessorDef = {
     const { agent, thread } = turnOf(event);
     // Only someone's turn needs to know where it works.
     const where = principalOf(ctx.actor) ? await spaceOf(ctx, thread) : undefined;
-    return await turn(asAgent(ctx, agent, where), event);
+    return await turn(asAgent(ctx, agent, thread, where), event);
   },
 };
 

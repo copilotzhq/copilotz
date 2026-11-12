@@ -56,10 +56,11 @@ const messageSchema = {
       },
     },
     /**
-     * Spaces it drew on that not everyone where it is can see (the access
-     * plugin's labels): only those who reach them all read it, until shared.
+     * Other spaces the work that wrote it read (the access plugin's labels,
+     * for an agent's): on the record, for whoever moves its conversation;
+     * never a gate.
      */
-    sources: { type: "array", items: { type: "string" } },
+    drew: { type: "array", items: { type: "string" } },
     /** Its turn was stopped (`chat.stop`): what it had written so far. */
     stopped: { type: "boolean" },
     /**

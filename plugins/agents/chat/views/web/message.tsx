@@ -10,9 +10,7 @@
  * says so (`hints.asked`); one from a side thread (not `hints.thread`) sits
  * indented. One of yours that waits for agents at work on an earlier one
  * says so, with a way to send it now (`hints.queued`: their ids; see
- * queued.tsx). One that drew on spaces not everyone here sees says so
- * (`hints.sources`: their names; none in a Personal space, where only its
- * person is), and someone who sees them can share it.
+ * queued.tsx).
  * One sent for someone by what they set up (`via`: a routine) says so. One
  * that says why its agent couldn't start (the org's limit) is a calm notice,
  * with its link; one where the agent itself failed is an error.
@@ -79,8 +77,6 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
   );
   const usual = Array.isArray(ctx.hints.usual) ? ctx.hints.usual as string[] : [];
   const addressed = mine ? m.to.some((name) => !usual.includes(name)) : to.length > 0;
-  // The spaces it drew on, by name (`hints.sources`, read once for the conversation).
-  const sources = Array.isArray(ctx.hints.sources) ? ctx.hints.sources as string[] : m.sources;
   const kind = mine ? "mine" : agent ? "agent" : "person";
 
   const addressees = addressed
@@ -202,26 +198,6 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
             <Chip size="sm" variant="primary" icon="chat" className="msg-asked">
               {say("waitingOnAnswer")}
             </Chip>
-          )
-          : null}
-        {sources?.length && !m.toolCalls
-          ? (
-            <Notice
-              tone="warning"
-              icon="lock"
-              className="msg-sources"
-              action={
-                <Button
-                  size="sm"
-                  icon="share"
-                  onClick={() => void ctx.call("share", { collection: "message", id: m._id })}
-                >
-                  {say("share")}
-                </Button>
-              }
-            >
-              {say.nodes("usesSources", { sources: <b>{sources.join(", ")}</b> })}
-            </Notice>
           )
           : null}
         {m.stopped ? <p className="msg-note">{say("stopped")}</p> : null}

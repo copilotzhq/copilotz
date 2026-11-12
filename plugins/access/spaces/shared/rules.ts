@@ -23,7 +23,8 @@ import { homeOf, keyOf, memberKey, type Reach, reachOf, type Verb, where } from 
 
 /**
  * The `shared` resource: collections whose documents live in spaces, the
- * field saying where (`in`), whether they keep labels (see labels.ts), what
+ * field saying where (`in`), whether they keep what their writers' work drew
+ * on (`drew`, see labels.ts), what
  * changing one needs where it lives (`write`: "write" by default, "manage"
  * for those only its managers change), whether its documents are members
  * of spaces themselves (`member`: the kind, `agent` for agents people make),
@@ -39,7 +40,7 @@ export type Shared = Record<
   string,
   {
     field?: string;
-    labels?: boolean;
+    drew?: boolean;
     write?: Verb;
     member?: string;
     part?: string;
@@ -131,16 +132,12 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
     }
     return { space: { $in: spaces } };
   }
-  const { field = "in", labels, write = "write", member, part, contact } = shared[collection];
+  const { field = "in", write = "write", member, part, contact } = shared[collection];
   const verb = access === "read" ? "read" : write;
   const spaces = where(reach, verb);
-  // A labelled document needs its sources reached too, to read or change it; a contact acting
-  // itself, what its collection lets a contact reach of it (not an agent's private steps).
-  const also: Filter[] = [
-    ...(labels ? [{ sources: { $not: { $elemMatch: { $nin: where(reach, "read") } } } }] : []),
-    ...(contact && actor.kind === "contact" ? [contact] : []),
-  ];
-  const sourced: Filter | undefined = also.length > 1 ? { $and: also } : also[0];
+  // A contact acting itself reaches what its collection lets a contact reach of it (not an
+  // agent's private steps).
+  const sourced: Filter | undefined = contact && actor.kind === "contact" ? contact : undefined;
   // A query naming a space it reaches goes to the store as it is.
   const named = filter?.[field];
   const there = typeof named === "string" ? reach.get(named) : undefined;

@@ -74,7 +74,6 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .msg-note { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; color: var(--muted-foreground);
   font-size: 12.5px; }
 .msg-asked { margin-top: 8px; }
-.msg-sources { margin-top: 10px; font-size: 13px; }
 .msg-files { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; max-width: 100%;
   margin-top: 8px; }
 .msg-mine .msg-files { justify-content: flex-end; }

@@ -133,20 +133,6 @@ export const commands: Commands = {
       await term.runtime.idle();
     },
   }),
-  "/share": command({
-    description: "Show everyone here the latest answer only some of them can see",
-    async run(_, term) {
-      const here = await thread(term);
-      if (!here) return await none(term);
-      const said = await term.runtime.query<Message[]>("message.history", { thread: here });
-      const labelled = said.findLast((m) => m.sources?.length);
-      if (!labelled) return await term.print(dim("Everyone here sees everything already."));
-      await term.runtime.call("share", { collection: "message", id: labelled._id });
-      const spaces = await term.runtime.query<{ _id: string; name: string }[]>("space.reached", {});
-      const names = labelled.sources!.map((id) => spaces.find((p) => p._id === id)?.name ?? id);
-      await term.print(dim(`Shared: everyone here sees what came from ${names.join(", ")}.`));
-    },
-  }),
   "/move": command({
     description: "Move this conversation, with everything in it, to another space you work in",
     usage: "<space>",

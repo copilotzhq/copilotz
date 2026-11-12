@@ -143,11 +143,11 @@ export const answer = async (
     ...(how.knew ? { knew: how.knew } : {}),
     at: now(),
   };
-  // Handed over from another space: the answer goes back there too, where its sender waits. Into
-  // a chat shared with someone outside its space (a contact), it says where it came from: only
-  // those who reach that space read it there.
+  // Handed over from another space: the answer goes back there too, where its sender waits;
+  // never into a chat shared with someone outside its space (a contact), who'd read what this
+  // space's work drew on.
   const outside = back && thread?.in ? (await sharedWith(ctx, "thread", back.thread)).length : 0;
-  const returned = back
+  const returned = back && !outside
     ? {
       ...reply,
       _id: `${run}:back`,
@@ -164,7 +164,6 @@ export const answer = async (
       told: undefined,
       state: undefined,
       knew: undefined,
-      ...(outside ? { sources: [thread!.in!] } : {}),
     }
     : undefined;
   // Back where it came from, which the agent doesn't work in: a grant of its own, on the record.

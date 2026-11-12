@@ -23,15 +23,24 @@ export function checkRole(ctx: Context, member: string, role: string) {
   }
 }
 
-export async function seat(ctx: Context, space: string, member: string, role: string) {
+export async function seat(
+  ctx: Context,
+  space: string,
+  member: string,
+  role: string,
+  contacts?: "read",
+) {
   checkRole(ctx, member, role);
   if (member.startsWith("contact:")) {
     throw invalid("A contact is let into a document (its chat), never into a whole space.");
   }
+  if (contacts && !member.startsWith("space:")) {
+    throw invalid("Only a space drawing on this one lets its contacts read it (contacts).");
+  }
   await keepsAManager(ctx, space, member, role);
   await ctx.as().db.collection("member").replaceOne(
     { _id: `${space}|${member}` },
-    { member, space, role },
+    { member, space, role, ...(contacts ? { contacts } : {}) },
     { upsert: true },
   );
 }

@@ -1,6 +1,6 @@
 ---
 title: "chat-terminal"
-description: "Chat's terminal front end, for the process that draws the terminal: how a conversation, a message, its author and a reply being written look there, and chat's commands."
+description: "Chat's terminal front end, for the process that draws the terminal."
 section: "Reference"
 order: 3
 ---
@@ -9,8 +9,7 @@ order: 3
 
 # chat-terminal
 
-Chat's terminal front end, for the process that draws the terminal: how a conversation, a message,
-its author and a reply being written look there, and chat's commands.
+Chat's terminal front end, for the process that draws the terminal.
 
 ```ts
 import { chatTerminal } from "copilotz/plugins/agents/terminal";
@@ -28,10 +27,11 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show in the terminal.
 
-- **In the terminal:** `agent.prompt`, `author`, `terminal.live`, `terminal.message`,
+- **In the terminal:** `agent.prompt`, `approvals`, `author`, `terminal.live`, `terminal.message`,
   `terminal.thread`, `threads`.
-- **What it adds to resources:** `commands` (`*`, `/file`, `/fork`, `/history`, `/move`, `/new`,
-  `/notes`, `/open`, `/prompt`, `/retry`, `/stop`, `/threads`).
+- **What it adds to resources:** `commands` (`*`, `/approvals`, `/approve`, `/file`, `/fork`,
+  `/history`, `/move`, `/new`, `/notes`, `/open`, `/prompt`, `/retry`, `/stop`, `/threads`),
+  `notices` (`approvals`).
 
 ## What it needs
 

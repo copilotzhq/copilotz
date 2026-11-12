@@ -44,9 +44,11 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/agents`              | `chat` and its `tool`, `history`, `memory`, `memoryExtraction`, `skills`, `routines`, `openapi`, `webTools`                                               |
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`                                                                                  |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                                                               |
+| `copilotz/plugins/agents/<name>`       | one of them alone, `<name>` being `chat`, `history`, `memory`, `skills`, `routines`, `openapi`, `webtools`                                                |
 | `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `googleSignIn`, `emailSignIn`, `email`, `devSignIn`, `accounts`                                              |
 | `copilotz/plugins/access/web`          | `spacesWeb`, `contactsWeb`, `accountsWeb`                                                                                                                 |
 | `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                                                          |
+| `copilotz/plugins/access/<name>`       | one of them alone, `<name>` being `spaces`, `identity`, `contacts`, `google`, `email`, `dev`, `accounts`                                                  |
 | `copilotz/plugins/billing`             | `usage`: the ledger, and the port an app's pricing plugs into (`spending`)                                                                                |
 | `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                                                                |
 | `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                                                           |
@@ -57,6 +59,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`                                         |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                                                                 |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                                                                 |
+| `copilotz/plugins/interfaces/<name>`   | one of them alone, `<name>` being `mcp`, `api`, `whatsapp`, `voice`                                                                                       |
 | `copilotz/plugins/<theme>/contract`    | each theme's plugins' contracts (`access`, `agents`, `models`, `interfaces`, `compute`): shapes, and the little code with them, for plugins built on them |
 | `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`, `surface`, `remind`)                             |
 | `copilotz/web/words`                   | the words alone, without the toolkit: `defineWords`, `wordsOf`, `formatDate`…                                                                             |
@@ -72,6 +75,10 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 
 The browser loads only `copilotz/web`, the front ends under `…/web`, and what they import. Every
 other entry point is for the process that runs the runtime, or the terminal.
+
+A theme's entry point (`copilotz/plugins/interfaces`) loads every plugin in it. A plugin's own
+(`copilotz/plugins/interfaces/mcp`) loads that plugin and what it imports, and nothing else: the
+same plugin, with less code in the server's memory.
 
 ## Product packages
 

@@ -366,10 +366,12 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`); the p
 lists them all. Besides those above: `copilotz/stores/sqlite` and `copilotz/stores/postgres`
 (stores), `copilotz/plugins/interfaces` (`mcp`, `api`, `whatsapp`, `voice`, `webLines`),
 `copilotz/web` (the web host, `web`), `copilotz/web/server` (`webPage`), `copilotz/web/node`
-(`listen`, `serve`, `bundle`), `copilotz/terminal` (`terminal`) and `copilotz/testing`. Front ends
-sit beside each theme (`copilotz/plugins/agents/web` has `chatWeb`). Product packages ship at the
-same version: `@copilotz/work` (`boards`, `documents`), `@copilotz/team`, `@copilotz/directory` and
-`@copilotz/billing`.
+(`listen`, `serve`, `bundle`), `copilotz/terminal` (`terminal`) and `copilotz/testing`. Each plugin
+of `agents`, `access` and `interfaces` is also its own entry point, which loads it alone:
+`copilotz/plugins/interfaces/mcp`, `copilotz/plugins/agents/chat`, `copilotz/plugins/access/spaces`…
+Front ends sit beside each theme (`copilotz/plugins/agents/web` has `chatWeb`). Product packages
+ship at the same version: `@copilotz/work` (`boards`, `documents`), `@copilotz/team`,
+`@copilotz/directory` and `@copilotz/billing`.
 
 ## Working on Copilotz itself
 

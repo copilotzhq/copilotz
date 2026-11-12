@@ -236,8 +236,9 @@ The runtime keeps these promises at every door, so your plugins don't have to.
 ## In the box
 
 Copilotz's own plugins are built the way yours are. Add the ones you need, and change them through
-their resources instead of forking them. They come by theme from `copilotz/plugins/<theme>`, and
-their front ends from `/web` and `/terminal` beside it.
+their resources instead of forking them. They come by theme from `copilotz/plugins/<theme>`, or one
+at a time (`copilotz/plugins/interfaces/mcp`), and their front ends from `/web` and `/terminal`
+beside the theme.
 
 **The doors**
 

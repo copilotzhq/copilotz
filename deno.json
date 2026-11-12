@@ -109,7 +109,8 @@
       ".github/",
       "package.json",
       "package-lock.json",
-      ".npmrc"
+      ".npmrc",
+      "context7.json"
     ]
   },
   "fmt": {

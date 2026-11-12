@@ -11,7 +11,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
-import { chat, type Message } from "../chat/mod.ts";
+import { type Approval, chat, type Message } from "../chat/mod.ts";
 import { routines } from "../routines/mod.ts";
 import type { Routine } from "../routines/collections/routine.ts";
 import { access } from "../../access/mod.ts";
@@ -183,18 +183,19 @@ test("from Personal, a routine kept in another space waits for its person's yes;
       agent: "east",
       schedule: { kind: "daily", time: "09:00", timezone: "UTC" },
     };
-    // Launch's people would see what Personal's work may draw on: not without Ana's yes.
-    await say(`do schedule_routine ${JSON.stringify(routine)}`, {});
-    assertStringIncludes(got.north[0], "Couldn't make it: That would show Launch");
-    assertStringIncludes(got.north[0], "has to say yes first");
+    // Launch's people would see what Personal's work may draw on: Ana is asked first.
+    await rt.call("chat.send", {
+      text: `do schedule_routine ${JSON.stringify(routine)}`,
+      in: personal,
+    }, { actor: ana });
+    await rt.idle();
+    const asked = await rt.query<Approval[]>("approval.pending", {}, { actor: ana });
+    assertEquals(asked.map((a) => [a.work, a.name]), [["share", "Launch"]]);
     assertEquals(await rt.query<Routine[]>("routine.list", { in: launch }, { actor: ana }), []);
-    // Made as the tool makes it (as Ana, for her agent there), with her yes for Launch: kept there.
-    const north: Actor = { kind: "agent", id: "north", for: ana, in: personal };
-    await rt.call("routine.create", { ...routine, post: "new" }, {
-      actor: { ...ana, in: personal, via: north, approved: [launch] },
-    });
+    // With her yes, it's made as the tool makes it (as her, for her agent there): kept there.
+    assertEquals(await yesToShares(rt, ana), 1);
     const [kept] = await rt.query<Routine[]>("routine.list", { in: launch }, { actor: ana });
-    assertEquals([kept.name, kept.in, kept.post, kept.by], ["Launch check", launch, "new", "ana"]);
+    assertEquals([kept.name, kept.in, kept.by], ["Launch check", launch, "ana"]);
   });
 });
 

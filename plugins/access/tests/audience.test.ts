@@ -101,6 +101,14 @@ const app = definePlugin({
     }),
     "test.count": counting(people),
     "test.countOpen": counting(peopleOrContacts),
+    // The same, unrecorded: it runs in its caller's job (a tool's, a turn's).
+    "test.countInline": { ...counting(people), record: false },
+    // Open to contacts, it calls the one only people may, inline.
+    "test.countVia": defineAction({
+      input: { type: "object" },
+      allow: peopleOrContacts,
+      run: (ctx) => ctx.call("test.countInline", {}),
+    }),
     "test.countInner": counting(),
     "test.tallies": defineAction({
       input: { type: "object" },
@@ -304,12 +312,19 @@ test("in front of a contact, trusted code goes beyond its caller only in an Acti
       '"test.count" goes beyond what everyone in this conversation may see',
     );
     assertEquals(await rt.call("test.countOpen", {}, { actor: working(carlas) }), 3);
+    // Unrecorded, in another's job: refused all the same.
+    await assertRejects(
+      () => rt.call("test.countVia", {}, { actor: working(carlas) }),
+      Error,
+      '"test.countInline" goes beyond what everyone in this conversation may see',
+    );
     // The app's own (no `allow`), set going from there: goes.
     await rt.call("test.countLater", {}, { actor: working(carlas) });
     assertEquals(await tallied(), [3]);
     // In the team's chat, both go.
     assertEquals(await rt.call("test.count", {}, { actor: working(staff) }), 3);
     assertEquals(await rt.call("test.countOpen", {}, { actor: working(staff) }), 3);
+    assertEquals(await rt.call("test.countVia", {}, { actor: working(staff) }), 3);
   });
 });
 

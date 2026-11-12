@@ -79,8 +79,9 @@ export type Line =
  * being run.
  */
 /** `outside`: reads for an outside reader (a query, a View): private fields stay out. */
+/** `action`: the Action whose code made it, when that runs in its caller's job (unrecorded). */
 export type OpRequest =
-  | { ops: Op[]; cause?: string; actor?: Actor; outside?: true }
+  | { ops: Op[]; cause?: string; actor?: Actor; outside?: true; action?: string }
   | {
     tx: string;
     ops: Op[];
@@ -88,6 +89,7 @@ export type OpRequest =
     cause?: string;
     actor?: Actor;
     outside?: true;
+    action?: string;
   };
 
 export type OpReply = { value: unknown } | { error: Failure };

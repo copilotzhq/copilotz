@@ -134,11 +134,10 @@ And the scripts the chapters run, in `package.json` (each arrives with the chapt
 
 A `.env` beside them may hold `OPENAI_API_KEY=sk-…`; the scripts read it if it's there.
 
-The code at the end of each chapter is a tag of the course repository,
-[copilotzhq/compass-course](https://github.com/copilotzhq/compass-course) (`lesson-1.1`,
-`lesson-1.2`…), and each chapter is also a video lesson of the Copilotz course. Chapters show the
-files that matter; each ends with what else changed, and `git diff lesson-a lesson-b` shows all of
-it.
+The code at the end of each chapter comes with the [Copilotz course](https://copilotz.com/learn):
+one git repository with a tag per lesson (`lesson-1.1`, `lesson-1.2`…), and each chapter is also one
+of its video lessons. Chapters show the files that matter; each ends with what else changed, and
+`git diff lesson-a lesson-b` shows all of it.
 
 ## The chapters
 

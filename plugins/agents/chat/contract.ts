@@ -18,7 +18,9 @@ export { FILE_CHARS, textual } from "./collections/file.ts";
 export type { Live, LiveCall } from "./collections/live.ts";
 export { isAnswer, type Message } from "./collections/message.ts";
 export type { AdditionShown } from "./collections/shown.ts";
-export type { Thread } from "./collections/thread.ts";
+export type { Moving, MovingPlace, Thread } from "./collections/thread.ts";
+/** A chat's notes, by its id (`<chat>:notes`, see `chat.notes`). */
+export { notesOf } from "./shared/notes.ts";
 export type { Wait } from "./collections/wait.ts";
 export type {
   Addition,

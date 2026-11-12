@@ -5,16 +5,20 @@
  * `/approvals` lists what agents wait on you for (it shows above where you
  * type too), and `/approve [n] [answer]` answers one, with an answer it takes
  * (once, thread, routine, always, no; for an answer handed back, here or me).
+ * `/move` says first who'll see the conversation there and what it drew on,
+ * and moves it with `yes`; `/notes` opens a chat's staff notes, and back.
  * Where you are is your shell state: the open conversation is `open`, kind
  * `thread`, and the screen shows it through chat's `thread` View.
  */
 import { command, type Commands, dim, type Terminal } from "../../../../hosts/terminal/mod.ts";
 import type { Approval } from "../collections/approval.ts";
 import type { Message } from "../collections/message.ts";
+import type { Moving } from "../collections/thread.ts";
 import type { Agent, Prompt } from "../shared/types.ts";
 import { ANSWERED, asker, asking } from "../views/asked.ts";
 import { howTo } from "../views/terminal/asks.ts";
 import type { Listed } from "../views/terminal/threads.ts";
+import { movingWords } from "../views/terminal/moving.ts";
 
 /** The open conversation, if one is. */
 const thread = async (term: Terminal) => {
@@ -140,19 +144,63 @@ export const commands: Commands = {
     },
   }),
   "/move": command({
-    description: "Move this conversation, with everything in it, to another space you work in",
-    usage: "<space>",
+    description: "Move this conversation, with everything in it, to another space you work in: " +
+      "it says first who'll see it there, and what it drew on",
+    usage: "<space> [yes]",
     async run(rest, term) {
       const here = await thread(term);
       if (!here) return await none(term);
       const spaces = await term.runtime.query<{ _id: string; name: string }[]>("space.reached", {});
-      const name = rest.trim().toLowerCase();
-      const to = spaces.find((p) => p._id === rest.trim() || p.name.toLowerCase() === name);
+      const named = (given: string) =>
+        spaces.find((p) => p._id === given || p.name.toLowerCase() === given.toLowerCase());
+      // `yes` after the space moves it; a space whose name ends in "yes" is that space still.
+      const asked = rest.trim();
+      const sure = !named(asked) && /\s+yes$/i.test(asked);
+      const to = named(sure ? asked.replace(/\s+yes$/i, "") : asked);
       if (!to) return await term.print(dim("Usage: /move <space>, one /spaces lists."));
+      if (!sure) {
+        const moving = await term.runtime.query<Moving | null>("thread.moving", {
+          thread: here,
+          to: to._id,
+        });
+        if (!moving) return await term.print(dim("Usage: /move <space>, one /spaces lists."));
+        const owners = [moving.to, ...moving.drew].flatMap((p) =>
+          p.kind === "personal" && p.owner && p.owner !== term.me ? [p.owner] : []
+        );
+        const names = owners.length
+          ? await term.runtime.query<Record<string, string>>("profile.names", { ids: owners })
+          : {};
+        await term.print(movingWords(moving, term.me, names));
+        return await term.print(dim(`/move ${to.name} yes moves it.`));
+      }
       await term.runtime.call("chat.move", { thread: here, to: to._id });
       // You go with it: new conversations go there too.
       await term.set({ space: to._id });
       await term.print(dim(`Moved to ${to.name}: its members see this conversation now.`));
+    },
+  }),
+  "/notes": command({
+    description: "This chat's staff notes, apart from it: where your team works with agents " +
+      "about a chat shared outside the space (a customer's), which they never see; " +
+      "/notes again goes back",
+    async run(_, term) {
+      const here = await thread(term);
+      if (!here) return await none(term);
+      const { thread: notes, about } = await term.runtime.call<{ thread: string; about: string }>(
+        "chat.notes",
+        { thread: here },
+      );
+      if (here === notes) {
+        await go(term, about);
+        return await term.print(dim("Back in the chat. /notes opens its staff notes again."));
+      }
+      await go(term, notes);
+      await term.print(
+        dim(
+          "Staff notes: only your team sees them, never whoever the chat is shared with outside " +
+            "this space. Agents here reach all the space does. /notes goes back to the chat.",
+        ),
+      );
     },
   }),
   "/new": command({

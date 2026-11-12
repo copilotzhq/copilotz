@@ -15,8 +15,11 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.agentsHere` | Agents here |
 | `chat.agentsIn` | Agents in {space} |
 | `chat.allChats` | All chats |
+| `chat.anotherSpace` | another space |
+| `chat.answersWhereSeen` | {agents} will answer here, where {name} can read it. To look something up just for your team, ask in staff notes. |
 | `chat.areWorking` | one: {names} is working… / other: {names} are working… |
 | `chat.askedInSideThread` | Asked in a side thread |
+| `chat.askInNotes` | Ask in staff notes |
 | `chat.attachFiles` | Attach files |
 | `chat.bytes` | {n} B |
 | `chat.cancel` | Cancel |
@@ -53,6 +56,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.inSpace` | In {space} |
 | `chat.inThisChat` | In this chat: {names} |
 | `chat.jumpToLatest` | Jump to latest |
+| `chat.keepWhereItIs` | Keep it where it is |
 | `chat.keyEnter` | Enter |
 | `chat.keyEsc` | Esc |
 | `chat.keyShift` | Shift |
@@ -78,10 +82,17 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.micNotFound` | No microphone was found. Connect one, then try again. |
 | `chat.missingBody` | It may have moved, or it isn't shared with you. Someone in it can invite you to its space. |
 | `chat.missingTitle` | This chat isn't here |
+| `chat.moveConfirm` | Move “{title}” to {space}? |
 | `chat.moveNote` | Its messages, files and subthreads go with it, for the people in that space to see. |
 | `chat.moveThisChat` | Move this chat to another space… |
 | `chat.moveTitle` | Move “{title}” to… |
+| `chat.moveTo` | Move to {space} |
 | `chat.moveToSpace` | Move to another space… |
+| `chat.movingDrew` | It drew on {spaces}. |
+| `chat.movingEveryone` | one: Everyone in {space} ({count} person) will see this whole conversation. / other: Everyone in {space} ({count} people) will see this whole conversation. |
+| `chat.movingEveryoneThere` | Everyone in {space} will see this whole conversation. |
+| `chat.movingTheirs` | {name} will see this whole conversation, in their Personal space. |
+| `chat.movingYours` | Only you will see this conversation, in your Personal space. |
 | `chat.namesAnd` | {rest} and {last} |
 | `chat.newChat` | New chat |
 | `chat.newChatHere` | New chat here |
@@ -92,13 +103,26 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.noChatsTitle` | No chats here yet |
 | `chat.noChatsYet` | No chats yet |
 | `chat.noSpeech` | No speech was heard. |
+| `chat.notesAbout` | Staff notes about the conversation with {name} |
+| `chat.notesAsPage` | Open staff notes as a page |
+| `chat.notesClose` | Close staff notes |
+| `chat.notesEmptyBody` | Ask an agent to look something up or draft a reply, or leave a note for whoever picks this up. Nothing here reaches {name}. |
+| `chat.notesEmptyTitle` | Your team's side of this conversation |
+| `chat.notesNever` | Only your team sees this, never {name} |
+| `chat.notesOnlyTeam` | Only your team sees this |
+| `chat.notesPlaceholder` | Ask an agent or leave a note for your team… |
+| `chat.notesTitle` | Staff notes |
+| `chat.notesViews` | The conversation, or its staff notes |
+| `chat.notesWithCount` | one: Staff notes, {count} message / other: Staff notes, {count} messages |
 | `chat.notFoundTitle` | Not found |
 | `chat.notInSpace` | You're not in this space |
 | `chat.notInSpaceBody` | Chats here are for its members. Pick one of your spaces to start one, or ask someone here to invite you. |
 | `chat.notYourSpaceTitle` | Not your space |
 | `chat.ofMinutes` | one: , of {count} minute at most / other: , of {count} minutes at most |
 | `chat.open` | Open {name} |
+| `chat.openConversation` | Open conversation |
 | `chat.openSpace` | Open {space} |
+| `chat.otherSpaces` | one: {count} other space / other: {count} other spaces |
 | `chat.overLimit` | Over 10 MB |
 | `chat.pastedFile` | pasted file |
 | `chat.personal` | Personal |
@@ -124,7 +148,11 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.sendAudioOnly` | Send audio only |
 | `chat.sendMessage` | Send a message |
 | `chat.sendNow` | Send now |
-| `chat.share` | Share |
+| `chat.sendsAsYou` | It goes as you, and {name} will see it. |
+| `chat.sendToName` | Send to {name}… |
+| `chat.sendToNameNow` | Send to {name} |
+| `chat.sentTo` | Sent to {name} |
+| `chat.sharedWith` | Shared with {name} |
 | `chat.showTranscript` | Show transcript |
 | `chat.sideThread` | side thread |
 | `chat.startingMic` | Starting the microphone… |
@@ -137,6 +165,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.stopping` | Stopping… |
 | `chat.stopToSendNow` | Stop to send now |
 | `chat.suggestions` | Suggestions |
+| `chat.theirPersonalSpace` | {name}'s Personal space |
 | `chat.thinking` | thinking |
 | `chat.thinkingLabel` | Thinking |
 | `chat.thisChat` | this chat |
@@ -153,7 +182,6 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.tryAgain` | Try again |
 | `chat.uploading` | Uploading… |
 | `chat.used` | Used {names} |
-| `chat.usesSources` | Uses {sources}. Not everyone here can see it. |
 | `chat.using` | Using {names} |
 | `chat.viaAnswer` | Answer: {name} |
 | `chat.viaDelegated` | Delegated: {name} |
@@ -169,6 +197,9 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.yesterday` | Yesterday |
 | `chat.you` | you |
 | `chat.youLabel` | You |
+| `chat.yourContact` | your contact |
+| `chat.yourMessageTo` | Your message to {name} |
+| `chat.yourPersonalSpace` | your Personal space |
 | `chat.yourRecording` | Your recording |
 
 ## host

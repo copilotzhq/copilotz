@@ -48,7 +48,17 @@
  *   carries more than one file. Drafts not sent within a day go
  *   (`chat.prune`, hourly).
  * - A person moves a conversation to another space (`chat.move`), with
- *   everything in it; not while an agent is writing in it.
+ *   everything in it; not while an agent is writing in it. Moving it is
+ *   sharing it: front ends say first who'll see it there and what it drew
+ *   on (`thread.moving`, from its messages' `drew`).
+ * - A chat shared with someone outside its space (a contact's) has notes
+ *   beside it (`chat.notes`): a thread of its own in the same space, made
+ *   the first time it's asked for, where its people work with agents about
+ *   it (they reach all the space does, and are told the chat's latest:
+ *   the `notes` context), and that the one outside never sees. A reply
+ *   drafted there goes into the chat as its person's own message
+ *   (`chat.send`). The notes go wherever the chat goes, and are erased with
+ *   it.
  * - A chat can be opened empty (`chat.open`), to share it with a contact
  *   (someone outside the org, who then writes there with `chat.send` and
  *   reaches only it, never its agents' private steps); a contact's message
@@ -65,6 +75,10 @@
  *   the system's): its thread in a space, its title, and its messages with
  *   who said them, their files and when, under the importer's ids, so
  *   importing again replaces what it made. Nothing runs.
+ * - Messages that kept the old marks (`sources`, from before the audience
+ *   rule) are moved where only those who could read them see them
+ *   (`chat.unmark`), once, as the runtime first starts with this release;
+ *   operators run it again, or dry, over maintenance.
  * - Threads record where they came from (`parent`). A fork (a subthread) sees
  *   its parent's conversation up to the message it started at, through every
  *   level, without copying it; a new thread starts from its first message.
@@ -105,6 +119,8 @@ import { forgetGrantAction } from "./actions/forget-grant.ts";
 import { forkAction } from "./actions/fork.ts";
 import { importAction } from "./actions/import.ts";
 import { moveAction } from "./actions/move.ts";
+import { notesAction } from "./actions/notes.ts";
+import { unmarkAction } from "./actions/unmark.ts";
 import { openAction } from "./actions/open.ts";
 import { pruneAction } from "./actions/prune.ts";
 import { quietAction } from "./actions/quiet.ts";
@@ -129,6 +145,7 @@ import { agentsOf, modelOf } from "./shared/agents.ts";
 import { contextView } from "./views/context.ts";
 import { historyView } from "./views/history.ts";
 import { messageView } from "./views/message.ts";
+import { notesContextView } from "./views/notes.ts";
 import { participants } from "./views/participants.ts";
 import { prompt } from "./views/prompt.ts";
 import { chatTools } from "./resources/tools.ts";
@@ -151,6 +168,7 @@ export const chat: Plugin = definePlugin({
     context: contextView,
     history: historyView,
     "llm.message": messageView,
+    "context:notes": notesContextView,
   },
   // Every agent's model can be called as configured (the models plugin says); a window by age
   // is in ms.
@@ -180,16 +198,24 @@ export const chat: Plugin = definePlugin({
     "chat.fork": forkAction,
     "chat.stop": stopAction,
     "chat.move": moveAction,
+    "chat.notes": notesAction,
+    "chat.unmark": unmarkAction,
     "chat.import": importAction,
     "chat.approve": approveAction,
     "chat.forgetGrant": forgetGrantAction,
   },
   events: { "turn.requested": turnRequested },
-  // Files uploaded to send that no message sent within a day go.
-  schedules: { "chat.prune": { every: "1h", call: "chat.prune", input: {} } },
+  schedules: {
+    // Files uploaded to send that no message sent within a day go.
+    "chat.prune": { every: "1h", call: "chat.prune", input: {} },
+    // The old marks come off once, as the runtime first starts with this release (a deploy).
+    "chat.unmark": { once: true, call: "chat.unmark", input: {}, retries: 5 },
+  },
   resources: {
     // Agents' own: the latest chats where they work (or another space they reach), and reading one.
     tools: chatTools,
+    // An agent in a chat's notes is told whose chat they're about, and its latest.
+    context: { notes: { place: "turn" } },
     // Conversations by title on Usage.
     usageNames: { thread: { tag: "tags.thread", collection: "thread", field: "title" } },
     // With the access plugin, chats live in spaces, and what's in a chat comes with it when it's

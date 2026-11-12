@@ -1,6 +1,7 @@
 /** Threads: conversations, which may fork from another at a message. */
 import type { Message } from "./message.ts";
 import { teamOf } from "../shared/agents.ts";
+import { conversationOf } from "../shared/notes.ts";
 import { said } from "../shared/summary.ts";
 import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
@@ -27,6 +28,12 @@ const threadSchema = {
     fork: { type: "boolean" },
     /** The space it's in (see the access plugin): its messages are there too. */
     in: { type: "string" },
+    /**
+     * The chat these are notes about (`chat.notes`): one shared with someone
+     * outside its space (a contact). They're kept beside it, in its space,
+     * and never shared with whoever it's shared with.
+     */
+    about: { type: "string" },
     /** Its summary, kept as messages come (shared/summary.ts): how many, its first and latest. */
     messages: { type: "integer" },
     opened: { type: "string" },
@@ -48,6 +55,45 @@ export const thread = defineCollection({
       allow: people,
       run: (_, params: { in?: string; names?: string[] }, ctx) =>
         teamOf(ctx, params.in, params.names ?? []),
+    },
+    /**
+     * What moving a conversation to the space `to` shows (`chat.move`), for
+     * front ends to say before it's done: that space (`to`, as the asker
+     * reads it; null when they don't), how many people are in it (its
+     * members, as its page counts them), and the other spaces its messages
+     * drew on (`drew`, theirs and its subthreads' and notes'): those the
+     * asker reaches, each with its name, and how many others (`elsewhere`).
+     */
+    moving: {
+      allow: people,
+      run: async (_threads, params: { thread: string; to: string }, ctx) => {
+        type Place = { _id: string; name: string; kind: string; owner?: string };
+        const spaces = ctx.db.collection<Place>("space");
+        const to = await spaces.findOne({ _id: params.to });
+        if (!to) return null;
+        const all = await conversationOf(ctx, params.thread);
+        const [said, members] = await Promise.all([
+          ctx.db.collection<Message>("message").find(
+            { thread: { $in: all }, "drew.0": { $exists: true } },
+            { projection: { drew: 1, in: 1 } },
+          ),
+          ctx.db.collection<{ member: string }>("member").find({ space: params.to }),
+        ]);
+        const ids = [...new Set(said.flatMap((m) => m.drew ?? []))]
+          .filter((id) => id !== params.to).sort();
+        const reached = ids.length ? await spaces.find({ _id: { $in: ids } }) : [];
+        const drew = ids.flatMap((id) => {
+          const found = reached.find((s) => s._id === id);
+          return found ? [placeOf(found)] : [];
+        });
+        return {
+          to: placeOf(to),
+          people: new Set(members.flatMap((m) => m.member.startsWith("person:") ? [m.member] : []))
+            .size,
+          drew,
+          elsewhere: ids.length - drew.length,
+        } satisfies Moving;
+      },
     },
     /** Exactly what `agent` would be sent in this thread now: the `llm` View of the thread. */
     prompt: {
@@ -94,3 +140,24 @@ export const thread = defineCollection({
 });
 
 export type Thread = Infer<typeof threadSchema> & { _id: string };
+
+/** A space as `thread.moving` names it: a Personal one by its person (`owner`). */
+export type MovingPlace = { _id: string; name: string; kind: string; owner?: string };
+
+/** What `thread.moving` answers: who'd see a conversation moved there, and what it drew on. */
+export type Moving = {
+  to: MovingPlace;
+  /** People in that space, as its page counts them. */
+  people: number;
+  /** The other spaces it drew on that the asker reaches. */
+  drew: MovingPlace[];
+  /** How many more it drew on that the asker doesn't reach. */
+  elsewhere: number;
+};
+
+const placeOf = (s: MovingPlace): MovingPlace => ({
+  _id: s._id,
+  name: s.name,
+  kind: s.kind,
+  ...(s.owner ? { owner: s.owner } : {}),
+});

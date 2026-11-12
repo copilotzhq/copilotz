@@ -20,7 +20,7 @@ import {
   Time,
 } from "../../../../../hosts/web/mod.ts";
 import { byDay, lastOf, type Listed, matches, titleOf } from "./listed.ts";
-import { moveStep } from "./move.ts";
+import { moveStep } from "./move.tsx";
 import { STYLE } from "./style.ts";
 import { say } from "./words.ts";
 

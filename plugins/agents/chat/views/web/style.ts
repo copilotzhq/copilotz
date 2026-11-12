@@ -1,11 +1,19 @@
 /**
  * Chat's layout on the web: a chat and its messages, what agents wait on you
  * for (over where you type, and in the sidebar), the composer, home, a
- * space's chats (its tab) and its latest (in the sidebar). Only layout, on the theme's variables; the
+ * space's chats (its tab) and its latest (in the sidebar), and a contact's
+ * chat's staff notes beside it. Only layout, on the theme's variables; the
  * pieces (buttons, chips, notices, markdown…) are the web host's toolkit.
  */
 export const STYLE = `
-.chat { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--background); }
+.chat { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--background);
+  --notes-tint: color-mix(in oklab, var(--warning) 6%, var(--background));
+  --notes-soft: color-mix(in oklab, var(--warning) 15%, var(--background));
+  --notes-line: color-mix(in oklab, var(--warning) 24%, var(--border));
+  --notes-ink: var(--warning-text); }
+/* Under the header: the conversation, and its staff notes beside it while they're open */
+.chat-split { position: relative; flex: 1; min-height: 0; display: flex; container: chat-split / inline-size; }
+.chat-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 /* The header */
 .chat-head { flex: none; display: flex; align-items: center; gap: 12px; min-height: 58px;
@@ -67,7 +75,8 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .msg-main:has(> .msg-actions) { position: relative; }
 .msg-actions { position: absolute; top: 100%; left: -6px; display: flex; gap: 2px; margin-top: 2px;
   opacity: 0; transition: opacity .15s; }
-.msg:hover .msg-actions, .msg:focus-within .msg-actions { opacity: 1; }
+.msg:hover .msg-actions, .msg:focus-within .msg-actions, .msg-actions-shown { opacity: 1; }
+.msg-mine .msg-actions { left: auto; right: -6px; }
 @media (hover: none) {
   .msg:has(> .msg-main > .msg-actions) { padding-bottom: 0; }
   .msg-actions { position: static; opacity: 1; margin: 2px 0 0 -6px; }
@@ -368,6 +377,70 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .chats-row-icon, .chats-row-count { display: none; }
 }
 
+/* Staff notes: the team's own side of a contact's chat. A quiet warm tint and a lock, never an alarm. */
+.notes-toggle { flex: none; gap: 6px; border-radius: var(--radius-full); }
+.notes-toggle > .copilotz-icon, .notes-switch-notes > .copilotz-icon, .chat-mention-note .copilotz-button .copilotz-icon {
+  color: var(--notes-ink); }
+.notes-toggle[aria-expanded=true] { border-color: var(--notes-line); background: var(--notes-soft); }
+.notes-count { min-width: 18px; margin-right: -3px; }
+.notes-switch { display: none; }
+.notes-lane { flex: none; display: flex; flex-direction: column; width: clamp(340px, 36%, 460px); min-height: 0;
+  border-left: 1px solid var(--notes-line); background: var(--notes-tint); animation: notes-in .22s cubic-bezier(.2, .8, .2, 1); }
+@keyframes notes-in { from { opacity: 0; transform: translateX(14px); } }
+.notes-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 9px 10px 9px 16px;
+  border-bottom: 1px solid var(--notes-line); }
+.notes-mark { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-full);
+  background: var(--notes-soft); color: var(--notes-ink); }
+.notes-mark-lg { width: 46px; height: 46px; }
+.notes-head-text { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.notes-head h2 { margin: 0; font-family: var(--font-display); font-size: 14.5px; font-weight: 650; line-height: 1.3; }
+.notes-head p { margin: 0; overflow: hidden; color: var(--muted-foreground); font-size: 12.5px; line-height: 1.35;
+  text-overflow: ellipsis; white-space: nowrap; }
+.notes-body, .notes-talk { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.notes-body > .copilotz-loading { flex: 1; }
+.notes-loading { display: grid; gap: 10px; align-content: start; padding: 22px 16px; }
+.notes-empty { flex: 1; display: grid; justify-items: center; align-content: center; gap: 8px; padding: 32px 28px;
+  text-align: center; animation: chat-fade .2s ease-out; }
+.notes-empty h3 { margin: 8px 0 0; font-family: var(--font-display); font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+.notes-empty p { max-width: 36ch; margin: 0; color: var(--muted-foreground); font-size: 13.5px; line-height: 1.55; }
+.notes-talk .chat-log { padding: 18px 16px 26px; }
+.notes-talk .msg { column-gap: 10px; grid-template-columns: 26px minmax(0, 1fr); }
+.notes-talk .msg-gutter .copilotz-avatar { --size: 26px !important; }
+.notes-talk .msg-mine { grid-template-columns: minmax(0, 1fr); }
+.notes-talk .msg-aside { margin-left: 10px; padding-left: 10px; }
+.notes-talk .msg-person .msg-bubble { background: var(--card); box-shadow: 0 0 0 1px var(--notes-line); }
+.notes-talk .chat-asks { padding: 2px 12px 8px; }
+.notes-talk .chat-composer { padding: 0 12px max(12px, env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, transparent, var(--notes-tint) 18px); }
+.notes-talk .chat-input { min-height: 48px; padding: 13px 16px 4px; font-size: 14.5px; }
+.notes-talk .chat-keys { display: none; }
+.notes-hint, .chat-shared { display: inline-flex; align-items: center; gap: 5px; }
+.notes-hint .copilotz-icon { color: var(--notes-ink); }
+.notes-banner { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 16px 8px 24px;
+  border-bottom: 1px solid var(--notes-line); background: var(--notes-tint); }
+.notes-banner .notes-mark { width: 26px; height: 26px; }
+.notes-banner p { flex: 1; min-width: 0; margin: 0; color: var(--muted-foreground); font-size: 13.5px; line-height: 1.4; }
+.notes-banner b { color: var(--foreground); font-weight: 620; }
+.notes-banner-only::before { content: "·"; margin: 0 7px; }
+@container chat-split (max-width: 880px) {
+  .notes-lane { position: absolute; z-index: 6; inset: 0 0 0 auto; width: min(100%, 420px); box-shadow: var(--shadow-lg); }
+}
+/* What's typed in a contact's chat names an agent: where it would answer */
+.chat-mentioned { margin: 0 0 8px; animation: chat-fade .2s ease-out; }
+/* A draft from the notes, sent on to the chat */
+.msg-relay-open { min-height: 28px; padding: 0 8px; color: var(--muted-foreground); font-size: 12.5px; }
+.msg-relay-open:hover { color: var(--foreground); }
+.msg-relayed { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 8px;
+  color: var(--success-text); font-size: 12.5px; font-weight: 560; animation: chat-fade .2s ease-out; }
+.msg-relay { display: grid; gap: 8px; width: 100%; margin-top: 10px; padding: 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-xl); background: var(--card); box-shadow: var(--shadow-md); animation: chat-fade .15s ease-out; }
+.msg-mine .msg-relay { align-self: stretch; min-width: min(320px, 100%); }
+.msg-relay-text { min-height: 64px; font-size: 14px; }
+.msg-relay-note { display: flex; align-items: center; gap: 6px; margin: 0 2px; color: var(--muted-foreground);
+  font-size: 12.5px; line-height: 1.4; }
+.msg-relay-note .copilotz-icon { flex: none; }
+.msg-relay-row { display: flex; justify-content: flex-end; gap: 6px; }
+
 @media (max-width: 760px) {
   .chat-head { padding-right: max(8px, var(--copilotz-inset-end, 0px)); gap: 8px; }
   .chat-head-new { display: inline-grid; }
@@ -401,5 +474,33 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .chat-home .chat-composer { padding: 0 14px; }
   .chat-home-body:has(.chat-notes .copilotz-notice) .chat-home-hero { transform: translateY(-48px); }
   .chat-home-top { padding: 0 14px; margin-bottom: 24px; }
+  /* On a phone, the conversation or its notes, one at a time: the switch always in sight */
+  .notes-toggle { display: none; }
+  .notes-switch { flex: none; display: flex; gap: 4px; margin: 8px 10px 0; padding: 3px; border-radius: var(--radius-full);
+    background: var(--muted); }
+  .notes-switch button { flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 36px; padding: 0 12px; border: 0; border-radius: var(--radius-full); background: transparent;
+    color: var(--muted-foreground); font: inherit; font-size: 13.5px; font-weight: 600; white-space: nowrap; cursor: pointer;
+    transition: background-color .15s, color .15s, box-shadow .15s; }
+  .notes-switch button[aria-pressed=true] { background: var(--background); color: var(--foreground); box-shadow: var(--shadow-sm); }
+  .notes-switch .notes-switch-notes[aria-pressed=true] { background: var(--notes-soft); box-shadow: 0 0 0 1px var(--notes-line); }
+  .notes-lane { position: absolute; z-index: 6; inset: 0; width: 100%; border-left: 0; box-shadow: none; animation: none; }
+  .chat-split[data-notes=open] > .chat-main { visibility: hidden; }
+  .notes-head { min-height: 46px; padding: 6px 8px 6px 14px; }
+  .notes-head h2 { display: none; }
+  .notes-head p { color: var(--secondary-foreground); font-size: 13px; white-space: normal; }
+  .notes-head .notes-mark { width: 26px; height: 26px; }
+  .notes-close { display: none; }
+  .notes-banner { align-items: flex-start; flex-wrap: wrap; padding: 8px 10px 8px 14px; }
+  .notes-banner p { flex-basis: calc(100% - 40px); }
+  .notes-banner .copilotz-button { margin-left: auto; }
+  .notes-banner-only { display: block; }
+  .notes-banner-only::before { content: none; }
+  .chat-mention-note { flex-wrap: wrap; }
+  .chat-mention-note .copilotz-notice-body { flex-basis: calc(100% - 30px); }
+  .chat-mention-note .copilotz-notice-action { width: 100%; justify-content: flex-end; margin: 2px 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .notes-lane, .notes-empty, .msg-relay, .msg-relayed, .chat-mentioned { animation: none; }
 }
 `;

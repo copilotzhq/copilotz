@@ -14,7 +14,7 @@ import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { go, type PaletteGroup } from "../../../../../hosts/web/mod.ts";
 import type { Thread } from "../../collections/thread.ts";
 import { type Listed, titleOf } from "./listed.ts";
-import { moveStep } from "./move.ts";
+import { moveStep } from "./move.tsx";
 import { plain } from "./plain.ts";
 import { say } from "./words.ts";
 

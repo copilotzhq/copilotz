@@ -60,7 +60,8 @@
     "catalog": "deno run --allow-net=models.dev --allow-read=plugins/models/shared/catalog.json --allow-write=plugins/models/shared/catalog.json scripts/catalog.ts",
     "web": "deno run -A --unstable-no-legacy-abort --env-file=.env examples/terminal-agent/web.ts",
     "web:node": "node examples/web-node/server.ts",
-    "build:npm": "node scripts/npm/build.ts"
+    "build:npm": "node scripts/npm/build.ts",
+    "unmark": "deno run --allow-env --allow-net --allow-read --allow-write --allow-sys --allow-ffi scripts/unmark.ts"
   },
   "imports": {
     "@cfworker/json-schema": "npm:@cfworker/json-schema@4.1.1",

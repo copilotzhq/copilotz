@@ -15,7 +15,10 @@
  * that says why its agent couldn't start (the org's limit) is a calm notice,
  * with its link; one where the agent itself failed is an error.
  * Agents show as they're named, with their emoji (`hints.who`, by id), and
- * an agent's name links to its page; people, by their names.
+ * an agent's name links to its page; people, by their names. In a chat's
+ * staff notes (`hints.sendTo`: the chat, and the contact it's shared with),
+ * one with words can be sent on to that chat, reviewed first, as the
+ * person's own (see send-on.tsx).
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -32,7 +35,9 @@ import {
 import type { Message } from "../../collections/message.ts";
 import type { Step } from "../../shared/types.ts";
 import { agentPath, type Shown } from "./agents.ts";
+import { unmarked } from "./plain.ts";
 import { Queued } from "./queued.tsx";
+import { SendOn, type SendTo } from "./send-on.tsx";
 import { Steps } from "./steps.tsx";
 import { toolView } from "./tool-view.ts";
 import { byAgent } from "./who.ts";
@@ -77,6 +82,10 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
   const usual = Array.isArray(ctx.hints.usual) ? ctx.hints.usual as string[] : [];
   const addressed = mine ? m.to.some((name) => !usual.includes(name)) : to.length > 0;
   const kind = mine ? "mine" : agent ? "agent" : "person";
+  // Words that may go on to the chat these notes are about, as the person's own.
+  const sendTo = ctx.hints.sendTo as SendTo | undefined;
+  const words = !m.toolCalls && !m.failed ? m.text?.trim() : undefined;
+  const copy = agent && words ? <CopyButton text={m.text!} label={say("copyReply")} /> : null;
 
   const addressees = addressed
     ? (
@@ -200,12 +209,19 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
           )
           : null}
         {m.stopped ? <p className="msg-note">{say("stopped")}</p> : null}
-        {agent && !m.toolCalls && m.text && !m.failed
+        {sendTo?.to.length && words
           ? (
-            <div className="msg-actions">
-              <CopyButton text={m.text} label={say("copyReply")} />
-            </div>
+            <SendOn
+              text={unmarked(m.text)}
+              name={sendTo.name}
+              shown={agent}
+              send={(text) => ctx.call("chat.send", { thread: sendTo.thread, text, to: sendTo.to })}
+            >
+              {copy}
+            </SendOn>
           )
+          : copy
+          ? <div className="msg-actions">{copy}</div>
           : null}
         {queued.length
           ? (

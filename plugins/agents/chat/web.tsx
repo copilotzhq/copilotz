@@ -7,7 +7,13 @@
  * `spaceSidebar` resources (named here; chat imports nothing of spaces').
  * In the command palette (the web shell's `palette`): chats to go to, a new
  * one, and moving the one open to another space, through spaces' picker
- * (`space.pick`, by name), as each chat's menu does.
+ * (`space.pick`, by name), as each chat's menu does; before it moves, who'll
+ * see it there and what it drew on (`chat.moving`, from `thread.moving`).
+ *
+ * A chat shared with someone outside its space (a contact) has staff notes
+ * beside it (`chat.notes`: its team's alone, in a lane opened from its
+ * header, or a switch on a phone), where agents look things up and draft
+ * replies that go on to the chat, reviewed, as the person's own.
  *
  * In a chat, what agents wait on you for shows over where you type, once
  * their turn is over (`chat.asks`): a card each, with only the answers it
@@ -58,6 +64,8 @@ import { fileView } from "./views/web/file.tsx";
 import { homeView } from "./views/web/home.tsx";
 import { liveView } from "./views/web/live.tsx";
 import { messageView } from "./views/web/message.tsx";
+import { movingView } from "./views/web/moving.tsx";
+import { notesView } from "./views/web/notes.tsx";
 import { chatsView } from "./views/web/chats.tsx";
 import { newThreadView } from "./views/web/new-thread.tsx";
 import { chatPaletteView } from "./views/web/palette.tsx";
@@ -78,6 +86,8 @@ export const chatWeb: Plugin = definePlugin({
     chats: chatsView,
     "chats.recent": recentView,
     "chat.palette": chatPaletteView,
+    "chat.notes": notesView,
+    "chat.moving": movingView,
   },
   resources: {
     // Starting one; then what agents wait on you for in other chats.

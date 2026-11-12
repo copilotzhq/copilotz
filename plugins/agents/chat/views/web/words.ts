@@ -199,4 +199,51 @@ export const say = defineWords("chat", {
   keywordConversation: "conversation",
   moveTitle: "Move “{title}” to…",
   moveNote: "Its messages, files and subthreads go with it, for the people in that space to see.",
+  // Moving: who'll see it, before it's done
+  moveConfirm: "Move “{title}” to {space}?",
+  moveTo: "Move to {space}",
+  keepWhereItIs: "Keep it where it is",
+  movingEveryone: {
+    one: "Everyone in {space} ({count} person) will see this whole conversation.",
+    other: "Everyone in {space} ({count} people) will see this whole conversation.",
+  },
+  movingEveryoneThere: "Everyone in {space} will see this whole conversation.",
+  movingYours: "Only you will see this conversation, in your Personal space.",
+  movingTheirs: "{name} will see this whole conversation, in their Personal space.",
+  movingDrew: "It drew on {spaces}.",
+  yourPersonalSpace: "your Personal space",
+  theirPersonalSpace: "{name}'s Personal space",
+  anotherSpace: "another space",
+  otherSpaces: {
+    one: "{count} other space",
+    other: "{count} other spaces",
+  },
+  // Staff notes: beside a chat shared outside its space, for its team only
+  notesTitle: "Staff notes",
+  notesWithCount: {
+    one: "Staff notes, {count} message",
+    other: "Staff notes, {count} messages",
+  },
+  notesOnlyTeam: "Only your team sees this",
+  notesNever: "Only your team sees this, never {name}",
+  notesClose: "Close staff notes",
+  notesAsPage: "Open staff notes as a page",
+  notesViews: "The conversation, or its staff notes",
+  notesPlaceholder: "Ask an agent or leave a note for your team…",
+  notesEmptyTitle: "Your team's side of this conversation",
+  notesEmptyBody:
+    "Ask an agent to look something up or draft a reply, or leave a note for whoever picks this up. Nothing here reaches {name}.",
+  notesAbout: "Staff notes about the conversation with {name}",
+  openConversation: "Open conversation",
+  yourContact: "your contact",
+  sharedWith: "Shared with {name}",
+  answersWhereSeen:
+    "{agents} will answer here, where {name} can read it. To look something up just for your team, ask in staff notes.",
+  askInNotes: "Ask in staff notes",
+  // A draft in the notes, sent on to the chat
+  sendToName: "Send to {name}…",
+  sendToNameNow: "Send to {name}",
+  yourMessageTo: "Your message to {name}",
+  sendsAsYou: "It goes as you, and {name} will see it.",
+  sentTo: "Sent to {name}",
 });

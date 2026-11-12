@@ -321,7 +321,7 @@ export async function setup(
   const app = definePlugin({
     name: "app",
     resources: {
-      shared: { thread: {}, message: { labels: true }, file: {} },
+      shared: { thread: {}, message: { drew: true }, file: {} },
       provider: { e: { adapter: "e" } },
       model: { transcribe: "fake/listen" },
       agents: {

@@ -2,9 +2,10 @@
  * An agent in its person's Personal space works across their spaces, as they
  * can: it lists and reads the chats of another space, says something in one
  * (send_message's `thread`: who answers there gets it, and the answer comes
- * back), and keeps a routine there. From a shared space it reaches only that
- * space, and says so. Sending to a chat needs its person to be able to write
- * there, wherever the agent is.
+ * back), and keeps a routine there once its person says yes (Launch's people
+ * would see what Personal's work may draw on). From a shared space it
+ * reaches only that space, and says so. Sending to a chat needs its person to
+ * be able to write there, wherever the agent is.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
@@ -52,7 +53,7 @@ const app = definePlugin({
   name: "app",
   adapters: { llm: { s: script } },
   resources: {
-    shared: { thread: {}, message: { labels: true } },
+    shared: { thread: {}, message: { drew: true } },
     provider: { s: { adapter: "s" } },
     agents: {
       north: {
@@ -170,16 +171,27 @@ test("another chat of the same space: said there, answered back", async () => {
   });
 });
 
-test("from Personal, a routine kept in another space starts a chat there each run", async () => {
-  await setup(async ({ rt, launch, say }) => {
-    await say(
-      `do schedule_routine {"in":"${launch}","name":"Launch check","text":"How's it going?",` +
-        `"agent":"east","schedule":{"kind":"daily","time":"09:00","timezone":"UTC"}}`,
-      {},
-    );
-    assertStringIncludes(got.north[0], "Made it");
+test("from Personal, a routine kept in another space waits for its person's yes; with it, it starts a chat there each run", async () => {
+  await setup(async ({ rt, personal, launch, say }) => {
+    const routine = {
+      in: launch,
+      name: "Launch check",
+      text: "How's it going?",
+      agent: "east",
+      schedule: { kind: "daily", time: "09:00", timezone: "UTC" },
+    };
+    // Launch's people would see what Personal's work may draw on: not without Ana's yes.
+    await say(`do schedule_routine ${JSON.stringify(routine)}`, {});
+    assertStringIncludes(got.north[0], "Couldn't make it: That would show Launch");
+    assertStringIncludes(got.north[0], "has to say yes first");
+    assertEquals(await rt.query<Routine[]>("routine.list", { in: launch }, { actor: ana }), []);
+    // Made as the tool makes it (as Ana, for her agent there), with her yes for Launch: kept there.
+    const north: Actor = { kind: "agent", id: "north", for: ana, in: personal };
+    await rt.call("routine.create", { ...routine, post: "new" }, {
+      actor: { ...ana, in: personal, via: north, approved: [launch] },
+    });
     const [kept] = await rt.query<Routine[]>("routine.list", { in: launch }, { actor: ana });
-    assertEquals([kept.name, kept.in, kept.post], ["Launch check", launch, "new"]);
+    assertEquals([kept.name, kept.in, kept.post, kept.by], ["Launch check", launch, "new", "ana"]);
   });
 });
 

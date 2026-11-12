@@ -1,13 +1,14 @@
 /**
- * Labels: what a job read goes with what it writes. An answer written in
- * Launch from what's in Finance carries Finance as a source: only those who
- * reach both read it, until someone who does shares it. An agent can't
- * write it anywhere else, nor where labels aren't kept. Except an agent
- * working for someone from their own Personal space: what it does there for
- * them is theirs, as if they'd done it, wherever they may; in Personal itself,
- * what keeps labels keeps its marks, for the day its chat moves.
+ * Where an agent's work may go. Working for Ana in Launch, it reads Launch
+ * alone, and what it writes there shows Launch's people nothing they couldn't
+ * see. In Ana's own Personal space, which only she sees, it reads all she
+ * does; writing what that could hold anywhere whose people don't all see it
+ * (Launch) waits for her yes (`needs_approval`, until the work carries it:
+ * `approved`). A person's own writing goes wherever they may, as it is. What
+ * an agent writes in a collection that keeps it (`drew: true`) says which
+ * other spaces its work read: on the record, never in the way of a reader.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   type Actor,
   createRuntime,
@@ -29,14 +30,14 @@ const bob: Actor = { kind: "person", id: "bob" };
 /** An agent working for Ana in Launch. */
 const north: Actor = { kind: "agent", id: "north", for: ana, in: "launch" };
 
-type Doc = { _id: string; in: string; text: string; sources?: string[] };
+type Doc = { _id: string; in: string; text: string; drew?: string[] };
 const text = { type: "string" } as const;
 const doc = { type: "object", properties: { in: text, text }, required: ["in", "text"] } as const;
 
 const app = definePlugin({
   name: "app",
-  // Answers keep labels; notes don't.
-  resources: { shared: { note: {}, answer: { labels: true } } },
+  // Answers keep what their writers' work drew on; notes don't.
+  resources: { shared: { note: {}, answer: { drew: true } } },
   collections: {
     note: defineCollection({ schema: doc }),
     answer: defineCollection({ schema: doc }),
@@ -120,96 +121,134 @@ const each = (name: string, fn: (runtime: Runtime) => Promise<void>) => {
 };
 
 const answers = (rt: Runtime, actor: Actor) => rt.call<string[]>("answer.list", {}, { actor });
-
-each("an answer from a space not everyone sees carries it, until it's shared", async (rt) => {
-  // From Launch alone: no labels, everyone in Launch reads it.
-  await rt.call("summarize", { from: ["launch"], into: "launch", as: "answer" }, { actor: ana });
-  // From Launch and Finance, into Launch: it carries Finance.
-  await rt.call("summarize", {
-    id: "a2",
-    from: ["launch", "finance"],
-    into: "launch",
-    as: "answer",
-  }, { actor: ana });
-  assertEquals(await answers(rt, ana), ["budget + plan", "plan"]);
-  assertEquals(await answers(rt, bob), ["plan"]);
-  // Bob can't show it: he doesn't see Finance. Ana can.
-  await assertRejects(
-    () => rt.call("share", { collection: "answer", id: "a2" }, { actor: bob }),
-    Error,
-    "can't see finance",
+const found = (rt: Runtime, collection: string, id: string, actor: Actor) =>
+  rt.call<Doc[]>("doc.find", { collection, id }, { actor });
+/** How a call failed: its code, and the place its words name. */
+const refusal = (p: Promise<unknown>) =>
+  p.then(
+    () => "done",
+    (e: Error & { code?: string }) => `${e.code}: ${/^That would show (\w+)/.exec(e.message)?.[1]}`,
   );
-  assertEquals(await rt.call("share", { collection: "answer", id: "a2" }, { actor: ana }), {
-    shared: ["finance"],
-  });
-  assertEquals(await answers(rt, bob), ["budget + plan", "plan"]);
-});
 
-each("an agent works where it is, and takes nothing from elsewhere", async (rt) => {
-  // In Launch, it reads Launch alone: Finance isn't there for it, so its answer carries nothing.
-  await rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "answer" }, {
-    actor: north,
-  });
-  assertEquals(await answers(rt, bob), ["plan"]);
-  await rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "note" }, {
-    actor: north,
-  });
-  // Nor does it write anywhere else, though it works in Marketing too: handing work over is a
-  // person's (or trusted code's) to do.
-  await rt.call("space.create", { id: "marketing", name: "Marketing" }, { actor: ana });
-  await hire(rt, "marketing");
-  await assertRejects(
-    () =>
-      rt.call("summarize", { from: ["launch"], into: "marketing", as: "note" }, { actor: north }),
-    Error,
-    "out of your reach",
-  );
-  // In Ana's Personal space only she sees what's said: there it reaches all she does, and what
-  // it writes carries where it came from.
+/** Ana's Personal space, where North works too: its work there, for her. */
+async function personalOf(rt: Runtime): Promise<{ personal: string; mine: Actor }> {
   const { space: personal } = await rt.call<{ space: string }>("space.personal", {}, {
     actor: ana,
   });
   await hire(rt, personal);
-  const mine: Actor = { ...north, in: personal };
-  await rt.call("summarize", { from: ["launch", "finance"], into: personal, as: "answer" }, {
-    actor: mine,
-  });
-  // (Launch's notes: Ana's, and the one it wrote there.)
-  assertEquals(await answers(rt, ana), ["budget + plan + plan", "plan"]);
-  assertEquals(await answers(rt, bob), ["plan"]);
-  // What it does from there is Ana's, as if she'd done it: written in Launch, it's for Launch's
-  // people, Finance's budget too, since she asked; and where labels aren't kept, it goes as well.
-  await rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "answer" }, {
-    actor: mine,
-  });
-  assert((await answers(rt, bob)).some((a) => a.includes("budget")), "Ana's to show Bob");
-  // What it writes in her Personal space itself, where labels are kept, keeps its marks, for the
-  // day its chat moves; anything else there (a note, a board, a file) goes as it is: only she sees
-  // it, and moving it is hers to do.
-  await rt.call("summarize", {
-    id: "p1",
-    from: ["launch", "finance"],
-    into: personal,
-    as: "answer",
-  }, {
-    actor: mine,
-  });
-  const marked = await rt.call<Doc[]>("doc.find", { collection: "answer", id: "p1" }, {
-    actor: ana,
-  });
-  assertEquals(marked.map((d) => d.sources), [["finance", "launch"]]);
-  await rt.call(
-    "summarize",
-    { id: "n1", from: ["launch", "finance"], into: personal, as: "note" },
-    {
+  return { personal, mine: { ...north, in: personal } };
+}
+
+each(
+  "a person writes what they read wherever they may; everyone there reads it as it is",
+  async (rt) => {
+    await rt.call("summarize", { from: ["launch"], into: "launch", as: "answer" }, { actor: ana });
+    // From Launch and Finance, into Launch: hers to show, and Bob reads it; it says nothing more.
+    await rt.call("summarize", {
+      id: "a2",
+      from: ["launch", "finance"],
+      into: "launch",
+      as: "answer",
+    }, { actor: ana });
+    assertEquals(await answers(rt, ana), ["budget + plan", "plan"]);
+    assertEquals(await answers(rt, bob), ["budget + plan", "plan"]);
+    assertEquals((await found(rt, "answer", "a2", bob)).map((d) => d.drew), [undefined]);
+  },
+);
+
+each(
+  "an agent reads only where it works, and writes beyond that only once its person says yes",
+  async (rt) => {
+    // In Launch, it reads Launch alone: Finance isn't there for it.
+    await rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "answer" }, {
+      actor: north,
+    });
+    assertEquals(await answers(rt, bob), ["plan"]);
+    await rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "note" }, {
+      actor: north,
+    });
+    // Nor does it write anywhere else, though it works in Marketing too: handing work over is a
+    // person's (or trusted code's) to do.
+    await rt.call("space.create", { id: "marketing", name: "Marketing" }, { actor: ana });
+    await hire(rt, "marketing");
+    await assertRejects(
+      () =>
+        rt.call("summarize", { from: ["launch"], into: "marketing", as: "note" }, { actor: north }),
+      Error,
+      "out of your reach",
+    );
+    // In Ana's Personal space only she sees what's said: there it reaches all she does, and writes
+    // there with nothing to ask.
+    const { personal, mine } = await personalOf(rt);
+    await rt.call("summarize", { from: ["launch", "finance"], into: personal, as: "answer" }, {
       actor: mine,
-    },
-  );
-  const noted = await rt.call<Doc[]>("doc.find", { collection: "note", id: "n1" }, { actor: ana });
-  assertEquals(noted.map((d) => [d.text, d.sources]), [["budget + plan + plan", undefined]]);
-  assertEquals(
-    await rt.call<Doc[]>("doc.find", { collection: "note", id: "n1" }, { actor: bob }),
-    [],
-  );
-  // Working for her in Launch, it still takes nothing from elsewhere (above): Bob reads there.
-});
+    });
+    // (Launch's notes: Ana's, and the one it wrote there.)
+    assertEquals(await answers(rt, ana), ["budget + plan + plan", "plan"]);
+    assertEquals(await answers(rt, bob), ["plan"]);
+    // Into Launch, what it could read there would show Bob Finance: it waits for Ana's yes, for
+    // Launch itself (a yes for somewhere else is none).
+    for (const approved of [undefined, ["finance"]]) {
+      assertEquals(
+        await refusal(
+          rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "answer" }, {
+            actor: { ...mine, ...(approved ? { approved } : {}) },
+          }),
+        ),
+        "needs_approval: Launch",
+      );
+    }
+    assertEquals(await answers(rt, bob), ["plan"]);
+    // Once she's said yes, it goes: everyone in Launch reads it, Finance's budget too.
+    await rt.call("summarize", { from: ["launch", "finance"], into: "launch", as: "answer" }, {
+      actor: { ...mine, approved: ["launch"] },
+    });
+    assertEquals(await answers(rt, bob), ["budget + plan + plan", "plan"]);
+  },
+);
+
+each(
+  "an agent's answer says which other spaces its work read, and that keeps nobody from it",
+  async (rt) => {
+    const { personal, mine } = await personalOf(rt);
+    // In her Personal space: Launch and Finance, both elsewhere.
+    await rt.call("summarize", {
+      id: "p1",
+      from: ["launch", "finance"],
+      into: personal,
+      as: "answer",
+    }, { actor: mine });
+    assertEquals((await found(rt, "answer", "p1", ana)).map((d) => d.drew), [[
+      "finance",
+      "launch",
+    ]]);
+    // Written in Launch (she said yes): Finance alone. Bob, who can't see Finance, reads it all.
+    await rt.call("summarize", {
+      id: "l1",
+      from: ["launch", "finance"],
+      into: "launch",
+      as: "answer",
+    }, { actor: { ...mine, approved: ["launch"] } });
+    assertEquals((await found(rt, "answer", "l1", bob)).map((d) => [d.text, d.drew]), [
+      ["budget + plan", ["finance"]],
+    ]);
+    // From Launch itself, nothing else: it says nothing.
+    await rt.call("summarize", { id: "l2", from: ["launch"], into: "launch", as: "answer" }, {
+      actor: north,
+    });
+    assertEquals((await found(rt, "answer", "l2", bob)).map((d) => d.drew), [undefined]);
+    // What doesn't keep it (a note) goes as it is: only Ana sees it, and moving it is hers to do.
+    await rt.call("summarize", {
+      id: "n1",
+      from: ["launch", "finance"],
+      into: personal,
+      as: "note",
+    }, {
+      actor: mine,
+    });
+    assertEquals((await found(rt, "note", "n1", ana)).map((d) => [d.text, d.drew]), [
+      ["budget + plan", undefined],
+    ]);
+    assertEquals(await found(rt, "note", "n1", bob), []);
+  },
+);

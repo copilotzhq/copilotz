@@ -68,7 +68,7 @@ const app = definePlugin({
     }),
   },
   resources: {
-    shared: { thread: {}, message: { labels: true } },
+    shared: { thread: {}, message: { drew: true } },
     provider: { s: { adapter: "s" } },
     tools: { whoami },
     agents: {

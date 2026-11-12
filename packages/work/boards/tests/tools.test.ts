@@ -223,7 +223,7 @@ for (const [name, make] of Object.entries(stores)) {
   });
 }
 
-test("from Personal, an agent keeps another space's board for its person; from a shared one, it can't", async () => {
+test("from Personal, an agent keeps another space's board once its person says yes; from a shared one, it can't", async () => {
   const rt = await start(stores.memory);
   try {
     const { space: personal } = await rt.call<{ space: string }>("space.personal", {}, {
@@ -235,21 +235,35 @@ test("from Personal, an agent keeps another space's board for its person; from a
     await join(rt, launch, bob, "editor", ana);
     const mine = { in: personal } as { in?: string; thread?: string };
 
-    // From ana's Personal space: Launch's board, as she'd keep it, for Launch's people to see.
+    // From ana's Personal space, a board in Launch would show Launch's people what her work there
+    // may draw on: it waits for her yes.
+    const asksFirst = /^That would show Launch .* has to say yes first/;
     assert.match(
       await ask(rt, mine, "create_board", { in: launch, name: "Launch plan" }),
-      /^Made the board “Launch plan”/,
+      asksFirst,
     );
-    assert.match(
-      await ask(rt, mine, "create_card", { in: launch, title: "Ship pricing", column: "to do" }),
-      /^Created “Ship pricing” \[\w+\] in To do/,
-    );
+    assert.deepEqual((await peekAs(rt, bob, launch)).boards, []);
+    // With it (the agent's work there carrying her yes), it keeps Launch's board as she would,
+    // for Launch's people to see.
+    const approved = {
+      actor: { kind: "agent", id: "north", for: ana, in: personal, approved: [launch] },
+    };
+    const { board } = await rt.call<{ board: string }>("board.create", {
+      in: launch,
+      name: "Launch plan",
+    }, approved);
+    await rt.call("card.create", { board, title: "Ship pricing" }, approved);
+    // Reading it from there needs nothing; changing it, her yes again.
     assert.match(
       await ask(rt, mine, "list_boards", { in: launch }),
       /^1 board in that space:\n- “Launch plan” .*: 1 card/,
     );
+    assert.match(
+      await ask(rt, mine, "create_card", { in: launch, title: "Ship docs" }),
+      asksFirst,
+    );
     const seen = await peekAs(rt, bob, launch);
-    assert.deepEqual(seen.cards.map((c) => c.title), ["Ship pricing"]);
+    assert.deepEqual(seen.cards.map((c) => [c.title, c.by]), [["Ship pricing", "agent:north"]]);
 
     // From a space ana shares with bob: only that space.
     const { space: team } = await rt.call<{ space: string }>("space.create", { name: "Team" }, {

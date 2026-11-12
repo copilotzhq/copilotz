@@ -2,7 +2,7 @@
  * Moving a conversation: from Ana's Personal space into a shared space, with
  * everything in it (messages, files, the subthreads agents opened), by
  * someone who may write in both spaces, and not while agents write in it.
- * What came from elsewhere keeps its marks.
+ * An answer's record of what it drew on goes with it; everyone there reads it.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
@@ -80,7 +80,7 @@ const app = definePlugin({
     }),
   },
   resources: {
-    shared: { thread: {}, message: { labels: true }, file: {}, note: {} },
+    shared: { thread: {}, message: { drew: true }, file: {}, note: {} },
     provider: { l: { adapter: "l" }, h: { adapter: "h" } },
     agents: {
       lead: {
@@ -189,15 +189,19 @@ test("only someone who may write in both spaces moves it; agents don't", async (
   });
 });
 
-test("what came from elsewhere keeps its marks when the conversation moves", async () => {
+test("an answer's record of what it drew on goes with it when the conversation moves", async () => {
   await setup(async (rt, mine) => {
     await rt.call("space.create", { id: "finance", name: "Finance" }, { actor: ana });
     await rt.call("note.add", { in: "finance", text: "budget 10k" }, { actor: ana });
     const thread = await say(rt, "peek", { in: mine });
+    const drew = async (actor: Actor) =>
+      (await rt.query<Message[]>("message.history", { thread }, { actor }))
+        .filter((m) => m.from === "lead" && !m.private).map((m) => [m.text, m.in, m.drew]);
+    assertEquals(await drew(ana), [["Saw: budget 10k", mine, ["finance"]]]);
     await rt.call("chat.move", { thread, to: "launch" }, { actor: ana });
-    assert((await seen(rt, ana, thread)).includes("Saw: budget 10k"));
-    // Bob sees the conversation, not what came from Finance, until Ana shares it.
-    assertEquals(await seen(rt, bob, thread), ["peek"]);
+    // Moved, it still says so, for whoever looks; Bob, who can't see Finance, reads it all.
+    assertEquals(await drew(bob), [["Saw: budget 10k", "launch", ["finance"]]]);
+    assertEquals(await seen(rt, bob, thread), await seen(rt, ana, thread));
   });
 });
 

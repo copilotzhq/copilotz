@@ -99,6 +99,22 @@ const app = definePlugin({
         return 1;
       },
     }),
+    // A message as the old marks left one (`sources`), not yet moved by chat.unmark.
+    "test.marked": defineAction({
+      input: { type: "object", properties: { thread: text, in: text }, required: ["thread", "in"] },
+      run: async (ctx, input) => {
+        await ctx.as().db.collection("message").insertOne({
+          _id: crypto.randomUUID(),
+          thread: input.thread,
+          in: input.in,
+          from: "lead",
+          to: [],
+          text: "marked before",
+          sources: ["supplier"],
+          at: new Date().toISOString(),
+        });
+      },
+    }),
     "test.count": counting(people),
     "test.countOpen": counting(peopleOrContacts),
     // The same, unrecorded: it runs in its caller's job (a tool's, a turn's).
@@ -284,6 +300,16 @@ test("writing into a contact's chat from a team's waits for a yes; in it, nothin
     // its reach altogether.
     assertEquals(await say(working(carlas), carlas), "done");
     assertEquals(await say(working(carlas), staff), "forbidden");
+    // What the old marks kept from her stays so until it's moved (chat.unmark): from her, and
+    // from the agent working for her; staff read it.
+    await rt.call("test.marked", { thread: carlas, in: shop });
+    assert(!(await reads(rt, carlas, carla)).includes("marked before"));
+    assert(
+      !(await reads(rt, carlas, { kind: "agent", id: "lead", for: carla })).includes(
+        "marked before",
+      ),
+    );
+    assert((await reads(rt, carlas, ana)).includes("marked before"));
   });
 });
 

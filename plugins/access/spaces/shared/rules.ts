@@ -136,8 +136,15 @@ export const rules: Guard = async (actor, { collection, access, filter, direct }
   const verb = access === "read" ? "read" : write;
   const spaces = where(reach, verb);
   // A contact acting itself reaches what its collection lets a contact reach of it (not an
-  // agent's private steps).
-  const sourced: Filter | undefined = contact && actor.kind === "contact" ? contact : undefined;
+  // agent's private steps). Until chat.unmark has run (it goes with it), what still carries the
+  // old marks (`sources`) stays from a contact, and from an agent working for one.
+  const outsider = actor.kind === "contact" ||
+    (actor.for as Actor | undefined)?.kind === "contact";
+  const also: Filter[] = [
+    ...(contact && actor.kind === "contact" ? [contact] : []),
+    ...(outsider ? [{ sources: { $exists: false } }] : []),
+  ];
+  const sourced: Filter | undefined = also.length > 1 ? { $and: also } : also[0];
   // A query naming a space it reaches goes to the store as it is.
   const named = filter?.[field];
   const there = typeof named === "string" ? reach.get(named) : undefined;

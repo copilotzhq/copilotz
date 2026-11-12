@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.45 — 2026-11-12
 
 - **AGENTS.md, a guide for coding agents.** Claude Code, Codex, Cursor or Gemini building an app
   with Copilotz finds it in the package (`node_modules/copilotz/AGENTS.md`, and in

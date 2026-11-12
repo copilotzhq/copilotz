@@ -102,14 +102,26 @@ test("a job running a server says the port it listens on, where this machine can
       "it listened",
       20_000,
     );
+    // The tools are slow on some machines, and may fail now and then: wait for the port to be
+    // found, and skip only when no tool ever answered.
     let listed: Job | undefined;
+    let tooled = false;
+    try {
+      await until(async () => {
+        [listed] = await work<Job[]>(WORK.jobsList, { scope });
+        tooled ||= listed?.ports !== undefined;
+        return listed?.ports?.includes(port) ?? false;
+      }, "its port was found", 20_000);
+    } catch (error) {
+      // No tool here to tell (no ss, lsof or netstat): it says nothing, rather than none.
+      if (tooled) throw error;
+      return console.log("  (no tool to find ports: skipped)");
+    }
+    assertEquals(listed?.ports, [port]);
     await until(async () => {
-      [listed] = await work<Job[]>(WORK.jobsList, { scope });
-      return listed?.ports === undefined || listed.ports.includes(port);
-    }, "its port was found");
-    // No tool here to tell (no ss, lsof or netstat): it says nothing, rather than none.
-    if (listed?.ports === undefined) return console.log("  (no tool to find ports: skipped)");
-    assertEquals(listed.ports, [port]);
+      const logs = await work<JobsLogs>(WORK.jobsLogs, { scope, id: job.id });
+      return logs.job.ports?.includes(port) ?? false;
+    }, "its logs say its port", 20_000);
     const logs = await work<JobsLogs>(WORK.jobsLogs, { scope, id: job.id });
     assertEquals(logs.job.ports, [port]);
     // Stopped, it listens on nothing, and says no ports.

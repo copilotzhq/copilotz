@@ -44,8 +44,28 @@ export type Job =
     actor?: Actor;
   };
 
-/** Why something failed; `final`: trying again won't help (it already was, as long as it should be). */
-export type Failure = { message: string; code?: string; final?: true; public?: true };
+/**
+ * Why something failed; `final`: trying again won't help (it already was, as
+ * long as it should be); `detail`: what its caller needs to act on it (where a
+ * write needs a yes for, say), strings only.
+ */
+export type Failure = {
+  message: string;
+  code?: string;
+  final?: true;
+  public?: true;
+  detail?: Record<string, string>;
+};
+
+/** An error's `detail`, kept only as strings (and none of an error's own names). */
+const detailOf = (error: unknown): Record<string, string> | undefined => {
+  const detail = (error as { detail?: unknown })?.detail;
+  if (!detail || typeof detail !== "object") return undefined;
+  const kept = Object.entries(detail).filter(([key, value]) =>
+    typeof value === "string" && !["message", "code", "final", "public", "stack"].includes(key)
+  );
+  return kept.length ? Object.fromEntries(kept) as Record<string, string> : undefined;
+};
 
 export type Line =
   | { frame: { channel: string; data: unknown } }
@@ -108,6 +128,7 @@ export const failure = (error: unknown): Failure => ({
   ...((error as { final?: unknown })?.final === true ? { final: true as const } : {}),
   // A message for any caller stays one from job to job (see errors.ts).
   ...((error as { public?: unknown })?.public === true ? { public: true as const } : {}),
+  ...(detailOf(error) ? { detail: detailOf(error) } : {}),
 });
 
 export const raise = (failure: Failure): Error =>
@@ -116,6 +137,7 @@ export const raise = (failure: Failure): Error =>
     failure.code ? { code: failure.code } : {},
     failure.final ? { final: true } : {},
     failure.public ? { public: true } : {},
+    failure.detail ? { ...failure.detail, detail: failure.detail } : {},
   );
 
 /**

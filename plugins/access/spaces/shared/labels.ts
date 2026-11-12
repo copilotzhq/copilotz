@@ -75,7 +75,7 @@ const needsApproval = (to: string, named: string) =>
       `That would show ${named} what this conversation may draw on, and not everyone there can ` +
         "see it: the person this is done for has to say yes first.",
     ),
-    { code: "needs_approval", to, named },
+    { code: "needs_approval", to, named, detail: { to, named } },
   );
 
 /** Whether a place was approved for this work (`approved`, set by its turn from a yes). */

@@ -184,6 +184,28 @@ each(
   },
 );
 
+each(
+  "a declared schedule that says no input calls an Action taking an object with {}",
+  async (make) => {
+    const store = await make();
+    const { runtime, ticks, advance } = await boot(store, [
+      definePlugin({
+        name: "beat",
+        actions: {
+          "beat.mark": defineAction({
+            input: { type: "object", additionalProperties: false },
+            run: (ctx) => ctx.db.collection("tick").insertOne({ n: 7 }),
+          }),
+        },
+        schedules: { heartbeat: { every: "1m", call: "beat.mark" } },
+      }),
+    ]);
+    await advance(MINUTE);
+    assertEquals(await ticks(), [7]);
+    await runtime.close();
+  },
+);
+
 each("a cron schedule comes due in its timezone", async (make) => {
   const store = await make();
   const { runtime, clock, timers, ticks } = await boot(store, [

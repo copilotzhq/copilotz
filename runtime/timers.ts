@@ -70,6 +70,13 @@ export function createTimers(options: {
   metrics: Metrics;
 }): Timers {
   const { store, clock, schedules, actions, signal } = options;
+  /** A declared schedule's input: as declared, or, left out, `{}` where its Action takes an object. */
+  const inputOf = (def: { call: string; input?: unknown }): unknown =>
+    def.input !== undefined
+      ? def.input
+      : (actions[def.call]?.input as { type?: unknown } | undefined)?.type === "object"
+      ? {}
+      : undefined;
   const lateness = options.metrics.histogram("copilotz.timer.lateness", {
     unit: "ms",
     description: "How long after its time a timer's occurrence was called",
@@ -82,8 +89,8 @@ export function createTimers(options: {
       if ((def as { at?: unknown }).at !== undefined) {
         throw invalid("takes `cron`, `every` or `once`, not `at`");
       }
-      timer(name, def.call, def.input, def, clock.now());
-      if (action.input) compile(action.input, `input`)(def.input);
+      timer(name, def.call, inputOf(def), def, clock.now());
+      if (action.input) compile(action.input, `input`)(inputOf(def));
     } catch (error) {
       throw invalid(`Schedule "${name}": ${(error as Error).message}`);
     }
@@ -326,7 +333,7 @@ export function createTimers(options: {
       const byId = new Map(found.map((t) => [t._id, t]));
       const ops: WriteOp[] = [];
       for (const [name, def] of Object.entries(schedules)) {
-        const wanted: Timer = { ...timer(name, def.call, def.input, def, now), declared: true };
+        const wanted: Timer = { ...timer(name, def.call, inputOf(def), def, now), declared: true };
         const have = byId.get(name);
         if (have?.declared && sameSchedule(have, wanted)) continue;
         const keep = running(wanted);

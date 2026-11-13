@@ -171,9 +171,10 @@ test("a contact's chat keeps its notes apart: one, made on first use, never the 
     }, { actor: bob });
     assertEquals(opened, { thread: notesOf(carlas), about: carlas });
     const [notes] = await reads<Thread>(runtime, "thread", ana, { _id: opened.thread });
+    // Its title is the chat's, as it is: what they are (`about`) views say around it.
     assertEquals(
       [notes.about, notes.in, notes.title, notes.agents],
-      [carlas, shop, "Staff notes: Carla", ["lead"]],
+      [carlas, shop, "Carla", ["lead"]],
     );
     // Asked again, or about the notes themselves: the same ones.
     for (const thread of [carlas, opened.thread]) {

@@ -1,7 +1,8 @@
 /**
  * At the terminal: `/notes` opens a contact's chat's staff notes, and again
- * goes back; `/move` says first who'll see a conversation there and what it
- * drew on, and moves it only with `yes`.
+ * goes back; a line where a reply went says where, in chat's words; `/move`
+ * says first who'll see a conversation there and what it drew on, and moves
+ * it only with `yes`.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { Writable } from "node:stream";
@@ -118,6 +119,40 @@ test("/notes opens a contact's chat's staff notes, and goes back", async () => {
     // What was said went into the notes, not the chat.
     const notes = await runtime.query<Thread[]>("thread.recent", {}, { actor: ana });
     assert(notes.some((t) => t._id === notesOf(carlas) && t.messages === 2));
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("a line where a reply went says where, in chat's words, never what it said", async () => {
+  const runtime = await open();
+  try {
+    const { space: launch } = await runtime.call<{ space: string }>("space.create", {
+      name: "Launch",
+    }, { actor: ana });
+    await join(runtime, launch, bob, "editor", ana);
+    const { thread } = await runtime.call<{ thread: string }>("chat.send", {
+      in: launch,
+      text: "plan",
+    }, { actor: ana });
+    await runtime.idle();
+    // As the migration leaves them: for Ana; for no one. No text: where it went, not a sentence.
+    for (const [id, held] of [["h1:held", { for: "ana" }], ["u1:held", {}]] as const) {
+      await runtime.call("test.seed", {
+        message: {
+          _id: id,
+          thread,
+          in: launch,
+          from: "lead",
+          to: [],
+          held,
+          at: new Date().toISOString(),
+        },
+      });
+    }
+    const shown = await session(runtime, bob, [`/open ${thread}`, "/history"]);
+    assertStringIncludes(shown, "A reply only ana could see was moved to their Personal space.");
+    assertStringIncludes(shown, "A reply only some here could see was held back.");
   } finally {
     await runtime.close();
   }

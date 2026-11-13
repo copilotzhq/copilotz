@@ -13,6 +13,7 @@ import type { Approval } from "../../collections/approval.ts";
 import { agentsShown } from "../../shared/agents.ts";
 import { asking, sentence } from "../asked.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 /** At most this many chats waiting are listed; the rest are counted. */
 const LISTED = 3;
@@ -37,7 +38,7 @@ export const waitingView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode 
   return (
     <>
       <style href="chat-web" precedence="copilotz">{STYLE}</style>
-      <ul className="asks-waiting" aria-label="Waiting on you">
+      <ul className="asks-waiting" aria-label={say("waitingOnYou")}>
         {waiting.slice(0, LISTED).map((asks) => {
           const [first] = asks;
           return (
@@ -51,21 +52,21 @@ export const waitingView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode 
                 }
                 description={asking(first)}
                 end={asks.length > 1
-                  ? <Badge tone="warning" aria-label={`${asks.length} asks`}>{asks.length}</Badge>
+                  ? (
+                    <Badge tone="warning" aria-label={say("asksCount", { count: asks.length })}>
+                      {asks.length}
+                    </Badge>
+                  )
                   : <Time at={first.at} />}
                 title={sentence(first, named(first.agent))}
               >
-                {named(first.agent)} needs your OK
+                {say("needsYourOk", { agent: named(first.agent) })}
               </NavItem>
             </li>
           );
         })}
         {more > 0
-          ? (
-            <li className="asks-waiting-more">
-              and {more} more chat{more === 1 ? "" : "s"} waiting on you
-            </li>
-          )
+          ? <li className="asks-waiting-more">{say("moreWaiting", { count: more })}</li>
           : null}
       </ul>
     </>

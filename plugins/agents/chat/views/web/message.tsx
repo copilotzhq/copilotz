@@ -11,6 +11,8 @@
  * indented. One of yours that waits for agents at work on an earlier one
  * says so, with a way to send it now (`hints.queued`: their ids; see
  * queued.tsx).
+ * One standing where a reply went that not everyone here could read
+ * (`held`) says where it went, in the reader's words, and nothing more.
  * One sent for someone by what they set up (`via`: a routine) says so. One
  * that says why its agent couldn't start (the org's limit) is a calm notice,
  * with its link; one where the agent itself failed is an error.
@@ -34,6 +36,7 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import type { Message } from "../../collections/message.ts";
 import type { Step } from "../../shared/types.ts";
+import { heldSaid } from "../held.ts";
 import { agentPath, type Shown } from "./agents.ts";
 import { unmarked } from "./plain.ts";
 import { Queued } from "./queued.tsx";
@@ -70,7 +73,8 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
   const follows = ctx.hints.follows === true;
   // Agents as they're named (by id), with their emoji; people by their names.
   const who = (ctx.hints.who ?? {}) as Record<string, Shown>;
-  const names = namesIn(ctx, [m.from, ...m.to].filter((id) => !who[id]));
+  const held = m.held?.for ? [m.held.for] : [];
+  const names = namesIn(ctx, [m.from, ...m.to, ...held].filter((id) => !who[id]));
   const named = (id: string) => who[id]?.name ?? nameOf(id, names);
   const author = named(m.from);
   // A person's face beside what they said, if they have a picture.
@@ -159,7 +163,14 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
             </Chip>
           )
           : null}
-        {m.toolCalls
+        {m.held
+          ? (
+            <p className="msg-note msg-held">
+              <Icon name="lock" size={14} />
+              {heldSaid(m, held.length ? named(held[0]) : undefined)}
+            </p>
+          )
+          : m.toolCalls
           ? (
             <Steps
               calls={m.toolCalls as Step[]}

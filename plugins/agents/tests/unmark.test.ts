@@ -313,7 +313,7 @@ test("on the first start with it, each marked message goes where only its reader
     const made = (await f.store.findOne("thread", { _id: notes })) as Thread | null;
     assertEquals(
       [made?.about, made?.in, made?.title, made?.messages],
-      [f.carlas, f.shop, "Staff notes: Carla", 2],
+      [f.carlas, f.shop, "Carla", 2],
     );
     for (const id of ["run1:reply", "run1:step", "c3"]) {
       assertEquals((await doc(id))?.thread, notes);
@@ -336,21 +336,19 @@ test("on the first start with it, each marked message goes where only its reader
       2,
     );
 
-    // Launch: Ana's answer to her Personal space, and a line where it was.
+    // Launch: Ana's answer to her Personal space, and a line where it was. No sentence is
+    // stored: the thread says what it holds (`held.from`, under its chat's title), the line
+    // for whom it was held; views say both in the reader's words.
     const forAna = `${f.team}:held:ana`;
     const heldForAna = (await f.store.findOne("thread", { _id: forAna })) as Thread | null;
-    assertEquals([heldForAna?.in, heldForAna?.title], [f.personal, "Held from Plan"]);
+    assertEquals([heldForAna?.in, heldForAna?.title, heldForAna?.held], [f.personal, "Plan", {
+      from: f.team,
+    }]);
     assertEquals([(await doc("h1"))?.thread, (await doc("h1"))?.in], [forAna, f.personal]);
     const line = await doc("h1:held");
     assertEquals(
-      [line?.thread, line?.in, line?.from, line?.at, line?.text],
-      [
-        f.team,
-        f.launch,
-        "lead",
-        at(6),
-        "A reply only ana could see was moved to their Personal space.",
-      ],
+      [line?.thread, line?.in, line?.from, line?.at, line?.held, line?.text],
+      [f.team, f.launch, "lead", at(6), { for: "ana" }, undefined],
     );
     // Cleo's, and its turn's step, to the Personal space made for her.
     const forCleo = `${f.team}:held:cleo`;
@@ -369,7 +367,8 @@ test("on the first start with it, each marked message goes where only its reader
       undefined,
       `${f.team}:held`,
     ]);
-    assertEquals((await doc("u1:held"))?.text, "A reply only some here could see was held back.");
+    assertEquals([nobodys?.title, nobodys?.held], ["Plan", { from: f.team }]);
+    assertEquals([(await doc("u1:held"))?.held, (await doc("u1:held"))?.text], [{}, undefined]);
     // Bob, in Launch: the lines, never what moved; Ana: hers, in her Personal space.
     const bobReads = (await reads<Message>(runtime, "message", bob, { thread: f.team }))
       .map((m) => m._id).sort();

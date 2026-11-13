@@ -2,14 +2,15 @@
  * What agents wait on their person for, just above where they type (the
  * shell's `notices`, kind `approvals`): each ask, and how to answer it, with
  * only the answers it takes. A share says who'd see it, and what it would
- * say. Live: it's there when an agent asks, and gone once answered.
+ * say. Live: it's there when an agent asks, and gone once answered. What it
+ * says is in chat's words, as the web's cards say it; the commands, as typed.
  */
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { accent, bold, dim } from "../../../../../hosts/terminal/mod.ts";
 import { namesIn } from "../../../../access/spaces/contract.ts";
 import type { Approval } from "../../collections/approval.ts";
-import { seenBy } from "../../shared/share.ts";
-import { asker, asking, TYPED } from "../asked.ts";
+import { asker, asking, seenOf, TYPED } from "../asked.ts";
+import { say } from "../web/words.ts";
 
 /** How to answer: `/approve once · /approve thread (this conversation) · …`, or by number. */
 export function howTo(a: Pick<Approval, "answers">, n?: number): string {
@@ -21,7 +22,7 @@ export function howTo(a: Pick<Approval, "answers">, n?: number): string {
 
 /** What else an ask says, under it: who'd see a share, and what it would say. */
 function about(a: Approval): string[] {
-  const seen = typeof a.people === "number" ? seenBy({ people: a.people }) : "";
+  const seen = seenOf(a);
   const preview = a.preview?.split("\n")[0]?.slice(0, 120);
   return [
     ...(seen ? [`  ${dim(seen)}`] : []),
@@ -36,8 +37,8 @@ export const approvalsView = (item: { person: string }, ctx: ViewContext): strin
   const names = namesIn(ctx, waiting.value.flatMap((a) => a.for ? [a.for] : []));
   return [
     ...waiting.value.flatMap((a, i) => [
-      `${accent("?")} ${many ? dim(`[${i + 1}] `) : ""}${asker(a, item.person, names)} wants to ${
-        bold(asking(a))
+      `${accent("?")} ${many ? dim(`[${i + 1}] `) : ""}${
+        say("wantsTo", { agent: asker(a, item.person, names), doing: bold(asking(a)) })
       }`,
       ...about(a),
       ...(many ? [] : [dim(`  ${howTo(a)}`)]),

@@ -2039,6 +2039,7 @@
             "in",
             "files",
             "drew",
+            "held",
             "stopped",
             "tap",
             "via",
@@ -2140,6 +2141,14 @@
                 "type": "array",
                 "items": {
                   "type": "string"
+                }
+              },
+              "held": {
+                "type": "object",
+                "properties": {
+                  "for": {
+                    "type": "string"
+                  }
                 }
               },
               "stopped": {
@@ -2361,6 +2370,7 @@
             "fork",
             "in",
             "about",
+            "held",
             "messages",
             "opened",
             "latest",
@@ -2404,6 +2414,17 @@
               },
               "about": {
                 "type": "string"
+              },
+              "held": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from"
+                ]
               },
               "messages": {
                 "type": "integer"

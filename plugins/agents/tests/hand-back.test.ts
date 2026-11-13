@@ -172,11 +172,11 @@ test("Send it to me only: Ana gets it in her Personal space; Launch hears where 
     await s.answer(asked, "me");
     assertEquals(await s.pending(), []);
     const there = await said(s, thread);
-    // In Launch: that it went to her, never what it says.
+    // In Launch: that it went to her (to whom, as structure: no sentence), never what it says.
     assert(!there.some(([, words]) => words.includes("scout heard")), JSON.stringify(there));
-    assert(
-      there.some(([from, words]) => from === "scout" && words === "The answer went to ana only."),
-    );
+    const word = (await s.history(thread)).find((m) => m.from === "scout" && m.held)!;
+    assertEquals([word.held, word.text, word.files], [{ for: "ana" }, undefined, undefined]);
+    // North is told where it went, and goes on.
     assertStringIncludes(there.at(-1)![1], "The answer went to ana only.");
     assertEquals(there.at(-1)![0], "north");
     // In her Personal space: a conversation of its own, with the answer.

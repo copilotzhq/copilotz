@@ -46,6 +46,7 @@ import {
   pathOf,
   WithNotes,
 } from "./notes-lane.tsx";
+import { threadTitle } from "./listed.ts";
 import { Over } from "./over.tsx";
 import { plain } from "./plain.ts";
 import type { SendTo } from "./send-on.tsx";
@@ -269,7 +270,8 @@ export function talk(
   const words = (m: Message) => m.text || m.files?.find((f) => f.transcript)?.transcript;
   const own = said.filter((m) => m.thread === id && !m.private && words(m));
   const first = own.find((m) => !byAgent(m)) ?? own[0];
-  const title = plain(thread?.title ?? (first && words(first))) || say("newChat");
+  const title = (thread && threadTitle(thread)) || plain(first && words(first)) ||
+    say("newChat");
   const last = said[said.length - 1];
   const addressed = thread?.agents?.length
     ? say("messageAgents", { names: names(thread.agents.map((name) => who[name]?.name ?? name)) })

@@ -29,7 +29,7 @@ import { SendOn } from "../chat/views/web/send-on.tsx";
 const ME = "sam";
 const at = new Date().toISOString();
 const chat = { _id: "c1", in: "s1", title: "Order 12", agents: ["maya"], at };
-const notes = { _id: "c1:notes", in: "s1", about: "c1", title: "Order 12, privately", at };
+const notes = { _id: "c1:notes", in: "s1", about: "c1", title: "Order 12", at };
 const team = {
   here: ["maya"],
   default: ["maya"],
@@ -192,6 +192,8 @@ test("notes opened as a page say what they're about, with the way back to the co
     ),
   );
   assertStringIncludes(page, "Staff notes about the conversation with Ana");
+  // Headed as what they are, around the chat's own title (stored as it is).
+  assertStringIncludes(page, ">Staff notes: Order 12</h1>");
   assertStringIncludes(page, "Only your team sees this");
   assertStringIncludes(page, 'href="/thread/c1?in=s1"');
   assertStringIncludes(page, "Open conversation");

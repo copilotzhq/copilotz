@@ -2,7 +2,7 @@
 import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 import { HISTORY } from "../shared/agents.ts";
 import { lineage } from "../shared/lineage.ts";
-import type { Step } from "../shared/types.ts";
+import { DELEGATED, type Step } from "../shared/types.ts";
 
 const names = { type: "array", items: { type: "string" } } as const;
 
@@ -61,6 +61,16 @@ const messageSchema = {
      * never a gate.
      */
     drew: { type: "array", items: { type: "string" } },
+    /**
+     * It stands where a reply went that not everyone here could read, and
+     * says only where (never what it said, and no `text`): to the Personal
+     * space of `for`, the only one who could; with no `for`, nowhere anyone
+     * here reads. Handed back from another space (`via` delegated), it's that
+     * answer: it went to `for` alone, or stayed where it was written. Views
+     * say it in the reader's words; it's stored as what happened, not as a
+     * sentence.
+     */
+    held: { type: "object", properties: { for: { type: "string" } } },
     /** Its turn was stopped (`chat.stop`): what it had written so far. */
     stopped: { type: "boolean" },
     /**
@@ -217,6 +227,23 @@ export const message = defineCollection({
 });
 
 export type Message = Infer<typeof messageSchema> & { _id: string };
+
+/**
+ * What stands where a reply went elsewhere (`held`), as agents are told it:
+ * in English, as they're told everything, with its person by `name`. People
+ * read it in their own words (views/held.ts).
+ */
+export function heldTold(m: Pick<Message, "held" | "via">, name?: string): string {
+  const back = m.via?.kind === DELEGATED;
+  if (m.held?.for) {
+    return back
+      ? `The answer went to ${name ?? m.held.for} only.`
+      : `A reply only ${name ?? m.held.for} could see was moved to their Personal space.`;
+  }
+  return back
+    ? "The answer stayed where it was written."
+    : "A reply only some here could see was held back.";
+}
 
 /** Whether a message is an agent's final answer in its turn (`<run>:reply`), one that didn't fail. */
 export const isAnswer = (m: Pick<Message, "_id" | "turn" | "failed" | "stopped">): boolean =>

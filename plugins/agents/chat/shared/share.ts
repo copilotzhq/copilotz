@@ -63,7 +63,11 @@ export function seenBy(share: Pick<Share, "people" | "contacts">): string {
 export const sharing = (share: Pick<Share, "named" | "contacts">) =>
   share.contacts ? `send this to ${share.named}` : `post this to ${share.named}`;
 
-/** The ask a share makes of the person an agent works for (`person`), in its turn's thread. */
+/**
+ * The ask a share makes of the person an agent works for (`person`), in its
+ * turn's thread: where (`on`, `name`) and to how many (`people`), which views
+ * say in the reader's words; what the agent is told, in English.
+ */
 export function shareAsk(
   share: Share,
   at: { person: string; agent: string; thread: string; in?: string; origin?: Origin },
@@ -80,8 +84,6 @@ export function shareAsk(
     work: SHARE,
     on: share.to,
     detail: share.named,
-    text: doing,
-    covers: share.contacts ? `send to ${share.named}` : `post to ${share.named}`,
     name: share.named,
     people: share.people,
     ...(share.preview ? { preview: share.preview } : {}),

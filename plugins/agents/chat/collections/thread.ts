@@ -31,9 +31,17 @@ const threadSchema = {
     /**
      * The chat these are notes about (`chat.notes`): one shared with someone
      * outside its space (a contact). They're kept beside it, in its space,
-     * and never shared with whoever it's shared with.
+     * and never shared with whoever it's shared with. Their `title` is the
+     * chat's own; views call them staff notes, in the reader's words.
      */
     about: { type: "string" },
+    /**
+     * What was held out of a conversation (`from`): replies only one person
+     * there could read, kept in their Personal space (`chat.unmark`). Its
+     * `title` is that conversation's, as it was, as notes' is their chat's:
+     * views say what it is around it, in the reader's words.
+     */
+    held: { type: "object", properties: { from: { type: "string" } }, required: ["from"] },
     /** Its summary, kept as messages come (shared/summary.ts): how many, its first and latest. */
     messages: { type: "integer" },
     opened: { type: "string" },

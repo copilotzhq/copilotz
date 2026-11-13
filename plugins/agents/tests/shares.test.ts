@@ -164,17 +164,10 @@ test("a post beyond its work's bound asks its person, and the turn waits", async
   await setup(async (s) => {
     const thread = await s.say("post hello team to launch", { in: s.personal });
     const [asked] = await s.pending();
+    // Where, and to how many: no sentence (`text`), which views say in the reader's words.
     assertEquals(
       [asked.work, asked.on, asked.name, asked.people, asked.text, asked.answers, asked.preview],
-      [
-        "share",
-        "launch",
-        "Launch",
-        2,
-        "post this to Launch",
-        ["once", "thread", "deny"],
-        "hello team",
-      ],
+      ["share", "launch", "Launch", 2, undefined, ["once", "thread", "deny"], "hello team"],
     );
     assert(asked.call && asked.question, "its call's own, with its question");
     assertEquals(await s.notes("launch"), []);
@@ -317,11 +310,7 @@ test("into a customer's chat: it asks to send it to them, by name", async () => 
     // Shop's agent, in a staff conversation, writes into her chat: she'd read what Shop's work may.
     const staff = await s.say(`post your order shipped into ${hers}`, { in: "shop" });
     const [asked] = await s.pending();
-    assertEquals([asked.on, asked.name, asked.text], [
-      `thread:${hers}`,
-      "Maria",
-      "send this to Maria",
-    ]);
+    assertEquals([asked.on, asked.name, asked.text], [`thread:${hers}`, "Maria", undefined]);
     const question = (await s.history(staff)).find((m) => m._id === asked.question)!;
     assertEquals(question.text, "May I send this to Maria?");
     assertEquals(await s.notes("shop"), []);

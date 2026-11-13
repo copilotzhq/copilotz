@@ -39,9 +39,14 @@ const approvalSchema = {
     on: { type: "string" },
     /** What exactly: the command, the file; where it'd go. A yes once is for this. */
     detail: { type: "string" },
-    /** What it would do, as its person reads it: "run df -h", "post this to Launch". */
+    /**
+     * What it would do, as its person reads it, in the asking plugin's words
+     * ("run df -h on laptop"). Chat's own kinds (a share, an answer handed
+     * back) keep none: views say them from where (`on`, `name`) in the
+     * reader's words.
+     */
     text: { type: "string" },
-    /** What a yes beyond this once lets: "run commands on laptop", "post to Launch". */
+    /** What a yes beyond this once lets, likewise: "run commands on laptop". */
     covers: { type: "string" },
     /** Where, as it's shown: the computer's name; the place a share goes. */
     name: { type: "string" },

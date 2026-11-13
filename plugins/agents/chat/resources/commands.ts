@@ -15,7 +15,7 @@ import type { Approval } from "../collections/approval.ts";
 import type { Message } from "../collections/message.ts";
 import type { Moving } from "../collections/thread.ts";
 import type { Agent, Prompt } from "../shared/types.ts";
-import { ANSWERED, asker, asking } from "../views/asked.ts";
+import { ANSWERED, asker, sentence } from "../views/asked.ts";
 import { howTo } from "../views/terminal/asks.ts";
 import type { Listed } from "../views/terminal/threads.ts";
 import { movingWords } from "../views/terminal/moving.ts";
@@ -309,7 +309,7 @@ export const commands: Commands = {
       const names = await namesOf(term, waiting.flatMap((a) => a.for ? [a.for] : []));
       await term.print(
         waiting.map((a, i) =>
-          `${dim(`[${i + 1}]`)} ${asker(a, term.me, names)} wants to ${asking(a)}\n` +
+          `${dim(`[${i + 1}]`)} ${sentence(a, asker(a, term.me, names))}\n` +
           dim(`    ${howTo(a, i + 1)}`)
         ).join("\n"),
       );

@@ -1,6 +1,6 @@
 /** Summary nodes' ids, sizes in bytes, and messages and steps as text. */
 import type { LlmMessage } from "../../../models/contract.ts";
-import type { Message, Thread } from "../../chat/contract.ts";
+import { heldTold, type Message, type Thread } from "../../chat/contract.ts";
 import { nameOf } from "../../../access/spaces/contract.ts";
 
 /** A thread whose older history is summarized says so, so others never look for an outline. */
@@ -14,17 +14,19 @@ export const size = (text: string) => encoder.encode(text).length;
 
 /**
  * A message as one piece of text: who wrote it, to whom (people by name,
- * from `names`), what, and the files it came with, by name.
+ * from `names`), what (where a reply went, for one held elsewhere), and the
+ * files it came with, by name.
  */
 export const lineOf = (
-  m: Pick<Message, "from" | "to" | "text" | "files">,
+  m: Pick<Message, "from" | "to" | "text" | "files" | "held" | "via">,
   names: Record<string, string> = {},
 ) => {
   const shown = (who: string) => nameOf(who, names);
   const files = (m.files ?? []).map((f) => ` [file ${f.name}]`).join("");
-  return `${shown(m.from)}${m.to.length ? ` → ${m.to.map(shown).join(", ")}` : ""}: ${
-    m.text ?? ""
-  }${files}`;
+  const said = m.held ? heldTold(m, m.held.for ? shown(m.held.for) : undefined) : m.text ?? "";
+  return `${shown(m.from)}${
+    m.to.length ? ` → ${m.to.map(shown).join(", ")}` : ""
+  }: ${said}${files}`;
 };
 
 /**

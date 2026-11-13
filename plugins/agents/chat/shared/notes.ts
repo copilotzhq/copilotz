@@ -15,15 +15,15 @@ import type { Thread } from "../collections/thread.ts";
 /** The id of a chat's notes: one per chat, so asking twice, or at once, finds the same. */
 export const notesOf = (thread: string): string => `${thread}:notes`;
 
-/** What notes about `chat` are called where conversations are listed. */
-export const notesTitle = (chat: Pick<Thread, "title">): string =>
-  `Staff notes: ${chat.title ?? "a conversation"}`.slice(0, 120);
-
-/** Notes about `chat`, as they're first written: in its space, answered by its agents. */
+/**
+ * Notes about `chat`, as they're first written: in its space, answered by
+ * its agents, with its title as it is (views call them staff notes around
+ * it, in the reader's words: `about` says what they are).
+ */
 export const notesFor = (chat: Thread, at: string): Thread => ({
   _id: notesOf(chat._id),
   about: chat._id,
-  title: notesTitle(chat),
+  ...(chat.title ? { title: chat.title } : {}),
   agents: chat.agents ?? [],
   ...(chat.in ? { in: chat.in } : {}),
   messages: 0,

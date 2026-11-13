@@ -12,10 +12,16 @@
  *   as it was, at its time, which only the space's people see.
  * - **Anywhere else** (`held`: a shared space, rare): to the Personal space
  *   of the person it was for (whom it was to, else whom its turn answered),
- *   in a thread "Held from <title>", with a line where it was saying so (a
- *   placeholder, by its author, at its time, with nothing of what it said).
+ *   in a thread holding what was held from that conversation (`held.from`,
+ *   with its title), leaving a placeholder where it was: by its author, at
+ *   its time, saying only for whom it was held (`held.for`), nothing of what
+ *   it said.
  * - **Nobody to hold it for** (`unresolved`): into a thread in no space,
- *   which no one but the system reads, with a placeholder where it was.
+ *   which no one but the system reads, with a placeholder where it was
+ *   (`held`, for no one).
+ *
+ * Neither stores a sentence: views say what a held thread and a placeholder
+ * are in the reader's words, and the person's name as it is when read.
  *
  * Planning only reads (`Reads`: the runtime's collections as the system, or
  * a store as it is, for a dry run against a database nobody writes); the
@@ -26,7 +32,7 @@ import type { Doc, Filter, Store } from "../../../../runtime/mod.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { notesFor, notesOf } from "./notes.ts";
-import { nameOf, namesOf, PERSONAL, PROFILE } from "../../../access/spaces/contract.ts";
+import { PERSONAL } from "../../../access/spaces/contract.ts";
 
 /** What a migration reads with: plain documents, as the store keeps them. */
 export type Reads = {
@@ -82,7 +88,6 @@ export type Known = {
   spaces: Map<string, Place | null>;
   shared: Map<string, boolean>;
   people: Map<string, boolean>;
-  names: Map<string, string>;
   /** Threads planned already (made, or to be made): each is made once. */
   made: Set<string>;
   /** Personal spaces planned already. */
@@ -94,7 +99,6 @@ export const known = (): Known => ({
   spaces: new Map(),
   shared: new Map(),
   people: new Map(),
-  names: new Map(),
   made: new Set(),
   personal: new Set(),
 });
@@ -167,29 +171,33 @@ async function personFor(reads: Reads, known: Known, m: Marked): Promise<string 
   return undefined;
 }
 
-async function nameFor(reads: Reads, known: Known, person: string) {
-  if (!known.names.has(person)) {
-    const profile = await reads.findOne(PROFILE, { _id: person }) as
-      | { _id: string; name?: string }
-      | null;
-    known.names.set(person, nameOf(person, namesOf(profile ? [profile] : [])));
-  }
-  return known.names.get(person)!;
-}
-
 /** A message's marks, merged into its record of what it drew on (but where it now is, `space`). */
 const drewOf = (m: Marked, space?: string) =>
   [...new Set([...m.drew ?? [], ...m.sources ?? []])].filter((id) => id !== space).sort();
 
-/** The line left where a marked message was, by its author, at its time: none of what it said. */
-const placeholder = (m: Marked, space: string | undefined, text: string): Message => ({
+/**
+ * The line left where a marked message was, by its author, at its time:
+ * for whom it was held (`for`; none, for no one), and none of what it said.
+ */
+const placeholder = (m: Marked, space: string | undefined, held: { for?: string }): Message => ({
   _id: `${m._id}:held`,
   thread: m.thread,
   ...(space ? { in: space } : {}),
   from: m.from,
   to: [],
-  text,
+  held,
   at: m.at,
+});
+
+/** The thread holding what was held from `chat` (`from`), with its title as it is. */
+const heldThread = (id: string, from: string, chat: Thread | null, now: string, home?: string) => ({
+  _id: id,
+  ...(chat?.title ? { title: chat.title } : {}),
+  held: { from },
+  agents: [],
+  ...(home ? { in: home } : {}),
+  messages: 0,
+  at: now,
 });
 
 /** What to do with a batch of marked messages. */
@@ -222,7 +230,6 @@ export async function planOf(
       plan.steps.push({ message: m, kind: "personal", drew: drewOf(m) });
       continue;
     }
-    const title = `Held from ${chat?.title ?? "a conversation"}`.slice(0, 120);
     const shared = !m.private;
     const person = await personFor(reads, known, m);
     if (person) {
@@ -233,44 +240,27 @@ export async function planOf(
         plan.personal.push(person);
       }
       const held = heldOf(m.thread, person);
-      if (!await threadOf(reads, known, held)) {
-        make({ _id: held, title, agents: [], in: home, messages: 0, at: now });
-      }
-      const name = await nameFor(reads, known, person);
+      if (!await threadOf(reads, known, held)) make(heldThread(held, m.thread, chat, now, home));
       plan.steps.push({
         message: m,
         kind: "held",
         thread: held,
         in: home,
         drew: drewOf(m, home),
-        ...(shared
-          ? {
-            placeholder: placeholder(
-              m,
-              space,
-              `A reply only ${name} could see was moved to their Personal space.`,
-            ),
-          }
-          : {}),
+        ...(shared ? { placeholder: placeholder(m, space, { for: person }) } : {}),
       });
       continue;
     }
     // Nobody to hold it for: out of every space, which only the system reads.
     const held = heldOf(m.thread);
-    if (!await threadOf(reads, known, held)) {
-      make({ _id: held, title, agents: [], messages: 0, at: now });
-    }
+    if (!await threadOf(reads, known, held)) make(heldThread(held, m.thread, chat, now));
     plan.steps.push({
       message: m,
       kind: "unresolved",
       thread: held,
       in: null,
       drew: drewOf(m, undefined),
-      ...(shared
-        ? {
-          placeholder: placeholder(m, space, "A reply only some here could see was held back."),
-        }
-        : {}),
+      ...(shared ? { placeholder: placeholder(m, space, {}) } : {}),
     });
   }
   return plan;

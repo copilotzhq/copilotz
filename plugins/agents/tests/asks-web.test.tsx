@@ -6,15 +6,22 @@
  * a share never "always"; publishing only once, or no. A share says where it
  * would go, who'd see it, and what it would say; an answer handed back, that
  * it would go here or to you alone. A kind a front end shows itself (a
- * computer's command) is its View inside chat's card.
+ * computer's command) is its View inside chat's card. Every word is chat's
+ * (`chat.<key>`), said from what each ask is (where, to how many), never
+ * from a stored sentence: English by default, the app's when it gives them,
+ * in the cards, the sidebar and the terminal's notice alike.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ViewContext } from "../../../runtime/mod.ts";
 import type { Approval } from "../chat/contract.ts";
-import { asksView } from "../chat/views/web/asks.tsx";
+import { asksView, tipOf } from "../chat/views/web/asks.tsx";
 import { waitingView } from "../chat/views/web/asking.tsx";
+import { approvalsView } from "../chat/views/terminal/asks.ts";
+import { setWords } from "../../../hosts/web/mod.ts";
+import { plain } from "../../../hosts/terminal/contract.ts";
+import { englishLeft, pseudoWords } from "../../../testing/words.ts";
 import { test } from "../../../testing/mod.ts";
 
 const asked = (more: Partial<Approval> & Pick<Approval, "_id" | "agent" | "work">): Approval =>
@@ -41,7 +48,7 @@ const command = (agent: string, detail: string, more: Partial<Approval> = {}) =>
     ...more,
   });
 
-/** A share into Launch, with its 12 members. */
+/** A share into Launch, with its 12 members: where, and to how many, as chat keeps it. */
 const share = (more: Partial<Approval> = {}) =>
   asked({
     _id: "s1",
@@ -50,11 +57,24 @@ const share = (more: Partial<Approval> = {}) =>
     on: "launch",
     detail: "Launch",
     name: "Launch",
-    text: "post this to Launch",
-    covers: "post to Launch",
     people: 12,
     preview: "We ship on Tuesday; the budget holds.",
     answers: ["once", "thread", "deny"],
+    ...more,
+  });
+
+/** An answer handed back to Launch, waiting on where it goes. */
+const back = (more: Partial<Approval> = {}) =>
+  asked({
+    _id: "b1",
+    agent: "scout",
+    work: "back",
+    on: "launch",
+    detail: "Launch",
+    name: "Launch",
+    people: 4,
+    preview: "The numbers for Q3 are in.",
+    answers: ["here", "me"],
     ...more,
   });
 
@@ -187,35 +207,17 @@ test("a share says where it would go, who'd see it, and what it would say; never
 });
 
 test("a share into a contact's chat is sent to them, by name", () => {
-  const html = shown([
-    share({
-      on: "thread:c9",
-      name: "Maria",
-      detail: "Maria",
-      text: "send this to Maria",
-      people: 1,
-    }),
-  ], { thread: "t1", busy: [] });
+  const html = shown([share({ on: "thread:c9", name: "Maria", detail: "Maria", people: 1 })], {
+    thread: "t1",
+    busy: [],
+  });
   assertStringIncludes(html, "Send this to <b>Maria</b>?");
   assertStringIncludes(html, "things Maria can&#x27;t see");
   assert(!html.includes("members will see it"), html);
 });
 
 test("an answer handed back: post it here, or send it to you only", () => {
-  const html = shown([
-    asked({
-      _id: "b1",
-      agent: "scout",
-      work: "back",
-      on: "launch",
-      detail: "Launch",
-      name: "Launch",
-      text: "post its answer in Launch",
-      people: 4,
-      preview: "The numbers for Q3 are in.",
-      answers: ["here", "me"],
-    }),
-  ], { thread: "t1", busy: [] });
+  const html = shown([back()], { thread: "t1", busy: [] });
   assertStringIncludes(html, "Post Scout&#x27;s answer here?");
   assertStringIncludes(html, "Its 4 members will see it.");
   assertStringIncludes(html, "The numbers for Q3 are in.");
@@ -243,4 +245,143 @@ test("in the sidebar: what waits on you in other chats, each a link to its chat"
   assertStringIncludes(html, 'href="/thread/t1?in=s1"');
   // The chat open asks in place.
   assertEquals(renderToStaticMarkup(<>{waitingView({}, ctx([share()], "/thread/t1"))}</>), "");
+});
+
+const routine = { kind: "routine", id: "r1", name: "Weekly", rev: 2 };
+
+/** The sidebar, with what waits on Ana in other chats. */
+const sidebar = (pending: Approval[]) =>
+  renderToStaticMarkup(
+    <>
+      {waitingView(
+        {},
+        {
+          db: { collection: () => ({ query: () => ({ status: "ready", value: pending }) }) },
+          resources: { agents: { scout: { name: "Scout", instructions: "" } } },
+          name: "chat.waiting",
+          hints: { path: "/" },
+        } as unknown as ViewContext<ReactNode>,
+      )}
+    </>,
+  );
+
+/** Every card and the sidebar, as their words say them (tips too, which show on hover). */
+function everything(): string {
+  const routed = share({ answers: ["once", "thread", "origin", "deny"], origin: routine });
+  const cards = shown([
+    routed,
+    share({ _id: "s2", on: "thread:c9", name: "Maria", detail: "Maria", people: 1 }),
+    back(),
+    command("east", "df -h", { thread: "t1-side" }),
+  ], { thread: "t1", side: ["t1-side"], busy: [] });
+  const tips = [routed, back()].flatMap((a) =>
+    a.answers.map((answer) => tipOf(answer, a, "Scout"))
+  );
+  const waiting = sidebar(
+    ["a", "b", "c", "d", "e"].map((t) => share({ _id: `w-${t}`, thread: `t-${t}` })),
+  );
+  // Class names and addresses are code, not words.
+  return [cards, waiting, ...tips].join("\n").replace(/ (class|href|id)="[^"]*"/g, "");
+}
+
+test("the cards' words are chat's, said from what each ask is: English by default, else the app's", () => {
+  const english = everything();
+  for (
+    const phrase of [
+      "Post this to <b>Launch</b>?",
+      "Its 12 members will see it.",
+      "Send this to <b>Maria</b>?",
+      "Post Scout&#x27;s answer here?",
+      "It may draw on things not everyone here can see.",
+      "in a side thread ·",
+      'aria-label="What Scout would post"',
+      'aria-label="What Scout answered"',
+      'aria-label="Scout wants to post this to Launch"',
+      "Scout may post this to Launch, this once.",
+      "Scout may post to Launch without asking again, in this conversation.",
+      "Scout may post to Launch without asking again, whenever “Weekly” runs, until it's",
+      "Scout is told no, and goes on without it.",
+      "It goes in this conversation, for everyone in it.",
+      "It goes to your Personal space, where only you see it.",
+      "and 2 more chats waiting on you",
+    ]
+  ) assertStringIncludes(english, phrase);
+  const restore = setWords(pseudoWords("chat"));
+  try {
+    const all = everything();
+    assertEquals(englishLeft(all, "chat"), []);
+    for (const key of ["askPost", "askBack", "answerOnce", "letsOrigin", "moreWaiting"]) {
+      assertStringIncludes(all, `«chat.${key}»`);
+    }
+  } finally {
+    restore();
+  }
+});
+
+test("a second language says each ask, its answers and who'd see it", () => {
+  const restore = setWords({
+    "chat.askPost": "Publicar isto em {place}?",
+    "chat.seenByMembers": { one: "O único membro vai ver.", other: "Os {count} membros vão ver." },
+    "chat.workMayDraw": "O trabalho de {agent} aqui pode usar o que nem todos lá veem.",
+    "chat.answerOnce": "Sim, só desta vez",
+    "chat.answerThread": "Sim, nesta conversa",
+    "chat.answerNo": "Não",
+    "chat.wantsTo": "{agent} quer {doing}",
+    "chat.doingPost": "publicar isto em {place}",
+    "chat.needsYourOk": "{agent} precisa do seu OK",
+    "chat.letsOnce": "{agent} pode {doing}, só desta vez.",
+  });
+  try {
+    const html = shown([share()], { thread: "t1", busy: [] });
+    assertStringIncludes(html, "Publicar isto em <b>Launch</b>?");
+    assertStringIncludes(html, "Os 12 membros vão ver.");
+    assertStringIncludes(html, "O trabalho de Scout aqui pode usar o que nem todos lá veem.");
+    assertEquals(answers(html), ["Sim, só desta vez", "Sim, nesta conversa", "Não"]);
+    assertStringIncludes(html, 'aria-label="Scout quer publicar isto em Launch"');
+    assertEquals(
+      tipOf("once", share(), "Scout"),
+      "Scout pode publicar isto em Launch, só desta vez.",
+    );
+    const waiting = sidebar([share()]);
+    assertStringIncludes(waiting, "Scout precisa do seu OK");
+    assertStringIncludes(waiting, "publicar isto em Launch");
+  } finally {
+    restore();
+  }
+});
+
+test("the terminal's notice says them in chat's words too: what, for whom, who'd see it", () => {
+  const notice = () =>
+    plain(
+      approvalsView(
+        { person: "ana" },
+        {
+          db: {
+            collection: () => ({
+              query: () => ({ status: "ready", value: [share(), back({ for: "bob" })] }),
+            }),
+          },
+          resources: {},
+          hints: {},
+        } as unknown as ViewContext,
+      ) ?? "",
+    );
+  const english = notice();
+  assertStringIncludes(english, "[1] scout wants to post this to Launch");
+  assertStringIncludes(english, "Its 12 members will see it.");
+  assertStringIncludes(english, "[2] scout (for bob) wants to post its answer in Launch");
+  assertStringIncludes(english, "Its 4 members will see it.");
+  const restore = setWords({
+    "chat.wantsTo": "{agent} quer {doing}",
+    "chat.askerFor": "{agent} (por {name})",
+    "chat.doingPostAnswer": "publicar a resposta em {place}",
+    "chat.seenByMembers": { one: "O único membro vai ver.", other: "Os {count} membros vão ver." },
+  });
+  try {
+    const pt = notice();
+    assertStringIncludes(pt, "[2] scout (por bob) quer publicar a resposta em Launch");
+    assertStringIncludes(pt, "Os 4 membros vão ver.");
+  } finally {
+    restore();
+  }
 });

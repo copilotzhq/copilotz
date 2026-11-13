@@ -15,7 +15,7 @@ import type { Wait } from "../collections/wait.ts";
 import { agentsNamed, NO_ANSWER, now, SEND } from "./agents.ts";
 import { originOf } from "./origin.ts";
 import { noted, startedWith } from "./summary.ts";
-import { beyond, nameOf, namesFor } from "../../../access/spaces/contract.ts";
+import { beyond } from "../../../access/spaces/contract.ts";
 import { DELEGATED, settingsOf, type Step, type Told, type Turn } from "./types.ts";
 
 /**
@@ -153,9 +153,7 @@ export const answer = async (
   const asker = wider ? personOf(ctx.actor) : undefined;
   const returned = back && !wider ? backOf(reply, trigger!, back, thread?.in) : undefined;
   // What it handed back without asking, which nobody can be asked about: a word that it didn't.
-  const kept = back && wider && !asker
-    ? keptOf(reply, trigger!, back, thread?.in, "The answer stayed where it was written.")
-    : undefined;
+  const kept = back && wider && !asker ? keptOf(reply, trigger!, back, thread?.in, {}) : undefined;
   const asked = back && wider && asker
     ? {
       _id: `${run}:back`,
@@ -166,10 +164,8 @@ export const answer = async (
       ...(back.in ? { in: back.in } : {}),
       work: BACK,
       on: wider.to,
+      // Where, and to how many: views say what it asks in the reader's words.
       detail: wider.named,
-      text: wider.contacts
-        ? `send its answer to ${wider.named}`
-        : `post its answer in ${wider.named}`,
       name: wider.named,
       people: wider.people,
       ...(text.trim() ? { preview: shortly(text) } : {}),
@@ -246,17 +242,24 @@ const backOf = (
 
 /**
  * Not the answer, where its work was handed over from: a word that it went
- * elsewhere (`said`), so whoever waits there on it goes on without it.
+ * elsewhere (`held`: to `for` alone, or nowhere), none of what it said, so
+ * whoever waits there on it goes on without it. Views say it in the
+ * reader's words.
  */
 const keptOf = (
   reply: Message & { hops: number },
   trigger: Pick<Message, "from">,
   back: Back,
   space: string | undefined,
-  said: string,
+  held: { for?: string },
 ): Message & { hops: number } => {
-  const { failed: _, stopped: __, ...word } = backOf(reply, trigger, back, space);
-  return { ...word, text: said };
+  const { failed: _, stopped: __, text: ___, files: ____, ...word } = backOf(
+    reply,
+    trigger,
+    back,
+    space,
+  );
+  return { ...word, held };
 };
 
 /** What an answer handed back that waits on its asker is about: its answer, and where it was. */
@@ -292,17 +295,10 @@ export async function handBack(ctx: Context, asked: Approval, to: "here" | "me")
   }
   const { space } = await ctx.call<{ space: string }>("space.personal", {});
   const person = personOf(ctx.actor)!;
-  const names = await namesFor(ctx, [person]);
   const from = await ctx.as().db.collection<Thread>("thread").findOne({ _id: reply.thread });
   const at = now();
   const mine = `${reply.turn}:mine`;
-  const word = keptOf(
-    reply,
-    trigger,
-    back,
-    reply.in,
-    `The answer went to ${nameOf(person, names)} only.`,
-  );
+  const word = keptOf(reply, trigger, back, reply.in, { for: person });
   const deliver = await delivery(writer, word, word.thread);
   await writer.transaction(async (tx) => {
     const message = {

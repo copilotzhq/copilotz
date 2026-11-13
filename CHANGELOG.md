@@ -40,6 +40,14 @@ hidden until shared) are gone, along with the `share` Action, `needs_share`, mes
   notes; elsewhere, to the Personal space of whom it answered, leaving a placeholder. One log line
   of counts. `deno task unmark --dry-run` rehearses it against a database, writing nothing. Until it
   has run, a contact reads nothing that still carries the old marks.
+- **What code writes is kept as what happened, and said in the reader's words.** A line where a
+  reply went (the migration's placeholders; an answer handed back that went to its asker alone, or
+  stayed) is a message's `held` (`{ for: <person> }`, or `{}`), with no text. Staff notes and what
+  was held from a chat keep that chat's title as it is, `about` and `held: { from }` saying what
+  they are. A share's or a hand-back's ask keeps where and to how many, not a sentence. Views say
+  them in chat's words (`chat.heldMoved`, `chat.notesOf`, `chat.heldFrom`, `chat.askPost`…), English
+  by default, names as they are when read; the asks' cards, the sidebar's waiting list and the
+  terminal's notice take every word from there. Agents are told them in English.
 - **Runtime:** a declared schedule may run `once` (on the first start with it); a failure's `detail`
   reaches its caller; operators call `isMaintenance` Actions at
   `POST /maintenance/actions/<action>`.

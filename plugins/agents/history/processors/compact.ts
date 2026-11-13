@@ -112,7 +112,10 @@ async function summarize(
 ) {
   if (await tree.get(0, index)) return; // Summarized when it came (before summaries waited).
   // People by name in what's kept.
-  const text = lineOf(m, await namesFor(ctx, [m.from, ...m.to]));
+  const text = lineOf(
+    m,
+    await namesFor(ctx, [m.from, ...m.to, ...(m.held?.for ? [m.held.for] : [])]),
+  );
   // The message's own line: itself when short, else compressed with the lines before it.
   let own = text;
   if (size(text) > config.line) {

@@ -2,13 +2,16 @@
  * A message as a line: who wrote it (the `author` View) and what; its number
  * when listed (`hints.n`). An agent's step shows the tools it called. A
  * question you're asked that an agent waits on says your next message
- * answers it, until it does: that wait is this part's own read.
+ * answers it, until it does: that wait is this part's own read. One
+ * standing where a reply went elsewhere (`held`) says where, dimmed.
  */
 import { Box, Text } from "ink";
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { short } from "../../../../../hosts/terminal/mod.ts";
 import type { Message } from "../../collections/message.ts";
+import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
+import { heldSaid } from "../held.ts";
 
 const size = (bytes: number) =>
   bytes < 1024
@@ -27,12 +30,16 @@ export const messageLine = (m: Message, ctx: ViewContext<ReactNode>) => {
   const asked = m.to.includes(ctx.viewer?.name ?? "") && !m.replyTo && m.expectReply !== false
     ? ctx.db.collection("wait").findOne({ waitingFor: m._id })
     : undefined;
+  // A reply that went elsewhere: where, its person by name.
+  const held = m.held
+    ? heldSaid(m, m.held.for ? nameOf(m.held.for, namesIn(ctx, [m.held.for])) : undefined)
+    : undefined;
   return (
     <Box flexDirection="column">
       <Text>
         <Text dimColor>{n}</Text>
         {ctx.show("author", m, ctx.hints)}
-        {m.text ?? ""}
+        {held ? <Text dimColor>{held}</Text> : m.text ?? ""}
         {m.subthread ? <Text dimColor>{` [subthread ${m.subthread.slice(0, 8)}]`}</Text> : null}
       </Text>
       {(m.files ?? []).map((f) => (

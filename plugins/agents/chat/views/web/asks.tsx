@@ -11,7 +11,8 @@
  * to be over (it's not among the `busy`), so they come once it has said why,
  * however long other agents work on; one asked in a side thread says so.
  * Answered, one goes: `approval.pending` is live. Agents show as they're
- * named (`agentsShown`).
+ * named (`agentsShown`). Chat's words are the app's (`chat.<key>`): its
+ * own kinds are said from what they are, never from stored sentences.
  *
  * With the keyboard, nothing is taken from where you type: once a card has
  * focus (Tab), the arrows move between its answers, and 1, 2, 3… answer, as
@@ -32,10 +33,11 @@ import {
 import type { Answer, Approval } from "../../collections/approval.ts";
 import { agentsShown } from "../../shared/agents.ts";
 import { BACK } from "../../shared/delivery.ts";
-import { seenBy, SHARE } from "../../shared/share.ts";
+import { SHARE } from "../../shared/share.ts";
 import type { AskView } from "../../shared/types.ts";
-import { asking, choices, sentence } from "../asked.ts";
+import { asking, choices, covering, seenOf, sentence, toContacts } from "../asked.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -54,7 +56,7 @@ export const asksView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
   if (!agents) return null;
   const views = (ctx.resources.askViews ?? {}) as Record<string, AskView | null>;
   return (
-    <div className="asks" role="region" aria-label="Waiting on you">
+    <div className="asks" role="region" aria-label={say("waitingOnYou")}>
       <style href="chat-web" precedence="copilotz">{STYLE}</style>
       {here.map((a) => {
         const agent = agents[a.agent]?.name || a.agent;
@@ -79,32 +81,28 @@ export const asksView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
   );
 };
 
-/** Whether what's asked goes to people outside the org: a conversation shared with contacts. */
-const toContacts = (a: Pick<Approval, "on">) => a.on.startsWith("thread:");
-
 /** Chat's own kinds' icons: a share (sent to contacts, or posted), an answer handed back. */
 const iconOf = (a: Approval): IconName =>
   a.work === SHARE ? toContacts(a) ? "send" : "share" : a.work === BACK ? "chat" : "alert";
 
 /** What a yes lets, for whoever's deciding: this once, in this conversation, for a routine, always. */
-function tipOf(answer: Answer, a: Approval, agent: string): string {
-  const lets = a.covers || asking(a);
+export function tipOf(answer: Answer, a: Approval, agent: string): string {
+  const lets = { agent, doing: covering(a) };
   switch (answer) {
     case "once":
-      return `${agent} may ${asking(a)}, this once.`;
+      return say("letsOnce", { agent, doing: asking(a) });
     case "thread":
-      return `${agent} may ${lets} without asking again, in this conversation.`;
+      return say("letsThread", lets);
     case "origin":
-      return `${agent} may ${lets} without asking again, whenever “${a.origin?.name}” runs, ` +
-        "until it's changed. It won't cover anything you ask it yourself.";
+      return say("letsOrigin", { ...lets, name: a.origin?.name ?? "" });
     case "always":
-      return `${agent} may ${lets} without asking again, in any conversation.`;
+      return say("letsAlways", lets);
     case "deny":
-      return `${agent} is told no, and goes on without it.`;
+      return say("letsNo", { agent });
     case "here":
-      return "It goes in this conversation, for everyone in it.";
+      return say("letsHere");
     case "me":
-      return "It goes to your Personal space, where only you see it.";
+      return say("letsMe");
   }
 }
 
@@ -182,7 +180,7 @@ export function AskCard(
       </span>
       <div className="ask-main">
         {children}
-        <div ref={row} className="ask-answers" role="group" aria-label="Answers">
+        <div ref={row} className="ask-answers" role="group" aria-label={say("answers")}>
           {options.map(({ answer: said, label }, i) => (
             <Tooltip key={said} text={tipOf(said, a, agent)}>
               <Button
@@ -212,7 +210,7 @@ export function AskCard(
 function When({ approval: a, aside }: { approval: Approval; aside: boolean }): ReactNode {
   return (
     <span className="ask-where">
-      {aside ? <>in a side thread ·</> : null}
+      {aside ? say("inSideThread") : null}
       <Time at={a.at} />
     </span>
   );
@@ -238,22 +236,25 @@ function AskWords(
 ): ReactNode {
   const named = a.name || a.detail;
   const contacts = toContacts(a);
-  const seen = contacts ? `${named} will see it.` : seenBy({ people: a.people ?? 0 });
+  const seen = seenOf(a);
   if (a.work === SHARE || a.work === BACK) {
     const back = a.work === BACK;
+    const why = back
+      ? contacts ? say("answerMayDrawName", { name: named }) : say("answerMayDraw")
+      : contacts
+      ? say("workMayDrawName", { agent, name: named })
+      : say("workMayDraw", { agent });
     return (
       <>
         <div className="ask-top">
           <p className="ask-title">
-            {back ? <>Post {agent}'s answer here?</> : (
-              <>
-                {contacts ? "Send" : "Post"} this to <b>{named}</b>?
-              </>
-            )}
+            {back
+              ? say("askBack", { agent })
+              : say.nodes(contacts ? "askSend" : "askPost", { place: <b>{named}</b> })}
           </p>
           <When approval={a} aside={aside} />
         </div>
-        {seen && (back || !contacts)
+        {seen
           ? (
             <p className="ask-seen">
               <Icon name="users" size={14} />
@@ -261,15 +262,10 @@ function AskWords(
             </p>
           )
           : null}
-        <p className="ask-why">
-          {back ? "It" : `${agent}'s work here`} may draw on things{" "}
-          {contacts ? `${named} can't see` : `not everyone ${back ? "here" : "there"} can see`}.
-        </p>
+        <p className="ask-why">{why}</p>
         <Quote
           text={a.preview}
-          label={back
-            ? `What ${agent} answered`
-            : `What ${agent} would ${contacts ? "send" : "post"}`}
+          label={say(back ? "answered" : contacts ? "wouldSend" : "wouldPost", { agent })}
         />
       </>
     );
@@ -277,10 +273,10 @@ function AskWords(
   return (
     <>
       <p className="ask-head">
-        <b>{agent}</b> wants to {asking(a)}
+        {say.nodes("wantsTo", { agent: <b>{agent}</b>, doing: asking(a) })}
         <When approval={a} aside={aside} />
       </p>
-      <Quote text={a.preview} label="What it would do" />
+      <Quote text={a.preview} label={say("wouldDo")} />
     </>
   );
 }

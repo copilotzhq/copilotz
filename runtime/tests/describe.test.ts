@@ -449,7 +449,10 @@ test("describe: Copilotz's chat, mcp, identity, google sign-in, maintenance and 
     ["yes", "yes", "no", "no"],
   );
   assert(c.actions.find((a) => a.name === "chat.say")!.internal);
-  assertEquals(c.schedules.map((s) => [s.name, s.when]), [["chat.prune", "every 1h"]]);
+  assertEquals(c.schedules.map((s) => [s.name, s.when]), [
+    ["chat.prune", "every 1h"],
+    ["chat.unmark", "once, when the runtime first starts with it"],
+  ]);
   assert(c.listens.includes("turn.requested"));
   assertEquals(c.emits.map((e) => e.type), ["turn.requested"]);
   assertEquals(c.keeps.find((k) => k.name === "live")!.kind, "live");

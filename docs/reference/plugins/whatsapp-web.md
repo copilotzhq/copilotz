@@ -39,7 +39,7 @@ Nothing to set: it works as it comes.
 The runtime doesn't start without [`whatsapp`](whatsapp.md) and [`web-shell`](web-shell.md): add
 them too.
 
-It ships with `copilotz@1.0.0-rc.45`.
+It ships with `copilotz@1.0.0-rc.47`.
 
 ## Listing
 

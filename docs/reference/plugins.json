@@ -1,7 +1,727 @@
 {
   "format": 1,
-  "runtime": "1.0.0-rc.45",
+  "runtime": "1.0.0-rc.47",
   "plugins": [
+    {
+      "format": 1,
+      "name": "accounts",
+      "summary": "Connected accounts: a person connects an outside account once, and agents working for them use it.",
+      "requires": [],
+      "package": {
+        "name": "copilotz",
+        "version": "1.0.0-rc.47"
+      },
+      "runtime": "1.0.0-rc.47",
+      "layer": "standard",
+      "keeps": [
+        {
+          "name": "account",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "person",
+            "provider",
+            "status",
+            "label",
+            "plan",
+            "problem",
+            "connected",
+            "refreshed",
+            "expires",
+            "rev"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "connected",
+                  "needs_reconnect",
+                  "revoked"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "plan": {
+                "type": "string"
+              },
+              "problem": {
+                "type": "string"
+              },
+              "connected": {
+                "type": "string"
+              },
+              "refreshed": {
+                "type": "string"
+              },
+              "expires": {
+                "type": "string"
+              },
+              "rev": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "person",
+              "provider",
+              "status",
+              "label",
+              "connected"
+            ]
+          },
+          "durable": true,
+          "recorded": false,
+          "private": [
+            "tokens"
+          ],
+          "shared": false,
+          "vectors": [],
+          "indexes": [
+            [
+              "person"
+            ]
+          ],
+          "queries": [
+            {
+              "name": "providers",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            },
+            {
+              "name": "uses",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            }
+          ]
+        },
+        {
+          "name": "accountFlow",
+          "summary": "",
+          "kind": "live",
+          "fields": [
+            "person",
+            "provider",
+            "verifier",
+            "redirect",
+            "expires"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "verifier": {
+                "type": "string"
+              },
+              "redirect": {
+                "type": "string"
+              },
+              "expires": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "person",
+              "provider",
+              "verifier",
+              "redirect",
+              "expires"
+            ]
+          },
+          "durable": false,
+          "recorded": false,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [],
+          "queries": []
+        },
+        {
+          "name": "modelKey",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "hint",
+            "by",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "hint": {
+                "type": "string"
+              },
+              "by": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "by",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [
+            "sealed"
+          ],
+          "shared": false,
+          "vectors": [],
+          "indexes": [],
+          "queries": []
+        }
+      ],
+      "indexes": [],
+      "shared": [],
+      "actions": [
+        {
+          "name": "account.callback",
+          "summary": "Finishes connecting an account, once its provider sent the person back",
+          "input": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "code": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "state": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "error": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "provider"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "account.complete",
+          "summary": "Finishes connecting an account from the address its sign-in ended at",
+          "input": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 16384
+              }
+            },
+            "required": [
+              "provider",
+              "address"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "account.connect",
+          "summary": "Starts connecting one of your accounts: where to sign in",
+          "input": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "account.disconnect",
+          "summary": "Disconnects one of your accounts, and asks its provider to end its sign-in",
+          "input": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "account.refresh",
+          "summary": "Renews an account's tokens before they run out (its timer calls it)",
+          "input": {
+            "type": "object",
+            "properties": {
+              "account": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "account"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "account.token",
+          "summary": "The access token whom a call is for has at a provider (trusted code only)",
+          "input": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "person": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "modelKey.list",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "modelKey.may",
+          "summary": "Whether you may change the org's keys for model providers",
+          "input": {
+            "type": "object",
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "modelKey.open",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "modelKey.remove",
+          "summary": "Removes the org's own key for a model provider",
+          "input": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "modelKey.set",
+          "summary": "Adds or replaces the org's own key for a model provider",
+          "input": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": [
+              "provider",
+              "key"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        }
+      ],
+      "tools": [],
+      "views": [],
+      "routes": [
+        {
+          "path": "/accounts/callback/:provider",
+          "method": "GET",
+          "methods": [
+            "GET"
+          ],
+          "host": false,
+          "underName": true
+        }
+      ],
+      "needs": [
+        {
+          "kind": "secret",
+          "path": "accounts.key",
+          "summary": "",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "accounts.url",
+          "summary": "",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "emits": [
+        {
+          "type": "account.changed",
+          "summary": "An account was connected, lost or disconnected",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "_id": {
+                "type": "string"
+              },
+              "person": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "connected",
+                  "needs_reconnect",
+                  "revoked",
+                  "disconnected"
+                ]
+              }
+            },
+            "required": [
+              "_id",
+              "person",
+              "provider",
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          "internal": true
+        }
+      ],
+      "changes": [
+        "modelKey.created",
+        "modelKey.updated",
+        "modelKey.deleted"
+      ],
+      "listens": [],
+      "processors": [],
+      "schedules": [],
+      "powers": [
+        "guard"
+      ],
+      "resources": {
+        "provides": {
+          "accountProviders": {
+            "chatgpt": {
+              "title": "ChatGPT"
+            }
+          },
+          "accounts": {},
+          "cost": {
+            "chatgpt/*": {}
+          },
+          "modelKeys": {
+            "list": {},
+            "may": {},
+            "open": {}
+          },
+          "provider": {
+            "chatgpt": {
+              "title": "ChatGPT plan"
+            }
+          }
+        },
+        "reads": [
+          {
+            "kind": "accountProviders",
+            "found": [
+              "check",
+              "source"
+            ]
+          },
+          {
+            "kind": "accounts",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "model",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "org",
+            "found": [
+              "source"
+            ]
+          }
+        ]
+      },
+      "adapters": {},
+      "workers": [],
+      "check": {
+        "reads": [
+          "accountProviders"
+        ],
+        "asks": []
+      },
+      "settings": [
+        {
+          "kind": "accounts",
+          "type": "AccountsSettings",
+          "inContract": true,
+          "fields": [
+            {
+              "name": "key",
+              "type": "string",
+              "optional": true,
+              "secret": true
+            },
+            {
+              "name": "url",
+              "type": "string",
+              "optional": true,
+              "secret": false
+            }
+          ],
+          "doc": "The `accounts` resource."
+        }
+      ],
+      "listing": {
+        "listable": true,
+        "problems": [],
+        "warnings": []
+      }
+    },
+    {
+      "format": 1,
+      "name": "accounts-web",
+      "summary": "Connected accounts' web front end, for the browser.",
+      "requires": [
+        "accounts",
+        "web-shell"
+      ],
+      "package": {
+        "name": "copilotz",
+        "version": "1.0.0-rc.47"
+      },
+      "runtime": "1.0.0-rc.47",
+      "layer": "standard",
+      "keeps": [],
+      "indexes": [],
+      "shared": [],
+      "actions": [],
+      "tools": [],
+      "views": [
+        {
+          "name": "accounts",
+          "place": "web"
+        },
+        {
+          "name": "accounts.palette",
+          "place": "web"
+        },
+        {
+          "name": "accounts.uses",
+          "place": "web"
+        }
+      ],
+      "routes": [],
+      "needs": [],
+      "emits": [],
+      "changes": [],
+      "listens": [],
+      "processors": [],
+      "schedules": [],
+      "powers": [],
+      "resources": {
+        "provides": {
+          "conversation": {
+            "accounts": {
+              "view": "accounts.uses"
+            }
+          },
+          "palette": {
+            "accounts": {
+              "view": "accounts.palette"
+            }
+          },
+          "userMenu": {
+            "accounts": {}
+          }
+        },
+        "reads": []
+      },
+      "adapters": {},
+      "workers": [],
+      "check": null,
+      "settings": [],
+      "listing": {
+        "listable": true,
+        "problems": [],
+        "warnings": []
+      }
+    },
     {
       "format": 1,
       "name": "api",
@@ -11,9 +731,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -354,9 +1074,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -443,9 +1163,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [
         {
@@ -1295,9 +2015,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -1384,9 +2104,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -3759,9 +4479,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -3887,9 +4607,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -4066,6 +4786,2250 @@
     },
     {
       "format": 1,
+      "name": "computers",
+      "summary": "Computers: people connect a machine (the computer program, run once, with a one-time code) to a space, and the agents of that space's conversations work on it.",
+      "requires": [
+        "chat",
+        "spaces"
+      ],
+      "package": {
+        "name": "copilotz",
+        "version": "1.0.0-rc.47"
+      },
+      "runtime": "1.0.0-rc.47",
+      "layer": "standard",
+      "keeps": [
+        {
+          "name": "computer",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "owner",
+            "name",
+            "secret",
+            "pending",
+            "online",
+            "seen",
+            "info",
+            "approve",
+            "status",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "secret": {
+                "type": "string"
+              },
+              "pending": {
+                "type": "string"
+              },
+              "online": {
+                "type": "boolean"
+              },
+              "seen": {
+                "type": "string"
+              },
+              "info": {
+                "type": "object"
+              },
+              "approve": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "terminal",
+                    "jobs",
+                    "writes"
+                  ]
+                }
+              },
+              "status": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "secret",
+              "online",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [
+            "pending",
+            "secret"
+          ],
+          "shared": false,
+          "vectors": [],
+          "indexes": [],
+          "queries": [
+            {
+              "name": "mine",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            }
+          ]
+        },
+        {
+          "name": "desk",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "in",
+            "computer",
+            "owner",
+            "name",
+            "online",
+            "seen",
+            "info",
+            "folder",
+            "approve",
+            "status",
+            "answers",
+            "default",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "in": {
+                "type": "string"
+              },
+              "computer": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "online": {
+                "type": "boolean"
+              },
+              "seen": {
+                "type": "string"
+              },
+              "info": {
+                "type": "object"
+              },
+              "folder": {
+                "type": "string"
+              },
+              "approve": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "terminal",
+                    "jobs",
+                    "writes"
+                  ]
+                }
+              },
+              "status": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "answers": {
+                "type": "string",
+                "enum": [
+                  "asker",
+                  "owner"
+                ]
+              },
+              "default": {
+                "type": "boolean"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "in",
+              "computer",
+              "owner",
+              "folder",
+              "online",
+              "answers",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [],
+          "shared": true,
+          "vectors": [],
+          "indexes": [
+            [
+              "in"
+            ],
+            [
+              "computer"
+            ]
+          ],
+          "queries": [
+            {
+              "name": "here",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            },
+            {
+              "name": "of",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            }
+          ]
+        },
+        {
+          "name": "enrollment",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "owner",
+            "expires",
+            "in",
+            "computer"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "expires": {
+                "type": "string"
+              },
+              "in": {
+                "type": "string"
+              },
+              "computer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "expires",
+              "in"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [],
+          "queries": []
+        },
+        {
+          "name": "envVar",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "space",
+            "app",
+            "name",
+            "value",
+            "sealed",
+            "secret",
+            "computers",
+            "hint",
+            "by",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "space": {
+                "type": "string"
+              },
+              "app": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "sealed": {
+                "type": "string"
+              },
+              "secret": {
+                "type": "boolean"
+              },
+              "computers": {
+                "type": "boolean"
+              },
+              "hint": {
+                "type": "string"
+              },
+              "by": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "space",
+              "name",
+              "secret",
+              "computers",
+              "by",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [
+            "sealed"
+          ],
+          "shared": true,
+          "vectors": [],
+          "indexes": [
+            [
+              "space"
+            ]
+          ],
+          "queries": [
+            {
+              "name": "apps",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            },
+            {
+              "name": "here",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            }
+          ]
+        },
+        {
+          "name": "preview",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "computer",
+            "space",
+            "folder",
+            "who",
+            "port",
+            "job",
+            "by",
+            "visibility",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              },
+              "space": {
+                "type": "string"
+              },
+              "folder": {
+                "type": "string"
+              },
+              "who": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer"
+              },
+              "job": {
+                "type": "string"
+              },
+              "by": {
+                "type": "string"
+              },
+              "visibility": {
+                "type": "string",
+                "enum": [
+                  "members",
+                  "link"
+                ]
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "computer",
+              "space",
+              "folder",
+              "who",
+              "port",
+              "by",
+              "visibility",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [],
+          "shared": true,
+          "vectors": [],
+          "indexes": [
+            [
+              "space"
+            ],
+            [
+              "computer"
+            ]
+          ],
+          "queries": [
+            {
+              "name": "here",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            },
+            {
+              "name": "label",
+              "internal": true
+            }
+          ]
+        }
+      ],
+      "indexes": [],
+      "shared": [
+        {
+          "collection": "desk",
+          "options": {}
+        },
+        {
+          "collection": "envVar",
+          "options": {
+            "field": "space"
+          }
+        },
+        {
+          "collection": "preview",
+          "options": {
+            "field": "space"
+          }
+        }
+      ],
+      "actions": [
+        {
+          "name": "computer.admit",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "secret": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "secret"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "computer.allowOrigin",
+          "summary": "Lets an agent do a kind of work at a desk when a routine runs, or stops letting it",
+          "input": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "desk": {
+                "type": "string",
+                "minLength": 1
+              },
+              "agent": {
+                "type": "string",
+                "minLength": 1
+              },
+              "work": {
+                "enum": [
+                  "terminal",
+                  "jobs",
+                  "writes"
+                ]
+              },
+              "allow": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "desk",
+              "agent",
+              "work",
+              "allow"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "computer.allowed",
+          "summary": "Whether an agent may do something with its conversation's computer",
+          "input": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "terminal",
+                  "jobs",
+                  "writes",
+                  "publish",
+                  "destroy"
+                ]
+              },
+              "computer": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "preview": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread",
+              "agent",
+              "kind",
+              "detail"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "computer.code",
+          "summary": "A one-time code to connect a computer to a space",
+          "input": {
+            "type": "object",
+            "properties": {
+              "in": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "computer.default",
+          "summary": "Makes a computer the one a space's agents use",
+          "input": {
+            "type": "object",
+            "properties": {
+              "desk": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "desk"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.enrollment",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "computer"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [
+            "code"
+          ],
+          "internal": true
+        },
+        {
+          "name": "computer.forget",
+          "summary": "Forgets one of your computers",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "computer"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.gone",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "computer.mark",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              },
+              "status": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "computer",
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "computer.move",
+          "summary": "Moves one of your computers to another space",
+          "input": {
+            "type": "object",
+            "properties": {
+              "desk": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "desk",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.preview",
+          "summary": "Makes an address for what a job on a space's computer serves",
+          "input": {
+            "type": "object",
+            "properties": {
+              "in": {
+                "type": "string"
+              },
+              "desk": {
+                "type": "string"
+              },
+              "computer": {
+                "type": "string"
+              },
+              "job": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "visibility": {
+                "enum": [
+                  "members",
+                  "link"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people",
+          "tool": "preview"
+        },
+        {
+          "name": "computer.previews",
+          "summary": "A space's previews: what its computers serve, at addresses of their own",
+          "input": {
+            "type": "object",
+            "properties": {
+              "in": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.provision",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "in": {
+                "type": "string"
+              },
+              "approve": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "terminal",
+                    "jobs",
+                    "writes"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "owner",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "computer.ready",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "computer.rename",
+          "summary": "Names one of your computers",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "computer",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.running",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "computer"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "computer.scope",
+          "summary": "Where a space's work goes on its computer",
+          "input": {
+            "type": "object",
+            "properties": {
+              "in": {
+                "type": "string"
+              },
+              "who": {
+                "type": "string",
+                "pattern": "^(agent|person):.+$"
+              },
+              "computer": {
+                "type": "string"
+              },
+              "job": {
+                "type": "string"
+              },
+              "desk": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "in",
+              "who"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "computer.share",
+          "summary": "Puts one of your computers in a space, for its members and their agents",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              },
+              "in": {
+                "type": "string"
+              },
+              "answers": {
+                "enum": [
+                  "asker",
+                  "owner"
+                ]
+              }
+            },
+            "required": [
+              "computer",
+              "in"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.unpreview",
+          "summary": "Takes a preview away: its address no longer opens",
+          "input": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.unshare",
+          "summary": "Takes a computer out of a space",
+          "input": {
+            "type": "object",
+            "properties": {
+              "desk": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "desk"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.upgradeAsks",
+          "summary": "Keeps computers' old asks and yeses as chat keeps them",
+          "input": {
+            "type": "object",
+            "properties": {
+              "dryRun": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "no",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "yes"
+          },
+          "helper": "isMaintenance"
+        },
+        {
+          "name": "computer.view",
+          "summary": "Says you have a space's computer open, so it stays awake while you do",
+          "input": {
+            "type": "object",
+            "properties": {
+              "desk": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "desk"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.work",
+          "summary": "Works on a space's computer, in its folder there",
+          "input": {
+            "type": "object",
+            "properties": {
+              "desk": {
+                "type": "string"
+              },
+              "work": {
+                "enum": [
+                  "terminal",
+                  "jobs.start",
+                  "jobs.list",
+                  "jobs.logs",
+                  "jobs.stop",
+                  "files.list",
+                  "files.read",
+                  "files.write",
+                  "files.edit",
+                  "search",
+                  "wake"
+                ]
+              },
+              "input": {
+                "type": "object"
+              },
+              "as": {
+                "type": "string",
+                "pattern": "^agent:[\\w.-]+$"
+              }
+            },
+            "required": [
+              "desk",
+              "work"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "env.set",
+          "summary": "Sets a variable or secret of a space's environment (or an app's own)",
+          "input": {
+            "type": "object",
+            "properties": {
+              "in": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z_][A-Z0-9_]*$",
+                "maxLength": 128
+              },
+              "app": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string",
+                "maxLength": 32768
+              },
+              "secret": {
+                "type": "boolean"
+              },
+              "computers": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "in",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "env.unset",
+          "summary": "Takes a variable or secret away from a space's environment (or an app's own)",
+          "input": {
+            "type": "object",
+            "properties": {
+              "in": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z_][A-Z0-9_]*$",
+                "maxLength": 128
+              },
+              "app": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "in"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "env.values",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "in": {
+                "type": "string"
+              },
+              "app": {
+                "type": "string"
+              },
+              "computers": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "in"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        }
+      ],
+      "tools": [
+        {
+          "name": "browser",
+          "summary": "Uses your browser on your person's computer: one of your own for this space, with its own profile (never their personal browser), so sign-ins stay between calls. One to ten actions per call, in order. Start with navigate, then snapshot: it lists the page's elements with refs to click, type into or read. The window is hidden unless you ask for \"shown\": then it opens on their screen, where they can watch and use it too. Show it when a site won't work hidden, or when they need to see or do something themselves (sign in, a CAPTCHA, a code): tell them what, then wait for them before going on, and hide it (\"hidden\") when you no longer need them.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "actions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "action"
+                  ],
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "navigate",
+                        "snapshot",
+                        "read",
+                        "click",
+                        "type",
+                        "fill",
+                        "keyPress",
+                        "scroll",
+                        "wait",
+                        "screenshot",
+                        "back",
+                        "forward",
+                        "reload",
+                        "tabs",
+                        "dialog",
+                        "download",
+                        "upload",
+                        "evaluate",
+                        "mouseMove",
+                        "mouseClick",
+                        "web_search",
+                        "close"
+                      ]
+                    },
+                    "url": {
+                      "type": "string",
+                      "description": "navigate, tabs new: where to go."
+                    },
+                    "ref": {
+                      "type": "string",
+                      "description": "click, type, fill, read, screenshot, download, upload: the element: a ref from snapshot (preferred), or a CSS selector."
+                    },
+                    "selector": {
+                      "type": "string",
+                      "description": "Instead of ref: a CSS selector; wait: what to wait for."
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "type, fill: what to enter; dialog: a prompt's answer."
+                    },
+                    "clear": {
+                      "type": "boolean",
+                      "description": "type: clear the field first."
+                    },
+                    "key": {
+                      "type": "string",
+                      "description": "keyPress: a key, like \"Enter\", \"Tab\", \"Escape\"."
+                    },
+                    "deltaY": {
+                      "type": "number",
+                      "description": "scroll: pixels down (negative: up)."
+                    },
+                    "deltaX": {
+                      "type": "number",
+                      "description": "scroll: pixels right."
+                    },
+                    "until": {
+                      "enum": [
+                        "load",
+                        "domcontentloaded",
+                        "networkidle",
+                        "selector"
+                      ],
+                      "description": "wait: what to wait for (selector: until it's there)."
+                    },
+                    "waitUntil": {
+                      "enum": [
+                        "load",
+                        "domcontentloaded",
+                        "networkidle",
+                        "commit"
+                      ],
+                      "description": "navigate: when it's done (default load)."
+                    },
+                    "maxChars": {
+                      "type": "integer",
+                      "description": "read: the most text to return."
+                    },
+                    "fullPage": {
+                      "type": "boolean",
+                      "description": "screenshot: the whole page (default), or the view."
+                    },
+                    "operation": {
+                      "enum": [
+                        "list",
+                        "new",
+                        "select",
+                        "close"
+                      ],
+                      "description": "tabs: what to do."
+                    },
+                    "tabId": {
+                      "type": "string",
+                      "description": "tabs select, close: which tab."
+                    },
+                    "accept": {
+                      "type": "boolean",
+                      "description": "dialog: accept (or dismiss) the open dialog."
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "download: where to save it; upload: the file; in the space's folder."
+                    },
+                    "expression": {
+                      "type": "string",
+                      "description": "evaluate: JavaScript run in the page."
+                    },
+                    "x": {
+                      "type": "number",
+                      "description": "mouseMove, mouseClick: from the page's left."
+                    },
+                    "y": {
+                      "type": "number",
+                      "description": "mouseMove, mouseClick: from the page's top."
+                    },
+                    "button": {
+                      "enum": [
+                        "left",
+                        "right",
+                        "middle"
+                      ],
+                      "description": "mouseClick."
+                    },
+                    "query": {
+                      "type": "string",
+                      "description": "web_search: what to search for."
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "description": "This action's time limit."
+                    }
+                  }
+                }
+              },
+              "window": {
+                "enum": [
+                  "hidden",
+                  "shown"
+                ],
+                "description": "Shown: on your person's screen, for them to watch or use. Default: as it was."
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "actions"
+            ]
+          }
+        },
+        {
+          "name": "edit_file",
+          "summary": "Changes a file in this space's folder: replaces text that occurs exactly once in it (old) with new text.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "old": {
+                "type": "string",
+                "minLength": 1
+              },
+              "new": {
+                "type": "string"
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "path",
+              "old",
+              "new"
+            ]
+          }
+        },
+        {
+          "name": "job_logs",
+          "summary": "What one of your background jobs wrote (the end of it, with tail: characters).",
+          "input": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "tail": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "list_files",
+          "summary": "Lists a directory in this space's folder (path relative to it; default: the folder).",
+          "input": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            }
+          }
+        },
+        {
+          "name": "list_jobs",
+          "summary": "Your background jobs in this space, on one of its computers: running and finished.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            }
+          }
+        },
+        {
+          "name": "preview",
+          "summary": "Makes a link to what one of your background jobs serves (a dev server, a site), for the people of this space to open in their browser: give the job (its id or name; it's found on whichever computer runs it) or the port it serves (and the computer, when not the default). Start the server with start_job first.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "job": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            }
+          }
+        },
+        {
+          "name": "read_file",
+          "summary": "Reads a file in this space's folder (text; base64 when it isn't). Large files come in parts: offset and length, in bytes.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        },
+        {
+          "name": "start_job",
+          "summary": "Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it). Read its output with job_logs; stop it with stop_job.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment variables for this job, over the space's (names to values)."
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "command"
+            ]
+          }
+        },
+        {
+          "name": "stop_job",
+          "summary": "Stops one of your background jobs.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "terminal",
+          "summary": "Runs a command in your own shell on your person's computer, in this space's folder: bash on macOS and Linux, PowerShell on Windows (your context says which this computer has). Give it in command. Your working directory and environment persist between calls. It answers within about a second: if the command is still \"running\", call again with its commandId to see more, with its commandId and stdin to answer a prompt, or with its commandId and operation interrupt to stop it. For servers and other long-running commands, use start_job instead.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "The command to run."
+              },
+              "commandId": {
+                "type": "string",
+                "description": "A running command's, to see more of it, answer it or stop it."
+              },
+              "stdin": {
+                "type": "string",
+                "description": "Input for the running command (with its commandId)."
+              },
+              "operation": {
+                "enum": [
+                  "interrupt"
+                ]
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "web_search",
+          "summary": "Searches the web: the top results, each a title, link and snippet. Open one with the browser to read it.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "minLength": 1
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "query"
+            ]
+          }
+        },
+        {
+          "name": "write_file",
+          "summary": "Writes a whole file in this space's folder, making its directories.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content": {
+                "type": "string"
+              },
+              "encoding": {
+                "enum": [
+                  "utf8",
+                  "base64"
+                ]
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ]
+          }
+        }
+      ],
+      "views": [
+        {
+          "name": "context:computer",
+          "place": "prompt"
+        }
+      ],
+      "routes": [
+        {
+          "path": "*://*-preview.*:*/*",
+          "method": "ANY",
+          "methods": [],
+          "host": true,
+          "underName": false
+        },
+        {
+          "path": "/__copilotz/previews/grant",
+          "method": "GET",
+          "methods": [
+            "GET"
+          ],
+          "host": false,
+          "underName": false
+        }
+      ],
+      "needs": [
+        {
+          "kind": "setting",
+          "path": "computers.approve",
+          "summary": "",
+          "required": false,
+          "type": "Exclude<Asked, \"publish\" | \"destroy\">[]"
+        },
+        {
+          "kind": "secret",
+          "path": "computers.key",
+          "summary": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "computers.codeMinutes",
+          "summary": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
+          "required": false,
+          "type": "number"
+        },
+        {
+          "kind": "setting",
+          "path": "computers.url",
+          "summary": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "computers.previews",
+          "summary": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
+          "required": false,
+          "type": "PreviewsSettings"
+        }
+      ],
+      "emits": [],
+      "changes": [
+        "computer.created",
+        "computer.updated",
+        "computer.deleted",
+        "desk.created",
+        "desk.updated",
+        "desk.deleted",
+        "enrollment.created",
+        "enrollment.updated",
+        "enrollment.deleted",
+        "envVar.created",
+        "envVar.updated",
+        "envVar.deleted",
+        "preview.created",
+        "preview.updated",
+        "preview.deleted"
+      ],
+      "listens": [
+        "member.deleted"
+      ],
+      "processors": [
+        {
+          "name": "computers.left",
+          "on": [
+            "member.deleted"
+          ],
+          "keyed": false
+        }
+      ],
+      "schedules": [
+        {
+          "name": "computer.upgradeAsks",
+          "when": "once, when the runtime first starts with it",
+          "summary": "Keeps computers' old asks and yeses as chat keeps them",
+          "call": "computer.upgradeAsks",
+          "once": true
+        }
+      ],
+      "powers": [
+        "guard",
+        "workers"
+      ],
+      "resources": {
+        "provides": {
+          "computers": {},
+          "context": {
+            "computer": {}
+          },
+          "shared": {
+            "desk": {},
+            "envVar": {},
+            "preview": {}
+          },
+          "tools": {
+            "browser": {
+              "description": "Uses your browser on your person's computer: one of your own for this space, with its own profile (never their personal browser), so sign-ins stay between calls. One to ten actions per call, in order. Start with navigate, then snapshot: it lists the page's elements with refs to click, type into or read. The window is hidden unless you ask for \"shown\": then it opens on their screen, where they can watch and use it too. Show it when a site won't work hidden, or when they need to see or do something themselves (sign in, a CAPTCHA, a code): tell them what, then wait for them before going on, and hide it (\"hidden\") when you no longer need them."
+            },
+            "edit_file": {
+              "description": "Changes a file in this space's folder: replaces text that occurs exactly once in it (old) with new text."
+            },
+            "job_logs": {
+              "description": "What one of your background jobs wrote (the end of it, with tail: characters)."
+            },
+            "list_files": {
+              "description": "Lists a directory in this space's folder (path relative to it; default: the folder)."
+            },
+            "list_jobs": {
+              "description": "Your background jobs in this space, on one of its computers: running and finished."
+            },
+            "preview": {
+              "description": "Makes a link to what one of your background jobs serves (a dev server, a site), for the people of this space to open in their browser: give the job (its id or name; it's found on whichever computer runs it) or the port it serves (and the computer, when not the default). Start the server with start_job first."
+            },
+            "read_file": {
+              "description": "Reads a file in this space's folder (text; base64 when it isn't). Large files come in parts: offset and length, in bytes."
+            },
+            "start_job": {
+              "description": "Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it). Read its output with job_logs; stop it with stop_job."
+            },
+            "stop_job": {
+              "description": "Stops one of your background jobs."
+            },
+            "terminal": {
+              "description": "Runs a command in your own shell on your person's computer, in this space's folder: bash on macOS and Linux, PowerShell on Windows (your context says which this computer has). Give it in command. Your working directory and environment persist between calls. It answers within about a second: if the command is still \"running\", call again with its commandId to see more, with its commandId and stdin to answer a prompt, or with its commandId and operation interrupt to stop it. For servers and other long-running commands, use start_job instead."
+            },
+            "web_search": {
+              "description": "Searches the web: the top results, each a title, link and snippet. Open one with the browser to read it."
+            },
+            "write_file": {
+              "description": "Writes a whole file in this space's folder, making its directories."
+            }
+          },
+          "usageNames": {
+            "computer": {}
+          }
+        },
+        "reads": [
+          {
+            "kind": "computerWake",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "computers",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "directory",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "downloads",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "org",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "origins",
+            "found": [
+              "source"
+            ]
+          }
+        ]
+      },
+      "adapters": {},
+      "workers": [
+        {
+          "kind": "computer",
+          "admit": "computer.admit",
+          "ready": "computer.ready",
+          "gone": "computer.gone",
+          "workloads": [
+            "computer.enrolled",
+            "computer.info",
+            "computer.terminal",
+            "computer.jobs.start",
+            "computer.jobs.list",
+            "computer.jobs.logs",
+            "computer.jobs.stop",
+            "computer.files.list",
+            "computer.files.read",
+            "computer.files.write",
+            "computer.files.edit",
+            "computer.browser",
+            "computer.search",
+            "computer.http",
+            "computer.archive",
+            "computer.update"
+          ]
+        }
+      ],
+      "check": null,
+      "settings": [
+        {
+          "kind": "computers",
+          "type": "ComputersSettings",
+          "inContract": true,
+          "fields": [
+            {
+              "name": "approve",
+              "type": "Exclude<Asked, \"publish\" | \"destroy\">[]",
+              "optional": true,
+              "secret": false
+            },
+            {
+              "name": "key",
+              "type": "string",
+              "optional": true,
+              "doc": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
+              "secret": true
+            },
+            {
+              "name": "codeMinutes",
+              "type": "number",
+              "optional": true,
+              "doc": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
+              "secret": false
+            },
+            {
+              "name": "url",
+              "type": "string",
+              "optional": true,
+              "doc": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
+              "secret": false
+            },
+            {
+              "name": "previews",
+              "type": "PreviewsSettings",
+              "optional": true,
+              "doc": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
+              "secret": false
+            }
+          ]
+        }
+      ],
+      "listing": {
+        "listable": false,
+        "problems": [
+          "Route \"*://*-preview.*:*/*\" takes whole hosts, not paths under /computers.",
+          "Route \"/__copilotz/previews/grant\" isn't under /computers."
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "format": 1,
+      "name": "computers-terminal",
+      "summary": "Computers' terminal front end: `/computers` and `/computer`.",
+      "requires": [
+        "computers",
+        "terminal-shell"
+      ],
+      "package": {
+        "name": "copilotz",
+        "version": "1.0.0-rc.47"
+      },
+      "runtime": "1.0.0-rc.47",
+      "layer": "standard",
+      "keeps": [],
+      "indexes": [],
+      "shared": [],
+      "actions": [],
+      "tools": [],
+      "views": [],
+      "routes": [],
+      "needs": [],
+      "emits": [],
+      "changes": [],
+      "listens": [],
+      "processors": [],
+      "schedules": [],
+      "powers": [],
+      "resources": {
+        "provides": {
+          "commands": {
+            "/computer": {
+              "description": "Connect a computer to this space, share or take one out, rename or forget one"
+            },
+            "/computers": {
+              "description": "This space's computers, where its agents work, and yours"
+            }
+          }
+        },
+        "reads": []
+      },
+      "adapters": {},
+      "workers": [],
+      "check": null,
+      "settings": [],
+      "listing": {
+        "listable": true,
+        "problems": [],
+        "warnings": []
+      }
+    },
+    {
+      "format": 1,
+      "name": "computers-web",
+      "summary": "Computers' web front end, for the browser.",
+      "requires": [
+        "computers",
+        "web-shell"
+      ],
+      "package": {
+        "name": "copilotz",
+        "version": "1.0.0-rc.47"
+      },
+      "runtime": "1.0.0-rc.47",
+      "layer": "standard",
+      "keeps": [],
+      "indexes": [],
+      "shared": [],
+      "actions": [],
+      "tools": [],
+      "views": [
+        {
+          "name": "computer",
+          "place": "web"
+        },
+        {
+          "name": "computer.ask",
+          "place": "web"
+        },
+        {
+          "name": "computer.palette",
+          "place": "web"
+        },
+        {
+          "name": "computer.routine",
+          "place": "web"
+        },
+        {
+          "name": "computer.space",
+          "place": "web"
+        },
+        {
+          "name": "computer.step",
+          "place": "web"
+        },
+        {
+          "name": "env.space",
+          "place": "web"
+        }
+      ],
+      "routes": [],
+      "needs": [],
+      "emits": [],
+      "changes": [],
+      "listens": [],
+      "processors": [],
+      "schedules": [],
+      "powers": [],
+      "resources": {
+        "provides": {
+          "askViews": {
+            "destroy": {
+              "view": "computer.ask"
+            },
+            "jobs": {
+              "view": "computer.ask"
+            },
+            "publish": {
+              "view": "computer.ask"
+            },
+            "terminal": {
+              "view": "computer.ask"
+            },
+            "writes": {
+              "view": "computer.ask"
+            }
+          },
+          "palette": {
+            "computers": {
+              "view": "computer.palette"
+            }
+          },
+          "routinePanels": {
+            "computers": {
+              "view": "computer.routine"
+            }
+          },
+          "spaceTabs": {
+            "computer": {
+              "title": "Computer",
+              "view": "computer.space"
+            },
+            "env": {
+              "title": "Environment",
+              "view": "env.space"
+            }
+          },
+          "toolViews": {
+            "browser": {},
+            "edit_file": {},
+            "job_logs": {},
+            "list_files": {},
+            "list_jobs": {},
+            "read_file": {},
+            "start_job": {},
+            "stop_job": {},
+            "terminal": {},
+            "web_search": {},
+            "write_file": {}
+          }
+        },
+        "reads": [
+          {
+            "kind": "computerKinds",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "envActions",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "jobActions",
+            "found": [
+              "source"
+            ]
+          }
+        ]
+      },
+      "adapters": {},
+      "workers": [],
+      "check": null,
+      "settings": [],
+      "listing": {
+        "listable": true,
+        "problems": [],
+        "warnings": []
+      }
+    },
+    {
+      "format": 1,
       "name": "contacts",
       "summary": "Contacts: people outside the org who talk to its agents, such as a WhatsApp customer writing to a business's number.",
       "requires": [
@@ -4073,9 +7037,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -4306,9 +7270,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -4351,9 +7315,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [
         {
@@ -5427,9 +8391,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -5489,9 +8453,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -5577,9 +8541,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [
         {
@@ -6733,9 +9697,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -6817,9 +9781,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -6889,9 +9853,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [
         {
@@ -7614,9 +10578,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -7701,9 +10665,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -7872,9 +10836,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -8557,9 +11521,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -8683,9 +11647,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -9028,9 +11992,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -9367,9 +12331,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -9663,9 +12627,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -10250,9 +13214,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -10729,9 +13693,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10827,9 +13791,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10880,9 +13844,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10944,9 +13908,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -11490,9 +14454,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -11742,9 +14706,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -12562,9 +15526,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -12646,9 +15610,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -13096,9 +16060,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -13173,9 +16137,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -14459,9 +17423,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -14551,9 +17515,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -14735,9 +17699,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -14961,9 +17925,9 @@
       "requires": [],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -15138,9 +18102,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [
         {
@@ -15530,9 +18494,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -15598,9 +18562,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -15853,9 +18817,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -15915,9 +18879,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [
         {
@@ -16172,9 +19136,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -16236,9 +19200,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -16955,9 +19919,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -17007,9 +19971,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -17062,9 +20026,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -17949,9 +20913,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -18473,9 +21437,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -18662,9 +21626,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -18743,9 +21707,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -19013,9 +21977,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [
         {
@@ -20274,9 +23238,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.45"
+        "version": "1.0.0-rc.47"
       },
-      "runtime": "1.0.0-rc.45",
+      "runtime": "1.0.0-rc.47",
       "layer": "standard",
       "keeps": [],
       "indexes": [],

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "copilotz",
+  "owner": { "name": "Copilotz", "url": "https://copilotz.com" },
+  "description": "The Copilotz plugin for coding agents.",
+  "plugins": [
+    {
+      "name": "copilotz",
+      "source": "./",
+      "description": "Build apps on Copilotz: the copilotz skill, and the Copilotz docs over MCP (planned).",
+      "category": "development"
+    }
+  ]
+}

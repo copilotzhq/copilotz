@@ -301,6 +301,27 @@ their front ends from `/web` and `/terminal` beside it.
 - **[AGENTS.md](AGENTS.md)** is the short guide for coding agents (Claude Code, Codex, Cursor,
   Gemini) building an app with Copilotz. It ships in the package.
 
+## For coding agents
+
+Claude Code, Codex, Cursor, Gemini CLI and GitHub Copilot building an app with Copilotz read
+[AGENTS.md](AGENTS.md), which ships in the package. The same guidance comes as an Agent Skill,
+[`copilotz`](skills/copilotz/SKILL.md): short up front, with a walkthrough, the rules and testing in
+files the agent reads when it needs them.
+
+```sh
+npx skills add copilotzhq/copilotz                                # the skill, for any agent
+/plugin install copilotz --marketplace copilotzhq/copilotz        # Claude Code, as a plugin
+codex plugin marketplace add copilotzhq/copilotz                  # Codex, then:
+codex plugin add copilotz@copilotz
+copilot plugin install copilotzhq/copilotz                        # GitHub Copilot CLI
+gemini extensions install https://github.com/copilotzhq/copilotz  # Gemini CLI
+```
+
+The plugins add the docs' MCP server, `https://copilotz.com/api/mcp` (`search_docs`, `read_doc`,
+`agents_guide`). It's coming soon: until it's live, their server won't connect, and the skill works
+without it. Cursor reads the same plugin once it's in the Cursor Marketplace; until then, use
+`npx skills add`.
+
 ## Status
 
 Copilotz 1.0 is a release candidate, `1.0.0-rc.34`. It's a new runtime, and it doesn't read 0.x

@@ -9,6 +9,8 @@ goes with `copilotz@1.0.0-rc.45`. Every docs page is Markdown at
 unsure of a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`).
 Don't guess.
 
+It also comes as an Agent Skill, for any coding agent: `npx skills add copilotzhq/copilotz`.
+
 ## What Copilotz is
 
 A runtime for apps that people and AI use alike. You write the app once: its data, what can be done,

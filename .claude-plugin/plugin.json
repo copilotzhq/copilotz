@@ -1,0 +1,28 @@
+{
+  "name": "copilotz",
+  "version": "1.0.0-rc.45",
+  "displayName": "Copilotz",
+  "description": "Build apps on Copilotz, the TypeScript runtime for apps that people and AI use alike: the copilotz skill (setup, the offline test loop, the rules), and the Copilotz docs over MCP (planned).",
+  "author": {
+    "name": "Copilotz",
+    "url": "https://copilotz.com"
+  },
+  "homepage": "https://copilotz.com",
+  "repository": "https://github.com/copilotzhq/copilotz",
+  "license": "MIT",
+  "keywords": [
+    "copilotz",
+    "typescript",
+    "agents",
+    "mcp",
+    "runtime",
+    "skills"
+  ],
+  "mcpServers": {
+    "copilotz-docs": {
+      "type": "http",
+      "url": "https://copilotz.com/api/mcp"
+    }
+  },
+  "privacyPolicyUrl": "https://copilotz.com/privacy"
+}

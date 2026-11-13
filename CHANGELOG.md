@@ -44,6 +44,14 @@ hidden until shared) are gone, along with the `share` Action, `needs_share`, mes
   reaches its caller; operators call `isMaintenance` Actions at
   `POST /maintenance/actions/<action>`.
 
+**The Copilotz agent plugin.** Coding agents can install a `copilotz` skill (`skills/copilotz/`:
+setup, the offline test loop with the scripted model, the rules, the audience rule included) with
+`npx skills add copilotzhq/copilotz`, or as a plugin: Claude Code (`.claude-plugin/`), Agent Plugins
+(`plugin.json`, read by Codex, Cursor and Copilot CLI) and Gemini CLI (`gemini-extension.json`).
+Each also declares the Copilotz docs over MCP (`https://copilotz.com/api/mcp`, coming).
+`testing/skill.test.ts` checks the skill's imports, docs slugs, links and commands, and that the
+manifests agree; the release script now sets their versions too.
+
 ## 1.0.0-rc.45 — 2026-11-12
 
 - **AGENTS.md, a guide for coding agents.** Claude Code, Codex, Cursor or Gemini building an app

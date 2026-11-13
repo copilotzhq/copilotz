@@ -3,8 +3,9 @@
  * Tests use `test` and the helpers here instead of a runtime's own APIs:
  * temporary files, environment variables, a local HTTP server, a child
  * process, serving an owner's Hypervisor to remote executors, saying
- * who a request is (`testWho`, `ticketFor`), and what a kind of caller is let
- * into (`openTo`).
+ * who a request is (`testWho`, `ticketFor`), what a kind of caller is let
+ * into (`openTo`), and a worker of the Oxian this Copilotz runs on
+ * (`createWorker`), for fakes of what connects as one (a computer).
  *
  * Only tests import this module; library code uses web standards alone.
  */
@@ -14,6 +15,13 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hypervisor } from "@oxian/oxian-js";
+
+/**
+ * Oxian's worker, as the computer program connects: an app's tests fake a
+ * computer (or another worker) with it, on the same Oxian as the runtime, so
+ * it reaches the runtime's in-process topics.
+ */
+export { createWorker, type WorkerWorkHandler } from "@oxian/oxian-js";
 import { type Actor, definePlugin, type Plugin, type Plugins } from "../runtime/mod.ts";
 import { merge } from "../runtime/registry.ts";
 

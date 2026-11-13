@@ -85,9 +85,9 @@ docs/           Getting Started, Build Compass, the guides, operations, the refe
                 plugins' pages generated) and the architecture; manifest.json, which the website
                 reads
 scripts/        catalog.ts (refreshes the models.dev snapshot); npm/ (builds the npm package, and
-                smoke-tests it installed); computer/ (builds the computer program); cloud/ (sets up
-                Google Cloud for cloud computers); describe.ts (plugins' declarations and their
-                reference pages); docs-index.py (docs/manifest.json)
+                smoke-tests it installed); computer/ (builds the computer program); describe.ts
+                (plugins' declarations and their reference pages); docs-index.py
+                (docs/manifest.json)
 examples/       terminal-agent (an app: its plugins and resources, run in the terminal host, or in a
                 browser: web.ts serves it on Deno, harbor.tsx and brands.ts the same app as another
                 brand, gallery.tsx the logo, type and toolkit, orgs.ts many orgs on Postgres);

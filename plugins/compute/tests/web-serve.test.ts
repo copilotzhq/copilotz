@@ -1,10 +1,8 @@
 /**
- * Cloud computers, previews and apps on the web, their logic: the kinds of
- * computer other front ends add, and which of the person's computers are
- * of one; what a job serves and its preview's address; a job to start from
- * the form; an agent's ask to publish, in words; a cloud computer's sizes,
- * prices, states, time awake and wake; and an app's address, status and
- * folder.
+ * Computers and previews on the web, their logic: the kinds of computer
+ * other front ends add, and which of the person's computers are of one; what
+ * a job serves and its preview's address; a job to start from the form; and
+ * an agent's ask to publish, in words.
  */
 import { assert, assertEquals } from "@std/assert";
 import type { Preview } from "../computers/collections/preview.ts";
@@ -25,30 +23,6 @@ import {
   serves,
   shown,
 } from "../computers/views/web/previews.ts";
-import {
-  awakeFor,
-  costOf,
-  duration,
-  lookOf,
-  money,
-  progress,
-  refusalOf,
-  sizesOf,
-  specsOf,
-  spent,
-  stillWaking,
-  suggestedName,
-  WAKE_MS,
-} from "../cloud/views/web/cloud.ts";
-import {
-  addressFor,
-  appOfJob,
-  domainOf as appsDomainOf,
-  folderOf,
-  lookOf as appLookOf,
-  suggestedName as appName,
-} from "../apps/views/web/apps.ts";
-import type { AppDoc } from "../apps/collections/app.ts";
 import { test } from "../../../testing/mod.ts";
 
 test("a kind that can't be made now says why, from its available query; otherwise it can", () => {
@@ -167,116 +141,4 @@ test("an agent's ask to publish, in words", () => {
   assertEquals(addressOf(at), "https://my-shop.copilotz.app");
   assertEquals(addressOf({ work: "writes", preview: "https://x.app" }), undefined);
   assertEquals(sentence(at), "assistant wants to publish My Shop at https://my-shop.copilotz.app");
-});
-
-test("a cloud computer's sizes and prices, as people pay them", () => {
-  const sizes = sizesOf({
-    sizes: [
-      { id: "small", label: "Small", vcpu: 2, memory: 4, shared: true, hour: 0.4 },
-      { id: "standard", label: "Standard", vcpu: 2, memory: 8, hour: null },
-      { id: "broken" },
-    ],
-    disk: { gb: 10, gbMonth: 0.2, snapshotGbMonth: null },
-  });
-  assertEquals(sizes.sizes.map((s) => [s.id, s.shared ?? false, s.hour]), [
-    ["small", true, 0.4],
-    ["standard", false, null],
-  ]);
-  assertEquals(sizes.disk, { gb: 10, gbMonth: 0.2, snapshotGbMonth: null });
-  // An app that says nothing: 10 GB, the usual minutes, and anyone may try.
-  assertEquals(sizesOf(undefined), {
-    sizes: [],
-    disk: { gb: 10, gbMonth: null, snapshotGbMonth: null },
-    warmMinutes: 10,
-    viewMinutes: 120,
-    create: true,
-  });
-  // What the app says of the person: may they make one, and why not.
-  const refused = sizesOf({ sizes: [], warmMinutes: 15, create: false, why: "budget" });
-  assertEquals([refused.warmMinutes, refused.create, refused.why], [15, false, "budget"]);
-  assertEquals(sizesOf({ create: false, why: "nonsense" }).why, undefined);
-  assertEquals([money(0.4), money(0.0335), money(12), money(0.05)], [
-    "$0.40",
-    "$0.034",
-    "$12.00",
-    "$0.05",
-  ]);
-  assertEquals([spent(0.004), spent(0.08)], ["under 1¢", "about $0.08"]);
-  assertEquals(specsOf({ vcpu: 2, memory: 4 }), "2 vCPU · 4 GB");
-});
-
-test("a cloud computer's states, time awake and wake, as people read them", () => {
-  assertEquals(
-    (["awake", "asleep", "cold", "waking", "releasing"] as const).map((s) => lookOf(s).label),
-    ["Awake", "Asleep", "Sleeping deeply", "Waking", "Going to sleep"],
-  );
-  assertEquals([lookOf("waking").busy, lookOf("asleep").busy], [true, false]);
-  assertEquals(
-    [0, 59_000, 12 * 60_000, 65 * 60_000, 120 * 60_000].map(duration),
-    ["less than a minute", "less than a minute", "12 min", "1 h 5 min", "2 h"],
-  );
-  const now = Date.parse("2026-10-30T10:12:00.000Z");
-  assertEquals(awakeFor({ state: "awake", woke: "2026-10-30T10:00:00.000Z" }, now), 720_000);
-  assertEquals(awakeFor({ state: "asleep", woke: "2026-10-30T10:00:00.000Z" }, now), undefined);
-  assertEquals(costOf(720_000, 0.4)?.toFixed(2), "0.08");
-  assertEquals(costOf(720_000, null), undefined);
-  // An estimate: quick at first, about 80% at the usual time, never done.
-  assertEquals(progress(0, WAKE_MS.asleep), 0);
-  assert(progress(WAKE_MS.asleep, WAKE_MS.asleep) > 0.75);
-  assertEquals(progress(10 * WAKE_MS.cold, WAKE_MS.cold), 0.95);
-  const waking = Object.assign(new Error("The computer is waking: try again in a minute."), {
-    code: "unavailable",
-  });
-  const broke = Object.assign(new Error("The computer couldn't wake: no capacity"), {
-    code: "unavailable",
-  });
-  assertEquals([stillWaking(waking), stillWaking(broke), stillWaking(null)], [true, false, false]);
-  assertEquals(
-    [
-      refusalOf(Object.assign(new Error("no"), { code: "forbidden" })),
-      refusalOf(Object.assign(new Error("spent"), { code: "budget" })),
-      refusalOf(new Error("other")),
-    ],
-    ["forbidden", "budget", undefined],
-  );
-  assertEquals([suggestedName("Acme"), suggestedName("Personal"), suggestedName()], [
-    "Acme cloud",
-    "My cloud computer",
-    "My cloud computer",
-  ]);
-});
-
-test("an app's address, status and folder, as publishing shows them", () => {
-  assertEquals(addressFor("Café Shop!", "copilotz.app"), "https://cafe-shop.copilotz.app");
-  assertEquals(addressFor("  ", "copilotz.app"), undefined);
-  const app = (over: Partial<AppDoc>): AppDoc => ({
-    _id: "a1",
-    space: "s1",
-    by: "ana",
-    name: "Shop",
-    label: "shop",
-    url: "https://shop.apps.test",
-    source: { computer: "c1", port: 3000, job: "j1" },
-    status: "live",
-    at: "2026-10-30T10:00:00.000Z",
-    ...over,
-  });
-  assertEquals(appsDomainOf([app({})]), "apps.test");
-  assertEquals(appsDomainOf([]), "copilotz.app");
-  assertEquals(
-    (["building", "live", "failed"] as const).map((status) => appLookOf({ status }).label),
-    ["Building", "Live", "Failed"],
-  );
-  const apps = [app({ _id: "gone", status: "removed" }), app({})];
-  assertEquals(appOfJob(apps, "j1", "c1")?._id, "a1");
-  assertEquals(appOfJob(apps, "j1", "c2"), undefined);
-  assertEquals([folderOf(""), folderOf("./web/"), folderOf("/site\\public")], [
-    {},
-    { path: "web" },
-    { path: "site/public" },
-  ]);
-  assert("error" in folderOf("../elsewhere"));
-  assertEquals(appName({ name: "web", command: "npm run dev" }, "~/Copilotz/acme"), "web");
-  assertEquals(appName({ name: "npm run dev", command: "npm run dev" }, "~/Copilotz/acme"), "acme");
-  assertEquals(appName({ name: "npm start", command: "npm start" }), "app");
 });

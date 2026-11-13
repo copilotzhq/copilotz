@@ -25,7 +25,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { POOL, type PoolAssign, type PoolRelease } from "../../cloud/contract.ts";
+import { POOL, type PoolAssign, type PoolRelease } from "../shared/pool.ts";
 import { type Computer, type ComputerOptions, startComputer } from "./computer.ts";
 import { connectionOf, loadState, reachable, sameApp, socketUrl, updateState } from "./state.ts";
 import { answer, fail } from "./workloads/answer.ts";

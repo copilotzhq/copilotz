@@ -118,9 +118,10 @@ minute; each is forgotten at once when the directory changes it.
 
 **What else lives in the directory's runtime:** whatever has one address for every org. Stripe's
 webhook (`stripeWebhook`, `POST /__stripe/<seller>`) checks the signature, then hands each fact to
-its org's runtime as `billing.apply` (the `stripe` resource's `orgs`); the pools' cloud computers
-connect at the cloud pool's route. Visitors on every org's site chats are counted together with one
-`contactsPool()` given to each org's runtime.
+its org's runtime as `billing.apply` (the `stripe` resource's `orgs`); an app's own plugins with one
+address may live there too (Compass's pool of cloud computers, whose VMs connect at its route).
+Visitors on every org's site chats are counted together with one `contactsPool()` given to each
+org's runtime.
 
 ### Cookies per org
 
@@ -224,4 +225,5 @@ install commands that carry the enrollment code:
 
 - it starts at login and updates itself, checking each download's hash;
 - signed and notarized downloads need the signing accounts, before the broad release;
-- the Linux build is also what a cloud computer will run.
+- the Linux build is also what an app's hosted computers run (Compass's cloud computers: its pool
+  mode, `copilotz/plugins/compute/program`).

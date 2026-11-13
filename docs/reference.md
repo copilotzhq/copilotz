@@ -56,10 +56,11 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/billing`             | `usage`: the ledger, and the port an app's pricing plugs into (`spending`)                                                                                |
 | `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                                                                |
 | `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                                                           |
-| `copilotz/plugins/compute`             | `computers` (people's machines, where agents work), `cloud`, `apps`, and their hosts                                                                      |
-| `copilotz/plugins/compute/web`         | `computersWeb`, `cloudWeb`, `appsWeb`                                                                                                                     |
+| `copilotz/plugins/compute`             | `computers` (people's machines, where agents work), and `googleToken` (Google's tokens, for Cloud Storage's blobs)                                        |
+| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                                                            |
 | `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                                                                       |
 | `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                                                             |
+| `copilotz/plugins/compute/program`     | `startPool`: the computer program's pool mode, in a process of the app's own (for an app that hosts computers)                                            |
 | `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`                                         |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                                                                 |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                                                                 |
@@ -73,7 +74,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)                                          |
 | `copilotz/terminal`                    | the terminal host, `terminal({ runtime, me })`, and its toolkit                                                                                           |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                                                                  |
-| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`, `openTo`…                                               |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`, `openTo`, `createWorker`…                               |
 | `copilotz/testing/words`               | testing a front end's words (`pseudoWords`, `englishLeft`), and listing them (`wordsList`)                                                                |
 | `copilotz/describe`                    | `describe(plugin)`: what a plugin declares, as JSON                                                                                                       |
 
@@ -674,7 +675,10 @@ shows, what it needs, and what it builds on. [The index](reference/plugins.md) l
   [`contacts`](reference/plugins/contacts.md) ([web](reference/plugins/contacts-web.md)),
   [`googleSignIn`](reference/plugins/google-sign-in.md),
   [`emailSignIn`](reference/plugins/email-sign-in.md), [`email`](reference/plugins/email.md),
-  [`devSignIn`](reference/plugins/dev-sign-in.md).
+  [`devSignIn`](reference/plugins/dev-sign-in.md), [`accounts`](reference/plugins/accounts.md)
+  ([web](reference/plugins/accounts-web.md)).
+- **Computers:** [`computers`](reference/plugins/computers.md)
+  ([web](reference/plugins/computers-web.md), [terminal](reference/plugins/computers-terminal.md)).
 - **Billing:** [`usage`](reference/plugins/usage.md) ([web](reference/plugins/usage-web.md),
   [terminal](reference/plugins/usage-terminal.md)).
 - **The doors:** [`webPage`](reference/plugins/web-page.md),
@@ -699,5 +703,4 @@ From the [product packages](#product-packages):
   ([web](reference/plugins/credits-web.md)), [`stripe`](reference/plugins/stripe.md),
   [`stripeWebhook`](reference/plugins/stripe-webhook.md).
 
-The compute plugins (`computers`, `cloud`, `apps`) and `accounts` have no page here.
 [Installing a computer](guides/installing-a-computer.md) covers what an app serves for computers.

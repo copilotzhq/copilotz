@@ -1,9 +1,10 @@
 /**
- * The computers plugin's contract, for plugins that build on it (apps, cloud):
- * the work a computer serves and its shapes (shared/workloads.ts), and a
- * space's environment as people read it (`envVar`). Other plugins send it
- * work by these names through `ctx.workers`, and call the plugin's Actions
- * by name.
+ * The computers plugin's contract, for plugins that build on it (an app's
+ * own, such as hosted computers or published apps): the work a computer
+ * serves and its shapes (shared/workloads.ts), the program's pool mode
+ * (shared/pool.ts), and a space's environment as people read it (`envVar`).
+ * Other plugins send it work by these names through `ctx.workers`, and call
+ * the plugin's Actions by name.
  */
 export {
   type ArchiveInput,
@@ -13,8 +14,10 @@ export {
   type Job,
   type JobsStartInput,
   type Scope,
+  type TerminalResult,
   WORK,
 } from "./shared/workloads.ts";
+export { POOL, POOL_KIND, type PoolAssign, type PoolRelease } from "./shared/pool.ts";
 export type { EnvVar } from "./collections/env-var.ts";
 
 /**

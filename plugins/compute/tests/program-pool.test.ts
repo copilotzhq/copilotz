@@ -21,7 +21,7 @@ import {
 } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { env, host, runtime, serve, tempDir, test } from "../../../testing/mod.ts";
-import { POOL, type PoolAssign } from "../cloud/contract.ts";
+import { POOL, type PoolAssign } from "../computers/shared/pool.ts";
 import { audienceOf, type Pool, type PoolOptions, startPool } from "../computers/program/pool.ts";
 import { connectionOf, loadState } from "../computers/program/state.ts";
 import { alive } from "../computers/program/workloads/processes.ts";

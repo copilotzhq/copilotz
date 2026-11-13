@@ -33,7 +33,7 @@ import {
 } from "../../agents/mod.ts";
 import { access, accounts, contactOf, googleSignIn } from "../mod.ts";
 import { api, terminalPlugin, whatsapp } from "../../interfaces/mod.ts";
-import { apps, cloud, computers } from "../../compute/mod.ts";
+import { computers } from "../../compute/mod.ts";
 import { usage } from "../../billing/mod.ts";
 import { openTo, test } from "../../../testing/mod.ts";
 import { attached } from "../../agents/tests/fixtures/files.ts";
@@ -481,7 +481,7 @@ test("an Action only people may call refuses a contact", async () => {
 
 test("every Action, query and event stays shut to contacts, but those opened to them", () => {
   // Each plugin on its own, asked as a contact would about itself. (Each product package checks
-  // its own the same way.)
+  // its own the same way, and so does an app with its own: Compass's hosted computers and apps.)
   const contact: Actor = { kind: "contact", id: "c-someone" };
   const open = openTo(contact, [
     models,
@@ -497,8 +497,6 @@ test("every Action, query and event stays shut to contacts, but those opened to 
     terminalPlugin,
     whatsapp,
     computers,
-    apps,
-    cloud,
     usage,
   ]);
   // `file.about` is a file as its reader reaches it: a contact, its own chat's; `chat.attach`

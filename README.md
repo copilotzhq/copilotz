@@ -152,7 +152,7 @@ ana sees: Tue 10:00, Wed 15:00
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.47   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.48   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
@@ -166,7 +166,7 @@ OPENAI_API_KEY=sk-… node salon.ts    # or bun salon.ts, or deno run -A salon.t
 ```
 
 On Deno, map the name `copilotz` in `deno.json`
-(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.47"`) so the imports read the same everywhere.
+(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.48"`) so the imports read the same everywhere.
 Copilotz runs on Node 24+, Deno 2.9+ and Bun, and it's built on web standards for Cloudflare Workers
 and the browser.
 

@@ -1,6 +1,6 @@
 {
   "name": "copilotz",
-  "version": "1.0.0-rc.47",
+  "version": "1.0.0-rc.48",
   "displayName": "Copilotz",
   "description": "Build apps on Copilotz, the TypeScript runtime for apps that people and AI use alike: the copilotz skill (setup, the offline test loop, the rules).",
   "author": {

@@ -1791,12 +1791,39 @@ export async function createOwner(
     }
   };
 
+  /**
+   * A signal that aborts when either does, unlinked when the job ends:
+   * `AbortSignal.any` keeps an entry of its own per call (WeakRefs its
+   * sources hold until collected), which adds up over many short calls.
+   */
+  const either = (a: AbortSignal, b: AbortSignal): { signal: AbortSignal; unlink(): void } => {
+    if (a.aborted || b.aborted) {
+      return { signal: AbortSignal.abort(a.aborted ? a.reason : b.reason), unlink() {} };
+    }
+    const both = new AbortController();
+    const fromA = () => both.abort(a.reason);
+    const fromB = () => both.abort(b.reason);
+    a.addEventListener("abort", fromA, { once: true });
+    b.addEventListener("abort", fromB, { once: true });
+    return {
+      signal: both.signal,
+      unlink() {
+        a.removeEventListener("abort", fromA);
+        b.removeEventListener("abort", fromB);
+      },
+    };
+  };
+
   const dispatch = async (job: Job, signal?: AbortSignal): Promise<unknown> => {
     jobs++;
+    const linked = signal ? either(closing.signal, signal) : undefined;
     const handle = await hypervisor.dispatch({
       workload: RUN,
       body: encode(job),
-      signal: signal ? AbortSignal.any([closing.signal, signal]) : closing.signal,
+      signal: linked?.signal ?? closing.signal,
+    }).catch((error) => {
+      linked?.unlink();
+      throw error;
     });
     pin(handle.operationId, job.kind === "process" ? job.event.actor : job.actor);
     if (job.kind === "call") acting.set(handle.operationId, job.action);
@@ -1819,6 +1846,7 @@ export async function createOwner(
       labelled.delete(handle.operationId);
       pinned.delete(handle.operationId);
       acting.delete(handle.operationId);
+      linked?.unlink();
     }
     if (signal?.aborted && !closing.signal.aborted && !(outcome && "result" in outcome)) {
       // Stopped: what it committed stays; `recorded` when it ended on its own record.

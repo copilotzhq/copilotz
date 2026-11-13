@@ -341,7 +341,9 @@ Build Compass (41 chapters, written for an earlier release candidate: check name
   site's chat: [GS 8](https://copilotz.com/docs/getting-started/08-a-chat-on-your-site.md).
   WhatsApp: [GS 9](https://copilotz.com/docs/getting-started/09-whatsapp.md).
 - Shipping (SQLite, PostgreSQL, sign-in by email):
-  [GS 10](https://copilotz.com/docs/getting-started/10-shipping-the-salon.md).
+  [GS 10](https://copilotz.com/docs/getting-started/10-shipping-the-salon.md). A container of 512
+  MiB or less (Deno 2.9+, `--max-semi-space-size=2`, SQLite's cache, each plugin from its own entry
+  point): [memory](https://copilotz.com/docs/operations/memory.md).
 - The prompt and context Views:
   [BC 2](https://copilotz.com/docs/build-compass/part-1-an-agent-of-your-own/02-north-in-your-terminal.md),
   [BC 4](https://copilotz.com/docs/build-compass/part-2-your-own-plugins/04-today-every-turn.md).

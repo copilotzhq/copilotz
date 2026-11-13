@@ -322,6 +322,11 @@
           "title": "Metrics",
           "slug": "operations/metrics",
           "description": "What the runtime and its plugins measure, the OpenTelemetry way: the meter, OTLP and Prometheus, and every metric recorded, copilotz.transaction.duration included."
+        },
+        {
+          "title": "Memory",
+          "slug": "operations/memory",
+          "description": "Running an app in a container of 512 MiB or less: Deno 2.9 or later, V8's young generation capped, SQLite's cache, each plugin from its own entry point, and the read cache, with what each saves."
         }
       ]
     },

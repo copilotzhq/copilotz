@@ -42,8 +42,9 @@ a machine with memory to spare reads faster with more:
 const store = await sqliteStore({ path, cacheKiB: 65_536, mmapMiB: 256 }); // the sizes before rc.46
 ```
 
-With the docs app's shape on Deno 2.9 (an MCP server, 1,000 calls), the larger sizes peaked at 263
-MiB and these at 225 MiB.
+With the docs app's shape (an MCP server, 1,000 calls), the larger sizes peaked 15 to 40 MiB higher
+on Deno 2.9, and about 40 MiB higher on Node 24. [Memory](memory.md) has the rest of what a small
+container needs.
 
 ## PostgreSQL
 

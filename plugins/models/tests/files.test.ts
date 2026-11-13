@@ -7,9 +7,12 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { createRuntime } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmMessage } from "../mod.ts";
-import { resolve } from "../shared/choice.ts";
+import { loadCatalog, resolve } from "../shared/choice.ts";
 import { FILES, filesFor, mediumOf } from "../shared/files.ts";
 import { test } from "../../../testing/mod.ts";
+
+// Resolving reads the catalog, loaded on first use: a test here resolves directly.
+await loadCatalog();
 
 const png = { name: "a.png", type: "image/png", data: "iVBO" };
 const pdf = { name: "b.pdf", type: "application/pdf", data: "JVBE" };

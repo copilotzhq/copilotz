@@ -196,7 +196,10 @@ async function catalog(): Promise<{ found: Found[]; unplaced: string[] }> {
   for (const [entry, as, sub] of entries) {
     const module = await import(urlOf(entry)) as Record<string, unknown>;
     for (const [name, value] of exportsOf(module)) {
+      // Each export once, a plugin or what makes one: the first entry point that has it names it
+      // (a theme's, before its plugins' own).
       if (seen.has(value)) continue;
+      seen.add(value);
       const placed = LAYERS[name];
       // A function that makes a plugin, and plugins a plugin carries (`directory.member`).
       const made = [
@@ -218,7 +221,6 @@ async function catalog(): Promise<{ found: Found[]; unplaced: string[] }> {
         found.push({ plugin, name: madeName, module: as, entry, placed: at });
       }
       if (!isPlugin(value)) continue;
-      seen.add(value);
       if (!placed) unplaced.push(`${name} (${as === npm ? sub : as})`);
       else if (placed !== "skip") found.push({ plugin: value, name, module: as, entry, placed });
     }

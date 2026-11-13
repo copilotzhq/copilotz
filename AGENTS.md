@@ -17,7 +17,7 @@ A runtime for apps that people and AI use alike. You write the app once: its dat
 who may do it, and how it shows. People use it on a web page or in a terminal, the app's own agents
 through tools, and outside assistants (ChatGPT, Claude, any MCP client) over MCP. Every way in calls
 the same Actions, under the same rules, and every write is on one record of who did what, for whom.
-It runs on Node 24+, Deno and Bun.
+It runs on Node 24+, Deno 2.9+ and Bun.
 
 ## How Copilotz works, in one minute
 
@@ -343,7 +343,9 @@ Build Compass (41 chapters, written for an earlier release candidate: check name
   site's chat: [GS 8](https://copilotz.com/docs/getting-started/08-a-chat-on-your-site.md).
   WhatsApp: [GS 9](https://copilotz.com/docs/getting-started/09-whatsapp.md).
 - Shipping (SQLite, PostgreSQL, sign-in by email):
-  [GS 10](https://copilotz.com/docs/getting-started/10-shipping-the-salon.md).
+  [GS 10](https://copilotz.com/docs/getting-started/10-shipping-the-salon.md). A container of 512
+  MiB or less (Deno 2.9+, `--max-semi-space-size=2`, SQLite's cache, each plugin from its own entry
+  point): [memory](https://copilotz.com/docs/operations/memory.md).
 - The prompt and context Views:
   [BC 2](https://copilotz.com/docs/build-compass/part-1-an-agent-of-your-own/02-north-in-your-terminal.md),
   [BC 4](https://copilotz.com/docs/build-compass/part-2-your-own-plugins/04-today-every-turn.md).
@@ -368,10 +370,12 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`); the p
 lists them all. Besides those above: `copilotz/stores/sqlite` and `copilotz/stores/postgres`
 (stores), `copilotz/plugins/interfaces` (`mcp`, `api`, `whatsapp`, `voice`, `webLines`),
 `copilotz/web` (the web host, `web`), `copilotz/web/server` (`webPage`), `copilotz/web/node`
-(`listen`, `serve`, `bundle`), `copilotz/terminal` (`terminal`) and `copilotz/testing`. Front ends
-sit beside each theme (`copilotz/plugins/agents/web` has `chatWeb`). Product packages ship at the
-same version: `@copilotz/work` (`boards`, `documents`), `@copilotz/team`, `@copilotz/directory` and
-`@copilotz/billing`.
+(`listen`, `serve`, `bundle`), `copilotz/terminal` (`terminal`) and `copilotz/testing`. Each plugin
+of `agents`, `access` and `interfaces` is also its own entry point, which loads it alone:
+`copilotz/plugins/interfaces/mcp`, `copilotz/plugins/agents/chat`, `copilotz/plugins/access/spaces`…
+Front ends sit beside each theme (`copilotz/plugins/agents/web` has `chatWeb`). Product packages
+ship at the same version: `@copilotz/work` (`boards`, `documents`), `@copilotz/team`,
+`@copilotz/directory` and `@copilotz/billing`.
 
 ## Working on Copilotz itself
 

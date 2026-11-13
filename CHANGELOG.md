@@ -51,6 +51,29 @@ hidden until shared) are gone, along with the `share` Action, `needs_share`, mes
 - **Runtime:** a declared schedule may run `once` (on the first start with it); a failure's `detail`
   reaches its caller; operators call `isMaintenance` Actions at
   `POST /maintenance/actions/<action>`.
+- **Less memory for the same app.** The docs app's shape (an MCP server with 3 tools, on the memory
+  store), started, after a full GC: Deno 2.9 106 → 90 MiB RSS and Node 24 134 → 103 MiB, with 7 MiB
+  less heap, when it imports each plugin from its own entry point.
+  [Memory](docs/operations/memory.md), a new page, says how to run an app in a container of 512 MiB
+  or less, with what each setting saves:
+  - **The model catalog loads the first time a model is resolved,** not with the models plugin. An
+    app that never calls a model saves about 5 MiB of heap; one that does sees no change.
+  - **SQLite keeps a 2 MiB page cache per connection and maps nothing into memory,** where it kept
+    64 MiB and mapped up to 256 MiB: 15 to 40 MiB less at its peak over 1,000 calls.
+    `cacheKiB: 65_536, mmapMiB: 256` gives the old sizes back.
+  - **Copilotz needs Deno 2.9 or later.** On an older Deno, the SQLite store says so when it opens,
+    instead of failing at its first read ("column index out of range").
+  - **The read cache's size** is `createRuntime({ cache: { documents, queries } })` (10,000 and
+    1,000 by default); 1,000 and 100 kept 3.5 MiB less heap over 1,000 calls.
+  - **V8's young generation, capped** (`--max-semi-space-size=2` on Node,
+    `--v8-flags=--max-semi-space-size=2` on Deno), took 55 to 110 MiB off the peak over 1,000 calls.
+  - The suite holds the docs app's shape to a memory budget on Deno and Node
+    (`bench/memory/budget.test.ts`).
+- **New entry points, one per plugin:** `copilotz/plugins/agents/<name>` (`chat`, `history`,
+  `memory`, `skills`, `routines`, `openapi`, `webtools`), `copilotz/plugins/access/<name>`
+  (`spaces`, `identity`, `contacts`, `google`, `email`, `dev`, `accounts`) and
+  `copilotz/plugins/interfaces/<name>` (`mcp`, `api`, `whatsapp`, `voice`), on npm and JSR. Each
+  loads its plugin alone; the themes' entry points stay as they were.
 
 **The Copilotz agent plugin.** Coding agents can install a `copilotz` skill (`skills/copilotz/`:
 setup, the offline test loop with the scripted model, the rules, the audience rule included) with

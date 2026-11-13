@@ -4,10 +4,7 @@
  * use with it when the app has no rate of its own.
  */
 import { defineAction } from "../../../runtime/mod.ts";
-import { catalog, lookup } from "../shared/choice.ts";
-
-/** Where catalog prices come from, and when it was fetched. */
-export const CATALOG = `models.dev ${catalog.fetched}`;
+import { catalog, loadCatalog, lookup } from "../shared/choice.ts";
 
 export const price = defineAction({
   description: "A model's price in the catalog, by its catalog id",
@@ -18,8 +15,10 @@ export const price = defineAction({
     required: ["catalog"],
     additionalProperties: false,
   },
-  run: (_ctx, input) => {
+  run: async (_ctx, input) => {
+    await loadCatalog();
     const cost = lookup(input.catalog)?.cost;
-    return { ...(cost ? { cost } : {}), source: CATALOG };
+    // Where catalog prices come from, and when it was fetched.
+    return { ...(cost ? { cost } : {}), source: `models.dev ${catalog.fetched}` };
   },
 });

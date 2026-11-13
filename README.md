@@ -150,10 +150,14 @@ ana sees: Tue 10:00, Wed 15:00
 ## Install and run
 
 ```sh
-npm install copilotz                 # Node 24+ (npm, pnpm, yarn)
-bun add copilotz                     # Bun
-deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
+npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
+bun add copilotz@next                          # Bun
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.45   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
+
+Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
+`deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
+the version.
 
 Save the example as `salon.ts`, and run it with an OpenAI key:
 
@@ -163,8 +167,8 @@ OPENAI_API_KEY=sk-… node salon.ts    # or bun salon.ts, or deno run -A salon.t
 
 On Deno, map the name `copilotz` in `deno.json`
 (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.45"`) so the imports read the same everywhere.
-Copilotz runs on Node, Deno and Bun, and it's built on web standards for Cloudflare Workers and the
-browser.
+Copilotz runs on Node 24+, Deno 2.9+ and Bun, and it's built on web standards for Cloudflare Workers
+and the browser.
 
 ## How it works
 
@@ -236,8 +240,9 @@ The runtime keeps these promises at every door, so your plugins don't have to.
 ## In the box
 
 Copilotz's own plugins are built the way yours are. Add the ones you need, and change them through
-their resources instead of forking them. They come by theme from `copilotz/plugins/<theme>`, and
-their front ends from `/web` and `/terminal` beside it.
+their resources instead of forking them. They come by theme from `copilotz/plugins/<theme>`, or one
+at a time (`copilotz/plugins/interfaces/mcp`), and their front ends from `/web` and `/terminal`
+beside the theme.
 
 **The doors**
 
@@ -323,8 +328,10 @@ Cursor Marketplace; until then, use `npx skills add`.
 
 ## Status
 
-Copilotz 1.0 is a release candidate, `1.0.0-rc.34`. It's a new runtime, and it doesn't read 0.x
-data. Copilotz 0.x lives on the [`v0`](https://github.com/copilotzhq/copilotz/tree/v0) branch, and
+Copilotz 1.0 is in release candidates:
+[the newest](https://github.com/copilotzhq/copilotz/releases/latest) is on npm's `next` tag
+(`npm install copilotz@next`) and on JSR. It's a new runtime, and it doesn't read 0.x data. Copilotz
+0.x lives on the [`v0`](https://github.com/copilotzhq/copilotz/tree/v0) branch, and
 [CHANGELOG.md](CHANGELOG.md) says what each release changed, and how to upgrade.
 
 To work on Copilotz itself, see [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -25,6 +25,7 @@ import type { Context } from "../../../runtime/mod.ts";
 import { failure, invalid } from "../../../runtime/mod.ts";
 import {
   adapterFor,
+  loadCatalog,
   type ModelInfo,
   type ModelRef,
   type Provider,
@@ -231,6 +232,7 @@ const saying = (text: string) => text.trim() ? `: ${text.trim().slice(0, 500)}` 
 
 /** Images from a prompt and references; with a list, a model that fails hands over to the next. */
 export async function generateImages(ctx: Reach, request: Generation): Promise<Images> {
+  await loadCatalog();
   const choices = imagers(ctx, request.model);
   if (!request.prompt.trim()) throw invalid("An image needs a prompt");
   const references = await Promise.all(

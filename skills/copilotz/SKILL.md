@@ -134,7 +134,6 @@ Each one, with why and code: [rules](references/rules.md).
   field), [the plugins](https://copilotz.com/docs/reference/plugins.md) (`chat`, `spaces`, `mcp`…, a
   page each) and [Getting Started](https://copilotz.com/docs/getting-started.md) (a booking app in
   10 chapters).
-- **The docs over MCP (planned, not live yet):** `https://copilotz.com/api/mcp`, over streamable
-  HTTP, will offer `search_docs`, `read_doc` and `agents_guide`. The Copilotz plugin (for Claude
-  Code, Codex, Cursor, Copilot CLI and Gemini CLI) registers it. If those tools are there and
-  answer, use them; otherwise fetch the `.md` pages.
+- **The docs over MCP (coming, not live yet):** they'll offer `search_docs`, `read_doc` and
+  `agents_guide`, and the Copilotz plugin will register them once they're live. Until then, fetch
+  the `.md` pages.

@@ -45,7 +45,6 @@ const exported = async (spec: string, names: string[]): Promise<string[]> => {
 };
 
 /** The docs' MCP server: planned at copilotz.com, over streamable HTTP. */
-const DOCS_MCP = "https://copilotz.com/api/mcp";
 
 test("the copilotz skill's frontmatter is the Agent Skills spec's", () => {
   const skill = read("skills/copilotz/SKILL.md");
@@ -142,40 +141,30 @@ test("the copilotz skill names no version, and gives the commands it sets up", (
   assertNotEquals(read("scripts/npm/build.ts").indexOf(`"AGENTS.md"`), -1);
 });
 
-test("the plugin manifests agree: the copilotz plugin, Copilotz's version, the docs' MCP", () => {
+test("the plugin manifests agree: the copilotz plugin, Copilotz's version; no docs MCP until it's live", () => {
   const claude = json(".claude-plugin/plugin.json");
   const market = json(".claude-plugin/marketplace.json");
   const portable = json("plugin.json"); // Agent Plugins: Codex, Cursor, Copilot
-  const mcp = json("mcp.json");
   const gemini = json("gemini-extension.json");
-  const said = {
+  assertEquals({
     names: [claude.name, market.plugins[0].name, portable.name, gemini.name],
     versions: [claude.version, portable.version, gemini.version],
     source: market.plugins.map((plugin: { source: string }) => plugin.source),
-    schemas: [portable.$schema, mcp.$schema],
-    servers: [
-      claude.mcpServers["copilotz-docs"],
-      mcp.mcpServers["copilotz-docs"],
-      gemini.mcpServers["copilotz-docs"],
-    ],
-  };
-  assertEquals(said, {
+    schema: portable.$schema,
+  }, {
     names: ["copilotz", "copilotz", "copilotz", "copilotz"],
-    // scripts/version.ts doesn't list these yet: a release moves them by hand.
     versions: [deno.version, deno.version, deno.version],
     source: ["./"],
-    schemas: [
-      "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-      "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
-    ],
-    // Streamable HTTP, as each host spells it.
-    servers: [
-      { type: "http", url: DOCS_MCP },
-      { type: "streamable-http", url: DOCS_MCP },
-      { httpUrl: DOCS_MCP },
-    ],
+    schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   });
-  // Each host finds the skill in skills/ by itself; the skill names the same server.
+  // The docs over MCP aren't live yet: no manifest wires a server agents would fail to reach.
+  // Adding one back is a deliberate change, once it answers, naming the same URL everywhere.
+  const servers = [
+    claude.mcpServers,
+    gemini.mcpServers,
+    existsSync(join(ROOT, "mcp.json")) ? json("mcp.json").mcpServers : undefined,
+  ].filter((wired) => wired !== undefined);
+  assertEquals(servers, []);
+  // Each host finds the skill in skills/ by itself.
   assertEquals(existsSync(join(SKILL, "SKILL.md")), true);
-  assertNotEquals(read("skills/copilotz/SKILL.md").indexOf(DOCS_MCP), -1);
 });

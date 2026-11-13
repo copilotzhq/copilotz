@@ -317,10 +317,9 @@ copilot plugin install copilotzhq/copilotz                        # GitHub Copil
 gemini extensions install https://github.com/copilotzhq/copilotz  # Gemini CLI
 ```
 
-The plugins add the docs' MCP server, `https://copilotz.com/api/mcp` (`search_docs`, `read_doc`,
-`agents_guide`). It's coming soon: until it's live, their server won't connect, and the skill works
-without it. Cursor reads the same plugin once it's in the Cursor Marketplace; until then, use
-`npx skills add`.
+The docs over MCP (`search_docs`, `read_doc`, `agents_guide`) are coming; the plugins will add them
+once they're live, and the skill works without them. Cursor reads the same plugin once it's in the
+Cursor Marketplace; until then, use `npx skills add`.
 
 ## Status
 

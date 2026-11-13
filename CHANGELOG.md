@@ -55,8 +55,8 @@ hidden until shared) are gone, along with the `share` Action, `needs_share`, mes
 **The Copilotz agent plugin.** Coding agents can install a `copilotz` skill (`skills/copilotz/`:
 setup, the offline test loop with the scripted model, the rules, the audience rule included) with
 `npx skills add copilotzhq/copilotz`, or as a plugin: Claude Code (`.claude-plugin/`), Agent Plugins
-(`plugin.json`, read by Codex, Cursor and Copilot CLI) and Gemini CLI (`gemini-extension.json`).
-Each also declares the Copilotz docs over MCP (`https://copilotz.com/api/mcp`, coming).
+(`plugin.json`, read by Codex, Cursor and Copilot CLI) and Gemini CLI (`gemini-extension.json`). The
+docs over MCP come in a later change, once they're live: no manifest wires a server before then.
 `testing/skill.test.ts` checks the skill's imports, docs slugs, links and commands, and that the
 manifests agree; the release script now sets their versions too.
 

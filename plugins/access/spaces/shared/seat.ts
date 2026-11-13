@@ -6,7 +6,7 @@
  */
 import { type Context, invalid } from "../../../../runtime/mod.ts";
 import { keepsAManager } from "./managers.ts";
-import { rolesOf } from "./reach.ts";
+import { PUBLIC, rolesOf } from "./reach.ts";
 
 /** Checks `role` for `member` (`person:ana`); keeping a manager only where it's a space's own. */
 export function checkRole(ctx: Context, member: string, role: string) {
@@ -17,6 +17,9 @@ export function checkRole(ctx: Context, member: string, role: string) {
   }
   if (member.startsWith("key:") && verbs.includes("manage")) {
     throw invalid("A key works here as a viewer or an editor.");
+  }
+  if (member === PUBLIC && verbs.some((verb) => verb !== "read")) {
+    throw invalid("The public only reads a space: as a viewer.");
   }
   if (member.startsWith("contact:") && verbs.includes("manage")) {
     throw invalid("A contact reads or writes in what's shared with them, never manages it.");

@@ -83,7 +83,7 @@ export {
 } from "./shared/names.ts";
 export { audience, beyond, may, must, mustOwnOr, present, sharedWith } from "./shared/can.ts";
 export type { Beyond } from "./shared/audience.ts";
-export { ORG, runsOrg } from "./shared/reach.ts";
+export { ORG, PUBLIC, runsOrg } from "./shared/reach.ts";
 export { PERSONAL } from "./shared/personal.ts";
 export { AGENT_ROLES } from "./views/web/who.ts";
 

@@ -79,8 +79,16 @@ const ALL: Verb[] = ["read", "write", "manage"];
 export const keyOf = (actor: { kind: string; key?: unknown }): string | undefined =>
   actor.kind === "person" && typeof actor.key === "string" ? actor.key : undefined;
 
-/** How an actor appears as a member: `person:ana`; a key of hers, `key:<id>`. */
+/**
+ * The public, as a member (`public`): whoever calls a public interface
+ * without being anyone. A space lets them read it by having them as a
+ * viewer; they reach nothing more.
+ */
+export const PUBLIC = "public";
+
+/** How an actor appears as a member: `person:ana`; a key of hers, `key:<id>`; the public. */
 export const memberKey = (actor: { kind: string; id: string; key?: unknown }): string => {
+  if (actor.kind === PUBLIC) return PUBLIC;
   const key = keyOf(actor);
   return key === undefined ? `${actor.kind}:${actor.id}` : `key:${key}`;
 };
@@ -336,6 +344,16 @@ const worksFor = (actor: Actor): Actor | undefined =>
 
 async function unlimited(actor: Actor, ctx: ReadContext): Promise<Reach> {
   const principal = worksFor(actor);
+  // The public reads the spaces that have it as a member, those alone (not what they draw on).
+  if (actor.kind === PUBLIC) {
+    const open = await ctx.db.collection<Member>("member").find({ member: PUBLIC });
+    return new Map(
+      open.filter((m) => !m.on && m.space !== ORG).map((m) => [
+        m.space,
+        { can: new Set<Verb>(["read"]) },
+      ]),
+    );
+  }
   if (!principal) {
     if (actor.kind === "person" && actor.staff === true) return await everything(ctx);
     const role = await orgRoleOf(actor, ctx);

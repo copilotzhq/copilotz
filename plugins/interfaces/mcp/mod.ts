@@ -57,8 +57,15 @@
  *   they draw on. No handle, no widgets. Its limits are calls at once (on the
  *   server, from an address), calls a minute from one address
  *   (`ipPerMinute`) and on the server (`linePerMinute`), counted in memory of
- *   a fixed size, and its `timeout`, past which a call is stopped. A server
- *   is public or keeps conversations: an app that wants both declares two.
+ *   a fixed size, and its `timeout`, past which a call is stopped. A caller's
+ *   address is read as the app's front says it (the `caller` resource: its
+ *   header, believed only with the front's secret or through its `hops`), so
+ *   an address claimed around the front counts for nothing; behind a proxy,
+ *   set `caller`, or every call counts as the proxy's. Each Action its tools
+ *   call is asked its `allow` for the public (`publicCallers`, or `true`):
+ *   make them unrecorded (`record: false`), or each call still leaves their
+ *   events. A server is public or keeps conversations: an app that wants
+ *   both declares two.
  * - **The protocol** (see resources/server.ts): MCP's Streamable HTTP,
  *   JSON-RPC 2.0, with no session; 2026-07-28 and the versions with a
  *   handshake (2025-11-25, 2025-06-18, 2025-03-26). Tools are what it serves,
@@ -120,6 +127,9 @@
  *   },
  * }
  * views: { "tool:search_trips": tripsForModels }   // each offered tool's, in a plugin
+ *
+ * // A public server's readers: the public, a viewer of what its tools read (from trusted code).
+ * await runtime.call("member.set", { space: "docs", member: { kind: "public", id: "" }, role: "viewer" });
  *
  * // With widgets: a tool drawn by a View, an Action only the widget calls, the template's domain.
  * tools: {

@@ -1,4 +1,7 @@
-## 1.0.0-rc.46 — 2026-11-13
+## 1.0.0-rc.47 — 2026-11-13
+
+(rc.46 was tagged but never published: a file wasn't formatted, and a test read Windows line endings
+as part of the text. This is it.)
 
 **Breaking: what an agent may say is bounded by who will see it.** The old labels (marks on answers,
 hidden until shared) are gone, along with the `share` Action, `needs_share`, message `sources`, the

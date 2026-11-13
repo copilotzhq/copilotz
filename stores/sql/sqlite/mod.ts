@@ -233,7 +233,7 @@ export async function sqliteStore(options: {
    * connections are open, so the cache counts twice, and mapped pages count
    * in the process's RSS once read: small, for containers. A large file on a
    * machine with memory to spare reads faster with more (`cacheKiB: 65_536,
-   * mmapMiB: 256`, the sizes before 1.0.0-rc.46).
+   * mmapMiB: 256`, the sizes before 1.0.0-rc.47).
    */
   cacheKiB?: number;
   mmapMiB?: number;

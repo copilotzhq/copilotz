@@ -39,7 +39,7 @@ and mapped pages once they're read. Small sizes leave a container's memory to th
 a machine with memory to spare reads faster with more:
 
 ```ts
-const store = await sqliteStore({ path, cacheKiB: 65_536, mmapMiB: 256 }); // the sizes before rc.46
+const store = await sqliteStore({ path, cacheKiB: 65_536, mmapMiB: 256 }); // the sizes before rc.47
 ```
 
 With the docs app's shape (an MCP server, 1,000 calls), the larger sizes peaked 15 to 40 MiB higher

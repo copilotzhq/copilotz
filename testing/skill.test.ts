@@ -19,7 +19,8 @@ import { test } from "./mod.ts";
 
 const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), ".."));
 const SKILL = join(ROOT, "skills", "copilotz");
-const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
+// Windows checks files out with CRLF line endings; the patterns read LF.
+const read = (path: string) => readFileSync(join(ROOT, path), "utf8").replaceAll("\r\n", "\n");
 const json = (path: string) => JSON.parse(read(path));
 
 /** SKILL.md and its references, by path from the repository's root. */

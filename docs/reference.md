@@ -14,17 +14,21 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 ## Install
 
 ```sh
-npm install copilotz                 # Node 24+ (npm, pnpm, yarn)
-bun add copilotz                     # Bun
-deno add jsr:@copilotz/copilotz      # Deno 2.9+ (or `deno add npm:copilotz`)
+npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
+bun add copilotz@next                          # Bun
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.45   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.34"`), and the
+Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
+`deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
+the version.
+
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.45"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
-too, at Copilotz's version (`npm install @copilotz/work`, `deno add jsr:@copilotz/work`): see
-[Product packages](#product-packages).
+too, at Copilotz's version (`npm install @copilotz/work@next`,
+`deno add jsr:@copilotz/work@^1.0.0-rc.45`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -83,7 +87,7 @@ same plugin, with less code in the server's memory.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.34` goes with `copilotz@1.0.0-rc.34`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.45` goes with `copilotz@1.0.0-rc.45`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.

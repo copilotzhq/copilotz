@@ -53,7 +53,7 @@ test("an agent lists and reads conversations: its space's from anywhere, others'
       definePlugin({
         name: "app",
         resources: {
-          shared: { thread: {}, message: { labels: true } },
+          shared: { thread: {}, message: { drew: true } },
           provider: { s: { adapter: "s" } },
           agents: {
             lead: {

@@ -1,6 +1,7 @@
 /**
  * Chats as lists show them (`thread.recent`'s answers): what each is called
- * (its title, else what was said first, else last), whether it matches what
+ * (its title, staff notes and held threads saying what they are around
+ * theirs; else what was said first, else last), whether it matches what
  * was searched, and grouped by when they were last written in: today,
  * yesterday, this week, this month, then by month.
  */
@@ -14,9 +15,21 @@ export type Listed = Thread & { messages: number; first?: string; last?: string 
 
 const line = (text?: string) => plain(text) || undefined;
 
+/**
+ * What a thread is called by its document: its title; for one code made
+ * beside a chat, what it is around that chat's own title, in the reader's
+ * words ("Staff notes: Order 123", "Held from Launch plan"). Undefined for
+ * a chat with no title yet.
+ */
+export function threadTitle(t: Pick<Thread, "title" | "about" | "held">): string | undefined {
+  const title = line(t.title);
+  if (!t.about && !t.held) return title;
+  return say(t.about ? "notesOf" : "heldFrom", { title: title ?? say("aConversation") });
+}
+
 /** What a chat is called in a list. */
 export const titleOf = (t: Listed): string =>
-  line(t.title) ?? line(t.first) ?? line(t.last) ?? say("newChat");
+  threadTitle(t) ?? line(t.first) ?? line(t.last) ?? say("newChat");
 
 /** What was said last, when it says more than the title. */
 export const lastOf = (t: Listed): string | undefined => {
@@ -29,7 +42,7 @@ export function matches(t: Listed, search: string): boolean {
   const fold = (text: string) => text.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
   const words = fold(search).split(/\s+/).filter(Boolean);
   if (!words.length) return true;
-  const said = fold([t.title, t.first, t.last].filter(Boolean).join(" "));
+  const said = fold([titleOf(t), t.first, t.last].filter(Boolean).join(" "));
   return words.every((word) => said.includes(word));
 }
 

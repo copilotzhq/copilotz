@@ -70,6 +70,8 @@ export const setMemberAction = defineAction({
       member: who,
       role: { type: "string" },
       on: { type: "string" },
+      /** A space drawing on this one lets its contacts read it too. */
+      contacts: { type: "string", enum: ["read"] },
     },
     required: ["space", "member", "role"],
     additionalProperties: false,
@@ -101,7 +103,7 @@ export const setMemberAction = defineAction({
           { code: "invalid" },
         );
       }
-      await seat(ctx, place, key, input.role);
+      await seat(ctx, place, key, input.role, input.contacts as "read" | undefined);
     } else {
       await ctx.as().db.collection("member").replaceOne(
         { _id: `${place}|${key}` },

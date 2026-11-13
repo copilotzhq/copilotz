@@ -95,10 +95,9 @@ function screens(): ReactNode[] {
       from: "ana",
       to: ["bob"],
       via: { kind: "routine", name: "Morning news" },
-      sources: ["Launch"],
       files: [],
     }),
-    msg({ turn: "x", toolCalls: [{ id: "c1", name: "clock", output: "9" }], sources: ["Launch"] }),
+    msg({ turn: "x", toolCalls: [{ id: "c1", name: "clock", output: "9" }], drew: ["launch"] }),
   ];
   return [
     <Missing fresh="/" />,
@@ -317,7 +316,6 @@ test("with no words set, the English reads as it always did", () => {
       "1 message",
       "3 messages",
       "Good ",
-      "Uses <b>Launch</b>. Not everyone here can see it.",
       "Routine: Morning news",
       "Asked in a side thread",
       "This chat isn&#x27;t here",

@@ -5,7 +5,10 @@
  * and calls each occurrence's Action with the occurrence's id, so the log
  * keeps it once however often it's called. A failed occurrence's next attempt
  * is a timer too, calling again as the same occurrence; one that a stop cut
- * short runs again (as itself) when the owner starts.
+ * short runs again (as itself) when the owner starts. A declared timer that
+ * runs once (`once`) stays after it ran, as the record that it did: its
+ * declaration unchanged, it never runs again; unfinished, its attempts
+ * spent, it runs again when the owner next starts.
  */
 import type { ActionDef } from "./define.ts";
 import type { Metrics } from "./metrics.ts";
@@ -67,6 +70,13 @@ export function createTimers(options: {
   metrics: Metrics;
 }): Timers {
   const { store, clock, schedules, actions, signal } = options;
+  /** A declared schedule's input: as declared, or, left out, `{}` where its Action takes an object. */
+  const inputOf = (def: { call: string; input?: unknown }): unknown =>
+    def.input !== undefined
+      ? def.input
+      : (actions[def.call]?.input as { type?: unknown } | undefined)?.type === "object"
+      ? {}
+      : undefined;
   const lateness = options.metrics.histogram("copilotz.timer.lateness", {
     unit: "ms",
     description: "How long after its time a timer's occurrence was called",
@@ -77,10 +87,10 @@ export function createTimers(options: {
     try {
       if (!action) throw invalid(`calls unknown action "${def.call}"`);
       if ((def as { at?: unknown }).at !== undefined) {
-        throw invalid("recurs: it takes `cron` or `every`, not `at`");
+        throw invalid("takes `cron`, `every` or `once`, not `at`");
       }
-      timer(name, def.call, def.input, def, clock.now());
-      if (action.input) compile(action.input, `input`)(def.input);
+      timer(name, def.call, inputOf(def), def, clock.now());
+      if (action.input) compile(action.input, `input`)(inputOf(def));
     } catch (error) {
       throw invalid(`Schedule "${name}": ${(error as Error).message}`);
     }
@@ -105,8 +115,10 @@ export function createTimers(options: {
   /**
    * Settles an occurrence: a one-off goes, and a failure with attempts left
    * comes back as a retry timer, after a wait that grows with each attempt.
+   * A declared timer that runs once stays, and once its occurrence is done
+   * (`done`), says so: it's running no more.
    */
-  const settle = async (t: Timer, id: string, retry: boolean) => {
+  const settle = async (t: Timer, id: string, retry: boolean, done = false) => {
     const ops: WriteOp[] = [];
     let again = false;
     if (retry) {
@@ -119,12 +131,24 @@ export function createTimers(options: {
           ...(t.input === undefined ? {} : { input: t.input }),
           retries: t.retries,
           retry: true,
+          ...(t.once ? { once: true as const } : {}),
           at: iso(clock.now() + backoff(attempts)),
         }));
       }
     }
-    // A retry timer that retries again is replaced above; otherwise a one-off goes.
-    if (!recurs(t) && !(again && t._id === id)) ops.push(drop(t));
+    // A retry timer that retries again is replaced above; otherwise a one-off goes, but the
+    // declared timer that runs once: it stays, the record that it ran.
+    const kept = t.once && !t.retry;
+    if (!recurs(t) && !kept && !(again && t._id === id)) ops.push(drop(t));
+    if (t.once && done) {
+      ops.push({
+        op: "update",
+        collection: TIMERS,
+        filter: { _id: scheduledOf(id).timer, once: true, at: { $exists: false } },
+        update: { $unset: { running: true } },
+        options: {},
+      });
+    }
     if (ops.length) await options.write(ops);
   };
 
@@ -145,7 +169,7 @@ export function createTimers(options: {
     const retry = failed !== undefined && code !== "invalid" && code !== "id_conflict";
     // The log holds every other failure; this one never started.
     if (code === "id_conflict") report(`calling ${id}`, failed);
-    await settle(t, id, retry).catch((error) => report("settling", error));
+    await settle(t, id, retry, failed === undefined).catch((error) => report("settling", error));
   };
 
   const start = (t: Timer, id: string) => {
@@ -262,6 +286,9 @@ export function createTimers(options: {
         return { op: "delete", collection: TIMERS, filter: { _id: op.timer }, options: {} };
       }
       if (!actions[op.call]) throw invalid(`Unknown action "${op.call}"`);
+      if ((op.when as { once?: unknown }).once !== undefined) {
+        throw invalid("`once` is a declared schedule's: a one-off at a time takes `at`");
+      }
       const set = timer(op.timer, op.call, op.input, op.when, clock.now());
       return replace(actor ? { ...set, actor } : set);
     },
@@ -291,8 +318,9 @@ export function createTimers(options: {
         for (const id of t.running ?? []) {
           if (id !== t._id && waiting.has(id)) continue;
           const { attempts, completed } = await outcome(store, id);
-          if (!completed && attempts <= t.retries) start(t, id);
-          else await settle(t, id, false);
+          // One that runs once and isn't done gets another go each time the owner starts.
+          if (!completed && (attempts <= t.retries || (t.once && !t.retry))) start(t, id);
+          else await settle(t, id, false, completed);
         }
       }
 
@@ -305,7 +333,7 @@ export function createTimers(options: {
       const byId = new Map(found.map((t) => [t._id, t]));
       const ops: WriteOp[] = [];
       for (const [name, def] of Object.entries(schedules)) {
-        const wanted: Timer = { ...timer(name, def.call, def.input, def, now), declared: true };
+        const wanted: Timer = { ...timer(name, def.call, inputOf(def), def, now), declared: true };
         const have = byId.get(name);
         if (have?.declared && sameSchedule(have, wanted)) continue;
         const keep = running(wanted);

@@ -44,7 +44,25 @@ curl https://app.example.com/maintenance/sql -H "authorization: Bearer $KEY" \
 | `POST /maintenance/sql/write`                     | `{ sql, params?, limit?, timeout? }`: one that writes, in the owner: `{ changed, rows, event }`        |
 | `POST /maintenance/collections/<collection>/<op>` | `insertOne` `{ doc }`… `deleteMany` `{ filter }`, and `find`, `findOne`, `countDocuments`, `aggregate` |
 | `POST /maintenance/queries/<collection>.<name>`   | A collection's named query (`booking.stats`), the body its params: `{ result, ms }`                    |
+| `POST /maintenance/actions/<action>`              | An Action made for operators (`allow: isMaintenance`), the body its input: `{ result, ms }`            |
 | `GET /maintenance/blobs/<sha256-…>`               | A blob's bytes and type, as a download                                                                 |
+
+## Migrations
+
+A plugin that changes how it keeps its data moves what's there itself, once, when the app first
+starts with it: a schedule declared `once: true` (see the reference's Schedules). Its Action lets
+operators in too (`allow: isMaintenance`), so it can be run again, or tried dry first. Chat's
+`chat.unmark`, which takes the old marks (`sources`) off messages, says what it would do with
+`{ "dryRun": true }`: counts by kind, and every id it would touch.
+
+```sh
+curl https://app.example.com/maintenance/actions/chat.unmark -H "authorization: Bearer $KEY" \
+  -H "content-type: application/json" -d '{"dryRun": true}'
+```
+
+To rehearse against a copy of a database before the deploy, without the app, Copilotz's repository
+has a script that reads the store and writes nothing (`DATABASE_URL`, `DATABASE_SCHEMA` and
+`DATABASE_TENANT`, or `SQLITE_PATH`): `deno task unmark --dry-run`.
 
 ## Keys
 

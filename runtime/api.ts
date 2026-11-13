@@ -69,7 +69,7 @@ const STATUS: Record<string, number> = {
   unauthorized: 401,
   forbidden: 403,
   not_here: 403,
-  needs_share: 403,
+  needs_approval: 403,
   not_found: 404,
   method: 405,
   duplicate_key: 409,

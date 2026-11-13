@@ -45,6 +45,27 @@
  *   front says it (`caller`: its header, and its secret, without which a
  *   request is refused, or the proxies' hops); one that can't be read counts
  *   with every other such call, as one caller.
+ * - **A public server** (`public: true`; see resources/public.ts and
+ *   actions/public.ts) keeps nothing: each call runs its tool as the public
+ *   (`{ kind: "public", id: "" }`, `publicCallers`), with no contact, chat,
+ *   step, receipt or counter in the store, and, unrecorded, no event. It
+ *   offers only the tools that only read (`annotations.readOnly`, which
+ *   chooses what's listed; the public's reach is what keeps it from
+ *   writing), and whose `offer` doesn't say no to the public. What they read
+ *   is what the public reaches: the spaces that have it as a viewer
+ *   (`member.set` with `{ kind: "public", id: "" }`), those alone, not what
+ *   they draw on. No handle, no widgets. Its limits are calls at once (on the
+ *   server, from an address), calls a minute from one address
+ *   (`ipPerMinute`) and on the server (`linePerMinute`), counted in memory of
+ *   a fixed size, and its `timeout`, past which a call is stopped. A caller's
+ *   address is read as the app's front says it (the `caller` resource: its
+ *   header, believed only with the front's secret or through its `hops`), so
+ *   an address claimed around the front counts for nothing; behind a proxy,
+ *   set `caller`, or every call counts as the proxy's. Each Action its tools
+ *   call is asked its `allow` for the public (`publicCallers`, or `true`):
+ *   make them unrecorded (`record: false`), or each call still leaves their
+ *   events. A server is public or keeps conversations: an app that wants
+ *   both declares two.
  * - **The protocol** (see resources/server.ts): MCP's Streamable HTTP,
  *   JSON-RPC 2.0, with no session; 2026-07-28 and the versions with a
  *   handshake (2025-11-25, 2025-06-18, 2025-03-26). Tools are what it serves,
@@ -86,6 +107,11 @@
  *   for anyone), a grant (`ctx.as(grant(…))`), and collections no rule
  *   speaks for (trusted code reads them whole). Those are what to review in
  *   a tool before a line offers it.
+ * - **On a public server, the same, for anyone at all.** A tool there that
+ *   goes past the public's reach (`ctx.as()`, an Action without an `allow`)
+ *   hands whatever it reads to anyone who asks: only a deliberate
+ *   declassifier should, scoped to what it's for, taking no free-form query
+ *   that could widen it, and returning only what anyone may see.
  *
  * ```ts
  * plugins: [models, chat, ...access, mcp]
@@ -96,9 +122,14 @@
  *   mcp: {
  *     chatgpt: { in: "customers", client: "ChatGPT", handles: false, exempt: OPENAI_EGRESS,
  *       tools: { search_trips: { annotations: { readOnly: true }, invoking: "Buscando…" } } },
+ *     // Anyone's, keeping nothing: tools that only read, what the public reaches.
+ *     docs: { in: "docs", public: true, tools: { search_docs: {}, read_doc: {} } },
  *   },
  * }
  * views: { "tool:search_trips": tripsForModels }   // each offered tool's, in a plugin
+ *
+ * // A public server's readers: the public, a viewer of what its tools read (from trusted code).
+ * await runtime.call("member.set", { space: "docs", member: { kind: "public", id: "" }, role: "viewer" });
  *
  * // With widgets: a tool drawn by a View, an Action only the widget calls, the template's domain.
  * tools: {
@@ -112,6 +143,7 @@ import { definePlugin, linksOf, type Plugin } from "../../../runtime/mod.ts";
 import { callAction } from "./actions/call.ts";
 import { conversationAction } from "./actions/conversation.ts";
 import { pruneAction } from "./actions/prune.ts";
+import { publicAction } from "./actions/public.ts";
 import { closed } from "./collections/closed.ts";
 import { opening } from "./collections/opening.ts";
 import { rate } from "./collections/rate.ts";
@@ -136,6 +168,7 @@ export const mcp: Plugin = definePlugin({
     "mcp.call": callAction,
     "mcp.conversation": conversationAction,
     "mcp.prune": pruneAction,
+    "mcp.public": publicAction,
   },
   processors: { "mcp.forgotten": forgottenProcessor, "mcp.erased": erasedProcessor },
   // What's past goes: counters, receipts, openings.

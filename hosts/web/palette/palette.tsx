@@ -6,7 +6,8 @@
  * hints, and `search`), observed only while it's open; and the page's own
  * groups. Items go somewhere, do something (an Action), or open a step of
  * their own, a list over this one ("Move to…", then a space), opened from
- * anywhere with `openPalette(step)`.
+ * anywhere with `openPalette(step)`; a step's pick may open one more (the
+ * space picked, then whether to move there), and its note may be a View.
  *
  * Keyboard first, as a combobox: typing filters, ↑ ↓ (or Ctrl+N, Ctrl+P)
  * move, Enter chooses, Escape goes back a step or closes it, and Backspace
@@ -53,6 +54,7 @@ import {
   type PaletteItem,
   paletteState,
   type PaletteStep,
+  pickIn,
 } from "./state.ts";
 
 const SHEET = sheet(
@@ -227,27 +229,27 @@ export function Palette(
     setActive(undefined);
     setError(undefined);
   };
-  const control = (moved: { yes: boolean }): PaletteControl => ({
-    search,
-    push(next) {
-      moved.yes = true;
-      push(next);
-    },
-    back() {
-      moved.yes = true;
-      back();
-    },
-    close: closePalette,
-    async pick(value) {
-      const asker = [...entries].reverse().find((e) => e.step?.pick)?.step;
-      return await asker?.pick?.(value);
-    },
-    dialog(shown) {
-      moved.yes = true;
-      setDialog({ ...shown, open: true });
-      closePalette();
-    },
-  });
+  const control = (moved: { yes: boolean }): PaletteControl => {
+    const palette: PaletteControl = {
+      search,
+      push(next) {
+        moved.yes = true;
+        push(next);
+      },
+      back() {
+        moved.yes = true;
+        back();
+      },
+      close: closePalette,
+      pick: (value) => pickIn(entries.map((e) => e.step), value, palette),
+      dialog(shown) {
+        moved.yes = true;
+        setDialog({ ...shown, open: true });
+        closePalette();
+      },
+    };
+    return palette;
+  };
 
   const choose = async (item: PaletteItem) => {
     if (item.disabled || busy) return;
@@ -359,7 +361,7 @@ export function Palette(
             {say("cancel")}
           </Button>
         </div>
-        {step?.note ? <p className="copilotz-palette-note">{step.note}</p> : null}
+        {step?.note ? <div className="copilotz-palette-note">{step.note}</div> : null}
         {error
           ? (
             <Notice tone="destructive" role="alert" className="copilotz-palette-error">

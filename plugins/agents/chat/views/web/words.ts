@@ -1,4 +1,8 @@
-/** Every word Chat's web front end shows, to be changed by the app (`chat.<key>`). */
+/**
+ * Every word Chat's web front end shows, to be changed by the app
+ * (`chat.<key>`). The terminal says what it shares with the web in them too
+ * (asks, a reply held elsewhere), in English unless its host sets words.
+ */
 import { defineWords } from "../../../../../hosts/web/words.ts";
 
 export const say = defineWords("chat", {
@@ -52,10 +56,17 @@ export const say = defineWords("chat", {
   couldntAnswer: "Couldn't answer.",
   askedInSideThread: "Asked in a side thread",
   waitingOnAnswer: "Waiting on your answer: your next message replies.",
-  usesSources: "Uses {sources}. Not everyone here can see it.",
-  share: "Share",
   stopped: "Stopped",
   copyReply: "Copy reply",
+  // Where a reply went that not everyone here could read (a message's `held`)
+  heldMoved: "A reply only {name} could see was moved to their Personal space.",
+  heldBack: "A reply only some here could see was held back.",
+  answerWentTo: "The answer went to {name} only.",
+  answerStayed: "The answer stayed where it was written.",
+  // Conversations code made, around their chat's own title
+  notesOf: "Staff notes: {title}",
+  heldFrom: "Held from {title}",
+  aConversation: "a conversation",
   // What an agent is doing
   messaging: "Messaging {names}",
   messaged: "Messaged {names}",
@@ -201,4 +212,107 @@ export const say = defineWords("chat", {
   keywordConversation: "conversation",
   moveTitle: "Move “{title}” to…",
   moveNote: "Its messages, files and subthreads go with it, for the people in that space to see.",
+  // Moving: who'll see it, before it's done
+  moveConfirm: "Move “{title}” to {space}?",
+  moveTo: "Move to {space}",
+  keepWhereItIs: "Keep it where it is",
+  movingEveryone: {
+    one: "Everyone in {space} ({count} person) will see this whole conversation.",
+    other: "Everyone in {space} ({count} people) will see this whole conversation.",
+  },
+  movingEveryoneThere: "Everyone in {space} will see this whole conversation.",
+  movingYours: "Only you will see this conversation, in your Personal space.",
+  movingTheirs: "{name} will see this whole conversation, in their Personal space.",
+  movingDrew: "It drew on {spaces}.",
+  yourPersonalSpace: "your Personal space",
+  theirPersonalSpace: "{name}'s Personal space",
+  anotherSpace: "another space",
+  otherSpaces: {
+    one: "{count} other space",
+    other: "{count} other spaces",
+  },
+  // Staff notes: beside a chat shared outside its space, for its team only
+  notesTitle: "Staff notes",
+  notesWithCount: {
+    one: "Staff notes, {count} message",
+    other: "Staff notes, {count} messages",
+  },
+  notesOnlyTeam: "Only your team sees this",
+  notesNever: "Only your team sees this, never {name}",
+  notesClose: "Close staff notes",
+  notesAsPage: "Open staff notes as a page",
+  notesViews: "The conversation, or its staff notes",
+  notesPlaceholder: "Ask an agent or leave a note for your team…",
+  notesEmptyTitle: "Your team's side of this conversation",
+  notesEmptyBody:
+    "Ask an agent to look something up or draft a reply, or leave a note for whoever picks this up. Nothing here reaches {name}.",
+  notesAbout: "Staff notes about the conversation with {name}",
+  openConversation: "Open conversation",
+  yourContact: "your contact",
+  sharedWith: "Shared with {name}",
+  answersWhereSeen:
+    "{agents} will answer here, where {name} can read it. To look something up just for your team, ask in staff notes.",
+  askInNotes: "Ask in staff notes",
+  // A draft in the notes, sent on to the chat
+  sendToName: "Send to {name}…",
+  sendToNameNow: "Send to {name}",
+  yourMessageTo: "Your message to {name}",
+  sendsAsYou: "It goes as you, and {name} will see it.",
+  sentTo: "Sent to {name}",
+  // What agents wait on you for: a card each, over where you type, and the terminal's notice
+  waitingOnYou: "Waiting on you",
+  answers: "Answers",
+  inSideThread: "in a side thread ·",
+  wantsTo: "{agent} wants to {doing}",
+  askerFor: "{agent} (for {name})",
+  doingPost: "post this to {place}",
+  doingSend: "send this to {place}",
+  doingPostAnswer: "post its answer in {place}",
+  doingSendAnswer: "send its answer to {place}",
+  coversPost: "post to {place}",
+  coversSend: "send to {place}",
+  askPost: "Post this to {place}?",
+  askSend: "Send this to {place}?",
+  askBack: "Post {agent}'s answer here?",
+  seenByName: "{name} will see it.",
+  seenByMembers: {
+    one: "Its one member will see it.",
+    other: "Its {count} members will see it.",
+  },
+  workMayDraw: "{agent}'s work here may draw on things not everyone there can see.",
+  workMayDrawName: "{agent}'s work here may draw on things {name} can't see.",
+  answerMayDraw: "It may draw on things not everyone here can see.",
+  answerMayDrawName: "It may draw on things {name} can't see.",
+  wouldPost: "What {agent} would post",
+  wouldSend: "What {agent} would send",
+  answered: "What {agent} answered",
+  wouldDo: "What it would do",
+  // The answers an ask takes, as its buttons say them
+  answerOnce: "Yes, this once",
+  answerThread: "Yes, for this conversation",
+  answerRoutine: "Yes, for this routine",
+  answerOrigin: "Yes, for this {kind}",
+  answerAlways: "Yes, always",
+  answerNo: "No",
+  answerHere: "Post here",
+  answerMe: "Send it to me only",
+  // What each answer lets, over its button
+  letsOnce: "{agent} may {doing}, this once.",
+  letsThread: "{agent} may {doing} without asking again, in this conversation.",
+  letsOrigin:
+    "{agent} may {doing} without asking again, whenever “{name}” runs, until it's changed. It won't cover anything you ask it yourself.",
+  letsAlways: "{agent} may {doing} without asking again, in any conversation.",
+  letsNo: "{agent} is told no, and goes on without it.",
+  letsHere: "It goes in this conversation, for everyone in it.",
+  letsMe: "It goes to your Personal space, where only you see it.",
+  // In the sidebar: what waits on you in other chats
+  needsYourOk: "{agent} needs your OK",
+  asksCount: {
+    one: "{count} ask",
+    other: "{count} asks",
+  },
+  moreWaiting: {
+    one: "and {count} more chat waiting on you",
+    other: "and {count} more chats waiting on you",
+  },
 });

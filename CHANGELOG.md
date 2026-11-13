@@ -1,3 +1,98 @@
+## 1.0.0-rc.46 — 2026-11-13
+
+**Breaking: what an agent may say is bounded by who will see it.** The old labels (marks on answers,
+hidden until shared) are gone, along with the `share` Action, `needs_share`, message `sources`, the
+"Uses … Not everyone here can see it." notice and `/share`. In their place:
+
+- **The bound.** An agent's work reads only what both its asker and its destination reach: a space
+  and what it draws on; a customer's chat, what that customer reaches; its person's own Personal
+  space, all they reach. Its answer there shows nobody what they couldn't see, so nothing is ever
+  hidden once written. The turn's agent carries its conversation (`thread`), and so does a tool
+  acting as its agent's person.
+- **Going wider asks first.** Writing anywhere whose readers don't all reach that bound (a Personal
+  space's agent posting in Launch, a team's agent writing into a customer's chat, handing work to
+  another space) is refused with `needs_approval` (`to`, `named`), and the turn asks its person:
+  "May I post this to Launch? Its 12 members will see it.", yes this once, for this conversation,
+  for the routine that set it going, or no; never always. On a yes it runs again. Don't catch
+  `needs_approval` in a tool: let it through.
+- **One ask for every plugin, in chat** (`approval`, `grant`, `chat.approve`, `chat.forgetGrant`):
+  each ask says which answers it takes. Computers use it (`computer.approve` and
+  `computer.forgetGrant` are gone); their stored asks and yeses move over on the first start
+  (`computer.upgradeAsks`).
+- **Answers handed back** from another space ask "Post here" / "Send it to me only" where that
+  space's people don't all reach what the work drew on; from a Personal space they never ask. Work
+  handed over from inside a customer's chat is refused: staff use its notes.
+- **In front of a customer,** trusted code going beyond its caller runs only in an Action a contact
+  may call, or the app's own (no `allow`), recorded or not. A tool that goes past its caller,
+  offered to a contact or the public, is a declassifier: scope it to them (AGENTS.md).
+- **A space drawing on another may let its contacts read it:** `member.set` with `contacts: "read"`
+  (read only, one level), for a catalog or policies a line's customers may see.
+- **Staff notes** beside a customer's chat (`<chat>:notes`, `chat.notes`): the team works with its
+  agents there, with the space's reach; the customer never sees it; a reply goes over as the
+  person's own message.
+- **Moving a conversation names what it shows:** "Everyone in Launch (12) will see this whole
+  conversation. It drew on Squad 1 and Finance." (`thread.moving`), from what its agents' messages
+  record they drew on (`drew`: a record, never a gate, and only spaces their readers reach).
+- **The public:** `{ kind: "public" }` (`publicCallers`) reads only the spaces that have it as a
+  viewer, and writes nothing; a call with no actor is still no one.
+- **Migration, by itself on the first start:** `chat.unmark` moves what the old marks kept hidden:
+  in a Personal space they become `drew`; in a customer's chat, the message moves to its staff
+  notes; elsewhere, to the Personal space of whom it answered, leaving a placeholder. One log line
+  of counts. `deno task unmark --dry-run` rehearses it against a database, writing nothing. Until it
+  has run, a contact reads nothing that still carries the old marks.
+- **What code writes is kept as what happened, and said in the reader's words.** A line where a
+  reply went (the migration's placeholders; an answer handed back that went to its asker alone, or
+  stayed) is a message's `held` (`{ for: <person> }`, or `{}`), with no text. Staff notes and what
+  was held from a chat keep that chat's title as it is, `about` and `held: { from }` saying what
+  they are. A share's or a hand-back's ask keeps where and to how many, not a sentence. Views say
+  them in chat's words (`chat.heldMoved`, `chat.notesOf`, `chat.heldFrom`, `chat.askPost`…), English
+  by default, names as they are when read; the asks' cards, the sidebar's waiting list and the
+  terminal's notice take every word from there. Agents are told them in English.
+- **Runtime:** a declared schedule may run `once` (on the first start with it); a failure's `detail`
+  reaches its caller; operators call `isMaintenance` Actions at
+  `POST /maintenance/actions/<action>`.
+- **Less memory for the same app.** The docs app's shape (an MCP server with 3 tools, on the memory
+  store), started, after a full GC: Deno 2.9 106 → 90 MiB RSS and Node 24 134 → 103 MiB, with 7 MiB
+  less heap, when it imports each plugin from its own entry point.
+  [Memory](docs/operations/memory.md), a new page, says how to run an app in a container of 512 MiB
+  or less, with what each setting saves:
+  - **The model catalog loads the first time a model is resolved,** not with the models plugin. An
+    app that never calls a model saves about 5 MiB of heap; one that does sees no change.
+  - **SQLite keeps a 2 MiB page cache per connection and maps nothing into memory,** where it kept
+    64 MiB and mapped up to 256 MiB: 15 to 40 MiB less at its peak over 1,000 calls.
+    `cacheKiB: 65_536, mmapMiB: 256` gives the old sizes back.
+  - **Copilotz needs Deno 2.9 or later.** On an older Deno, the SQLite store says so when it opens,
+    instead of failing at its first read ("column index out of range").
+  - **The read cache's size** is `createRuntime({ cache: { documents, queries } })` (10,000 and
+    1,000 by default); 1,000 and 100 kept 3.5 MiB less heap over 1,000 calls.
+  - **V8's young generation, capped** (`--max-semi-space-size=2` on Node,
+    `--v8-flags=--max-semi-space-size=2` on Deno), took 55 to 110 MiB off the peak over 1,000 calls.
+  - The suite holds the docs app's shape to a memory budget on Deno and Node
+    (`bench/memory/budget.test.ts`).
+- **A public MCP server keeps nothing** (`public: true` on `resources.mcp.<name>`, for a docs
+  site's): each call runs its tool as the public, with no contact, chat, step, receipt or event. It
+  lists only the tools that only read (`annotations.readOnly`), with no `chat` handle, and reads
+  what the spaces that have the public as a viewer hold. Calls are limited at once, a minute by
+  address (as the `caller` front says it, else the socket) and on the whole server (`ipPerMinute`,
+  `linePerMinute`), in memory of a fixed size, and stopped past `timeout`. The docs app's shape,
+  1,000 calls without a handle: from 5 documents and 17 events a call to none, from 31.7 KB of heap
+  kept a call to 1.5, and a peak of 261 MiB to 119, on Node 24 (on Deno 2.9: 25.7 KB to 1.0, 195 MiB
+  to 113). A tool offered there that goes past the public's reach is a declassifier (see the `mcp`
+  reference).
+- **New entry points, one per plugin:** `copilotz/plugins/agents/<name>` (`chat`, `history`,
+  `memory`, `skills`, `routines`, `openapi`, `webtools`), `copilotz/plugins/access/<name>`
+  (`spaces`, `identity`, `contacts`, `google`, `email`, `dev`, `accounts`) and
+  `copilotz/plugins/interfaces/<name>` (`mcp`, `api`, `whatsapp`, `voice`), on npm and JSR. Each
+  loads its plugin alone; the themes' entry points stay as they were.
+
+**The Copilotz agent plugin.** Coding agents can install a `copilotz` skill (`skills/copilotz/`:
+setup, the offline test loop with the scripted model, the rules, the audience rule included) with
+`npx skills add copilotzhq/copilotz`, or as a plugin: Claude Code (`.claude-plugin/`), Agent Plugins
+(`plugin.json`, read by Codex, Cursor and Copilot CLI) and Gemini CLI (`gemini-extension.json`). The
+docs over MCP come in a later change, once they're live: no manifest wires a server before then.
+`testing/skill.test.ts` checks the skill's imports, docs slugs, links and commands, and that the
+manifests agree; the release script now sets their versions too.
+
 ## 1.0.0-rc.45 — 2026-11-12
 
 - **AGENTS.md, a guide for coding agents.** Claude Code, Codex, Cursor or Gemini building an app

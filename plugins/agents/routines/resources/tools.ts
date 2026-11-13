@@ -154,6 +154,8 @@ const scheduleRoutine = tool({
           "when it first asks."
         : "Made it.";
     } catch (error) {
+      // Kept somewhere not everyone could see what this work may draw on: its person is asked.
+      if ((error as { code?: string }).code === "needs_approval") throw error;
       return `Couldn't make it: ${(error as Error).message}`;
     }
   },

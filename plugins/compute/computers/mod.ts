@@ -5,10 +5,11 @@
  * others (its desks: one per space, with a folder of its own there), where
  * every member, and their agents, use it; each with their own shell, jobs
  * and browser, so they never tread on each other. Running commands, starting
- * jobs and writing files wait for a yes (once, for the conversation, or
- * always): from the person the agent works for, or the computer's owner when
- * they keep that to themselves. The agent's turn waits for it, and goes on
- * once it's answered, the call running then. What a job serves gets an address of its own
+ * jobs and writing files wait for a yes (once, for the conversation, for a
+ * routine, or always), asked as chat asks for everything (its `ask`): of the
+ * person the agent works for, or the computer's owner when they keep that to
+ * themselves. The agent's turn waits for it, and goes on once it's answered,
+ * the call running then. What a job serves gets an address of its own
  * for the space's members (`computer.preview`, the `preview` tool), once the
  * app names a domain for previews (`computers: { previews }`: see
  * resources/previews.ts). A space's environment (variables and secrets, its
@@ -28,8 +29,6 @@ import { definePlugin, failure, personOf, type Plugin } from "../../../runtime/m
 import { admitAction } from "./actions/admit.ts";
 import { allowedAction } from "./actions/allowed.ts";
 import { allowOriginAction } from "./actions/allow-origin.ts";
-import { forgetGrantAction } from "./actions/forget-grant.ts";
-import { approveAction } from "./actions/approve.ts";
 import { codeAction } from "./actions/code.ts";
 import { defaultAction } from "./actions/default.ts";
 import { enrollmentAction } from "./actions/enrollment.ts";
@@ -48,37 +47,37 @@ import { shareAction } from "./actions/share.ts";
 import { unshareAction } from "./actions/unshare.ts";
 import { viewAction } from "./actions/view.ts";
 import { workAction } from "./actions/work.ts";
-import { approval } from "./collections/approval.ts";
 import { computer } from "./collections/computer.ts";
 import { desk } from "./collections/desk.ts";
 import { enrollment } from "./collections/enrollment.ts";
 import { envVar } from "./collections/env-var.ts";
-import { grant } from "./collections/grant.ts";
 import { preview } from "./collections/preview.ts";
 import { previewRoutes } from "./resources/previews.ts";
 import { tools } from "./resources/tools.ts";
+import { upgradeAsksAction } from "./actions/upgrade-asks.ts";
 import { contextViews } from "./views/context.ts";
 import { UPDATE } from "./program/release.ts";
 import { leftProcessor } from "./processors/left.ts";
 import { WORK } from "./shared/workloads.ts";
 
-export type { Approval } from "./collections/approval.ts";
 export type { Computer } from "./collections/computer.ts";
 export type { Desk } from "./collections/desk.ts";
 export type { EnvVar } from "./collections/env-var.ts";
 export type { Preview } from "./collections/preview.ts";
 export type { ComputersSettings } from "./shared/settings.ts";
 export type { ComputerWake } from "./shared/wake.ts";
+/** Asks and yeses computers kept before chat kept every ask, kept as chat keeps them now. */
+export { upgradeAsks, type Upgraded } from "./shared/upgrade.ts";
 
 /** Collections a person reaches only their own of. */
-const OWNED = new Set(["computer", "enrollment", "approval", "grant"]);
+const OWNED = new Set(["computer", "enrollment"]);
 /** Its records that live in spaces. */
 const PLACED = new Set(["desk", "preview", "envVar"]);
 
 export const computers: Plugin = definePlugin({
   name: "computers",
   requires: ["chat", "spaces"],
-  collections: { computer, desk, enrollment, approval, grant, preview, envVar },
+  collections: { computer, desk, enrollment, preview, envVar },
   workers: {
     computer: {
       admit: "computer.admit",
@@ -99,9 +98,7 @@ export const computers: Plugin = definePlugin({
     "computer.unshare": unshareAction,
     "computer.default": defaultAction,
     "computer.move": moveAction,
-    "computer.approve": approveAction,
     "computer.allowOrigin": allowOriginAction,
-    "computer.forgetGrant": forgetGrantAction,
     "computer.work": workAction,
     // A space's environment: its managers' (env.values: the system's, an app's deploy).
     "env.set": envSetAction,
@@ -119,8 +116,14 @@ export const computers: Plugin = definePlugin({
     "computer.enrollment": enrollmentAction,
     "computer.running": runningAction,
     "computer.mark": markAction,
+    // Asks and yeses kept the old way, kept as chat keeps them (code's, on a deploy).
+    "computer.upgradeAsks": upgradeAsksAction,
   },
   processors: { "computers.left": leftProcessor },
+  // Asks and yeses kept the old way are kept as chat keeps them, once, as a deploy first starts.
+  schedules: {
+    "computer.upgradeAsks": { once: true, call: "computer.upgradeAsks", input: {}, retries: 5 },
+  },
   // Agents with computer tools know, each turn, whose computer they work on and what waits for a yes.
   views: contextViews,
   // What jobs serve, at addresses of their own, once the app says where (`previews`).
@@ -136,9 +139,8 @@ export const computers: Plugin = definePlugin({
       computer: { tag: "tags.computer", collection: "desk", key: "computer", field: "name" },
     },
   },
-  // Each person reaches their own computers, codes, approvals (those they answer) and grants. None
-  // of the plugin's records is written directly from outside: which computer a desk or a preview
-  // is on, an approval's answer, a grant's yes, are its Actions' to check.
+  // Each person reaches their own computers and codes. None of the plugin's records is written
+  // directly from outside: which computer a desk or a preview is on is its Actions' to check.
   guard: (actor, { collection, access, direct }) => {
     if (direct && access === "write" && (OWNED.has(collection) || PLACED.has(collection))) {
       throw failure("forbidden", "Computers, and what's on them, change through their Actions.", {

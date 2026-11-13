@@ -302,6 +302,11 @@
           "title": "Installing a computer",
           "slug": "guides/installing-a-computer",
           "description": "People connect their own machines for their agents to work on: where the computer program comes from, the one line that installs it, and what it does on the machine."
+        },
+        {
+          "title": "A public MCP server: docs and data for anyone",
+          "slug": "guides/public-mcp-server",
+          "description": "A read-only MCP server anyone can call, that keeps nothing: what runs as the public, what it may read, what it lists, its limits, and the one rule for its tools."
         }
       ]
     },
@@ -322,6 +327,11 @@
           "title": "Metrics",
           "slug": "operations/metrics",
           "description": "What the runtime and its plugins measure, the OpenTelemetry way: the meter, OTLP and Prometheus, and every metric recorded, copilotz.transaction.duration included."
+        },
+        {
+          "title": "Memory",
+          "slug": "operations/memory",
+          "description": "Running an app in a container of 512 MiB or less: Deno 2.9 or later, V8's young generation capped, SQLite's cache, each plugin from its own entry point, and the read cache, with what each saves."
         }
       ]
     },

@@ -12,7 +12,7 @@ say yes.
 
 A computer belongs to a space. An agent uses a computer of the space its chat is in, for the person
 it works for, and only where that person reaches. Only the person says yes: an agent, a key or a
-routine can't answer for them, since `computer.approve` is `inPerson`.
+routine can't answer for them, since `chat.approve` is `inPerson`.
 
 ## Where the program comes from
 
@@ -28,7 +28,7 @@ An app serves it from there by default. It can also serve a folder of its own, o
 import { computerDownloads } from "copilotz/plugins/compute/downloads";
 
 plugins: [...plugins, await computerDownloads()], // this Copilotz's release
-plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.45" })], // its own: /computer/download/
+plugins: [...plugins, await computerDownloads({ dir: "dist/computer/1.0.0-rc.46" })], // its own: /computer/download/
 plugins: [...plugins, await computerDownloads({ url: "https://downloads.example.com/computer/" })], // or elsewhere
 ```
 

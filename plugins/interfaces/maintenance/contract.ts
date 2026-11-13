@@ -2,7 +2,9 @@
  * The maintenance plugin's contract: its settings (the `maintenance`
  * resource) and who its requests act as. Other plugins and apps reach the
  * rest by name: its Actions (`maintenance.read`, `maintenance.write`) and the
- * runtime's audit event of a SQL write (`maintenance.sql`).
+ * runtime's audit event of a SQL write (`maintenance.sql`). A plugin's own
+ * Action for operators (a migration) lets them call it with `allow:
+ * isMaintenance`: `POST /maintenance/actions/<action>`.
  *
  * ```ts
  * resources: { maintenance: { key: process.env.MAINTENANCE_KEY } }
@@ -44,6 +46,8 @@ export type MaintenanceLog = {
   collection?: string;
   op?: string;
   query?: string;
+  /** An Action made for operators, by name. */
+  action?: string;
   blob?: string;
   key?: number;
   at: string;

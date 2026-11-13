@@ -1,7 +1,7 @@
 import type { ViewContext } from "../../../../runtime/mod.ts";
 import type { LlmFile, LlmMessage, LlmState } from "../../../models/contract.ts";
 import { type File, FILE_CHARS, text, textual } from "../collections/file.ts";
-import { isAnswer, type Message } from "../collections/message.ts";
+import { heldTold, isAnswer, type Message } from "../collections/message.ts";
 import type { AdditionShown } from "../collections/shown.ts";
 import { DELEGATED, type Step, type Told } from "../shared/types.ts";
 import { nameOf, namesIn } from "../../../access/spaces/contract.ts";
@@ -60,15 +60,20 @@ function shownAfter(m: Message, ctx: ViewContext): string {
  * spaces itself: that was other work, in another chat, not this turn's. A
  * choice tapped says what it was (`[tapped: trip:123]`); an answer, what went
  * out after it, and its own message the files it sent (`[sent: logo.png]`).
+ * One standing where a reply went elsewhere (`held`) says where, in English.
  */
 
 export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
   const me = ctx.viewer?.name;
   const handed = m.via?.kind === DELEGATED;
   const then = shownAfter(m, ctx);
+  // A reply held elsewhere: where it went, its person by name.
+  const held = m.held?.for ? [m.held.for] : [];
+  const text = (names: Record<string, string>) =>
+    m.held ? heldTold(m, held.length ? nameOf(held[0], names) : undefined) : m.text;
   if (m.from !== me || handed) {
     // People by name (an agent's own name is as it is).
-    const names = namesIn(ctx, [m.from, ...m.to]);
+    const names = namesIn(ctx, [m.from, ...m.to, ...held]);
     const to = !me || m.to.includes(me) || !m.to.length
       ? ""
       : ` → ${m.to.map((who) => nameOf(who, names)).join(", ")}`;
@@ -79,7 +84,7 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
     return [{
       role: "user",
       text: `${m.from === me ? "You" : nameOf(m.from, names)}${via}${to}: ${
-        m.text ?? ""
+        text(names) ?? ""
       }${tapped}${notes}${then}`,
       ...(files.length ? { files } : {}),
     }];
@@ -93,7 +98,7 @@ export function messageView(m: Message, ctx: ViewContext): LlmMessage[] {
   if (!m.toolCalls?.length) {
     // Files it sent (`chat.say`'s), as it's told them: `[sent: logo.png]`.
     const sent = m.files?.length ? `[sent: ${m.files.map((f) => f.name).join(", ")}]` : "";
-    const said = [m.text, sent].filter(Boolean).join("\n");
+    const said = [text(held.length ? namesIn(ctx, held) : {}), sent].filter(Boolean).join("\n");
     return [...told, { role: "assistant", text: `${said}${then}`, ...state }];
   }
   const calls = m.toolCalls as Step[];

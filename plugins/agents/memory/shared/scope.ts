@@ -137,7 +137,7 @@ export function scopeOf(
     people,
     names: namesIn(ctx, people),
     // What comes up by itself was learned here (in its person's Personal space, anywhere they
-    // read); looking elsewhere is asking (and labels it).
+    // read); looking elsewhere is asking, as far as the work reaches.
     ...(thread.in ? { in: thread.in } : {}),
     ...(ownPersonal(space?.value, ctx.actor) ? { everywhere: true } : {}),
     ...(at >= 0 ? { latest: recent.value[at], before: recent.value.slice(at + 1, at + 3) } : {}),

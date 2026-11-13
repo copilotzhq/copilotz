@@ -10,21 +10,23 @@
  * says so (`hints.asked`); one from a side thread (not `hints.thread`) sits
  * indented. One of yours that waits for agents at work on an earlier one
  * says so, with a way to send it now (`hints.queued`: their ids; see
- * queued.tsx). One that drew on spaces not everyone here sees says so
- * (`hints.sources`: their names; none in a Personal space, where only its
- * person is), and someone who sees them can share it.
+ * queued.tsx).
+ * One standing where a reply went that not everyone here could read
+ * (`held`) says where it went, in the reader's words, and nothing more.
  * One sent for someone by what they set up (`via`: a routine) says so. One
  * that says why its agent couldn't start (the org's limit) is a calm notice,
  * with its link; one where the agent itself failed is an error.
  * Agents show as they're named, with their emoji (`hints.who`, by id), and
- * an agent's name links to its page; people, by their names.
+ * an agent's name links to its page; people, by their names. In a chat's
+ * staff notes (`hints.sendTo`: the chat, and the contact it's shared with),
+ * one with words can be sent on to that chat, reviewed first, as the
+ * person's own (see send-on.tsx).
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
   Avatar,
   Badge,
-  Button,
   Chip,
   CopyButton,
   Icon,
@@ -34,8 +36,11 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import type { Message } from "../../collections/message.ts";
 import type { Step } from "../../shared/types.ts";
+import { heldSaid } from "../held.ts";
 import { agentPath, type Shown } from "./agents.ts";
+import { unmarked } from "./plain.ts";
 import { Queued } from "./queued.tsx";
+import { SendOn, type SendTo } from "./send-on.tsx";
 import { Steps } from "./steps.tsx";
 import { toolView } from "./tool-view.ts";
 import { byAgent } from "./who.ts";
@@ -68,7 +73,8 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
   const follows = ctx.hints.follows === true;
   // Agents as they're named (by id), with their emoji; people by their names.
   const who = (ctx.hints.who ?? {}) as Record<string, Shown>;
-  const names = namesIn(ctx, [m.from, ...m.to].filter((id) => !who[id]));
+  const held = m.held?.for ? [m.held.for] : [];
+  const names = namesIn(ctx, [m.from, ...m.to, ...held].filter((id) => !who[id]));
   const named = (id: string) => who[id]?.name ?? nameOf(id, names);
   const author = named(m.from);
   // A person's face beside what they said, if they have a picture.
@@ -79,9 +85,11 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
   );
   const usual = Array.isArray(ctx.hints.usual) ? ctx.hints.usual as string[] : [];
   const addressed = mine ? m.to.some((name) => !usual.includes(name)) : to.length > 0;
-  // The spaces it drew on, by name (`hints.sources`, read once for the conversation).
-  const sources = Array.isArray(ctx.hints.sources) ? ctx.hints.sources as string[] : m.sources;
   const kind = mine ? "mine" : agent ? "agent" : "person";
+  // Words that may go on to the chat these notes are about, as the person's own.
+  const sendTo = ctx.hints.sendTo as SendTo | undefined;
+  const words = !m.toolCalls && !m.failed ? m.text?.trim() : undefined;
+  const copy = agent && words ? <CopyButton text={m.text!} label={say("copyReply")} /> : null;
 
   const addressees = addressed
     ? (
@@ -155,7 +163,14 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
             </Chip>
           )
           : null}
-        {m.toolCalls
+        {m.held
+          ? (
+            <p className="msg-note msg-held">
+              <Icon name="lock" size={14} />
+              {heldSaid(m, held.length ? named(held[0]) : undefined)}
+            </p>
+          )
+          : m.toolCalls
           ? (
             <Steps
               calls={m.toolCalls as Step[]}
@@ -204,33 +219,20 @@ export const messageView = (m: Message, ctx: ViewContext<ReactNode>): ReactNode 
             </Chip>
           )
           : null}
-        {sources?.length && !m.toolCalls
-          ? (
-            <Notice
-              tone="warning"
-              icon="lock"
-              className="msg-sources"
-              action={
-                <Button
-                  size="sm"
-                  icon="share"
-                  onClick={() => void ctx.call("share", { collection: "message", id: m._id })}
-                >
-                  {say("share")}
-                </Button>
-              }
-            >
-              {say.nodes("usesSources", { sources: <b>{sources.join(", ")}</b> })}
-            </Notice>
-          )
-          : null}
         {m.stopped ? <p className="msg-note">{say("stopped")}</p> : null}
-        {agent && !m.toolCalls && m.text && !m.failed
+        {sendTo?.to.length && words
           ? (
-            <div className="msg-actions">
-              <CopyButton text={m.text} label={say("copyReply")} />
-            </div>
+            <SendOn
+              text={unmarked(m.text)}
+              name={sendTo.name}
+              shown={agent}
+              send={(text) => ctx.call("chat.send", { thread: sendTo.thread, text, to: sendTo.to })}
+            >
+              {copy}
+            </SendOn>
           )
+          : copy
+          ? <div className="msg-actions">{copy}</div>
           : null}
         {queued.length
           ? (

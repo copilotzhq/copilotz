@@ -3,23 +3,21 @@
  * computers: connecting one, adding one of yours, which one agents use, who
  * answers what they ask; then the terminal, jobs and files in the space's
  * folder), on its page and in the panel beside a chat; a computer's own page
- * at `/computer/<id>`, for its owner; at the top of the sidebar, what agents
- * wait on you for in other chats; and in chats, what agents ask you there
- * (Allow once · for this routine, on a routine's run · in this conversation ·
- * always · Deny, with what a write will write) and their calls to computer tools, shown as commands and output,
- * files and changes, links. Add it beside the web shell and chat's and
- * spaces' front ends:
+ * at `/computer/<id>`, for its owner; in chats, what an agent asks to do on
+ * one (the command, what a write will write, an app it would publish: chat's
+ * card for it, with its answers, through chat's `askViews`) and their calls
+ * to computer tools, shown as commands and output, files and changes, links.
+ * Add it beside the web shell and chat's and spaces' front ends:
  *
  * ```ts
  * await web({ plugins: [webShell, chatWeb, spacesWeb, computersWeb], root });
  * ```
  *
- * It fills chat's `conversation` and `toolViews` resources, spaces'
+ * It fills chat's `askViews` and `toolViews` resources, spaces'
  * `spaceTabs`, routines' `routinePanels` (what a routine may do on its own)
  * and the web shell's `palette` (moving one of yours to another
  * space, through spaces' picker, as each computer's menu does), and reads
- * the spaces the person reaches (`space.reached`). What agents ask shows
- * once their turn is over (`conversation`'s `working` hint). A job that
+ * the spaces the person reaches (`space.reached`). A job that
  * serves a port gets a preview (`computer.preview`), opened in a tab, its
  * link copied, for the space's members or anyone with the link; the
  * computer's previews list over its jobs. A space's Environment tab: its
@@ -34,14 +32,13 @@
  * (its apps, given it again).
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
-import { asksView } from "./views/web/asks.tsx";
+import { askView } from "./views/web/asks.tsx";
 import { computerView } from "./views/web/computer.tsx";
 import { envSpaceView } from "./views/web/env.tsx";
 import { computerPaletteView } from "./views/web/palette.tsx";
 import { spaceComputersView } from "./views/web/space-tab.tsx";
 import { stepView } from "./views/web/step.tsx";
 import { routinePanelView } from "./views/web/routine-panel.tsx";
-import { waitingView } from "./views/web/waiting.tsx";
 
 /** The computer tools (resources/tools.ts), by name: the browser loads front-end code only. */
 const TOOLS = [
@@ -64,15 +61,13 @@ export const computersWeb: Plugin = definePlugin({
   views: {
     computer: computerView,
     "computer.space": spaceComputersView,
-    "computer.waiting": waitingView,
-    "computer.asks": asksView,
+    "computer.ask": askView,
     "computer.step": stepView,
     "computer.palette": computerPaletteView,
     "computer.routine": routinePanelView,
     "env.space": envSpaceView,
   },
   resources: {
-    sidebar: { waiting: { view: "computer.waiting", order: 5 } },
     spaceTabs: {
       // The computer, then what goes with it: its environment (and the apps', apps/web.tsx).
       computer: {
@@ -84,7 +79,14 @@ export const computersWeb: Plugin = definePlugin({
       },
       env: { title: "Environment", view: "env.space", icon: "lock", under: "computer", order: 10 },
     },
-    conversation: { "computer.asks": { view: "computer.asks", order: 10 } },
+    // What an agent asks to do on a computer, on chat's card for it, by its kind of work.
+    askViews: {
+      terminal: { view: "computer.ask", icon: "terminal" },
+      jobs: { view: "computer.ask", icon: "play" },
+      writes: { view: "computer.ask", icon: "pencil" },
+      publish: { view: "computer.ask", icon: "globe" },
+      destroy: { view: "computer.ask", icon: "trash" },
+    },
     palette: { computers: { view: "computer.palette", order: 30 } },
     // What a routine's agent may do on its own (routines' page).
     routinePanels: { computers: { view: "computer.routine", order: 10 } },

@@ -15,6 +15,11 @@ const memberSchema = {
     space: { type: "string" },
     role: { type: "string" },
     on: { type: "string" },
+    /**
+     * A space drawing on this one lets its contacts read it too (`read`):
+     * reference a line's customers may see (a catalog, policies).
+     */
+    contacts: { type: "string", enum: ["read"] },
   },
   required: ["member", "space", "role"],
 } as const;

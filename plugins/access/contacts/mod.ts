@@ -13,7 +13,9 @@
  *   else; the space's members reach it as any chat there. An agent working
  *   for a contact reaches what both reach: that chat.
  * - **Agents are told** who they're talking with (the `contact` context),
- *   and see them by name ("People here: Ana": a `names` source, `contact:`).
+ *   and see them by name ("People here: Ana": a `names` source, `contact:`);
+ *   working in a chat's staff notes (chat's `chat.notes`), whose chat it is
+ *   and what was said there lately (the `notes` context).
  * - **Erasing one** (`contact.forget`, by its space's managers) ends its
  *   access at once and deletes its record, and with `chats` its chats.
  * - **Lines** bring contacts in: WhatsApp's, the phone's, MCP's and the web's (`webLines`, in
@@ -31,6 +33,7 @@ import { forgetAction } from "./actions/forget.ts";
 import { startAction } from "./actions/start.ts";
 import { CONTACT, contact } from "./collections/contact.ts";
 import { contactView } from "./views/contact.ts";
+import { notesContextView } from "./views/notes.ts";
 
 export * from "./contract.ts";
 
@@ -43,13 +46,14 @@ export const contacts: Plugin = definePlugin({
     "contact.chat": chatAction,
     "contact.forget": forgetAction,
   },
-  views: { "context:contact": contactView },
+  views: { "context:contact": contactView, "context:notes": notesContextView },
   resources: {
     // A contact's record lives in its line's space; only trusted code changes it. A contact is a
     // member (of its chats, and of its own record): reading it labels nothing, as for an agent.
     shared: { contact: { write: "manage", member: "contact" } },
     names: { contact: { collection: "contact", prefix: CONTACT } },
-    context: { contact: { place: "system" } },
+    // Who an agent talks with; and, working in a contact's chat's notes, that chat's latest.
+    context: { contact: { place: "system" }, notes: { place: "turn" } },
   },
   // Who a contact is (its number, its channel) is trusted code's to say: never written from outside.
   guard: (_actor, { collection, access, direct }) => {

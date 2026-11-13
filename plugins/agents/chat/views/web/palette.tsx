@@ -13,8 +13,8 @@ import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { go, type PaletteGroup } from "../../../../../hosts/web/mod.ts";
 import type { Thread } from "../../collections/thread.ts";
-import { type Listed, titleOf } from "./listed.ts";
-import { moveStep } from "./move.ts";
+import { type Listed, threadTitle, titleOf } from "./listed.ts";
+import { moveStep } from "./move.tsx";
 import { plain } from "./plain.ts";
 import { say } from "./words.ts";
 
@@ -42,7 +42,7 @@ export const chatPaletteView = (_: unknown, ctx: ViewContext<ReactNode>): Palett
 
   if (open && thread) {
     const listed = threads.find((t) => t._id === open);
-    const title = listed ? titleOf(listed) : plain(thread.title) || say("thisChat");
+    const title = listed ? titleOf(listed) : threadTitle(thread) || say("thisChat");
     groups.push({
       title: say("thisChatGroup"),
       order: 10,

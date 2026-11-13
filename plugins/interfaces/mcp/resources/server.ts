@@ -13,7 +13,11 @@
  *   conversation's contact.
  * - **Who calls.** With the app's `caller` settings, the caller's address,
  *   as its front says it (the runtime's `callerFrom`); a request that came around
- *   the front (without its secret) is refused (403).
+ *   the front (without its secret) is refused (403). On a public server
+ *   without them, the address the socket says (see public.ts).
+ * - **A public server** (`public: true`, see public.ts) runs every tool call
+ *   as the public, keeping nothing, and lists only the tools it offers the
+ *   public; the protocol is the same.
  * - **At once.** Tool calls running at once: on the server (`limits.atOnce`, 4), from one caller's address
  *   (`addressAtOnce`, 2: a batch's every call counts) and in one
  *   conversation (`chatAtOnce`, 2), each call taking its places until it's
@@ -60,6 +64,7 @@ import {
 import type { Widgets } from "../../../../hosts/web/mod.ts";
 import { addressKey, callIdOf, threadOf, userOf } from "../shared/keys.ts";
 import { appOnly, PATH, READ, type Server, serverOf } from "../shared/settings.ts";
+import { publicCalled, publicCaller, publicTools } from "./public.ts";
 import { busy, hold, isBusy } from "./running.ts";
 import { called, conversationHere, listed, mirrored, offeredOf, type Said } from "./tools.ts";
 import {
@@ -206,8 +211,11 @@ export const serveMcp: Route = Object.assign(
     if (origin !== null && allowed === undefined) {
       return respond(403, fault(undefined, REQUEST, "Not from this origin"));
     }
-    // Around the app's front, straight to it: refused, when the front vouches for callers.
-    const caller = callerFrom(request, callerOf({ resources }), line.exempt);
+    // Around the app's front, straight to it: refused, when the front vouches for callers. A
+    // public server counts every caller by address: as the socket says, without a front.
+    const caller = line.public
+      ? publicCaller(request, callerOf({ resources }), line.exempt)
+      : callerFrom(request, callerOf({ resources }), line.exempt);
     if (caller === "refused") {
       return respond(403, fault(undefined, REQUEST, "Not through the app's front"), cors);
     }
@@ -392,7 +400,9 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
         if (params.cursor !== undefined) {
           return failed(status(PARAMS), rpc, PARAMS, "No such cursor");
         }
-        const names = await offeredOf(c.runtime, c.line, Object.keys(c.line.tools));
+        const names = c.line.public
+          ? await publicTools(c.runtime, c.line)
+          : await offeredOf(c.runtime, c.line, Object.keys(c.line.tools));
         const template = await templateOf(c.line, c.widgets, c.origin);
         return ok({
           tools: listed(c.line, c.resources, names, c.runtime.describe().actions, template?.uri),
@@ -438,6 +448,13 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
         if (!isObject(input)) return failed(status(PARAMS), rpc, PARAMS, "arguments is an object");
         const odd = oddIn(input);
         if (odd) return failed(status(PARAMS), rpc, PARAMS, odd);
+        // A public server: only what it lists for the public, as the public, and nothing kept.
+        if (c.line.public) {
+          if (!(await publicTools(c.runtime, c.line)).includes(tool)) {
+            return failed(status(PARAMS), rpc, PARAMS, `Unknown tool: ${tool.slice(0, 128)}`);
+          }
+          return ok(await publicCalled(c.runtime, c.line, { tool, input, caller: c.caller! }));
+        }
         const conversation = saidOf(meta);
         if (!conversation) {
           return failed(status(PARAMS), rpc, PARAMS, "openai/session and openai/subject are text");

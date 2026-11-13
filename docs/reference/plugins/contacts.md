@@ -53,9 +53,9 @@ It also adds rules every read and write keeps to (`guard`).
 
 Its Views show to the model.
 
-- **To the model:** `context:contact`.
+- **To the model:** `context:contact`, `context:notes`.
 - **Front ends:** [`contacts-web`](contacts-web.md).
-- **What it adds to resources:** `context` (`contact`), `names` (`contact`).
+- **What it adds to resources:** `context` (`contact`, `notes`), `names` (`contact`).
 
 ## What it needs
 
@@ -65,7 +65,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`spaces`](spaces.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.45`.
 
 ## Listing
 

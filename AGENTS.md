@@ -4,10 +4,12 @@ A guide for coding agents (Claude Code, Codex, Cursor, Gemini) building an app w
 it whole before you write code. The last section is for work on Copilotz itself.
 
 It ships in the package (`node_modules/copilotz/AGENTS.md`, and `@copilotz/copilotz` on JSR) and
-goes with `copilotz@1.0.0-rc.45`. Every docs page is Markdown at
+goes with `copilotz@1.0.0-rc.46`. Every docs page is Markdown at
 `https://copilotz.com/docs/<slug>.md`, and https://copilotz.com/llms.txt lists them all. When you're
 unsure of a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`).
 Don't guess.
+
+It also comes as an Agent Skill, for any coding agent: `npx skills add copilotzhq/copilotz`.
 
 ## What Copilotz is
 
@@ -15,7 +17,7 @@ A runtime for apps that people and AI use alike. You write the app once: its dat
 who may do it, and how it shows. People use it on a web page or in a terminal, the app's own agents
 through tools, and outside assistants (ChatGPT, Claude, any MCP client) over MCP. Every way in calls
 the same Actions, under the same rules, and every write is on one record of who did what, for whom.
-It runs on Node 24+, Deno and Bun.
+It runs on Node 24+, Deno 2.9+ and Bun.
 
 ## How Copilotz works, in one minute
 
@@ -62,12 +64,12 @@ There's no project generator. Set a project up as the docs' courses do, on Node 
 ```sh
 mkdir my-app && cd my-app
 npm init -y && npm pkg set type=module
-npm install copilotz@1.0.0-rc.45 react@19 react-dom@19
+npm install copilotz@1.0.0-rc.46 react@19 react-dom@19
 npm install -D typescript @types/node @types/react @types/react-dom esbuild
 ```
 
 Pin the version: npm's `latest` tag still points at an early release candidate. On Deno, run
-`deno add jsr:@copilotz/copilotz` and map `"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.45"` in
+`deno add jsr:@copilotz/copilotz` and map `"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.46"` in
 `deno.json`, so imports read the same.
 
 Node runs `.ts` files as they are, so there's no build step. It doesn't run `.tsx`: tests that load
@@ -106,7 +108,7 @@ line `@AGENTS.md` (Claude Code reads `CLAUDE.md`, and follows the import). Keep 
 ```markdown
 # AGENTS.md
 
-This app runs on Copilotz (copilotz@1.0.0-rc.45). Read node_modules/copilotz/AGENTS.md first;
+This app runs on Copilotz (copilotz@1.0.0-rc.46). Read node_modules/copilotz/AGENTS.md first;
 https://copilotz.com/llms.txt lists the docs, as Markdown.
 
 - `npm test` runs every test offline, with a scripted model: run it after each change.
@@ -290,9 +292,10 @@ Test what callers may not do as well: call as someone else, and `assert.rejects`
   live `in` a space; `part` ties one to another document, as a booking to its chat), or write a
   `guard`. Don't filter by who's asking inside an Action. To keep a collection changing only through
   its Actions, refuse `direct` writes in a `guard`.
-- **Say `allow` on every Action outsiders call:** `people`, `contacts`, `peopleOrContacts`, or
-  `inPerson` for what only the person decides (consent, keys, who's in a space, money). It's asked
-  of agents too, and of whom they work for. An Action without `allow` is internal.
+- **Say `allow` on every Action outsiders call:** `people`, `contacts`, `peopleOrContacts`,
+  `publicCallers`, or `inPerson` for what only the person decides (consent, keys, who's in a space,
+  money). Write it by kind, never by identity. It's asked of agents too, and of whom they work for.
+  An Action without `allow` is internal.
 - **A View for whatever anyone reads, a model included.** Each tool gets a `tool:<name>` View: short
   text, with ids the model can act on. A failed call's output is its error's words; pass them on,
   don't throw. An MCP server that offers a tool without its View doesn't start.
@@ -308,6 +311,16 @@ Test what callers may not do as well: call as someone else, and `assert.rejects`
   A tool works where its chat is.
 - **Going past the actor's reach is a named grant,** `ctx.as(grant("…"))`, in trusted code, on the
   record. Keys stay in code: never in Action inputs (they're recorded), never with a model.
+- **An agent tells a conversation only what everyone in it could see.** Its work reads what both its
+  asker and the place its answer goes reach: a space and what it draws on; a customer's chat, what
+  that customer reaches (a space drawing on another with `contacts: "read"` lets them read it); its
+  person's Personal space, all they reach. Writing anywhere its readers don't all reach that asks
+  the person first (`needs_approval`): don't catch it, let it through to the turn.
+- **A tool that goes past its caller, offered to a contact or the public, is a declassifier.** Scope
+  it to them (their own bookings, never any record), take no free-form query that could widen it,
+  and return only what they may see. In a customer's chat, an Action people call that goes past its
+  caller is refused; the app's own (no `allow`) runs as its tool chose. The public (`publicCallers`,
+  `{ kind: "public" }`) reads only spaces that have it as a viewer, and writes nothing.
 - **Outside effects:** write the intent, call out with its id as the idempotency key (a tool's
   `callId`), then write the result.
 - **Online:** `devSignIn` is for this machine only; Copilotz won't start it with a public origin.
@@ -330,7 +343,9 @@ Build Compass (41 chapters, written for an earlier release candidate: check name
   site's chat: [GS 8](https://copilotz.com/docs/getting-started/08-a-chat-on-your-site.md).
   WhatsApp: [GS 9](https://copilotz.com/docs/getting-started/09-whatsapp.md).
 - Shipping (SQLite, PostgreSQL, sign-in by email):
-  [GS 10](https://copilotz.com/docs/getting-started/10-shipping-the-salon.md).
+  [GS 10](https://copilotz.com/docs/getting-started/10-shipping-the-salon.md). A container of 512
+  MiB or less (Deno 2.9+, `--max-semi-space-size=2`, SQLite's cache, each plugin from its own entry
+  point): [memory](https://copilotz.com/docs/operations/memory.md).
 - The prompt and context Views:
   [BC 2](https://copilotz.com/docs/build-compass/part-1-an-agent-of-your-own/02-north-in-your-terminal.md),
   [BC 4](https://copilotz.com/docs/build-compass/part-2-your-own-plugins/04-today-every-turn.md).
@@ -355,10 +370,12 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`); the p
 lists them all. Besides those above: `copilotz/stores/sqlite` and `copilotz/stores/postgres`
 (stores), `copilotz/plugins/interfaces` (`mcp`, `api`, `whatsapp`, `voice`, `webLines`),
 `copilotz/web` (the web host, `web`), `copilotz/web/server` (`webPage`), `copilotz/web/node`
-(`listen`, `serve`, `bundle`), `copilotz/terminal` (`terminal`) and `copilotz/testing`. Front ends
-sit beside each theme (`copilotz/plugins/agents/web` has `chatWeb`). Product packages ship at the
-same version: `@copilotz/work` (`boards`, `documents`), `@copilotz/team`, `@copilotz/directory` and
-`@copilotz/billing`.
+(`listen`, `serve`, `bundle`), `copilotz/terminal` (`terminal`) and `copilotz/testing`. Each plugin
+of `agents`, `access` and `interfaces` is also its own entry point, which loads it alone:
+`copilotz/plugins/interfaces/mcp`, `copilotz/plugins/agents/chat`, `copilotz/plugins/access/spaces`…
+Front ends sit beside each theme (`copilotz/plugins/agents/web` has `chatWeb`). Product packages
+ship at the same version: `@copilotz/work` (`boards`, `documents`), `@copilotz/team`,
+`@copilotz/directory` and `@copilotz/billing`.
 
 ## Working on Copilotz itself
 

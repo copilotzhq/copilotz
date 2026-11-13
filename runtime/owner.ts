@@ -1240,10 +1240,10 @@ export async function createOwner(
   };
   /** An actor's inserts and replaces, as the labels have them, given what their job read. */
   const label = async (ops: StoreOp[], actor: Actor | undefined, job: string) => {
-    const read = labelled.get(job);
     const labels = registry.labels;
-    if (!labels || !actor || actor.kind === "system" || !read?.size) return ops;
-    const seen = [...read];
+    if (!labels || !actor || actor.kind === "system") return ops;
+    if (!ops.some((op) => op.op === "insert" || op.op === "replace")) return ops;
+    const seen = [...labelled.get(job) ?? []];
     return await Promise.all(ops.map(async (op): Promise<StoreOp> => {
       if (op.op === "insert") {
         return {
@@ -1420,6 +1420,17 @@ export async function createOwner(
     // Trusted code going on beyond whom it acted for: as the system, or a grant, on the record.
     if (request.actor?.kind === "system" && request.actor.via) {
       measure.elevated.add(request.ops.length, { grant: request.actor.id });
+      // In an Action's code (its own job, or its caller's when it's unrecorded), for whom its
+      // labels may keep it from going beyond (a contact, say).
+      const action = request.action ?? acting.get(job);
+      const elevate = registry.labels?.elevate;
+      if (elevate && action) {
+        // Whoever went beyond themselves: the code's own actor, whatever job it runs in.
+        const by = request.actor.via as Actor;
+        if (!await elevate(by, registry.actions[action]?.allow, ruleReads)) {
+          throw forbidden(`"${action}" goes beyond what everyone in this conversation may see`);
+        }
+      }
     }
     let ops: StoreOp[], keep: Map<string, Filter>;
     try {
@@ -1564,6 +1575,8 @@ export async function createOwner(
    * (`via`). What an executor claims never widens what its job was given.
    */
   const pinned = new Map<string, Actor | null>();
+  /** The Action each job runs, if it runs one: its `allow` says who it's for. */
+  const acting = new Map<string, string>();
   const pinning = new Map<string, PromiseWithResolvers<Actor | null>>();
   const pin = (job: string, actor: Actor | undefined) => {
     pinned.set(job, actor ?? null);
@@ -1778,14 +1791,42 @@ export async function createOwner(
     }
   };
 
+  /**
+   * A signal that aborts when either does, unlinked when the job ends:
+   * `AbortSignal.any` keeps an entry of its own per call (WeakRefs its
+   * sources hold until collected), which adds up over many short calls.
+   */
+  const either = (a: AbortSignal, b: AbortSignal): { signal: AbortSignal; unlink(): void } => {
+    if (a.aborted || b.aborted) {
+      return { signal: AbortSignal.abort(a.aborted ? a.reason : b.reason), unlink() {} };
+    }
+    const both = new AbortController();
+    const fromA = () => both.abort(a.reason);
+    const fromB = () => both.abort(b.reason);
+    a.addEventListener("abort", fromA, { once: true });
+    b.addEventListener("abort", fromB, { once: true });
+    return {
+      signal: both.signal,
+      unlink() {
+        a.removeEventListener("abort", fromA);
+        b.removeEventListener("abort", fromB);
+      },
+    };
+  };
+
   const dispatch = async (job: Job, signal?: AbortSignal): Promise<unknown> => {
     jobs++;
+    const linked = signal ? either(closing.signal, signal) : undefined;
     const handle = await hypervisor.dispatch({
       workload: RUN,
       body: encode(job),
-      signal: signal ? AbortSignal.any([closing.signal, signal]) : closing.signal,
+      signal: linked?.signal ?? closing.signal,
+    }).catch((error) => {
+      linked?.unlink();
+      throw error;
     });
     pin(handle.operationId, job.kind === "process" ? job.event.actor : job.actor);
+    if (job.kind === "call") acting.set(handle.operationId, job.action);
     let outcome: Exclude<Line, { frame: unknown }> | undefined;
     let lost: unknown;
     try {
@@ -1804,6 +1845,8 @@ export async function createOwner(
       endedBy.delete(handle.operationId);
       labelled.delete(handle.operationId);
       pinned.delete(handle.operationId);
+      acting.delete(handle.operationId);
+      linked?.unlink();
     }
     if (signal?.aborted && !closing.signal.aborted && !(outcome && "result" in outcome)) {
       // Stopped: what it committed stays; `recorded` when it ended on its own record.

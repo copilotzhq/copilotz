@@ -62,7 +62,14 @@ async function open(
     const viewer = agent ? { viewer: { kind: "agent", name: agent } } : {};
     const shown = await ctx.render("llm.message", message, viewer).catch(() => undefined);
     const text = !Array.isArray(shown)
-      ? lineOf(message, await namesFor(ctx, [message.from, ...message.to]))
+      ? lineOf(
+        message,
+        await namesFor(ctx, [
+          message.from,
+          ...message.to,
+          ...(message.held?.for ? [message.held.for] : []),
+        ]),
+      )
       : steps
       ? stepOf(agent!, shown as LlmMessage[])
       : (shown as LlmMessage[]).map((m) => m.text ?? "").join("\n");

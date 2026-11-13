@@ -1,35 +1,33 @@
 /**
- * Labels: what a job read is carried to what it writes. A document read
- * labels the job with its space and its sources. A document the job then
- * writes into a space whose members can't all see some of those (a space
- * neither it nor one it draws on) takes them on as `sources`, in a
- * collection that keeps labels (`shared: { message: { labels: true } }`):
- * only those who reach its space and all its sources read it, until someone
- * who does shares it (`share`). An agent writing that anywhere else, or into
- * a collection that keeps no labels, is refused (`needs_share`): a person has
- * to choose to show it there. Documents that are members (agents people
- * make, contacts) carry nothing: they're meant for whoever they work with.
+ * Where an agent's work may go, and what it drew on, on the record.
  *
- * What's written for someone from their own Personal space is never refused:
- * only they see what's said there, and what their agents do there for them,
- * anywhere they may, is theirs, as if they'd done it (an assistant they asked
- * in private). Written elsewhere, it carries nothing, for whoever sees where
- * it goes; the record says who did it, for whom, and from where. Written in
- * the Personal space itself, where labels are kept (its chat's messages), it
- * keeps its marks, for the day its conversation moves; anything else there
- * (a board, a document, a file) goes as it is: only they see it, and moving it
- * is theirs to do.
- *
- * A document that may be shared on its own (a chat: other collections'
- * documents are its parts) labels as itself, and so do its parts (a chat's
- * messages), so a write into one shared with someone outside its space (a
- * contact) knows what they can't see: anything else read, even from the
- * same space, labels it with that space, which they don't reach.
+ * - **The bound.** Work done for someone (an agent's, a routine's) reads only
+ *   what both its destination and its asker reach (reach.ts): a space and
+ *   what it draws on, a conversation shared on its own with a contact and
+ *   what its space lets contacts read, or, in its person's own Personal
+ *   space, all they reach. Its answer there needs nothing more: everyone it's
+ *   shown to could see what it read.
+ * - **Going wider is a share.** What it writes anywhere whose readers don't
+ *   all reach its bound (a Personal space's agent posting in Launch, a team's
+ *   answering into a contact's chat) is refused (`needs_approval`) until its
+ *   person says yes to that place (`approved` on the actor: the turn sets it
+ *   from their answer). Nothing is ever hidden once written.
+ * - **Elevating, in front of a contact.** Trusted code going beyond its
+ *   caller (`ctx.as()`) in an Action's job, for an agent answering in a
+ *   conversation shared with a contact, goes on only if that Action lets a
+ *   contact call it (its `allow`): the tools an app offers there are its own
+ *   choice, and run as they are.
+ * - **On the record.** A document an agent writes in a collection that keeps
+ *   it (`shared: { message: { drew: true } }`) says which other spaces its
+ *   job read (`drew`), for whoever moves its conversation (chat.move): never
+ *   a gate, and only spaces its own readers reach (what an approved share
+ *   drew on beyond them isn't theirs to learn; trusted code's own reads, as
+ *   the system, are never counted).
  */
-import type { Labels, ReadContext } from "../../../../runtime/mod.ts";
-import type { Member } from "../collections/member.ts";
-import { docKey, homeOf, ownPersonal, reachOf } from "./reach.ts";
-import { nameOf, namesOf, PROFILE } from "./names.ts";
+import type { Actor, Labels, ReadContext } from "../../../../runtime/mod.ts";
+import { whereOf } from "../../../../runtime/mod.ts";
+import { audienceOf, covers } from "./audience.ts";
+import { CHAT, coverOf, docKey, narrows, sharedWith } from "./reach.ts";
 import type { Shared } from "./rules.ts";
 
 /** The `shared` resource; an entry is a collection's own key, never what objects inherit. */
@@ -37,118 +35,102 @@ const sharedOf = (ctx: ReadContext) => (ctx.resources.shared ?? {}) as Shared;
 const entryOf = (shared: Shared, collection: string) =>
   Object.hasOwn(shared, collection) ? shared[collection] : undefined;
 
-/** A document's own label: `#<collection>:<id>`, apart from spaces' ids. */
-const OWN = "#";
+/**
+ * Where a document written in `space` is shown: the conversation it's part
+ * of (a message's chat) or is, when that's shared on its own with someone
+ * outside its space; else its space.
+ */
+async function destinationOf(
+  collection: string,
+  doc: Record<string, unknown>,
+  space: string,
+  shared: Shared,
+  ctx: ReadContext,
+): Promise<string> {
+  const part = entryOf(shared, collection)?.part;
+  const whole = part
+    ? typeof doc[part] === "string" ? docKey(part, doc[part] as string) : undefined
+    : collection === CHAT && typeof doc._id === "string"
+    ? docKey(CHAT, doc._id)
+    : undefined;
+  return whole && (await sharedWith(whole, ctx)).length ? whole : space;
+}
+
+/** The most of a document a share's ask shows of it. */
+const PREVIEW = 280;
+
+/** What a document says, shortly, for whoever is asked to share it: its text, else its title or name. */
+function previewOf(doc: Record<string, unknown>): string | undefined {
+  const said = [doc.text, doc.title, doc.name].find((v) => typeof v === "string" && v.trim());
+  if (typeof said !== "string") return undefined;
+  const text = said.trim();
+  return text.length > PREVIEW ? `${text.slice(0, PREVIEW - 1).trimEnd()}…` : text;
+}
 
 /**
- * The document that `doc` of `collection` is shared with, as a label's key:
- * the one it's part of (a message's chat), or itself, when it's one others
- * are parts of (a chat). Others are shared only through their space.
+ * The refusal of a share, saying what its person is asked about: where it
+ * would show (`to`), as people say it (`named`), and what it would say
+ * (`preview`); its `detail`, so that reaches the turn that asks them.
  */
-function wholeOf(collection: string, doc: Record<string, unknown>, shared: Shared) {
-  const part = entryOf(shared, collection)?.part;
-  if (part) return typeof doc[part] === "string" ? docKey(part, doc[part] as string) : undefined;
-  const whole = Object.values(shared).some((entry) => entry?.part === collection);
-  return whole && typeof doc._id === "string" ? docKey(collection, doc._id) : undefined;
-}
-
-/** Who's a member of a document on its own (`thread:t1`): contacts in a chat, say. */
-const membersOn = async (key: string, ctx: ReadContext) =>
-  new Set((await ctx.db.collection<Member>("member").find({ space: key })).map((m) => m.member));
-
-const needsShare = (from: string[], named: string[]) =>
-  Object.assign(
+const needsApproval = (to: string, named: string, preview?: string) => {
+  const detail = { to, named, ...(preview ? { preview } : {}) };
+  return Object.assign(
     new Error(
-      `That would show what came from ${named.join(", ")} to people who can't see it: ` +
-        "a person who can has to share it.",
+      `That would show ${named} what this conversation may draw on, and not everyone there can ` +
+        "see it: the person this is done for has to say yes first.",
     ),
-    { code: "needs_share", sources: from },
+    { code: "needs_approval", ...detail, detail },
   );
+};
 
-/** Spaces as people say them: by name; a Personal space as its owner's (by their name). */
-async function described(ids: string[], ctx: ReadContext): Promise<string[]> {
-  const spaces = await ctx.db.collection<
-    { _id: string; name: string; kind: string; owner?: string }
-  >(
-    "space",
-  ).find({ _id: { $in: ids } });
-  const owners = spaces.flatMap((s) => s.kind === "personal" && s.owner ? [s.owner] : []);
-  const names = owners.length
-    ? namesOf(
-      await ctx.db.collection<{ _id: string; name?: string }>(PROFILE).find({
-        _id: { $in: owners },
-      }),
-    )
-    : {};
-  return ids.map((id) => {
-    const space = spaces.find((s) => s._id === id);
-    if (!space) return "another space";
-    return space.kind === "personal" && space.owner
-      ? `${nameOf(space.owner, names)}'s Personal space`
-      : space.name;
-  });
-}
-
-/** What a space's members all see, besides it: the spaces it draws on. */
-const covered = async (space: string, ctx: ReadContext) =>
-  new Set([space, ...(await reachOf({ kind: "space", id: space }, ctx)).keys()]);
+/** Whether a place was approved for this work (`approved`, set by its turn from a yes). */
+const approved = (actor: Actor, target: string, space: string) =>
+  Array.isArray(actor.approved) &&
+  (actor.approved.includes(target) || actor.approved.includes(space));
 
 export const labels: Labels = {
   read(collection, docs, ctx) {
-    const all = sharedOf(ctx);
-    const shared = entryOf(all, collection);
-    // A document that's a member (an agent) is meant for everywhere it works: reading it labels nothing.
+    const shared = entryOf(sharedOf(ctx), collection);
+    // A document that's a member (an agent) is meant for everywhere it works: it says nothing.
     if (!shared || shared.member) return [];
     const field = shared.field ?? "in";
-    return docs.flatMap((doc) => {
-      const whole = wholeOf(collection, doc, all);
-      return [
-        ...(whole
-          ? [`${OWN}${whole}`]
-          : typeof doc[field] === "string"
-          ? [doc[field] as string]
-          : []),
-        ...(Array.isArray(doc.sources) ? doc.sources as string[] : []),
-      ];
-    });
+    return docs.flatMap((doc) => [
+      ...(typeof doc[field] === "string" ? [doc[field] as string] : []),
+      ...(Array.isArray(doc.drew) ? doc.drew as string[] : []),
+    ]);
   },
   async write(actor, collection, doc, read, ctx) {
     const all = sharedOf(ctx);
     const shared = entryOf(all, collection);
-    const space = shared ? doc[shared.field ?? "in"] : undefined;
+    if (!shared || shared.member) return doc;
+    const space = doc[shared.field ?? "in"];
     if (typeof space !== "string") return doc;
-    const seen = await covered(space, ctx);
-    // Who else it's for: whoever the document it goes in is shared with on its own (a contact).
-    const whole = wholeOf(collection, doc, all);
-    const outside = whole ? await membersOn(whole, ctx) : new Set<string>();
-    const found = new Set<string>();
-    for (const label of read) {
-      if (!label.startsWith(OWN)) {
-        // A space: its members see it; someone in only this document doesn't.
-        if (!seen.has(label) || outside.size) found.add(label);
-        continue;
+    // What everyone it's shown to reaches: checked, and all its record may say.
+    let cover: Set<string> | undefined;
+    if (narrows(actor) && whereOf(actor) !== undefined) {
+      const target = await destinationOf(collection, doc, space, all, ctx);
+      cover = await coverOf(target, ctx);
+      if (!approved(actor, target, space) && !await covers(actor, cover, ctx)) {
+        throw needsApproval(target, (await audienceOf(target, ctx)).named, previewOf(doc));
       }
-      const key = label.slice(OWN.length);
-      if (key === whole) continue;
-      const home = await homeOf(key, ctx);
-      if (!home) continue;
-      const on = outside.size ? await membersOn(key, ctx) : outside;
-      if (!seen.has(home) || [...outside].some((m) => !on.has(m))) found.add(home);
     }
-    const foreign = [...found];
-    if (!foreign.length) return doc;
-    // Done for someone from their own Personal space: theirs, as if they'd written it (on the
-    // record as who did it, for them, from there). Elsewhere, for whoever sees where it goes; in
-    // Personal itself, what keeps labels keeps its marks (the conversation may move), and the
-    // rest goes as it is: only they see it there.
-    if ((space !== actor.in || !shared!.labels) && await ownPersonal(actor, ctx)) return doc;
-    // Where it works (`in`): an agent writing elsewhere what not everyone there can see is refused.
-    const elsewhere = typeof actor.in === "string" && actor.in !== space;
-    if (actor.kind === "agent" && (elsewhere || !shared!.labels)) {
-      throw needsShare(foreign, await described(foreign, ctx));
+    if (!shared.drew || actor.kind !== "agent") return doc;
+    const drew = [
+      ...new Set([...(Array.isArray(doc.drew) ? doc.drew as string[] : []), ...read]),
+    ].filter((one) => one !== space && (!cover || cover.has(one))).sort();
+    return drew.length ? { ...doc, drew } : doc;
+  },
+  async elevate(actor, allow, ctx) {
+    // The agent at work, however its code went on (as its person, as the system).
+    let agent: Actor | undefined = actor;
+    while (agent && !(agent.kind === "agent" && typeof agent.thread === "string")) {
+      agent = agent.via as Actor | undefined;
     }
-    if (!shared!.labels) return doc;
-    const sources = [...new Set([...(doc.sources as string[] ?? []), ...foreign])].sort();
-    return { ...doc, sources };
+    if (!agent) return true;
+    const outside = await sharedWith(docKey(CHAT, agent.thread as string), ctx);
+    if (!outside.some((member) => member.startsWith("contact:"))) return true;
+    // An Action of the app's own (no `allow`) is what its tool chose to do; one people call is
+    // let in only if a contact could call it themselves.
+    return !allow || allow({ kind: "contact", id: "" }, undefined);
   },
 };

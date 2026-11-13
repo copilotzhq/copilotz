@@ -4,11 +4,18 @@
  * runtime's `caller` resource). Each is an MCP server at `/mcp/<name>` that
  * a model outside (ChatGPT, Claude, any MCP client) calls the app's tools
  * through: which tools, how they're shown, the space its conversations'
- * chats live in, and its limits. `serverOf` gives a server with every
- * default filled in, as the plugin uses it; `problemOf` says what's wrong
- * with one, at start.
+ * chats live in (or, a public one, where its tools work), and its limits.
+ * `serverOf` gives a server with every default filled in, as the plugin
+ * uses it; `forThePublic` says which tools a public one offers; `problemOf`
+ * says what's wrong with one, at start.
  */
-import { callerOf, callerProblem, exemptProblem, type Resources } from "../../../../runtime/mod.ts";
+import {
+  type Actor,
+  callerOf,
+  callerProblem,
+  exemptProblem,
+  type Resources,
+} from "../../../../runtime/mod.ts";
 import { agentsOf, SEND, type Tool, type ToolAnnotations } from "../../../agents/chat/contract.ts";
 
 /** Who may call an entry: the model, the app's own widget (MCP Apps' `ui.visibility`). */
@@ -99,7 +106,10 @@ export type McpLimits = {
    */
   lateAtOnce: number;
   addressLateAtOnce: number;
-  /** Calls one conversation may make a minute, and all of the server's conversations together. */
+  /**
+   * Calls one conversation may make a minute, and all of the server's conversations together (on
+   * a public server, which has none: all its calls together).
+   */
   perMinute: number;
   linePerMinute: number;
   /** New conversations the server takes an hour, and one user starts there (ChatGPT's `openai/subject`). */
@@ -114,7 +124,10 @@ export type McpLimits = {
 
 /** A server the app declares: an MCP server open to anyone, at `/mcp/<name>`. */
 export type DeclaredServer = {
-  /** The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or not). */
+  /**
+   * The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or
+   * not); on a public server, the space its tools work in (`ctx.in`).
+   */
   in: string;
   /**
    * The tools it offers, by name (the `tools` resource's), each with how
@@ -140,6 +153,17 @@ export type DeclaredServer = {
    * model isn't shown the field, and nobody else gets a chat there.
    */
   handles?: boolean;
+  /**
+   * A public server, which keeps nothing: each call runs its tool as the public (`{ kind:
+   * "public" }`, whom `publicCallers` lets in), with no contact, chat or step, and only the tools
+   * that only read (`annotations.readOnly`) are offered. What they read is what the public
+   * reaches: the spaces that have it as a viewer (`member.set` with `{ kind: "public" }`), those
+   * alone, and nothing it writes lands. No conversation, so no `chat` handle, no widgets, and
+   * calls are limited by the caller's address and on the whole server (`ipPerMinute`,
+   * `linePerMinute`), in memory of a fixed size. A server is public or keeps conversations: to
+   * offer both, declare two. Off unless said.
+   */
+  public?: boolean;
   /** The browser origins it answers (`Origin`, or `"*"` for any): none unless said (no browser calls MCP). */
   origins?: string[];
   /**
@@ -148,6 +172,7 @@ export type DeclaredServer = {
    * tool (`READ`: what a widget reads that its snapshot didn't have).
    */
   widgets?: McpWidgets;
+  /** What it takes before it says no, over the defaults (`MCP_LIMITS`): see `McpLimits`. */
   limits?: Partial<McpLimits>;
   /**
    * Callers whose address is in these CIDR ranges (a shared proxy's: OpenAI's egress, every
@@ -195,7 +220,10 @@ const STATUS = 64;
 export type Server = Omit<DeclaredServer, "tools" | "limits"> & {
   name: string;
   client: string;
+  /** Whether it gives handles: never on a public server, which keeps no conversation. */
   handles: boolean;
+  /** Whether it's public: anyone's, each call as the public, keeping nothing. */
+  public: boolean;
   version: string;
   /** The tools it offers, in order, each with how. */
   tools: Record<string, McpTool>;
@@ -238,7 +266,8 @@ export function serverOf(ctx: { resources: Resources }, name: string): Server | 
     ...line,
     name,
     client: line.client ?? name,
-    handles: line.handles ?? true,
+    public: line.public === true,
+    handles: line.public === true ? false : line.handles ?? true,
     version: line.version ?? "1.0.0",
     tools: Object.fromEntries(listedBy(line).map((tool) => [tool, line.tools[tool] ?? {}])),
     limits: { ...LIMITS, ...line.limits },
@@ -249,6 +278,28 @@ export function serverOf(ctx: { resources: Resources }, name: string): Server | 
 export const hintsOf = (line: Server, name: string, tool: Tool): ToolAnnotations => ({
   ...tool.annotations,
   ...line.tools[name]?.annotations,
+});
+
+/**
+ * Whether a server offers its tool `name` to the public, when it's a public server: a tool the
+ * model calls (not an Action, not drawn by a widget, not the widgets' alone) that only reads, as
+ * its hints say (the tool's own, then the server's). Its `readOnly` only chooses what's offered:
+ * what keeps the public from writing is its reach (it writes nothing), not the hint.
+ */
+export function forThePublic(line: Server, name: string, tool: Tool | undefined): boolean {
+  const how = Object.hasOwn(line.tools, name) ? line.tools[name] : undefined;
+  if (!how || !tool || how.action !== undefined || how.widget !== undefined || appOnly(how)) {
+    return false;
+  }
+  return hintsOf(line, name, tool).readOnly === true;
+}
+
+/** Whom a public server's calls run as: the public, from it, in its space. */
+export const publicOf = (line: Pick<Server, "name" | "in">): Actor => ({
+  kind: "public",
+  id: "",
+  mcp: line.name,
+  in: line.in,
 });
 
 /** Tool names an MCP client takes as they are. */
@@ -273,9 +324,17 @@ export function problemOf(
   if (!line.tools || typeof line.tools !== "object") {
     return "needs its tools: which ones a model outside calls";
   }
+  if (line.public !== undefined && typeof line.public !== "boolean") {
+    return "public is true or false";
+  }
+  const open = line.public === true;
+  if (open && line.handles !== undefined && line.handles !== false) {
+    return "is public, so it keeps no conversation: it gives no handles (leave handles out)";
+  }
   const tools = (resources.tools ?? {}) as Record<string, Tool | null>;
   const offered = listedBy(line);
   if (!offered.length) return "offers no tool";
+  let reads = false;
   const client = line.client ?? name;
   if (Object.hasOwn(agentsOf({ resources }), client)) {
     return `its client "${client}" is an agent's name`;
@@ -293,6 +352,10 @@ export function problemOf(
     }
     if (how.widget !== undefined && (typeof how.widget !== "string" || !how.widget)) {
       return `tools.${tool}.widget is a View's kind`;
+    }
+    // A widget draws a conversation's calls, and acts for its contact: a public server has none.
+    if (open && (how.widget !== undefined || how.action !== undefined || appOnly(how))) {
+      return `tools.${tool}: a public server has no widgets (they draw a conversation's calls)`;
     }
     let own: Tool | undefined;
     if (how.action !== undefined) {
@@ -315,7 +378,10 @@ export function problemOf(
         | { type?: unknown; properties?: Record<string, unknown> }
         | undefined;
       if (input && input.type !== "object") return `"${tool}" takes an object (its input's type)`;
-      if ((line.handles ?? true) && input?.properties && Object.hasOwn(input.properties, "chat")) {
+      if (
+        !open && (line.handles ?? true) && input?.properties &&
+        Object.hasOwn(input.properties, "chat")
+      ) {
         return `"${tool}" has an input called chat, which handles take: set handles: false`;
       }
     }
@@ -328,12 +394,17 @@ export function problemOf(
     if (how.replay !== undefined && typeof how.replay !== "boolean") {
       return `tools.${tool}.replay is true or false`;
     }
-    for (const [hint, value] of Object.entries({ ...own?.annotations, ...how.annotations })) {
+    const hints = { ...own?.annotations, ...how.annotations };
+    for (const [hint, value] of Object.entries(hints)) {
       if (!["readOnly", "destructive", "idempotent", "openWorld"].includes(hint)) {
         return `"${tool}": ${hint} isn't an annotation (readOnly, destructive, idempotent, openWorld)`;
       }
       if (typeof value !== "boolean") return `"${tool}": its ${hint} is true or false`;
     }
+    if (hints.readOnly === true) reads = true;
+  }
+  if (open && !reads) {
+    return "is public and offers no tool that only reads (annotations.readOnly): all it offers";
   }
   for (const [key, value] of Object.entries(line.limits ?? {})) {
     if (!(key in LIMITS)) return `limits.${key} isn't a limit`;

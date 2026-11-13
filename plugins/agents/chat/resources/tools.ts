@@ -10,7 +10,7 @@
  * app, and an agent with no tools only answers (a visitor reads its words as
  * they come).
  */
-import type { Message } from "../collections/message.ts";
+import { heldTold, type Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { type Tool, tool } from "../shared/types.ts";
 import { workIn } from "../shared/where.ts";
@@ -30,11 +30,17 @@ const when = (at: string | undefined) => at ? at.slice(0, 16).replace("T", " ") 
 
 /** Whom messages name, for `namesFor`: who wrote them, to whom, and ids in what they say. */
 const namedIn = (messages: Message[]): string[] =>
-  messages.flatMap((m) => [m.from, ...(m.to ?? []), ...idsIn(m.text ?? "")]);
+  messages.flatMap((m) => [
+    m.from,
+    ...(m.to ?? []),
+    ...(m.held?.for ? [m.held.for] : []),
+    ...idsIn(m.text ?? ""),
+  ]);
 
 /**
  * A message as a line of a transcript: when, who to whom, what it says and
- * carries; people by `names` (in what it says too).
+ * carries (where a reply went, for one held elsewhere); people by `names`
+ * (in what it says too).
  */
 function line(m: Message, names: Record<string, string> = {}): string {
   const to = m.to?.length ? ` → ${m.to.map((who) => nameOf(who, names)).join(", ")}` : "";
@@ -43,9 +49,15 @@ function line(m: Message, names: Record<string, string> = {}): string {
       m.files.map((f) => f.transcript ? `voice: ${gist(f.transcript, 400)}` : f.name).join("; ")
     }]`
     : "";
-  const text = withNames((m.text ?? "").trim(), names);
+  const text = m.held
+    ? heldTold(m, m.held.for ? nameOf(m.held.for, names) : undefined)
+    : withNames((m.text ?? "").trim(), names);
   return `[${when(m.at)}] ${nameOf(m.from, names)}${to}: ${text}${files}`;
 }
+
+/** What a conversation code made is, beside its title: a chat's staff notes, what was held from one. */
+const kindOf = (t: Pick<Thread, "about" | "held">) =>
+  t.about ? ` (staff notes about ${t.about})` : t.held ? ` (held from ${t.held.from})` : "";
 
 const IN = {
   type: "string",
@@ -85,7 +97,8 @@ const listConversations = tool({
     const said = (text?: string) => gist(text && withNames(text, names));
     return others.map((t) =>
       [
-        `- ${t._id}${t.title ? ` “${gist(t.title, 80)}”` : ""} · ${t.messages ?? 0} messages · ` +
+        `- ${t._id}${t.title ? ` “${gist(t.title, 80)}”` : ""}${kindOf(t)} · ` +
+        `${t.messages ?? 0} messages · ` +
         `last ${when(t.at)}`,
         `  opened: ${said(t.first) || "(nothing to read)"}`,
         ...(t.last && t.latest !== t.opened ? [`  latest: ${said(t.last)}`] : []),
@@ -130,7 +143,7 @@ const readConversation = tool({
     const more = found.length > most
       ? `\n(earlier messages: read again with before: "${shown[0].at}")`
       : "";
-    const title = thread.title ? ` “${gist(thread.title, 80)}”` : "";
+    const title = `${thread.title ? ` “${gist(thread.title, 80)}”` : ""}${kindOf(thread)}`;
     const elsewhere = where.in === ctx.in ? "" : ` (in space ${where.in})`;
     const names = await namesFor(ctx, namedIn(shown));
     return `Conversation ${conversation}${title}${elsewhere}:\n${

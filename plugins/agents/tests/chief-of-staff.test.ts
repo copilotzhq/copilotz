@@ -2,20 +2,22 @@
  * An agent in its person's Personal space works across their spaces, as they
  * can: it lists and reads the chats of another space, says something in one
  * (send_message's `thread`: who answers there gets it, and the answer comes
- * back), and keeps a routine there. From a shared space it reaches only that
- * space, and says so. Sending to a chat needs its person to be able to write
- * there, wherever the agent is.
+ * back), and keeps a routine there once its person says yes (Launch's people
+ * would see what Personal's work may draw on). From a shared space it
+ * reaches only that space, and says so. Sending to a chat needs its person to
+ * be able to write there, wherever the agent is.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
-import { chat, type Message } from "../chat/mod.ts";
+import { type Approval, chat, type Message } from "../chat/mod.ts";
 import { routines } from "../routines/mod.ts";
 import type { Routine } from "../routines/collections/routine.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
 import { test } from "../../../testing/mod.ts";
+import { yesToShares } from "./yes.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -52,7 +54,7 @@ const app = definePlugin({
   name: "app",
   adapters: { llm: { s: script } },
   resources: {
-    shared: { thread: {}, message: { labels: true } },
+    shared: { thread: {}, message: { drew: true } },
     provider: { s: { adapter: "s" } },
     agents: {
       north: {
@@ -102,6 +104,8 @@ async function setup(
         ...(where.thread || where.in ? where : { in: personal }),
       }, { actor: ana });
       await rt.idle();
+      // Saying something in another space's chat from Personal asks her first: she says yes.
+      await yesToShares(rt, ana);
       return thread;
     };
     const there = await say("@east how's the launch going?", { in: launch });
@@ -170,16 +174,28 @@ test("another chat of the same space: said there, answered back", async () => {
   });
 });
 
-test("from Personal, a routine kept in another space starts a chat there each run", async () => {
-  await setup(async ({ rt, launch, say }) => {
-    await say(
-      `do schedule_routine {"in":"${launch}","name":"Launch check","text":"How's it going?",` +
-        `"agent":"east","schedule":{"kind":"daily","time":"09:00","timezone":"UTC"}}`,
-      {},
-    );
-    assertStringIncludes(got.north[0], "Made it");
+test("from Personal, a routine kept in another space waits for its person's yes; with it, it starts a chat there each run", async () => {
+  await setup(async ({ rt, personal, launch, say }) => {
+    const routine = {
+      in: launch,
+      name: "Launch check",
+      text: "How's it going?",
+      agent: "east",
+      schedule: { kind: "daily", time: "09:00", timezone: "UTC" },
+    };
+    // Launch's people would see what Personal's work may draw on: Ana is asked first.
+    await rt.call("chat.send", {
+      text: `do schedule_routine ${JSON.stringify(routine)}`,
+      in: personal,
+    }, { actor: ana });
+    await rt.idle();
+    const asked = await rt.query<Approval[]>("approval.pending", {}, { actor: ana });
+    assertEquals(asked.map((a) => [a.work, a.name]), [["share", "Launch"]]);
+    assertEquals(await rt.query<Routine[]>("routine.list", { in: launch }, { actor: ana }), []);
+    // With her yes, it's made as the tool makes it (as her, for her agent there): kept there.
+    assertEquals(await yesToShares(rt, ana), 1);
     const [kept] = await rt.query<Routine[]>("routine.list", { in: launch }, { actor: ana });
-    assertEquals([kept.name, kept.in, kept.post], ["Launch check", launch, "new"]);
+    assertEquals([kept.name, kept.in, kept.by], ["Launch check", launch, "ana"]);
   });
 });
 

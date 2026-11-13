@@ -62,8 +62,9 @@ async function withPool(run: (pool: PostgresPool) => Promise<void>) {
 
 test("serve: while it waits for the lease, requests are told it's starting; then it serves", () =>
   withPool(async (pool) => {
-    // A newer deploy holds it, and isn't asked.
-    const other = await lease(pool, { revision: 9, ttlMs: 600, lost: () => {} });
+    // A newer deploy holds it, and isn't asked. Its time is long: a slow runner that stalls
+    // for a while must not see it run out, and the app open early.
+    const other = await lease(pool, { revision: 9, ttlMs: 30_000, lost: () => {} });
     const port = await freePort();
     const closed: number[] = [];
     let opened = false;

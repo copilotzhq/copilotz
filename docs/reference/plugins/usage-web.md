@@ -39,7 +39,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.45`.
 
 ## Listing
 

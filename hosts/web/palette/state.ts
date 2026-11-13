@@ -19,8 +19,9 @@ export type PaletteControl = {
   back(): void;
   close(): void;
   /**
-   * Hands `value` to the nearest step that asked for one (its `pick`): a
-   * space picked, for a move there. What it returns, the item's `run` does.
+   * Hands `value` to the nearest step that asked for one (its `pick`, with
+   * this palette): a space picked, for a move there. What it returns, the
+   * item's `run` does.
    */
   pick(value: unknown): Promise<unknown>;
   /** Closes the palette and shows a View in a dialog instead: a form (inviting someone). */
@@ -73,8 +74,11 @@ export type PaletteStep = {
   placeholder?: string;
   /** What the field starts with: a name to change. */
   value?: string;
-  /** A line under the field: what choosing here does. */
-  note?: string;
+  /**
+   * Under the field: what choosing here does. Words, or what says them
+   * (a `LazyView`: who'll see a move, read once it's asked).
+   */
+  note?: ReactNode;
   /** The View that lists its items (it returns groups), with its item and hints (and `search`) … */
   view?: string;
   item?: unknown;
@@ -85,8 +89,11 @@ export type PaletteStep = {
   filter?: boolean;
   /** A question to answer (archive it?): no field, only its choices, the first chosen by Enter. */
   confirm?: boolean;
-  /** What a picked value does: a space picked, the move there. */
-  pick?(value: unknown): unknown;
+  /**
+   * What a picked value does: a space picked, the move there; or, with the
+   * palette, a question first (`palette.push`: who'll see it there?).
+   */
+  pick?(value: unknown, palette: PaletteControl): unknown;
 };
 
 /** A View shown in a dialog, from the palette. */
@@ -124,4 +131,17 @@ export function openPalette(step?: PaletteStep): void {
 
 export function closePalette(): void {
   if (state.open) set({ open: false, steps: [] });
+}
+
+/**
+ * Hands `value` to the nearest of `steps` that asks for one (the latest
+ * with a `pick`), with the palette, so it may open a step of its own.
+ */
+export async function pickIn(
+  steps: (PaletteStep | undefined)[],
+  value: unknown,
+  palette: PaletteControl,
+): Promise<unknown> {
+  const asker = [...steps].reverse().find((step) => step?.pick);
+  return await asker?.pick?.(value, palette);
 }

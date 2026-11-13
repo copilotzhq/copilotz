@@ -5,9 +5,8 @@
  * never the caller. Only whoever would be asked there says it.
  */
 import { defineAction, forbidden, inPerson, invalid } from "../../../../runtime/mod.ts";
-import { type Origin, originKey } from "../../../agents/chat/contract.ts";
+import { letOrigin, type Origin, originKey } from "../../../agents/chat/contract.ts";
 import type { Desk } from "../collections/desk.ts";
-import { letOrigin } from "../shared/grants.ts";
 import { answererOf } from "../shared/where.ts";
 
 /** What says what an origin is: `origins: { routine: { action: "routine.origin" } }`. */
@@ -32,7 +31,7 @@ export const allowOriginAction = defineAction({
   allow: inPerson,
   run: async (ctx, input) => {
     const me = ctx.actor!.id;
-    const scope = { owner: me, desk: input.desk, agent: input.agent, work: input.work };
+    const scope = { owner: me, on: input.desk, agent: input.agent, work: input.work };
     if (!input.allow) {
       await ctx.db.collection("grant").deleteMany({
         ...scope,
@@ -47,7 +46,7 @@ export const allowOriginAction = defineAction({
     if (answererOf(desk, found.by) !== me) {
       throw forbidden("Whoever answers for this computer says that.");
     }
-    await letOrigin(ctx, { ...scope, computer: desk.computer, origin: found.origin });
+    await letOrigin(ctx, { ...scope, origin: found.origin, also: { computer: desk.computer } });
     return { allowed: true };
   },
 });

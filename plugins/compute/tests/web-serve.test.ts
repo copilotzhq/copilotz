@@ -8,7 +8,7 @@
  */
 import { assert, assertEquals } from "@std/assert";
 import type { Preview } from "../computers/collections/preview.ts";
-import { addressOf, asked, publishOf, reach, sentence } from "../computers/views/web/asked.ts";
+import { addressOf, asked, publishOf, sentence } from "../computers/views/web/asked.ts";
 import {
   blockedBy,
   jobActionsOf,
@@ -167,16 +167,6 @@ test("an agent's ask to publish, in words", () => {
   assertEquals(addressOf(at), "https://my-shop.copilotz.app");
   assertEquals(addressOf({ work: "writes", preview: "https://x.app" }), undefined);
   assertEquals(sentence(at), "assistant wants to publish My Shop at https://my-shop.copilotz.app");
-  assertEquals(reach("once", ask, "laptop"), "assistant may publish My Shop, this once.");
-  assertEquals(
-    reach("thread", ask, "laptop"),
-    "assistant may publish apps from laptop without asking again, in this conversation.",
-  );
-  // The others read as before.
-  assertEquals(
-    reach("always", { agent: "a", work: "jobs", detail: "x" }),
-    "a may start jobs on this computer without asking again, in any conversation.",
-  );
 });
 
 test("a cloud computer's sizes and prices, as people pay them", () => {

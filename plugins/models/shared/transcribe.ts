@@ -1,7 +1,14 @@
 /** Transcribing: the model choice resolved, fallbacks, and its use told. */
 import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
 import { calledBy, type Endpoint, type Usage } from "./provider.ts";
-import { adapterFor, type ModelInfo, type ModelRef, resolve, type Resolved } from "./choice.ts";
+import {
+  adapterFor,
+  loadCatalog,
+  type ModelInfo,
+  type ModelRef,
+  resolve,
+  type Resolved,
+} from "./choice.ts";
 import { mayUse, used } from "./use.ts";
 import { measure } from "./telemetry.ts";
 
@@ -55,6 +62,7 @@ export async function transcribe(
   ctx: Reach,
   request: { model: ModelRef; audio: Audio; tags?: Record<string, string> },
 ): Promise<Transcript> {
+  await loadCatalog();
   const choices = transcribers(ctx, request.model);
   for (const [i, m] of choices.entries()) {
     // Whoever listens to model use may refuse it first (a web line's budget, spent): for good.

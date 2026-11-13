@@ -9,11 +9,11 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
-import { chat, type Message } from "../../agents/chat/mod.ts";
+import { type Approval, chat, type Message } from "../../agents/chat/mod.ts";
 import { routines } from "../../agents/routines/mod.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
-import { type Approval, computers, type Desk } from "../mod.ts";
+import { computers, type Desk } from "../mod.ts";
 import { WORK } from "../computers/shared/workloads.ts";
 import { test } from "../../../testing/mod.ts";
 import { fakeComputer } from "./fake-computer.ts";
@@ -44,7 +44,7 @@ const script: LlmAdapter = {
 const app = definePlugin({
   name: "app",
   resources: {
-    shared: { thread: {}, message: { labels: true } },
+    shared: { thread: {}, message: { drew: true } },
     provider: { s: { adapter: "s" } },
     agents: {
       assistant: { instructions: "Hi.", model: "s/x", default: true, tools: ["terminal"] },
@@ -126,7 +126,7 @@ test("a yes for a routine lets its runs go on their own, and nothing else", asyn
     ]);
 
     // Yes, for this routine: that run carries on.
-    await s.rt.call("computer.approve", { approval: asked._id, answer: "origin" }, { actor: ana });
+    await s.rt.call("chat.approve", { approval: asked._id, answer: "origin" }, { actor: ana });
     await s.rt.idle();
     assertEquals(s.ran(computer), ["df"]);
     assertEquals(await s.pending(), []);
@@ -171,7 +171,7 @@ test("a yes for a routine lets its runs go on their own, and nothing else", asyn
     // Answers other than this one work as before, and keep the run's scope.
     const uptime = (await s.pending()).find((a) => a.detail === "uptime")!;
     assertEquals(uptime.origin?.id, other);
-    await s.rt.call("computer.approve", { approval: uptime._id, answer: "once" }, { actor: ana });
+    await s.rt.call("chat.approve", { approval: uptime._id, answer: "once" }, { actor: ana });
     await s.rt.idle();
     assertEquals(s.ran(computer), ["df", "df", "uptime"]);
     await s.run(other);
@@ -208,7 +208,7 @@ test("every run stopped on the same thing carries on when it's allowed", async (
     const waiting = await s.pending();
     assertEquals(waiting.length, 2);
     assert(waiting[0].thread !== waiting[1].thread);
-    await s.rt.call("computer.approve", { approval: waiting[0]._id, answer: "origin" }, {
+    await s.rt.call("chat.approve", { approval: waiting[0]._id, answer: "origin" }, {
       actor: ana,
     });
     await s.rt.idle();
@@ -312,7 +312,7 @@ test("where a computer's owner answers, the yes is theirs, and only theirs", asy
     assertEquals([asked.detail, asked.owner, asked.for], ["make", "ana", "bob"]);
 
     // Ana lets it. Bob then changes what it does: Ana's yes doesn't cover that.
-    await s.rt.call("computer.approve", { approval: asked._id, answer: "origin" }, { actor: ana });
+    await s.rt.call("chat.approve", { approval: asked._id, answer: "origin" }, { actor: ana });
     await s.rt.idle();
     assertEquals(s.ran(computer), ["make"]);
     await s.run(id, bob);
@@ -335,7 +335,7 @@ test("only what a routine set going can be allowed for one", async () => {
     const [asked] = await s.pending();
     assertEquals(asked.origin, undefined);
     const refused = await assertRejects(() =>
-      s.rt.call("computer.approve", { approval: asked._id, answer: "origin" }, { actor: ana })
+      s.rt.call("chat.approve", { approval: asked._id, answer: "origin" }, { actor: ana })
     );
     assertEquals((refused as { code?: string }).code, "invalid");
     assertEquals((await s.pending()).length, 1);
@@ -355,7 +355,7 @@ test("a key can't answer for its person, and nobody works directly on a computer
     const by = (call: Promise<unknown>) =>
       call.then(() => "done", (e) => (e as { code?: string }).code);
     assertEquals(
-      await by(s.rt.call("computer.approve", { approval: asked._id, answer: "always" }, {
+      await by(s.rt.call("chat.approve", { approval: asked._id, answer: "always" }, {
         actor: key,
       })),
       "forbidden",
@@ -428,11 +428,11 @@ test("what's let for a routine is checked against it; an owner's yes keeps the t
     await s.rt.idle();
     const [asked] = await s.pending(ana);
     assertEquals([asked.owner, asked.for], ["ana", "bob"]);
-    await s.rt.call("computer.approve", { approval: asked._id, answer: "thread" }, { actor: ana });
+    await s.rt.call("chat.approve", { approval: asked._id, answer: "thread" }, { actor: ana });
     await s.rt.idle();
     assertEquals(s.ran(computer), ["make"]);
     const said = await s.rt.query<Message[]>("message.history", { thread }, { actor: bob });
-    const yes = said.find((m) => m.text === "Yes, in this conversation: make")!;
+    const yes = said.find((m) => m.text === "Yes, for this conversation: make")!;
     assertEquals([yes.from, yes.via?.kind, yes.via?.name], ["bob", "answer", "ana"]);
     await computer.worker.stop();
   });

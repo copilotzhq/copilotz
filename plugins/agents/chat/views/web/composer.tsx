@@ -16,7 +16,11 @@
  * what was typed stays. What other front ends want known before sending
  * (`notes`, the `composerNotes` resource: the org is out of credits) shows
  * over the box too, each its own View, taking no room until it has something
- * to say.
+ * to say. What's typed that names agents here (`@maya`, written out) may
+ * show a word of its own over the box (`mentionNote`: where they'd answer,
+ * in a chat someone outside reads), with a way to take what's typed out.
+ * Text handed to its conversation from elsewhere on the page (`handDraft`:
+ * a question moved to a chat's staff notes) is typed in, after what's there.
  */
 import {
   type ClipboardEvent,
@@ -44,8 +48,9 @@ import {
   Textarea,
 } from "../../../../../hosts/web/mod.ts";
 import type { ComposerNote, RefusalView } from "../../shared/types.ts";
-import { matching, mention, type Mentionable, typingAt, unanswered } from "./agents.ts";
+import { matching, mention, type Mentionable, mentions, typingAt, unanswered } from "./agents.ts";
 import { type Attached, chosen, FILES, read, size } from "./attach.ts";
+import { takeDraft, useHanded } from "./handed.ts";
 import { record, type Recorder as Recording, type Take } from "./record.ts";
 import { Recorder } from "./recorder.tsx";
 import { VoiceFailed } from "./voice-failed.tsx";
@@ -72,6 +77,9 @@ const LISTED = 8;
 /** A send refused for a reason another front end's View helps with: that View, and what for. */
 type Refused = { view: string; names: string[]; text: string; message: string };
 
+/** What's typed that names agents here: the text, those agents, and a way to take the text out. */
+export type Mentioned = { text: string; agents: Mentionable[]; clear(): void };
+
 const silent = () => () => {};
 const none = () => undefined;
 const audio = (type: string) => type.startsWith("audio/");
@@ -95,6 +103,12 @@ export function Composer(props: {
   note?: ReactNode;
   /** What's typed already when it opens (`@maya `, asked from an agent's page). */
   initial?: string;
+  /**
+   * Whether it's ready to type in once shown, where there's a keyboard (by
+   * default it is). Asked as it's shown, for one beside another that is: a
+   * chat's notes take it only when someone just opened them.
+   */
+  autoFocus?: boolean | (() => boolean);
   /** The agents here, for `@` to list: who answers new chats first. */
   agents?: Mentionable[];
   /** Where they work, as the list's heading says it ("Launch"). */
@@ -105,6 +119,12 @@ export function Composer(props: {
   notes?: Record<string, ComposerNote | null>;
   /** Where it sends, for those Views: the chat (none from home) and its space. */
   place?: { thread?: string; in?: string };
+  /**
+   * Over the box while what's typed names agents here (once written out, the
+   * list closed): what to know before it goes to them (in a chat someone
+   * outside reads, that they'd answer there).
+   */
+  mentionNote?(typed: Mentioned): ReactNode;
 }): ReactNode {
   const [text, setText] = useState(props.initial ?? "");
   const [files, setFiles] = useState<Attached[]>([]);
@@ -146,7 +166,10 @@ export function Composer(props: {
 
   // Ready to type after what's there, where there's a keyboard (on a phone, it waits for a tap).
   useEffect(() => {
-    if (fine()) {
+    const take = typeof props.autoFocus === "function"
+      ? props.autoFocus()
+      : props.autoFocus ?? true;
+    if (fine() && take) {
       area.current?.focus();
       area.current?.setSelectionRange(text.length, text.length);
     }
@@ -156,6 +179,20 @@ export function Composer(props: {
   useEffect(() => {
     if (!working.length) setStopping(false);
   }, [working.length]);
+  // Text handed over from elsewhere on the page goes after what's typed, ready to send.
+  const thread = props.place?.thread;
+  const handed = useHanded(thread);
+  useEffect(() => {
+    const given = handed && thread ? takeDraft(thread) : undefined;
+    if (!given) return;
+    const next = text.trim() ? `${text.trimEnd()}\n\n${given}` : given;
+    setText(next);
+    setCaret(next.length);
+    requestAnimationFrame(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(next.length, next.length);
+    });
+  }, [handed, thread]);
   // A recording replaced, sent or left behind lets the microphone go.
   useEffect(() => () => recorder?.cancel(), [recorder]);
   // Stopped, it waits to be sent: words may go with it.
@@ -244,6 +281,15 @@ export function Composer(props: {
   useEffect(() => {
     if (!typing) setClosed(undefined);
   }, [!!typing]);
+  // The agents here what's typed names, once written out: what `mentionNote` speaks of.
+  const named = props.mentionNote && !listing && !live
+    ? mentions(text).flatMap((id) => props.agents?.find((a) => a.id === id) ?? [])
+    : [];
+  const clear = () => {
+    setText("");
+    setCaret(0);
+    setRefused(undefined);
+  };
   const pick = (agent: string) => {
     if (!typing) return;
     const next = mention(text, typing, agent);
@@ -450,6 +496,13 @@ export function Composer(props: {
               onRetry={() => void submit()}
               onAudioOnly={() => void submit({ transcribe: false })}
             />
+          )
+          : null}
+        {named.length && !sending
+          ? (
+            <div className="chat-mentioned">
+              {props.mentionNote?.({ text: text.trim(), agents: named, clear })}
+            </div>
           )
           : null}
         {notes.length

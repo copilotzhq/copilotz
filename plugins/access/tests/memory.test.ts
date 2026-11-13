@@ -4,7 +4,7 @@
  * Launch, it reaches Launch and what Launch draws on, never Ana's other
  * spaces. In Ana's Personal space, which only she sees, what comes up by
  * itself comes from anywhere she reads, and it's told where else it can
- * read for her; what it brings from Finance there labels the answer. Once
+ * read for her; the answer says it drew on Finance (on the record). Once
  * Launch draws on Finance, recalling it there is Launch's own. Work handed
  * to Launch for her is hers there: what's said of her is about her, and
  * what's known of her there is in mind.
@@ -18,6 +18,7 @@ import { type Memory, memory, memoryExtraction } from "../../agents/memory/mod.t
 import { access } from "../mod.ts";
 import { join } from "./join.ts";
 import { test } from "../../../testing/mod.ts";
+import { yesToShares } from "../../agents/tests/yes.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -50,11 +51,11 @@ const scripted: LlmAdapter = {
   },
 };
 
-test("a memory stays where it was learned; recalled from there, the answer carries it", async () => {
+test("a memory stays where it was learned; recalled from there, the answer says it drew on it", async () => {
   const app = definePlugin({
     name: "app",
     resources: {
-      shared: { thread: {}, message: { labels: true }, memory: {} },
+      shared: { thread: {}, message: { drew: true }, memory: {} },
       memory: { embedder: "hash/words" },
       provider: { s: { adapter: "s" } },
       agents: { lead: { instructions: "Hi.", model: "s/lead", default: true } },
@@ -109,7 +110,7 @@ test("a memory stays where it was learned; recalled from there, the answer carri
     assertEquals(await texts(bob), asked);
 
     // In Ana's Personal space, only she sees what's said: Finance is somewhere else to look, and
-    // recalled from there, the answer carries it.
+    // recalled from there, the answer says it drew on it.
     const { space: personal } = await runtime.call<{ space: string }>("space.personal", {}, {
       actor: ana,
     });
@@ -123,7 +124,7 @@ test("a memory stays where it was learned; recalled from there, the answer carri
       JSON.stringify(told.turn),
     );
     // What comes up there by itself, from anywhere she reads: where it was learned, and the answer
-    // carries it.
+    // says it drew on it.
     await say(ana, "what is the budget", { thread: mine });
     const prompted = await runtime.query<Prompt>("thread.prompt", { thread: mine, agent: "lead" }, {
       actor: { kind: "agent", id: "lead", for: ana, in: personal },
@@ -138,14 +139,14 @@ test("a memory stays where it was learned; recalled from there, the answer carri
     const answered = (await runtime.query<Message[]>("message.history", { thread: mine }, {
       actor: ana,
     })).at(-1);
-    assertEquals([answered?.text, answered?.sources], ["ok", ["finance"]]);
+    assertEquals([answered?.text, answered?.drew], ["ok", ["finance"]]);
     await say(ana, "recall budget in finance", { thread: mine });
     const hers = await texts(ana, mine);
     assert(hers.some((text) => text?.includes("budget is 10k")), JSON.stringify(hers));
     const answer = (await runtime.query<Message[]>("message.history", { thread: mine }, {
       actor: ana,
     })).findLast((m) => m.text?.includes("budget is 10k"));
-    assertEquals(answer?.sources, ["finance"]);
+    assertEquals(answer?.drew, ["finance"]);
 
     // Once Launch draws on Finance, it's Launch's to look in: found there, for everyone there.
     await runtime.call("member.set", {
@@ -191,7 +192,7 @@ test("work handed to a space for someone is theirs there: about them, with them 
   const app = definePlugin({
     name: "app",
     resources: {
-      shared: { thread: {}, message: { labels: true }, memory: {} },
+      shared: { thread: {}, message: { drew: true }, memory: {} },
       memory: { embedder: "hash/words", extractor: "s/cheap", every: 2 },
       provider: { s: { adapter: "s" } },
       agents: {
@@ -212,6 +213,8 @@ test("work handed to a space for someone is theirs there: about them, with them 
     const hand = async (text: string) => {
       await runtime.call("chat.send", { text, in: personal }, { actor: ana });
       await runtime.idle();
+      // From her Personal space into Launch: she says yes to handing it over.
+      await yesToShares(runtime, ana);
     };
     // Only agents talk in the chat it's handed: what's said of her there is about her, in Launch.
     await hand("hand launch she lives in Braga");

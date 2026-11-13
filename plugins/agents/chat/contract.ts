@@ -16,14 +16,17 @@
 export type { File, FileAbout } from "./collections/file.ts";
 export { FILE_CHARS, textual } from "./collections/file.ts";
 export type { Live, LiveCall } from "./collections/live.ts";
-export { isAnswer, type Message } from "./collections/message.ts";
+export { heldTold, isAnswer, type Message } from "./collections/message.ts";
 export type { AdditionShown } from "./collections/shown.ts";
-export type { Thread } from "./collections/thread.ts";
+export type { Moving, MovingPlace, Thread } from "./collections/thread.ts";
+/** A chat's notes, by its id (`<chat>:notes`, see `chat.notes`). */
+export { notesOf } from "./shared/notes.ts";
 export type { Wait } from "./collections/wait.ts";
 export type {
   Addition,
   AdditionEntry,
   Agent,
+  AskView,
   ChatSettings,
   ComposerNote,
   ContextEntry,
@@ -48,6 +51,30 @@ export { tool } from "./shared/types.ts";
  */
 export { runTool, type ToolAt, type ToolRun, toolText } from "./shared/tools.ts";
 export { type Origin, originKey, originOf } from "./shared/origin.ts";
+/**
+ * Asking a person before an agent's work goes on, for every plugin that
+ * needs a yes (computers: a command; chat itself: a share, an answer handed
+ * back): `ask` (what the asking plugin says: whom, about what, in its
+ * words, and which answers it takes; chat keeps the `approval`, puts the
+ * question in the conversation and holds the turn), `letOrigin` (a yes for a
+ * routine, ahead of time), and the words each answer says (`said`). People
+ * answer with `chat.approve`, and take a yes back with `chat.forgetGrant`.
+ */
+export {
+  type Ask,
+  ask,
+  type Asking,
+  letOrigin,
+  type Letting,
+  SAID,
+  said,
+  withdraw,
+} from "./shared/asks.ts";
+export { type Answer, ANSWERS, type Approval } from "./collections/approval.ts";
+export type { Grant } from "./collections/grant.ts";
+/** The kinds of ask chat makes itself: a share (`share`), an answer handed back (`back`). */
+export { SHARE } from "./shared/share.ts";
+export { BACK } from "./shared/delivery.ts";
 /**
  * Where a tool works: the space its call names (`in`), when the agent's work
  * reaches it, else where its conversation is; or, in words, why it can't.

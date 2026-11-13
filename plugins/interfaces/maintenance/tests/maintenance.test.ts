@@ -23,7 +23,7 @@ import { sqliteStore } from "../../../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../../../stores/sql/postgres/mod.ts";
 import { env, tempFile, test } from "../../../../testing/mod.ts";
 import { maintainer } from "../../../../stores/tests/maintainer.ts";
-import { maintenance, type MaintenanceLog } from "../mod.ts";
+import { isMaintenance, maintenance, type MaintenanceLog } from "../mod.ts";
 import { sameKey, weak } from "../resources/routes.ts";
 
 const KEY = "mk_Zq8vT2xLp9WcR4nY7bH3kJ6dF1sA5gE0uM";
@@ -81,6 +81,20 @@ const notes = definePlugin({
       input: { type: "object", properties: { id: text, text } },
       run: (ctx, input) =>
         ctx.db.collection("note").insertOne({ _id: input.id, text: input.text! }),
+    }),
+    // One made for operators (a migration): it says what it would do, or does it.
+    "note.tidy": defineAction({
+      input: {
+        type: "object",
+        properties: { dryRun: { type: "boolean" } },
+        additionalProperties: false,
+      },
+      allow: isMaintenance,
+      run: async (ctx, input) => {
+        const all = await ctx.as().db.collection("note").countDocuments({});
+        if (!input.dryRun) await ctx.as().db.collection("note").deleteMany({ text: "old" });
+        return { notes: all, dryRun: !!input.dryRun, by: ctx.actor?.kind };
+      },
     }),
   },
   processors: {
@@ -210,6 +224,50 @@ test("maintenance: keys rotate, and each request is logged before it runs", asyn
     // A wrong key is refused before anything is logged.
     assertEquals((await send(runtime, "GET", "/", { key: "wrong" })).status, 401);
     assertEquals(logged.length, 1);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("maintenance: an Action made for operators runs as them; no other Action does", async () => {
+  logged.length = 0;
+  const runtime = await open(memoryStore());
+  try {
+    await runtime.call("note.add", { id: "n1", text: "old" });
+    await runtime.call("note.add", { id: "n2", text: "new" });
+    const dry = await send(runtime, "POST", "/actions/note.tidy", { body: { dryRun: true } });
+    assertEquals([dry.status, dry.body.result], [200, {
+      notes: 2,
+      dryRun: true,
+      by: "maintenance",
+    }]);
+    assertEquals(await runtime.query("note.one", { id: "n1" }) !== null, true);
+    const done = await send(runtime, "POST", "/actions/note.tidy", {
+      body: {},
+      headers: { "idempotency-key": "tidy-1", "x-maintenance-by": "ops" },
+    });
+    assertEquals(done.body.result.dryRun, false);
+    assertEquals(await runtime.query("note.one", { id: "n1" }), null);
+    // Sent again with its key: what it did the first time, not done twice.
+    await runtime.call("note.add", { id: "n3", text: "old" });
+    const again = await send(runtime, "POST", "/actions/note.tidy", {
+      body: {},
+      headers: { "idempotency-key": "tidy-1" },
+    });
+    assertEquals(again.body.result, done.body.result);
+    assertEquals(await runtime.query("note.one", { id: "n3" }) !== null, true);
+    // One that doesn't let the maintenance actor in is refused; one that isn't there, not found.
+    const internal = await send(runtime, "POST", "/actions/note.add", { body: { text: "x" } });
+    assertEquals([internal.status, internal.body.error.code], [403, "forbidden"]);
+    const none = await send(runtime, "POST", "/actions/note.none", { body: {} });
+    assertEquals([none.status, none.body.error.code], [404, "not_found"]);
+    assertEquals(
+      logged.filter((l) => l.maintenance === "action").map((l) => [l.action, l.by]),
+      [["note.tidy", undefined], ["note.tidy", "ops"], ["note.tidy", undefined], [
+        "note.add",
+        undefined,
+      ]],
+    );
   } finally {
     await runtime.close();
   }

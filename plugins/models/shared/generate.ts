@@ -3,6 +3,7 @@ import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
 import { invalid } from "../../../runtime/mod.ts";
 import {
   adapterFor,
+  loadCatalog,
   type Media,
   type ModelRef,
   type Provider,
@@ -133,6 +134,7 @@ const stale = (error: unknown) =>
  * (its own key, a person's plan); with none, that's what it's told.
  */
 export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<LlmChunk> {
+  await loadCatalog();
   const choices = chooseModels(ctx, request.model);
   let stopped: unknown;
   for (const [i, choice] of choices.entries()) {

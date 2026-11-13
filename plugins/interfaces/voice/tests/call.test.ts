@@ -220,7 +220,7 @@ test("only what the caller may read is said", async () => {
       thread: c.thread,
       contact: c.contact,
       text: "Segredo",
-      sources: ["elsewhere"],
+      private: true,
     });
     await s.runtime.call("test.said", {
       thread: c.thread,
@@ -259,7 +259,7 @@ const quiet = definePlugin({
       input: { type: "object" },
       run: async (
         ctx,
-        input: { thread: string; contact: string; text: string; sources?: string[] },
+        input: { thread: string; contact: string; text: string; private?: boolean },
       ) => {
         // As trusted code says something to them (`chat.say`): no turn.
         await ctx.db.collection<Message>("message").insertOne({
@@ -270,7 +270,7 @@ const quiet = definePlugin({
           to: [`contact:${input.contact}`],
           text: input.text,
           hops: 1,
-          ...(input.sources ? { sources: input.sources } : {}),
+          ...(input.private ? { private: true } : {}),
           at: new Date().toISOString(),
         });
       },

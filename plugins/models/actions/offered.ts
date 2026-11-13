@@ -21,6 +21,7 @@ import { type Context, defineAction, people } from "../../../runtime/mod.ts";
 import {
   catalog,
   keyable,
+  loadCatalog,
   type ModelInfo,
   type ModelKeys,
   type Provider,
@@ -195,6 +196,7 @@ export const offered = defineAction({
   },
   allow: people,
   run: async (ctx, input) => {
+    await loadCatalog();
     const declared = (ctx.resources.provider ?? {}) as Record<string, Provider>;
     const providers = await providersOf(ctx);
     const known = new Map(providers.map((p) => [p.id, p]));
@@ -256,5 +258,8 @@ export const keyableAction = defineAction({
     required: ["provider"],
     additionalProperties: false,
   },
-  run: (_ctx, input) => keyable(input.provider),
+  run: async (_ctx, input) => {
+    await loadCatalog();
+    return keyable(input.provider);
+  },
 });

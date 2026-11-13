@@ -2,13 +2,23 @@
  * Chat's terminal commands: plain text talks (`@name` addresses agents; when
  * an agent is waiting on your answer, your next message is it), and commands
  * move between conversations, fork them and show what agents are sent.
+ * `/approvals` lists what agents wait on you for (it shows above where you
+ * type too), and `/approve [n] [answer]` answers one, with an answer it takes
+ * (once, thread, routine, always, no; for an answer handed back, here or me).
+ * `/move` says first who'll see the conversation there and what it drew on,
+ * and moves it with `yes`; `/notes` opens a chat's staff notes, and back.
  * Where you are is your shell state: the open conversation is `open`, kind
  * `thread`, and the screen shows it through chat's `thread` View.
  */
 import { command, type Commands, dim, type Terminal } from "../../../../hosts/terminal/mod.ts";
+import type { Approval } from "../collections/approval.ts";
 import type { Message } from "../collections/message.ts";
+import type { Moving } from "../collections/thread.ts";
 import type { Agent, Prompt } from "../shared/types.ts";
+import { ANSWERED, asker, sentence } from "../views/asked.ts";
+import { howTo } from "../views/terminal/asks.ts";
 import type { Listed } from "../views/terminal/threads.ts";
+import { movingWords } from "../views/terminal/moving.ts";
 
 /** The open conversation, if one is. */
 const thread = async (term: Terminal) => {
@@ -133,34 +143,64 @@ export const commands: Commands = {
       await term.runtime.idle();
     },
   }),
-  "/share": command({
-    description: "Show everyone here the latest answer only some of them can see",
-    async run(_, term) {
-      const here = await thread(term);
-      if (!here) return await none(term);
-      const said = await term.runtime.query<Message[]>("message.history", { thread: here });
-      const labelled = said.findLast((m) => m.sources?.length);
-      if (!labelled) return await term.print(dim("Everyone here sees everything already."));
-      await term.runtime.call("share", { collection: "message", id: labelled._id });
-      const spaces = await term.runtime.query<{ _id: string; name: string }[]>("space.reached", {});
-      const names = labelled.sources!.map((id) => spaces.find((p) => p._id === id)?.name ?? id);
-      await term.print(dim(`Shared: everyone here sees what came from ${names.join(", ")}.`));
-    },
-  }),
   "/move": command({
-    description: "Move this conversation, with everything in it, to another space you work in",
-    usage: "<space>",
+    description: "Move this conversation, with everything in it, to another space you work in: " +
+      "it says first who'll see it there, and what it drew on",
+    usage: "<space> [yes]",
     async run(rest, term) {
       const here = await thread(term);
       if (!here) return await none(term);
       const spaces = await term.runtime.query<{ _id: string; name: string }[]>("space.reached", {});
-      const name = rest.trim().toLowerCase();
-      const to = spaces.find((p) => p._id === rest.trim() || p.name.toLowerCase() === name);
+      const named = (given: string) =>
+        spaces.find((p) => p._id === given || p.name.toLowerCase() === given.toLowerCase());
+      // `yes` after the space moves it; a space whose name ends in "yes" is that space still.
+      const asked = rest.trim();
+      const sure = !named(asked) && /\s+yes$/i.test(asked);
+      const to = named(sure ? asked.replace(/\s+yes$/i, "") : asked);
       if (!to) return await term.print(dim("Usage: /move <space>, one /spaces lists."));
+      if (!sure) {
+        const moving = await term.runtime.query<Moving | null>("thread.moving", {
+          thread: here,
+          to: to._id,
+        });
+        if (!moving) return await term.print(dim("Usage: /move <space>, one /spaces lists."));
+        const owners = [moving.to, ...moving.drew].flatMap((p) =>
+          p.kind === "personal" && p.owner && p.owner !== term.me ? [p.owner] : []
+        );
+        const names = owners.length
+          ? await term.runtime.query<Record<string, string>>("profile.names", { ids: owners })
+          : {};
+        await term.print(movingWords(moving, term.me, names));
+        return await term.print(dim(`/move ${to.name} yes moves it.`));
+      }
       await term.runtime.call("chat.move", { thread: here, to: to._id });
       // You go with it: new conversations go there too.
       await term.set({ space: to._id });
       await term.print(dim(`Moved to ${to.name}: its members see this conversation now.`));
+    },
+  }),
+  "/notes": command({
+    description: "This chat's staff notes, apart from it: where your team works with agents " +
+      "about a chat shared outside the space (a customer's), which they never see; " +
+      "/notes again goes back",
+    async run(_, term) {
+      const here = await thread(term);
+      if (!here) return await none(term);
+      const { thread: notes, about } = await term.runtime.call<{ thread: string; about: string }>(
+        "chat.notes",
+        { thread: here },
+      );
+      if (here === notes) {
+        await go(term, about);
+        return await term.print(dim("Back in the chat. /notes opens its staff notes again."));
+      }
+      await go(term, notes);
+      await term.print(
+        dim(
+          "Staff notes: only your team sees them, never whoever the chat is shared with outside " +
+            "this space. Agents here reach all the space does. /notes goes back to the chat.",
+        ),
+      );
     },
   }),
   "/new": command({
@@ -261,4 +301,52 @@ export const commands: Commands = {
       await term.show("agent.prompt", { ...prompt, agent });
     },
   }),
+  "/approvals": command({
+    description: "What your agents wait on you for",
+    async run(_, term) {
+      const waiting = await term.runtime.query<Approval[]>("approval.pending", {});
+      if (!waiting.length) return await term.print(dim("Nothing waits on you."));
+      const names = await namesOf(term, waiting.flatMap((a) => a.for ? [a.for] : []));
+      await term.print(
+        waiting.map((a, i) =>
+          `${dim(`[${i + 1}]`)} ${sentence(a, asker(a, term.me, names))}\n` +
+          dim(`    ${howTo(a, i + 1)}`)
+        ).join("\n"),
+      );
+    },
+  }),
+  "/approve": command({
+    description: "Answer what an agent waits on you for (once, this conversation, its routine, " +
+      "always, or no: as it allows)",
+    usage: "[n] [once|thread|routine|always|no|here|me]",
+    async run(rest, term) {
+      const words = rest.trim().split(/\s+/).filter(Boolean);
+      const n = /^\d+$/.test(words[0] ?? "") ? Number(words.shift()) : undefined;
+      const waiting = await term.runtime.query<Approval[]>("approval.pending", {});
+      if (!waiting.length) return await term.print(dim("Nothing waits on you."));
+      const chosen = n ? waiting[n - 1] : waiting.length === 1 ? waiting[0] : undefined;
+      if (!chosen) {
+        return await term.print(dim("Several wait: /approvals lists them; /approve <n> <answer>"));
+      }
+      // Its first answer, when none is said (yes once; for an answer handed back, post it here).
+      const answer = words[0] ? ANSWERED[words[0]] : chosen.answers[0];
+      if (!answer || !chosen.answers.includes(answer)) {
+        return await term.print(dim(`This takes: ${howTo(chosen, n)}`));
+      }
+      const { answered } = await term.runtime.call<{ answered: boolean }>("chat.approve", {
+        approval: chosen._id,
+        answer,
+      });
+      await term.print(
+        dim(answered ? "Answered; the agent carries on." : "It was answered already."),
+      );
+    },
+  }),
 };
+
+/** People's names by id, as the spaces plugin has them (none without it). */
+const namesOf = (term: Terminal, ids: string[]) =>
+  ids.length
+    ? term.runtime.query<Record<string, string>>("profile.names", { ids: [...new Set(ids)] })
+      .catch(() => ({} as Record<string, string>))
+    : Promise.resolve({} as Record<string, string>);

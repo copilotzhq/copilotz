@@ -20,7 +20,8 @@ import { chat, type ToolContext } from "../../../agents/chat/mod.ts";
 import { access } from "../../../access/mod.ts";
 import { join } from "../../../access/tests/join.ts";
 import usage from "../../../billing/usage/mod.ts";
-import { type Approval, type Computer, computers } from "../../mod.ts";
+import type { Approval } from "../../../agents/chat/mod.ts";
+import { type Computer, computers } from "../../mod.ts";
 import { tools as computerTools } from "../../computers/resources/tools.ts";
 import { WORK } from "../../computers/shared/workloads.ts";
 import { test } from "../../../../testing/mod.ts";
@@ -437,14 +438,14 @@ test("an agent's publish waits for its person's yes, even where nothing else is 
 
       // Publishing is asked every time: nothing wider than this once.
       for (const answer of ["always", "thread", "origin"]) {
-        const refused = await rt.call("computer.approve", { approval: asked._id, answer }, {
+        const refused = await rt.call("chat.approve", { approval: asked._id, answer }, {
           actor: ana,
         }).then(() => "done", (e) => (e as { code?: string }).code);
         assertEquals(refused, "invalid");
       }
 
       // Yes, this once: it publishes, answering at once.
-      await rt.call("computer.approve", { approval: asked._id, answer: "once" }, { actor: ana });
+      await rt.call("chat.approve", { approval: asked._id, answer: "once" }, { actor: ana });
       await rt.idle();
       const published = await tool("publish", { name: "Blog", port: 8080 }) as Published & {
         note: string;

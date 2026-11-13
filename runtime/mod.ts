@@ -90,6 +90,7 @@ export {
   isPublic,
   people,
   peopleOrContacts,
+  publicCallers,
 } from "./errors.ts";
 export type { Accumulator, Expr, Pipeline, Stage } from "./aggregate.ts";
 export {

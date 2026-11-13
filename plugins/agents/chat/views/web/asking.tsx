@@ -1,17 +1,19 @@
 /**
  * What agents wait on you for in other chats, at the top of the sidebar
- * (kind `computer.waiting`): quietly, each a link to its chat, the oldest
- * ask first; nothing at all when nothing waits. Live: an agent asking, or an
- * answer, redraws it. The chat open (`hints.path`) asks in place, so it
- * isn't listed here. Agents show as they're named (chat's `agentsShown`). A space's computers are on its page (its Computer tab).
+ * (kind `chat.waiting`): quietly, each a link to its chat, the oldest ask
+ * first, whatever its kind (a command, a share, an answer handed back);
+ * nothing at all when nothing waits. Live: an agent asking, or an answer,
+ * redraws it. The chat open (`hints.path`) asks in place, so it isn't listed
+ * here. Agents show as they're named (`agentsShown`).
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { Badge, Icon, NavItem, Time } from "../../../../../hosts/web/mod.ts";
-import { agentsShown } from "../../../../agents/chat/contract.ts";
 import type { Approval } from "../../collections/approval.ts";
-import { asked } from "./asked.ts";
+import { agentsShown } from "../../shared/agents.ts";
+import { asking, sentence } from "../asked.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 /** At most this many chats waiting are listed; the rest are counted. */
 const LISTED = 3;
@@ -32,40 +34,39 @@ export const waitingView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode 
   if (!waiting.length) return null;
   const agents = agentsShown(ctx, waiting.map(([first]) => first.agent));
   const named = (agent: string) => agents?.[agent]?.name || agent;
+  const more = waiting.length - LISTED;
   return (
     <>
-      <style href="computers-web" precedence="copilotz">{STYLE}</style>
-      <ul className="computers" aria-label="Waiting on you">
+      <style href="chat-web" precedence="copilotz">{STYLE}</style>
+      <ul className="asks-waiting" aria-label={say("waitingOnYou")}>
         {waiting.slice(0, LISTED).map((asks) => {
           const [first] = asks;
-          const { wants, what } = asked(first);
           return (
             <li key={first.thread}>
               <NavItem
                 href={`/thread/${encodeURIComponent(first.thread)}${inSpace(first.in)}`}
                 leading={
-                  <span className="computers-waiting">
+                  <span className="asks-waiting-mark">
                     <Icon name="alert" size={13} />
                   </span>
                 }
-                description={`${wants.replace(/^wants /, "")} ${what}`}
+                description={asking(first)}
                 end={asks.length > 1
-                  ? <Badge tone="warning" aria-label={`${asks.length} asks`}>{asks.length}</Badge>
+                  ? (
+                    <Badge tone="warning" aria-label={say("asksCount", { count: asks.length })}>
+                      {asks.length}
+                    </Badge>
+                  )
                   : <Time at={first.at} />}
-                title={`${named(first.agent)} ${wants} ${what}`}
+                title={sentence(first, named(first.agent))}
               >
-                {named(first.agent)} needs your OK
+                {say("needsYourOk", { agent: named(first.agent) })}
               </NavItem>
             </li>
           );
         })}
-        {waiting.length > LISTED
-          ? (
-            <li className="computers-more">
-              and {waiting.length - LISTED} more chat{waiting.length - LISTED === 1 ? "" : "s"}{" "}
-              waiting on you
-            </li>
-          )
+        {more > 0
+          ? <li className="asks-waiting-more">{say("moreWaiting", { count: more })}</li>
           : null}
       </ul>
     </>

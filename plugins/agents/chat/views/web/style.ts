@@ -1,10 +1,19 @@
 /**
- * Chat's layout on the web: a chat and its messages, the composer, home, a
- * space's chats (its tab) and its latest (in the sidebar). Only layout, on the theme's variables; the
+ * Chat's layout on the web: a chat and its messages, what agents wait on you
+ * for (over where you type, and in the sidebar), the composer, home, a
+ * space's chats (its tab) and its latest (in the sidebar), and a contact's
+ * chat's staff notes beside it. Only layout, on the theme's variables; the
  * pieces (buttons, chips, notices, markdown…) are the web host's toolkit.
  */
 export const STYLE = `
-.chat { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--background); }
+.chat { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--background);
+  --notes-tint: color-mix(in oklab, var(--warning) 6%, var(--background));
+  --notes-soft: color-mix(in oklab, var(--warning) 15%, var(--background));
+  --notes-line: color-mix(in oklab, var(--warning) 24%, var(--border));
+  --notes-ink: var(--warning-text); }
+/* Under the header: the conversation, and its staff notes beside it while they're open */
+.chat-split { position: relative; flex: 1; min-height: 0; display: flex; container: chat-split / inline-size; }
+.chat-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 /* The header */
 .chat-head { flex: none; display: flex; align-items: center; gap: 12px; min-height: 58px;
@@ -66,7 +75,8 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .msg-main:has(> .msg-actions) { position: relative; }
 .msg-actions { position: absolute; top: 100%; left: -6px; display: flex; gap: 2px; margin-top: 2px;
   opacity: 0; transition: opacity .15s; }
-.msg:hover .msg-actions, .msg:focus-within .msg-actions { opacity: 1; }
+.msg:hover .msg-actions, .msg:focus-within .msg-actions, .msg-actions-shown { opacity: 1; }
+.msg-mine .msg-actions { left: auto; right: -6px; }
 @media (hover: none) {
   .msg:has(> .msg-main > .msg-actions) { padding-bottom: 0; }
   .msg-actions { position: static; opacity: 1; margin: 2px 0 0 -6px; }
@@ -74,7 +84,6 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .msg-note { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; color: var(--muted-foreground);
   font-size: 12.5px; }
 .msg-asked { margin-top: 8px; }
-.msg-sources { margin-top: 10px; font-size: 13px; }
 .msg-files { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; max-width: 100%;
   margin-top: 8px; }
 .msg-mine .msg-files { justify-content: flex-end; }
@@ -165,6 +174,49 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   padding: 2px 24px 10px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
   scrollbar-color: var(--input) transparent; }
 .chat-asks:empty, .chat-asks .copilotz-loading { display: none; }
+
+/* What agents wait on you for: a card each, what's asked, then only the answers it takes */
+.asks { display: grid; gap: 8px; }
+.asks > .ask { animation: ask-in .36s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(8px); } }
+.ask { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 12px 14px 12px 12px;
+  border-color: var(--warning-border); box-shadow: var(--shadow-md); }
+.ask-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md);
+  background: var(--warning-soft); color: var(--warning-text); }
+.ask-main { display: grid; gap: 9px; min-width: 0; }
+.ask-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 4px 0 0; font-size: 14.5px; }
+.ask-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-top: 4px; }
+.ask-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.ask-where { margin-left: auto; color: var(--muted-foreground); font-size: 12.5px; white-space: nowrap; }
+.ask-where .copilotz-time { font-size: 12.5px; }
+/* Who'd see it, then, quieter, why it's asked */
+.ask-seen { display: flex; align-items: center; gap: 6px; margin: -3px 0 0; font-size: 13.5px; }
+.ask-seen .copilotz-icon { flex: none; color: var(--muted-foreground); }
+.ask-why { margin: -5px 0 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.45; }
+/* What it would say: a calm quote, a few lines until it's opened */
+.ask-quote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--warning-border);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0; background: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.ask-quote .copilotz-long-text-toggle { margin-top: 2px; }
+.ask-answers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ask-answers .copilotz-button { position: relative; }
+/* Saying no, or keeping it to yourself, sits apart */
+.ask-apart { margin-left: auto; }
+.ask-deny { color: var(--destructive-text); }
+/* Each answer's key, shown once the card has focus: 1, 2, 3… answer */
+.ask-key { position: absolute; top: -7px; right: -7px; display: grid; place-items: center; min-width: 16px; height: 16px;
+  padding: 0 4px; border: 1px solid var(--input); border-radius: var(--radius-full); background: var(--background);
+  color: var(--muted-foreground); font: 600 10px/1 var(--font-sans); opacity: 0; transform: scale(.8);
+  transition: opacity .12s, transform .12s; pointer-events: none; }
+.ask:focus-within .ask-key { opacity: 1; transform: none; }
+.ask-error { margin: 0; color: var(--destructive-text); font-size: 13px; }
+
+/* The sidebar: what agents wait on you for in other chats */
+.asks-waiting { list-style: none; display: grid; gap: 1px; margin: 0; padding: 0; }
+.asks-waiting-mark { display: grid; place-items: center; flex: none; width: 22px; height: 22px;
+  border-radius: var(--radius-full); background: var(--warning-soft); color: var(--warning-text);
+  animation: asks-pulse 2.4s ease-in-out infinite; }
+@keyframes asks-pulse { 50% { background: color-mix(in oklab, var(--warning) 26%, var(--sidebar)); } }
+.asks-waiting-more { margin: 0 10px 4px 41px; color: var(--muted-foreground); font-size: 12px; }
 
 /* Where you type */
 .chat-composer { flex: none; padding: 0 24px max(14px, env(safe-area-inset-bottom));
@@ -325,6 +377,70 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .chats-row-icon, .chats-row-count { display: none; }
 }
 
+/* Staff notes: the team's own side of a contact's chat. A quiet warm tint and a lock, never an alarm. */
+.notes-toggle { flex: none; gap: 6px; border-radius: var(--radius-full); }
+.notes-toggle > .copilotz-icon, .notes-switch-notes > .copilotz-icon, .chat-mention-note .copilotz-button .copilotz-icon {
+  color: var(--notes-ink); }
+.notes-toggle[aria-expanded=true] { border-color: var(--notes-line); background: var(--notes-soft); }
+.notes-count { min-width: 18px; margin-right: -3px; }
+.notes-switch { display: none; }
+.notes-lane { flex: none; display: flex; flex-direction: column; width: clamp(340px, 36%, 460px); min-height: 0;
+  border-left: 1px solid var(--notes-line); background: var(--notes-tint); animation: notes-in .22s cubic-bezier(.2, .8, .2, 1); }
+@keyframes notes-in { from { opacity: 0; transform: translateX(14px); } }
+.notes-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 9px 10px 9px 16px;
+  border-bottom: 1px solid var(--notes-line); }
+.notes-mark { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-full);
+  background: var(--notes-soft); color: var(--notes-ink); }
+.notes-mark-lg { width: 46px; height: 46px; }
+.notes-head-text { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.notes-head h2 { margin: 0; font-family: var(--font-display); font-size: 14.5px; font-weight: 650; line-height: 1.3; }
+.notes-head p { margin: 0; overflow: hidden; color: var(--muted-foreground); font-size: 12.5px; line-height: 1.35;
+  text-overflow: ellipsis; white-space: nowrap; }
+.notes-body, .notes-talk { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.notes-body > .copilotz-loading { flex: 1; }
+.notes-loading { display: grid; gap: 10px; align-content: start; padding: 22px 16px; }
+.notes-empty { flex: 1; display: grid; justify-items: center; align-content: center; gap: 8px; padding: 32px 28px;
+  text-align: center; animation: chat-fade .2s ease-out; }
+.notes-empty h3 { margin: 8px 0 0; font-family: var(--font-display); font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+.notes-empty p { max-width: 36ch; margin: 0; color: var(--muted-foreground); font-size: 13.5px; line-height: 1.55; }
+.notes-talk .chat-log { padding: 18px 16px 26px; }
+.notes-talk .msg { column-gap: 10px; grid-template-columns: 26px minmax(0, 1fr); }
+.notes-talk .msg-gutter .copilotz-avatar { --size: 26px !important; }
+.notes-talk .msg-mine { grid-template-columns: minmax(0, 1fr); }
+.notes-talk .msg-aside { margin-left: 10px; padding-left: 10px; }
+.notes-talk .msg-person .msg-bubble { background: var(--card); outline: 1px solid var(--notes-line); outline-offset: -1px; }
+.notes-talk .chat-asks { padding: 2px 12px 8px; }
+.notes-talk .chat-composer { padding: 0 12px max(12px, env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, transparent, var(--notes-tint) 18px); }
+.notes-talk .chat-input { min-height: 48px; padding: 13px 16px 4px; font-size: 14.5px; }
+.notes-talk .chat-keys { display: none; }
+.notes-hint, .chat-shared { display: inline-flex; align-items: center; gap: 5px; }
+.notes-hint .copilotz-icon { color: var(--notes-ink); }
+.notes-banner { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 16px 8px 24px;
+  border-bottom: 1px solid var(--notes-line); background: var(--notes-tint); }
+.notes-banner .notes-mark { width: 26px; height: 26px; }
+.notes-banner p { flex: 1; min-width: 0; margin: 0; color: var(--muted-foreground); font-size: 13.5px; line-height: 1.4; }
+.notes-banner b { color: var(--foreground); font-weight: 620; }
+.notes-banner-only::before { content: "·"; margin: 0 7px; }
+@container chat-split (max-width: 880px) {
+  .notes-lane { position: absolute; z-index: 6; inset: 0 0 0 auto; width: min(100%, 420px); box-shadow: var(--shadow-lg); }
+}
+/* What's typed in a contact's chat names an agent: where it would answer */
+.chat-mentioned { margin: 0 0 8px; animation: chat-fade .2s ease-out; }
+/* A draft from the notes, sent on to the chat */
+.msg-relay-open { min-height: 28px; padding: 0 8px; color: var(--muted-foreground); font-size: 12.5px; }
+.msg-relay-open:hover { color: var(--foreground); }
+.msg-relayed { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 8px;
+  color: var(--success-text); font-size: 12.5px; font-weight: 560; animation: chat-fade .2s ease-out; }
+.msg-relay { display: grid; gap: 8px; width: 100%; margin-top: 10px; padding: 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-xl); background: var(--card); box-shadow: var(--shadow-md); animation: chat-fade .15s ease-out; }
+.msg-mine .msg-relay { align-self: stretch; min-width: min(320px, 100%); }
+.msg-relay-text { min-height: 64px; font-size: 14px; }
+.msg-relay-note { display: flex; align-items: center; gap: 6px; margin: 0 2px; color: var(--muted-foreground);
+  font-size: 12.5px; line-height: 1.4; }
+.msg-relay-note .copilotz-icon { flex: none; }
+.msg-relay-row { display: flex; justify-content: flex-end; gap: 6px; }
+
 @media (max-width: 760px) {
   .chat-head { padding-right: max(8px, var(--copilotz-inset-end, 0px)); gap: 8px; }
   .chat-head-new { display: inline-grid; }
@@ -337,6 +453,15 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .msg-aside { margin-left: 10px; padding-left: 10px; }
   .chat-composer { padding: 0 10px max(10px, env(safe-area-inset-bottom)); }
   .chat-asks { padding: 2px 10px 8px; }
+  .ask { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  .ask-icon, .ask-key { display: none; }
+  .ask-head, .ask-top { margin: 0; }
+  /* Two columns: the first yes and the answer apart, then the wider yeses (tooltips lay out as their buttons). */
+  .ask-answers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ask-answers .copilotz-button { order: 2; min-width: 0; width: 100%; white-space: normal; text-align: center;
+    line-height: 1.2; }
+  .ask-answers > :first-child .copilotz-button { order: 0; }
+  .ask-answers .ask-apart { order: 1; margin: 0; }
   .voice-rec-meter { gap: 10px; padding: 0 6px 0 8px; }
   .voice-error { flex-wrap: wrap; }
   .voice-error p { flex-basis: calc(100% - 30px); }
@@ -349,5 +474,33 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .chat-home .chat-composer { padding: 0 14px; }
   .chat-home-body:has(.chat-notes .copilotz-notice) .chat-home-hero { transform: translateY(-48px); }
   .chat-home-top { padding: 0 14px; margin-bottom: 24px; }
+  /* On a phone, the conversation or its notes, one at a time: the switch always in sight */
+  .notes-toggle { display: none; }
+  .notes-switch { flex: none; display: flex; gap: 4px; margin: 8px 10px 0; padding: 3px; border-radius: var(--radius-full);
+    background: var(--muted); }
+  .notes-switch button { flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 36px; padding: 0 12px; border: 0; border-radius: var(--radius-full); background: transparent;
+    color: var(--muted-foreground); font: inherit; font-size: 13.5px; font-weight: 600; white-space: nowrap; cursor: pointer;
+    transition: background-color .15s, color .15s, box-shadow .15s; }
+  .notes-switch button[aria-pressed=true] { background: var(--background); color: var(--foreground); box-shadow: var(--shadow-sm); }
+  .notes-switch .notes-switch-notes[aria-pressed=true] { background: var(--notes-soft); outline: 1px solid var(--notes-line); outline-offset: -1px; }
+  .notes-lane { position: absolute; z-index: 6; inset: 0; width: 100%; border-left: 0; box-shadow: none; animation: none; }
+  .chat-split[data-notes=open] > .chat-main { visibility: hidden; }
+  .notes-head { min-height: 46px; padding: 6px 8px 6px 14px; }
+  .notes-head h2 { display: none; }
+  .notes-head p { color: var(--secondary-foreground); font-size: 13px; white-space: normal; }
+  .notes-head .notes-mark { width: 26px; height: 26px; }
+  .notes-close { display: none; }
+  .notes-banner { align-items: flex-start; flex-wrap: wrap; padding: 8px 10px 8px 14px; }
+  .notes-banner p { flex-basis: calc(100% - 40px); }
+  .notes-banner .copilotz-button { margin-left: auto; }
+  .notes-banner-only { display: block; }
+  .notes-banner-only::before { content: none; }
+  .chat-mention-note { flex-wrap: wrap; }
+  .chat-mention-note .copilotz-notice-body { flex-basis: calc(100% - 30px); }
+  .chat-mention-note .copilotz-notice-action { width: 100%; justify-content: flex-end; margin: 2px 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .notes-lane, .notes-empty, .msg-relay, .msg-relayed, .chat-mentioned { animation: none; }
 }
 `;

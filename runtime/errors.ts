@@ -53,5 +53,12 @@ export const inPerson = (actor: Actor): boolean => actor.kind === "person" && !o
  */
 export const contacts = (actor: Actor): boolean =>
   actor.kind === "contact" || (!!behalf(actor) && contacts(behalf(actor)!));
+/**
+ * Whoever calls a public, stateless interface (a public MCP server's tools)
+ * without being anyone: `{ kind: "public" }`. They read only what's let to
+ * the public, and write nothing. An outside call with no actor at all is
+ * still no one, never this.
+ */
+export const publicCallers = (actor: Actor): boolean => actor.kind === "public";
 /** People, and contacts: what an Action opened to contacts allows (and their agents). */
 export const peopleOrContacts = (actor: Actor): boolean => people(actor) || contacts(actor);

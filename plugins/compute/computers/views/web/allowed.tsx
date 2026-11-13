@@ -1,12 +1,12 @@
 /**
  * What you've let agents do without asking on this space's computers, with the
- * way to take each back (`computer.forgetGrant`): on the space's Computer tab,
+ * way to take each back (`chat.forgetGrant`): on the space's Computer tab,
  * only where there's something. What's let for a routine is on its own page.
  */
 import { type ReactNode, useState } from "react";
 import { Button, Card, Icon, message, Time } from "../../../../../hosts/web/mod.ts";
 import type { Desk } from "../../collections/desk.ts";
-import type { Grant } from "../../collections/grant.ts";
+import type { Grant } from "../../../../agents/chat/contract.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -27,13 +27,13 @@ export function Allowed(
 ): ReactNode {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
-  const shown = grants.filter((g) => !g.origin && !g.once && desks.some((d) => d._id === g.desk));
+  const shown = grants.filter((g) => !g.origin && !g.once && desks.some((d) => d._id === g.on));
   if (!shown.length) return null;
   const forget = async (grant: string) => {
     setBusy(grant);
     setError(undefined);
     try {
-      await call("computer.forgetGrant", { grant });
+      await call("chat.forgetGrant", { grant });
     } catch (e) {
       setError(message(e));
     } finally {
@@ -47,7 +47,7 @@ export function Allowed(
       </h3>
       <ul>
         {shown.map((g) => {
-          const desk = desks.find((d) => d._id === g.desk)!;
+          const desk = desks.find((d) => d._id === g.on)!;
           return (
             <li key={g._id}>
               <span>

@@ -23,6 +23,18 @@
  *   messages, and resumes with that call run again, as itself, after the
  *   answer. An agent another one asked still answers it, whatever it waited
  *   on meanwhile.
+ * - Asking for a yes is chat's, for every plugin (its contract's `ask`): what
+ *   a call waits on is an `approval` its person answers with `chat.approve`,
+ *   only as that kind of ask allows (`answers`: yes this once, in this
+ *   conversation, for the routine that set it going, always, or no); a yes
+ *   beyond once is a `grant`, taken back with `chat.forgetGrant`. A
+ *   computer's command asks so, and so does a share: a tool's write refused
+ *   for going where not everyone reaches what the agent's work may read
+ *   (`needs_approval`) asks the person it works for (never always), and on a
+ *   yes runs again with that place `approved`. An answer to work handed over
+ *   goes back without asking only where everyone could see what its work
+ *   may read; otherwise whoever handed it over says where: there, or to them
+ *   alone, in their Personal space.
  * - What an agent is writing shows as it comes: a `live` document per running
  *   turn, kept in memory, swapped for the step or reply it became in one commit.
  * - A step's tool calls are written (an `intent`) before any of them runs, and
@@ -36,7 +48,17 @@
  *   carries more than one file. Drafts not sent within a day go
  *   (`chat.prune`, hourly).
  * - A person moves a conversation to another space (`chat.move`), with
- *   everything in it; not while an agent is writing in it.
+ *   everything in it; not while an agent is writing in it. Moving it is
+ *   sharing it: front ends say first who'll see it there and what it drew
+ *   on (`thread.moving`, from its messages' `drew`).
+ * - A chat shared with someone outside its space (a contact's) has notes
+ *   beside it (`chat.notes`): a thread of its own in the same space, made
+ *   the first time it's asked for, where its people work with agents about
+ *   it (they reach all the space does; contacts tells them the chat's
+ *   latest), and that the one outside never sees. A reply
+ *   drafted there goes into the chat as its person's own message
+ *   (`chat.send`). The notes go wherever the chat goes, and are erased with
+ *   it.
  * - A chat can be opened empty (`chat.open`), to share it with a contact
  *   (someone outside the org, who then writes there with `chat.send` and
  *   reaches only it, never its agents' private steps); a contact's message
@@ -53,6 +75,10 @@
  *   the system's): its thread in a space, its title, and its messages with
  *   who said them, their files and when, under the importer's ids, so
  *   importing again replaces what it made. Nothing runs.
+ * - Messages that kept the old marks (`sources`, from before the audience
+ *   rule) are moved where only those who could read them see them
+ *   (`chat.unmark`), once, as the runtime first starts with this release;
+ *   operators run it again, or dry, over maintenance.
  * - Threads record where they came from (`parent`). A fork (a subthread) sees
  *   its parent's conversation up to the message it started at, through every
  *   level, without copying it; a new thread starts from its first message.
@@ -85,12 +111,16 @@
  * - `additions`: { order?, agents? }, each with an `addition:<name>` View in
  *   the place that shows it, given `{ thread, answer }` (see `Addition`).
  */
-import { definePlugin, failure, type Plugin } from "../../../runtime/mod.ts";
+import { definePlugin, failure, personOf, type Plugin } from "../../../runtime/mod.ts";
+import { approveAction } from "./actions/approve.ts";
 import { attachAction } from "./actions/attach.ts";
 import { eraseAction } from "./actions/erase.ts";
+import { forgetGrantAction } from "./actions/forget-grant.ts";
 import { forkAction } from "./actions/fork.ts";
 import { importAction } from "./actions/import.ts";
 import { moveAction } from "./actions/move.ts";
+import { notesAction } from "./actions/notes.ts";
+import { unmarkAction } from "./actions/unmark.ts";
 import { openAction } from "./actions/open.ts";
 import { pruneAction } from "./actions/prune.ts";
 import { quietAction } from "./actions/quiet.ts";
@@ -98,7 +128,9 @@ import { sayAction } from "./actions/say.ts";
 import { sendAction } from "./actions/send.ts";
 import { shownAction } from "./actions/shown.ts";
 import { stopAction } from "./actions/stop.ts";
+import { approval } from "./collections/approval.ts";
 import { drafter, file } from "./collections/file.ts";
+import { grant } from "./collections/grant.ts";
 import { serveFile } from "./routes/files.ts";
 import { intent } from "./collections/intent.ts";
 import { live } from "./collections/live.ts";
@@ -121,12 +153,14 @@ export * from "./contract.ts";
 export { lineage } from "./shared/lineage.ts";
 
 /** Chat's collections, changed only through its Actions. */
-const CHAT_RECORDS = ["message", "live", "thread", "file", "shown"];
+const CHAT_RECORDS = ["message", "live", "thread", "file", "shown", "approval", "grant"];
+/** What a person reaches only their own of: what agents ask them, and what they let. */
+const OWNED = ["approval", "grant"];
 
 export const chat: Plugin = definePlugin({
   name: "chat",
   requires: ["models"],
-  collections: { thread, message, wait, live, file, intent, shown },
+  collections: { thread, message, wait, live, file, intent, shown, approval, grant },
   views: {
     "llm.thread": prompt,
     participants: participants,
@@ -162,11 +196,19 @@ export const chat: Plugin = definePlugin({
     "chat.fork": forkAction,
     "chat.stop": stopAction,
     "chat.move": moveAction,
+    "chat.notes": notesAction,
+    "chat.unmark": unmarkAction,
     "chat.import": importAction,
+    "chat.approve": approveAction,
+    "chat.forgetGrant": forgetGrantAction,
   },
   events: { "turn.requested": turnRequested },
-  // Files uploaded to send that no message sent within a day go.
-  schedules: { "chat.prune": { every: "1h", call: "chat.prune", input: {} } },
+  schedules: {
+    // Files uploaded to send that no message sent within a day go.
+    "chat.prune": { every: "1h", call: "chat.prune", input: {} },
+    // The old marks come off once, as the runtime first starts with this release (a deploy).
+    "chat.unmark": { once: true, call: "chat.unmark", input: {}, retries: 5 },
+  },
   resources: {
     // Agents' own: the latest chats where they work (or another space they reach), and reading one.
     tools: chatTools,
@@ -181,7 +223,7 @@ export const chat: Plugin = definePlugin({
     shared: {
       thread: {},
       message: {
-        labels: true,
+        drew: true,
         part: "thread",
         contact: { private: { $ne: true }, toolCalls: { $exists: false } },
       },
@@ -210,6 +252,11 @@ export const chat: Plugin = definePlugin({
       throw failure("forbidden", `"${collection}" changes through chat's Actions (chat.send…).`, {
         public: true,
       });
+    }
+    // What agents ask, and what's let them: each person's own (those they answer, those they gave).
+    if (OWNED.includes(collection)) {
+      const person = personOf(actor);
+      return person ? { owner: person } : { owner: { $in: [] } };
     }
     if (direct || collection !== "file") return undefined;
     const by = drafter(actor);

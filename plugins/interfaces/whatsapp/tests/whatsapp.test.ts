@@ -178,7 +178,7 @@ test("a linked phone's message reaches the agents as its person, and their answe
     const [mine] = await runtime.query<Message[]>("message.history", { thread: thread._id }, {
       actor: ana,
     });
-    assertEquals(mine.sources, undefined);
+    assertEquals(mine.drew, undefined);
     // The next message goes on in that conversation.
     await deliver([{ text: { body: "and more" } }]);
     assertEquals((await threadsOf(runtime, personal)).length, 1);

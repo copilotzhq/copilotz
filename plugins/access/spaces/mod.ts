@@ -22,12 +22,15 @@
  *   what's reached; inserts and what writes leave must be in a space you may
  *   write; a document shared on its own is reached through its own members.
  *   A query naming a space it reaches is sent to the store as it is.
- * - **Labels:** what a job read goes with what it writes: an answer that
- *   used what not everyone in its space can see carries those sources (in
- *   a collection with `labels: true`), and only those who reach them all
- *   read it until someone who does `share`s it. An agent writing it
- *   anywhere else is refused (`needs_share`), unless it works for someone
- *   from their own Personal space: that's theirs to do, as if they'd done it.
+ * - **Where an agent's work goes** (labels.ts): it reads only what both
+ *   its destination and its asker reach (a space and what it draws on; a
+ *   chat shared with a contact, and what its space lets contacts read; its
+ *   person's own Personal space, all they reach), so its answer there shows
+ *   nobody what they couldn't see. Writing anywhere whose readers don't all
+ *   reach that is a share: refused (`needs_approval`) until its person says
+ *   yes. In front of a contact, trusted code goes beyond its caller only for
+ *   an Action a contact may call. An agent's messages say which other spaces
+ *   its work read (`drew`), on the record, never a gate.
  * - **People by name:** each person's profile (collection `profile`: their
  *   name and picture, as sign-in verified them, kept as it changes), which
  *   anyone in the org reads; wherever an id would show, the name does
@@ -78,7 +81,6 @@ import {
 } from "./actions/org.ts";
 import { personalAction } from "./actions/personal.ts";
 import { renameAction } from "./actions/rename.ts";
-import { shareAction } from "./actions/share.ts";
 import { labels } from "./shared/labels.ts";
 import { invitation } from "./collections/invitation.ts";
 import { member } from "./collections/member.ts";
@@ -158,7 +160,6 @@ export const spaces: Plugin = definePlugin({
     "invitation.send": sendInvitationAction,
     "invitation.accept": acceptInvitationAction,
     "invitation.decline": declineInvitationAction,
-    share: shareAction,
     "request.grant": grantAction,
     "request.deny": denyAction,
   },

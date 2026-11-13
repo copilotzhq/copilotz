@@ -14,17 +14,21 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 ## Install
 
 ```sh
-npm install copilotz                 # Node 24+ (npm, pnpm, yarn)
-bun add copilotz                     # Bun
-deno add jsr:@copilotz/copilotz      # Deno (or `deno add npm:copilotz`)
+npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
+bun add copilotz@next                          # Bun
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.46   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.34"`), and the
+Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
+`deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
+the version.
+
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.46"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
-too, at Copilotz's version (`npm install @copilotz/work`, `deno add jsr:@copilotz/work`): see
-[Product packages](#product-packages).
+too, at Copilotz's version (`npm install @copilotz/work@next`,
+`deno add jsr:@copilotz/work@^1.0.0-rc.46`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -44,9 +48,11 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/agents`              | `chat` and its `tool`, `history`, `memory`, `memoryExtraction`, `skills`, `routines`, `openapi`, `webTools`                                               |
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`                                                                                  |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                                                               |
+| `copilotz/plugins/agents/<name>`       | one of them alone, `<name>` being `chat`, `history`, `memory`, `skills`, `routines`, `openapi`, `webtools`                                                |
 | `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `googleSignIn`, `emailSignIn`, `email`, `devSignIn`, `accounts`                                              |
 | `copilotz/plugins/access/web`          | `spacesWeb`, `contactsWeb`, `accountsWeb`                                                                                                                 |
 | `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                                                          |
+| `copilotz/plugins/access/<name>`       | one of them alone, `<name>` being `spaces`, `identity`, `contacts`, `google`, `email`, `dev`, `accounts`                                                  |
 | `copilotz/plugins/billing`             | `usage`: the ledger, and the port an app's pricing plugs into (`spending`)                                                                                |
 | `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                                                                |
 | `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                                                           |
@@ -57,6 +63,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`                                         |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                                                                 |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                                                                 |
+| `copilotz/plugins/interfaces/<name>`   | one of them alone, `<name>` being `mcp`, `api`, `whatsapp`, `voice`                                                                                       |
 | `copilotz/plugins/<theme>/contract`    | each theme's plugins' contracts (`access`, `agents`, `models`, `interfaces`, `compute`): shapes, and the little code with them, for plugins built on them |
 | `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`, `surface`, `remind`)                             |
 | `copilotz/web/words`                   | the words alone, without the toolkit: `defineWords`, `wordsOf`, `formatDate`…                                                                             |
@@ -73,10 +80,14 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 The browser loads only `copilotz/web`, the front ends under `…/web`, and what they import. Every
 other entry point is for the process that runs the runtime, or the terminal.
 
+A theme's entry point (`copilotz/plugins/interfaces`) loads every plugin in it. A plugin's own
+(`copilotz/plugins/interfaces/mcp`) loads that plugin and what it imports, and nothing else: the
+same plugin, with less code in the server's memory.
+
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.34` goes with `copilotz@1.0.0-rc.34`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.46` goes with `copilotz@1.0.0-rc.46`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.
@@ -552,6 +563,7 @@ when to call it.
 schedules: {
   "usage.close": { cron: "10 0 * * *", call: "usage.close", input: {} },
   heartbeat: { every: "5m", call: "health.check" },
+  "notes.migrate": { once: true, call: "notes.migrate", retries: 5 },
 }
 ```
 
@@ -560,6 +572,12 @@ schedules: {
   removes one. At start the owner makes the timers what the plugins declare. A schedule calling an
   unknown Action, with input its Action refuses, or with a bad cron expression stops the runtime
   from starting. Declared ones run as the system.
+- **Run once:** `once: true` runs as soon as the owner starts with it (a deploy) and never again
+  while it's declared as it is: its timer stays, without a time, as the record that it ran. Declared
+  otherwise (another input), it runs again. One that didn't finish, its retries spent, gets another
+  go each time the owner starts, until it's done. For migrations of what's kept: its Action must be
+  safe to run again, as the owner may stop in the middle of it. Only the owner holding the store
+  runs timers, so instances started together run it once.
 - **From code:** `ctx.schedule(action, input, { at | cron | every, id?, retries? })` sets a timer
   with the call's writes, and `ctx.unschedule(id)` removes it. In a transaction, `tx.schedule`
   commits with the rest. Scheduling an id again replaces its timer. Without an `id`, a retried call

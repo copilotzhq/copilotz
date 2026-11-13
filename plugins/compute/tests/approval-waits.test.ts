@@ -11,9 +11,9 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
-import { chat, type Message, type Step, tool } from "../../agents/chat/mod.ts";
+import { type Approval, chat, type Message, type Step, tool } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
-import { type Approval, computers, type Desk } from "../mod.ts";
+import { computers, type Desk } from "../mod.ts";
 import { WORK } from "../computers/shared/workloads.ts";
 import { test } from "../../../testing/mod.ts";
 import { fakeComputer } from "./fake-computer.ts";
@@ -147,7 +147,7 @@ async function setup(
         ),
       history: (thread) => rt.query<Message[]>("message.history", { thread }, { actor: ana }),
       answer: async (approval, answer) => {
-        await rt.call("computer.approve", { approval: approval._id, answer }, { actor: ana });
+        await rt.call("chat.approve", { approval: approval._id, answer }, { actor: ana });
         await rt.idle();
       },
     });
@@ -174,6 +174,10 @@ test("north asks east, east waits for ana's yes, and east's answer goes back to 
     // East asked in the side thread, and both wait: nothing ran, nobody answered.
     const [asked] = await s.pending();
     assertEquals([asked.agent, asked.detail], ["east", "df"]);
+    // A computer's answers, as ever: once, this conversation, always, or no; a yes beyond once
+    // lets that kind of work on that computer.
+    assertEquals(asked.answers, ["once", "thread", "always", "deny"]);
+    assertStringIncludes(asked.covers!, "run commands on ");
     assert(asked.call && asked.question, "its own request, with its question");
     assertEquals(s.ran(), []);
     const side = await s.history(asked.thread);
@@ -248,7 +252,7 @@ test("a yes in this conversation answers the asks it covers: one answer, and the
     // Each said in the conversation, as hers.
     assertEquals(
       side.filter((m) => m.from === "ana" && m.replyTo).map((m) => m.text).sort(),
-      ["Yes, in this conversation: df", "Yes, in this conversation: ls"],
+      ["Yes, for this conversation: df", "Yes, for this conversation: ls"],
     );
     assertEquals([s.calls.east, s.calls.north], [2, 2]);
   });
@@ -301,7 +305,7 @@ test("an answer can't come before the question is written: a moment later, it go
     }
     assert(asked, "it asked");
     const early = await assertRejects(() =>
-      s.rt.call("computer.approve", { approval: asked!._id, answer: "once" }, { actor: ana })
+      s.rt.call("chat.approve", { approval: asked!._id, answer: "once" }, { actor: ana })
     );
     assertEquals((early as { code?: string }).code, "busy");
     assertEquals((await s.pending()).length, 1);

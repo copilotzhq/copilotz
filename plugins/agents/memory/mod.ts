@@ -18,7 +18,7 @@
  *   With spaces (the access plugin), a memory lives where it was learned:
  *   recall searches where the conversation is (in its person's own Personal
  *   space, which only they see, everywhere they can read), or another space
- *   it names (`in`), and what it brings from there marks the answer. Recall
+ *   it names (`in`), within what the conversation may draw on. Recall
  *   also opens where a memory was learned (`source`).
  * - With an extractor model (`memoryExtraction`, beside it), memories also
  *   arrive on their own: every few messages, and once a conversation has been

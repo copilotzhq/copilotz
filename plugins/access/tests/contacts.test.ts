@@ -2,9 +2,10 @@
  * Contacts: people outside the org, each in a chat shared with them alone.
  * A contact reaches its chat, what's said and filed in it, and nothing else;
  * the agent working for it reaches exactly that chat, though it works in the
- * whole space; the space's people reach every contact's chat, and taking a
- * contact out cuts them off at once. Every Action and query that admits
- * people stays shut to contacts, but the few opened to them.
+ * whole space, and so does a staff member's there; the space's people reach
+ * every contact's chat, and taking a contact out cuts them off at once.
+ * Every Action and query that admits people stays shut to contacts, but the
+ * few opened to them.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
@@ -20,6 +21,7 @@ import {
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmRequest } from "../../models/mod.ts";
 import {
+  type Approval,
   chat,
   history,
   memory,
@@ -271,7 +273,7 @@ test("a contact reaches its own chat, what's said and filed in it, and nothing e
     const [, answer] = await runtime.query<Message[]>("message.history", { thread: carlas }, {
       actor: ana,
     });
-    assertEquals([answer.to, answer.sources], [["contact:c-carla-01"], undefined]);
+    assertEquals([answer.to, answer.drew], [["contact:c-carla-01"], undefined]);
 
     // What it reads: its chat, and its own record; nothing of the space, nor of others'.
     const ids = async (collection: string) =>
@@ -556,16 +558,16 @@ test("an agent says a fixed message to a contact's chat without a turn, once", a
   });
 });
 
-test("what staff's agents read stays with staff: in a contact's chat, it's theirs alone", async () => {
+test("staff's agents in a contact's chat read only what everyone there reaches, and say it there", async () => {
   await setup(async ({ runtime, carla, carlas, staff, read }) => {
     const last = async () =>
       (await runtime.query<Message[]>("message.history", { thread: carlas }, { actor: ana }))
         .findLast((m) => m.from === "lead")!;
-    // Ana's agent in Carla's chat, reading only the chat: Carla reads its answer.
+    // Ana's agent in Carla's chat: Carla reads its answer, which drew on nothing else.
     await runtime.call("chat.send", { thread: carlas, text: "hello" }, { actor: ana });
     await runtime.idle();
     const hello = await last();
-    assertEquals(hello.sources, undefined);
+    assertEquals(hello.drew, undefined);
     assert((await read<Message>("message", carla)).some((m) => m._id === hello._id));
     // Its agent is told who else is in the chat, and its tools are the staff's.
     const request = sent.at(-1)!;
@@ -579,12 +581,13 @@ test("what staff's agents read stays with staff: in a contact's chat, it's their
       "request_access",
       "send_message",
     ]);
-    // Looking around the shop: its answer draws on it, and Carla doesn't read it.
+    // Looking around, it finds Carla's chat alone, as she would: never Ana's own chat in the
+    // shop. What it says of it, Carla reads.
     await runtime.call("chat.send", { thread: carlas, text: "peek around" }, { actor: ana });
     await runtime.idle();
+    assertEquals([peeked?.threads, peeked?.messages], [[carlas], [carlas]]);
     const answer = await last();
-    assert(answer.sources?.length, "labelled with the shop");
-    assert(!(await read<Message>("message", carla)).some((m) => m._id === answer._id));
+    assert((await read<Message>("message", carla)).some((m) => m._id === answer._id));
     // A reply to a message of another chat replies to nothing.
     const [elsewhere] = await runtime.query<Message[]>("message.history", { thread: staff }, {
       actor: ana,
@@ -649,23 +652,26 @@ test("a document shared on its own is never a space; memories and people stay ou
   });
 });
 
-test("work handed to another space from a contact's chat comes back theirs alone", async () => {
+test("work isn't handed to another space from a contact's chat: nothing of it comes in", async () => {
   await setup(async ({ runtime, carla, carlas, read }) => {
     const { space } = await runtime.call<{ space: string }>("space.create", { name: "Finance" }, {
       actor: ana,
     });
     financeId = space;
-    // Ana's agent, in Carla's chat, hands it to Finance; Finance's answer comes back there.
+    // Ana's agent, in Carla's chat, would hand it to Finance: in front of a contact, trusted code
+    // goes beyond its caller only in what a contact may call, and asking whether Ana may write
+    // there isn't. Nothing is sent, so nothing comes back, and nobody is asked about it.
     await runtime.call("chat.send", { thread: carlas, text: "ask finance" }, { actor: ana });
     await runtime.idle();
+    assertEquals(await runtime.query("thread.recent", { in: space }, { actor: ana }), []);
     const history = await runtime.query<Message[]>("message.history", { thread: carlas }, {
       actor: ana,
     });
-    const back = history.find((m) => m.via?.kind === "delegated")!;
-    assertEquals(back.sources, [space]);
-    // Carla never reads it; Ana, who reaches Finance, does.
-    assert(!(await read<Message>("message", carla)).some((m) => m._id === back._id));
-    assert((await read<Message>("message", ana)).some((m) => m._id === back._id));
+    const [call] = history.flatMap((m) => m.toolCalls ?? []) as { output: string }[];
+    assert(call.output.includes("Not sent"), call.output);
+    assert(!history.some((m) => m.via?.kind === "delegated"), JSON.stringify(history));
+    assertEquals(await runtime.query<Approval[]>("approval.pending", {}, { actor: ana }), []);
+    assert(!(await read<Message>("message", carla)).some((m) => m.in === space));
   });
 });
 

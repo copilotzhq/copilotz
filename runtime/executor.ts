@@ -113,8 +113,9 @@ export function createExecutor(
     cause?: string,
     numbering = cause,
     actor?: Actor,
+    action?: string,
   ): Promise<R> => {
-    const who = actor ? { actor } : {};
+    const who = { ...(actor ? { actor } : {}), ...(action ? { action } : {}) };
     const id = crypto.randomUUID();
     const queued: Op[] = [];
     let begun = false;
@@ -189,8 +190,11 @@ export function createExecutor(
     scheduled?: Scheduled,
     numbering = cause,
     actor?: Actor,
+    /** The unrecorded Action whose code this is, running in its caller's job. */
+    action?: string,
   ): Context => {
-    const run: Run = (op) => job.send({ ops: [op], cause, ...(actor ? { actor } : {}) });
+    const run: Run = (op) =>
+      job.send({ ops: [op], cause, ...(actor ? { actor } : {}), ...(action ? { action } : {}) });
     const ctx: Context = {
       db: { collection: (name) => collection(name, run, querying(run, job.record, actor)) },
       graph: {
@@ -203,15 +207,24 @@ export function createExecutor(
         declared(type, data);
         await run({ op: "emit", event: { id: options.id, type, data, cause } });
       },
-      transaction: (work) => transaction(job, work, cause, numbering, actor),
+      transaction: (work) => transaction(job, work, cause, numbering, actor, action),
       stream: (channel) => ({ write: (data) => job.frame(channel, json(data)) }),
       call: (action, input) => call(job, action, input, cause, undefined, numbering, actor),
       branch: (key) =>
-        context(job, cause, event, scheduled, `${numbering ?? crypto.randomUUID()}/${key}`, actor),
+        context(
+          job,
+          cause,
+          event,
+          scheduled,
+          `${numbering ?? crypto.randomUUID()}/${key}`,
+          actor,
+          action,
+        ),
       ...(actor ? { actor } : {}),
       ...(whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
       // Acting as someone else, or as the system: what it does says on whose behalf, and stays
-      // where the work is unless it says where.
+      // where the work is unless it says where (and, as someone else, in its conversation, with
+      // what its person approved: a tool acting as its agent's person is bound as the agent is).
       as: (other) =>
         context(
           job,
@@ -224,6 +237,12 @@ export function createExecutor(
               ...other,
               ...(actor ? { via: actor } : {}),
               ...(!("in" in other) && whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
+              ...(!("thread" in other) && typeof actor?.thread === "string"
+                ? { thread: actor.thread }
+                : {}),
+              ...(!("approved" in other) && Array.isArray(actor?.approved)
+                ? { approved: actor.approved }
+                : {}),
             }
             : actor
             ? {
@@ -233,6 +252,7 @@ export function createExecutor(
               ...(whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
             }
             : undefined,
+          action,
         ),
       schedule: async (action, input, when) => {
         const op = scheduling(job, numbering, action, input, when);
@@ -352,7 +372,7 @@ export function createExecutor(
     }
     if (action.record === false) {
       return await action.run(
-        context(job, parent, undefined, given?.scheduled, parent, actor),
+        context(job, parent, undefined, given?.scheduled, parent, actor, name),
         normalized,
       ) as R;
     }

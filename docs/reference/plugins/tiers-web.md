@@ -39,7 +39,7 @@ Nothing to set: it works as it comes.
 The runtime doesn't start without [`web-shell`](web-shell.md), [`spaces-web`](spaces-web.md) and
 [`team-web`](team-web.md): add them too.
 
-It ships in a package of its own, `@copilotz/team@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.45`, for `copilotz` `1.0.0-rc.45`:
 install it beside `copilotz`.
 
 ## Listing

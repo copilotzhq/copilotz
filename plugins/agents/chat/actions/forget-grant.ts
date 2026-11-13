@@ -1,4 +1,4 @@
-/** `computer.forgetGrant`: takes back a yes the person gave: the rules reach only their own. */
+/** `chat.forgetGrant`: takes back a yes the person gave: the rules reach only their own. */
 import { defineAction, inPerson } from "../../../../runtime/mod.ts";
 
 export const forgetGrantAction = defineAction({

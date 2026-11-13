@@ -575,10 +575,12 @@ export type Who = (
 
 /**
  * Labels: the owner keeps, for each job an actor's work runs, the labels of
- * what it read (`read`: a document's space, its sources), and hands them to
- * each document the job then inserts or replaces (`write`), which returns it
- * as written: carrying the labels its readers might not all reach, say, or
- * refused. One plugin, the access plugin, declares them.
+ * what it read (`read`: where a document lives), and hands them to each
+ * document the job then inserts or replaces (`write`), which returns it as
+ * written (saying what it drew on, say) or refuses it (somewhere not everyone
+ * may see what the work could read). Trusted code in an Action going beyond
+ * whom it acts for asks too (`elevate`, with the actor it went beyond and
+ * that Action's `allow`): false refuses it. One plugin, the access plugin, declares them.
  */
 export type Labels = {
   read(collection: string, docs: Record<string, unknown>[], ctx: ReadContext): string[];
@@ -589,6 +591,11 @@ export type Labels = {
     labels: string[],
     ctx: ReadContext,
   ): Record<string, unknown> | Promise<Record<string, unknown>>;
+  elevate?(
+    actor: Actor,
+    allow: ((actor: Actor, input: unknown) => boolean) | undefined,
+    ctx: ReadContext,
+  ): boolean | Promise<boolean>;
 };
 
 /**

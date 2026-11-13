@@ -39,7 +39,7 @@ Nothing to set. It reads `orgSettings`, resource kinds the app and other plugins
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It ships in a package of its own, `@copilotz/directory@1.0.0-rc.34`, for `copilotz` `1.0.0-rc.34`:
+It ships in a package of its own, `@copilotz/directory@1.0.0-rc.45`, for `copilotz` `1.0.0-rc.45`:
 install it beside `copilotz`.
 
 ## Listing

@@ -14,15 +14,17 @@ import { Button, Card, Checkbox, Icon, message, Notice } from "../../../../../ho
 import { agentsShown, originKey } from "../../../../agents/chat/contract.ts";
 import type { Routine } from "../../../../agents/routines/contract.ts";
 import { nameOf, namesIn } from "../../../../access/spaces/contract.ts";
-import type { Approval } from "../../collections/approval.ts";
+import type { Approval, Grant } from "../../../../agents/chat/contract.ts";
 import type { Desk } from "../../collections/desk.ts";
-import type { Grant } from "../../collections/grant.ts";
 import { answererOf } from "../../shared/where.ts";
 import { asked } from "./asked.ts";
 import { STYLE } from "./style.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 type Work = "terminal" | "jobs" | "writes";
+
+/** A computer's kinds of ask; a routine's run may wait on others too (a share). */
+const COMPUTER = new Set(["terminal", "jobs", "writes", "publish", "destroy"]);
 
 const WORK: { work: Work; label: string }[] = [
   { work: "terminal", label: "Run commands" },
@@ -36,7 +38,9 @@ const threadPath = (a: Approval) =>
 export const routinePanelView = (item: Routine, ctx: ViewContext<ReactNode>): ReactNode => {
   const key = originKey({ kind: "routine", id: item._id });
   const desks = ctx.db.collection("desk").query<Desk[]>("here", { in: item.in }).value;
-  const grants = ctx.db.collection("grant").query<Grant[]>("forOrigin", { origin: key }).value;
+  // What it lets on computers (a yes to share somewhere for it is another kind of ask's).
+  const grants = ctx.db.collection("grant").query<Grant[]>("forOrigin", { origin: key }).value
+    ?.filter((g) => WORK.some((w) => w.work === g.work));
   const pending = ctx.db.collection("approval").query<Approval[]>("pending", {}).value;
   const me = ctx.viewer?.name;
   const owners = (desks ?? []).map((d) => d.owner);
@@ -87,12 +91,12 @@ function Allowed(
   const now = grants.filter((g) => g.rev === rev);
   const old = grants.filter((g) => g.rev !== rev);
   const has = (desk: string, agent: string, work: Work) =>
-    now.some((g) => g.desk === desk && g.agent === agent && g.work === work);
+    now.some((g) => g.on === desk && g.agent === agent && g.work === work);
   // Its own agent on each computer, and any other it has let (an agent its agent asked).
   const rows = [
     ...desks.map((d) => ({ desk: d, agent: r.agent })),
     ...desks.flatMap((d) =>
-      [...new Set(now.filter((g) => g.desk === d._id && g.agent !== r.agent).map((g) => g.agent))]
+      [...new Set(now.filter((g) => g.on === d._id && g.agent !== r.agent).map((g) => g.agent))]
         .map((agent) => ({ desk: d, agent }))
     ),
   ];
@@ -112,7 +116,10 @@ function Allowed(
   return (
     <div className="routine-allowed-wrap">
       {waiting.map((a) => {
-        const { wants, what } = asked(a);
+        // A computer's ask, as its card says it; another kind's, in its own words.
+        const { wants, what } = COMPUTER.has(a.work)
+          ? asked(a)
+          : { wants: "wants to", what: a.text || a.detail };
         return (
           <Notice
             key={a._id}
@@ -137,7 +144,7 @@ function Allowed(
                 onClick={() =>
                   void set(
                     "again",
-                    old.map((g) => ({ desk: g.desk, agent: g.agent, work: g.work, allow: true })),
+                    old.map((g) => ({ desk: g.on, agent: g.agent, work: g.work, allow: true })),
                   )}
               >
                 Allow again

@@ -1,6 +1,7 @@
 /**
  * A message's text as one plain line, for a title or a preview (markdown's
- * marks left out), and a title cut short enough to name a step.
+ * marks left out), as words for someone who reads it plain (its lines
+ * kept), and a title cut short enough to name a step.
  */
 
 /** A message's text as one plain line: markdown's marks left out. */
@@ -17,3 +18,24 @@ export const plain = (text = ""): string =>
 /** A title short enough to say in a step's name ("Move “Plan the…” to…"). */
 export const shortened = (title: string, most = 40): string =>
   title.length > most ? `${title.slice(0, most - 1).trimEnd()}…` : title;
+
+/**
+ * A message's text as words to send on to someone who reads it plain (a
+ * contact, on a messaging app): markdown's marks left out, its lines and
+ * paragraphs kept, a link as its words and where it goes.
+ */
+export const unmarked = (text = ""): string =>
+  text
+    .replace(/```[^\n]*\n?([\s\S]*?)(?:```|$)/g, "$1")
+    .replace(/`([^`\n]*)`/g, "$1")
+    .replace(
+      /!?\[([^\]\n]*)\]\(([^)\s]*)\)/g,
+      (_, words: string, href: string) => words && words !== href ? `${words} (${href})` : href,
+    )
+    .replace(/^[ \t]*(?:#{1,6}[ \t]+|>[ \t]?)/gm, "")
+    .replace(/^([ \t]*)[*+][ \t]+/gm, "$1- ")
+    .replace(/\*\*|__|~~/g, "")
+    .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?!\w)/gm, "$1$2")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();

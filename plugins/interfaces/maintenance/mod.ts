@@ -30,6 +30,9 @@
  *   writes, fenced by its epoch, with one `maintenance.sql` audit event in
  *   the same commit; the owner then forgets what it derived from documents.
  *   It bypasses schemas and per-document events.
+ * - **Actions made for operators**, any plugin's whose `allow` lets the
+ *   maintenance actor in (`isMaintenance`): a migration run again, or tried
+ *   dry first, by its name and input.
  * - **Blobs by id**, as stored (in the store, or the app's Blobs).
  *
  * The endpoints are in `resources/routes.ts`; what raw SQL does to the

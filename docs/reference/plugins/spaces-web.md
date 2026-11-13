@@ -44,7 +44,7 @@ Nothing to set. It reads `names`, `spaceAgents`, `spaceInvite`, `spaceMembers`, 
 The runtime doesn't start without [`spaces`](spaces.md) and [`web-shell`](web-shell.md): add them
 too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.45`.
 
 ## Listing
 

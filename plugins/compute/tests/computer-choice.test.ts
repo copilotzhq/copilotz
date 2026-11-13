@@ -268,12 +268,12 @@ test("a job is found on whichever computer runs it: its preview, and where its a
         computer: where.computer,
       }, { actor: ana });
       assertStringIncludes(String(asked), "yes");
-      const [approval] = await s.rt.query<{ desk: string; work: string }[]>(
+      const [approval] = await s.rt.query<{ on: string; work: string }[]>(
         "approval.pending",
         {},
         { actor: ana },
       );
-      assertEquals([approval.work, approval.desk], ["publish", desktop._id]);
+      assertEquals([approval.work, approval.on], ["publish", desktop._id]);
     },
   );
 });

@@ -7,10 +7,11 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { type Actor, createRuntime, definePlugin, type Event } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
-import { chat, type Message, tool } from "../chat/mod.ts";
+import { type Approval, chat, type Message, tool } from "../chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { join } from "../../access/tests/join.ts";
 import { test } from "../../../testing/mod.ts";
+import { yesToShares } from "./yes.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
@@ -71,7 +72,7 @@ const app = definePlugin({
   name: "app",
   adapters: { llm: { s: script } },
   resources: {
-    shared: { thread: {}, message: { labels: true } },
+    shared: { thread: {}, message: { drew: true } },
     provider: { s: { adapter: "s" } },
     tools: { whoami },
     agents: {
@@ -136,6 +137,8 @@ test("work handed to another space opens a chat its members see, and its answer 
       in: personal,
     }, { actor: ana });
     await rt.idle();
+    // From her Personal space into Project, whose people can't see all she does: Ana says yes.
+    assertEquals(await yesToShares(rt, ana), 1);
 
     // On the record: the hand-over, a grant of its own, by North for Ana from where it works;
     // what it wrote is in the other space.
@@ -197,7 +200,16 @@ test("a chain of hand-overs works, each for the same person", async () => {
       in: personal,
     }, { actor: ana });
     await rt.idle();
+    // Each hand-over goes where its people can't see all the work before it may read: Ana says yes.
+    assertEquals(await yesToShares(rt, ana), 2);
     assertEquals([seen.dev?.id, (seen.dev?.for as Actor)?.id, seen.dev?.in], ["dev", "ana", dev]);
+    // Dev's answer going back to Project, whose people can't all see Dev: Ana says it goes there.
+    // Project's, back in her Personal space, goes without asking: only she sees it.
+    const [asked] = await rt.query<Approval[]>("approval.pending", {}, { actor: ana });
+    assertEquals([asked.work, asked.agent, asked.on], ["back", "dev", pm]);
+    await rt.call("chat.approve", { approval: asked._id, answer: "here" }, { actor: ana });
+    await rt.idle();
+    assertEquals(await rt.query("approval.pending", {}, { actor: ana }), []);
     const here = await history(rt, thread);
     assert(here.some((m) => m.from === "lead" && m.via?.kind === "delegated"));
     assertEquals(here.at(-1)!.from, "north");
@@ -278,6 +290,7 @@ test("what set the work going, and a key's limit, go with it", async () => {
       actor: { ...ana, origin },
     });
     await rt.idle();
+    await yesToShares(rt, ana);
     assertEquals((seen.lead?.for as Actor)?.origin, origin);
   });
 });
@@ -294,6 +307,13 @@ test("stopping a chat stops what it handed over", async () => {
       text: `hand ${pm}: hold, then whoami`,
       in: personal,
     }, { actor: ana });
+    // Ana's yes to handing it over (Lead then holds, so nothing waits for everything to settle).
+    let asked: Approval | undefined;
+    for (let i = 0; i < 300 && !asked; i++) {
+      [asked] = await rt.query<Approval[]>("approval.pending", {}, { actor: ana });
+      if (!asked) await new Promise((r) => setTimeout(r, 5));
+    }
+    await rt.call("chat.approve", { approval: asked!._id, answer: "once" }, { actor: ana });
     for (let i = 0; i < 300 && !told.lead; i++) await new Promise((r) => setTimeout(r, 5));
     assert(told.lead, "it reached the other space");
     const { stopped } = await rt.call<{ stopped: number }>("chat.stop", { thread }, { actor: ana });
@@ -322,6 +342,7 @@ test("the same agent in another space is other work, and reads it as input", asy
       in: personal,
     }, { actor: ana });
     await rt.idle();
+    await yesToShares(rt, ana);
 
     // It worked there, as itself, for Ana, with what it was handed as input.
     assertEquals([seen.north?.id, (seen.north?.for as Actor)?.id, seen.north?.in], [
@@ -371,6 +392,7 @@ test("whoever the space says answers takes it, even the agent that sent it", asy
     });
     await rt.call("chat.send", { text: `hand ${space}: whoami`, in: personal }, { actor: ana });
     await rt.idle();
+    await yesToShares(rt, ana);
     assertEquals(seen.north?.in, space);
     assertEquals(seen.lead, undefined);
 
@@ -380,6 +402,7 @@ test("whoever the space says answers takes it, even the agent that sent it", asy
       actor: ana,
     });
     await rt.idle();
+    await yesToShares(rt, ana);
     assertEquals(seen.lead?.in, space);
   });
 });

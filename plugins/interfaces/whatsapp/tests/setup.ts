@@ -129,12 +129,12 @@ export const reads = definePlugin({
           $set: { shown: new Date(Date.now() - input.seconds * 1000).toISOString() },
         }),
     }),
-    // An agent's message in a chat, as trusted code writes one (with what it drew on, maybe).
+    // An agent's message in a chat, as trusted code writes one (one its contact doesn't read, maybe).
     "test.said": defineAction({
       input: { type: "object" },
       run: async (
         ctx,
-        input: { thread: string; to: string; text: string; sources?: string[]; answer?: boolean },
+        input: { thread: string; to: string; text: string; private?: boolean; answer?: boolean },
       ) => {
         const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: input.thread });
         const turn = crypto.randomUUID();
@@ -148,7 +148,7 @@ export const reads = definePlugin({
           to: [input.to],
           text: input.text,
           hops: 1,
-          ...(input.sources ? { sources: input.sources } : {}),
+          ...(input.private ? { private: true } : {}),
           at: new Date().toISOString(),
         });
       },
@@ -321,7 +321,7 @@ export async function setup(
   const app = definePlugin({
     name: "app",
     resources: {
-      shared: { thread: {}, message: { labels: true }, file: {} },
+      shared: { thread: {}, message: { drew: true }, file: {} },
       provider: { e: { adapter: "e" } },
       model: { transcribe: "fake/listen" },
       agents: {

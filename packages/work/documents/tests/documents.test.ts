@@ -84,7 +84,7 @@ async function start(make: () => Store | Promise<Store>) {
         name: "app",
         actions: { "test.peek": peek },
         resources: {
-          shared: { thread: {}, message: { labels: true } },
+          shared: { thread: {}, message: { drew: true } },
           provider: { s: { adapter: "s" } },
           agents: {
             lead: { instructions: "I lead.", model: "s/one", default: true, name: "Lead" },
@@ -638,7 +638,7 @@ test("people by their profiles' names; the id someone signed in with never shows
   assert.equal(nameOf("agent:north", (id) => id === "north" ? "North" : undefined), "North");
 });
 
-test("from Personal, an agent writes and reads another space's documents; from a shared one, it can't", async () => {
+test("from Personal, an agent reads another space's documents, and writes there once its person says yes; from a shared one, it can't", async () => {
   const rt = await start(memoryStore);
   try {
     const { space: personal } = await rt.call<{ space: string }>("space.personal", {}, {
@@ -657,22 +657,33 @@ test("from Personal, an agent writes and reads another space's documents; from a
       return said[0];
     };
 
-    // From ana's Personal space: Launch's documents, as she'd keep them.
+    const launched = async () =>
+      (await rt.call<Document[]>("test.peek", { collection: "document", filter: { in: launch } }, {
+        actor: ana,
+      })).map((d) => [d.title, d.in]);
+    // From ana's Personal space, writing in Launch would show its people what her work there may
+    // draw on: it waits for her yes.
+    const asksFirst = /That would show Launch .* has to say yes first/;
     assert.match(
       await ask(personal, "write_document", { in: launch, title: "Brief", text: "Ship it" }),
-      /^Made \[Brief\]/,
+      asksFirst,
     );
-    const there = await rt.call<Document[]>("test.peek", {
-      collection: "document",
-      filter: { in: launch },
-    }, { actor: ana });
-    assert.deepEqual(there.map((d) => [d.title, d.in]), [["Brief", launch]]);
+    assert.deepEqual(await launched(), []);
+    // With it (the agent's work there carrying her yes), it's made, as she'd keep it.
+    await rt.call("document.create", { in: launch, title: "Brief", text: "Ship it" }, {
+      actor: { kind: "agent", id: "lead", for: ana, in: personal, approved: [launch] },
+    });
+    assert.deepEqual(await launched(), [["Brief", launch]]);
+    // Reading there needs nothing; changing it, her yes again.
     assert.match(await ask(personal, "list_documents", { in: launch }), /Brief/);
     assert.match(
       await ask(personal, "append_document", { in: launch, document: "Brief", text: "Friday" }),
-      /^Saved \[Brief\].* as version 2/,
+      asksFirst,
     );
-    assert.match(await ask(personal, "read_document", { in: launch, document: "Brief" }), /Friday/);
+    assert.match(
+      await ask(personal, "read_document", { in: launch, document: "Brief" }),
+      /Ship it/,
+    );
 
     // From a space ana shares with bob: only that space.
     const { space: team } = await rt.call<{ space: string }>("space.create", { name: "Team" }, {

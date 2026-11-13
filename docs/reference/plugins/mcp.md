@@ -28,11 +28,12 @@ It keeps 4 collections.
 
 ## What it lets callers do
 
-Of its 3 Actions, people, agents, contacts and someone signed out may call none.
+Of its 4 Actions, people, agents, contacts and someone signed out may call none.
 
-| Action     | Person | Agent | Contact | Anyone | Key | What it does                                                    |
-| ---------- | ------ | ----- | ------- | ------ | --- | --------------------------------------------------------------- |
-| `mcp.call` | no     | no    | no      | no     | no  | One call to one of the app's tools, from a model outside (MCP). |
+| Action       | Person | Agent | Contact | Anyone | Key | What it does                                                                   |
+| ------------ | ------ | ----- | ------- | ------ | --- | ------------------------------------------------------------------------------ |
+| `mcp.call`   | no     | no    | no      | no     | no  | One call to one of the app's tools, from a model outside (MCP).                |
+| `mcp.public` | no     | no    | no      | no     | no  | One call to one of a public server's tools, as the public (MCP): kept nowhere. |
 
 An agent works for a person, and calls what both may. A key calls only what its scope names.
 
@@ -55,25 +56,20 @@ Its Views show to the model.
 
 You set it in `resources.mcp`: 2 settings are required.
 
-A model tool normally reuses its completed answer for identical input for two minutes. Set
-`tools.<tool>.replay: false` for a check that updates state but must fetch fresh results, such as
-payment reconciliation. Keep its `annotations.readOnly: false`: replay is separate from what the
-tool does. Interrupted calls still recover with their original call ID. Read-only tools and
-widget-only Actions already run without completed-answer replay.
-
-| Setting                   | Type                              | Required | What it is                                                                                                                                                                                            |
-| ------------------------- | --------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mcp.<name>.in`           | `string`                          | yes      | The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or not).                                                                                                      |
-| `mcp.<name>.tools`        | `Record<string, McpTool \| null>` | yes      | The tools it offers, by name (the `tools` resource's), each with how it's offered (`{}` as it is).                                                                                                    |
-| `mcp.<name>.title`        | `string`                          | no       | What it's called, its version, and what the model is told about using it.                                                                                                                             |
-| `mcp.<name>.version`      | `string`                          | no       | What it's called, its version, and what the model is told about using it.                                                                                                                             |
-| `mcp.<name>.instructions` | `string`                          | no       | What it's called, its version, and what the model is told about using it.                                                                                                                             |
-| `mcp.<name>.client`       | `string`                          | no       | Who calls (`ChatGPT`), as its chats show it: the sender of their steps, and their title.                                                                                                              |
-| `mcp.<name>.handles`      | `boolean`                         | no       | A client that names no conversation (no `openai/session`, which ChatGPT sends) gets a handle to name it with (`chat`, on every tool), so its calls go on in one chat.                                 |
-| `mcp.<name>.origins`      | `string[]`                        | no       | The browser origins it answers (`Origin`): none unless said (no browser calls MCP).                                                                                                                   |
-| `mcp.<name>.widgets`      | `McpWidgets`                      | no       | Its widgets (with the app's `widgets` resource, `widgetsOf`): the template's options.                                                                                                                 |
-| `mcp.<name>.limits`       | `Partial<McpLimits>`              | no       | Its widgets (with the app's `widgets` resource, `widgetsOf`): the template's options.                                                                                                                 |
-| `mcp.<name>.exempt`       | `string[]`                        | no       | Callers whose address is in these CIDR ranges (a shared proxy's: OpenAI's egress, every ChatGPT user's calls behind a few addresses) aren't limited by address; the server's other limits still hold. |
+| Setting                   | Type                              | Required | What it is                                                                                                                                                                                                                               |
+| ------------------------- | --------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcp.<name>.in`           | `string`                          | yes      | The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or not); on a public server, the space its tools work in (`ctx.in`).                                                                             |
+| `mcp.<name>.tools`        | `Record<string, McpTool \| null>` | yes      | The tools it offers, by name (the `tools` resource's), each with how it's offered (`{}` as it is).                                                                                                                                       |
+| `mcp.<name>.title`        | `string`                          | no       | What it's called, its version, and what the model is told about using it.                                                                                                                                                                |
+| `mcp.<name>.version`      | `string`                          | no       | What it's called, its version, and what the model is told about using it.                                                                                                                                                                |
+| `mcp.<name>.instructions` | `string`                          | no       | What it's called, its version, and what the model is told about using it.                                                                                                                                                                |
+| `mcp.<name>.client`       | `string`                          | no       | Who calls (`ChatGPT`), as its chats show it: the sender of their steps, and their title.                                                                                                                                                 |
+| `mcp.<name>.handles`      | `boolean`                         | no       | A client that names no conversation (no `openai/session`, which ChatGPT sends) gets a handle to name it with (`chat`, on every tool), so its calls go on in one chat.                                                                    |
+| `mcp.<name>.public`       | `boolean`                         | no       | A public server, which keeps nothing: each call runs its tool as the public (`{ kind: "public" }`, whom `publicCallers` lets in), with no contact, chat or step, and only the tools that only read (`annotations.readOnly`) are offered. |
+| `mcp.<name>.origins`      | `string[]`                        | no       | The browser origins it answers (`Origin`, or `"*"` for any): none unless said (no browser calls MCP).                                                                                                                                    |
+| `mcp.<name>.widgets`      | `McpWidgets`                      | no       | Its widgets (with the app's `widgets` resource, `widgetsOf`): the template's options.                                                                                                                                                    |
+| `mcp.<name>.limits`       | `Partial<McpLimits>`              | no       | What it takes before it says no, over the defaults (`MCP_LIMITS`): see `McpLimits`.                                                                                                                                                      |
+| `mcp.<name>.exempt`       | `string[]`                        | no       | Callers whose address is in these CIDR ranges (a shared proxy's: OpenAI's egress, every ChatGPT user's calls behind a few addresses) aren't limited by address; the server's other limits still hold.                                    |
 
 It also reads `caller`, `org`, `tools` and `widgets`, resource kinds the app and other plugins fill.
 
@@ -82,7 +78,7 @@ It also reads `caller`, `org`, `tools` and `widgets`, resource kinds the app and
 The runtime doesn't start without [`chat`](chat.md), [`spaces`](spaces.md) and
 [`contacts`](contacts.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.45`.
 
 ## What it does on its own
 

@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "runtime": "1.0.0-rc.34",
+  "runtime": "1.0.0-rc.45",
   "plugins": [
     {
       "format": 1,
@@ -11,9 +11,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -354,9 +354,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -443,9 +443,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [
         {
@@ -1013,10 +1013,14 @@
       "tools": [
         {
           "name": "create_board",
-          "summary": "Make a board in this space, for work that takes more than one step. It starts with Backlog, To do, Doing, Blocked, In review and Done, unless you name its columns.",
+          "summary": "Make a board in this space, for work that takes more than one step. It starts with Backlog, To do, Doing, Blocked, In review and Done, unless you name its columns. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              },
               "name": {
                 "type": "string",
                 "minLength": 1,
@@ -1043,10 +1047,14 @@
         },
         {
           "name": "create_card",
-          "summary": "Add a card to a board in this space: one real outcome, with its owner (assignee), what done looks like and any blocker in its description, and an honest column. The board is the space's first unless you name one; the column, its first.",
+          "summary": "Add a card to a board in this space: one real outcome, with its owner (assignee), what done looks like and any blocker in its description, and an honest column. The board is the space's first unless you name one; the column, its first. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              },
               "title": {
                 "type": "string",
                 "minLength": 1,
@@ -1096,18 +1104,27 @@
         },
         {
           "name": "list_boards",
-          "summary": "List the boards in this conversation's space: each one's name, link, and how many cards are in each column. Read one with read_board.",
+          "summary": "List the boards in this conversation's space: each one's name, link, and how many cards are in each column. Read one with read_board. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
-            "properties": {}
+            "properties": {
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              }
+            }
           }
         },
         {
           "name": "move_card",
-          "summary": "Move a card in this space (by its id from read_board, or its title) to a column of its board, by the column's name or id: when its state changes, not later. At the column's bottom unless you say top.",
+          "summary": "Move a card in this space (by its id from read_board, or its title) to a column of its board, by the column's name or id: when its state changes, not later. At the column's bottom unless you say top. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              },
               "card": {
                 "type": "string",
                 "description": "Its id, or its title."
@@ -1136,10 +1153,14 @@
         },
         {
           "name": "read_board",
-          "summary": "Read a board in this space (by its name or id; without one, the space's first): its columns in order, with their cards, each with its id, title, owner, labels, due date and a line of its description. Read it before you change it.",
+          "summary": "Read a board in this space (by its name or id; without one, the space's first): its columns in order, with their cards, each with its id, title, owner, labels, due date and a line of its description. Read it before you change it. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              },
               "board": {
                 "type": "string",
                 "description": "Its name or id."
@@ -1149,10 +1170,14 @@
         },
         {
           "name": "update_card",
-          "summary": "Change a card in this space (by its id from read_board, or its title): its title, description, assignee, labels (the whole set) or due date. An empty value, or null, clears one. Moving it is move_card.",
+          "summary": "Change a card in this space (by its id from read_board, or its title): its title, description, assignee, labels (the whole set) or due date. An empty value, or null, clears one. Moving it is move_card. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              },
               "card": {
                 "type": "string",
                 "description": "Its id, or its title."
@@ -1230,22 +1255,22 @@
           },
           "tools": {
             "create_board": {
-              "description": "Make a board in this space, for work that takes more than one step. It starts with Backlog, To do, Doing, Blocked, In review and Done, unless you name its columns."
+              "description": "Make a board in this space, for work that takes more than one step. It starts with Backlog, To do, Doing, Blocked, In review and Done, unless you name its columns. In another space you can work in, give in (its id)."
             },
             "create_card": {
-              "description": "Add a card to a board in this space: one real outcome, with its owner (assignee), what done looks like and any blocker in its description, and an honest column. The board is the space's first unless you name one; the column, its first."
+              "description": "Add a card to a board in this space: one real outcome, with its owner (assignee), what done looks like and any blocker in its description, and an honest column. The board is the space's first unless you name one; the column, its first. In another space you can work in, give in (its id)."
             },
             "list_boards": {
-              "description": "List the boards in this conversation's space: each one's name, link, and how many cards are in each column. Read one with read_board."
+              "description": "List the boards in this conversation's space: each one's name, link, and how many cards are in each column. Read one with read_board. In another space you can work in, give in (its id)."
             },
             "move_card": {
-              "description": "Move a card in this space (by its id from read_board, or its title) to a column of its board, by the column's name or id: when its state changes, not later. At the column's bottom unless you say top."
+              "description": "Move a card in this space (by its id from read_board, or its title) to a column of its board, by the column's name or id: when its state changes, not later. At the column's bottom unless you say top. In another space you can work in, give in (its id)."
             },
             "read_board": {
-              "description": "Read a board in this space (by its name or id; without one, the space's first): its columns in order, with their cards, each with its id, title, owner, labels, due date and a line of its description. Read it before you change it."
+              "description": "Read a board in this space (by its name or id; without one, the space's first): its columns in order, with their cards, each with its id, title, owner, labels, due date and a line of its description. Read it before you change it. In another space you can work in, give in (its id)."
             },
             "update_card": {
-              "description": "Change a card in this space (by its id from read_board, or its title): its title, description, assignee, labels (the whole set) or due date. An empty value, or null, clears one. Moving it is move_card."
+              "description": "Change a card in this space (by its id from read_board, or its title): its title, description, assignee, labels (the whole set) or due date. An empty value, or null, clears one. Moving it is move_card. In another space you can work in, give in (its id)."
             }
           }
         },
@@ -1270,9 +1295,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -1359,11 +1384,206 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
+        {
+          "name": "approval",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "owner",
+            "for",
+            "agent",
+            "thread",
+            "in",
+            "work",
+            "on",
+            "detail",
+            "text",
+            "covers",
+            "name",
+            "people",
+            "preview",
+            "answers",
+            "origin",
+            "call",
+            "question",
+            "reply",
+            "status",
+            "grant",
+            "at",
+            "decided"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "for": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "thread": {
+                "type": "string"
+              },
+              "in": {
+                "type": "string"
+              },
+              "work": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "covers": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "people": {
+                "type": "integer"
+              },
+              "preview": {
+                "type": "string"
+              },
+              "answers": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "once",
+                    "thread",
+                    "origin",
+                    "always",
+                    "deny",
+                    "here",
+                    "me"
+                  ]
+                }
+              },
+              "origin": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "rev": {
+                    "type": "integer"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id",
+                  "name",
+                  "rev"
+                ]
+              },
+              "call": {
+                "type": "string"
+              },
+              "question": {
+                "type": "string"
+              },
+              "reply": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "allowed",
+                  "denied"
+                ]
+              },
+              "grant": {
+                "enum": [
+                  "once",
+                  "thread",
+                  "origin",
+                  "always",
+                  "deny",
+                  "here",
+                  "me"
+                ]
+              },
+              "at": {
+                "type": "string"
+              },
+              "decided": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "for",
+              "thread",
+              "agent",
+              "work",
+              "on",
+              "detail",
+              "answers",
+              "status",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [
+            [
+              "owner",
+              "status"
+            ],
+            [
+              "thread",
+              "at"
+            ],
+            [
+              "call"
+            ],
+            [
+              "on"
+            ]
+          ],
+          "queries": [
+            {
+              "name": "pending",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            }
+          ]
+        },
         {
           "name": "file",
           "summary": "",
@@ -1461,6 +1681,104 @@
                 "maintenance": "no"
               },
               "helper": "peopleOrContacts"
+            }
+          ]
+        },
+        {
+          "name": "grant",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "owner",
+            "agent",
+            "work",
+            "on",
+            "thread",
+            "once",
+            "origin",
+            "rev",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "work": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "thread": {
+                "type": "string"
+              },
+              "once": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "rev": {
+                "type": "integer"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "agent",
+              "work",
+              "on",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [
+            [
+              "on",
+              "agent",
+              "work"
+            ],
+            [
+              "origin"
+            ]
+          ],
+          "queries": [
+            {
+              "name": "forOrigin",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            },
+            {
+              "name": "mine",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
             }
           ]
         },
@@ -1720,7 +2038,7 @@
             "failed",
             "in",
             "files",
-            "sources",
+            "drew",
             "stopped",
             "tap",
             "via",
@@ -1818,7 +2136,7 @@
                   ]
                 }
               },
-              "sources": {
+              "drew": {
                 "type": "array",
                 "items": {
                   "type": "string"
@@ -2042,6 +2360,7 @@
             "parent",
             "fork",
             "in",
+            "about",
             "messages",
             "opened",
             "latest",
@@ -2083,6 +2402,9 @@
               "in": {
                 "type": "string"
               },
+              "about": {
+                "type": "string"
+              },
               "messages": {
                 "type": "integer"
               },
@@ -2109,6 +2431,19 @@
           "queries": [
             {
               "name": "agents",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            },
+            {
+              "name": "moving",
               "callers": {
                 "person": "yes",
                 "agent": "yes",
@@ -2253,7 +2588,7 @@
         {
           "collection": "message",
           "options": {
-            "labels": true,
+            "drew": true,
             "part": "thread",
             "contact": {
               "private": {
@@ -2277,6 +2612,46 @@
         }
       ],
       "actions": [
+        {
+          "name": "chat.approve",
+          "summary": "Answers what an agent waits on you for",
+          "input": {
+            "type": "object",
+            "properties": {
+              "approval": {
+                "type": "string"
+              },
+              "answer": {
+                "enum": [
+                  "once",
+                  "thread",
+                  "origin",
+                  "always",
+                  "deny",
+                  "here",
+                  "me"
+                ]
+              }
+            },
+            "required": [
+              "approval",
+              "answer"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
         {
           "name": "chat.attach",
           "summary": "Uploads a file to send: a draft that a message of yours sends, by its id",
@@ -2360,6 +2735,35 @@
           "recorded": true,
           "private": [],
           "internal": true
+        },
+        {
+          "name": "chat.forgetGrant",
+          "summary": "Takes back what you let an agent do without asking",
+          "input": {
+            "type": "object",
+            "properties": {
+              "grant": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "grant"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
         },
         {
           "name": "chat.fork",
@@ -2566,6 +2970,35 @@
             "maintenance": "no"
           },
           "helper": "inPerson"
+        },
+        {
+          "name": "chat.notes",
+          "summary": "The notes beside a chat shared outside its space, made the first time",
+          "input": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "thread"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
         },
         {
           "name": "chat.open",
@@ -2923,9 +3356,87 @@
             "maintenance": "no"
           },
           "helper": "people"
+        },
+        {
+          "name": "chat.unmark",
+          "summary": "Takes the old marks off messages: each goes where only those who could read it see it",
+          "input": {
+            "type": "object",
+            "properties": {
+              "dryRun": {
+                "type": "boolean"
+              },
+              "batch": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              }
+            },
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "no",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "yes"
+          },
+          "helper": "isMaintenance"
         }
       ],
-      "tools": [],
+      "tools": [
+        {
+          "name": "list_conversations",
+          "summary": "List the other conversations in this space, latest first: each one's id, how it opened, where it is now, and how many messages it has. Read one with read_conversation before asking people to repeat what they said there; say something in one with send_message's thread. In another space you can read, give in (its id).",
+          "title": "List conversations",
+          "input": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "description": "How many (default 20)."
+              },
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              }
+            }
+          }
+        },
+        {
+          "name": "read_conversation",
+          "summary": "Read what was said in another conversation (by its id, from list_conversations): its messages, oldest first, the latest `limit` of them, or those before `before` (a time from a previous read) to go further back. In this space, or another you can read.",
+          "title": "Read a conversation",
+          "input": {
+            "type": "object",
+            "properties": {
+              "conversation": {
+                "type": "string",
+                "description": "Its id."
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "description": "How many (default 30)."
+              },
+              "before": {
+                "type": "string",
+                "description": "Only messages before this time (ISO)."
+              }
+            },
+            "required": [
+              "conversation"
+            ]
+          }
+        }
+      ],
       "views": [
         {
           "name": "context",
@@ -3014,9 +3525,15 @@
         }
       ],
       "changes": [
+        "approval.created",
+        "approval.updated",
+        "approval.deleted",
         "file.created",
         "file.updated",
         "file.deleted",
+        "grant.created",
+        "grant.updated",
+        "grant.deleted",
         "message.created",
         "message.updated",
         "message.deleted",
@@ -3074,6 +3591,13 @@
           "summary": "Drops files uploaded to send that no message sent within a day",
           "call": "chat.prune",
           "every": "1h"
+        },
+        {
+          "name": "chat.unmark",
+          "when": "once, when the runtime first starts with it",
+          "summary": "Takes the old marks off messages: each goes where only those who could read it see it",
+          "call": "chat.unmark",
+          "once": true
         }
       ],
       "powers": [
@@ -3087,6 +3611,16 @@
             "message": {},
             "shown": {},
             "thread": {}
+          },
+          "tools": {
+            "list_conversations": {
+              "description": "List the other conversations in this space, latest first: each one's id, how it opened, where it is now, and how many messages it has. Read one with read_conversation before asking people to repeat what they said there; say something in one with send_message's thread. In another space you can read, give in (its id).",
+              "title": "List conversations"
+            },
+            "read_conversation": {
+              "description": "Read what was said in another conversation (by its id, from list_conversations): its messages, oldest first, the latest `limit` of them, or those before `before` (a time from a previous read) to go further back. In this space, or another you can read.",
+              "title": "Read a conversation"
+            }
           },
           "usageNames": {
             "thread": {}
@@ -3197,16 +3731,16 @@
     {
       "format": 1,
       "name": "chat-terminal",
-      "summary": "Chat's terminal front end, for the process that draws the terminal: how a conversation, a message, its author and a reply being written look there, and chat's commands.",
+      "summary": "Chat's terminal front end, for the process that draws the terminal.",
       "requires": [
         "chat",
         "terminal-shell"
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -3216,6 +3750,10 @@
       "views": [
         {
           "name": "agent.prompt",
+          "place": "terminal"
+        },
+        {
+          "name": "approvals",
           "place": "terminal"
         },
         {
@@ -3253,6 +3791,12 @@
             "*": {
               "description": "Talk: @name addresses agents; a question you were asked takes your answer"
             },
+            "/approvals": {
+              "description": "What your agents wait on you for"
+            },
+            "/approve": {
+              "description": "Answer what an agent waits on you for (once, this conversation, its routine, always, or no: as it allows)"
+            },
             "/file": {
               "description": "Send a file (its text, for text files), with what you say about it"
             },
@@ -3263,10 +3807,13 @@
               "description": "This conversation, with agents' steps; shared messages are numbered"
             },
             "/move": {
-              "description": "Move this conversation, with everything in it, to another space you work in"
+              "description": "Move this conversation, with everything in it, to another space you work in: it says first who'll see it there, and what it drew on"
             },
             "/new": {
               "description": "Start a new conversation"
+            },
+            "/notes": {
+              "description": "This chat's staff notes, apart from it: where your team works with agents about a chat shared outside the space (a customer's), which they never see; /notes again goes back"
             },
             "/open": {
               "description": "Continue a conversation, by number or id"
@@ -3277,14 +3824,16 @@
             "/retry": {
               "description": "Have your last message answered again, in a fork"
             },
-            "/share": {
-              "description": "Show everyone here the latest answer only some of them can see"
-            },
             "/stop": {
               "description": "Stop the agents working here (and in its subthreads)"
             },
             "/threads": {
               "description": "The latest conversations"
+            }
+          },
+          "notices": {
+            "approvals": {
+              "view": "approvals"
             }
           }
         },
@@ -3317,9 +3866,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -3328,7 +3877,23 @@
       "tools": [],
       "views": [
         {
+          "name": "chat.asks",
+          "place": "web"
+        },
+        {
+          "name": "chat.moving",
+          "place": "web"
+        },
+        {
+          "name": "chat.notes",
+          "place": "web"
+        },
+        {
           "name": "chat.palette",
+          "place": "web"
+        },
+        {
+          "name": "chat.waiting",
           "place": "web"
         },
         {
@@ -3374,12 +3939,20 @@
       "powers": [],
       "resources": {
         "provides": {
+          "conversation": {
+            "asks": {
+              "view": "chat.asks"
+            }
+          },
           "palette": {
             "chats": {
               "view": "chat.palette"
             }
           },
           "sidebar": {
+            "asks": {
+              "view": "chat.waiting"
+            },
             "start": {
               "view": "new-thread"
             }
@@ -3404,6 +3977,24 @@
           }
         },
         "reads": [
+          {
+            "kind": "agentSources",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "agents",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "askViews",
+            "found": [
+              "source"
+            ]
+          },
           {
             "kind": "composerNotes",
             "found": [
@@ -3461,9 +4052,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -3642,6 +4233,10 @@
         {
           "name": "context:contact",
           "place": "prompt"
+        },
+        {
+          "name": "context:notes",
+          "place": "prompt"
         }
       ],
       "routes": [],
@@ -3661,7 +4256,8 @@
       "resources": {
         "provides": {
           "context": {
-            "contact": {}
+            "contact": {},
+            "notes": {}
           },
           "names": {
             "contact": {}
@@ -3689,9 +4285,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -3734,9 +4330,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [
         {
@@ -4810,9 +5406,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -4872,9 +5468,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -4960,9 +5556,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [
         {
@@ -6116,9 +6712,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -6200,9 +6796,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -6272,9 +6868,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [
         {
@@ -6799,7 +7395,7 @@
       "tools": [
         {
           "name": "append_document",
-          "summary": "Add text to the end of a document of this space (by its title or id), after a blank line. Markdown.",
+          "summary": "Add text to the end of a document of this space (by its title or id), after a blank line. Markdown. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
@@ -6812,6 +7408,10 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 409600
+              },
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
               }
             },
             "required": [
@@ -6822,7 +7422,7 @@
         },
         {
           "name": "edit_document",
-          "summary": "Change part of a document of this space (by its title or id): replace text that occurs exactly once in it (old, copied exactly, with enough around it to be unique) with new text. Read it first.",
+          "summary": "Change part of a document of this space (by its title or id): replace text that occurs exactly once in it (old, copied exactly, with enough around it to be unique) with new text. Read it first. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
@@ -6839,6 +7439,10 @@
               "new": {
                 "type": "string",
                 "description": "What goes in its place."
+              },
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
               }
             },
             "required": [
@@ -6850,15 +7454,20 @@
         },
         {
           "name": "list_documents",
-          "summary": "List this space's documents, latest saved first: each one's title (a link to it), version, size, who saved it last and when, and how it opens. Read one with read_document before you change it.",
+          "summary": "List this space's documents, latest saved first: each one's title (a link to it), version, size, who saved it last and when, and how it opens. Read one with read_document before you change it. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
-            "properties": {}
+            "properties": {
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              }
+            }
           }
         },
         {
           "name": "read_document",
-          "summary": "Read a document of this space, by its title or id: its text (Markdown), with its version and who saved it. With version, an older one, as it was then.",
+          "summary": "Read a document of this space, by its title or id: its text (Markdown), with its version and who saved it. With version, an older one, as it was then. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
@@ -6871,6 +7480,10 @@
                 "type": "integer",
                 "minimum": 1,
                 "description": "An older version (default: now)."
+              },
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
               }
             },
             "required": [
@@ -6880,10 +7493,14 @@
         },
         {
           "name": "write_document",
-          "summary": "Make a new document in this space (title and text), or, naming one with document, replace its whole text (and title, if given). To change part of one, prefer edit_document or append_document: they keep what others wrote. Markdown.",
+          "summary": "Make a new document in this space (title and text), or, naming one with document, replace its whole text (and title, if given). To change part of one, prefer edit_document or append_document: they keep what others wrote. Markdown. In another space you can work in, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              },
               "title": {
                 "type": "string",
                 "maxLength": 200,
@@ -6932,19 +7549,19 @@
           },
           "tools": {
             "append_document": {
-              "description": "Add text to the end of a document of this space (by its title or id), after a blank line. Markdown."
+              "description": "Add text to the end of a document of this space (by its title or id), after a blank line. Markdown. In another space you can work in, give in (its id)."
             },
             "edit_document": {
-              "description": "Change part of a document of this space (by its title or id): replace text that occurs exactly once in it (old, copied exactly, with enough around it to be unique) with new text. Read it first."
+              "description": "Change part of a document of this space (by its title or id): replace text that occurs exactly once in it (old, copied exactly, with enough around it to be unique) with new text. Read it first. In another space you can work in, give in (its id)."
             },
             "list_documents": {
-              "description": "List this space's documents, latest saved first: each one's title (a link to it), version, size, who saved it last and when, and how it opens. Read one with read_document before you change it."
+              "description": "List this space's documents, latest saved first: each one's title (a link to it), version, size, who saved it last and when, and how it opens. Read one with read_document before you change it. In another space you can work in, give in (its id)."
             },
             "read_document": {
-              "description": "Read a document of this space, by its title or id: its text (Markdown), with its version and who saved it. With version, an older one, as it was then."
+              "description": "Read a document of this space, by its title or id: its text (Markdown), with its version and who saved it. With version, an older one, as it was then. In another space you can work in, give in (its id)."
             },
             "write_document": {
-              "description": "Make a new document in this space (title and text), or, naming one with document, replace its whole text (and title, if given). To change part of one, prefer edit_document or append_document: they keep what others wrote. Markdown."
+              "description": "Make a new document in this space (title and text), or, naming one with document, replace its whole text (and title, if given). To change part of one, prefer edit_document or append_document: they keep what others wrote. Markdown. In another space you can work in, give in (its id)."
             }
           }
         },
@@ -6976,9 +7593,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -7063,9 +7680,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -7234,9 +7851,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -7919,9 +8536,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -8045,9 +8662,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -8064,6 +8681,7 @@
             "tailAt",
             "tailIds",
             "tailSteps",
+            "steps",
             "last",
             "complete",
             "cutAt"
@@ -8110,6 +8728,9 @@
                   "type": "boolean"
                 }
               },
+              "steps": {
+                "type": "object"
+              },
               "last": {
                 "type": "string"
               },
@@ -8148,6 +8769,7 @@
             "text",
             "bytes",
             "message",
+            "agent",
             "at"
           ],
           "schema": {
@@ -8169,6 +8791,9 @@
                 "type": "integer"
               },
               "message": {
+                "type": "string"
+              },
+              "agent": {
                 "type": "string"
               },
               "at": {
@@ -8204,13 +8829,21 @@
       "tools": [
         {
           "name": "zoom",
-          "summary": "Open a line of the summarized conversation: zoom(id, n) with the line's id+n gives the two lines it was made from (n/2 messages each); zoom(id, 1) gives the message whole. Whenever you need something from earlier, find its latest mention in the summary and zoom until you have it whole, before you act, guess or ask.",
+          "summary": "Open a line of the summarized conversation: zoom(id, n) with the line's id+n gives the two lines it was made from (n/2 messages each); zoom(id, 1) gives the message whole. Lines of your own steps open the same way, their id as written (s12). Whenever you need something from earlier, find its latest mention in the summary and zoom until you have it whole, before you act, guess or ask.",
           "input": {
             "type": "object",
             "properties": {
               "id": {
-                "type": "integer",
-                "description": "The line's first message, as in id+n."
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^s?\\d+$"
+                  }
+                ],
+                "description": "The line's first message, as in id+n: 12, or s12 for your own steps."
               },
               "n": {
                 "type": "integer",
@@ -8301,7 +8934,7 @@
         "provides": {
           "tools": {
             "zoom": {
-              "description": "Open a line of the summarized conversation: zoom(id, n) with the line's id+n gives the two lines it was made from (n/2 messages each); zoom(id, 1) gives the message whole. Whenever you need something from earlier, find its latest mention in the summary and zoom until you have it whole, before you act, guess or ask."
+              "description": "Open a line of the summarized conversation: zoom(id, n) with the line's id+n gives the two lines it was made from (n/2 messages each); zoom(id, 1) gives the message whole. Lines of your own steps open the same way, their id as written (s12). Whenever you need something from earlier, find its latest mention in the summary and zoom until you have it whole, before you act, guess or ask."
             }
           }
         },
@@ -8374,9 +9007,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -8448,6 +9081,7 @@
             "email",
             "picture",
             "accounts",
+            "named",
             "at"
           ],
           "schema": {
@@ -8467,6 +9101,9 @@
                 "additionalProperties": {
                   "type": "string"
                 }
+              },
+              "named": {
+                "type": "string"
               },
               "at": {
                 "type": "string"
@@ -8534,6 +9171,35 @@
           "recorded": false,
           "private": [],
           "internal": true
+        },
+        {
+          "name": "person.rename",
+          "summary": "Sets the name you go by; an empty one clears it",
+          "input": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
         },
         {
           "name": "person.set",
@@ -8680,9 +9346,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -8976,9 +9642,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -9303,7 +9969,7 @@
         {
           "kind": "setting",
           "path": "mcp.<name>.origins",
-          "summary": "The browser origins it answers (`Origin`): none unless said (no browser calls MCP).",
+          "summary": "The browser origins it answers (`Origin`, or `\"*\"` for any): none unless said (no browser calls MCP).",
           "required": false,
           "type": "string[]"
         },
@@ -9470,7 +10136,7 @@
               "name": "origins",
               "type": "string[]",
               "optional": true,
-              "doc": "The browser origins it answers (`Origin`): none unless said (no browser calls MCP).",
+              "doc": "The browser origins it answers (`Origin`, or `\"*\"` for any): none unless said (no browser calls MCP).",
               "secret": false
             },
             {
@@ -9514,9 +10180,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -9773,7 +10439,7 @@
         },
         {
           "name": "recall",
-          "summary": "Search what you remember, by meaning and by words: about the people here, yourself, this conversation and everyone. Recall before answering about anything from earlier conversations, instead of guessing. It searches what was learned where this conversation is; when what you need isn't there (something the person keeps to themselves, another space), give `in`, a space you can read: what you find there marks your answer, so look only when you need to.",
+          "summary": "Search what you remember, by meaning and by words: about the people here, yourself, this conversation and everyone. Recall before you answer about anything from before, and before you say you don't know or don't have something, instead of guessing. It searches what was learned where this conversation is (in someone's own Personal space, everywhere they can read); when what you need isn't there (something the person keeps to themselves, another space), give `in`, a space you can read: what you find there marks your answer, so look only when you need to. Each memory says when and where it was learned: when you need more than it says, give `source`, its [id], to read what was said there.",
           "input": {
             "type": "object",
             "properties": {
@@ -9787,11 +10453,12 @@
               },
               "limit": {
                 "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "description": "A memory's [id]: what was said where it was learned, instead of a search."
               }
-            },
-            "required": [
-              "query"
-            ]
+            }
           }
         },
         {
@@ -9864,6 +10531,13 @@
         },
         {
           "kind": "setting",
+          "path": "memory.quiet",
+          "summary": "How long a conversation is quiet, in milliseconds, before what it said since its last extraction is read anyway (10 minutes); 0: only `every`.",
+          "required": false,
+          "type": "number"
+        },
+        {
+          "kind": "setting",
           "path": "memory.agents",
           "summary": "The agents with memory (all by default).",
           "required": false,
@@ -9900,7 +10574,7 @@
               "description": "Forget a memory that is wrong or no longer wanted, by its [id]."
             },
             "recall": {
-              "description": "Search what you remember, by meaning and by words: about the people here, yourself, this conversation and everyone. Recall before answering about anything from earlier conversations, instead of guessing. It searches what was learned where this conversation is; when what you need isn't there (something the person keeps to themselves, another space), give `in`, a space you can read: what you find there marks your answer, so look only when you need to."
+              "description": "Search what you remember, by meaning and by words: about the people here, yourself, this conversation and everyone. Recall before you answer about anything from before, and before you say you don't know or don't have something, instead of guessing. It searches what was learned where this conversation is (in someone's own Personal space, everywhere they can read); when what you need isn't there (something the person keeps to themselves, another space), give `in`, a space you can read: what you find there marks your answer, so look only when you need to. Each memory says when and where it was learned: when you need more than it says, give `source`, its [id], to read what was said there."
             },
             "remember": {
               "description": "Remember something worth knowing in later conversations: one self-contained statement naming who it is about, and why it matters if that isn't obvious. about: the person it concerns, by name (by default, the person you're talking with), \"me\" for a note to yourself, \"thread\" for this conversation only, or \"everyone\". core: true for what you should always have in mind about them (who they are, strong preferences). Remembering something you already know updates it; give the id to correct a specific memory."
@@ -9953,6 +10627,13 @@
               "secret": false
             },
             {
+              "name": "quiet",
+              "type": "number",
+              "optional": true,
+              "doc": "How long a conversation is quiet, in milliseconds, before what it said since its last extraction is read anyway (10 minutes); 0: only `every`.",
+              "secret": false
+            },
+            {
               "name": "agents",
               "type": "string[]",
               "optional": true,
@@ -9971,21 +10652,41 @@
     {
       "format": 1,
       "name": "memory-extraction",
-      "summary": "Memories that arrive on their own: the extractor model reads every few messages.",
+      "summary": "Memories that arrive on their own: the extractor model reads every few messages, and what a conversation said before going quiet.",
       "requires": [
         "memory",
         "models"
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
       "shared": [],
-      "actions": [],
+      "actions": [
+        {
+          "name": "memory.extract",
+          "summary": "Reads what a quiet conversation said since its last extraction",
+          "input": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        }
+      ],
       "tools": [],
       "views": [],
       "routes": [],
@@ -10056,9 +10757,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10109,9 +10810,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10173,9 +10874,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -10719,9 +11420,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10971,9 +11672,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -11589,13 +12290,17 @@
       "tools": [
         {
           "name": "cancel_routine",
-          "summary": "Delete one of this space's routines, by its [id] (from list_routines) or its name. Only its maker or a manager here may; the chats it posted in stay.",
+          "summary": "Delete one of this space's routines, by its [id] (from list_routines) or its name. Only its maker or a manager here may; the chats it posted in stay. In another space, give in (its id).",
           "input": {
             "type": "object",
             "properties": {
               "routine": {
                 "type": "string",
                 "minLength": 1
+              },
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
               }
             },
             "required": [
@@ -11605,10 +12310,15 @@
         },
         {
           "name": "list_routines",
-          "summary": "The routines in this space: what each sends, to whom, when it runs next.",
+          "summary": "The routines in this space: what each sends, to whom, when it runs next. In another space you can read, give in (its id).",
           "input": {
             "type": "object",
-            "properties": {}
+            "properties": {
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              }
+            }
           }
         },
         {
@@ -11630,7 +12340,7 @@
         },
         {
           "name": "schedule_routine",
-          "summary": "Make a routine: a message sent to an agent on a schedule, here, as the person you work for (\"every weekday at 9:00, ask @researcher for the news on X\", \"remind me every Monday to send the report\"). text is what's sent each time, written as the person would ask it; agent defaults to you. Give the person's timezone when you know it (ask when the time matters and you don't); without one, it's UTC. Where it posts: by default back in this chat (reminders, monitoring, anything that reads as one thread). Use post \"new\" when each run is its own piece of work to open later (a daily analysis), and give chat_name. Tell them what you set up, and where it posts.",
+          "summary": "Make a routine: a message sent to an agent on a schedule, here, as the person you work for (\"every weekday at 9:00, ask @researcher for the news on X\", \"remind me every Monday to send the report\"). text is what's sent each time, written as the person would ask it; agent defaults to you. Give the person's timezone when you know it (ask when the time matters and you don't); without one, it's UTC. Where it posts: by default back in this chat (reminders, monitoring, anything that reads as one thread). Use post \"new\" when each run is its own piece of work to open later (a daily analysis), and give chat_name. Tell them what you set up, and where it posts. In another space you can work in, give in (its id): a routine there starts a new chat there each run.",
           "input": {
             "type": "object",
             "properties": {
@@ -11700,6 +12410,10 @@
                 ],
                 "description": "same (default): always this chat; new: a new chat each run."
               },
+              "in": {
+                "type": "string",
+                "description": "Another space, by its id (your context lists them)."
+              },
               "chat_name": {
                 "type": "string",
                 "maxLength": 120,
@@ -11744,16 +12458,16 @@
           },
           "tools": {
             "cancel_routine": {
-              "description": "Delete one of this space's routines, by its [id] (from list_routines) or its name. Only its maker or a manager here may; the chats it posted in stay."
+              "description": "Delete one of this space's routines, by its [id] (from list_routines) or its name. Only its maker or a manager here may; the chats it posted in stay. In another space, give in (its id)."
             },
             "list_routines": {
-              "description": "The routines in this space: what each sends, to whom, when it runs next."
+              "description": "The routines in this space: what each sends, to whom, when it runs next. In another space you can read, give in (its id)."
             },
             "name_chat": {
               "description": "Name this chat for what you found, once you have: people pick a run from a list by its name (\"Nov 2 · Competitor cut 8%, we hold\"). One short line, with the conclusion."
             },
             "schedule_routine": {
-              "description": "Make a routine: a message sent to an agent on a schedule, here, as the person you work for (\"every weekday at 9:00, ask @researcher for the news on X\", \"remind me every Monday to send the report\"). text is what's sent each time, written as the person would ask it; agent defaults to you. Give the person's timezone when you know it (ask when the time matters and you don't); without one, it's UTC. Where it posts: by default back in this chat (reminders, monitoring, anything that reads as one thread). Use post \"new\" when each run is its own piece of work to open later (a daily analysis), and give chat_name. Tell them what you set up, and where it posts."
+              "description": "Make a routine: a message sent to an agent on a schedule, here, as the person you work for (\"every weekday at 9:00, ask @researcher for the news on X\", \"remind me every Monday to send the report\"). text is what's sent each time, written as the person would ask it; agent defaults to you. Give the person's timezone when you know it (ask when the time matters and you don't); without one, it's UTC. Where it posts: by default back in this chat (reminders, monitoring, anything that reads as one thread). Use post \"new\" when each run is its own piece of work to open later (a daily analysis), and give chat_name. Tell them what you set up, and where it posts. In another space you can work in, give in (its id): a routine there starts a new chat there each run."
             }
           }
         },
@@ -11778,9 +12492,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -11862,9 +12576,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -12239,6 +12953,10 @@
         {
           "name": "context:skills",
           "place": "prompt"
+        },
+        {
+          "name": "context:skillsGuide",
+          "place": "prompt"
         }
       ],
       "routes": [],
@@ -12261,7 +12979,8 @@
       "resources": {
         "provides": {
           "context": {
-            "skills": {}
+            "skills": {},
+            "skillsGuide": {}
           },
           "shared": {
             "skill": {},
@@ -12307,9 +13026,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -12384,9 +13103,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -12469,7 +13188,8 @@
             "member",
             "space",
             "role",
-            "on"
+            "on",
+            "contacts"
           ],
           "schema": {
             "type": "object",
@@ -12485,6 +13205,12 @@
               },
               "on": {
                 "type": "string"
+              },
+              "contacts": {
+                "type": "string",
+                "enum": [
+                  "read"
+                ]
               }
             },
             "required": [
@@ -12880,6 +13606,12 @@
               },
               "on": {
                 "type": "string"
+              },
+              "contacts": {
+                "type": "string",
+                "enum": [
+                  "read"
+                ]
               }
             },
             "required": [
@@ -13218,38 +13950,6 @@
               }
             },
             "required": [
-              "id"
-            ],
-            "additionalProperties": false
-          },
-          "recorded": true,
-          "private": [],
-          "callers": {
-            "person": "yes",
-            "agent": "no",
-            "contact": "no",
-            "anonymous": "no",
-            "key": "no",
-            "routine": "no",
-            "maintenance": "no"
-          },
-          "helper": "inPerson"
-        },
-        {
-          "name": "share",
-          "summary": "Shows a labelled document to everyone where it is",
-          "input": {
-            "type": "object",
-            "properties": {
-              "collection": {
-                "type": "string"
-              },
-              "id": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "collection",
               "id"
             ],
             "additionalProperties": false
@@ -13689,9 +14389,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -13781,9 +14481,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -13965,9 +14665,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -14191,9 +14891,9 @@
       "requires": [],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -14368,9 +15068,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [
         {
@@ -14760,9 +15460,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -14828,9 +15528,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -15083,9 +15783,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -15145,9 +15845,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [
         {
@@ -15402,9 +16102,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -15466,9 +16166,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -16185,9 +16885,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -16237,9 +16937,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -16292,9 +16992,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -17179,9 +17879,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -17703,9 +18403,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -17892,9 +18592,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -17973,9 +18673,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -18243,9 +18943,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [
         {
@@ -19504,9 +20204,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.34"
+        "version": "1.0.0-rc.45"
       },
-      "runtime": "1.0.0-rc.34",
+      "runtime": "1.0.0-rc.45",
       "layer": "standard",
       "keeps": [],
       "indexes": [],

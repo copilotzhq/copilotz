@@ -20,8 +20,7 @@ same, as data.
 - [`api-web`](plugins/api-web.md): The developer API's web front end, for the browser.
 - [`chat`](plugins/chat.md): Chat: threads where people and agents talk.
 - [`chat-terminal`](plugins/chat-terminal.md): Chat's terminal front end, for the process that draws
-  the terminal: how a conversation, a message, its author and a reply being written look there, and
-  chat's commands.
+  the terminal.
 - [`chat-web`](plugins/chat-web.md): Chat's web front end, for the browser: home (a new chat), how a
   chat looks with what agents are writing right now, a message and its files, where you type, and at
   the top of the sidebar, starting one.
@@ -45,7 +44,7 @@ same, as data.
   app's tools.
 - [`memory`](plugins/memory.md): Memory: what agents know across conversations.
 - [`memory-extraction`](plugins/memory-extraction.md): Memories that arrive on their own: the
-  extractor model reads every few messages.
+  extractor model reads every few messages, and what a conversation said before going quiet.
 - [`memory-terminal`](plugins/memory-terminal.md): Memory's terminal front end: how a memory looks
   there, and `/memories`.
 - [`memory-web`](plugins/memory-web.md): Memory's web front end, for the browser: what agents

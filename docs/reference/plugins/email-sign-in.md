@@ -69,7 +69,7 @@ the secret."
 
 The runtime doesn't start without [`identity`](identity.md) and [`email`](email.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.45`.
 
 ## What it does on its own
 

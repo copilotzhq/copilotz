@@ -97,7 +97,7 @@ You set it in `resources.voice`: 4 settings are required, and 1 is a secret, kep
 The runtime doesn't start without [`chat`](chat.md), [`spaces`](spaces.md) and
 [`contacts`](contacts.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.45`.
 
 ## What it does on its own
 

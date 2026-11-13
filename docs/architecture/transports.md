@@ -84,7 +84,7 @@ The runtime checks the scope only where a call comes in, never inside the work i
 
 Since 1.0.0-rc.32, a key can't call what only its person decides. Those Actions say `inPerson`,
 which never lets in a key, an agent or a routine's work: `space.create`, `member.set`, invitations,
-`share`, `chat.move`, `agent.create` and the rest. Listing one in a key's scope changes nothing.
+`chat.move`, `agent.create` and the rest. Listing one in a key's scope changes nothing.
 
 `connect(url, { key })` is the client for scripts. It joins over the socket with a ticket, or over
 the REST API with `over: "http"`, and the rest of the script is the same either way. Its collections

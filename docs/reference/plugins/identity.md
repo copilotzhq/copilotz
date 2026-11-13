@@ -19,10 +19,10 @@ import { identity } from "copilotz/plugins/access";
 
 It keeps 2 collections, each on the record: every change to one is an event.
 
-| Collection   | Kept as   | Fields                                             |
-| ------------ | --------- | -------------------------------------------------- |
-| `credential` | documents | `kind`, `person`, `hint`, `expires`, `staff`, `at` |
-| `person`     | documents | `name`, `email`, `picture`, `accounts`, `at`       |
+| Collection   | Kept as   | Fields                                                |
+| ------------ | --------- | ----------------------------------------------------- |
+| `credential` | documents | `kind`, `person`, `hint`, `expires`, `staff`, `at`    |
+| `person`     | documents | `name`, `email`, `picture`, `accounts`, `named`, `at` |
 
 Its named queries read for callers, as the rules let them:
 
@@ -33,11 +33,12 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 5 Actions, people may call 1; agents, contacts and someone signed out may call none.
+Of its 6 Actions, people may call 2; agents, contacts and someone signed out may call none.
 
-| Action        | Person | Agent | Contact | Anyone | Key | Routine | What it does                            |
-| ------------- | ------ | ----- | ------- | ------ | --- | ------- | --------------------------------------- |
-| `session.end` | yes    | no    | no      | no     | no  | no      | Ends the session whose secret is shown. |
+| Action          | Person | Agent | Contact | Anyone | Key | Routine | What it does                                     |
+| --------------- | ------ | ----- | ------- | ------ | --- | ------- | ------------------------------------------------ |
+| `person.rename` | yes    | no    | no      | no     | no  | no      | Sets the name you go by; an empty one clears it. |
+| `session.end`   | yes    | no    | no      | no     | no  | no      | Ends the session whose secret is shown.          |
 
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.
@@ -66,7 +67,7 @@ Nothing to set: it works as it comes.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.34`.
+It ships with `copilotz@1.0.0-rc.45`.
 
 ## Listing
 

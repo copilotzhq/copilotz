@@ -290,9 +290,10 @@ Test what callers may not do as well: call as someone else, and `assert.rejects`
   live `in` a space; `part` ties one to another document, as a booking to its chat), or write a
   `guard`. Don't filter by who's asking inside an Action. To keep a collection changing only through
   its Actions, refuse `direct` writes in a `guard`.
-- **Say `allow` on every Action outsiders call:** `people`, `contacts`, `peopleOrContacts`, or
-  `inPerson` for what only the person decides (consent, keys, who's in a space, money). It's asked
-  of agents too, and of whom they work for. An Action without `allow` is internal.
+- **Say `allow` on every Action outsiders call:** `people`, `contacts`, `peopleOrContacts`,
+  `publicCallers`, or `inPerson` for what only the person decides (consent, keys, who's in a space,
+  money). Write it by kind, never by identity. It's asked of agents too, and of whom they work for.
+  An Action without `allow` is internal.
 - **A View for whatever anyone reads, a model included.** Each tool gets a `tool:<name>` View: short
   text, with ids the model can act on. A failed call's output is its error's words; pass them on,
   don't throw. An MCP server that offers a tool without its View doesn't start.
@@ -308,6 +309,16 @@ Test what callers may not do as well: call as someone else, and `assert.rejects`
   A tool works where its chat is.
 - **Going past the actor's reach is a named grant,** `ctx.as(grant("…"))`, in trusted code, on the
   record. Keys stay in code: never in Action inputs (they're recorded), never with a model.
+- **An agent tells a conversation only what everyone in it could see.** Its work reads what both its
+  asker and the place its answer goes reach: a space and what it draws on; a customer's chat, what
+  that customer reaches (a space drawing on another with `contacts: "read"` lets them read it); its
+  person's Personal space, all they reach. Writing anywhere its readers don't all reach that asks
+  the person first (`needs_approval`): don't catch it, let it through to the turn.
+- **A tool that goes past its caller, offered to a contact or the public, is a declassifier.** Scope
+  it to them (their own bookings, never any record), take no free-form query that could widen it,
+  and return only what they may see. In a customer's chat, an Action people call that goes past its
+  caller is refused; the app's own (no `allow`) runs as its tool chose. The public (`publicCallers`,
+  `{ kind: "public" }`) reads only spaces that have it as a viewer, and writes nothing.
 - **Outside effects:** write the intent, call out with its id as the idempotency key (a tool's
   `callId`), then write the result.
 - **Online:** `devSignIn` is for this machine only; Copilotz won't start it with a public origin.

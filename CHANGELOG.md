@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.49 — 2026-11-13
 
 **Breaking: hosted computers and apps are Compass's, not Copilotz's.** `cloud`, `cloudPool`,
 `remotePool`, `apps`, `cloudWeb`, `appsWeb` and their hosts (`gceHost`, `localHost` and

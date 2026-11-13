@@ -204,7 +204,7 @@ test("releases: a binary per platform, by name; which version is newer; the line
     "1.0.0-beta",
     "1.0.0-rc.1",
     "1.0.0-rc.2",
-    "1.0.0-rc.48",
+    "1.0.0-rc.49",
     "1.0.0",
     "1.0.1",
     "1.1.0",

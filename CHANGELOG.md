@@ -1,3 +1,11 @@
+## 1.0.0-rc.48 — 2026-11-13
+
+- **Oxian 0.23.6:** each end of a worker connection keeps about 70 bytes per finished stream instead
+  of about 170, for the connection's life (its handoff, at about 49,000 streams). A public MCP app,
+  whose Hypervisor and worker share a process, keeps about 0.2 MiB less heap per 1,000 calls.
+- `copilotz/testing`'s `host()` on Deno loaded Oxian 0.23.4's adapter beside the runtime's own
+  Oxian; it now names the same version.
+
 ## 1.0.0-rc.47 — 2026-11-13
 
 (rc.46 was tagged but never published: a file wasn't formatted, and a test read Windows line endings

@@ -4,7 +4,7 @@ A guide for coding agents (Claude Code, Codex, Cursor, Gemini) building an app w
 it whole before you write code. The last section is for work on Copilotz itself.
 
 It ships in the package (`node_modules/copilotz/AGENTS.md`, and `@copilotz/copilotz` on JSR) and
-goes with `copilotz@1.0.0-rc.47`. Every docs page is Markdown at
+goes with `copilotz@1.0.0-rc.48`. Every docs page is Markdown at
 `https://copilotz.com/docs/<slug>.md`, and https://copilotz.com/llms.txt lists them all. When you're
 unsure of a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`).
 Don't guess.
@@ -64,12 +64,12 @@ There's no project generator. Set a project up as the docs' courses do, on Node 
 ```sh
 mkdir my-app && cd my-app
 npm init -y && npm pkg set type=module
-npm install copilotz@1.0.0-rc.47 react@19 react-dom@19
+npm install copilotz@1.0.0-rc.48 react@19 react-dom@19
 npm install -D typescript @types/node @types/react @types/react-dom esbuild
 ```
 
 Pin the version: npm's `latest` tag still points at an early release candidate. On Deno, run
-`deno add jsr:@copilotz/copilotz` and map `"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.47"` in
+`deno add jsr:@copilotz/copilotz` and map `"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.48"` in
 `deno.json`, so imports read the same.
 
 Node runs `.ts` files as they are, so there's no build step. It doesn't run `.tsx`: tests that load
@@ -108,7 +108,7 @@ line `@AGENTS.md` (Claude Code reads `CLAUDE.md`, and follows the import). Keep 
 ```markdown
 # AGENTS.md
 
-This app runs on Copilotz (copilotz@1.0.0-rc.47). Read node_modules/copilotz/AGENTS.md first;
+This app runs on Copilotz (copilotz@1.0.0-rc.48). Read node_modules/copilotz/AGENTS.md first;
 https://copilotz.com/llms.txt lists the docs, as Markdown.
 
 - `npm test` runs every test offline, with a scripted model: run it after each change.

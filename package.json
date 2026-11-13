@@ -1,6 +1,6 @@
 {
   "name": "copilotz",
-  "version": "1.0.0-rc.47",
+  "version": "1.0.0-rc.48",
   "private": true,
   "type": "module",
   "description": "The open-source runtime that makes your app usable by people, your own agents and their assistants.",
@@ -80,7 +80,7 @@
     "@cfworker/json-schema": "4.1.1",
     "@inkjs/ui": "2.0.0",
     "@oxian/ominipg": "npm:@jsr/oxian__ominipg@0.11.2",
-    "@oxian/oxian-js": "npm:oxianjs@0.23.5",
+    "@oxian/oxian-js": "npm:oxianjs@0.23.6",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
     "croner": "10.0.1",

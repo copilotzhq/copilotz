@@ -1,4 +1,4 @@
-## 1.0.0-rc.46 (in progress)
+## 1.0.0-rc.46 — 2026-11-13
 
 **Breaking: what an agent may say is bounded by who will see it.** The old labels (marks on answers,
 hidden until shared) are gone, along with the `share` Action, `needs_share`, message `sources`, the

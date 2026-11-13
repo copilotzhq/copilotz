@@ -9917,6 +9917,41 @@
           "recorded": false,
           "private": [],
           "internal": true
+        },
+        {
+          "name": "mcp.public",
+          "summary": "One call to one of a public server's tools, as the public (MCP): kept nowhere",
+          "input": {
+            "type": "object",
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "input": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "line",
+              "tool",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "no",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          }
         }
       ],
       "tools": [],
@@ -9941,7 +9976,7 @@
         {
           "kind": "setting",
           "path": "mcp.<name>.in",
-          "summary": "The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or not).",
+          "summary": "The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or not); on a public server, the space its tools work in (`ctx.in`).",
           "required": true,
           "type": "string"
         },
@@ -9989,6 +10024,13 @@
         },
         {
           "kind": "setting",
+          "path": "mcp.<name>.public",
+          "summary": "A public server, which keeps nothing: each call runs its tool as the public (`{ kind: \"public\" }`, whom `publicCallers` lets in), with no contact, chat or step, and only the tools that only read (`annotations.readOnly`) are offered. What they read is what the public reaches: the spaces that have it as a viewer (`member.set` with `{ kind: \"public\" }`), those alone, and nothing it writes lands. No conversation, so no `chat` handle, no widgets, and calls are limited by the caller's address and on the whole server (`ipPerMinute`, `linePerMinute`), in memory of a fixed size. A server is public or keeps conversations: to offer both, declare two. Off unless said.",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "kind": "setting",
           "path": "mcp.<name>.origins",
           "summary": "The browser origins it answers (`Origin`, or `\"*\"` for any): none unless said (no browser calls MCP).",
           "required": false,
@@ -10004,7 +10046,7 @@
         {
           "kind": "setting",
           "path": "mcp.<name>.limits",
-          "summary": "Its widgets (with the app's `widgets` resource, `widgetsOf`): the template's options. A server whose tools name a `widget`, or that offers Actions, offers widgets, and the widgets' read tool (`READ`: what a widget reads that its snapshot didn't have).",
+          "summary": "What it takes before it says no, over the defaults (`MCP_LIMITS`): see `McpLimits`.",
           "required": false,
           "type": "Partial<McpLimits>"
         },
@@ -10108,7 +10150,7 @@
               "name": "in",
               "type": "string",
               "optional": false,
-              "doc": "The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or not).",
+              "doc": "The space its conversations' chats live in (declared with the spaces plugin's `spaces`, or not); on a public server, the space its tools work in (`ctx.in`).",
               "secret": false
             },
             {
@@ -10154,6 +10196,13 @@
               "secret": false
             },
             {
+              "name": "public",
+              "type": "boolean",
+              "optional": true,
+              "doc": "A public server, which keeps nothing: each call runs its tool as the public (`{ kind: \"public\" }`, whom `publicCallers` lets in), with no contact, chat or step, and only the tools that only read (`annotations.readOnly`) are offered. What they read is what the public reaches: the spaces that have it as a viewer (`member.set` with `{ kind: \"public\" }`), those alone, and nothing it writes lands. No conversation, so no `chat` handle, no widgets, and calls are limited by the caller's address and on the whole server (`ipPerMinute`, `linePerMinute`), in memory of a fixed size. A server is public or keeps conversations: to offer both, declare two. Off unless said.",
+              "secret": false
+            },
+            {
               "name": "origins",
               "type": "string[]",
               "optional": true,
@@ -10171,7 +10220,7 @@
               "name": "limits",
               "type": "Partial<McpLimits>",
               "optional": true,
-              "doc": "Its widgets (with the app's `widgets` resource, `widgetsOf`): the template's options. A server whose tools name a `widget`, or that offers Actions, offers widgets, and the widgets' read tool (`READ`: what a widget reads that its snapshot didn't have).",
+              "doc": "What it takes before it says no, over the defaults (`MCP_LIMITS`): see `McpLimits`.",
               "secret": false
             },
             {

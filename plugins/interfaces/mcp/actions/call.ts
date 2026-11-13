@@ -77,6 +77,7 @@ import { runTool } from "../../../agents/chat/contract.ts";
 import { RERUN_MS, RESEND_MS } from "../collections/receipt.ts";
 import { sameCallOf, threadOf } from "../shared/keys.ts";
 import { appOnly, hintsOf, READ, type Server, serverOf } from "../shared/settings.ts";
+import { FAILED, shown, toldOf } from "../shared/shown.ts";
 import type { Offering } from "../views/offered.ts";
 
 /**
@@ -107,8 +108,7 @@ const SAID = {
   unknown:
     "That chat handle isn't one this app gave: leave `chat` out to start a new conversation.",
   unoffered: "That tool isn't offered here.",
-  failed: "Something went wrong running that tool. Try again in a moment.",
-  hidden: "It ran, but what it returned can't be shown.",
+  failed: FAILED,
 } as const;
 
 /** Writes whose answer isn't needed: a transaction of only these is one command, never held. */
@@ -401,29 +401,6 @@ async function offered(ctx: Context, line: Server, tool: string, thread: Thread)
     viewer: { kind: "agent", name: line.client },
   });
   return Array.isArray(names) && names.includes(tool);
-}
-
-/** What a failed call tells the caller: a public failure's message, else only that it failed. */
-const toldOf = (error: unknown): string =>
-  isPublic(error) && error instanceof Error && error.message
-    ? error.message.slice(0, 1_000)
-    : SAID.failed;
-
-/**
- * What a call's result reads as to the app's agents, read as the contact:
- * its tool's View, never the output as it is; a View that fails, or says
- * nothing, hides it.
- */
-async function shown(ctx: Context, line: Server, step: Step): Promise<string> {
-  try {
-    const text = await ctx.render(`tool:${step.name}`, step, {
-      viewer: { kind: "agent", name: line.client },
-    });
-    return typeof text === "string" ? text : SAID.hidden;
-  } catch (error) {
-    console.error(`mcp.${line.name}: tool:${step.name} failed to show:`, (error as Error).message);
-    return SAID.hidden;
-  }
 }
 
 /** A call answered lately, answered again: what it said, kept, else shown again from its step. */

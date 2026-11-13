@@ -52,6 +52,7 @@ import {
   appOnly,
   hasWidgets,
   hintsOf,
+  publicOf,
   READ,
   type Server,
   visibilityOf,
@@ -100,13 +101,16 @@ export function offeredOf(
 const LISTED_MS = 60_000;
 const listings = new WeakMap<object, Map<string, { at: number; names: Promise<string[]> }>>();
 
-/** What a stand-in contact, in no chat yet, is offered of `names`. */
+/**
+ * What a stand-in contact, in no chat yet, is offered of `names`; on a public server, what the
+ * public is (who every call there is).
+ */
 async function standIn(
   runtime: Pick<Runtime, "observe">,
   line: Server,
   names: string[],
 ): Promise<string[]> {
-  const actor: Actor = {
+  const actor: Actor = line.public ? publicOf(line) : {
     kind: "contact",
     id: "c-mcp-listing",
     mcp: line.name,

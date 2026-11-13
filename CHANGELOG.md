@@ -69,6 +69,16 @@ hidden until shared) are gone, along with the `share` Action, `needs_share`, mes
     `--v8-flags=--max-semi-space-size=2` on Deno), took 55 to 110 MiB off the peak over 1,000 calls.
   - The suite holds the docs app's shape to a memory budget on Deno and Node
     (`bench/memory/budget.test.ts`).
+- **A public MCP server keeps nothing** (`public: true` on `resources.mcp.<name>`, for a docs
+  site's): each call runs its tool as the public, with no contact, chat, step, receipt or event. It
+  lists only the tools that only read (`annotations.readOnly`), with no `chat` handle, and reads
+  what the spaces that have the public as a viewer hold. Calls are limited at once, a minute by
+  address (as the `caller` front says it, else the socket) and on the whole server (`ipPerMinute`,
+  `linePerMinute`), in memory of a fixed size, and stopped past `timeout`. The docs app's shape,
+  1,000 calls without a handle: from 5 documents and 17 events a call to none, from 31.7 KB of heap
+  kept a call to 1.5, and a peak of 261 MiB to 119, on Node 24 (on Deno 2.9: 25.7 KB to 1.0, 195 MiB
+  to 113). A tool offered there that goes past the public's reach is a declassifier (see the `mcp`
+  reference).
 - **New entry points, one per plugin:** `copilotz/plugins/agents/<name>` (`chat`, `history`,
   `memory`, `skills`, `routines`, `openapi`, `webtools`), `copilotz/plugins/access/<name>`
   (`spaces`, `identity`, `contacts`, `google`, `email`, `dev`, `accounts`) and

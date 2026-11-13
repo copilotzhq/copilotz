@@ -33,6 +33,10 @@ const files = [
   "plugins/compute/tests/program-platform.test.ts",
   "README.md",
   "AGENTS.md",
+  // The agent plugin's manifests (skills/copilotz and the docs MCP).
+  ".claude-plugin/plugin.json",
+  "plugin.json",
+  "gemini-extension.json",
   ...packages.flatMap((dir) => [`${dir}/deno.json`, `${dir}/package.json`]),
 ];
 const quoted = (version: string) => version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

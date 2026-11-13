@@ -6,6 +6,10 @@ its credits and Stripe, its agents people make). An app that wanted none of thos
 and the core's own front ends imported the directory's. Now there are three layers, the product
 plugins are packages of their own in this repo, and the core imports none of them.
 
+2026-11-13: hosting computers and apps left Copilotz for Compass (private): `cloud`, `cloudPool` and
+`apps`, with their hosts (Compute Engine, Cloud Run). Computers people connect, the computer
+program, its downloads and connected accounts stay, as standard plugins.
+
 ## Three layers
 
 1. **The runtime:** `runtime/`, the stores and blobs, the exporters, `testing/`, and the web and
@@ -32,21 +36,29 @@ plugins are packages of their own in this repo, and the core imports none of the
 | `webShell`, `terminalShell`, `webLines`, `mcp`, `whatsapp`, `voice`, `maintenance`                     | standard              | the media the promise names, and running the app                                                                              |
 | `models`, `chat`, `history`, `memory`, `memoryExtraction`, `skills`, `routines`, `webTools`, `openapi` | standard              | agents and conversations: the promise                                                                                         |
 | `usage`                                                                                                | standard              | every use is metered and on the record; it's also the port pricing plugs into (`spending`, the `usage` resource's `spent`)    |
-| `computers`, `cloud`, `cloudPool`, `apps`, `computerDownloads`, `accounts`                             | standard, for now     | **moving to Compass (private) later**: see below                                                                              |
+| `computers`, `computerDownloads`, `accounts`                                                           | standard              | agents work on the machines people bring, and with the accounts they connect; no hosting model, no pricing                    |
 | `boards`, `documents`                                                                                  | `@copilotz/work`      | one product's way of working together; most apps don't                                                                        |
 | `directory`                                                                                            | `@copilotz/directory` | many orgs behind one address is a hosting model; most apps serve one org                                                      |
 | `credits`, `stripe`, `stripeWebhook`                                                                   | `@copilotz/billing`   | a business's pricing: plans, credits, a payment provider                                                                      |
 | `team`, `tiers`                                                                                        | `@copilotz/team`      | agents people make, and model tiers sold by plan: product policy; the app's agents in code are chat's                         |
+| `cloud`, `cloudPool`, `apps`                                                                           | Compass (private)     | computers and apps one product hosts, on Google Cloud (`*.copilotz.app`), and prices                                          |
 
 Each package's front ends go with it: `boardsWeb` and `documentsWeb`, `directoryWeb`, `creditsWeb`,
 `teamWeb` and `tiersWeb`.
 
-**Computers, cloud computers, apps, the computer program's downloads and connected accounts stay for
-now,** marked as moving to Compass (private) later. They fail the test (they're one product's way to
-give agents a machine), but the computer program's binaries are built on a Mac in the publish
-workflow and served from Copilotz's public GitHub releases (`computerDownloads()` reads its own
-release), so moving them needs its own plan: where the program is built, signed and released, and
-how computers already installed find their updates.
+**Computers people connect, the computer program, its downloads and connected accounts are
+standard;** hosting them isn't. They were marked as moving to Compass with cloud computers and apps,
+but they pass the test: a machine or a plan the person brings carries no product's policy, and the
+computer program's binaries are built on a Mac in the publish workflow and served from Copilotz's
+public GitHub releases (`computerDownloads()` reads its own release), where computers already
+installed find their updates. Cloud computers, their pools and published apps fail it (a hosting
+model, Google Cloud's, and its prices), so they're Compass's: its `plugins/cloud` and
+`plugins/apps`, with the same plugin, collection, Action and route names, built on Copilotz's entry
+points. What they need of computers is in computers' contract (`copilotz/plugins/compute/contract`):
+the work a computer serves, and the program's pool mode (`POOL`, `PoolAssign`, `PoolRelease`), which
+a hosted computer's VM runs (`computer pool`). Its code is `copilotz/plugins/compute/program`
+(`startPool`), for a local host's VMs and tests. Google's tokens (`googleToken`) stay with
+`copilotz/plugins/compute`, which Cloud Storage's blobs use too.
 
 ## The directory, decoupled
 
@@ -164,8 +176,6 @@ On Deno, an app names each in its import map beside Copilotz, at the same versio
 
 ## Open
 
-- **Computers, cloud computers, apps, downloads and accounts to Compass:** their own plan (the
-  program's build, signing and releases).
 - **Versions apart** once past the release candidates, if a package changes faster than Copilotz.
 - **Routes under a name for official packages:** only where an app's address space would gain from
   it, with redirects; none is planned.

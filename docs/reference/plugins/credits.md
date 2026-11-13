@@ -80,7 +80,7 @@ It also reads `directory` and `org`, resource kinds the app and other plugins fi
 
 The runtime doesn't start without [`usage`](usage.md): add it too.
 
-It ships in a package of its own, `@copilotz/billing@1.0.0-rc.45`, for `copilotz` `1.0.0-rc.45`:
+It ships in a package of its own, `@copilotz/billing@1.0.0-rc.47`, for `copilotz` `1.0.0-rc.47`:
 install it beside `copilotz`.
 
 ## What it does on its own

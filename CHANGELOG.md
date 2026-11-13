@@ -1,3 +1,27 @@
+## 1.0.0-rc.49 — 2026-11-13
+
+**Breaking: hosted computers and apps are Compass's, not Copilotz's.** `cloud`, `cloudPool`,
+`remotePool`, `apps`, `cloudWeb`, `appsWeb` and their hosts (`gceHost`, `localHost` and
+`createLocalHost`, `cloudRun`, `cloudRunHost`, `localApps`) are no longer in
+`copilotz/plugins/compute` or `/web`, nor their contracts in `/contract`: a hosting model (Google
+Cloud's, `*.copilotz.app`) and its prices are one product's (see design/plugins.md). Compass keeps
+them, with the same names, so its data and routes don't change.
+
+Computers people connect stay, as standard plugins, with the computer program and its downloads
+(`computers`, `computersWeb`, `computersTerminal`, `computerDownloads`), and so do connected
+accounts (`accounts`, `accountsWeb`); their reference pages are now published.
+
+- **The program's pool mode** (`computer pool`, what a hosted computer's VM runs) is part of
+  computers' contract: `POOL`, `POOL_KIND`, `PoolAssign` and `PoolRelease`, from
+  `copilotz/plugins/compute/contract` (they were cloud's). Its code is a new entry point,
+  `copilotz/plugins/compute/program` (`startPool`), for an app's local VMs and tests.
+- **Google's tokens** stay: `googleToken`, and now `verifyIdentityToken` (who a Compute Engine VM
+  is), from `copilotz/plugins/compute`.
+- Computers' contract also has `TerminalResult` (what a `terminal` call answers), and
+  `copilotz/testing` has Oxian's `createWorker`, so an app's tests fake a computer on the same Oxian
+  as its runtime.
+- `scripts/cloud/` (setting up Google Cloud for cloud computers) went with them.
+
 ## 1.0.0-rc.48 — 2026-11-13
 
 - **Oxian 0.23.6:** each end of a worker connection keeps about 70 bytes per finished stream instead

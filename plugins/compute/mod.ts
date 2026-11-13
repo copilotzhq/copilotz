@@ -1,13 +1,10 @@
-/** Compute: computers people connect, those the app hosts (cloud), what agents do on them, and the apps they publish. */
+/** Compute: computers people connect, and what agents do on them. */
 export * from "./computers/mod.ts";
-export * from "./cloud/mod.ts";
-export * from "./apps/mod.ts";
-/** Hosts: Compute Engine for cloud computers, Cloud Run (and a local one) for apps, and Google's tokens they use. */
-export { gceHost, type GceOptions } from "./cloud/adapters/gce/index.ts";
-export { type GoogleAuthOptions, googleToken } from "./cloud/shared/google.ts";
-export { cloudRun, cloudRunHost, type CloudRunOptions } from "./apps/adapters/cloudrun.ts";
+/** Google's tokens, without its SDKs (for Google Cloud Storage's blobs, say), and who a Compute Engine VM is. */
 export {
-  type LocalHost as LocalApps,
-  localHost as localApps,
-  type LocalHostOptions as LocalAppsOptions,
-} from "./apps/adapters/local.ts";
+  type ComputeEngine,
+  type GoogleAuthOptions,
+  googleToken,
+  verifyIdentityToken,
+  type VerifyOptions,
+} from "./google.ts";

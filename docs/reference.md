@@ -16,19 +16,19 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.48   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.49   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
 `deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
 the version.
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.48"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.49"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
 too, at Copilotz's version (`npm install @copilotz/work@next`,
-`deno add jsr:@copilotz/work@^1.0.0-rc.48`): see [Product packages](#product-packages).
+`deno add jsr:@copilotz/work@^1.0.0-rc.49`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -56,10 +56,11 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/billing`             | `usage`: the ledger, and the port an app's pricing plugs into (`spending`)                                                                                |
 | `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                                                                |
 | `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                                                           |
-| `copilotz/plugins/compute`             | `computers` (people's machines, where agents work), `cloud`, `apps`, and their hosts                                                                      |
-| `copilotz/plugins/compute/web`         | `computersWeb`, `cloudWeb`, `appsWeb`                                                                                                                     |
+| `copilotz/plugins/compute`             | `computers` (people's machines, where agents work), and `googleToken` (Google's tokens, for Cloud Storage's blobs)                                        |
+| `copilotz/plugins/compute/web`         | `computersWeb`                                                                                                                                            |
 | `copilotz/plugins/compute/terminal`    | `computersTerminal`                                                                                                                                       |
 | `copilotz/plugins/compute/downloads`   | `computerDownloads`: the computer program's release, served by the app (Node)                                                                             |
+| `copilotz/plugins/compute/program`     | `startPool`: the computer program's pool mode, in a process of the app's own (for an app that hosts computers)                                            |
 | `copilotz/plugins/interfaces`          | `terminalPlugin` (the terminal's data), `api`, `whatsapp`, `voice`, `mcp`, `webLines` (site chats), `maintenance`                                         |
 | `copilotz/plugins/interfaces/web`      | `webShell` (the web's root View), `apiWeb`, `whatsappWeb`                                                                                                 |
 | `copilotz/plugins/interfaces/terminal` | `terminalShell`: the terminal's root View                                                                                                                 |
@@ -73,7 +74,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)                                          |
 | `copilotz/terminal`                    | the terminal host, `terminal({ runtime, me })`, and its toolkit                                                                                           |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                                                                  |
-| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`, `openTo`…                                               |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`, `openTo`, `createWorker`…                               |
 | `copilotz/testing/words`               | testing a front end's words (`pseudoWords`, `englishLeft`), and listing them (`wordsList`)                                                                |
 | `copilotz/describe`                    | `describe(plugin)`: what a plugin declares, as JSON                                                                                                       |
 
@@ -87,7 +88,7 @@ same plugin, with less code in the server's memory.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.48` goes with `copilotz@1.0.0-rc.48`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.49` goes with `copilotz@1.0.0-rc.49`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.
@@ -674,7 +675,10 @@ shows, what it needs, and what it builds on. [The index](reference/plugins.md) l
   [`contacts`](reference/plugins/contacts.md) ([web](reference/plugins/contacts-web.md)),
   [`googleSignIn`](reference/plugins/google-sign-in.md),
   [`emailSignIn`](reference/plugins/email-sign-in.md), [`email`](reference/plugins/email.md),
-  [`devSignIn`](reference/plugins/dev-sign-in.md).
+  [`devSignIn`](reference/plugins/dev-sign-in.md), [`accounts`](reference/plugins/accounts.md)
+  ([web](reference/plugins/accounts-web.md)).
+- **Computers:** [`computers`](reference/plugins/computers.md)
+  ([web](reference/plugins/computers-web.md), [terminal](reference/plugins/computers-terminal.md)).
 - **Billing:** [`usage`](reference/plugins/usage.md) ([web](reference/plugins/usage-web.md),
   [terminal](reference/plugins/usage-terminal.md)).
 - **The doors:** [`webPage`](reference/plugins/web-page.md),
@@ -699,5 +703,4 @@ From the [product packages](#product-packages):
   ([web](reference/plugins/credits-web.md)), [`stripe`](reference/plugins/stripe.md),
   [`stripeWebhook`](reference/plugins/stripe-webhook.md).
 
-The compute plugins (`computers`, `cloud`, `apps`) and `accounts` have no page here.
 [Installing a computer](guides/installing-a-computer.md) covers what an app serves for computers.

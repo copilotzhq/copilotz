@@ -14,6 +14,9 @@ same, as data.
 
 ## In `copilotz`
 
+- [`accounts`](plugins/accounts.md): Connected accounts: a person connects an outside account once,
+  and agents working for them use it.
+- [`accounts-web`](plugins/accounts-web.md): Connected accounts' web front end, for the browser.
 - [`api`](plugins/api.md): Developer keys: what code calls the app with, as someone, over the
   runtime's REST API (`/api/`) or its socket (see runtime/api.ts and runtime/client.ts):
   `Authorization: Bearer <key>`.
@@ -24,6 +27,12 @@ same, as data.
 - [`chat-web`](plugins/chat-web.md): Chat's web front end, for the browser: home (a new chat), how a
   chat looks with what agents are writing right now, a message and its files, where you type, and at
   the top of the sidebar, starting one.
+- [`computers`](plugins/computers.md): Computers: people connect a machine (the computer program,
+  run once, with a one-time code) to a space, and the agents of that space's conversations work on
+  it.
+- [`computers-terminal`](plugins/computers-terminal.md): Computers' terminal front end: `/computers`
+  and `/computer`.
+- [`computers-web`](plugins/computers-web.md): Computers' web front end, for the browser.
 - [`contacts`](plugins/contacts.md): Contacts: people outside the org who talk to its agents, such
   as a WhatsApp customer writing to a business's number.
 - [`contacts-web`](plugins/contacts-web.md): Contacts on the web: their names, wherever a page shows

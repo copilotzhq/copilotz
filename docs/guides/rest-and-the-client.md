@@ -103,7 +103,6 @@ the person decides is `inPerson`, and that never lets a key in, even when its sc
 | `credits`   | `billing.setPlan`, `billing.grant`, `billing.waive`, `billing.pay`, `billing.budget`, `billing.redeem`                                                                                                                            |
 | `stripe`    | `billing.checkout`, `billing.portal`                                                                                                                                                                                              |
 | `computers` | `computer.code`, `computer.work`, `computer.allowOrigin`                                                                                                                                                                          |
-| `apps`      | `app.publish`                                                                                                                                                                                                                     |
 | `voice`     | `voice.block`, `voice.unblock`                                                                                                                                                                                                    |
 | `whatsapp`  | `whatsapp.connect`, `whatsapp.credentials`, `whatsapp.set`, `whatsapp.move`, `whatsapp.link`, `whatsapp.unlink`, `whatsapp.block`, `whatsapp.disconnect`, `whatsapp.webhook`                                                      |
 

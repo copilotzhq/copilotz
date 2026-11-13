@@ -4,7 +4,8 @@
  * - **standard:** with `copilotz` itself;
  * - **package:** in a product package of its own, in this repository
  *   (`packages/<name>`, `@copilotz/<name>`: see design/plugins.md);
- * - **private:** moving to Compass, so never on the public pages.
+ * - **private:** an app's own, never on the public pages (none now: hosted
+ *   computers and apps went to Compass, which Copilotz doesn't export).
  *
  * Plugins are found in the entry points (Copilotz's `deno.json`'s `exports`,
  * and each package's): a plugin no layer names stops the docs from being
@@ -32,7 +33,6 @@ const work: Placed = { layer: "package", package: "@copilotz/work" };
 const directory: Placed = { layer: "package", package: "@copilotz/directory" };
 const billing: Placed = { layer: "package", package: "@copilotz/billing" };
 const team: Placed = { layer: "package", package: "@copilotz/team" };
-const compass: Placed = { layer: "private" };
 
 /** A small API, for the example `openapi` plugin. */
 const TRIPS = {
@@ -141,19 +141,13 @@ export const LAYERS: Record<string, Placed | "skip"> = {
   teamWeb: team,
   tiers: team,
   tiersWeb: team,
-  // Moving to Compass.
-  computers: compass,
-  computersWeb: compass,
-  computersTerminal: compass,
-  computerDownloads: compass,
-  cloud: compass,
-  cloudWeb: compass,
-  cloudPool: compass,
-  remotePool: compass,
-  apps: compass,
-  appsWeb: compass,
-  accounts: compass,
-  accountsWeb: compass,
+  // Computers people connect, and accounts people connect.
+  computers: standard,
+  computersWeb: standard,
+  computersTerminal: standard,
+  computerDownloads: standard,
+  accounts: standard,
+  accountsWeb: standard,
   // A test's helper, not a feature.
   testWho: "skip",
 };

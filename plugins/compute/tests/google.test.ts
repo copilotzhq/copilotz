@@ -1,16 +1,15 @@
 /**
- * Google auth without SDKs (`cloud/shared/google.ts`), and the Compute Engine
- * host's `verify`: access tokens from a fake metadata server, from ADC files
- * (a person's refresh token, a service account's key) against a fake token
- * endpoint, traded for a service account's (a fake IAM Credentials); and
- * pool VMs' identity tokens, signed with a key made here and checked against
- * a fake certs URL. No call reaches Google.
+ * Google auth without SDKs (`google.ts`): access tokens from a fake
+ * metadata server, from ADC files (a person's refresh token, a service
+ * account's key) against a fake token endpoint, traded for a service
+ * account's (a fake IAM Credentials); and Compute Engine VMs' identity
+ * tokens, signed with a key made here and checked against a fake certs URL.
+ * No call reaches Google.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { gceHost } from "../cloud/adapters/gce/index.ts";
-import { googleToken, signJwt, verifyIdentityToken } from "../cloud/shared/google.ts";
+import { googleToken, signJwt, verifyIdentityToken } from "../google.ts";
 import { serve, tempDir, test } from "../../../testing/mod.ts";
 
 const ALGORITHM = {
@@ -262,72 +261,6 @@ test("an identity token is checked: Google's signature, issuer, audience, times,
       Error,
       "names no VM",
     );
-  } finally {
-    await google.close();
-  }
-});
-
-test("verify takes pool VMs of the app's placements only", async () => {
-  const google = await fakeGoogle();
-  try {
-    const here = { project: "copilotz-485719", zone: "us-central1-a" };
-    const host = gceHost({
-      token: () => Promise.reject(new Error("verify needs no token")),
-      api: "http://127.0.0.1:1/never",
-      certs: google.certs,
-      placements: [{ project: "other-project", zone: "us-east1-b" }, here],
-    });
-    const jwt = await google.identity();
-    assertEquals(await host.verify(`pool:gce:${jwt}`, APP), {
-      vm: "cz-pool-small-x7k2",
-      placement: here,
-    });
-    assertEquals(await host.verify(`gce:${jwt}`, APP), {
-      vm: "cz-pool-small-x7k2",
-      placement: here,
-    });
-
-    // Another audience, expired, another project or zone, not a pool VM, not a GCE credential.
-    assertEquals(await host.verify(`pool:gce:${jwt}`, "https://elsewhere.example"), null);
-    const past = Math.floor(Date.now() / 1000) - 7200;
-    assertEquals(
-      await host.verify(`pool:gce:${await google.identity({ iat: past, exp: past + 600 })}`, APP),
-      null,
-    );
-    assertEquals(
-      await host.verify(
-        `pool:gce:${await google.identity({}, undefined, { project_id: "someone-else" })}`,
-        APP,
-      ),
-      null,
-    );
-    assertEquals(
-      await host.verify(
-        `pool:gce:${await google.identity({}, undefined, { zone: "us-central1-b" })}`,
-        APP,
-      ),
-      null,
-    );
-    assertEquals(
-      await host.verify(
-        `pool:gce:${await google.identity({}, undefined, { instance_name: "dev-box" })}`,
-        APP,
-      ),
-      null,
-    );
-    assertEquals(await host.verify(`pool:docker:${jwt}`, APP), null);
-    assertEquals(await host.verify("pool:gce:not.a.jwt", APP), null);
-
-    // Placements read when asked; none, no pool VM passes.
-    let known: typeof here[] = [];
-    const later = gceHost({
-      token: () => Promise.resolve("x"),
-      certs: google.certs,
-      placements: () => known,
-    });
-    assertEquals(await later.verify(`pool:gce:${jwt}`, APP), null);
-    known = [here];
-    assert(await later.verify(`pool:gce:${jwt}`, APP));
   } finally {
     await google.close();
   }

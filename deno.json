@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "1.0.0-rc.48",
+  "version": "1.0.0-rc.49",
   "exports": {
     ".": "./runtime/mod.ts",
     "./stores/memory": "./stores/memory/mod.ts",
@@ -42,6 +42,7 @@
     "./plugins/compute/web": "./plugins/compute/web.tsx",
     "./plugins/compute/terminal": "./plugins/compute/computers/terminal.ts",
     "./plugins/compute/downloads": "./plugins/compute/computers/resources/downloads.ts",
+    "./plugins/compute/program": "./plugins/compute/computers/program/mod.ts",
     "./plugins/interfaces": "./plugins/interfaces/mod.ts",
     "./plugins/interfaces/contract": "./plugins/interfaces/contract.ts",
     "./plugins/interfaces/web": "./plugins/interfaces/web.tsx",

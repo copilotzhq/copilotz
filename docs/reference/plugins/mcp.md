@@ -78,7 +78,7 @@ It also reads `caller`, `org`, `tools` and `widgets`, resource kinds the app and
 The runtime doesn't start without [`chat`](chat.md), [`spaces`](spaces.md) and
 [`contacts`](contacts.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.45`.
+It ships with `copilotz@1.0.0-rc.47`.
 
 ## What it does on its own
 

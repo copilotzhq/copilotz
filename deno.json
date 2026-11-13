@@ -119,6 +119,7 @@
   ],
   "publish": {
     "exclude": [
+      "bench/",
       "packages/",
       "**/tests/",
       "**/*.test.ts",

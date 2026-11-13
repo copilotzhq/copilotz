@@ -34,6 +34,12 @@ types and the JSR package. On Node it also builds the npm package and smoke-test
 The workflow runs when the publish workflow calls it, before a release, and on demand. It doesn't
 run on pushes or pull requests. So run what a change touches locally before merging it.
 
+`bench/memory/budget.test.ts` holds the docs app's shape (an MCP server on the memory store) to a
+memory budget on Deno and Node: RSS and heap after a full GC, the heap 200 calls keep, and no model
+catalog loaded. It runs the app in a process of its own, in a few seconds, as part of the suite. Its
+bounds are about twice what it measured: a test that fails there found a leak or a module graph that
+grew, not noise. [Memory](docs/operations/memory.md) has what was measured.
+
 The models plugin has 2 suites of its own:
 
 - `plugins/models/tests/providers.test.ts` checks each adapter against a local server speaking that
@@ -73,6 +79,7 @@ hosts/          the places the app is used in: terminal (the Ink host and its to
                 assets; and node/, listening and bundling on Node)
 testing/        one test API for Deno, Node and Bun; the layers' import rules (boundaries.test.ts);
                 plugins' CSS keeps to the theme (styles.test.ts)
+bench/          memory/: the docs app's shape held to a memory budget (budget.test.ts)
 design/         agreed designs
 docs/           Getting Started, Build Compass, the guides, operations, the reference (its
                 plugins' pages generated) and the architecture; manifest.json, which the website

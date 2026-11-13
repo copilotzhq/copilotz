@@ -78,6 +78,12 @@ const app = definePlugin({
       input: { type: "object", properties: { in: { type: "string" }, text: { type: "string" } } },
       run: (ctx, input) => ctx.db.collection("note").insertOne(input),
     }),
+    // What a test waits for: an agent's words in a conversation, written down as they come.
+    "live.count": defineAction({
+      allow: () => true,
+      input: { type: "object", properties: { thread: { type: "string" } }, required: ["thread"] },
+      run: (ctx, input) => ctx.db.collection("live").countDocuments({ thread: input.thread }),
+    }),
   },
   resources: {
     shared: { thread: {}, message: { drew: true }, file: {}, note: {} },
@@ -212,7 +218,12 @@ test("a conversation doesn't move while an agent is writing in it", async () => 
     const { thread } = await rt.call<{ thread: string }>("chat.send", { text: "slow", in: mine }, {
       actor: ana,
     });
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Writing starts once its first words are written down, which takes longer on a busy machine.
+    for (const end = Date.now() + 10_000;;) {
+      if (await rt.call<number>("live.count", { thread }, { actor: ana })) break;
+      if (Date.now() > end) throw new Error("The agent never started writing.");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     await assertRejects(
       () => rt.call("chat.move", { thread, to: "launch" }, { actor: ana }),
       Error,

@@ -49,14 +49,14 @@ Set it in a container of 512 MiB or less. With more room, V8's default collects 
 ## SQLite's cache
 
 The SQLite store keeps a page cache of 2 MiB per connection and maps nothing into memory. Those are
-its defaults since 1.0.0-rc.46, and both are options:
+its defaults since 1.0.0-rc.47, and both are options:
 
 ```ts
 const store = await sqliteStore({ path, cacheKiB: 2048, mmapMiB: 0 }); // the defaults
 ```
 
 The store opens 2 connections, and both count in the process's RSS once filled. The sizes before
-rc.46 (`cacheKiB: 65_536, mmapMiB: 256`) read a big file faster on a machine with memory to spare.
+rc.47 (`cacheKiB: 65_536, mmapMiB: 256`) read a big file faster on a machine with memory to spare.
 Over the same 1,000 calls, on SQLite, they peaked 15 to 40 MiB higher on Deno 2.9, and about 40 MiB
 higher on Node 24. [Stores](stores.md) has the rest about SQLite.
 

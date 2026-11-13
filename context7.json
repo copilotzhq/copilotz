@@ -1,3 +1,4 @@
+
 {
   "$schema": "https://context7.com/schema/context7.json",
   "projectTitle": "Copilotz",
@@ -27,6 +28,8 @@
     "package.json",
     "plugins.json"
   ],
+  "url": "https://context7.com/copilotzhq/copilotz",
+  "public_key": "pk_4PJUJel1aqEoymTCfhEEk"
   "rules": [
     "Make every change to data an Action (defineAction) and call it from every way in: pages and tools with ctx.call, scripts with runtime.call. A tool is a thin caller of Actions; don't add a second write path.",
     "Put access rules at the data (the shared resource or a guard), not inside Action handlers, and set allow (people, contacts, peopleOrContacts or inPerson) on every Action that outside callers use.",

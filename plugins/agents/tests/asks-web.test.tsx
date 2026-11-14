@@ -17,7 +17,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ViewContext } from "../../../runtime/mod.ts";
 import type { Approval } from "../chat/contract.ts";
 import { asksView, tipOf } from "../chat/views/web/asks.tsx";
-import { waitingView } from "../chat/views/web/asking.tsx";
+import { waitingRailView, waitingView } from "../chat/views/web/asking.tsx";
 import { approvalsView } from "../chat/views/terminal/asks.ts";
 import { setWords } from "../../../hosts/web/mod.ts";
 import { plain } from "../../../hosts/terminal/contract.ts";
@@ -247,23 +247,52 @@ test("in the sidebar: what waits on you in other chats, each a link to its chat"
   assertEquals(renderToStaticMarkup(<>{waitingView({}, ctx([share()], "/thread/t1"))}</>), "");
 });
 
-const routine = { kind: "routine", id: "r1", name: "Weekly", rev: 2 };
-
-/** The sidebar, with what waits on Ana in other chats. */
-const sidebar = (pending: Approval[]) =>
-  renderToStaticMarkup(
+test("on the rail: one mark, counting the chats waiting, that goes to the oldest", () => {
+  const ctx = (pending: Approval[], path = "/") =>
+    ({
+      db: { collection: () => ({ query: () => ({ status: "ready", value: pending }) }) },
+      resources: { agents: { scout: { name: "Scout", instructions: "" } } },
+      name: "chat.waiting.rail",
+      hints: { path },
+    }) as unknown as ViewContext<ReactNode>;
+  const one = renderToStaticMarkup(<>{waitingRailView({}, ctx([share({ in: "s1" })]))}</>);
+  assertStringIncludes(one, 'aria-label="Scout needs your OK"');
+  assertStringIncludes(one, 'href="/thread/t1?in=s1"');
+  assertStringIncludes(one, 'data-tone="warning"');
+  assertStringIncludes(one, '<span class="copilotz-rail-badge" aria-hidden="true">1</span>');
+  const three = renderToStaticMarkup(
     <>
-      {waitingView(
+      {waitingRailView(
         {},
-        {
-          db: { collection: () => ({ query: () => ({ status: "ready", value: pending }) }) },
-          resources: { agents: { scout: { name: "Scout", instructions: "" } } },
-          name: "chat.waiting",
-          hints: { path: "/" },
-        } as unknown as ViewContext<ReactNode>,
+        ctx([
+          share({ _id: "a", thread: "t-a" }),
+          share({ _id: "b", thread: "t-b" }),
+          share({ _id: "b2", thread: "t-b" }),
+          share({ _id: "c", thread: "t-c" }),
+        ]),
       )}
     </>,
   );
+  assertStringIncludes(three, 'aria-label="3 chats waiting on you"');
+  assertStringIncludes(three, 'href="/thread/t-a"');
+  assertStringIncludes(three, ">3</span>");
+  // The chat open asks in place; nothing else waiting, nothing shows.
+  assertEquals(renderToStaticMarkup(<>{waitingRailView({}, ctx([share()], "/thread/t1"))}</>), "");
+  assertEquals(renderToStaticMarkup(<>{waitingRailView({}, ctx([]))}</>), "");
+});
+
+const routine = { kind: "routine", id: "r1", name: "Weekly", rev: 2 };
+
+/** The sidebar, with what waits on Ana in other chats; and the rail, the sidebar folded. */
+const sidebar = (pending: Approval[]) => {
+  const ctx = {
+    db: { collection: () => ({ query: () => ({ status: "ready", value: pending }) }) },
+    resources: { agents: { scout: { name: "Scout", instructions: "" } } },
+    name: "chat.waiting",
+    hints: { path: "/" },
+  } as unknown as ViewContext<ReactNode>;
+  return renderToStaticMarkup(<>{waitingView({}, ctx)}{waitingRailView({}, ctx)}</>);
+};
 
 /** Every card and the sidebar, as their words say them (tips too, which show on hover). */
 function everything(): string {
@@ -310,7 +339,9 @@ test("the cards' words are chat's, said from what each ask is: English by defaul
   try {
     const all = everything();
     assertEquals(englishLeft(all, "chat"), []);
-    for (const key of ["askPost", "askBack", "answerOnce", "letsOrigin", "moreWaiting"]) {
+    for (
+      const key of ["askPost", "askBack", "answerOnce", "letsOrigin", "moreWaiting", "chatsWaiting"]
+    ) {
       assertStringIncludes(all, `«chat.${key}»`);
     }
   } finally {

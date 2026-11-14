@@ -29,8 +29,9 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `chat.asks`, `chat.moving`, `chat.notes`, `chat.palette`, `chat.waiting`, `chats`,
-  `chats.recent`, `file`, `home`, `new-thread`, `web.live`, `web.message`, `web.thread`.
+- **On the web:** `chat.asks`, `chat.moving`, `chat.notes`, `chat.palette`, `chat.waiting`,
+  `chat.waiting.rail`, `chats`, `chats.recent`, `file`, `home`, `new-thread`, `new-thread.rail`,
+  `web.live`, `web.message`, `web.thread`.
 - **What it adds to resources:** `conversation` (`asks`), `palette` (`chats`), `sidebar` (`asks`,
   `start`), `spaceSidebar` (`chats`), `spaceTabs` (`chats`), `suggestions` (`draft`, `explain`,
   `names`, `week`).
@@ -44,7 +45,7 @@ Nothing to set. It reads `agentSources`, `agents`, `askViews`, `composerNotes`, 
 
 The runtime doesn't start without [`chat`](chat.md) and [`web-shell`](web-shell.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.47`.
+It ships with `copilotz@1.0.0-rc.49`.
 
 ## Listing
 

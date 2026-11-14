@@ -1,7 +1,11 @@
 /**
  * The shell's layout: a sidebar and a main column, and beside the page, its
  * side panel, when it offers one; on a phone, the sidebar in a drawer (the
- * toolkit's) and a menu button over the page, and the panel a sheet. Only
+ * toolkit's) and a menu button over the page, and the panel a sheet. On a
+ * wide screen, the sidebar folds to a rail of icons: its column slides to
+ * the rail's width (the page's base stills it for less motion), the rail laid
+ * out at its own width as it does, and the whole sidebar at its own as it
+ * unfolds, so neither squeezes on the way. Only
  * layout, on the theme's variables (see `hosts/web/theme/`). On a phone, a
  * View's own header keeps clear of the menu button by `--copilotz-inset` (the
  * toolkit's `Page` does); a page that offers the panel, and the panel open,
@@ -11,15 +15,20 @@
  * where the person names themselves.
  */
 export const STYLE = `
-.copilotz-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); height: 100dvh;
-  overflow: clip; background: var(--background); }
+.copilotz-shell { --copilotz-sidebar-width: 280px; --copilotz-rail-width: 60px; display: grid;
+  grid-template-columns: var(--copilotz-sidebar-width) minmax(0, 1fr); height: 100dvh; overflow: clip;
+  background: var(--background); transition: grid-template-columns .2s ease; }
+.copilotz-shell[data-sidebar=rail] { grid-template-columns: var(--copilotz-rail-width) minmax(0, 1fr); }
 .copilotz-sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--sidebar);
   color: var(--sidebar-foreground); border-right: 1px solid var(--sidebar-border); }
+.copilotz-shell > .copilotz-sidebar { min-width: 0; overflow: hidden; }
+.copilotz-shell > .copilotz-sidebar:not([data-rail]) > * { min-width: calc(var(--copilotz-sidebar-width) - 1px); }
 .copilotz-sidebar-head { display: flex; align-items: center; justify-content: space-between;
   gap: 8px; padding: 14px 12px 10px 18px; }
 .copilotz-brand { display: inline-flex; align-items: center; margin: -6px -8px; padding: 6px 8px;
   border-radius: var(--radius-md); text-decoration: none; transition: background-color .15s; }
 .copilotz-brand:hover { background: var(--sidebar-accent); }
+.copilotz-sidebar-fold { margin: -2px -4px -2px 0; }
 .copilotz-find { padding: 0 10px 6px; }
 .copilotz-find .copilotz-nav-icon { color: var(--muted-foreground); }
 .copilotz-find .copilotz-kbd { font-size: 10.5px; }
@@ -65,11 +74,25 @@ export const STYLE = `
 .copilotz-panel-sheet-body > * { flex: 1; min-height: 0; }
 
 @media (max-width: 760px) {
-  .copilotz-shell { grid-template-columns: minmax(0, 1fr); --copilotz-inset: 56px; }
+  .copilotz-shell, .copilotz-shell[data-sidebar=rail] { grid-template-columns: minmax(0, 1fr);
+    --copilotz-inset: 56px; }
   .copilotz-sidebar { border-right: 0; }
   .copilotz-shell-menu { position: absolute; z-index: 20; top: 10px; left: 10px; color: var(--secondary-foreground); }
   .copilotz-panel-toggle { top: 10px; right: 10px; }
 }
+
+/* The sidebar folded: a rail of icons, each named beside it; sections' own, then the person */
+.copilotz-rail { display: flex; flex-direction: column; align-items: center; flex: 1; min-height: 0;
+  width: calc(var(--copilotz-rail-width) - 1px); }
+.copilotz-rail-head { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0 8px; }
+.copilotz-rail-head::after { content: ""; width: 24px; height: 1px; margin-top: 4px; background: var(--sidebar-border); }
+.copilotz-rail-mark { color: var(--sidebar-foreground); }
+.copilotz-rail-sections { flex: 1; min-height: 0; align-self: stretch; display: flex; flex-direction: column;
+  align-items: center; gap: 10px; padding: 4px 0 12px; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: none; }
+.copilotz-rail-section { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.copilotz-rail-section:empty { display: none; }
+.copilotz-me-rail { justify-content: center; align-self: stretch; padding: 8px 0 10px; }
 
 /* Where the app serves many orgs: the orgs slot's switcher, beside the app's mark */
 .copilotz-sidebar-head[data-orgs] { gap: 4px; padding: 12px 10px 8px 10px; }

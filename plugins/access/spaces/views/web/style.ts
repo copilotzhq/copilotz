@@ -33,6 +33,12 @@ export const STYLE = `
 .spaces-archived-list { margin: 1px 0 6px 12px; }
 .spaces-archived-list .copilotz-avatar { opacity: .75; }
 
+/* The sidebar folded: spaces on the rail, each its face */
+.spaces-rail { list-style: none; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0;
+  padding: 0; }
+.spaces-rail .spaces-personal { width: 26px; height: 26px; }
+.spaces-rail [aria-current] .spaces-personal { background: var(--card); color: var(--primary-text); }
+
 /* Invitations to you: in the sidebar, and on home */
 .invitations { list-style: none; display: grid; gap: 8px; margin: 0; padding: 0; }
 .invitation { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px;

@@ -19,7 +19,8 @@
  * their turn is over (`chat.asks`): a card each, with only the answers it
  * takes (`chat.approve`), and keys for them (the arrows move between its
  * answers; 1, 2, 3… answer); in other chats, at the top of the sidebar
- * (`chat.waiting`).
+ * (`chat.waiting`). On the rail, the sidebar folded, starting a chat and
+ * what waits on you are an icon each (`new-thread.rail`, `chat.waiting.rail`).
  *
  * In a chat, agents show as they're named, with their emoji (`thread.agents`),
  * each name a link to its page (`/agent/<id>`, another front end's: team's),
@@ -58,7 +59,7 @@
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { asksView } from "./views/web/asks.tsx";
-import { waitingView } from "./views/web/asking.tsx";
+import { waitingRailView, waitingView } from "./views/web/asking.tsx";
 import { conversationView } from "./views/web/conversation.tsx";
 import { fileView } from "./views/web/file.tsx";
 import { homeView } from "./views/web/home.tsx";
@@ -67,7 +68,7 @@ import { messageView } from "./views/web/message.tsx";
 import { movingView } from "./views/web/moving.tsx";
 import { notesView } from "./views/web/notes.tsx";
 import { chatsView } from "./views/web/chats.tsx";
-import { newThreadView } from "./views/web/new-thread.tsx";
+import { newThreadRailView, newThreadView } from "./views/web/new-thread.tsx";
 import { chatPaletteView } from "./views/web/palette.tsx";
 import { recentView } from "./views/web/recent.tsx";
 
@@ -78,11 +79,13 @@ export const chatWeb: Plugin = definePlugin({
     "web.thread": conversationView,
     "chat.asks": asksView,
     "chat.waiting": waitingView,
+    "chat.waiting.rail": waitingRailView,
     home: homeView,
     "web.message": messageView,
     "web.live": liveView,
     file: fileView,
     "new-thread": newThreadView,
+    "new-thread.rail": newThreadRailView,
     chats: chatsView,
     "chats.recent": recentView,
     "chat.palette": chatPaletteView,
@@ -90,8 +93,11 @@ export const chatWeb: Plugin = definePlugin({
     "chat.moving": movingView,
   },
   resources: {
-    // Starting one; then what agents wait on you for in other chats.
-    sidebar: { start: { view: "new-thread", order: 0 }, asks: { view: "chat.waiting", order: 5 } },
+    // Starting one; then what agents wait on you for in other chats (on the rail too).
+    sidebar: {
+      start: { view: "new-thread", order: 0, rail: "new-thread.rail" },
+      asks: { view: "chat.waiting", order: 5, rail: "chat.waiting.rail" },
+    },
     // What agents wait on you for here, over where you type.
     conversation: { asks: { view: "chat.asks", order: 10 } },
     spaceTabs: { chats: { title: "Chats", view: "chats", icon: "chat", order: 10 } },

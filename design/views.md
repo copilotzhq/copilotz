@@ -281,6 +281,14 @@ resource kinds (no list of tabs or sections anywhere):
   to its page, unfolding what front ends put under it (`spaceSidebar`: chat's latest chats, and "All
   chats"), the current space and chat marked; what's folded, the browser keeps. What agents wait on
   you for in other chats shows above it, only while something does.
+- **The sidebar folds to a rail** on a wide screen (built 2026-11-14): its button at the top, ⌘B
+  (Ctrl+B elsewhere, where the key isn't a field's own) or the palette fold it to about 60 pixels
+  and back, sliding unless the person asks for less motion; the browser keeps which, for them, and
+  the shell's `shell` resource says how it starts (`{ sidebar: "rail" }`). The rail is the app's
+  mark, unfolding, Search, then each section's `rail` View (`RailItem`s, read only while the rail
+  shows: chat's new chat and what waits on you, invitations counted, spaces as their faces), and the
+  person's face with their menu; each item named beside it as a tooltip. A section with no `rail`
+  waits for the sidebar to unfold. On a phone the sidebar stays a drawer.
 - **A space's page** (`/space/<id>`, spaces' `space` View) is its header (its name, renamed in place
   by managers; Personal or shared; its people; invite; a new chat there) and its tabs: `spaceTabs`
   (`{ title, view, icon?, order?, under?, group?, own?, menu? }`), each a View given `{ _id }` and
@@ -569,7 +577,9 @@ exports `Scrollback`: plain function components whose variants are props.
 - **Overlays and navigation:** `Menu` (items as data), `Dialog`, `Drawer` (left, right, bottom),
   `Tabs` (`segmented`, `line`), `Tooltip`, `NavItem` (a row in a navigation list: an icon or
   anything leading, a count or time at its end, a description line; `current` is `page`, raised, or
-  `location`, tinted).
+  `location`, tinted), `RailItem` (the same in a rail, a sidebar folded: an icon or an avatar in a
+  square, named by its label as a tooltip beside it, with a `badge` count; `current` as
+  `NavItem`'s).
 - **Pages and details:** `Page`, a View's frame: a header (a `back` link, an `icon` or anything
   `leading`, the title, an `h1` unless given another `heading`, with `badges` after it and `actions`
   at its end, a `description`), then its content. `full` density is a page in the main area (it

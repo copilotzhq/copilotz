@@ -19,6 +19,11 @@ export const say = defineWords("shell", {
   spacesAndChats: "Spaces and chats",
   skipToContent: "Skip to content",
 
+  // The sidebar folded to a rail, and back (rail.tsx, shared/sidebar.ts)
+  collapseSidebar: "Collapse sidebar",
+  expandSidebar: "Expand sidebar",
+  keysSidebar: "sidebar rail fold unfold hide show toggle",
+
   // The side panel (panel.tsx, shared/panel.ts)
   panelWidth: "Panel width",
   panel: "Panel",

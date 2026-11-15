@@ -100,6 +100,11 @@ await ctx.transaction(async (tx) => {
 A refused write rolls it all back. A transaction holds the store's writer, so keep slow work out of
 it: no model calls, no `fetch`. One whose code sends no op for 5 seconds rolls back.
 
+Another plugin's work that must commit with yours is its Action, declared `atomic: true` (it only
+reads, writes, emits and schedules), called in the transaction with `tx.call(action, input)`. Its
+failure rolls it all back. Work that may follow a moment later goes through the outbox instead: emit
+an event in the transaction, and let the other plugin's Processor react, idempotently.
+
 ## Who acts, and where
 
 `personOf(ctx.actor)` is the person whose work this is, the one acting or the one an agent works

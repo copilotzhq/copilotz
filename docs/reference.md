@@ -335,6 +335,7 @@ What can be done, by name. `defineAction` types `run`'s input from the schema.
 | `description` | what it does, for people and for tools that list Actions                                         |
 | `record`      | `false`: unrecorded. It runs inline in its caller's job, with no events and no commit of its own |
 | `private`     | fields its calls are recorded without, as dot paths, in its input and its result                 |
+| `atomic`      | `true`: it does only what commits with a transaction, so another's `tx.call` runs it there       |
 
 Every recorded call is on the record (`action.started`, then `action.completed` or `action.failed`),
 retryable by id, and everything it causes is its caller's, where its caller is. Queries, Views and
@@ -443,7 +444,7 @@ What plugin code gets. `Context` is an Action's, a Processor's and a tool's.
 | `db.collection(name)`                   | the collection API. Each write commits on its own                                                           |
 | `call(action, input)`                   | calls an Action as `actor`, asking its `allow`                                                              |
 | `as(actor?)`                            | this context acting as someone else, or as the system (`as()`), or as a grant. Trusted code only            |
-| `transaction(tx => …)`                  | several writes, events and timers, atomic                                                                   |
+| `transaction(tx => …)`                  | several writes, events and timers, atomic; `tx.call(action, input)` runs an atomic Action in it             |
 | `emit(type, data, { id? })`             | commits a declared event                                                                                    |
 | `schedule(action, input, when)`         | has time call an Action, and returns the timer's id; `unschedule(id)` removes it                            |
 | `record(collection, doc)`               | appends to a ledger with the job's next write, kept even if the job fails                                   |
@@ -466,7 +467,10 @@ Action nobody declares fails with `invalid` ("Unknown action"), and that's a bug
 work is unless `other` says where (`in`, or `in: undefined` for nowhere). `ctx.transaction` holds
 the store's writer: an op in it that fails, a write the rules refuse included, ends it and rolls it
 back, and one whose code sends no op for 5 seconds after its last answer rolls back too
-([one writer](architecture/the-owner.md)).
+([one writer](architecture/the-owner.md)). `tx.call` brings another plugin's atomic Action into it:
+its reads and writes are the transaction's, its own `ctx.transaction` joins it, and its failure
+rolls it all back
+([another plugin's work in a transaction](architecture/the-owner.md#another-plugins-work-in-a-transaction)).
 
 The others are narrower:
 

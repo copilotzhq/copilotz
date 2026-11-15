@@ -41,6 +41,8 @@ export type Graph = {
  * when the error is caught. It holds the store's writer, so keep slow work out
  * of it: one whose code sends no op for 5 seconds after its last answer rolls
  * back too. An op that is slow itself, or waits for the writer, doesn't count.
+ *
+ * Another plugin's Action joins it through `call`, when it's `atomic`.
  */
 export type TransactionScope = {
   db: { collection<T = Record<string, unknown>>(name: string): Collection<T> };
@@ -50,6 +52,19 @@ export type TransactionScope = {
   schedule(action: string, input: unknown, when: ScheduleOptions): string;
   /** Removes a timer with the transaction's writes. */
   unschedule(id: string): void;
+  /**
+   * Calls an atomic Action (`atomic: true`), this plugin's or another's, in
+   * this transaction: its reads see the transaction's writes, and what it
+   * writes, emits and schedules commits with them, or rolls back with them.
+   * Checked as `ctx.call` is, as this code's actor: its `allow` and its
+   * input; one that isn't atomic, or isn't there, is refused before any of
+   * it runs, and that ends nothing. Once it runs, its failure ends the
+   * transaction, as a failed op does. A recorded one's `action.started` and
+   * `action.completed` commit with it too, so a retry after a rollback runs
+   * it again, and one after a commit answers from the record. Calls run one
+   * at a time, in the order they're made.
+   */
+  call<R = unknown>(action: string, input?: unknown): Promise<R>;
 };
 
 export type Context = {
@@ -396,6 +411,16 @@ export type ActionDef = {
    * apart (`sys.results`, no events), so a retry answers with all of it.
    */
   private?: string[];
+  /**
+   * Safe inside another's transaction: it does only what commits with it
+   * (`db`, `graph`, `emit`, `schedule`, `unschedule`, its own `transaction`,
+   * and calls of other atomic Actions), so a transaction's `tx.call` runs it
+   * there (see `TransactionScope.call`). Called so, its `ctx.transaction`
+   * joins the one it's in, and `ctx.stream`, `ctx.fetch`, `ctx.workers`,
+   * `ctx.cancel` and `ctx.disconnect` throw. Called any other way, it runs as
+   * any Action does.
+   */
+  atomic?: boolean;
   // deno-lint-ignore no-explicit-any
   run(ctx: Context, input: any): unknown;
 };
@@ -678,6 +703,7 @@ export const defineAction = <const S extends JSONSchema, R>(
     input: S;
     record?: boolean;
     private?: string[];
+    atomic?: boolean;
     allow?(actor: Actor, input: Infer<S>): boolean;
     run(ctx: Context, input: Infer<S>): R | Promise<R>;
   },

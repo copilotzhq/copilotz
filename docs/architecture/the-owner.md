@@ -60,7 +60,7 @@ Collections can say how they're kept:
   with no events. `ctx.record` appends one from any job, and it rides the job's next write.
 - **`durable: false`** lives in the owner's memory, not the store, with no events. Chat's live text
   is one. It goes in the commit that writes the reply it became, so a screen never shows both.
-- **`private: ["token"]`** keeps fields out of every event and every outside read.
+- **`private: ["token"]`** keeps fields out of every event and every outside read: where secrets go.
 
 ## One writer, and its transactions
 

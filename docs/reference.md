@@ -322,6 +322,20 @@ types its documents and queries from the schema.
 
 Plugin code runs any named query, as whoever it acts for, under the rules. From outside,
 `runtime.query("message.history", params, { actor })` runs only a query whose `allow` lets them in.
+A query is named under a collection, usually the one it reads. A plugin whose queries read only
+other plugins' collections (reports) declares a collection of its own to name them under: one that
+holds no documents costs nothing.
+
+**Secrets** go in a `private` field: a token, an API key, an SMTP password. No event holds it, so
+the log keeps the document without it (an update's `changed` may name the field, never its value).
+An actor's queries and Views read the document without it, and REST and the socket never read,
+filter by or write it. Actions and Processors read it. A path names the same field in every
+document, so settings kept as key and value documents (`{ _id: "smtp_pass", value }`) keep their
+secrets in a collection of their own, with `private: ["value"]`, beside the one for the rest. An
+Action whose input or result holds a secret says so in its own `private`: the log keeps its call
+without it, and a result that had one is kept whole apart (`sys.results`), so a retry answers with
+all of it. Maintenance SQL goes around all of this: it reads the store as it is, and records each
+write's statement and params, so a secret is written through an Action, never through SQL.
 
 ### Actions
 
@@ -372,7 +386,10 @@ elements in the terminal, React in the browser. A name says what it shows (`book
   `{ status: "ready", value }`. The runtime runs the View again until a pass reads nothing new.
 - **`ctx.show(name, item, hints?)`** shows exactly the View it names. Observed, the shown View is a
   part that runs again on its own.
-- **`ctx.call`** and **`ctx.emit`** act from a handler, as the actor looking.
+- **`ctx.call`** and **`ctx.emit`** act from a handler, as the actor looking. A handler that needs
+  what the View didn't read (suggestions as someone types) calls an unrecorded Action
+  (`record: false`, with an `allow`) that runs the query and returns it: nothing goes on record. It
+  reads as Actions do, private fields included, so it returns only what its caller may see.
 - **`runtime.render(name, item, { viewer?, hints? })`** renders once, as the system. Code renders
   with `ctx.render`, as its actor: a turn renders its agent's prompt, the `llm.thread` View, that
   way.
@@ -515,6 +532,11 @@ const runtime = await createRuntime({ store, plugins });
 | `cancel`, `disconnect`, `wake`, `stats`, `describe` | stops a call; ends an actor's browsers; fires due timers; counts; what's declared |
 
 Without `actor`, a call runs as the system. An actor's `in` says where.
+
+Nothing resets a runtime in place: its cache, Processors' cursors and timers all follow its store.
+To start over (a test against a running server), close it, empty its store (a new memory store, a
+new SQLite file, a dropped schema) and create another. In a pool of `runtimes()`, `close(id)` then
+`get(id)` starts one over, its `open` making the empty store: `get` waits until it has closed.
 
 The rest of `copilotz`:
 

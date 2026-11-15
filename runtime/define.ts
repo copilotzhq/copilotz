@@ -365,9 +365,14 @@ export type CollectionDef = {
    */
   indexes?: string[][];
   /**
-   * Fields only trusted code reads (tokens, keys): what an actor's queries
-   * and Views read comes without them. Actions and Processors acting for
-   * them still read them; what they return is theirs to decide.
+   * Fields only trusted code reads (tokens, keys, passwords), as dot paths:
+   * where secrets go. No event holds them, so the log never does; what an
+   * actor's queries and Views read comes without them; and outsiders (REST,
+   * the socket) never read, filter by or write them. Actions and Processors
+   * acting for them still read them; what they return is theirs to decide.
+   * A path names the same field in every document: settings kept as key and
+   * value documents keep their secrets in a collection of their own, with
+   * `private: ["value"]`.
    */
   private?: string[];
   /** Named reads: `runtime.query("<collection>.<name>", params)`, or `collection.query(name, params)`. */

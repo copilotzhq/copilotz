@@ -7,8 +7,11 @@
  * message starts a new one (`gap`, in hours: 12 unless set), how many
  * messages a customer may send a minute (`rate`: 20), how long they may
  * write on before the agent answers them all at once (`quiet`, seconds: 4),
- * and the language
- * customers are told things in (`language`: `en`, `pt`). Closed again,
+ * the language customers are told things in (`language`: `en`, `pt`), and
+ * the template that goes in a message's place once Meta's 24 hours since the
+ * phone last wrote are past (`fallback`: one the app declares, its
+ * parameters saying `{name}` and `{text}`; null, none: such a message stays
+ * in the app). Closed again,
  * strangers are told how to link their phone; its chats stay where they are.
  * A Personal space's number isn't opened: it's its person's alone.
  */
@@ -18,6 +21,8 @@ import type { WhatsAppThread } from "../collections/thread.ts";
 import { blockedKey } from "../collections/blocked.ts";
 import { mustManage } from "./connect.ts";
 import { PERSONAL } from "../../../access/spaces/contract.ts";
+import type { TemplateSend } from "../shared/settings.ts";
+import { fallbackOf } from "../shared/template.ts";
 
 export const setAction = defineAction({
   description: "Opens a WhatsApp number to anyone (a customer line), or closes it",
@@ -34,6 +39,27 @@ export const setAction = defineAction({
       /** Seconds a customer may write on before the agent answers. */
       quiet: { type: "number", minimum: 0, maximum: 30 },
       language: { type: "string", enum: ["en", "pt"] },
+      /** A template the app declares, for messages past Meta's 24 hours; null, none. */
+      fallback: {
+        anyOf: [
+          { type: "null" },
+          {
+            type: "object",
+            properties: {
+              template: { type: "string", minLength: 1 },
+              params: {
+                anyOf: [
+                  { type: "array", items: { type: "string", maxLength: 1024 }, maxItems: 100 },
+                  { type: "object", additionalProperties: { type: "string", maxLength: 1024 } },
+                ],
+              },
+              components: { type: "array", items: { type: "object" }, maxItems: 20 },
+            },
+            required: ["template"],
+            additionalProperties: false,
+          },
+        ],
+      },
     },
     required: ["number"],
     additionalProperties: false,
@@ -66,6 +92,9 @@ export const setAction = defineAction({
         );
       }
     }
+    const fallback = input.fallback as TemplateSend | null | undefined;
+    // A template the app declares, its parameters as its body takes them.
+    if (fallback) fallbackOf(ctx, fallback, { name: "Ana", text: "Hi" });
     const set = {
       ...(input.open ? { open: true } : {}),
       ...(agent ? { agent } : {}),
@@ -73,10 +102,12 @@ export const setAction = defineAction({
       ...(input.rate !== undefined ? { rate: input.rate } : {}),
       ...(input.quiet !== undefined ? { quiet: input.quiet } : {}),
       ...(input.language ? { language: input.language } : {}),
+      ...(fallback ? { fallback } : {}),
     };
     const unset = {
       ...(input.open === false ? { open: "" } : {}),
       ...(agent === null ? { agent: "" } : {}),
+      ...(fallback === null ? { fallback: "" } : {}),
     };
     if (Object.keys(set).length || Object.keys(unset).length) {
       // As the person: the rules say they manage the space.

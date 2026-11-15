@@ -15,15 +15,18 @@
  *   `rate` a minute (20) goes unanswered; a phone its people blocked, or took
  *   out of its chat (until the gap passes), is let go without a word; what
  *   they're told is in the number's `language`.
+ * - **When it wrote**, for a phone the number writes to (a linked person's,
+ *   a customer's): Meta lets the number write to it freely for 24 hours
+ *   after, and only templates past them (see processors/reply.ts).
  * - **Someone linked**, still in the number's space: their message is
  *   marked read (with "typing…") and becomes `chat.send`, as them, in
  *   their WhatsApp conversation, in the space they chose (their Personal
  *   space unless they said otherwise). Photos, documents, video and voice
  *   notes come as its files, each uploaded as them first (`chat.attach`;
- *   chat transcribes audio as it's sent). A reply
- *   quoting an agent's message, or one sent while an agent waits on their
- *   answer there, answers it. `/new`, `/space` and `/help` are commands
- *   (see shared/commands.ts).
+ *   chat transcribes audio as it's sent). A reply quoting a message sent
+ *   to them there (an agent's, or a person's at the desk), or one sent while
+ *   an agent waits on their answer there, answers it. `/new`, `/space` and
+ *   `/help` are commands (see shared/commands.ts).
  * - **A tap** (a button, a list's row, a carousel card's reply) comes as its
  *   title, with what it meant (`tap.id`) and the addition it was in
  *   (`tap.key`), answering the message it was on.
@@ -73,7 +76,10 @@ export const receiveProcessor: ProcessorDef = {
     if (!on) return;
     const phone = await ctx.as().db.collection<WhatsAppPhone>("whatsapp_phone")
       .findOne({ _id: `${on.number._id}:${received.from}` });
-    if (phone?.person) return await linked(ctx, on, received, phone, event);
+    if (phone?.person) {
+      await heard(ctx, phone, event);
+      return await linked(ctx, on, received, phone, event);
+    }
     // Blocked by the number's people: what it sends goes nowhere, and nothing is said.
     const blocks = ctx.as().db.collection("whatsapp_blocked");
     if (await blocks.findOne({ _id: await blockedKey(on.number._id, received.from) })) return;
@@ -125,7 +131,7 @@ async function tried(
   await ctx.as().transaction(async (tx) => {
     await tx.db.collection("whatsapp_phone").replaceOne(
       { _id },
-      { ...base, person: found.person, linked: at },
+      { ...base, person: found.person, linked: at, wrote: at },
       { upsert: true },
     );
     await tx.db.collection("whatsapp_code").deleteMany({
@@ -197,6 +203,7 @@ async function customer(
 ) {
   const { from, name, message } = received;
   const system = ctx.as();
+  if (phone?.contact) await heard(ctx, phone, event);
   // Too many at once: let go, unanswered (each answer costs a model's turn and Meta's message).
   if (await flooding(ctx, on, `${on.number._id}:${from}`, event)) return;
   const contact = await contactOf(ctx, on, received, phone, event);
@@ -247,6 +254,17 @@ async function flooding(ctx: Context, on: Connected, phone: string, event: Event
   // Past minutes, no longer counted, go.
   if (!had || had.minute !== minute) await counts.deleteMany({ minute: { $lt: minute } });
   return count > (on.number.rate ?? RATE);
+}
+
+/**
+ * When a phone the number writes to last wrote (`wrote`, to the minute):
+ * the number writes to it freely for Meta's 24 hours after.
+ */
+async function heard(ctx: Context, phone: WhatsAppPhone, event: Event) {
+  if (phone.wrote && Date.parse(event.at) - Date.parse(phone.wrote) < 60_000) return;
+  await ctx.as().db.collection("whatsapp_phone").updateOne({ _id: phone._id }, {
+    $set: { wrote: event.at },
+  });
 }
 
 /**
@@ -315,6 +333,7 @@ async function chatFor(
           ...(name ? { name } : {}),
           contact,
           thread,
+          wrote: event.at,
           at,
         },
       },
@@ -538,9 +557,9 @@ async function written(
 }
 
 /**
- * The message this one answers: the agent's message it quotes or taps (and
- * the addition the tap was in). Else `chat.send` finds it: the question an
- * agent waits on them for.
+ * The message this one answers: the message sent to them that it quotes or
+ * taps, an agent's or a person's (and the addition the tap was in). Else
+ * `chat.send` finds it: the question an agent waits on them for.
  */
 async function answered(
   ctx: Context,

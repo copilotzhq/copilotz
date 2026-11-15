@@ -49,6 +49,16 @@ With it, the app adds the `whatsapp` plugin, and declares the number, open to an
 - **A stranger who writes** is a contact, named by their WhatsApp profile, in a chat of their own at
   the desk, answered by the concierge. They reach that chat and nothing else.
 - **What the concierge says** goes back through Meta's Graph API, as WhatsApp formats it.
+- **What the desk says to the customer** goes the same way, with its files: someone at the desk
+  taking the chat over (`chat.send` with `to: ["contact:<id>"]`, or `to: []` for the whole chat),
+  and the app's own fixed messages (`chat.say`). What's said to the concierge alone stays in the
+  app.
+- **WhatsApp's 24 hours.** A business writes freely only in the 24 hours after the customer last
+  wrote; after that, Meta takes only a template message it approved. The app declares its templates
+  (`whatsappTemplates`), and the desk, the concierge's tools or the app's code send one in a chat
+  (`whatsapp.template`). Anything else said past the 24 hours goes as the number's `fallback`
+  template, when it has one; without it, it stays in the app, and its failure is on the record
+  (`window_closed`).
 - **`quiet`** is how many seconds a burst of messages may go on before the concierge answers them
   together, 4 unless said. The tests say 0.
 

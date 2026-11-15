@@ -24,17 +24,29 @@
  * chosen, never what may be done. Agents read its id as it came, so a tool
  * acting on one (choosing a trip) checks it against what was shown there.
  *
+ * The template messages the app declares (the `whatsappTemplates`
+ * resource) are `WhatsAppTemplate`s; a template to send, by the app's name
+ * for it, is a `TemplateSend` (`whatsapp.template`'s input, and a number's
+ * `fallback`). `WINDOW` is Meta's 24 hours.
+ *
  * They reach the rest by name: its collections (`whatsapp_number`,
  * `whatsapp_phone`, `whatsapp_thread`), its event (`whatsapp.received`) and
  * its Actions (`whatsapp.connect`, `whatsapp.credentials`,
  * `whatsapp.disconnect`, `whatsapp.webhook`, `whatsapp.link`,
- * `whatsapp.unlink`, `whatsapp.move`, `whatsapp.set`, `whatsapp.block`).
+ * `whatsapp.unlink`, `whatsapp.move`, `whatsapp.set`, `whatsapp.block`,
+ * `whatsapp.template`).
  */
 export { GAP, type WhatsAppNumber } from "./collections/number.ts";
-export type { WhatsAppPhone } from "./collections/phone.ts";
+export { type WhatsAppPhone, WINDOW } from "./collections/phone.ts";
 export type { WhatsAppCode } from "./collections/code.ts";
 export type { WhatsAppThread } from "./collections/thread.ts";
-export type { DeclaredNumber, WhatsAppSettings } from "./shared/settings.ts";
+export type {
+  DeclaredNumber,
+  TemplateSend,
+  WhatsAppSettings,
+  WhatsAppTemplate,
+  WhatsAppTemplatesSettings,
+} from "./shared/settings.ts";
 export {
   buttons,
   type Card,

@@ -12,8 +12,7 @@ import type { LlmAdapter, LlmMessage } from "../../../models/mod.ts";
 import { type Addition, type Message, tool } from "../../../agents/chat/mod.ts";
 import { test } from "../../../../testing/mod.ts";
 import { buttons, carousel, text, type WaPart } from "../contract.ts";
-import { ana, PHONE_ID, said, SECRET, type Setup, setup, threadsOf } from "./setup.ts";
-import { sign } from "../shared/signature.ts";
+import { ana, said, type Setup, setup, statuses, threadsOf } from "./setup.ts";
 
 const CARLA = "5511911112222";
 
@@ -223,30 +222,6 @@ test("a carousel Meta refuses sends its fallback instead, with the answer, and s
     assert(JSON.stringify(asked.at(-1)).includes("2 trips to Santos as a carousel (as text)"));
   });
 });
-
-/** Meta's statuses of what was sent, delivered to the webhook as it does, signed. */
-async function statuses(s: Setup, items: Record<string, unknown>[]) {
-  const body = JSON.stringify({
-    object: "whatsapp_business_account",
-    entry: [{
-      changes: [{
-        field: "messages",
-        value: { metadata: { phone_number_id: PHONE_ID }, statuses: items },
-      }],
-    }],
-  });
-  await s.serve(
-    new Request(`http://localhost/hooks/whatsapp/${s.number}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-hub-signature-256": await sign(SECRET, new TextEncoder().encode(body)),
-      },
-      body,
-    }),
-  );
-  await s.runtime.idle();
-}
 
 test("a carousel Meta took but couldn't deliver (a picture it failed to fetch) sends its fallback, once", async () => {
   await run(async (s) => {

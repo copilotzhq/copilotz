@@ -5,8 +5,9 @@
  * (`space`, their Personal space unless they chose another; `thread`, the
  * conversation they're in). One that isn't linked is only what's needed to
  * answer it politely, once a day, and to stop guessing codes; on an open
- * number, it's a contact (`contact`), in the chat it's in (`thread`). Each
- * person reads their own.
+ * number, it's a contact (`contact`), in the chat it's in (`thread`). For
+ * those the number writes to, when it last wrote (`wrote`). Each person
+ * reads their own.
  */
 import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
 
@@ -28,6 +29,13 @@ const phoneSchema = {
     thread: { type: "string" },
     /** On an open number, the contact it is (someone outside the org). */
     contact: { type: "string" },
+    /**
+     * When it last wrote to the number (to the minute): the number writes to
+     * it freely for Meta's 24 hours after (`WINDOW`), and past them only
+     * templates reach it. Unknown (a phone that hasn't written since), it's
+     * Meta that says.
+     */
+    wrote: { type: "string" },
     /** When it was last told how to link: once a day. */
     told: { type: "string" },
     /** Codes it sent that didn't match, since `since`. */
@@ -37,6 +45,12 @@ const phoneSchema = {
   },
   required: ["number", "phone", "at"],
 } as const;
+
+/**
+ * Hours a number may write to a phone freely after it last wrote: Meta's
+ * customer service window. Past them, only a template message reaches it.
+ */
+export const WINDOW = 24;
 
 export const phone = defineCollection({
   schema: phoneSchema,

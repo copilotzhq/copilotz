@@ -217,9 +217,15 @@ export function talk(
       sort: { at: 1 },
     }).value ?? []
     : [];
+  // What agents still wait on me for, among these messages: asked by their threads.
+  const threads = [...new Set(said.map((m) => m.thread))].sort();
   const asked = new Set(
-    (ctx.db.collection<Message>("message").query<Message[]>("questions", { person: me }).value ??
-      []).map((m) => m._id),
+    (threads.length
+      ? ctx.db.collection<Message>("message").query<Message[]>("questions", {
+        person: me,
+        threads,
+      }).value ?? []
+      : []).map((m) => m._id),
   );
   const space = within
     ? ctx.db.collection<Space>("space").findOne({ _id: within }).value ?? undefined

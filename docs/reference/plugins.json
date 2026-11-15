@@ -2387,7 +2387,11 @@
           "private": [],
           "shared": true,
           "vectors": [],
-          "indexes": [],
+          "indexes": [
+            [
+              "thread"
+            ]
+          ],
           "queries": [
             {
               "name": "about",
@@ -2969,7 +2973,18 @@
           ],
           "shared": true,
           "vectors": [],
-          "indexes": [],
+          "indexes": [
+            [
+              "thread",
+              "at"
+            ],
+            [
+              "replyTo"
+            ],
+            [
+              "turn"
+            ]
+          ],
           "queries": [
             {
               "name": "conversation",
@@ -3168,7 +3183,15 @@
           "private": [],
           "shared": true,
           "vectors": [],
-          "indexes": [],
+          "indexes": [
+            [
+              "in",
+              "at"
+            ],
+            [
+              "parent.thread"
+            ]
+          ],
           "queries": [
             {
               "name": "agents",
@@ -11799,7 +11822,13 @@
           "private": [],
           "shared": false,
           "vectors": [],
-          "indexes": [],
+          "indexes": [
+            [
+              "thread",
+              "level",
+              "index"
+            ]
+          ],
           "queries": [
             {
               "name": "of",

@@ -146,6 +146,10 @@ export const message = defineCollection({
   schema: messageSchema,
   // What it was told and its model's state are the agent's: people's reads and events go without.
   private: ["told", "state"],
+  // A thread's messages by when they were written: every read of a conversation, an agent's
+  // window, its history's. The answer to a question, by what it answers; a turn's own, when its
+  // turn runs again.
+  indexes: [["thread", "at"], ["replyTo"], ["turn"]],
   queries: {
     /**
      * Everything in a thread, oldest first, agents' private steps included.
@@ -198,24 +202,33 @@ export const message = defineCollection({
             : []
         ),
       );
-      // Replies to this agent, wherever they were written: one cached query per agent.
+      // Replies to what it sent, wherever they were written: found by what they reply to.
       const elsewhere = sent.size
-        ? (await messages.find({ to: params.agent, replyTo: { $exists: true } })
+        ? (await messages.find({ replyTo: { $in: [...sent] }, to: params.agent })
           .sort({ at: -1 })
           .limit(HISTORY))
-          .filter((m) => sent.has(m.replyTo!) && m.thread !== params.thread)
+          .filter((m) => m.thread !== params.thread)
         : [];
       return [...recent, ...elsewhere]
         .filter((m) => !sent.has(m._id))
         .sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
     },
-    /** Questions to `person` that an agent is still waiting on, newest first. */
+    /**
+     * Questions to `person` that an agent is still waiting on, newest first.
+     * With `threads`, those asked there (a conversation and its subthreads):
+     * found by thread, not among every message to them.
+     */
     questions: {
       allow: (actor, params: { person: string }) =>
         actor.kind === "person" && actor.id === params.person,
-      run: async (messages, params: { person: string }, ctx) => {
+      run: async (messages, params: { person: string; threads?: string[] }, ctx) => {
         const asked = await messages.find(
-          { to: params.person, replyTo: { $exists: false }, expectReply: { $ne: false } },
+          {
+            ...(params.threads ? { thread: { $in: params.threads } } : {}),
+            to: params.person,
+            replyTo: { $exists: false },
+            expectReply: { $ne: false },
+          },
           { sort: { at: -1 }, limit: 20 },
         );
         const waits = ctx.db.collection("wait");

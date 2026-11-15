@@ -10,6 +10,7 @@ import {
   type Actor,
   createRuntime,
   definePlugin,
+  loopback,
   type Plugin,
   type Route,
   setClientAddress,
@@ -454,6 +455,33 @@ test("a request from another site that may change something is refused, unless i
     assertEquals(local.status, 200);
     const refused = await post({ origin: "https://evil.example" });
     assertEquals(await refused.json(), { error: "Not from this app's page" });
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a name under localhost is this machine's: its page isn't another site, its cookies not Secure", async () => {
+  assert(loopback("acme.localhost") && loopback("A.B.LOCALHOST") && loopback("localhost."));
+  assert(!loopback("evil-localhost") && !loopback("localhost.example.com"));
+  const rt = await runtimeWith([
+    definePlugin({ name: "app", routes: { "/do": echo("do") } }),
+    jar("a"),
+  ]);
+  try {
+    // A brand tried by its host on this machine (RFC 6761: browsers send *.localhost here).
+    const post = (origin: string) =>
+      get(rt, "http://acme.localhost:8100/do", { method: "POST", headers: { origin } });
+    assertEquals((await post("http://acme.localhost:8100")).status, 200);
+    assertEquals((await post("http://other.localhost:8100")).status, 403, "another host");
+    const ticket = await get(rt, "http://acme.localhost:8100/connect", {
+      method: "POST",
+      headers: { origin: "http://acme.localhost:8100" },
+    });
+    assertEquals(ticket.status, 401, "not another site's: refused only for being nobody");
+    assertEquals(
+      (await get(rt, "http://acme.localhost:8100/a/set")).headers.get("set-cookie"),
+      "session=a-secret-of-sixteen; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000",
+    );
   } finally {
     await rt.close();
   }

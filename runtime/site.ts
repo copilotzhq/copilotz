@@ -128,9 +128,16 @@ export function ownHost(hosts: unknown, host: string): boolean | undefined {
   return Object.keys(hosts).some((pattern) => hostMatches(pattern, host));
 }
 
-/** Whether a host name is this machine's own: `localhost`, 127.0.0.0/8, `::1`. */
-export const loopback = (hostname: string): boolean =>
-  hostname.toLowerCase() === "localhost" || loopbackAddress(hostname);
+/**
+ * Whether a host name is this machine's own: `localhost` and any name under
+ * it (`acme.localhost`, which browsers send here, RFC 6761), 127.0.0.0/8,
+ * `::1`. So one app tried by host on one machine (a brand each) is at home
+ * on each.
+ */
+export const loopback = (hostname: string): boolean => {
+  const name = hostname.toLowerCase().replace(/\.$/, "");
+  return name === "localhost" || name.endsWith(".localhost") || loopbackAddress(hostname);
+};
 
 /**
  * Whether a host name is this machine's or one on its network: loopback, a

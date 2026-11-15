@@ -39,7 +39,7 @@ export const forgotAction = defineAction({
   },
   run: async (ctx, input) => {
     const email = emailIn(input.email);
-    await aSend(ctx, { email, address: input.address });
+    await aSend(ctx, { account: email, address: input.address });
     const db = ctx.as().db;
     const codes = db.collection<Code>("email_code");
     const known = await db.collection<Login>("email_login").findOne({ _id: email }) ??
@@ -81,7 +81,7 @@ export const resetAction = defineAction({
   run: async (ctx, input) => {
     const email = emailIn(input.email);
     const password = passwordIn(input.password);
-    await aTry(ctx, { email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address });
     if (!await redeem(ctx, linksFor(ctx), "reset", email, codeIn(input.code))) {
       throw failure("invalid", WRONG_CODE, { public: true });
     }

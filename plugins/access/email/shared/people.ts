@@ -28,21 +28,22 @@ export async function personFor(
 
 /**
  * Keeps what a sign-in proved about a person: their email (identity's
- * `person.email`, what invitations find people by), the name they gave when
- * they have none (and never chose one: `person.rename`), and when they came
- * (`at`, kept from before; an import's).
+ * `person.email`, what invitations find people by; none for someone who
+ * signs in by an identifier), the name they gave when they have none (and
+ * never chose one: `person.rename`), and when they came (`at`, kept from
+ * before; an import's).
  */
 export async function keepPerson(
   ctx: Context,
   person: string,
-  given: { email: string; name?: string; at?: string },
+  given: { email?: string; name?: string; at?: string },
 ): Promise<void> {
   const people = ctx.as().db.collection<Person>("person");
   const known = await people.findOne({ _id: person });
   const name = given.name?.trim();
   await people.updateOne({ _id: person }, {
     $set: {
-      email: given.email,
+      ...(given.email ? { email: given.email } : {}),
       ...(name && !known?.name && !known?.named ? { name } : {}),
       at: known?.at ?? given.at ?? new Date().toISOString(),
     },

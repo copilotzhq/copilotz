@@ -60,7 +60,7 @@ export const signUpAction = defineAction({
     }
     const email = emailIn(input.email);
     const password = passwordIn(input.password);
-    await aSend(ctx, { email, address: input.address });
+    await aSend(ctx, { account: email, address: input.address });
     const links = linksFor(ctx);
     // Hashed either way, so an address with an account answers as soon as one without.
     const pending = await hashPassword(password);
@@ -104,7 +104,7 @@ export const verifyAction = defineAction({
   },
   run: async (ctx, input) => {
     const email = emailIn(input.email);
-    await aTry(ctx, { email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address });
     const waiting = await redeem(ctx, linksFor(ctx), "verify", email, codeIn(input.code));
     if (!waiting?.pending) throw failure("invalid", WRONG_CODE, { public: true });
     const login = await ctx.as().db.collection<Login>("email_login").findOne({ _id: email });

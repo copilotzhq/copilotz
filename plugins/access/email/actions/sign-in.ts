@@ -33,7 +33,7 @@ export const signInAction = defineAction({
   },
   run: async (ctx, input) => {
     const email = emailIn(input.email);
-    await aTry(ctx, { email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address });
     const db = ctx.as().db;
     const logins = db.collection<Login>("email_login");
     const login = await logins.findOne({ _id: email });
@@ -53,7 +53,7 @@ export const signInAction = defineAction({
       .find({ email, purpose: "verify" }).sort({ at: -1 }).toArray();
     for (const signUp of waiting) {
       if (!signUp.pending || !await verifyPassword(input.password, signUp.pending)) continue;
-      const room = await aSend(ctx, { email }).then(() => true, (error) => {
+      const room = await aSend(ctx, { account: email }).then(() => true, (error) => {
         if ((error as { code?: string }).code === "too_many") return false;
         throw error;
       });

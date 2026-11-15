@@ -87,6 +87,7 @@ import {
 import type { EmailSettings } from "./contract.ts";
 
 export * from "./contract.ts";
+export { passwordSignIn } from "./password.ts";
 export { hashPassword, verifyPassword } from "./shared/password.ts";
 export { INVITE_FRAGMENT } from "./actions/invite.ts";
 

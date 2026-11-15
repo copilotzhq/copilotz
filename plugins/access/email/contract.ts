@@ -2,7 +2,8 @@
  * The email plugins' contract: what other plugins may import. The shape of a
  * message (`email.send`'s input), of an adapter of the `email` port (to send
  * another way than Resend's or SMTP), and of the plugins' settings. They
- * reach the rest by name: `email.send`, `email.invite`, `email.import`.
+ * reach the rest by name: `email.send`, `email.invite`, `email.import`,
+ * `password.set`, `password.import`.
  */
 
 /**
@@ -139,3 +140,21 @@ export type EmailSignInSettings = {
 
 /** What a sign-in that ends signed in answers (the route sets the session in its cookie). */
 export type SignedInByEmail = { person: string; session: string; new?: boolean };
+
+/**
+ * The `passwordSignIn` resource: how people sign in by an identifier (a
+ * username, a badge number, a CPF) and a password.
+ */
+export type PasswordSignInSettings = {
+  /**
+   * Characters an identifier is read without, wherever it's typed or set:
+   * `".-/"` for a CPF typed with its dots. Spaces never count, nor case.
+   */
+  ignore?: string;
+  /**
+   * How much one identifier, and one caller, may try (`too_many` past it):
+   * tries at an identifier's password in 15 minutes (`tries`, 10), and all
+   * one caller asks in 15 minutes (`address`, 30).
+   */
+  limits?: { tries?: number; address?: number };
+};

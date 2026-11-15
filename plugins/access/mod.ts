@@ -11,8 +11,10 @@
  * - `devSignIn`: sign-in by name, from this machine only, for trying things
  *   out;
  * - `emailSignIn`: sign-in with an email and a password (codes, resets and
- *   invitations by email), with `email`, the app's email port (Resend's, or
- *   the log on a laptop);
+ *   invitations by email), with `email`, the app's email port (Resend's, a
+ *   mail server's over SMTP, or the log on a laptop);
+ * - `passwordSignIn`: sign-in with an identifier (a username, a badge
+ *   number, a CPF) and a password, for accounts an admin or an import makes;
  * - `accounts`: outside accounts people connect for their agents to use (a
  *   ChatGPT plan, as a model provider); its front end is `accountsWeb`
  *   (accounts/web.tsx).
@@ -25,7 +27,8 @@
  *
  * Who a request is comes from here too: identity's `who` (its session's
  * cookie: a person), beside the web interface's lines' (`webLines`: a
- * visitor); and how people sign in, Google's, email's and dev sign-in's routes.
+ * visitor); and how people sign in, Google's, email's, password's and dev
+ * sign-in's routes.
  */
 import type { Plugin } from "../../runtime/mod.ts";
 import { contacts } from "./contacts/mod.ts";

@@ -39,8 +39,8 @@ type Counting = {
   said: Record<Kind, string>;
 };
 
-/** Email sign-in's counting. */
-const byEmail = (ctx: Context): Counting => ({
+/** Email sign-in's counting: by address. */
+export const byEmail = (ctx: Context): Counting => ({
   collection: "email_rate",
   limits: signInOf(ctx).limits,
   said: SAID,
@@ -81,12 +81,12 @@ async function take(
 /**
  * A try at a password, a code or a link: the caller's (when the route says
  * who calls: trusted code that calls the Action itself isn't counted by
- * address), and the account's. Email sign-in's, unless `counting` says.
+ * address), and the account's, as the sign-in counts them (`counting`).
  */
 export async function aTry(
   ctx: Context,
   asker: Asker,
-  counting: Counting = byEmail(ctx),
+  counting: Counting,
   now = Date.now(),
 ): Promise<void> {
   if (asker.address) await take(ctx, counting, "address", asker.address, now);

@@ -25,7 +25,7 @@ import type { Code } from "../collections/code.ts";
 import type { Login } from "../collections/login.ts";
 import { LINK_HOURS, newToken, seal, sealsOf, tokenText } from "../shared/codes.ts";
 import { ADDRESS, EMAIL, emailIn, HOST, NAME, PASSWORD, passwordIn } from "../shared/inputs.ts";
-import { aTry } from "../shared/limits.ts";
+import { aTry, byEmail } from "../shared/limits.ts";
 import { mail, originFor } from "../shared/mail.ts";
 import { hashPassword } from "../shared/password.ts";
 import { keepPassword, keepPerson, personFor, sessionFor } from "../shared/people.ts";
@@ -118,7 +118,7 @@ export const invitationAction = defineAction({
     additionalProperties: false,
   },
   run: async (ctx, input) => {
-    await aTry(ctx, { address: input.address });
+    await aTry(ctx, { address: input.address }, byEmail(ctx));
     return { email: (await invitationOf(ctx, input.token)).email };
   },
 });
@@ -134,7 +134,7 @@ export const acceptAction = defineAction({
   },
   run: async (ctx, input) => {
     const password = passwordIn(input.password);
-    await aTry(ctx, { address: input.address });
+    await aTry(ctx, { address: input.address }, byEmail(ctx));
     const { email } = await invitationOf(ctx, input.token);
     const login = await ctx.as().db.collection<Login>("email_login").findOne({ _id: email });
     const { person, new: made } = await personFor(ctx, email, login);

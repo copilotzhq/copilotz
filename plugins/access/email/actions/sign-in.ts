@@ -14,7 +14,7 @@ import type { Code } from "../collections/code.ts";
 import type { Login } from "../collections/login.ts";
 import { issue } from "../shared/codes.ts";
 import { ADDRESS, EMAIL, emailIn, HOST, PASSWORD } from "../shared/inputs.ts";
-import { aSend, aTry } from "../shared/limits.ts";
+import { aSend, aTry, byEmail } from "../shared/limits.ts";
 import { mail } from "../shared/mail.ts";
 import { hashPassword, noPassword, stale, verifyPassword } from "../shared/password.ts";
 import { sessionFor } from "../shared/people.ts";
@@ -33,7 +33,7 @@ export const signInAction = defineAction({
   },
   run: async (ctx, input) => {
     const email = emailIn(input.email);
-    await aTry(ctx, { account: email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address }, byEmail(ctx));
     const db = ctx.as().db;
     const logins = db.collection<Login>("email_login");
     const login = await logins.findOne({ _id: email });

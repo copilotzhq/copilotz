@@ -68,6 +68,7 @@ export const LAYERS: Record<string, Placed | "skip"> = {
   googleSignIn: standard,
   devSignIn: standard,
   emailSignIn: standard,
+  passwordSignIn: standard,
   email: standard,
   spacesWeb: standard,
   contactsWeb: standard,

@@ -97,7 +97,11 @@ export type EmailSettings = {
   replyTo?: string;
   /** The adapter's key (Resend's). */
   apiKey?: string;
-  /** The `smtp` adapter's server. */
+  /**
+   * The `smtp` adapter's server: `{ host, port?, secure?, starttls?, user?,
+   * password?, ca?, name?, timeout? }` (see `SmtpSettings`). Its password is
+   * a secret: keep it out of your code.
+   */
   smtp?: SmtpSettings;
 };
 

@@ -32,7 +32,7 @@ import {
   PASSWORD,
   passwordIn,
 } from "../shared/inputs.ts";
-import { aSend, aTry } from "../shared/limits.ts";
+import { aSend, aTry, byEmail } from "../shared/limits.ts";
 import { mail } from "../shared/mail.ts";
 import { hashPassword } from "../shared/password.ts";
 import { keepPassword, keepPerson, personFor, sessionFor } from "../shared/people.ts";
@@ -105,7 +105,7 @@ export const verifyAction = defineAction({
   },
   run: async (ctx, input) => {
     const email = emailIn(input.email);
-    await aTry(ctx, { account: email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address }, byEmail(ctx));
     const waiting = await redeem(ctx, linksFor(ctx), "verify", email, codeIn(input.code));
     if (!waiting?.pending) throw failure("invalid", WRONG_CODE, { public: true });
     const login = await ctx.as().db.collection<Login>("email_login").findOne({ _id: email });

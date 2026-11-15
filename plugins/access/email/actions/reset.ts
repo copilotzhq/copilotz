@@ -30,7 +30,7 @@ import {
   PASSWORD,
   passwordIn,
 } from "../shared/inputs.ts";
-import { aSend, aTry } from "../shared/limits.ts";
+import { aSend, aTry, byEmail } from "../shared/limits.ts";
 import { mail } from "../shared/mail.ts";
 import { hashPassword } from "../shared/password.ts";
 import { keepPassword, keepPerson, personFor, sessionFor } from "../shared/people.ts";
@@ -90,7 +90,7 @@ export const resetAction = defineAction({
   run: async (ctx, input) => {
     const email = emailIn(input.email);
     const password = passwordIn(input.password);
-    await aTry(ctx, { account: email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address }, byEmail(ctx));
     if (!await redeem(ctx, linksFor(ctx), "reset", email, codeIn(input.code))) {
       throw failure("invalid", WRONG_CODE, { public: true });
     }

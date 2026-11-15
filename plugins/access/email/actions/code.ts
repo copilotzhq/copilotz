@@ -24,7 +24,7 @@ import type { Code } from "../collections/code.ts";
 import type { Login } from "../collections/login.ts";
 import { CODE_MINUTES, codeText, newCode, newToken, redeem, seal } from "../shared/codes.ts";
 import { ADDRESS, CODE, codeIn, EMAIL, emailIn, HOST, NAME } from "../shared/inputs.ts";
-import { aSend, aTry } from "../shared/limits.ts";
+import { aSend, aTry, byEmail } from "../shared/limits.ts";
 import { mail } from "../shared/mail.ts";
 import { keepPerson, personFor, sessionFor } from "../shared/people.ts";
 import { linksFor, signInOf } from "../shared/settings.ts";
@@ -91,7 +91,7 @@ export const enterAction = defineAction({
   run: async (ctx, input) => {
     offered(ctx);
     const email = emailIn(input.email);
-    await aTry(ctx, { account: email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address }, byEmail(ctx));
     if (!await redeem(ctx, linksFor(ctx), "signin", email, codeIn(input.code))) {
       throw failure("invalid", WRONG_CODE, { public: true });
     }

@@ -1,7 +1,8 @@
 /**
  * A shared space always keeps a manager: someone to let people in, rename
  * it, and hand it on. Removing, demoting or the leaving of its last one is
- * refused until someone else manages it.
+ * refused until someone else manages it; so is giving them an end (`until`):
+ * a manager who's there only until a time doesn't keep it.
  */
 import type { Context } from "../../../../runtime/mod.ts";
 import { forbidden } from "../../../../runtime/mod.ts";
@@ -12,10 +13,12 @@ export async function keepsAManager(ctx: Context, space: string, key: string, ne
   const roles = rolesOf(ctx);
   const manages = (role?: string) => !!role && (roles[role] ?? []).includes("manage");
   if (manages(next)) return;
-  const members = await ctx.as().db.collection<{ member: string; role: string; on?: string }>(
-    "member",
-  ).find({ space, on: { $exists: false } });
-  const managers = members.filter((m) => manages(m.role) && !m.member.startsWith("agent:"));
+  const members = await ctx.as().db.collection<
+    { member: string; role: string; on?: string; until?: string }
+  >("member").find({ space, on: { $exists: false } });
+  const managers = members.filter((m) =>
+    manages(m.role) && !m.member.startsWith("agent:") && m.until === undefined
+  );
   if (managers.length === 1 && managers[0].member === key) {
     const you = ctx.actor && key === `${ctx.actor.kind}:${ctx.actor.id}`;
     throw forbidden(

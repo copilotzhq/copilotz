@@ -44,6 +44,7 @@ export const SIGN_IN_WORDS = {
   ledeGoogleDev: "With Google, or by name on this machine.",
   ledeGoogle: "With your Google account.",
   ledeDev: "By name, on this machine.",
+  ledePassword: "With your username and password.",
   googleFailed: "Google couldn't sign you in. Try again.",
   // Signing in by name, on this machine (dev).
   devLabel: "Your name or email",
@@ -55,6 +56,12 @@ export const SIGN_IN_WORDS = {
   devSubmitBeside: "Sign in by name",
   devInstead: "Sign in by name instead",
   devNote: "Signing in by name works on this machine only, for trying things out.",
+  // Signing in with a username and a password (password sign-in).
+  identifier: "Username",
+  identifierPlaceholder: "Your username",
+  identifierInstead: "Sign in with a username instead",
+  enterIdentifier: "Enter your username.",
+  wrongIdentifier: "That username and password don't match.",
   // Fields.
   email: "Email",
   emailPlaceholder: "you@example.com",
@@ -92,6 +99,9 @@ export const SIGN_IN_WORDS = {
   newCode: "send a new code",
   newCodeIn: "send a new code in {seconds}s",
   codeSent: "We've sent a new code.",
+  // Signing in with a code instead of a password (when the app offers it).
+  codeInstead: "Email me a code instead",
+  codeSignInLede: "We sent a 6-digit code to {email}. Enter it to sign in.",
   codeNotSent: "We couldn't send a new code. If you have an account, sign in instead.",
   // A new password.
   forgotTitle: "Reset your password",

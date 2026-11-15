@@ -1,10 +1,12 @@
 /**
  * Passwords at rest: PBKDF2-HMAC-SHA256 on WebCrypto, so the same code runs on
- * Deno, Node, Bun and workerd. Two formats are read:
+ * Deno, Node, Bun and workerd. Three formats are read:
  *
  * - **Legacy** (`"<saltHex>:<hashHex>"`): a 16-byte salt and a 32-byte hash
  *   in lowercase hex, 100,000 iterations, the password as raw UTF-8. What
  *   apps on Copilotz 0.x kept (an app moving from 0.x brings its people's as they are).
+ * - **bcrypt** (`$2a$`, `$2b$`, `$2y$`, cost 4 to 15): what Rails, PHP,
+ *   Laravel and Parse keep (see bcrypt.ts), for people moving in.
  * - **Ours** (`pbkdf2-sha256$<stages>x<iterations>$<salt>$<hash>`, base64url):
  *   PBKDF2 in stages, each salted with the salt and the stage before it
  *   (`K1 = PBKDF2(P, salt, n)`, `Ki = PBKDF2(P, salt ‖ Ki-1, n)`), the last
@@ -16,6 +18,7 @@
  * the next time its person signs in (`stale`). Comparisons take as long
  * whatever the first difference.
  */
+import { BCRYPT, bcrypt } from "./bcrypt.ts";
 
 /** Stages of PBKDF2 a new hash goes through, and the iterations in each (workerd's most). */
 export const STAGES = 6;
@@ -77,13 +80,20 @@ export async function hashPassword(password: string): Promise<string> {
   return `pbkdf2-sha256$${STAGES}x${ITERATIONS}$${base64url(salt)}$${base64url(hash)}`;
 }
 
-/** Whether a stored hash is one this plugin reads: legacy, or ours. */
-export const readable = (stored: string): boolean => LEGACY.test(stored) || OURS.test(stored);
+/** Whether a stored hash is one this plugin reads: legacy, bcrypt, or ours. */
+export const readable = (stored: string): boolean =>
+  LEGACY.test(stored) || BCRYPT.test(stored) || OURS.test(stored);
 
 /** Whether a password is the one a stored hash was made from (false for one it can't read). */
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const legacy = LEGACY.exec(stored);
   if (legacy) return same(await pbkdf2(password, hex(legacy[1]), 100_000), hex(legacy[2]));
+  if (BCRYPT.test(stored)) {
+    return same(
+      encoder.encode(await bcrypt(password, stored.slice(0, 29))),
+      encoder.encode(stored),
+    );
+  }
   const ours = OURS.exec(stored);
   if (!ours) return false;
   const [, stages, iterations, salt, hash] = ours;

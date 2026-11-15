@@ -46,7 +46,12 @@ test("an app's own words and pitch: nothing of Copilotz's English or pitch shows
       },
     },
   });
-  for (const ways of [ALL, { dev: true as const }, {}]) {
+  const more: Ways[] = [
+    { password: true },
+    { password: true, dev: true },
+    { email: { signUp: true, code: true }, password: true },
+  ];
+  for (const ways of [ALL, { dev: true as const }, {}, ...more]) {
     const page = <SignIn signIn={ways} page={signInPageOf([app])} />;
     const shown = `${text(page)} ${attributes(page).join(" ")}`;
     assertStringIncludes(shown, "Seus projetos, sempre em dia.");
@@ -88,4 +93,22 @@ test("an app's words in pt-BR, its pitch gone or its own; one that says nothing,
   const copilotz = text(<SignIn signIn={{ email: { signUp: true } }} />);
   assertStringIncludes(copilotz, `${COPILOTZ_ABOUT.headline} ${COPILOTZ_ABOUT.quiet}`);
   for (const point of COPILOTZ_ABOUT.points!) assert(copilotz.includes(point.title));
+});
+
+test("a username and a password: the form alone, or a click away under email's; a code by email when offered", () => {
+  const alone = text(<SignIn signIn={{ password: true }} />);
+  for (
+    const said of [SIGN_IN_WORDS.ledePassword, SIGN_IN_WORDS.identifier, SIGN_IN_WORDS.password]
+  ) {
+    assertStringIncludes(alone, said);
+  }
+  assertEquals(alone.includes(SIGN_IN_WORDS.noWay), false);
+  const beside = text(<SignIn signIn={{ email: { signUp: false, code: true }, password: true }} />);
+  assertStringIncludes(beside, SIGN_IN_WORDS.identifierInstead);
+  assertStringIncludes(beside, SIGN_IN_WORDS.codeInstead);
+  assertEquals(beside.includes(SIGN_IN_WORDS.identifier), false);
+  // No code offered: no such link.
+  const plain = text(<SignIn signIn={{ email: { signUp: true } }} />);
+  assertEquals(plain.includes(SIGN_IN_WORDS.codeInstead), false);
+  assertEquals(plain.includes(SIGN_IN_WORDS.identifierInstead), false);
 });

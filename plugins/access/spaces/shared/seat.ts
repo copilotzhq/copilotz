@@ -26,12 +26,18 @@ export function checkRole(ctx: Context, member: string, role: string) {
   }
 }
 
+/**
+ * Seats `member` in `space` with `role`, in place of what they had there:
+ * letting its contacts read it too (`contacts`, a space drawing on it), until
+ * a time (`until`, ISO 8601; else it lasts).
+ */
 export async function seat(
   ctx: Context,
   space: string,
   member: string,
   role: string,
   contacts?: "read",
+  until?: string,
 ) {
   checkRole(ctx, member, role);
   if (member.startsWith("contact:")) {
@@ -40,10 +46,11 @@ export async function seat(
   if (contacts && !member.startsWith("space:")) {
     throw invalid("Only a space drawing on this one lets its contacts read it (contacts).");
   }
-  await keepsAManager(ctx, space, member, role);
+  // A manager whose membership ends is no manager to keep the space by.
+  await keepsAManager(ctx, space, member, until ? undefined : role);
   await ctx.as().db.collection("member").replaceOne(
     { _id: `${space}|${member}` },
-    { member, space, role, ...(contacts ? { contacts } : {}) },
+    { member, space, role, ...(contacts ? { contacts } : {}), ...(until ? { until } : {}) },
     { upsert: true },
   );
 }

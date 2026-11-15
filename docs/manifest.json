@@ -349,6 +349,16 @@
           "description": "Every plugin Copilotz exports: what it keeps, who may call what, where it shows, what it needs."
         },
         {
+          "title": "accounts",
+          "slug": "reference/plugins/accounts",
+          "description": "Connected accounts: a person connects an outside account once, and agents working for them use it."
+        },
+        {
+          "title": "accounts-web",
+          "slug": "reference/plugins/accounts-web",
+          "description": "Connected accounts' web front end, for the browser."
+        },
+        {
           "title": "api",
           "slug": "reference/plugins/api",
           "description": "Developer keys: what code calls the app with, as someone, over the runtime's REST API (`/api/`) or its socket (see runtime/api.ts and runtime/client.ts): `Authorization: Bearer <key>`."
@@ -376,12 +386,27 @@
         {
           "title": "chat-terminal",
           "slug": "reference/plugins/chat-terminal",
-          "description": "Chat's terminal front end, for the process that draws the terminal: how a conversation, a message, its author and a reply being written look there, and chat's commands."
+          "description": "Chat's terminal front end, for the process that draws the terminal."
         },
         {
           "title": "chat-web",
           "slug": "reference/plugins/chat-web",
           "description": "Chat's web front end, for the browser: home (a new chat), how a chat looks with what agents are writing right now, a message and its files, where you type, and at the top of the sidebar, starting one."
+        },
+        {
+          "title": "computers",
+          "slug": "reference/plugins/computers",
+          "description": "Computers: people connect a machine (the computer program, run once, with a one-time code) to a space, and the agents of that space's conversations work on it."
+        },
+        {
+          "title": "computers-terminal",
+          "slug": "reference/plugins/computers-terminal",
+          "description": "Computers' terminal front end: `/computers` and `/computer`."
+        },
+        {
+          "title": "computers-web",
+          "slug": "reference/plugins/computers-web",
+          "description": "Computers' web front end, for the browser."
         },
         {
           "title": "contacts",
@@ -476,7 +501,7 @@
         {
           "title": "memory-extraction",
           "slug": "reference/plugins/memory-extraction",
-          "description": "Memories that arrive on their own: the extractor model reads every few messages."
+          "description": "Memories that arrive on their own: the extractor model reads every few messages, and what a conversation said before going quiet."
         },
         {
           "title": "memory-terminal",
@@ -497,6 +522,11 @@
           "title": "openapi",
           "slug": "reference/plugins/openapi",
           "description": "OpenAPI: an HTTP API's operations as Actions and as tools for agents, made from its OpenAPI 3 spec."
+        },
+        {
+          "title": "password-sign-in",
+          "slug": "reference/plugins/password-sign-in",
+          "description": "Password sign-in: people sign in by an identifier (a username, a badge number, a CPF) and a password, with the identity plugin."
         },
         {
           "title": "routines",

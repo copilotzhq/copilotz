@@ -19,3 +19,16 @@ export const pruneAction = defineAction({
     return { gone: codes.deletedCount };
   },
 });
+
+/** `password.prune`: password sign-in's counters whose window is over go. Its schedule's. */
+export const passwordPruneAction = defineAction({
+  description: "Drops password sign-in's counters that are past",
+  input: { type: "object", additionalProperties: false },
+  record: false,
+  run: async (ctx) => {
+    const gone = await ctx.as().db.collection("password_rate").deleteMany({
+      until: { $lte: Date.now() },
+    });
+    return { gone: gone.deletedCount };
+  },
+});

@@ -16,6 +16,8 @@ export const CODE = { type: "string", maxLength: 20 } as const;
 export const NAME = { type: "string", maxLength: 120 } as const;
 /** The caller, as the route counted them (an address, or `unknown`): for the limits. */
 export const ADDRESS = { type: "string", minLength: 1, maxLength: 80 } as const;
+/** The host the page was served on, as the route saw it: for what's said there. */
+export const HOST = { type: "string", maxLength: 253 } as const;
 
 const SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

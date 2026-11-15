@@ -23,13 +23,13 @@ export default { fetch: runtime.fetch }; // workerd (Cloudflare Workers)
 What it answers comes from the app's plugins. The same call serves a signed-in workspace, a public
 site where visitors chat with an agent, or a WhatsApp app with no page at all:
 
-| Part                                                       | Comes from                                                                 |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `POST /connect`, the socket (`/oxian`), `/api/`, `/health` | the runtime itself                                                         |
-| Webhooks, APIs, sockets of their own                       | plugins' `routes`                                                          |
-| Who a request is (if nobody says, it's anonymous)          | plugins' `who`: identity's sessions, the api plugin's keys, site visitors  |
-| The page and its code (without it, there's no page)        | the page plugin (`webPage`) and the `page` resource                        |
-| Signing in and out (without them, nobody signs in)         | `googleSignIn`, `emailSignIn`, `devSignIn` (this machine), `POST /signout` |
+| Part                                                       | Comes from                                                                                   |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `POST /connect`, the socket (`/oxian`), `/api/`, `/health` | the runtime itself                                                                           |
+| Webhooks, APIs, sockets of their own                       | plugins' `routes`                                                                            |
+| Who a request is (if nobody says, it's anonymous)          | plugins' `who`: identity's sessions, the api plugin's keys, site visitors                    |
+| The page and its code (without it, there's no page)        | the page plugin (`webPage`) and the `page` resource                                          |
+| Signing in and out (without them, nobody signs in)         | `googleSignIn`, `emailSignIn`, `passwordSignIn`, `devSignIn` (this machine), `POST /signout` |
 
 ## Routes
 
@@ -235,7 +235,12 @@ Each way to sign in is a plugin. Add the ones the app uses.
   shows Google's button.
 - **With an email and a password** (`emailSignIn`). It needs `email`, which says how mail goes, and
   the `links` resource. The page shows its form, and its screens for making an account, the code, a
-  new password and an invitation's link.
+  new password and an invitation's link. With `signInByCode: true`, people may sign in with a code
+  sent to their address instead, with no password: the page offers "Email me a code instead".
+- **With a username and a password** (`passwordSignIn`). For staff and back-office apps, whose
+  accounts an admin or an import makes: nobody signs up, and there's no email to reset by. The
+  identifier is anything the app chooses (a username, a badge number, a CPF). The page shows its
+  form, or, beside email sign-in, a link to it.
 
 When someone signs in by an email a person already has, such as a person who moved in from another
 app under an id of their own, they sign in as that person, as they are.
@@ -262,6 +267,64 @@ plugins: [
 ];
 ```
 
+Email goes through Resend (`adapter: "resend"`), a mail server (`adapter: "smtp"`), or, on a laptop,
+the log (`adapter: "console"`). The `smtp` adapter speaks over `node:net` and `node:tls`, so it runs
+on Node, Deno and Bun, not on workerd. It moves to TLS before it says anything: from the start with
+`secure: true` (port 465), else with STARTTLS (port 587), and it refuses a server that doesn't offer
+STARTTLS unless `starttls: false` says it's one on this machine:
+
+```ts
+email: {
+  adapter: "smtp",
+  from: "Loja <loja@example.com>",
+  smtp: { host: "smtp.example.com", user: "loja", password: process.env.SMTP_PASSWORD },
+},
+```
+
+Trusted code sends its own mail with `email.send`, from the app's `from` or another address the
+`email` resource's `senders` allow, with where replies go and files in base64 (10 MiB in all):
+
+```ts
+await ctx.call("email.send", {
+  to: customer.email,
+  from: "Billing <billing@example.com>", // listed in email.senders
+  replyTo: "help@example.com",
+  subject: `Your invoice ${invoice.number}`,
+  text: "Your invoice is attached.",
+  attachments: [{ filename: `${invoice.number}.pdf`, content: pdfBase64 }],
+});
+```
+
+Accounts by username are trusted code's. An admin's screen calls `password.set` through an Action of
+the app's that says who may, and a migration brings people with the hashes another app kept
+(bcrypt's `$2a$`, `$2b$` and `$2y$` too: hashed again Copilotz's way at the first sign-in).
+`email.import` takes them as well:
+
+```ts
+plugins: [
+  ...plugins,
+  passwordSignIn,
+  definePlugin({
+    name: "app",
+    // A CPF typed with its dots and dash is the same CPF.
+    resources: { passwordSignIn: { ignore: ".-/" } },
+  }),
+];
+
+// An Action of the app's, for whoever it lets manage staff.
+await ctx.call("password.set", {
+  person: employee._id,
+  identifier: employee.username,
+  password: input.password, // optional: 8 characters at least; a new one ends their sessions
+  name: employee.name,
+});
+// A migration, as the system.
+await runtime.call("password.import", { person: "emp-7", identifier: "ana", hash: row.password });
+```
+
+A person signed in changes their own with `POST /signin/password/change` `{ password, new }`.
+`password.remove` `{ person }` takes an account away, and ends its sessions.
+
 Signing out is `POST /signout`. It ends the session, disconnects its browsers and clears the cookie.
 
 ## The sign-in page's words
@@ -285,6 +348,25 @@ Copilotz's pitch, and every word of the front ends (hosts/web/WORDS.md).
 The messages email sign-in sends are the server's `emailSignIn.messages`. Setting a message's `html`
 to `null` sends it as text alone. `page.lang` says the page's language, and Google's button follows
 it.
+
+An app that serves brands on hosts of their own says, per host, what changes there:
+`emailSignIn.hosts`, by the host the page was served on, gives its name, its sender (one the `email`
+resource's `senders` allow), its messages' words and where its links go (`https://<host>` unless its
+`origin` says). Trusted code inviting someone for a brand passes its host to `email.invite`:
+
+```ts
+emailSignIn: {
+  app: "Abordo",
+  hosts: {
+    "passaromarron.com.br": {
+      app: "Pássaro Marron",
+      from: "Pássaro Marron <nao-responda@passaromarron.com.br>",
+      messages: { verify: { subject: "{code} é o seu código no {app}" } },
+    },
+  },
+},
+email: { adapter: "resend", from: "Abordo <nao-responda@abordo.com.br>", senders: ["@passaromarron.com.br"], apiKey },
+```
 
 An app in Portuguese, with its own pitch and a few words its own way (the rest are `ptBR`'s):
 

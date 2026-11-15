@@ -3,7 +3,8 @@
  * anyone (`{ kind: "public" }`). A space lets them read it by having them as
  * a viewer, and that alone: not what it draws on, and nothing written, even
  * by a tool that says it only reads. A role above viewer can't be given to
- * them. A call with no actor at all is still no one.
+ * them. A call with no actor at all is still no one. What the public reads,
+ * anyone reads: people, contacts and agents, wherever they work.
  */
 import { assertEquals } from "@std/assert";
 import {
@@ -12,7 +13,7 @@ import {
   defineAction,
   defineCollection,
   definePlugin,
-  people,
+  peopleOrContacts,
   publicCallers,
   type Runtime,
 } from "../../../runtime/mod.ts";
@@ -21,13 +22,14 @@ import { access } from "../mod.ts";
 import { test } from "../../../testing/mod.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
+const bob: Actor = { kind: "person", id: "bob" };
 const anyone: Actor = { kind: "public", id: "" };
 const code = (p: Promise<unknown>) =>
   p.then(() => "done", (e) => (e as { code?: string }).code ?? String(e));
 
 type Note = { _id: string; in: string; text: string };
 const text = { type: "string" } as const;
-const opened = (actor: Actor) => people(actor) || publicCallers(actor);
+const opened = (actor: Actor) => peopleOrContacts(actor) || publicCallers(actor);
 
 const app = definePlugin({
   name: "public-test",
@@ -112,5 +114,45 @@ test("the public is let in as a viewer only", async () => {
       }, { actor: ana })),
       "invalid",
     );
+  });
+});
+
+test("what the public reads, people, contacts and agents read too, and write nothing more", async () => {
+  await setup(async ({ rt, docs, inner, team }) => {
+    const contact: Actor = { kind: "contact", id: "c1" };
+    const helper: Actor = { kind: "agent", id: "helper", for: bob, in: team };
+    for (const who of [bob, contact, helper]) {
+      assertEquals(await rt.call("note.list", {}, { actor: who }), []);
+    }
+    await rt.call("member.set", {
+      space: docs,
+      member: { kind: "public", id: "" },
+      role: "viewer",
+    }, { actor: ana });
+    // Docs, as the public reads it: not what it draws on, nor Team; wherever an agent works.
+    for (const who of [bob, contact, helper]) {
+      assertEquals(await rt.call("note.list", {}, { actor: who }), ["guide"]);
+      assertEquals(
+        await code(rt.call("note.add", { in: docs, text: "x" }, { actor: who })),
+        "forbidden",
+      );
+    }
+    // It's read, not theirs: it isn't among the spaces they're in.
+    const listed = await rt.query<{ _id: string }[]>("space.reached", {}, { actor: bob });
+    assertEquals(listed.some((s) => s._id === docs), false);
+    // Its members still write there; another space let to the public is read too.
+    await rt.call("member.set", {
+      space: inner,
+      member: { kind: "public", id: "" },
+      role: "viewer",
+    }, { actor: ana });
+    await rt.call("note.add", { in: docs, text: "more" }, { actor: ana });
+    assertEquals(await rt.call("note.list", {}, { actor: bob }), ["draft", "guide", "more"]);
+    // Let go of, it's theirs no more.
+    await rt.call("member.remove", { space: docs, member: { kind: "public", id: "" } }, {
+      actor: ana,
+    });
+    assertEquals(await rt.call("note.list", {}, { actor: bob }), ["draft"]);
+    assertEquals(await rt.call("note.list", {}, { actor: contact }), ["draft"]);
   });
 });

@@ -1,7 +1,7 @@
 /**
  * What email sign-in waits on: a sign-up until its address is confirmed
  * (`verify`), a new password's code (`reset`), an invitation's link
- * (`invite`). Never a code or a token itself: what's kept is its seal
+ * (`invite`), a code to sign in with (`signin`). Never a code or a token itself: what's kept is its seal
  * (`hash`, or an invitation's `_id`: see shared/codes.ts), with a sign-up's
  * password already hashed (`pending`), both private. A code works until
  * `expires` and for `CODE_TRIES` wrong tries; a sign-up stays a week
@@ -15,7 +15,7 @@ const codeSchema = {
   type: "object",
   properties: {
     email: { type: "string" },
-    purpose: { type: "string", enum: ["verify", "reset", "invite"] },
+    purpose: { type: "string", enum: ["verify", "reset", "invite", "signin"] },
     /** Its code's seal (a code's); private. */
     hash: { type: "string" },
     /** A sign-up's password, hashed; private. */

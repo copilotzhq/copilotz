@@ -265,7 +265,8 @@ beside the theme.
   them. `skills` gives them know-how, and `routines` runs them on a schedule. `openapi` turns an
   API's spec into tools, and `webTools` searches and reads the web.
 - **Access:** `access` for spaces, people and contacts, with `googleSignIn`, `emailSignIn` and
-  `email`, and `devSignIn` for this machine. `accounts` connects a person's own accounts.
+  `email` (Resend or SMTP), `passwordSignIn` (a username and a password), and `devSignIn` for this
+  machine. `accounts` connects a person's own accounts.
 - **Billing:** `usage` keeps a ledger of what every model call used and cost.
 - **Compute:** `computers`, people's own machines, where agents run commands once their person says
   yes.

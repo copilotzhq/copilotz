@@ -49,10 +49,10 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`                                                                                  |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                                                               |
 | `copilotz/plugins/agents/<name>`       | one of them alone, `<name>` being `chat`, `history`, `memory`, `skills`, `routines`, `openapi`, `webtools`                                                |
-| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `googleSignIn`, `emailSignIn`, `email`, `devSignIn`, `accounts`                                              |
+| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `googleSignIn`, `emailSignIn`, `passwordSignIn`, `email`, `devSignIn`, `accounts`                            |
 | `copilotz/plugins/access/web`          | `spacesWeb`, `contactsWeb`, `accountsWeb`                                                                                                                 |
 | `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                                                          |
-| `copilotz/plugins/access/<name>`       | one of them alone, `<name>` being `spaces`, `identity`, `contacts`, `google`, `email`, `dev`, `accounts`                                                  |
+| `copilotz/plugins/access/<name>`       | one of them alone, `<name>` being `spaces`, `identity`, `contacts`, `google`, `email` (with `passwordSignIn`), `dev`, `accounts`                          |
 | `copilotz/plugins/billing`             | `usage`: the ledger, and the port an app's pricing plugs into (`spending`)                                                                                |
 | `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                                                                |
 | `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                                                           |
@@ -407,7 +407,7 @@ elements in the terminal, React in the browser. A name says what it shows (`book
   a later plugin patches an earlier one's entries, so an app changes one agent's `effort` without
   redefining it.
 - **Adapters** are implementations of a port, by port and name: `llm.openai`, `embeddings.hash`,
-  `email.resend`. A later plugin's adapter of a name replaces an earlier one's.
+  `email.resend`, `email.smtp`. A later plugin's adapter of a name replaces an earlier one's.
 
 ### Routes and `who`
 
@@ -713,6 +713,7 @@ shows, what it needs, and what it builds on. [The index](reference/plugins.md) l
   [`contacts`](reference/plugins/contacts.md) ([web](reference/plugins/contacts-web.md)),
   [`googleSignIn`](reference/plugins/google-sign-in.md),
   [`emailSignIn`](reference/plugins/email-sign-in.md), [`email`](reference/plugins/email.md),
+  [`passwordSignIn`](reference/plugins/password-sign-in.md),
   [`devSignIn`](reference/plugins/dev-sign-in.md), [`accounts`](reference/plugins/accounts.md)
   ([web](reference/plugins/accounts-web.md)).
 - **Computers:** [`computers`](reference/plugins/computers.md)

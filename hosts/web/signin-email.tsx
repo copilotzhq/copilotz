@@ -8,7 +8,8 @@
  * - **Create an account** (a name, an email, a password), when the app lets
  *   people make one;
  * - **Check your email:** the six-digit code a sign-up sent (or a sign-in
- *   refused until the address is confirmed), sent on as soon as it's typed
+ *   refused until the address is confirmed, or one asked for to sign in
+ *   with, when the app offers that: `code`), sent on as soon as it's typed
  *   or pasted, with a new one a click away (every 30 seconds);
  * - **Reset your password:** an email, then its code and a new password;
  * - **Choose your password:** arriving by an invitation's link
@@ -88,7 +89,14 @@ const AGAIN = 30;
 type Screen =
   | { name: "signin" }
   | { name: "signup" }
-  | { name: "code"; email: string; password: string; from: "signin" | "signup"; first?: true }
+  | {
+    name: "code";
+    email: string;
+    password: string;
+    /** What sent it: a sign-in refused until confirmed, a sign-up, or a code asked for to sign in. */
+    from: "signin" | "signup" | "code";
+    first?: true;
+  }
   | { name: "forgot" }
   | { name: "reset"; email: string }
   | { name: "invite"; token: string };
@@ -113,7 +121,7 @@ function problemOf(
 }
 
 /** A password field: shown or hidden at a click, saying when Caps Lock is on. */
-function Password(
+export function Password(
   { words, label, value, onChange, autoComplete, hint, error, input, autoFocus }: {
     words: SignInWords;
     label: string;
@@ -242,11 +250,13 @@ const Badge = ({ icon }: { icon: IconName }) => (
 );
 
 export function EmailSignIn(
-  { words, signUp, invite, lede, above, below, landed }: {
+  { words, signUp, code: byCode, invite, lede, above, below, landed }: {
     /** What it says: the app's words. */
     words: SignInWords;
     /** Whether people make accounts themselves. */
     signUp: boolean;
+    /** Whether people may sign in with a code sent to their address instead. */
+    code?: boolean;
     /** An invitation's token, when the page was opened by its link. */
     invite?: string;
     /** What the first screen says under its heading. */
@@ -373,23 +383,45 @@ export function EmailSignIn(
     }
   };
 
+  /** A code to sign in with, to the address typed: then its screen. */
+  const askCode = async () => {
+    if (busy || !checked({ email: true })) return;
+    try {
+      await send("/signin/email/code", { email: typed });
+      go({ name: "code", email: typed, password: "", from: "code" });
+    } catch (error) {
+      refused(problemOf(error, words, { invalid: { field: "email", text: words.enterEmail } }));
+    }
+  };
+
   const confirm = async (digits = code) => {
     if (screen.name !== "code" || busy) return;
     if (digits.length !== 6) {
       refused({ field: "code", text: words.enterCode });
       return;
     }
+    const path = screen.from === "code" ? "/signin/email/enter" : "/signin/email/verify";
     try {
-      landed(await send<SignedIn>("/signin/email/verify", { email: screen.email, code: digits }));
+      landed(await send<SignedIn>(path, { email: screen.email, code: digits }));
     } catch (error) {
       setCode("");
       refused(problemOf(error, words, { invalid: { field: "code", text: words.wrongCode } }));
     }
   };
 
-  /** Another code for a sign-up: signing in with its password sends one (`unverified`). */
+  /** Another code: to sign in with, asked again; a sign-up's, by signing in with its password. */
   const newCode = async () => {
     if (screen.name !== "code" || busy || again) return;
+    if (screen.from === "code") {
+      try {
+        await send("/signin/email/code", { email: screen.email });
+        restart();
+        setSent(words.codeSent);
+      } catch (error) {
+        refused(problemOf(error, words));
+      }
+      return;
+    }
     try {
       landed(
         await send<SignedIn>("/signin/email", { email: screen.email, password: screen.password }),
@@ -583,6 +615,15 @@ export function EmailSignIn(
                 {busy ? words.signingInBusy : words.signIn}
               </Button>
             </form>
+            {byCode
+              ? (
+                <p className="copilotz-signin-switch">
+                  <Button variant="link" icon="mail" onClick={() => void askCode()}>
+                    {words.codeInstead}
+                  </Button>
+                </p>
+              )
+              : null}
             {signUp ? switchTo(words.newHere, words.createAccount, { name: "signup" }) : null}
           </>
         )
@@ -642,7 +683,10 @@ export function EmailSignIn(
             <h2>{words.codeTitle}</h2>
             <p className="copilotz-signin-lede">
               {screen.first ? <>{words.confirmFirst}{" "}</> : null}
-              {say(words.codeLede, bold(screen.email))}
+              {say(
+                screen.from === "code" ? words.codeSignInLede : words.codeLede,
+                bold(screen.email),
+              )}
             </p>
             <form
               onSubmit={(event) => {

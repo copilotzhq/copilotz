@@ -3,7 +3,9 @@
  * with Google (`google`: its button, for the client id `GET /google` gives;
  * the button posts its token to `/signin/google`), with an email and a
  * password (`email`: `/signin/email…`, its screens in signin-email.tsx:
- * making an account, its code, a new password, an invitation's link), or by
+ * making an account, its code, a new password, an invitation's link; a code
+ * instead of a password, when the app offers it), with a username and a
+ * password (`password`: `/signin/password`, signin-password.tsx), or by
  * name on this machine (`dev`: `/signin/dev`). Each sets the session cookie;
  * the page then starts over, connected, where the server lands them (with
  * many orgs, the one they were in last; their own the first time), with a
@@ -25,10 +27,16 @@ import { Logo } from "./toolkit/logo.tsx";
 import { Notice } from "./toolkit/notice.tsx";
 import { Spinner } from "./toolkit/spinner.tsx";
 import { EmailSignIn, post, say, type SignedIn } from "./signin-email.tsx";
+import { PasswordSignIn } from "./signin-password.tsx";
 import { signInPageOf, type SignInSaid } from "./signin-words.ts";
 
 /** The ways to sign in the app's routes offer, each with what its button needs. */
-export type Ways = { google?: { clientId: string }; email?: { signUp: boolean }; dev?: true };
+export type Ways = {
+  google?: { clientId: string };
+  email?: { signUp: boolean; code?: boolean };
+  password?: true;
+  dev?: true;
+};
 
 declare const google: {
   accounts: {
@@ -149,14 +157,20 @@ export function SignIn(
   },
 ): ReactNode {
   const { words, about } = page;
-  const config = { google: signIn.google ?? null, email: signIn.email ?? null, dev: !!signIn.dev };
+  const config = {
+    google: signIn.google ?? null,
+    email: signIn.email ?? null,
+    password: !!signIn.password,
+    dev: !!signIn.dev,
+  };
   const [name, setName] = useState("");
   // What went wrong with Google's button, or signing in by name: said beside it.
   const [error, setError] = useState<{ text: string; from: "google" | "dev" }>();
   const [busy, setBusy] = useState(false);
   const [going, setGoing] = useState<SignedIn["org"] | null>();
-  // With email sign-in, signing in by name is one click away, under it.
+  // With email sign-in, signing in by name, or by a username, is one click away, under it.
   const [byName, setByName] = useState(!config.email);
+  const [byUsername, setByUsername] = useState(false);
   const button = useRef<HTMLDivElement>(null);
   const typed = name.trim().toLowerCase();
   const invalid = typed !== "" && !NAME.test(typed);
@@ -209,6 +223,8 @@ export function SignIn(
 
   const lede = config.email
     ? config.google ? words.ledeGoogleEmail : words.ledeEmail
+    : config.password && !config.google
+    ? words.ledePassword
     : config.google && config.dev
     ? words.ledeGoogleDev
     : config.google
@@ -219,7 +235,9 @@ export function SignIn(
     ? (
       <>
         <div ref={button} className="copilotz-signin-google" />
-        {config.email || config.dev ? <div className="copilotz-signin-or">{words.or}</div> : null}
+        {config.email || config.password || config.dev
+          ? <div className="copilotz-signin-or">{words.or}</div>
+          : null}
       </>
     )
     : null;
@@ -342,6 +360,7 @@ export function SignIn(
               <EmailSignIn
                 words={words}
                 signUp={config.email.signUp}
+                code={config.email.code}
                 invite={invite}
                 lede={lede}
                 above={
@@ -350,10 +369,23 @@ export function SignIn(
                     {errorNotice("google")}
                   </>
                 }
-                below={config.dev
+                below={config.password || config.dev
                   ? (
                     <div className="copilotz-signin-dev">
-                      {byName ? devForm : (
+                      {config.password
+                        ? byUsername
+                          ? <PasswordSignIn words={words} primary={false} focus landed={landed} />
+                          : (
+                            <Button
+                              variant="link"
+                              icon="person"
+                              onClick={() => setByUsername(true)}
+                            >
+                              {words.identifierInstead}
+                            </Button>
+                          )
+                        : null}
+                      {!config.dev ? null : byName ? devForm : (
                         <Button
                           variant="link"
                           icon="terminal"
@@ -375,8 +407,21 @@ export function SignIn(
                 <h2>{words.signIn}</h2>
                 <p className="copilotz-signin-lede">{lede}</p>
                 {googleButton}
+                {config.password
+                  ? (
+                    <PasswordSignIn
+                      words={words}
+                      primary
+                      focus={!config.google}
+                      landed={landed}
+                    />
+                  )
+                  : null}
+                {config.password && config.dev
+                  ? <div className="copilotz-signin-or">{words.or}</div>
+                  : null}
                 {devForm}
-                {!config.google && !config.dev
+                {!config.google && !config.dev && !config.password
                   ? <p className="copilotz-signin-lede">{words.noWay}</p>
                   : null}
                 {errorNotice()}

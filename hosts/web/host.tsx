@@ -148,7 +148,8 @@ async function shownOf(): Promise<Shown> {
 /**
  * The ways to sign in the app has, by what its routes answer: Google's, with
  * its client id (`GET /google`), email's, with whether people make accounts
- * (`GET /signin/email`), and dev sign-in, on this machine
+ * and sign in by a code (`GET /signin/email`), password sign-in's
+ * (`GET /signin/password`), and dev sign-in, on this machine
  * (`GET /signin/dev`). One that isn't there answers 404.
  */
 async function waysToSignIn(): Promise<Ways> {
@@ -159,15 +160,18 @@ async function waysToSignIn(): Promise<Ways> {
     const json = response?.ok && response.headers.get("content-type")?.includes("json");
     return json ? await response!.json().catch(() => undefined) : undefined;
   };
-  const [google, email, dev] = await Promise.all([
+  const [google, email, password, dev] = await Promise.all([
     asked("/google"),
     asked("/signin/email"),
+    asked("/signin/password"),
     asked("/signin/dev"),
   ]);
   const clientId = (google as { clientId?: unknown } | undefined)?.clientId;
+  const said = email as { signUp?: unknown; code?: unknown } | undefined;
   return {
     ...(typeof clientId === "string" && clientId ? { google: { clientId } } : {}),
-    ...(email ? { email: { signUp: (email as { signUp?: unknown }).signUp !== false } } : {}),
+    ...(said ? { email: { signUp: said.signUp !== false, code: said.code === true } } : {}),
+    ...(password ? { password: true as const } : {}),
     ...(dev ? { dev: true as const } : {}),
   };
 }

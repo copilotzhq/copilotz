@@ -282,9 +282,11 @@ export type Owner = {
 const SYSTEM = "sys.";
 const WRITES = ["insert", "update", "replace", "delete"];
 /**
- * A held transaction with no op for this long is rolled back (its executor
- * stuck, or gone unnoticed). Short: it holds the store's writer, the app's
- * only one, and every other write waits for it.
+ * A held transaction left waiting on its executor this long is rolled back
+ * (the executor stuck, or gone unnoticed): from when it answered an op until
+ * the next one arrives. Short: it holds the store's writer, the app's only
+ * one, and every other write waits for it. An op queued or running, however
+ * long it takes, isn't idleness.
  */
 const HOLD_IDLE_MS = 5_000;
 /** An idle owner saves Processor cursors this long after their last advance. */
@@ -1303,17 +1305,19 @@ export async function createOwner(
     let closed = false;
     let idle = false;
     let ending: { reply: PromiseWithResolvers<unknown>; value: unknown } | undefined;
+    // Armed only while it waits on its executor: from an answer to the next request.
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const waiting = () => {
+      timer = setTimeout(() => {
+        idle = true;
+        send({ tx: id, ops: [], end: "abort" }).catch(() => {});
+      }, HOLD_IDLE_MS);
+    };
     const send: Held["send"] = (request) => {
       if (closed) return Promise.reject(invalid("The transaction is closed."));
       clearTimeout(timer);
+      timer = undefined;
       if (request.end) closed = true;
-      else {
-        timer = setTimeout(() => {
-          idle = true;
-          send({ tx: id, ops: [], end: "abort" }).catch(() => {});
-        }, HOLD_IDLE_MS);
-      }
       const reply = Promise.withResolvers<unknown>();
       inbox.push({ request, reply });
       wake?.();
@@ -1356,6 +1360,8 @@ export async function createOwner(
           }
           if (!request.end) {
             reply.resolve(value);
+            // Answered, and nothing else asked: it waits on its executor now.
+            if (!inbox.length && !closed) waiting();
             continue;
           }
           ending = { reply, value };

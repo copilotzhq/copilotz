@@ -39,7 +39,8 @@ export type Graph = {
  * An op that fails, a write the rules refuse included, ends the transaction:
  * it rolls back, and its later ops fail ("The transaction is closed."), even
  * when the error is caught. It holds the store's writer, so keep slow work out
- * of it: one with no op for 5 seconds rolls back too.
+ * of it: one whose code sends no op for 5 seconds after its last answer rolls
+ * back too. An op that is slow itself, or waits for the writer, doesn't count.
  */
 export type TransactionScope = {
   db: { collection<T = Record<string, unknown>>(name: string): Collection<T> };

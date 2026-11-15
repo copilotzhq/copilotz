@@ -76,8 +76,11 @@ job until it ends. So plugin code keeps slow work, such as a model call, outside
   transaction is closed.", even when the code caught the error. A write the rules refuse counts:
   before 1.0.0-rc.31 it left the transaction open, holding the writer, and every write in the app
   waited.
-- **An idle transaction rolls back.** One with no op for 5 seconds is rolled back, so a stuck
-  executor can't hold the writer for long.
+- **An idle transaction rolls back.** One left waiting on its executor for 5 seconds, from the
+  owner's answer to an op until the next op arrives, is rolled back, so a stuck executor can't hold
+  the writer for long. An op that is slow itself, or that waits for the writer behind another
+  transaction, isn't idle: before 1.0.0-rc.50 the 5 seconds ran from when an op arrived, so such an
+  op rolled back its own transaction.
 - **Each one is measured.** `copilotz.transaction.duration` records how long it held the writer, by
   outcome: `commit`, `abort`, `idle` or `error`. See [Metrics](../operations/metrics.md).
 

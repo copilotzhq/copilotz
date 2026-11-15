@@ -460,7 +460,8 @@ What plugin code gets. `Context` is an Action's, a Processor's and a tool's.
 `ctx.as(other)` records what it does as `other`, `via` the actor it acted for, and stays where the
 work is unless `other` says where (`in`, or `in: undefined` for nowhere). `ctx.transaction` holds
 the store's writer: an op in it that fails, a write the rules refuse included, ends it and rolls it
-back, and one with no op for 5 seconds rolls back too ([one writer](architecture/the-owner.md)).
+back, and one whose code sends no op for 5 seconds after its last answer rolls back too
+([one writer](architecture/the-owner.md)).
 
 The others are narrower:
 

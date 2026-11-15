@@ -301,7 +301,7 @@ types its documents and queries from the schema.
 | `schema`  | the JSON Schema every write is checked against                                              |
 | `queries` | named reads: a function, or `{ allow, run }` to let actors run it from outside              |
 | `vectors` | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
-| `indexes` | lists of fields (`[["at"], ["tags.tenant", "at"]]`), each a scalar its schema types         |
+| `indexes` | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
 | `private` | fields only trusted code reads: an actor's queries and Views get the documents without them |
 | `records` | `true`: a ledger, appended to and never changed, whose documents are their own record       |
 | `durable` | `false`: kept in the owner's memory, never in the store, with no events                     |
@@ -312,7 +312,12 @@ types its documents and queries from the schema.
 `nearest(vector, { filter, limit })` and `query(name, params)`.
 
 - **Filters:** `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$exists`, `$elemMatch`,
-  `$and`, `$or`, `$nor`, `$not`.
+  `$and`, `$or`, `$nor`, `$not`, and `$regex` with `$options` `i` (ignore case) and `s` (`.` matches
+  line breaks): the part of JavaScript's patterns every store reads alike, matched in linear time,
+  so any caller may send one. Escape text meant literally (`RegExp.escape(text)`). A pattern ignores
+  case, not accents: search a folded copy of the field for that. The
+  [stores' README](../stores/README.md#text-patterns) has what's in the subset, its limits, and the
+  folded copy.
 - **Updates:** `$set`, `$unset`, `$inc`, `$push` (with `$each`), `$addToSet`, `$pull`; `upsert`.
 - **Finds:** `sort`, `limit`, `skip`, and `projection` (`{ name: 1 }` keeps fields, `{ data: 0 }`
   leaves them out), applied before any large value is loaded.

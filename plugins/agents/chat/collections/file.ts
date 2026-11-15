@@ -63,6 +63,8 @@ const fileSchema = {
 
 export const file = defineCollection({
   schema: fileSchema,
+  // A conversation's files: what moves and goes with it.
+  indexes: [["thread"]],
   queries: {
     /**
      * One file as its reader reaches it, all but its content (`data`): what

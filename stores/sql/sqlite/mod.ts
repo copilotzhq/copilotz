@@ -15,6 +15,11 @@
  * Maintenance SQL (`inspect`, a transaction's `execute`) runs one statement
  * as it is: a read apart, in a process of its own on a read-only connection
  * (apart.ts), a write in a maintenance transaction on the writer.
+ *
+ * `$regex` calls the reference's matcher, a function each connection has
+ * (`node:sqlite` registers it). A database that can't have one (`bun:sqlite`,
+ * one opened another way) reads with the rest of the filter in SQL, sorted
+ * there, and matches the whole filter in JavaScript before it pages.
  */
 type SQLInputValue = null | number | bigint | string | Uint8Array;
 
@@ -23,6 +28,12 @@ export type SqliteDatabase = {
   exec(sql: string): unknown;
   prepare(sql: string): SqliteStatement;
   close(): void;
+  /** Registers a SQL function (`node:sqlite` has it): `$regex` is matched in SQL with it. */
+  function?(
+    name: string,
+    options: { deterministic?: boolean; directOnly?: boolean },
+    fn: (...args: SQLInputValue[]) => SQLInputValue,
+  ): unknown;
   /** Whether a transaction is open (`node:sqlite` calls it `isTransaction`, Bun `inTransaction`). */
   readonly isTransaction?: boolean;
   readonly inTransaction?: boolean;
@@ -65,7 +76,9 @@ async function builtin(path: string): Promise<SqliteDatabase> {
 }
 import type { JSONSchema } from "../../../runtime/define.ts";
 import { forbidden, invalid } from "../../../runtime/errors.ts";
-import { applyUpdate, seedOf } from "../../../runtime/mongo.ts";
+import { applyUpdate, check, matches, seedOf, sortAndPage } from "../../../runtime/mongo.ts";
+import { pattern } from "../../../runtime/pattern.ts";
+import { aggregate as grouping } from "../../../runtime/aggregate.ts";
 import { checkBlobId } from "../../../runtime/blobs.ts";
 import {
   type Blob,
@@ -75,14 +88,22 @@ import {
   type Edge,
   type Event,
   fenced,
+  type Filter,
   type IndexSpec,
   type Inspected,
   type Reader,
   type Store,
   type Transaction,
 } from "../../../runtime/store.ts";
-import { type Bind, page, type Scalars, where } from "../shared/filter.ts";
-import { scalar, sqlite, sqliteAggregates } from "./dialect.ts";
+import {
+  asksPattern,
+  type Bind,
+  page,
+  type Scalars,
+  where,
+  withoutPatterns,
+} from "../shared/filter.ts";
+import { PATTERN_FUNCTION, scalar, sqlite, sqliteAggregates } from "./dialect.ts";
 import { grouped } from "../shared/aggregate.ts";
 import { statement as checked } from "../shared/statement.ts";
 import { readApart } from "./apart.ts";
@@ -264,6 +285,24 @@ export async function sqliteStore(options: {
     );
     return db;
   };
+  /**
+   * Registers `$regex`'s function on a connection, if it can have one (as
+   * `node:sqlite`'s `function`), and says whether it answers.
+   */
+  const matching = (db: SqliteDatabase) => {
+    try {
+      db.function?.(
+        PATTERN_FUNCTION,
+        { deterministic: true, directOnly: true },
+        (text, source, flags) =>
+          typeof text === "string" && pattern(source, flags ?? "").test(text) ? 1 : 0,
+      );
+      const asked = db.prepare(`SELECT ${PATTERN_FUNCTION}('a', 'a', '') AS found`).get();
+      return (asked as { found?: unknown } | undefined)?.found === 1;
+    } catch {
+      return false;
+    }
+  };
   const writer = await connect();
   /**
    * Why reads stay on the reading connection, when they do: the database is
@@ -324,6 +363,13 @@ export async function sqliteStore(options: {
   else due = changes() + Math.max(1_000, known);
   const committed = await connect();
   reload = () => committed.exec("ANALYZE sqlite_schema");
+  /** Whether both connections match `$regex` in SQL; else reads match patterns in JavaScript. */
+  const patterns = matching(writer) && matching(committed);
+  /**
+   * Whether a filter's patterns are matched here, after SQL reads with the
+   * rest of it: checked first, so what's refused is, whatever SQL finds.
+   */
+  const apart = (filter: Filter) => !patterns && asksPattern(filter) && (check(filter), true);
   let statements = 0;
   let queue = Promise.resolve();
 
@@ -369,31 +415,42 @@ export async function sqliteStore(options: {
   const reader = (db: SqliteDatabase): Reader => {
     // Async, so a filter it can't translate rejects like any other failure.
     const find: Reader["find"] = async (collection, filter = {}, options = {}) => {
+      const here = apart(filter);
       const { bind, params } = binder();
       const sql = `SELECT doc FROM main.nodes WHERE collection = ${named(collection, bind)} AND ` +
-        `${where(filter, sqlite, bind, scalars.get(collection))}` +
-        page(options, sqlite, bind, scalars.get(collection));
-      return await Promise.resolve(
+        `${where(here ? withoutPatterns(filter) : filter, sqlite, bind, scalars.get(collection))}` +
+        page(here ? { sort: options.sort } : options, sqlite, bind, scalars.get(collection));
+      const docs = await Promise.resolve(
         all(db, sql, params).map((row) => JSON.parse(String(row.doc)) as Doc),
       );
+      // Sorted in SQL; matched and paged here.
+      return here
+        ? sortAndPage(docs.filter((doc) => matches(doc, filter)), {
+          skip: options.skip,
+          limit: options.limit,
+        })
+        : docs;
     };
     return {
       find,
       // Filtered in SQL, ranked here: SQLite has no vector index.
       async nearest(collection, field, vector, options = {}) {
+        const filter = options.filter ?? {};
+        const here = apart(filter);
         const { bind, params } = binder();
         const sql =
           `SELECT n.doc AS doc, v.embedding AS embedding FROM main.nodes n JOIN main.vectors v ` +
           `ON v.collection = n.collection AND v.node = n.id WHERE n.collection = ${
             named(collection, bind)
           } AND v.field = ${bind(field)} AND ${
-            where(options.filter ?? {}, sqlite, bind, scalars.get(collection))
+            where(here ? withoutPatterns(filter) : filter, sqlite, bind, scalars.get(collection))
           } ` +
           `ORDER BY n.rowid`;
         const scored = (await Promise.resolve(all(db, sql, params))).flatMap((row) => {
           const embedding = JSON.parse(String(row.embedding)) as number[];
-          return embedding.length === vector.length
-            ? [{ ...JSON.parse(String(row.doc)) as Doc, _score: cosine(embedding, vector) }]
+          const doc = JSON.parse(String(row.doc)) as Doc;
+          return embedding.length === vector.length && (!here || matches(doc, filter))
+            ? [{ ...doc, _score: cosine(embedding, vector) }]
             : [];
         });
         return scored.sort((a, b) => b._score - a._score).slice(0, options.limit ?? 10);
@@ -402,6 +459,9 @@ export async function sqliteStore(options: {
         (await find(collection, filter, { ...options, limit: 1 }))[0] ?? null,
       async aggregate(collection, plan) {
         if (!plan.group) return await find(collection, plan.match, plan);
+        if (apart(plan.match)) {
+          return grouping(await find(collection, plan.match), { ...plan, match: {} });
+        }
         const { bind, params } = binder();
         const query = grouped({ ...plan, group: plan.group }, sqlite, sqliteAggregates, bind);
         const sql =
@@ -412,6 +472,7 @@ export async function sqliteStore(options: {
         return await Promise.resolve(query.read(all(db, sql, params)));
       },
       async count(collection, filter = {}) {
+        if (apart(filter)) return (await find(collection, filter)).length;
         const { bind, params } = binder();
         const sql =
           `SELECT count(*) AS n FROM main.nodes WHERE collection = ${

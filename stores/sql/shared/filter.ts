@@ -5,8 +5,12 @@
  * which are MongoDB's: equality also matches an array element and null also
  * a missing field; comparisons only match values of the operand's type, and
  * an array when an element does; sorting orders types as MongoDB does.
+ * `$regex` takes a pattern runtime/pattern.ts has checked, which each
+ * dialect matches as that reference does.
  */
 import type { Filter, FindOptions, ScalarType } from "../../../runtime/store.ts";
+import { checkOptions } from "../../../runtime/mongo.ts";
+import { type Pattern, pattern } from "../../../runtime/pattern.ts";
 
 /** Binds a value as a statement parameter and returns its placeholder. */
 export type Bind = (value: unknown) => string;
@@ -47,6 +51,13 @@ export type Dialect = {
    * serve the order: null and missing first, as MongoDB orders them.
    */
   sorted(field: string, type: ScalarType, direction: 1 | -1): string;
+  /**
+   * Whether the field is a string matching the pattern somewhere (or, for an
+   * array, one of its strings is), as runtime/pattern.ts matches it.
+   */
+  regex(path: unknown, pattern: Pattern, bind: Bind): string;
+  /** The column that holds `_id`, the row's key: equality and `$in` on `_id` look it up. */
+  key: string;
   /** The column that keeps insertion order: ties sort by it, as in the reference. */
   natural: string;
   /** The LIMIT that means "no limit", for an OFFSET without one. */
@@ -78,16 +89,26 @@ function compile(filter: Filter, c: Context): string {
   return parts.length ? parts.join(" AND ") : "TRUE";
 }
 
+/**
+ * The type a field's index holds it as, if any: an indexed scalar's, or
+ * `string` for `_id`, which the key holds (always a string).
+ */
+const typeOf = (field: string, c: Context) => field === "_id" ? "string" : c.scalars?.get(field);
+
+/** The expression an index holds a field as: the key for `_id`, else its scalar's. */
+const indexed = (field: string, type: ScalarType, c: Context) =>
+  field === "_id" ? c.dialect.key : c.dialect.scalar(field, type);
+
 function test(field: string, condition: unknown, c: Context): string {
   const { dialect, bind } = c;
   const path = dialect.path(field);
-  const type = c.scalars?.get(field);
+  const type = typeOf(field, c);
   const operators = condition !== null && typeof condition === "object" &&
     !Array.isArray(condition) && Object.keys(condition).some((key) => key.startsWith("$"));
   if (!operators) {
-    // An indexed scalar equal to a value of its type: what its index serves.
+    // An indexed scalar (or `_id`) equal to a value of its type: what its index serves.
     return type && fits(type, condition)
-      ? `${dialect.scalar(field, type)} = ${dialect.operand(type, condition, bind)}`
+      ? `${indexed(field, type, c)} = ${dialect.operand(type, condition, bind)}`
       : dialect.equals(path, condition, bind);
   }
   const parts = Object.entries(condition as Record<string, unknown>).map(([op, arg]) => {
@@ -109,13 +130,24 @@ function test(field: string, condition: unknown, c: Context): string {
         const among = inner === "$in" || inner === "$eq" ? "$in" : "$nin";
         return dialect.elemMatch(path, among, [values].flat(), bind);
       }
+      // `_id` compares as its document holds it: the key's own order may not be code points'.
       case "$gt":
       case "$gte":
       case "$lt":
       case "$lte":
-        return type && type !== "boolean" && fits(type, arg)
+        return type && type !== "boolean" && field !== "_id" && fits(type, arg)
           ? `${dialect.scalar(field, type)} ${SQL_OPS[op]} ${dialect.operand(type, arg, bind)}`
           : dialect.compare(path, op, arg, bind);
+      case "$regex":
+        return dialect.regex(
+          path,
+          pattern(arg, (condition as Record<string, unknown>).$options),
+          bind,
+        );
+      // Read with its `$regex`.
+      case "$options":
+        checkOptions(condition as Record<string, unknown>);
+        return "TRUE";
       default:
         throw new Error(`Unsupported filter operator ${op}`);
     }
@@ -143,15 +175,17 @@ function among(
     const of = values.filter((v) => typeof v === kind);
     if (of.length === 1) parts.push(test(field, of[0], c));
     else if (of.length && type === kind) {
-      parts.push(c.dialect.oneOf(c.dialect.scalar(field, type), type, of, c.bind));
+      parts.push(c.dialect.oneOf(indexed(field, type, c), type, of, c.bind));
     } else if (of.length) parts.push(c.dialect.among(path, kind, of, c.bind));
   }
   return parts.length ? `(${parts.join(" OR ")})` : "FALSE";
 }
 
 /**
- * A WHERE clause over the `doc` column; `_id` equality uses the primary key,
- * and filters on a collection's indexed fields (`scalars`) can use theirs.
+ * A WHERE clause over the `doc` column. `_id` equal to a string, or `$in`
+ * strings, looks up the primary key wherever it is in the filter (beside a
+ * rule's, in `$and`, in `$or`), and filters on a collection's indexed fields
+ * (`scalars`) can use theirs.
  */
 export function where(
   filter: Filter = {},
@@ -159,12 +193,29 @@ export function where(
   bind: Bind,
   scalars?: Scalars,
 ): string {
-  const c = { dialect, bind, scalars };
-  if (typeof filter._id === "string") {
-    const { _id, ...rest } = filter;
-    return `id = ${bind(_id)} AND ${compile(rest, c)}`;
+  return compile(filter, { dialect, bind, scalars });
+}
+
+/** Whether a filter asks `$regex` anywhere. */
+export function asksPattern(filter: unknown): boolean {
+  if (Array.isArray(filter)) return filter.some(asksPattern);
+  if (filter === null || typeof filter !== "object") return false;
+  return Object.entries(filter).some(([key, value]) => key === "$regex" || asksPattern(value));
+}
+
+/**
+ * A filter without what asks `$regex`: its top-level clauses (and those of
+ * its `$and`s) that do are left out. It matches every document the filter
+ * does, and maybe more: a store that can't match patterns in SQL reads with
+ * it, and matches the whole filter in JavaScript after.
+ */
+export function withoutPatterns(filter: Filter): Filter {
+  const kept: Filter = {};
+  for (const [key, value] of Object.entries(filter)) {
+    if (key === "$and") kept.$and = (value as Filter[]).map(withoutPatterns);
+    else if (!asksPattern(value)) kept[key] = value;
   }
-  return compile(filter, c);
+  return kept;
 }
 
 /**

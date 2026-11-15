@@ -5,7 +5,8 @@
  * translate queries instead.
  */
 import type { Doc, Filter, FindOptions, Projection, Update } from "./store.ts";
-import { invalid } from "./errors.ts";
+import { failure, invalid } from "./errors.ts";
+import { pattern } from "./pattern.ts";
 
 /**
  * A field name a write may give: not an operator's or a blob reference's
@@ -150,6 +151,8 @@ const OPERATORS = new Set([
   "$exists",
   "$not",
   "$elemMatch",
+  "$regex",
+  "$options",
 ]);
 
 /** A condition made of operators (`{ $gt: 1 }`), as opposed to a value to equal. */
@@ -204,6 +207,16 @@ function compares(value: unknown, op: keyof typeof COMPARE, operand: unknown): b
   return one(value) || (Array.isArray(value) && value.some(one));
 }
 
+/**
+ * `$regex` as in MongoDB: a string matches the pattern somewhere (runtime/pattern.ts),
+ * and an array when one of its strings does. Anything else doesn't.
+ */
+function matchesPattern(value: unknown, source: unknown, options: unknown): boolean {
+  const { test } = pattern(source, options);
+  const one = (v: unknown) => typeof v === "string" && test(v);
+  return one(value) || (Array.isArray(value) && value.some(one));
+}
+
 function test(value: unknown, condition: unknown): boolean {
   if (!operatorObject(condition)) {
     // Equality also matches an element of an array field, and null a missing field,
@@ -233,15 +246,30 @@ function test(value: unknown, condition: unknown): boolean {
       // An array with an element meeting the condition (`$in`, `$nin`, `$eq`, `$ne`).
       case "$elemMatch":
         return Array.isArray(value) && value.some((item) => test(item, arg));
+      case "$regex":
+        return matchesPattern(value, arg, (condition as Record<string, unknown>).$options);
+      // Read with its `$regex`.
+      case "$options":
+        return checkOptions(condition as Record<string, unknown>), true;
       default:
         throw new Error(`Unsupported filter operator ${op}`);
     }
   });
 }
 
+/** `$options` go with a `$regex`, in the same condition: `{ $regex: "^ana", $options: "i" }`. */
+export function checkOptions(condition: Record<string, unknown>): void {
+  if (!("$regex" in condition)) {
+    throw failure("invalid", '$options go with a $regex: { $regex: "^ana", $options: "i" }', {
+      public: true,
+    });
+  }
+}
+
 /**
  * Throws for anything the reference doesn't implement, before reading any
- * document, as the SQL stores do when they translate the filter.
+ * document, as the SQL stores do when they translate the filter. A `$regex`
+ * outside what every store reads alike is `invalid`.
  */
 export function check(filter: Filter): void {
   // What every store matches array elements on: one of these, with scalars.
@@ -262,6 +290,8 @@ export function check(filter: Filter): void {
       if (op === "$in" || op === "$nin") (arg as unknown[]).forEach(condition);
       else if (op === "$eq" || op === "$ne" || op === "$not") condition(arg);
       else if (op === "$elemMatch") elementCondition(arg);
+      else if (op === "$regex") pattern(arg, value.$options);
+      else if (op === "$options") checkOptions(value);
       else if (op !== "$exists" && arg !== null && !["number", "string"].includes(typeof arg)) {
         throw new Error(`Unsupported comparison with ${JSON.stringify(arg)}`);
       }

@@ -317,6 +317,15 @@ resource kinds (no list of tabs or sections anywhere):
 - **Over where you type** (chat's `conversation` resource), Views hear `working`: true while an
   agent's turn runs in the chat, held 600 ms past its last step, so what waits for the turn to be
   over (an agent asking for your OK) comes once it is, not while the agent still explains itself.
+- **Before it sends** (built 2026-11-15): a `conversation` entry may carry `beforeSend`, a function
+  of the front end's, asked as the box sends, before anything goes (a voice message's upload
+  included), with `{ thread, in, text, files }` and the page's `call`: a desk takes the chat over
+  from its assistant first, a form checks what's typed. `false` holds it (what's typed stays, the
+  front end's View says why); thrown, its words show as a refused send's. One after another, in
+  `order`; an entry may be the hook alone. It's the resource model's way with behaviour, as the
+  `orgs` slot's `use`: the function rides in the front end's resources, in the browser, and merges
+  as any entry does. And a front end puts words in the box itself with chat's `handDraft`
+  (contract), as staff notes do: typed in after what's there, for the person to send.
 
 ### Agents on the web
 

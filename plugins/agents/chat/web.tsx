@@ -39,6 +39,10 @@
  * - `conversation`: Views it shows over where you type, with hints
  *   `{ thread, in, side, working, busy }`: what to answer there, once the
  *   agents' turn is over (chat's own asks: `{ asks: { view: "chat.asks" } }`);
+ *   and what a front end does before the box sends (`beforeSend`, given the
+ *   words, the files, the conversation and how to call Actions): take the
+ *   chat over first, or check it, holding the message (`false`) or failing
+ *   with words that show;
  * - `home`: Views home shows over its greeting, with hints `{ in }`
  *   (invitations to join a space);
  * - `toolViews`: by tool, the View that shows a call to it, instead of the
@@ -56,6 +60,9 @@
  *   conversation and on home, with hints `{ thread?, in?, working }`: what to
  *   know before sending, or nothing (`{ billing: { view: "billing.composer" } }`:
  *   that the org is out of credits).
+ *
+ * A front end puts words in a conversation's box itself with `handDraft`
+ * (chat's contract): typed in after what's there, for the person to send.
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { asksView } from "./views/web/asks.tsx";

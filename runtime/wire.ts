@@ -7,6 +7,7 @@
 import type { Actor, Event } from "./store.ts";
 import type { Op } from "./ops.ts";
 import type { Scheduled } from "./schedules.ts";
+import { httpError } from "./errors.ts";
 
 export const RUN = "core.run";
 export const OP = "core.op";
@@ -46,14 +47,16 @@ export type Job =
 
 /**
  * Why something failed; `final`: trying again won't help (it already was, as
- * long as it should be); `detail`: what its caller needs to act on it (where a
- * write needs a yes for, say), strings only.
+ * long as it should be); `status`: the HTTP status it asked to answer with
+ * (see `FailureOptions`); `detail`: what its caller needs to act on it (where
+ * a write needs a yes for, say), strings only.
  */
 export type Failure = {
   message: string;
   code?: string;
   final?: true;
   public?: true;
+  status?: number;
   detail?: Record<string, string>;
 };
 
@@ -62,7 +65,8 @@ const detailOf = (error: unknown): Record<string, string> | undefined => {
   const detail = (error as { detail?: unknown })?.detail;
   if (!detail || typeof detail !== "object") return undefined;
   const kept = Object.entries(detail).filter(([key, value]) =>
-    typeof value === "string" && !["message", "code", "final", "public", "stack"].includes(key)
+    typeof value === "string" &&
+    !["message", "code", "final", "public", "status", "stack"].includes(key)
   );
   return kept.length ? Object.fromEntries(kept) as Record<string, string> : undefined;
 };
@@ -130,6 +134,9 @@ export const failure = (error: unknown): Failure => ({
   ...((error as { final?: unknown })?.final === true ? { final: true as const } : {}),
   // A message for any caller stays one from job to job (see errors.ts).
   ...((error as { public?: unknown })?.public === true ? { public: true as const } : {}),
+  ...(httpError((error as { status?: unknown })?.status)
+    ? { status: (error as { status: number }).status }
+    : {}),
   ...(detailOf(error) ? { detail: detailOf(error) } : {}),
 });
 
@@ -139,6 +146,7 @@ export const raise = (failure: Failure): Error =>
     failure.code ? { code: failure.code } : {},
     failure.final ? { final: true } : {},
     failure.public ? { public: true } : {},
+    httpError(failure.status) ? { status: failure.status } : {},
     failure.detail ? { ...failure.detail, detail: failure.detail } : {},
   );
 

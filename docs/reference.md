@@ -322,6 +322,20 @@ types its documents and queries from the schema.
 
 Plugin code runs any named query, as whoever it acts for, under the rules. From outside,
 `runtime.query("message.history", params, { actor })` runs only a query whose `allow` lets them in.
+A query is named under a collection, usually the one it reads. A plugin whose queries read only
+other plugins' collections (reports) declares a collection of its own to name them under: one that
+holds no documents costs nothing.
+
+**Secrets** go in a `private` field: a token, an API key, an SMTP password. No event holds it, so
+the log keeps the document without it (an update's `changed` may name the field, never its value).
+An actor's queries and Views read the document without it, and REST and the socket never read,
+filter by or write it. Actions and Processors read it. A path names the same field in every
+document, so settings kept as key and value documents (`{ _id: "smtp_pass", value }`) keep their
+secrets in a collection of their own, with `private: ["value"]`, beside the one for the rest. An
+Action whose input or result holds a secret says so in its own `private`: the log keeps its call
+without it, and a result that had one is kept whole apart (`sys.results`), so a retry answers with
+all of it. Maintenance SQL goes around all of this: it reads the store as it is, and records each
+write's statement and params, so a secret is written through an Action, never through SQL.
 
 ### Actions
 
@@ -335,6 +349,7 @@ What can be done, by name. `defineAction` types `run`'s input from the schema.
 | `description` | what it does, for people and for tools that list Actions                                         |
 | `record`      | `false`: unrecorded. It runs inline in its caller's job, with no events and no commit of its own |
 | `private`     | fields its calls are recorded without, as dot paths, in its input and its result                 |
+| `atomic`      | `true`: it does only what commits with a transaction, so another's `tx.call` runs it there       |
 
 Every recorded call is on the record (`action.started`, then `action.completed` or `action.failed`),
 retryable by id, and everything it causes is its caller's, where its caller is. Queries, Views and
@@ -371,7 +386,10 @@ elements in the terminal, React in the browser. A name says what it shows (`book
   `{ status: "ready", value }`. The runtime runs the View again until a pass reads nothing new.
 - **`ctx.show(name, item, hints?)`** shows exactly the View it names. Observed, the shown View is a
   part that runs again on its own.
-- **`ctx.call`** and **`ctx.emit`** act from a handler, as the actor looking.
+- **`ctx.call`** and **`ctx.emit`** act from a handler, as the actor looking. A handler that needs
+  what the View didn't read (suggestions as someone types) calls an unrecorded Action
+  (`record: false`, with an `allow`) that runs the query and returns it: nothing goes on record. It
+  reads as Actions do, private fields included, so it returns only what its caller may see.
 - **`runtime.render(name, item, { viewer?, hints? })`** renders once, as the system. Code renders
   with `ctx.render`, as its actor: a turn renders its agent's prompt, the `llm.thread` View, that
   way.
@@ -443,7 +461,7 @@ What plugin code gets. `Context` is an Action's, a Processor's and a tool's.
 | `db.collection(name)`                   | the collection API. Each write commits on its own                                                           |
 | `call(action, input)`                   | calls an Action as `actor`, asking its `allow`                                                              |
 | `as(actor?)`                            | this context acting as someone else, or as the system (`as()`), or as a grant. Trusted code only            |
-| `transaction(tx => …)`                  | several writes, events and timers, atomic                                                                   |
+| `transaction(tx => …)`                  | several writes, events and timers, atomic; `tx.call(action, input)` runs an atomic Action in it             |
 | `emit(type, data, { id? })`             | commits a declared event                                                                                    |
 | `schedule(action, input, when)`         | has time call an Action, and returns the timer's id; `unschedule(id)` removes it                            |
 | `record(collection, doc)`               | appends to a ledger with the job's next write, kept even if the job fails                                   |
@@ -454,13 +472,22 @@ What plugin code gets. `Context` is an Action's, a Processor's and a tool's.
 | `cancel(target)`, `disconnect(actor)`   | stops a running call or delivery; ends an actor's browsers                                                  |
 | `workers`, `fetch`, `metrics`           | workers by kind and id; the outside `fetch` (a test's fake, if given); counters, histograms and gauges      |
 | `resources`, `adapters`                 | the merged configuration                                                                                    |
+| `describe()`                            | what the app declares, as `runtime.describe()`: its collections, Actions and Views by name, and resources   |
 | `kept(key, work)`                       | what a rule works out, kept until a commit changes what it read. Only the owner keeps it; here it just runs |
 | `event`, `scheduled`, `retry`, `signal` | the event a Processor handles; the timer that called; whether this ran before; when to stop                 |
+
+A call another plugin may not offer, because this one doesn't `require` it, asks first:
+`if (ctx.describe().actions["register.clear"]) await ctx.call("register.clear", {})`. Calling an
+Action nobody declares fails with `invalid` ("Unknown action"), and that's a bug, not a way to ask.
 
 `ctx.as(other)` records what it does as `other`, `via` the actor it acted for, and stays where the
 work is unless `other` says where (`in`, or `in: undefined` for nowhere). `ctx.transaction` holds
 the store's writer: an op in it that fails, a write the rules refuse included, ends it and rolls it
-back, and one with no op for 5 seconds rolls back too ([one writer](architecture/the-owner.md)).
+back, and one whose code sends no op for 5 seconds after its last answer rolls back too
+([one writer](architecture/the-owner.md)). `tx.call` brings another plugin's atomic Action into it:
+its reads and writes are the transaction's, its own `ctx.transaction` joins it, and its failure
+rolls it all back
+([another plugin's work in a transaction](architecture/the-owner.md#another-plugins-work-in-a-transaction)).
 
 The others are narrower:
 
@@ -506,6 +533,11 @@ const runtime = await createRuntime({ store, plugins });
 
 Without `actor`, a call runs as the system. An actor's `in` says where.
 
+Nothing resets a runtime in place: its cache, Processors' cursors and timers all follow its store.
+To start over (a test against a running server), close it, empty its store (a new memory store, a
+new SQLite file, a dropped schema) and create another. In a pool of `runtimes()`, `close(id)` then
+`get(id)` starts one over, its `open` making the empty store: `get` waits until it has closed.
+
 The rest of `copilotz`:
 
 - **Running many:** `runtimes(open)`, a pool of runtimes by id, each opened on first use and closed
@@ -513,8 +545,10 @@ The rest of `copilotz`:
   and its executors apart ([topology](architecture/topology.md)).
 - **The client:** `connect(url, { key?, over?, plugins? })` reaches an app over its socket or its
   REST API ([the REST API and the client](guides/rest-and-the-client.md)).
-- **Errors:** `failure(code, message, { public? })`, `forbidden`, `invalid`, `isPublic`. Only a
-  public error's words reach a caller outside.
+- **Errors:** `failure(code, message, { public?, status? })`, `forbidden`, `invalid`, `isPublic`.
+  Only a public error's words reach a caller outside. Over REST a failure answers a 4xx with its
+  code (422 for an app's own, or the `status` it says), and an error with no code a 500
+  ([errors](guides/rest-and-the-client.md#errors)).
 - **Links and addresses:** `signLink`, `verifyLink`, `linksOf`, `clientAddress`, `callerOf`…
 - **Metrics:** `createMetrics`, `noMetrics` ([metrics](operations/metrics.md)).
 - **Time:** `manualClock`, `systemClock`.

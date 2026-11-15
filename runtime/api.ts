@@ -36,9 +36,11 @@
  * every write within their reach; the schema checks it; and every write
  * records its events, as theirs.
  *
- * Errors are JSON, `{ error: { code, message } }`, with the status their
- * code says; a contact or anonymous caller is told only the words of a
- * failure meant for anyone (`public`). Streams send a comment every 20 s
+ * Errors are JSON, `{ error: { code, message } }`. A refusal (an error with
+ * a code, as `failure` makes them) answers a 4xx: its code's status, 422 for
+ * an app's own code, or the `status` it says; an error with no code is a
+ * crash, a 500 that says nothing of it. A contact or anonymous caller is told
+ * only the words of a failure meant for anyone (`public`). Streams send a comment every 20 s
  * (the runtime's clock), asking `who` again: one whose credential no longer
  * proves who it followed (signed out, the key revoked) says so (`revoked`)
  * and ends; ending an actor (`disconnect`) ends theirs at once. Any origin
@@ -56,6 +58,7 @@ import type { Owner } from "./owner.ts";
 import type { Clock } from "./schedules.ts";
 import type { Actor, Event, Filter, FindOptions } from "./store.ts";
 import { failure as said } from "./wire.ts";
+import { httpError } from "./errors.ts";
 
 /** How often a stream says it's alive, and asks who it follows again (ms). */
 export const PING_MS = 20_000;
@@ -63,7 +66,7 @@ export const PING_MS = 20_000;
 /** The largest body taken (files go in as base64): 16 MB. */
 export const MAX_BODY = 16 * 1024 * 1024;
 
-/** The status each error code answers with. */
+/** The status each of the runtime's refusals answers with, by its code. */
 const STATUS: Record<string, number> = {
   invalid: 400,
   unauthorized: 401,
@@ -81,6 +84,28 @@ const STATUS: Record<string, number> = {
   unavailable: 501,
   offline: 503,
 };
+
+/**
+ * A refusal's code: lowercase words (`invalid`, an app's own `username_taken`).
+ * A code of another shape is a driver's or the platform's (`ECONNRESET`,
+ * `23505`), a crash's: nobody's to act on.
+ */
+const REFUSAL = /^[a-z][a-z0-9_.-]*$/;
+
+/** The runtime's codes for what failed on its side, not the caller's: crashes, as one with no code. */
+const FAULTS = new Set(["internal", "executor_lost", "fenced", "missing_blob"]);
+
+/**
+ * The status a thrown error answers with, if it's a refusal: the `status` it
+ * asked for (`failure(code, message, { status })`), else its code's, else 422,
+ * an app's own refusal (`username_taken`). Undefined for a crash: an error
+ * with no code, a code no refusal has, or one of the runtime's faults.
+ */
+function statusOf(error: unknown): number | undefined {
+  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
+  if (typeof code !== "string" || !REFUSAL.test(code) || FAULTS.has(code)) return undefined;
+  return httpError(status) ? status : Object.hasOwn(STATUS, code) ? STATUS[code] : 422;
+}
 
 /** Who may call from a browser, and with what. */
 export const CORS = {
@@ -762,15 +787,20 @@ function toldTo(actor: Actor, error: unknown): { code?: string; message: string 
   return { ...(told.code ? { code: told.code } : {}), message: "Something went wrong." };
 }
 
-/** What a thrown error answers: its code's status, as the caller may be told it; else a 500. */
+/**
+ * What a thrown error answers: a refusal, its status (see `statusOf`) and its
+ * code, its words as the caller may be told them; a crash, a 500 that says
+ * nothing of it.
+ */
 function refusal(error: unknown, actor: Actor): Response {
   const { code, allow, headers } = (error ?? {}) as {
-    code?: unknown;
+    code: string;
     allow?: string;
     headers?: Record<string, string>;
   };
   const message = error instanceof Error ? error.message : String(error);
-  if (typeof code !== "string" || !STATUS[code]) {
+  const status = statusOf(error);
+  if (status === undefined) {
     // The runtime says an unknown name is invalid; to a caller, it isn't there.
     if (/^Unknown (action|query|collection)/.test(message)) {
       return failed(404, "not_found", message);
@@ -778,6 +808,7 @@ function refusal(error: unknown, actor: Actor): Response {
     console.error("api:", message);
     return failed(500, "internal", "Something went wrong.");
   }
+  if (status >= 500) console.error("api:", message);
   // Refused for being nobody: who they are might be let in.
   if (actor.kind === "anonymous" && code === "forbidden") {
     return failed(
@@ -790,7 +821,7 @@ function refusal(error: unknown, actor: Actor): Response {
     );
   }
   const told = toldTo(actor, error);
-  return failed(STATUS[code], code, told.message, {
+  return failed(status, code, told.message, {
     ...(allow ? { allow } : {}),
     ...headers,
   });

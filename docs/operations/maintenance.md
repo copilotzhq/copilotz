@@ -129,7 +129,9 @@ what operations can't do.
 Each runs alone among the owner's writes: those running end first, and the next ones wait for it. It
 runs in a transaction fenced by the owner's epoch, so an owner that lost the store can't run one.
 Its `maintenance.sql` event goes in the same commit: the statement, its params, the rows it changed
-in any table, and who.
+in any table, and who. The statement and its params are kept as given (a `PASSWORD '…'` aside), so a
+secret never goes through SQL: an Action writes it, into a collection's `private` field, which no
+event holds.
 
 A raw write bypasses schemas and per-document events. So the owner then forgets what it derived from
 documents: its cache empties, it lets go of every reach it kept, observed Views run again, and the

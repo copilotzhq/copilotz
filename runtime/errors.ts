@@ -10,19 +10,41 @@
  * words reach (a driver's, a stack's, the runtime's about its insides, a
  * store's about a document). A tool's refusal meant for the model that
  * called it is public: "Search trips first."
+ *
+ * A failure is the caller's to act on, not a crash: over REST it answers a
+ * 4xx with its code (its code's status, or 422 for an app's own code, such as
+ * `username_taken`), and an error with no code a 500. `status` picks another.
  */
 import type { Actor } from "./store.ts";
 import { onBehalf } from "./actor.ts";
 
-/** What a failure says about itself beyond its code: whether its message is for any caller. */
-export type FailureOptions = { public?: boolean };
+/**
+ * What a failure says about itself beyond its code: whether its message is
+ * for any caller (`public`), and the HTTP status the REST API answers it
+ * with (`status`, 400 to 599) when its code's isn't the one.
+ */
+export type FailureOptions = { public?: boolean; status?: number };
 
 export const failure = (
   code: string,
   message: string,
   options: FailureOptions = {},
-): Error & { code: string; public?: true } =>
-  Object.assign(new Error(message), { code }, options.public ? { public: true as const } : {});
+): Error & { code: string; public?: true; status?: number } => {
+  const { status } = options;
+  if (status !== undefined && !httpError(status)) {
+    throw new RangeError(`failure("${code}"): status is an HTTP error status, 400 to 599`);
+  }
+  return Object.assign(
+    new Error(message),
+    { code },
+    options.public ? { public: true as const } : {},
+    status !== undefined ? { status } : {},
+  );
+};
+
+/** Whether a number is an HTTP error status: 400 to 599. */
+export const httpError = (status: unknown): status is number =>
+  Number.isInteger(status) && (status as number) >= 400 && (status as number) <= 599;
 
 /** Whether an error's message is for any caller (`failure(code, message, { public: true })`). */
 export const isPublic = (error: unknown): boolean =>

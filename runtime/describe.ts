@@ -156,6 +156,8 @@ export type ActionDeclaration = {
   recorded: boolean;
   /** Fields its calls are recorded without. */
   private: string[];
+  /** It does only what commits with a transaction: another's `tx.call` runs it there. */
+  atomic?: true;
   /** No `allow`: plugin code, schedules and the system call it, nobody outside. */
   internal?: true;
   callers?: Callers;
@@ -625,6 +627,7 @@ function actionsOf(plugin: Plugin, tools: Map<string, string>): ActionDeclaratio
     ...(def.input ? { input: json(def.input) } : {}),
     recorded: def.record !== false,
     private: sorted(def.private ?? []),
+    ...(def.atomic ? { atomic: true as const } : {}),
     ...accessOf(def.allow, minimalOf(def.input) ?? {}),
     ...(tools.has(name) ? { tool: tools.get(name) } : {}),
   })).sort(byName);

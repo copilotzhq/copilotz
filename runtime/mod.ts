@@ -4,7 +4,6 @@ export { type Runtimes, runtimes } from "./runtimes.ts";
 export {
   type Bytes,
   createOwner,
-  type Description,
   type Feed,
   type Owner,
   type Stats,

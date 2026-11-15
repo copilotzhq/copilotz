@@ -105,8 +105,9 @@ writes `Set-Cookie` itself.
 
 Every cookie is `HttpOnly`, on the whole site (`Path=/`), and never has a `Domain`. Over https it's
 `Secure` and named `__Host-<name>`, so no other host under the domain, such as a preview's, can set
-one in its place. Only over plain http to this machine, or to one on its network (a private address,
-a `.local` name), does it keep its plain name.
+one in its place. Only over plain http to this machine (`localhost`, or a name under it such as
+`acme.localhost`), or to one on its network (a private address, a `.local` name), does it keep its
+plain name.
 
 A cookie is `SameSite=Lax` unless its plugin asks for `Strict`, as a site visitor's does. A response
 that sets one is never cached.
@@ -132,7 +133,10 @@ agent reaches.
 Requests from other sites are refused. A request that may change something (anything but GET, HEAD
 and OPTIONS), sent by another site's page, without an `Authorization` header, gets a 403. The
 browser's `Origin` or `Sec-Fetch-Site` header says where it came from. So another site can't sign
-its visitors in, or act with their cookies. Webhooks send no `Origin`, and pass.
+its visitors in, or act with their cookies. Webhooks send no `Origin`, and pass. Over plain http,
+only this machine's pages and its network's are the app's own: `localhost`, any name under it
+(browsers send `*.localhost` here, so `http://acme.localhost:8100` tries one brand of an app by its
+host), loopback and private addresses, and `.local` names.
 
 Behind a front of the app's own, such as a Cloudflare worker, the `caller` resource's `front` secret
 says which requests the front vouches for. The host it forwards (`x-forwarded-host`) is then the
@@ -225,8 +229,8 @@ with `node examples/web-node/server.ts`.
 Each way to sign in is a plugin. Add the ones the app uses.
 
 - **By name, on this machine** (`devSignIn`). It's for trying an app out. The socket's address and
-  the host must both be this machine's, with no header a proxy adds. An app whose `links` origin is
-  public doesn't start with it.
+  the host must both be this machine's (`localhost`, a name under it, or a loopback address), with
+  no header a proxy adds. An app whose `links` origin is public doesn't start with it.
 - **With Google** (`googleSignIn`). Give the `google` resource your OAuth `clientId`, and the page
   shows Google's button.
 - **With an email and a password** (`emailSignIn`). It needs `email`, which says how mail goes, and

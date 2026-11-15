@@ -272,12 +272,13 @@ const debit = (amount: number, card = "c1"): Call => ({
 });
 const reward: Call = { action: "customer.reward", input: { customer: "cleo" } };
 
-/** The log after the card was issued: each event as its type and its Action or document. */
+/** The log from the first call after the card was issued. */
 const since = async (store: Store) => {
   const all = await store.events(0);
   const from = all.findIndex((e) => e.type === "action.started" && e.data.action !== "card.issue");
   return from < 0 ? [] : all.slice(from);
 };
+/** Each event as its type, and its Action or its document. */
 const told = (events: Event[]) =>
   events.map((e) => [e.type, (e.data.action ?? e.data._id) as string]);
 const card = async (store: Store) => (await store.findOne("card", { _id: "c1" }))?.value;
@@ -319,25 +320,29 @@ each(
   },
 );
 
-each("a callee's failure rolls back the caller's writes and what other callees wrote", async (
-  { runtime, store },
-) => {
-  await assertRejects(
-    () => runtime.call("sale.complete", sale([reward, debit(80)]), { actor: ana }),
-    Error,
-    "Card c1 has 50.",
-  );
-  assertEquals(await store.find("sale", {}), []);
-  assertEquals(await store.find("customer", {}), []);
-  assertEquals(await card(store), 50);
-  // The failed call is on record, apart; nothing of the reward is.
-  assertEquals(told(await since(store)), [
-    ["action.started", "sale.complete"],
-    ["action.started", "card.debit"],
-    ["action.failed", "card.debit"],
-    ["action.failed", "sale.complete"],
-  ]);
-}, ["memory"]);
+each(
+  "a callee's failure rolls back the caller's writes, and another callee's own transaction, joined",
+  async (
+    { runtime, store },
+  ) => {
+    await assertRejects(
+      () => runtime.call("sale.complete", sale([reward, debit(80)]), { actor: ana }),
+      Error,
+      "Card c1 has 50.",
+    );
+    assertEquals(await store.find("sale", {}), []);
+    assertEquals(await store.find("customer", {}), []);
+    assertEquals(await card(store), 50);
+    // The failed call is on record, apart; nothing of the reward is.
+    assertEquals(told(await since(store)), [
+      ["action.started", "sale.complete"],
+      ["action.started", "card.debit"],
+      ["action.failed", "card.debit"],
+      ["action.failed", "sale.complete"],
+    ]);
+  },
+  ["memory"],
+);
 
 each("a callee that reaches the world is refused there, and it all rolls back", async (
   { runtime, store },

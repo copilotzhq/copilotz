@@ -27,9 +27,17 @@
  *   they say: `whatsapp.move`, or `/space <name>` from the phone); photos,
  *   documents and voice notes too (chat transcribes audio). `/new` starts a
  *   new conversation. Meta delivering a message again changes nothing.
- * - **What agents say there** to them goes back to the phone, as WhatsApp
- *   formats it, a long answer in several messages; "typing…" shows while
- *   they work, and nothing says "please wait".
+ * - **What's said there to them** goes back to the phone, as WhatsApp
+ *   formats it, a long one in several messages, with its files: agents'
+ *   answers, the app's fixed messages (`chat.say`), and what the space's
+ *   people say when they take a customer's chat over (`chat.send` with
+ *   `to: ["contact:<id>"]`, or to nobody in particular, `to: []`). Their own
+ *   words never come back to them; what's private, or said to an agent
+ *   alone, stays in the app. "Typing…" shows while agents work, and nothing
+ *   says "please wait". Meta lets a business write freely only in the 24
+ *   hours after the phone last wrote, and only a template after (this
+ *   plugin sends none): a message Meta refuses for that fails once, plainly
+ *   (`window_closed`, on the record), and stays in the app.
  * - **WhatsApp has Views of its own:** a `whatsapp.*` View returns
  *   parts, each one WhatsApp message, built with the toolkit in the contract
  *   (`text`, `buttons`, `list`, `carousel`, `image`, `document`), which

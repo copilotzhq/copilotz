@@ -1,9 +1,9 @@
 /**
  * Conversations that happen on WhatsApp, by thread id: the number and phone
  * they're with, and whose phone it is: a person's, or a contact's (a
- * customer on an open number). What agents say there to them goes out to
- * the phone, even after they've moved on to a new conversation. Each person
- * reads their own.
+ * customer on an open number). What's said there to them (by agents, the
+ * app or the space's people) goes out to the phone, even after they've moved
+ * on to a new conversation. Each person reads their own.
  */
 import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
 

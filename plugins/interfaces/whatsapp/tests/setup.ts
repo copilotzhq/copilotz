@@ -129,12 +129,20 @@ export const reads = definePlugin({
           $set: { shown: new Date(Date.now() - input.seconds * 1000).toISOString() },
         }),
     }),
-    // An agent's message in a chat, as trusted code writes one (one its contact doesn't read, maybe).
+    // A message in a chat, as trusted code writes one (one its contact doesn't read, maybe): an
+    // agent's unless it says whose (`from`), to one or to several (`to`, an array).
     "test.said": defineAction({
       input: { type: "object" },
       run: async (
         ctx,
-        input: { thread: string; to: string; text: string; private?: boolean; answer?: boolean },
+        input: {
+          thread: string;
+          to: string | string[];
+          text: string;
+          from?: string;
+          private?: boolean;
+          answer?: boolean;
+        },
       ) => {
         const thread = await ctx.db.collection<Thread>("thread").findOne({ _id: input.thread });
         const turn = crypto.randomUUID();
@@ -144,10 +152,11 @@ export const reads = definePlugin({
           ...(input.answer ? { turn } : {}),
           thread: input.thread,
           ...(thread?.in ? { in: thread.in } : {}),
-          from: "lead",
-          to: [input.to],
+          from: input.from ?? "lead",
+          to: Array.isArray(input.to) ? input.to : [input.to],
           text: input.text,
-          hops: 1,
+          // An agent's after a person's; a person's starts again.
+          hops: input.from ? 0 : 1,
           ...(input.private ? { private: true } : {}),
           at: new Date().toISOString(),
         });
@@ -196,8 +205,11 @@ export async function fakeGraph() {
     "media-huge": { type: "video/mp4", bytes: new Uint8Array(1) },
   };
   let sent = 0;
-  /** What Meta refuses (a 400, as for a part it won't take), and what fails once (a 500). */
-  const refusing: { refuse?: (body: Record<string, unknown>) => boolean } = {};
+  /**
+   * What Meta refuses (a 400, as for a part it won't take; with its code, 131009 unless said), and
+   * what fails once (a 500).
+   */
+  const refusing: { refuse?: (body: Record<string, unknown>) => boolean; code?: number } = {};
   let failing: ((body: Record<string, unknown>) => boolean) | undefined;
   const server = await listen(async (request) => {
     const url = new URL(request.url);
@@ -240,8 +252,14 @@ export async function fakeGraph() {
         });
       }
       if (refusing.refuse?.(body)) {
+        const code = refusing.code ?? 131009;
         return Response.json({
-          error: { message: "(#131009) Parameter value is not valid", code: 131009 },
+          error: {
+            message: code === 131047
+              ? "(#131047) Re-engagement message"
+              : `(#${code}) Parameter value is not valid`,
+            code,
+          },
         }, { status: 400 });
       }
     }
@@ -277,12 +295,18 @@ export async function fakeGraph() {
     /** Every message sent to a phone (read marks aside), as the Graph API got it, in order. */
     sent: (to: string) =>
       requests.filter((r) => r.body?.to === to && r.body?.status !== "read").map((r) => r.body!),
+    /** WhatsApp's id for the last message Meta took. */
+    lastId: () => `wamid.out.${sent}`,
     /** Read marks for a phone's messages that showed "typing…". */
     typing: () =>
       requests.filter((r) => r.body?.status === "read" && r.body?.typing_indicator).length,
-    /** Meta refuses what this says (a 400). */
-    refuse: (when?: (body: Record<string, unknown>) => boolean) => {
+    /**
+     * Meta refuses what this says (a 400), with its code: 131047 is the 24 hours since the phone
+     * last wrote, past.
+     */
+    refuse: (when?: (body: Record<string, unknown>) => boolean, code?: number) => {
       refusing.refuse = when;
+      refusing.code = code;
     },
     /** The next message this says fails once (a 500), as Meta's outages do. */
     failOnce: (when: (body: Record<string, unknown>) => boolean) => {
@@ -436,6 +460,30 @@ export async function link(s: Setup, who = ana, phone = ANA_PHONE) {
     actor: who,
   });
   await s.deliver([{ text: { body: code } }], { from: phone });
+}
+
+/** Meta's statuses of what was sent, delivered to the webhook as it does, signed. */
+export async function statuses(s: Setup, items: Record<string, unknown>[]) {
+  const body = JSON.stringify({
+    object: "whatsapp_business_account",
+    entry: [{
+      changes: [{
+        field: "messages",
+        value: { metadata: { phone_number_id: PHONE_ID }, statuses: items },
+      }],
+    }],
+  });
+  await s.serve(
+    new Request(`http://localhost/hooks/whatsapp/${s.number}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": await sign(SECRET, new TextEncoder().encode(body)),
+      },
+      body,
+    }),
+  );
+  await s.runtime.idle();
 }
 
 /** Every event, as text: what the log holds. */

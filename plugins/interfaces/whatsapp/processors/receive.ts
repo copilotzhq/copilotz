@@ -20,10 +20,10 @@
  *   their WhatsApp conversation, in the space they chose (their Personal
  *   space unless they said otherwise). Photos, documents, video and voice
  *   notes come as its files, each uploaded as them first (`chat.attach`;
- *   chat transcribes audio as it's sent). A reply
- *   quoting an agent's message, or one sent while an agent waits on their
- *   answer there, answers it. `/new`, `/space` and `/help` are commands
- *   (see shared/commands.ts).
+ *   chat transcribes audio as it's sent). A reply quoting a message sent
+ *   to them there (an agent's, or a person's at the desk), or one sent while
+ *   an agent waits on their answer there, answers it. `/new`, `/space` and
+ *   `/help` are commands (see shared/commands.ts).
  * - **A tap** (a button, a list's row, a carousel card's reply) comes as its
  *   title, with what it meant (`tap.id`) and the addition it was in
  *   (`tap.key`), answering the message it was on.
@@ -538,9 +538,9 @@ async function written(
 }
 
 /**
- * The message this one answers: the agent's message it quotes or taps (and
- * the addition the tap was in). Else `chat.send` finds it: the question an
- * agent waits on them for.
+ * The message this one answers: the message sent to them that it quotes or
+ * taps, an agent's or a person's (and the addition the tap was in). Else
+ * `chat.send` finds it: the question an agent waits on them for.
  */
 async function answered(
   ctx: Context,

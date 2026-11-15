@@ -1,11 +1,15 @@
 /**
- * What agents say on WhatsApp goes out: a message an agent writes in a
- * WhatsApp conversation, to that conversation's person or contact (its
- * answer, a question it waits on them for, or what it says without a turn:
- * `chat.say`), as its `whatsapp.message` View shows it: its
- * Markdown as WhatsApp formats it, a long one in several messages split
- * where a reader would pause. Their steps (private) and what agents say to
- * each other there stay in the app.
+ * What's said on WhatsApp goes out: a message in a WhatsApp conversation to
+ * that conversation's person or contact, whoever says it (an agent's answer,
+ * a question it waits on them for, what trusted code says without a turn,
+ * `chat.say`, or the desk's people taking a customer's chat over), as its
+ * `whatsapp.message` View shows it: its Markdown as WhatsApp formats it, a
+ * long one in several messages split where a reader would pause, then its
+ * files. What's said to the whole chat (to nobody in particular, `to: []`)
+ * goes too, but not a turn's answer to nobody (handed back elsewhere, or
+ * one nobody waits for). Their own words never come back to them; agents'
+ * steps (private), what's kept private, and what's said to others there
+ * alone (agents to each other, the desk to an agent) stay in the app.
  *
  * After an answer come its additions (chat's `additions` resource, each an
  * `addition:<name>` View here): a carousel of trips, buttons to pay. Each
@@ -19,9 +23,16 @@
  * Only what they may read goes: a message drawing on what they can't see
  * (its `sources`) stays in the app, and a customer is told a turn failed
  * only in a line of their language, never its error. Each part sent is recorded
- * (`whatsapp_sent`), so a retried delivery sends only what's left; each
- * addition shown, in chat's `shown` (`chat.shown`). It reads the
- * conversation's number as the system: its token is what sends.
+ * (`whatsapp_sent`, by the message's id), so a retried delivery sends only
+ * what's left; each addition shown, in chat's `shown` (`chat.shown`). It
+ * reads the conversation's number as the system: its token is what sends.
+ *
+ * Meta lets a business write freely only in the 24 hours after the phone
+ * last wrote; past them, only a template (which this plugin doesn't send).
+ * A message Meta refuses for that (131047) fails once, plainly
+ * (`window_closed`, the `processor.failed` on the record), and stays in the
+ * app; one it takes and then says so of is logged with why (see
+ * `undeliveredProcessor`).
  */
 import type { Actor, Context, ProcessorDef, Viewer } from "../../../../runtime/mod.ts";
 import {
@@ -35,7 +46,7 @@ import { CONTACT } from "../../../access/contacts/contract.ts";
 import type { WhatsAppSent } from "../collections/sent.ts";
 import type { WhatsAppThread } from "../collections/thread.ts";
 import { CUSTOMERS } from "../shared/customers.ts";
-import { refused } from "../shared/graph.ts";
+import { refused, WINDOW_CLOSED } from "../shared/graph.ts";
 import { type Connected, connected, send } from "../shared/number.ts";
 import { joined, type WaPart } from "../shared/parts.ts";
 
@@ -87,20 +98,26 @@ async function delivering(
   return { sending, done };
 }
 
+/**
+ * Whether a message goes to the phone of the chat it's in (`to`, as messages
+ * name them): addressed to them, or said to the whole chat (to nobody in
+ * particular) by anyone but a turn; never what they said themselves.
+ */
+const goesTo = (said: Pick<Message, "from" | "to" | "turn">, to: string): boolean =>
+  said.from !== to &&
+  ((said.to ?? []).includes(to) || (!said.to?.length && said.turn === undefined));
+
 export const replyProcessor: ProcessorDef = {
   on: "message.created",
-  // An agent's: its answers (written in a turn) and what it sends (after a person's, `hops` ≥ 1).
-  where: {
-    "doc.private": { $ne: true },
-    $or: [{ "doc.turn": { $exists: true } }, { "doc.hops": { $gte: 1 } }],
-  },
+  // Anyone's, but never a step or what's kept private: whom it's to is the chat's to say, below.
+  where: { "doc.private": { $ne: true } },
   key: (event) => String((event.data.doc as Message | undefined)?.thread),
   run: async (ctx, event) => {
     const said = event.data.doc as Message;
     const chat = await ctx.as().db.collection<WhatsAppThread>("whatsapp_thread")
       .findOne({ _id: said.thread });
     const whom = addresseeOf(chat);
-    if (!chat || !whom || !said.to?.includes(whom.to)) return;
+    if (!chat || !whom || !goesTo(said, whom.to)) return;
     const { reader, viewer } = whom;
     // Only what they may read: an answer drawing on what they can't see (its sources) stays here.
     if (!await ctx.as(reader).db.collection("message").findOne({ _id: said._id })) return;
@@ -130,13 +147,14 @@ export const replyProcessor: ProcessorDef = {
  * What Meta took and then couldn't deliver (`whatsapp.undelivered`: a
  * picture it failed to fetch, a carousel): an addition's part goes as that
  * addition's fallback, once (its parts on the ledger), with the answer's
- * text when it went with it. Anything else undelivered is only logged.
+ * text when it went with it. Anything else undelivered is only logged, with
+ * why (past the 24 hours since the phone last wrote: only a template goes).
  */
 export const undeliveredProcessor: ProcessorDef = {
   on: "whatsapp.undelivered",
   key: (event) => `${event.data.number}:${event.data.to}`,
   run: async (ctx, event) => {
-    const { wamid } = event.data as { wamid: string };
+    const { wamid, errors } = event.data as { wamid: string; errors?: unknown[] };
     const system = ctx.as().db;
     const sent = await system.collection<WhatsAppSent>("whatsapp_sent").find({ wamid });
     // An addition's part (`<message>:<key>:<n>`), not one of its fallback's (`…:<key>:f<n>`).
@@ -145,7 +163,11 @@ export const undeliveredProcessor: ProcessorDef = {
       !s._id.startsWith(`${s.message}:${s.key}:f`)
     );
     if (!failed) {
-      if (sent.length) console.error(`whatsapp: message ${wamid} wasn't delivered`);
+      if (sent.length) {
+        console.error(
+          `whatsapp: message ${wamid} (${sent[0].message}) wasn't delivered${whyNot(errors)}`,
+        );
+      }
       return;
     }
     const key = failed.key!;
@@ -181,6 +203,17 @@ export const undeliveredProcessor: ProcessorDef = {
     for (const out of outs) await sending(out);
   },
 };
+
+/** Why Meta says it couldn't deliver a message, as a log line ends: its codes and titles. */
+function whyNot(errors: unknown[] | undefined): string {
+  const said = (errors ?? []) as { code?: number; title?: string; message?: string }[];
+  if (said.some((e) => e?.code === WINDOW_CLOSED)) {
+    return ": past the 24 hours since the phone last wrote, only a template message reaches it";
+  }
+  const reasons = said.map((e) => [e?.code, e?.title ?? e?.message].filter(Boolean).join(" "))
+    .filter(Boolean);
+  return reasons.length ? `: ${reasons.join("; ")}` : "";
+}
 
 /**
  * The additions that go after an answer, in order: each entry's View, here,

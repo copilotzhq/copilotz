@@ -3,12 +3,13 @@
  * declares, kept as its settings say), the Graph API with its token, and
  * sending from it (text, or any part). What Meta refuses
  * about its token is noted on the number (`problem`), for those who manage
- * it to see, and cleared once it works again.
+ * it to see, and cleared once it works again. What it refuses past the 24
+ * hours since the phone last wrote fails as that (`window_closed`), once.
  */
 import type { Actor, Context } from "../../../../runtime/mod.ts";
 import type { WhatsAppNumber } from "../collections/number.ts";
 import type { WhatsAppSecret } from "../collections/secret.ts";
-import { type Graph, sendPart, tokenRefused } from "./graph.ts";
+import { type Graph, sendPart, tokenRefused, windowClosed } from "./graph.ts";
 import { sendable } from "./media.ts";
 import type { WaPart } from "./parts.ts";
 import { type DeclaredNumber, GRAPH, numbersOf } from "./settings.ts";
@@ -121,6 +122,16 @@ export async function send(
       }
       // Trying again won't help until someone gives it a new token.
       throw Object.assign(error as Error, { final: true });
+    }
+    if (windowClosed(error)) {
+      // Nor until they write again: only a template reaches them now, and that's the app's.
+      throw Object.assign(
+        new Error(
+          "Past WhatsApp's 24 hours since this phone last wrote: Meta takes only a template " +
+            `message now, so this one stayed in the app. (${(error as Error).message})`,
+        ),
+        { code: "window_closed", final: true },
+      );
     }
     throw error;
   }

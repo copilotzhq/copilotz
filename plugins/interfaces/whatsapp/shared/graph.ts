@@ -44,6 +44,18 @@ export const tokenRefused = (error: unknown) => {
   return e?.code === "graph" && (e.status === 401 || e.graph === 190);
 };
 
+/**
+ * Meta's code for a message past the 24 hours a business may write freely
+ * after the phone last wrote: only a template reaches them then.
+ */
+export const WINDOW_CLOSED = 131047;
+
+/** Whether a failure is Meta refusing a message past those 24 hours. */
+export const windowClosed = (error: unknown) => {
+  const e = error as Partial<GraphError>;
+  return e?.code === "graph" && e.graph === WINDOW_CLOSED;
+};
+
 /** What a number is, as Meta knows it: proves the token works for it. */
 export const numberInfo = (graph: Graph) =>
   call<{ id: string; display_phone_number?: string; verified_name?: string }>(
@@ -61,7 +73,7 @@ export const refused = (error: unknown) => {
   if (e?.code === "unsendable") return true;
   const g = e as Partial<GraphError>;
   return g?.code === "graph" && g.status === 400 &&
-    ![190, 131047, 130429, 131056].includes(g.graph ?? 0);
+    ![190, WINDOW_CLOSED, 130429, 131056].includes(g.graph ?? 0);
 };
 
 /** Media as the Graph API takes it: a link, or the id of one uploaded. */

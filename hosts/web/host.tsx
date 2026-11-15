@@ -5,7 +5,9 @@
  * asks, `arrive`: `POST /web/<name>`), observes the web shell for the address it's at (its path, where
  * the person works, `?in=`, and its other parameters), and draws it with
  * React, each part a component redrawn on its own. Where you are is the address: links are
- * followed without reloading, back and forward work, two tabs differ. The
+ * followed without reloading, back and forward work, two tabs differ. A page followed to shows
+ * once it's ready, the one before staying until then, with a thin bar at the top saying it's on
+ * its way (screens.ts). The
  * connection is kept for `LazyView`, which observes a View on demand.
  * Whom Views are shown to (`ctx.viewer`) is the person, by their name and
  * email (identity's `GET /me`, asked while the ticket is), kept as their own
@@ -30,7 +32,8 @@ import { createRoot } from "react-dom/client";
 import { type Client, connect } from "../../runtime/client.ts";
 import type { Observation, Plugins } from "../../runtime/mod.ts";
 import { registerWorker } from "./install.ts";
-import { Part } from "./part.tsx";
+import { Going, Part } from "./part.tsx";
+import { screens } from "./screens.ts";
 import { followViewer, session, type Shown, viewerOf } from "./session.ts";
 import { SignIn, type Ways } from "./signin.tsx";
 import { inviteOf } from "./signin-email.tsx";
@@ -187,13 +190,14 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     if (fromGoogle(fonts)) preconnect("https://fonts.gstatic.com", { crossOrigin: "anonymous" });
     preinit(fonts, { as: "style", precedence: "copilotz-fonts" });
   }
-  const draw = (root: ReactNode) =>
+  const draw = (root: ReactNode, going = false) =>
     react.render(
       <ThemeContext value={theme}>
         <style href="copilotz-theme" precedence="copilotz">{css}</style>
         <style href="copilotz-base" precedence="copilotz">{BASE}</style>
         <Painted />
         {root}
+        {going ? <Going /> : null}
         <UpdateReady />
       </ThemeContext>,
     );
@@ -246,7 +250,8 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   session.viewer = viewerOf(first.actor, me);
   let space = (await options.start?.(client, first.actor))?.space;
 
-  let shown: Observation | undefined;
+  // Each page drawn at once, on its way until it's ready; the one before closes then.
+  const showing = screens<Observation>((shell, going) => draw(<Part part={shell} />, going));
   const show = () => {
     const asked = new URLSearchParams(location.search).get("in");
     if (asked) space = asked;
@@ -265,11 +270,8 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
       ...(here ? { actor: { ...first.actor, in: here } } : {}),
       part: (part, key) => <Part key={key} part={part} />,
     });
-    draw(<Part part={shell} />);
     // The old screen closes once the new one reads what it needs: what both read stays watched.
-    const old = shown;
-    shown = shell;
-    void shell.ready.then(() => old?.close());
+    showing(shell);
   };
 
   follow = (path) => {

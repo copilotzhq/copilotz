@@ -1,8 +1,10 @@
 /**
  * The shell's frame: the sidebar beside the main area; on a phone, the
  * sidebar is a drawer (the toolkit's, modal) that the menu button opens.
- * Going anywhere closes it, as do Escape and a tap outside; while it's open,
- * the page behind waits, and focus goes back to the menu button after. A
+ * A link followed from it closes it at once, before the page it goes to is
+ * drawn (the host shows that page on its way); going anywhere else closes it
+ * too, as do Escape and a tap outside. While it's open, the page behind
+ * waits, and focus goes back to the menu button after. A
  * page that offers the side panel has its button at its top right, and the
  * panel beside it (on a phone, a sheet): see panel.tsx.
  *
@@ -79,6 +81,11 @@ const phone = {
   },
   matches: () => matchMedia(PHONE).matches,
 };
+
+/** Whether a tap was on a link (or inside one): followed from the drawer, it closes the drawer. */
+export function followsLink(target: EventTarget | null): boolean {
+  return !!(target as Element | null)?.closest?.("a[href]");
+}
 
 export function Frame(
   {
@@ -299,7 +306,15 @@ export function Frame(
             label={say("sidebar")}
             className="copilotz-sidebar"
           >
-            {content}
+            {/* A link followed from here closes the drawer at once, not once its page is drawn. */}
+            <div
+              className="copilotz-sidebar-links"
+              onClick={(event) => {
+                if (followsLink(event.target)) setOpen(false);
+              }}
+            >
+              {content}
+            </div>
           </Drawer>
         )
         : (

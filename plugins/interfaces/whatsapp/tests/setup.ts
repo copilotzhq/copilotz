@@ -182,6 +182,17 @@ export const reads = definePlugin({
           $set: { at: new Date(Date.now() - input.hours * 3_600_000).toISOString() },
         }),
     }),
+    // Phones that last wrote some hours ago (Meta's 24 hours past, at 24); none: as if never heard.
+    "test.wrote": defineAction({
+      input: { type: "object" },
+      run: (ctx, input: { hours?: number }) =>
+        ctx.db.collection("whatsapp_phone").updateMany(
+          {},
+          input.hours === undefined
+            ? { $unset: { wrote: "" } }
+            : { $set: { wrote: new Date(Date.now() - input.hours * 3_600_000).toISOString() } },
+        ),
+    }),
     // Meta stops taking the number's token (it expired).
     "test.expire": defineAction({
       input: { type: "object" },
@@ -292,6 +303,10 @@ export async function fakeGraph() {
     texts: (to: string) =>
       requests.filter((r) => r.body?.to === to && r.body?.type === "text")
         .map((r) => (r.body!.text as { body: string }).body),
+    /** The templates sent to a phone, in order, as the Graph API got them. */
+    templates: (to: string) =>
+      requests.filter((r) => r.body?.to === to && r.body?.type === "template")
+        .map((r) => r.body!.template as Record<string, unknown>),
     /** Every message sent to a phone (read marks aside), as the Graph API got it, in order. */
     sent: (to: string) =>
       requests.filter((r) => r.body?.to === to && r.body?.status !== "read").map((r) => r.body!),

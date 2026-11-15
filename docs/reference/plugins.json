@@ -22081,6 +22081,7 @@
             "rate",
             "quiet",
             "language",
+            "fallback",
             "declared",
             "at"
           ],
@@ -22130,6 +22131,39 @@
                   "pt"
                 ]
               },
+              "fallback": {
+                "type": "object",
+                "properties": {
+                  "template": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    ]
+                  },
+                  "components": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "required": [
+                  "template"
+                ]
+              },
               "declared": {
                 "type": "boolean"
               },
@@ -22169,6 +22203,7 @@
             "space",
             "thread",
             "contact",
+            "wrote",
             "told",
             "tries",
             "since",
@@ -22199,6 +22234,9 @@
                 "type": "string"
               },
               "contact": {
+                "type": "string"
+              },
+              "wrote": {
                 "type": "string"
               },
               "told": {
@@ -22353,6 +22391,63 @@
             ],
             [
               "wamid",
+              "thread"
+            ]
+          ],
+          "queries": []
+        },
+        {
+          "name": "whatsapp_template",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "thread",
+            "template",
+            "name",
+            "language",
+            "components",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "template": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              },
+              "components": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread",
+              "template",
+              "name",
+              "language",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": false,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [
+            [
               "thread"
             ]
           ],
@@ -22748,6 +22843,52 @@
                   "en",
                   "pt"
                 ]
+              },
+              "fallback": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "template": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "params": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "maxLength": 1024
+                            },
+                            "maxItems": 100
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string",
+                              "maxLength": 1024
+                            }
+                          }
+                        ]
+                      },
+                      "components": {
+                        "type": "array",
+                        "items": {
+                          "type": "object"
+                        },
+                        "maxItems": 20
+                      }
+                    },
+                    "required": [
+                      "template"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
               }
             },
             "required": [
@@ -22767,6 +22908,74 @@
             "maintenance": "no"
           },
           "helper": "inPerson"
+        },
+        {
+          "name": "whatsapp.template",
+          "summary": "Sends a WhatsApp template message in a WhatsApp chat",
+          "input": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "template": {
+                "type": "string",
+                "minLength": 1
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "maxItems": 100
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 1024
+                    }
+                  }
+                ]
+              },
+              "components": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "maxItems": 20
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "from": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "thread",
+              "template"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
         },
         {
           "name": "whatsapp.unlink",
@@ -22935,6 +23144,34 @@
           "summary": "The number as people dial it, and the business's name, as shown.",
           "required": false,
           "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "whatsapp.<name>.fallback",
+          "summary": "The template that goes in a message's place once Meta's 24 hours since the phone last wrote are past: one of `whatsappTemplates`, whose parameters may say `{name}` (the phone's WhatsApp name) and `{text}` (what the message said). Without it, that message stays in the app (`window_closed`).",
+          "required": false,
+          "type": "TemplateSend"
+        },
+        {
+          "kind": "setting",
+          "path": "whatsappTemplates.<name>.name",
+          "summary": "Meta's name for it, as approved: `order_update`.",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "whatsappTemplates.<name>.language",
+          "summary": "Its language, as Meta's code says it: `pt_BR`, `en_US`.",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "whatsappTemplates.<name>.body",
+          "summary": "Its body, as approved, its parameters where they go: numbered (`{{1}}`, `{{2}}`…) or named (`{{customer}}`). What chats show of it, filled.",
+          "required": true,
+          "type": "string"
         }
       ],
       "emits": [
@@ -23033,19 +23270,7 @@
           "where": {
             "doc.private": {
               "$ne": true
-            },
-            "$or": [
-              {
-                "doc.turn": {
-                  "$exists": true
-                }
-              },
-              {
-                "doc.hops": {
-                  "$gte": 1
-                }
-              }
-            ]
+            }
           },
           "keyed": true
         },
@@ -23079,7 +23304,8 @@
           "shared": {
             "whatsapp_number": {}
           },
-          "whatsapp": {}
+          "whatsapp": {},
+          "whatsappTemplates": {}
         },
         "reads": [
           {
@@ -23106,6 +23332,13 @@
               "check",
               "source"
             ]
+          },
+          {
+            "kind": "whatsappTemplates",
+            "found": [
+              "check",
+              "source"
+            ]
           }
         ]
       },
@@ -23114,7 +23347,8 @@
       "check": {
         "reads": [
           "links",
-          "whatsapp"
+          "whatsapp",
+          "whatsappTemplates"
         ],
         "asks": []
       },
@@ -23214,10 +23448,47 @@
               "optional": true,
               "doc": "The number as people dial it, and the business's name, as shown.",
               "secret": false
+            },
+            {
+              "name": "fallback",
+              "type": "TemplateSend",
+              "optional": true,
+              "doc": "The template that goes in a message's place once Meta's 24 hours since the phone last wrote are past: one of `whatsappTemplates`, whose parameters may say `{name}` (the phone's WhatsApp name) and `{text}` (what the message said). Without it, that message stays in the app (`window_closed`).",
+              "secret": false
             }
           ],
           "each": true,
           "doc": "The `whatsapp` resource: the declared numbers, by name."
+        },
+        {
+          "kind": "whatsappTemplates",
+          "type": "WhatsAppTemplatesSettings",
+          "inContract": true,
+          "fields": [
+            {
+              "name": "name",
+              "type": "string",
+              "optional": false,
+              "doc": "Meta's name for it, as approved: `order_update`.",
+              "secret": false
+            },
+            {
+              "name": "language",
+              "type": "string",
+              "optional": false,
+              "doc": "Its language, as Meta's code says it: `pt_BR`, `en_US`.",
+              "secret": false
+            },
+            {
+              "name": "body",
+              "type": "string",
+              "optional": false,
+              "doc": "Its body, as approved, its parameters where they go: numbered (`{{1}}`, `{{2}}`…) or named (`{{customer}}`). What chats show of it, filled.",
+              "secret": false
+            }
+          ],
+          "each": true,
+          "doc": "The `whatsappTemplates` resource: the template messages the app's numbers send, by the app's name for each (`resources.whatsappTemplates.<name>`)."
         }
       ],
       "listing": {

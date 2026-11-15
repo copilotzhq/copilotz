@@ -8,7 +8,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { Fragment, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
-import { Loading, Part } from "../part.tsx";
+import { Going, Loading, Part } from "../part.tsx";
 import { Palette } from "../palette/palette.tsx";
 import { openPalette } from "../palette/state.ts";
 import { AudioPlayer } from "../toolkit/audio-player.tsx";
@@ -43,6 +43,7 @@ function screens(): ReactNode[] {
   const keyed = (nodes: ReactNode[]) => nodes.map((n, i) => <Fragment key={i}>{n}</Fragment>);
   return keyed([
     <Loading />,
+    <Going />,
     <Part part={part({ status: "failed", error: { code: "forbidden", message: "no" } })} />,
     <Part part={part({ status: "failed", error: new Error("boom") })} />,
     <Palette sources={[]} hints={{}} />,

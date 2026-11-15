@@ -3,7 +3,9 @@
  * `bottom`, a sheet): the browser's own modal `<dialog>`, as `Dialog` is.
  * Escape, the backdrop or `onClose` end it. A `title` over what's in it, or
  * just a `label` for screen readers; `className` is its box's, which
- * fills it.
+ * fills it. On a phone it keeps clear of what covers the screen's edges (the
+ * status bar, a notch, the home indicator: the safe-area insets) on the sides
+ * it runs along; a sheet's foot keeps clear of the home indicator on its own.
  *
  * ```tsx
  * <Drawer open={open} onClose={() => setOpen(false)} label="Sidebar">{sidebar}</Drawer>
@@ -20,11 +22,14 @@ const SHEET = sheet(
   "drawer",
   `
 .copilotz-drawer { position: fixed; inset: 0 auto 0 0; width: min(86vw, 320px); max-width: none; height: 100dvh;
-  max-height: none; margin: 0; padding: 0; border: 0; background: var(--popover); color: var(--popover-foreground);
+  max-height: none; margin: 0; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
+  border: 0; background: var(--popover); color: var(--popover-foreground);
   box-shadow: var(--shadow-lg); transform: translateX(-102%);
   transition: transform .28s cubic-bezier(.2, .8, .2, 1), overlay .28s allow-discrete, display .28s allow-discrete; }
-.copilotz-drawer-right { inset: 0 0 0 auto; transform: translateX(102%); }
+.copilotz-drawer-right { inset: 0 0 0 auto; transform: translateX(102%);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) 0; }
 .copilotz-drawer-bottom { inset: auto 0 0 0; width: 100%; height: auto; max-height: 85dvh;
+  padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
   border-radius: var(--radius-2xl) var(--radius-2xl) 0 0; transform: translateY(102%); }
 .copilotz-drawer[open] { display: flex; transform: none; }
 @starting-style {

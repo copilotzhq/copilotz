@@ -8,6 +8,9 @@
  * resource), with the button that folds it at its top; as a rail, the app's mark (and under it,
  * where the app serves many orgs, the `orgs` slot's rail View), the button that unfolds it,
  * Search, a place for each section's rail View, and the person's face.
+ *
+ * And on a phone: a tap on a link in the drawer closes it at once (not once the page it goes to is
+ * drawn), and the shell keeps clear of what covers the screen's edges (the safe-area insets).
  */
 import { assert, assertEquals, assertFalse, assertMatch, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
@@ -15,7 +18,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../../testing/mod.ts";
 import type { OrgsShown } from "../shared/orgs.ts";
 import type { ShellSettings } from "../shared/sidebar.ts";
-import { Frame, type Orgs } from "../views/frame.tsx";
+import { STYLE } from "../shared/style.ts";
+import { followsLink, Frame, type Orgs } from "../views/frame.tsx";
 
 const noCall = () => Promise.resolve({} as never);
 
@@ -127,4 +131,28 @@ test("on the rail, where the app serves many orgs: the switcher's own under the 
   // Until the slot's hook answers (or with one org), or with no rail View, the mark alone.
   assertFalse(draw({ ...slot(undefined), rail: "orgs.rail" }, rail).includes("copilotz-rail-org"));
   assertFalse(draw(slot(shown), rail).includes("copilotz-rail-org"));
+});
+
+/** Where a tap lands: inside a link (`a[href]`, as the sidebar's rows are), or not. */
+const tap = (onLink: boolean) =>
+  ({
+    closest: (selector: string) => (onLink && selector === "a[href]" ? {} : null),
+  }) as unknown as EventTarget;
+
+test("on a phone, a tap on a link in the drawer closes it at once; any other tap doesn't", () => {
+  assert(followsLink(tap(true)));
+  assertFalse(followsLink(tap(false)));
+  assertFalse(followsLink(null));
+  // What isn't an element (no `closest`) isn't a link.
+  assertFalse(followsLink({} as EventTarget));
+});
+
+test("on a phone, the shell keeps clear of the status bar and a notch: the safe-area insets", () => {
+  const shell = /\.copilotz-shell \{[^}]*\}/.exec(STYLE)?.[0] ?? "";
+  assertStringIncludes(
+    shell,
+    "padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left)",
+  );
+  // The drawer's rows lay out as the sidebar's own, inside what hears their taps.
+  assertMatch(STYLE, /\.copilotz-sidebar-links \{ display: contents; \}/);
 });

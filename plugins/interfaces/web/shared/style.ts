@@ -13,16 +13,24 @@
  * Where a front end fills the `orgs` slot, the top of the sidebar makes room
  * for its switcher beside the app's mark; and the user menu, with the dialog
  * where the person names themselves.
+ *
+ * The page spans a phone's whole screen (`viewport-fit=cover`), so the shell
+ * keeps clear of what covers its edges: the status bar, where an installed
+ * app draws under it, and a notch on either side (the safe-area insets; 0
+ * elsewhere). A page's bottom keeps clear of the home indicator on its own,
+ * as chat's composer does, so what scrolls there runs to the screen's edge.
  */
 export const STYLE = `
 .copilotz-shell { --copilotz-sidebar-width: 280px; --copilotz-rail-width: 60px; display: grid;
   grid-template-columns: var(--copilotz-sidebar-width) minmax(0, 1fr); height: 100dvh; overflow: clip;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
   background: var(--background); transition: grid-template-columns .2s ease; }
 .copilotz-shell[data-sidebar=rail] { grid-template-columns: var(--copilotz-rail-width) minmax(0, 1fr); }
 .copilotz-sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--sidebar);
   color: var(--sidebar-foreground); border-right: 1px solid var(--sidebar-border); }
 .copilotz-shell > .copilotz-sidebar { min-width: 0; overflow: hidden; }
 .copilotz-shell > .copilotz-sidebar:not([data-rail]) > * { min-width: calc(var(--copilotz-sidebar-width) - 1px); }
+.copilotz-sidebar-links { display: contents; }
 .copilotz-sidebar-head { display: flex; align-items: center; justify-content: space-between;
   gap: 8px; padding: 14px 12px 10px 18px; }
 .copilotz-brand { display: inline-flex; align-items: center; margin: -6px -8px; padding: 6px 8px;
@@ -51,8 +59,8 @@ export const STYLE = `
 .copilotz-main > * { flex: 1; min-height: 0; }
 .copilotz-main > .copilotz-failed { flex: none; align-self: center; width: min(560px, calc(100% - 32px));
   margin: max(64px, 12vh) 0 0; }
-.copilotz-skip { position: fixed; z-index: 60; top: 10px; left: 10px; transform: translateY(-160%);
-  transition: transform .15s; }
+.copilotz-skip { position: fixed; z-index: 60; top: calc(10px + env(safe-area-inset-top));
+  left: calc(10px + env(safe-area-inset-left)); transform: translateY(-160%); transition: transform .15s; }
 .copilotz-skip:focus-visible { transform: none; }
 .copilotz-shell-empty { display: grid; place-content: center; padding: 32px; }
 

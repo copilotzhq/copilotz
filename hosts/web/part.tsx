@@ -2,7 +2,8 @@
  * A part on the web: a React component over an observed part, redrawn on its
  * own when its output changes (as the terminal's `Part` is for Ink). While it
  * loads, it keeps what it showed before (a new page appears once it's ready,
- * without a blank flash), or the first time, a quiet loader after a moment.
+ * without a blank flash, the host showing it on its way: `Going`), or the
+ * first time, a quiet loader after a moment.
  * A failed part says why, and offers to reload.
  */
 import { isValidElement, type ReactNode, useRef, useSyncExternalStore } from "react";
@@ -19,6 +20,14 @@ const STYLE = `
   animation: copilotz-appear .3s .35s forwards; }
 #app > .copilotz-loading { min-height: 100%; }
 @keyframes copilotz-appear { to { opacity: 1; } }
+.copilotz-going { position: fixed; z-index: 70; top: env(safe-area-inset-top); left: 0; right: 0; height: 2px;
+  overflow: hidden; pointer-events: none; opacity: 0; animation: copilotz-appear .2s .15s forwards; }
+.copilotz-going::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 40%;
+  background: var(--primary); animation: copilotz-going 1.1s ease-in-out infinite; }
+@keyframes copilotz-going { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) {
+  .copilotz-going::before { width: 100%; opacity: .5; animation: none; }
+}
 .copilotz-failed { margin: 12px; }
 #app > .copilotz-failed { max-width: 520px; margin: 18vh auto; }
 `;
@@ -39,6 +48,18 @@ export function Loading(): ReactNode {
       {SHEET}
       <span className="copilotz-sr">{say("loading")}</span>
       <Spinner variant="dots" size={7} />
+    </div>
+  );
+}
+
+/**
+ * A new page on its way, the one before still shown (see screens.ts): a thin
+ * bar across the top, after a moment, so a quick page never flashes it.
+ */
+export function Going(): ReactNode {
+  return (
+    <div className="copilotz-going" role="progressbar" aria-label={say("loading")}>
+      {SHEET}
     </div>
   );
 }

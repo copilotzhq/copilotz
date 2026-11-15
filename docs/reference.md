@@ -311,7 +311,12 @@ types its documents and queries from the schema.
 `nearest(vector, { filter, limit })` and `query(name, params)`.
 
 - **Filters:** `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$exists`, `$elemMatch`,
-  `$and`, `$or`, `$nor`, `$not`.
+  `$and`, `$or`, `$nor`, `$not`, and `$regex` with `$options` `i` (ignore case) and `s` (`.` matches
+  line breaks): the part of JavaScript's patterns every store reads alike, matched in linear time,
+  so any caller may send one. Escape text meant literally (`RegExp.escape(text)`). A pattern ignores
+  case, not accents: search a folded copy of the field for that. The
+  [stores' README](../stores/README.md#text-patterns) has what's in the subset, its limits, and the
+  folded copy.
 - **Updates:** `$set`, `$unset`, `$inc`, `$push` (with `$each`), `$addToSet`, `$pull`; `upsert`.
 - **Finds:** `sort`, `limit`, `skip`, and `projection` (`{ name: 1 }` keeps fields, `{ data: 0 }`
   leaves them out), applied before any large value is loaded.

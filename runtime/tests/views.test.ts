@@ -71,7 +71,7 @@ const notes = definePlugin({
     restless: (_item: unknown, ctx: ViewContext) =>
       ctx.db.collection("note").find({ text: crypto.randomUUID() }).status,
     broken: (_item: unknown, ctx: ViewContext) =>
-      ctx.db.collection("note").find({ text: { $regex: "x" } }).status,
+      ctx.db.collection("note").find({ text: { $size: 1 } }).status,
   },
   actions: {
     "note.add": defineAction({

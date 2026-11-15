@@ -11,6 +11,7 @@ import { sqliteStore } from "../sql/sqlite/mod.ts";
 import { postgresStore } from "../sql/postgres/mod.ts";
 import { env, tempDir, tempFile, temporary, test } from "../../testing/mod.ts";
 import { pooled } from "./pooled.ts";
+import type { SqliteDatabase } from "../sql/sqlite/mod.ts";
 import { tmpdir } from "node:os";
 
 const temp = () => tempFile(".sqlite");
@@ -124,6 +125,17 @@ const FILTERS: Filter[] = [
   { _id: { $nin: ["a", "b"] } },
   { _id: { $eq: "c" } },
   { _id: { $gt: "b" } },
+  // Text patterns: strings only, an array's strings, with the rest of the filter.
+  { s: { $regex: "^[x-y]$" } },
+  { s: { $regex: "X", $options: "i" } },
+  { s: { $regex: "1", $ne: "x" } },
+  { tags: { $regex: "e" } },
+  { "nested.deep.v": { $regex: "Q", $options: "i" } },
+  { s: { $not: { $regex: "x" } } },
+  { $and: [{ s: { $regex: "." } }, { b: true }] },
+  { $or: [{ s: { $regex: "^z" } }, { n: 1 }] },
+  { _id: { $regex: "^[a-c]" } },
+  { at: { $regex: "-02$" } },
 ];
 
 const PAGES: FindOptions[] = [
@@ -181,6 +193,12 @@ const MONGO_FILTERS: [Filter, string][] = [
   [{ n: { $not: { $gt: 1 } } }, "abce"],
   [{ $or: [{ n: 1 }, { s: "B" }] }, "ac"],
   [{ $nor: [{ n: null }, { n: 1 }] }, "de"],
+  [{ s: { $regex: "b" } }, "b"], // a pattern matches a string somewhere in it
+  [{ s: { $regex: "B", $options: "i" } }, "bc"],
+  [{ s: { $regex: "^\\d$" } }, "a"],
+  [{ n: { $regex: "2" } }, "e"], // only strings match: 2.5 is a number
+  [{ tags: { $regex: "^y$" } }, "a"], // an array matches when one of its strings does
+  [{ s: { $not: { $regex: "b", $options: "i" } } }, "ade"], // and missing fields don't
 ];
 const MONGO_SORTS: [Record<string, 1 | -1>, string][] = [
   // null and missing are equal and first; then numbers, strings (code points: "B" < "b").
@@ -205,7 +223,7 @@ for (const [name, make] of Object.entries(adapters)) {
     }
     // What isn't supported fails, whether or not any document would be read.
     for (const collection of ["m", "empty"]) {
-      for (const filter of [{ s: { $regex: "b" } }, { $where: "1" }, { n: { $gt: true } }]) {
+      for (const filter of [{ s: { $size: 1 } }, { $where: "1" }, { n: { $gt: true } }]) {
         await assertRejects(() => store.find(collection, filter), Error, "Unsupported");
       }
     }
@@ -749,6 +767,136 @@ for (const [name, database] of Object.entries(shared)) {
     assertEquals((await second.events(0)).map((e) => e.type), ["kept"]);
     await first.close();
     await second.close();
+  });
+}
+
+// Not literal, so no checker or bundler tries to resolve the one this runtime lacks.
+const BUN_SQLITE = "bun:sqlite";
+const NODE_SQLITE = "node:sqlite";
+
+/**
+ * The runtime's SQLite, as a database that can't register functions (as
+ * bun:sqlite's): the store matches patterns in JavaScript, after SQL.
+ */
+async function functionless(path: string): Promise<SqliteDatabase> {
+  const db: SqliteDatabase = "Bun" in globalThis
+    ? new (await import(BUN_SQLITE)).Database(path, { create: true })
+    : new (await import(NODE_SQLITE)).DatabaseSync(path);
+  return {
+    exec: (sql) => db.exec(sql),
+    prepare: (sql) => db.prepare(sql),
+    close: () => db.close(),
+    get isTransaction() {
+      return db.isTransaction;
+    },
+    get inTransaction() {
+      return db.inTransaction;
+    },
+  };
+}
+
+/** Names as people write them (accents, cases, scripts, line breaks), and what isn't a string. */
+const NAMES: Doc[] = [
+  { _id: "joao", name: "João Silva", n: 1 },
+  { _id: "JOAO", name: "JOÃO", n: 2 },
+  { _id: "plain", name: "joao", n: 3 },
+  { _id: "acao", name: "Ação", n: 4 },
+  { _id: "ACAO", name: "AÇÃO", n: 5 },
+  { _id: "strasse", name: "Straße", n: 6 },
+  { _id: "smile", name: "😀 smile", n: 7 },
+  { _id: "lines", name: "two\nlines", n: 8 },
+  { _id: "dot", name: "a.b", n: 9 },
+  { _id: "number", name: 42, n: 10 },
+  { _id: "list", name: ["x", "Joãozinho"], n: 11 },
+  { _id: "null", name: null, n: 12 },
+  { _id: "none", n: 13 },
+];
+
+const STRINGS = [
+  "joao",
+  "JOAO",
+  "plain",
+  "acao",
+  "ACAO",
+  "strasse",
+  "smile",
+  "lines",
+  "dot",
+  "list",
+];
+
+/** What each pattern matches, in every store whatever its locale: as JavaScript's `u` flag reads it. */
+const NAMED: [Filter, string[]][] = [
+  [{ name: { $regex: "joão", $options: "i" } }, ["joao", "JOAO", "list"]],
+  [{ name: { $regex: "^joão$", $options: "i" } }, ["JOAO"]],
+  [{ name: { $regex: "ção$", $options: "i" } }, ["acao", "ACAO"]],
+  [{ name: { $regex: "ÇÃO" } }, ["ACAO"]],
+  [{ name: { $regex: "STRASSE", $options: "i" } }, []], // ß folds to itself, not to "ss"
+  [{ name: { $regex: "^.\\s" } }, ["smile"]], // 😀 is one character
+  [{ name: { $regex: "two.lines" } }, []], // . isn't a line break…
+  [{ name: { $regex: "two.lines", $options: "s" } }, ["lines"]], // …unless `s`
+  [{ name: { $regex: "a\\.b" } }, ["dot"]],
+  [{ name: { $regex: "4" } }, []], // a number isn't a string
+  [{ name: { $regex: "" } }, STRINGS],
+  [{ name: { $not: { $regex: "o", $options: "i" } } }, [
+    "strasse",
+    "smile",
+    "dot",
+    "number",
+    "null",
+    "none",
+  ]],
+  [{ $and: [{ name: { $regex: "o" } }, { n: { $gt: 2 } }] }, ["plain", "acao", "lines", "list"]],
+];
+
+const patterned = {
+  ...adapters,
+  "sqlite without functions": () => sqliteStore({ path: temp(), open: functionless }),
+};
+
+for (const [name, make] of Object.entries(patterned)) {
+  test(`${name}: text patterns match alike, paged, counted and grouped`, async () => {
+    const store = await make();
+    const { epoch } = await store.open();
+    await store.transaction(epoch, (tx) => tx.insert("names", structuredClone(NAMES)));
+    for (const [filter, expected] of NAMED) {
+      assertEquals(ids(await store.find("names", filter)), expected, JSON.stringify(filter));
+      assertEquals(await store.count("names", filter), expected.length, JSON.stringify(filter));
+    }
+    // Sorted, then paged, among what matches.
+    const some = { name: { $regex: "o", $options: "i" } };
+    assertEquals(
+      ids(await store.find("names", some, { sort: { n: -1 }, skip: 1, limit: 2 })),
+      ["lines", "ACAO"],
+    );
+    assertEquals(ids(await store.find("names", some, { limit: 1 })), ["joao"]);
+    const grouped: unknown[] = await store.aggregate(
+      "names",
+      plan([
+        { $match: { name: { $regex: "ção$", $options: "i" } } },
+        { $group: { _id: null, n: { $sum: "$n" } } },
+      ]),
+    );
+    assertEquals(grouped, [{ _id: null, n: 9 }]);
+    // Writes find what they change the same way.
+    await store.transaction(
+      epoch,
+      (tx) =>
+        tx.update("names", { name: { $regex: "^jo", $options: "i" } }, { $set: { j: true } }, {
+          many: true,
+        }),
+    );
+    assertEquals(ids(await store.find("names", { j: true })), ["joao", "JOAO", "plain", "list"]);
+    await store.transaction(epoch, (tx) => tx.delete("names", { name: { $regex: "ção" } }));
+    assertEquals(await store.count("names", { name: { $regex: "ção", $options: "i" } }), 1);
+    // A pattern outside the subset is refused, whether or not any document would be read.
+    for (const collection of ["names", "empty"]) {
+      for (const filter of [{ name: { $regex: "(a)\\1" } }, { name: { $options: "i" } }]) {
+        const error = await assertRejects(() => store.find(collection, filter));
+        assertEquals((error as { code?: string }).code, "invalid", JSON.stringify(filter));
+      }
+    }
+    await store.close();
   });
 }
 

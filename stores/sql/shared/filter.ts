@@ -5,8 +5,12 @@
  * which are MongoDB's: equality also matches an array element and null also
  * a missing field; comparisons only match values of the operand's type, and
  * an array when an element does; sorting orders types as MongoDB does.
+ * `$regex` takes a pattern runtime/pattern.ts has checked, which each
+ * dialect matches as that reference does.
  */
 import type { Filter, FindOptions, ScalarType } from "../../../runtime/store.ts";
+import { checkOptions } from "../../../runtime/mongo.ts";
+import { type Pattern, pattern } from "../../../runtime/pattern.ts";
 
 /** Binds a value as a statement parameter and returns its placeholder. */
 export type Bind = (value: unknown) => string;
@@ -47,6 +51,11 @@ export type Dialect = {
    * serve the order: null and missing first, as MongoDB orders them.
    */
   sorted(field: string, type: ScalarType, direction: 1 | -1): string;
+  /**
+   * Whether the field is a string matching the pattern somewhere (or, for an
+   * array, one of its strings is), as runtime/pattern.ts matches it.
+   */
+  regex(path: unknown, pattern: Pattern, bind: Bind): string;
   /** The column that holds `_id`, the row's key: equality and `$in` on `_id` look it up. */
   key: string;
   /** The column that keeps insertion order: ties sort by it, as in the reference. */
@@ -129,6 +138,16 @@ function test(field: string, condition: unknown, c: Context): string {
         return type && type !== "boolean" && field !== "_id" && fits(type, arg)
           ? `${dialect.scalar(field, type)} ${SQL_OPS[op]} ${dialect.operand(type, arg, bind)}`
           : dialect.compare(path, op, arg, bind);
+      case "$regex":
+        return dialect.regex(
+          path,
+          pattern(arg, (condition as Record<string, unknown>).$options),
+          bind,
+        );
+      // Read with its `$regex`.
+      case "$options":
+        checkOptions(condition as Record<string, unknown>);
+        return "TRUE";
       default:
         throw new Error(`Unsupported filter operator ${op}`);
     }
@@ -175,6 +194,28 @@ export function where(
   scalars?: Scalars,
 ): string {
   return compile(filter, { dialect, bind, scalars });
+}
+
+/** Whether a filter asks `$regex` anywhere. */
+export function asksPattern(filter: unknown): boolean {
+  if (Array.isArray(filter)) return filter.some(asksPattern);
+  if (filter === null || typeof filter !== "object") return false;
+  return Object.entries(filter).some(([key, value]) => key === "$regex" || asksPattern(value));
+}
+
+/**
+ * A filter without what asks `$regex`: its top-level clauses (and those of
+ * its `$and`s) that do are left out. It matches every document the filter
+ * does, and maybe more: a store that can't match patterns in SQL reads with
+ * it, and matches the whole filter in JavaScript after.
+ */
+export function withoutPatterns(filter: Filter): Filter {
+  const kept: Filter = {};
+  for (const [key, value] of Object.entries(filter)) {
+    if (key === "$and") kept.$and = (value as Filter[]).map(withoutPatterns);
+    else if (!asksPattern(value)) kept[key] = value;
+  }
+  return kept;
 }
 
 /**

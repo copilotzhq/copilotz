@@ -41,6 +41,11 @@ any GET with Accept: text/event-stream: the result, then each new result after a
 `PATCH`, `PUT` and `DELETE` also work on the collection itself, with `?filter=<json>` in place of an
 id. They then change the first document that matches, and `?upsert=true` inserts one when none does.
 
+A filter is the stores' MongoDB filter, `$regex` included:
+`?filter={"name":{"$regex":"^jo","$options":"i"}}` finds names starting with "jo" in any case. A
+pattern is matched in linear time, so a caller's own is safe to send; escape text meant literally.
+The [reference](../reference.md) lists the operators.
+
 An `Idempotency-Key` on an Action call is the call's id. Sent again, the call answers what the first
 did, without doing it twice.
 

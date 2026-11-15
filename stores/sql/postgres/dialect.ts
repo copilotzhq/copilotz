@@ -1,10 +1,12 @@
 /**
  * PostgreSQL's leaves for the shared MongoDB-to-SQL translation
- * (../shared/filter.ts), over `jsonb` documents.
+ * (../shared/filter.ts), over `jsonb` documents. `$regex` is its `~`, on the
+ * pattern written in its own syntax (pattern.ts).
  */
 import type { Aggregates } from "../shared/aggregate.ts";
 import type { Bind, Dialect } from "../shared/filter.ts";
 import type { ScalarType } from "../../../runtime/store.ts";
+import { postgresPattern } from "./pattern.ts";
 
 /** A dot path as a text array: `#>` treats numeric segments as array indexes. */
 const segments = (field: string) => field.split(".");
@@ -75,6 +77,14 @@ export const postgres: Dialect = {
     return `COALESCE(${test(at(path, bind))} OR ${element(path, bind, test("e"))}, FALSE)`;
   },
   exists: (path, present, bind) => `(${at(path, bind)} IS ${present ? "NOT " : ""}NULL)`,
+  regex(path, pattern, bind) {
+    // Code points, whatever the database's collation: the pattern spells out every class.
+    const written = `${bind(postgresPattern(pattern))}::text`;
+    const matched = (json: string) =>
+      `CASE WHEN jsonb_typeof(${json}) = 'string' THEN (${json} #>> '{}') COLLATE "C" ~ ` +
+      `${written} ELSE FALSE END`;
+    return `COALESCE(${matched(at(path, bind))} OR ${element(path, bind, matched("e"))}, FALSE)`;
+  },
   // jsonb equality is type-strict, as MongoDB's: one list serves every type.
   among(path, _type, values, bind) {
     const list = () => `(SELECT jsonb_array_elements(${bind(JSON.stringify(values))}::jsonb))`;

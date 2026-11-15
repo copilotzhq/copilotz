@@ -782,12 +782,12 @@ for (const same of [false, true]) {
 test("a Processor whose where filter can't be evaluated fails at start", async () => {
   const bad = definePlugin({
     name: "bad",
-    processors: { "bad.p": { on: "x", where: { "doc.text": { $regex: "a" } }, run: () => {} } },
+    processors: { "bad.p": { on: "x", where: { "doc.text": { $size: 1 } }, run: () => {} } },
   });
   await assertRejects(
     () => createRuntime({ store: memoryStore(), plugins: [bad] }),
     Error,
-    'Processor "bad.p" where: Unsupported filter operator $regex',
+    'Processor "bad.p" where: Unsupported filter operator $size',
   );
 });
 

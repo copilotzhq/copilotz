@@ -1,7 +1,7 @@
 /**
  * Failures: a public one says its message to any caller, and stays public
  * from job to job (an Action's failure reaching its caller); any other is
- * not public, whatever its code.
+ * not public, whatever its code. The status one asks for goes with it too.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createRuntime, definePlugin, failure, isPublic } from "../mod.ts";
@@ -21,6 +21,14 @@ test("a failure is public only when made so; a code alone isn't", () => {
     true,
   ]);
   assert(!isPublic(raise(wired(failure("conflict", "inside")))));
+});
+
+test("the status a failure asks the REST API for goes with it, from job to job", () => {
+  const carried = raise(wired(failure("taken", "Taken.", { status: 409 }))) as { status?: number };
+  assertEquals(carried.status, 409);
+  // Only an HTTP error status: anything else on an error isn't carried as one.
+  const odd = raise(wired(Object.assign(new Error("x"), { code: "x", status: 200 })));
+  assertEquals((odd as { status?: number }).status, undefined);
 });
 
 test("an Action's public failure reaches its caller public", async () => {

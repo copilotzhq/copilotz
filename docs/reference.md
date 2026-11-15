@@ -514,8 +514,10 @@ The rest of `copilotz`:
   and its executors apart ([topology](architecture/topology.md)).
 - **The client:** `connect(url, { key?, over?, plugins? })` reaches an app over its socket or its
   REST API ([the REST API and the client](guides/rest-and-the-client.md)).
-- **Errors:** `failure(code, message, { public? })`, `forbidden`, `invalid`, `isPublic`. Only a
-  public error's words reach a caller outside.
+- **Errors:** `failure(code, message, { public?, status? })`, `forbidden`, `invalid`, `isPublic`.
+  Only a public error's words reach a caller outside. Over REST a failure answers a 4xx with its
+  code (422 for an app's own, or the `status` it says), and an error with no code a 500
+  ([errors](guides/rest-and-the-client.md#errors)).
 - **Links and addresses:** `signLink`, `verifyLink`, `linksOf`, `clientAddress`, `callerOf`…
 - **Metrics:** `createMetrics`, `noMetrics` ([metrics](operations/metrics.md)).
 - **Time:** `manualClock`, `systemClock`.

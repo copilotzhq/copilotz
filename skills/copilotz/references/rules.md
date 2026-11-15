@@ -74,8 +74,11 @@ throw failure("not_found", `No task ${task} here.`, { public: true });
 ```
 
 Only a public failure's words reach a caller outside, or a model. No other error's words do (a
-driver's, a stack's, the runtime's about its insides). Over HTTP the code is the status: `invalid`
-400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `too_many` 429, and 500 for the rest.
+driver's, a stack's, the runtime's about its insides). Over the REST API a failure is a refusal,
+with its code's status: `invalid` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404,
+`too_many` 429, and 422 for the app's own codes (`seat_taken`), unless it says a `status`
+(`failure("seat_taken", "…", { status: 409 })`). An error with no code is a crash: a 500. So throw
+refusals, don't return them as data.
 
 ## Settings are resources, not code
 
@@ -95,7 +98,7 @@ await ctx.transaction(async (tx) => {
 ```
 
 A refused write rolls it all back. A transaction holds the store's writer, so keep slow work out of
-it: no model calls, no `fetch`. One with no op for 5 seconds rolls back.
+it: no model calls, no `fetch`. One whose code sends no op for 5 seconds rolls back.
 
 ## Who acts, and where
 

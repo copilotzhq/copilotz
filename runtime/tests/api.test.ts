@@ -17,7 +17,9 @@ import {
   defineAction,
   defineCollection,
   definePlugin,
+  failure,
   manualClock,
+  type Plugin,
   type Runtime,
   type ViewContext,
 } from "../mod.ts";
@@ -106,17 +108,50 @@ const notes = definePlugin({
   },
 });
 
+/** Refusals of the app's own, and crashes: what each answers over REST. */
+const refusals = definePlugin({
+  name: "refusals",
+  actions: {
+    "note.full": defineAction({
+      allow: () => true,
+      input: { type: "object" },
+      run: () => {
+        throw failure("note_full", "Notes are full.");
+      },
+    }),
+    "note.taken": defineAction({
+      allow: () => true,
+      input: { type: "object" },
+      run: () => {
+        throw failure("note_taken", "That note is taken.", { public: true, status: 409 });
+      },
+    }),
+    "note.crash": defineAction({
+      allow: () => true,
+      input: { type: "object", properties: { driver: { type: "boolean" } } },
+      run: (_, input) => {
+        throw input.driver
+          ? Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:5432"), { code: "ECONNREFUSED" })
+          : new Error("Cannot read properties of undefined");
+      },
+    }),
+  },
+});
+
 type Setup = {
   rt: Runtime;
   /** A request as `actor` (none: anonymous), to `path`. */
   as(actor: Actor | null, path: string, init?: RequestInit): Promise<Response>;
 };
 
-async function setup(fn: (s: Setup) => Promise<void>, options: { clock?: boolean } = {}) {
+async function setup(
+  fn: (s: Setup) => Promise<void>,
+  options: { clock?: boolean; plugins?: Plugin[] } = {},
+) {
   const topic = `api-test.${crypto.randomUUID()}`;
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [notes, testWho],
+    plugins: [notes, testWho, ...options.plugins ?? []],
     transports: [{ type: "in-process", config: { topic } }],
     ...(options.clock ? { clock: manualClock() } : {}),
   });
@@ -572,6 +607,42 @@ test("REST: errors are JSON with their code's status; a credential proving nobod
     assertEquals(options.headers.get("access-control-allow-origin"), "*");
     assertMatch(options.headers.get("access-control-allow-methods")!, /PATCH/);
   });
+});
+
+test("REST: an app's own failure is a 4xx with its code; a crash is a 500 that says nothing", async () => {
+  const cleo: Actor = { kind: "contact", id: "cleo" };
+  await setup(async ({ as }) => {
+    const call = async (actor: Actor, name: string, input = {}) => {
+      const response = await as(actor, `/api/actions/${name}`, json("POST", input));
+      return [response.status, (await response.json()).error];
+    };
+    // Not one of the runtime's codes: 422, the caller's to act on, said as far as they may hear.
+    assertEquals(await call(ana, "note.full"), [
+      422,
+      { code: "note_full", message: "Notes are full." },
+    ]);
+    assertEquals(await call(cleo, "note.full"), [
+      422,
+      { code: "note_full", message: "Something went wrong." },
+    ]);
+    // The status it asks for; public, its words for anyone.
+    assertEquals(await call(cleo, "note.taken"), [
+      409,
+      { code: "note_taken", message: "That note is taken." },
+    ]);
+    // No code, or a driver's: a crash, whoever asks.
+    const crash = { code: "internal", message: "Something went wrong." };
+    assertEquals(await call(ana, "note.crash"), [500, crash]);
+    assertEquals(await call(ana, "note.crash", { driver: true }), [500, crash]);
+  }, { plugins: [refusals] });
+  assert(failure("x", "y", { status: 503 }).status === 503);
+  let wrong: unknown;
+  try {
+    failure("x", "y", { status: 200 });
+  } catch (error) {
+    wrong = error;
+  }
+  assert(wrong instanceof RangeError);
 });
 
 test("the socket's writes: as the person's own, within the rules and the scope", async () => {

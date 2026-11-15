@@ -59,8 +59,27 @@ memberships, sessions, keys, messages, routines and computers are some of them.
 
 ## Errors
 
-Errors are `{ error: { code, message } }`, with the status their code says. A credential that proves
-nobody gets a 401.
+Errors are `{ error: { code, message } }`. A credential that proves nobody gets a 401.
+
+A refusal is the caller's to act on, and answers a 4xx with its code. That's any error with a code,
+as `failure(code, message)` makes it:
+
+- one of the runtime's codes answers its own status: `invalid` 400, `forbidden` 403, `not_found`
+  404, `duplicate_key` and `id_conflict` 409, `too_many` 429…;
+- an app's own code (`username_taken`, `seat_taken`) answers 422;
+- `failure(code, message, { status })` picks another, 400 to 599:
+  `failure("seat_taken", "That seat is taken.", { public: true, status: 409 })`.
+
+Its message reaches a person (and their key) whole. A contact or anonymous caller reads it only when
+the failure is `public`, and otherwise `Something went wrong.`, with its code.
+
+An error with no code is a crash, not a refusal: a 500, `internal`, that says nothing of it to
+anyone. So is a code that isn't a refusal's (a driver's `ECONNREFUSED`, a database's `23505`) and
+the runtime's own faults (`executor_lost`, `fenced`). Before 1.0.0-rc.50 an app's own code answered
+a 500 too, so apps returned refusals as data (`{ ok: false, error }`); throw them instead.
+
+The client (`connect(url, { over: "http" })`) throws the same: an error with the `code`, and the
+`status` it answered.
 
 ## Keys
 

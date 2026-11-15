@@ -9,6 +9,9 @@
  * the org's other spaces (that they reach by running it, not by being in
  * them) are apart too, under "Across the org", folded the same way. Its
  * guests, who work only in the spaces they're invited to, make none.
+ *
+ * On the rail, the sidebar folded (`SpaceRail`): the same spaces in use, each
+ * its face, a link to its page named beside it, marked the same way.
  */
 import { type ReactNode, useId, useState } from "react";
 import {
@@ -19,6 +22,7 @@ import {
   kept,
   LazyView,
   NavItem,
+  RailItem,
 } from "../../../../../hosts/web/mod.ts";
 import { useStanding } from "../../../../interfaces/web/contract.ts";
 import type { Member, Reached, SpaceSidebar } from "../../contract.ts";
@@ -47,6 +51,33 @@ const foldsOf = (key: string): Folds => {
 /** The Archived fold's key among the folds kept, and the org's other spaces'. */
 const ARCHIVED = "copilotz:archived";
 const ACROSS = "copilotz:across";
+
+/**
+ * The person's standing in the org, as the tree lists spaces by it: whether they run it (its
+ * owners and admins, and platform staff, reach every space in it), and whether they're its guest.
+ */
+function useRunning(joined: Member[], call?: Call) {
+  const standing = useStanding(call ?? noCall, !!call);
+  const role = joined.find((m) => m.space === ORG)?.role;
+  // In the org as platform staff (an app serving many orgs gives their sessions that).
+  const staff = standing?.staff === true;
+  // Where there are orgs (`org.me` names the org), everyone in one but its guests reads their own
+  // role there.
+  return {
+    runs: role === "owner" || role === "admin" || staff,
+    guest: !!standing?.org && !staff && !role,
+  };
+}
+
+/**
+ * Whether a space is the person's own, as the tree lists it: any they reach; for those who run
+ * the org, those they're in and their Personal (the rest of the org's are apart).
+ */
+const ownOf = (joined: Member[], viewer: string, runs: boolean) => {
+  const theirs = new Set(joined.map((m) => m.space));
+  return (s: Reached) =>
+    !runs || theirs.has(s._id) || (s.kind === "personal" && s.owner === viewer);
+};
 
 export function SpaceTree(
   {
@@ -82,17 +113,8 @@ export function SpaceTree(
 ): ReactNode {
   // Those who run the org (and staff) reach every space in it: the ones they're in show as
   // anyone's do; the rest of the org's, apart.
-  const standing = useStanding(call ?? noCall, !!call);
-  const role = joined.find((m) => m.space === ORG)?.role;
-  // In the org as platform staff (an app serving many orgs gives their sessions that).
-  const staff = standing?.staff === true;
-  const runs = role === "owner" || role === "admin" || staff;
-  // Where there are orgs (`org.me` names the org), everyone in one but its guests reads their own
-  // role there.
-  const guest = !!standing?.org && !staff && !role;
-  const theirs = new Set(joined.map((m) => m.space));
-  const mine = (s: Reached) =>
-    !runs || theirs.has(s._id) || (s.kind === "personal" && s.owner === viewer);
+  const { runs, guest } = useRunning(joined, call);
+  const mine = ownOf(joined, viewer, runs);
   const spaces = reached.filter(mine);
   const archived = shelved.filter(mine);
   const across = [...reached, ...shelved].filter((s) => !mine(s));
@@ -301,5 +323,45 @@ function SpaceRow(
         )
         : null}
     </li>
+  );
+}
+
+/**
+ * The spaces on the rail, the sidebar folded: those in use that the tree lists as the person's
+ * own, each its face (Personal, a person's), a link to its page, named beside it; where they work
+ * tinted, and its page raised. Archived spaces and the org's others wait in the tree.
+ */
+export function SpaceRail(
+  { spaces, joined = [], here, path, viewer, call }: {
+    /** Those in use, in the sidebar's order. */
+    spaces: Reached[];
+    joined?: Member[];
+    here?: string;
+    path?: string;
+    viewer: string;
+    call?: Call;
+  },
+): ReactNode {
+  const { runs } = useRunning(joined, call);
+  const mine = ownOf(joined, viewer, runs);
+  return (
+    <ul className="spaces-rail" aria-label={say("spacesGroup")}>
+      {spaces.filter(mine).map((s) => (
+        <li key={s._id}>
+          <RailItem
+            href={spacePath(s._id)}
+            label={spaceName(s, viewer)}
+            current={path === spacePath(s._id) ? "page" : s._id === here ? "location" : undefined}
+            leading={s.kind === "personal"
+              ? (
+                <span className="spaces-personal">
+                  <Icon name="person" size={14} />
+                </span>
+              )
+              : <Avatar name={s.name} kind="space" size={26} />}
+          />
+        </li>
+      ))}
+    </ul>
   );
 }

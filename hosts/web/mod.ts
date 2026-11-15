@@ -92,6 +92,7 @@ export { Dialog } from "./toolkit/dialog.tsx";
 export { Drawer } from "./toolkit/drawer.tsx";
 export { type Tab, Tabs } from "./toolkit/tabs.tsx";
 export { NavItem } from "./toolkit/nav-item.tsx";
+export { RailItem, type RailItemProps } from "./toolkit/rail-item.tsx";
 export { ResizeHandle } from "./toolkit/resize-handle.tsx";
 export { Tooltip } from "./toolkit/tooltip.tsx";
 // Pages and details.

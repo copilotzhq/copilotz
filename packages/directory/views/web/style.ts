@@ -17,6 +17,7 @@ export const STYLE = `
   color: var(--muted-foreground); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .copilotz-org[data-staff] .copilotz-org-sub { color: var(--warning-text); font-weight: 620; }
 .copilotz-org[data-staff] > .copilotz-avatar { outline: 2px solid var(--warning); outline-offset: 1px; }
+.copilotz-org-rail[data-staff] > .copilotz-avatar { outline: 2px solid var(--warning); outline-offset: 1px; }
 .copilotz-org-chevron { flex: none; color: var(--muted-foreground); }
 .copilotz-org-dot { flex: none; display: inline-grid; place-items: center; min-width: 19px; height: 19px; padding: 0 6px;
   border-radius: var(--radius-full); background: var(--primary); color: var(--primary-foreground); font-size: 11px;

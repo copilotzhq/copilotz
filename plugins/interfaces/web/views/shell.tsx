@@ -2,13 +2,15 @@
  * The web shell's View: the sidebar features fill, who's signed in, and what
  * the address opens, with the address's parameters (`hints.query`). Sidebar
  * sections hear where the person works (`in`) and the address (`path`), to
- * mark what's current. A space's page (`/space/<id>`) is in that space. A
+ * mark what's current; so do their `rail` Views, which the sidebar shows
+ * folded to a rail (on a wide screen, as the person keeps it, or as the
+ * `shell` resource starts it). A space's page (`/space/<id>`) is in that space. A
  * page whose kind the `panel` resource is `on` offers the side panel, for
  * the space the person works in. The command palette lists what front ends
  * offer there (the `palette` resource), for where the person is: the space,
  * the address, the page open (`{ kind, id }`) and its parameters. Where a
- * front end fills the `orgs` slot, its switcher is drawn with the same hints
- * as the sidebar's, and its overlay with none.
+ * front end fills the `orgs` slot, its switcher (and on the rail, its `rail`)
+ * is drawn with the same hints as the sidebar's, and its overlay with none.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../runtime/mod.ts";
@@ -17,14 +19,19 @@ import { userMenuOf } from "../shared/menu.ts";
 import { orgsSlotOf } from "../shared/orgs.ts";
 import { pageOf, sourcesOf } from "../shared/palette.ts";
 import { offered, type Panel } from "../shared/panel.ts";
+import type { ShellSettings } from "../shared/sidebar.ts";
 import { Frame } from "./frame.tsx";
 import { say } from "./words.ts";
 
 /** The app's name, which its logo says: the title the page came with. */
 const app = globalThis.document?.title || "Copilotz";
 
-/** A sidebar entry: the View that fills it, and a title over it (a plain link needs none). */
-export type Section = { title?: string; view: string; order?: number };
+/**
+ * A sidebar entry: the View that fills it, and a title over it (a plain link needs none); and
+ * what it shows on the rail, the sidebar folded, if anything: a View of the toolkit's
+ * `RailItem`s (an icon or an avatar each, named by its label), read only while the rail shows.
+ */
+export type Section = { title?: string; view: string; order?: number; rail?: string };
 
 export const shellView = (
   where: { path: string; space?: string; query?: Record<string, string> },
@@ -68,6 +75,9 @@ export const shellView = (
           ...(where.query ? { query: where.query } : {}),
         },
       }}
+      rails={sections.flatMap(([, section]) => section.rail ? [section.rail] : [])}
+      hints={around}
+      {...(ctx.resources.shell ? { settings: ctx.resources.shell as ShellSettings } : {})}
       menu={userMenuOf(ctx.resources.userMenu)}
       call={ctx.call}
       panel={offered(panel, kind ?? "home", space) ? { ...panel, space: space! } : undefined}
@@ -75,6 +85,8 @@ export const shellView = (
         ? {
           orgs: {
             switcher: ctx.show(slot.switcher, {}, around),
+            // On the rail, read only while it shows, as sections' rails are.
+            ...(slot.rail ? { rail: slot.rail } : {}),
             // The same wherever the page is: what it shows outlives going elsewhere.
             ...(slot.overlay ? { overlay: ctx.show(slot.overlay, {}, {}) } : {}),
             ...(slot.use ? { use: slot.use } : {}),

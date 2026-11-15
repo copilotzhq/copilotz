@@ -27,9 +27,9 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `invitations`, `invitations.home`, `org.about`, `org.members`, `space`,
-  `space.invite`, `space.members`, `space.not-here`, `space.panel`, `space.pick`, `space.settings`,
-  `spaces.palette`, `web.spaces`.
+- **On the web:** `invitations`, `invitations.home`, `invitations.rail`, `org.about`, `org.members`,
+  `space`, `space.invite`, `space.members`, `space.not-here`, `space.panel`, `space.pick`,
+  `space.settings`, `spaces.palette`, `spaces.rail`, `web.spaces`.
 - **What it adds to resources:** `home` (`invitations`), `names` (`people`), `orgSettings` (`about`,
   `members`), `palette` (`spaces`), `panel` (`on`, `title`, `view`), `refusals` (`not_here`),
   `sidebar` (`invitations`, `spaces`), `spaceTabs` (`members`, `settings`).
@@ -44,7 +44,7 @@ Nothing to set. It reads `names`, `spaceAgents`, `spaceInvite`, `spaceMembers`, 
 The runtime doesn't start without [`spaces`](spaces.md) and [`web-shell`](web-shell.md): add them
 too.
 
-It ships with `copilotz@1.0.0-rc.47`.
+It ships with `copilotz@1.0.0-rc.49`.
 
 ## Listing
 

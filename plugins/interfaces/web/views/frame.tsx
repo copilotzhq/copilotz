@@ -6,22 +6,28 @@
  * page that offers the side panel has its button at its top right, and the
  * panel beside it (on a phone, a sheet): see panel.tsx.
  *
+ * On a wide screen the sidebar folds to a rail of icons and back (rail.tsx):
+ * from the button at its top, with ⌘B (Ctrl+B elsewhere) where the key isn't
+ * a field's own (a document's bold, a terminal's), or from the palette. It
+ * slides to its width, unless the person asks for less motion.
+ *
  * The command palette opens with ⌘K (Ctrl+K elsewhere), or from Search at
  * the top of the sidebar, over whatever page is open; the same key closes
  * it. Besides what front ends list there, the shell offers its own: the
- * side panel, going home, signing out.
+ * side panel, folding the sidebar, going home, signing out.
  *
  * Where the app serves many orgs, the front end that knows them fills the
  * `orgs` slot (see shared/orgs.ts): the top of the sidebar is its switcher
- * beside the app's mark, its overlay is drawn beside every page, and what
- * its hook lists joins the user menu and the palette. Without it, the top of
- * the sidebar is the app's whole logo.
+ * beside the app's mark (on the rail, its `rail` under the mark), its overlay
+ * is drawn beside every page, and what its hook lists joins the user menu and
+ * the palette. Without it, the top of the sidebar is the app's whole logo.
  */
 import {
   type CSSProperties,
   type ReactNode,
   useEffect,
   useId,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -42,15 +48,22 @@ import type { OrgsShown, OrgsSlot } from "../shared/orgs.ts";
 import { apple, opens, type PaletteSource, shortcutOf } from "../shared/palette.ts";
 import { toggleLabel } from "../shared/panel.ts";
 import type { UserMenuEntry } from "../shared/menu.ts";
+import { foldKeyOf, foldKeysOf, foldLabel, folds, type ShellSettings } from "../shared/sidebar.ts";
 import { STYLE } from "../shared/style.ts";
 import { Me } from "./me.tsx";
+import { Rail, useSidebar } from "./rail.tsx";
 import { say } from "./words.ts";
 import { type Offered, PanelSheet, PanelToggle, SidePanel, usePanel } from "./panel.tsx";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
-/** The `orgs` slot as drawn: its Views, and its hook. */
-export type Orgs = { switcher: ReactNode; overlay?: ReactNode; use?: OrgsSlot["use"] };
+/** The `orgs` slot as drawn: its Views (its `rail` by name, read while the rail shows), and its hook. */
+export type Orgs = {
+  switcher: ReactNode;
+  rail?: string;
+  overlay?: ReactNode;
+  use?: OrgsSlot["use"];
+};
 
 /** Where no front end fills the slot: nothing of orgs. */
 const none = (): OrgsShown | undefined => undefined;
@@ -68,7 +81,23 @@ const phone = {
 };
 
 export function Frame(
-  { path, brand, viewer, label, email, sidebar, menu, call, panel, palette, orgs, children }: {
+  {
+    path,
+    brand,
+    viewer,
+    label,
+    email,
+    sidebar,
+    rails = [],
+    hints = {},
+    settings,
+    menu,
+    call,
+    panel,
+    palette,
+    orgs,
+    children,
+  }: {
     /** Where the page is: going elsewhere closes the drawer, and the panel's sheet. */
     path: string;
     /** The app's name, which its logo says (or shows). */
@@ -80,6 +109,12 @@ export function Frame(
     /** The viewer's email, where the host knows it. */
     email?: string;
     sidebar: ReactNode;
+    /** What sections offer for the rail, the sidebar folded (their `rail` Views, in order). */
+    rails?: string[];
+    /** The sidebar's hints, for the rail's Views: `{ in, path }`. */
+    hints?: Record<string, unknown>;
+    /** The `shell` resource: how the sidebar starts, until the person chooses. */
+    settings?: ShellSettings;
     /** What front ends put in the person's menu (the `userMenu` resource). */
     menu: UserMenuEntry[];
     /** How the shell calls Actions (the person naming themselves; the `orgs` slot's hook). */
@@ -99,6 +134,12 @@ export function Frame(
   useEffect(() => setOpen(false), [path, narrow]);
   const side = usePanel(viewer, path, narrow);
   const panelId = useId();
+  const sidebarId = useId();
+  const foldId = useId();
+  const fold = useSidebar(viewer, settings, foldId);
+  // The rail is for a wide screen: a phone's sidebar is its drawer, whole.
+  const rail = !narrow && fold.rail;
+  const aside = useRef<HTMLElement>(null);
   const mac = apple();
   // The app's orgs, as the slot's front end lists them: the same hook on every draw. Until it
   // answers (or where there's one org), the top of the sidebar is the app's whole logo.
@@ -121,6 +162,22 @@ export function Frame(
     return () => document.removeEventListener("keydown", pressed, true);
   }, [mac]);
 
+  // ⌘B (Ctrl+B) folds the sidebar to a rail and back, on a wide screen; not over a dialog, nor
+  // where what has focus took the key (a document's bold, a terminal) or it's a rich text field's
+  // own: heard as it bubbles, after them. Focus stays where it is, unless the sidebar had it.
+  useEffect(() => {
+    if (narrow) return;
+    const pressed = (event: KeyboardEvent) => {
+      if (!folds(event, mac) || event.repeat || event.defaultPrevented) return;
+      if ((event.target as HTMLElement | null)?.isContentEditable) return;
+      if (document.querySelector("dialog[open]")) return;
+      event.preventDefault();
+      fold.toggle(!!aside.current?.contains(document.activeElement));
+    };
+    document.addEventListener("keydown", pressed);
+    return () => document.removeEventListener("keydown", pressed);
+  }, [mac, narrow, fold.rail]);
+
   const find = () => {
     setOpen(false);
     openPalette();
@@ -138,6 +195,14 @@ export function Frame(
           run: () => side.toggle(),
         }]
         : []),
+      ...(narrow ? [] : [{
+        key: "shell:sidebar",
+        label: foldLabel(fold.rail),
+        icon: "sidebar" as const,
+        keywords: say("keysSidebar").split(/\s+/).filter(Boolean),
+        shortcut: foldKeyOf(mac),
+        run: () => fold.toggle(),
+      }]),
       {
         key: "shell:home",
         label: say("goHome"),
@@ -149,6 +214,20 @@ export function Frame(
       { key: "shell:signout", label: say("signOut"), icon: "signout", run: () => signOut() },
     ],
   }];
+
+  /** Who's signed in, at the sidebar's foot: their name and a note, or (on the rail) their face. */
+  const me = (compact: boolean) =>
+    viewer
+      ? (
+        <Me
+          {...(label ? { name: label } : {})}
+          email={shown?.email ?? email}
+          menu={[...menu, ...(shown?.menu ?? [])]}
+          call={call}
+          rail={compact}
+        />
+      )
+      : null;
 
   const content = (
     <>
@@ -173,7 +252,19 @@ export function Frame(
           )}
         {narrow
           ? <IconButton icon="close" label={say("closeSidebar")} onClick={() => setOpen(false)} />
-          : null}
+          : (
+            <IconButton
+              id={foldId}
+              icon="sidebar"
+              label={say("collapseSidebar")}
+              shortcut={foldKeyOf(mac)}
+              aria-keyshortcuts={foldKeysOf(mac)}
+              aria-expanded
+              aria-controls={sidebarId}
+              className="copilotz-sidebar-fold"
+              onClick={() => fold.toggle(true)}
+            />
+          )}
       </div>
       <div className="copilotz-find">
         <NavItem
@@ -187,21 +278,12 @@ export function Frame(
         </NavItem>
       </div>
       <nav className="copilotz-sections" aria-label={say("spacesAndChats")}>{sidebar}</nav>
-      {viewer
-        ? (
-          <Me
-            {...(label ? { name: label } : {})}
-            email={shown?.email ?? email}
-            menu={[...menu, ...(shown?.menu ?? [])]}
-            call={call}
-          />
-        )
-        : null}
+      {me(false)}
     </>
   );
 
   return (
-    <div className="copilotz-shell">
+    <div className="copilotz-shell" data-sidebar={rail ? "rail" : undefined}>
       <style href="web-shell" precedence="copilotz">{STYLE}</style>
       <Button
         className="copilotz-skip"
@@ -220,7 +302,31 @@ export function Frame(
             {content}
           </Drawer>
         )
-        : <aside className="copilotz-sidebar" aria-label={say("sidebar")}>{content}</aside>}
+        : (
+          <aside
+            ref={aside}
+            id={sidebarId}
+            className="copilotz-sidebar"
+            aria-label={say("sidebar")}
+            data-rail={rail ? "" : undefined}
+          >
+            {rail
+              ? (
+                <Rail
+                  brand={brand}
+                  {...(switcher && orgs?.rail ? { org: orgs.rail } : {})}
+                  mac={mac}
+                  state={fold}
+                  button={foldId}
+                  sidebar={sidebarId}
+                  rails={rails}
+                  hints={hints}
+                  me={me(true)}
+                />
+              )
+              : content}
+          </aside>
+        )}
       <div className="copilotz-stage">
         <main
           id="copilotz-main"

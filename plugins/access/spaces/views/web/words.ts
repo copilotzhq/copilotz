@@ -100,6 +100,10 @@ export const say = defineWords("spaces", {
   invitedAt: "Invited {time}. Joining shows you its chats, memories and computers.",
   invitations: "Invitations",
   moreInvitations: { one: "{count} more invitation", other: "{count} more invitations" },
+  invitationsWaiting: {
+    one: "{count} invitation to a space",
+    other: "{count} invitations to spaces",
+  },
 
   // Inviting to a space (invite-dialog.tsx)
   inviteTitle: "Invite someone to {name}",

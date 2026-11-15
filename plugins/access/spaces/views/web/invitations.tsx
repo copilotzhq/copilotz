@@ -3,11 +3,12 @@
  * `invitations`): a calm card each, to join or decline there, the newest
  * first; the rest counted, all of them on home (where the sidebar leaves
  * them to it). Nothing waiting, nothing shows. Live: one sent to them
- * appears, one taken back goes.
+ * appears, one taken back goes. On the rail, the sidebar folded (kind
+ * `invitations.rail`): one mark, counting them, that goes home.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
-import { NavItem } from "../../../../../hosts/web/mod.ts";
+import { NavItem, RailItem } from "../../../../../hosts/web/mod.ts";
 import type { Invitation } from "../../contract.ts";
 import { InvitationCard } from "./invitation.tsx";
 import { STYLE } from "./style.ts";
@@ -40,5 +41,18 @@ export const invitationsView = (_: unknown, ctx: ViewContext<ReactNode>): ReactN
           : null}
       </ul>
     </>
+  );
+};
+
+export const invitationsRailView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
+  const mine = ctx.db.collection("invitation").query<Invitation[]>("mine", {}).value ?? [];
+  if (!mine.length || ctx.hints.path === "/") return null;
+  return (
+    <RailItem
+      href="/"
+      icon="mail"
+      badge={mine.length}
+      label={say("invitationsWaiting", { count: mine.length })}
+    />
   );
 };

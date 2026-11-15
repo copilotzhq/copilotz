@@ -2,7 +2,7 @@
  * A short line about the one element it wraps: shown after a moment under
  * the pointer, at once when Tab brings focus to it (not when a dialog or a
  * menu hands focus back), hidden by leaving, a press or Escape. It's a manual popover (the top layer, over anything),
- * placed above (or below) by `anchor`. It describes its element, unless
+ * placed above (or below, or after it: `end`, beside a rail's item) by `anchor`. It describes its element, unless
  * `describe` is false (an icon button already named by the same words);
  * `disabled`, it stays hidden (its element stays as it is).
  *
@@ -22,6 +22,8 @@ const SHEET = sheet(
   border-radius: var(--radius-sm); background: var(--foreground); color: var(--background);
   font-size: 12.5px; font-weight: 520; line-height: 1.35; box-shadow: var(--shadow-md);
   pointer-events: none; overflow-wrap: anywhere; animation: copilotz-tooltip .12s ease-out; }
+.copilotz-tooltip > .copilotz-kbd { margin-left: 8px; border-color: color-mix(in oklab, var(--background) 30%, transparent);
+  background: transparent; color: inherit; opacity: .75; }
 @keyframes copilotz-tooltip { from { opacity: 0; } }
 `,
 );
@@ -38,7 +40,7 @@ globalThis.addEventListener?.("keydown", (event) => {
 export function Tooltip(
   { text, side = "top", describe = true, disabled, children }: {
     text: ReactNode;
-    side?: "top" | "bottom";
+    side?: "top" | "bottom" | "end";
     describe?: boolean;
     disabled?: boolean;
     children: ReactNode;

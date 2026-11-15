@@ -25,6 +25,7 @@ import { chatsView } from "../chat/views/web/chats.tsx";
 import { homeView } from "../chat/views/web/home.tsx";
 import { liveView } from "../chat/views/web/live.tsx";
 import { messageView } from "../chat/views/web/message.tsx";
+import { newThreadRailView, newThreadView } from "../chat/views/web/new-thread.tsx";
 import { chatPaletteView } from "../chat/views/web/palette.tsx";
 import { recentView } from "../chat/views/web/recent.tsx";
 import { byDay, type Listed } from "../chat/views/web/listed.ts";
@@ -184,6 +185,8 @@ function screens(): ReactNode[] {
     <>{chatsView({ _id: "s1" }, ctx([thread("a")], { mode: "panel" }))}</>,
     <>{recentView({ _id: "s1" }, ctx([thread("a")]))}</>,
     <>{recentView({ _id: "s1" }, ctx([]))}</>,
+    <>{newThreadView({}, ctx(undefined, { in: "s1", path: "/" }))}</>,
+    <>{newThreadRailView({}, ctx(undefined, { in: "s1", path: "/" }))}</>,
     <>
       {homeView(
         {},

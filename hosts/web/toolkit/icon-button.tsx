@@ -1,8 +1,9 @@
 /**
  * A button that is only an icon, named by its `label` (said to screen
- * readers, and shown as a tooltip unless `tooltip` is false): `ghost` (the
- * default), `outline`, `secondary` or `primary`; `sm`, `md` or `lg`.
- * `loading` shows a spinner and waits. Given an `href`, it's a link.
+ * readers, and shown as a tooltip unless `tooltip` is false, with its
+ * `shortcut`, a key that does it too, as a keycap): `ghost` (the default),
+ * `outline`, `secondary` or `primary`; `sm`, `md` or `lg`. `loading` shows a
+ * spinner and waits. Given an `href`, it's a link.
  *
  * ```tsx
  * <IconButton icon="close" label="Close" onClick={close} />
@@ -11,6 +12,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import { cx } from "./cx.ts";
 import { Icon, type IconName } from "./icon.tsx";
+import { Kbd } from "./kbd.tsx";
 import { sheet } from "./sheet.tsx";
 import { Spinner } from "./spinner.tsx";
 import { Tooltip } from "./tooltip.tsx";
@@ -24,6 +26,8 @@ type Own = {
   iconSize?: number;
   loading?: boolean;
   tooltip?: boolean;
+  /** A key that does it too, as its tooltip shows it after the label: "⌘B". */
+  shortcut?: string;
   className?: string;
 };
 
@@ -75,6 +79,7 @@ export function IconButton(props: IconButtonProps): ReactNode {
     iconSize,
     loading,
     tooltip = true,
+    shortcut,
     className,
     ...rest
   } = props;
@@ -108,7 +113,20 @@ export function IconButton(props: IconButtonProps): ReactNode {
   return (
     <>
       {SHEET}
-      <Tooltip text={label} describe={false} disabled={!tooltip}>{button}</Tooltip>
+      <Tooltip
+        text={shortcut
+          ? (
+            <>
+              {label}
+              <Kbd>{shortcut}</Kbd>
+            </>
+          )
+          : label}
+        describe={false}
+        disabled={!tooltip}
+      >
+        {button}
+      </Tooltip>
     </>
   );
 }

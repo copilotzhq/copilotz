@@ -4,7 +4,9 @@
  * app's identity sits (`orgs.switcher`: the org you're in, your standing
  * there; opened, your orgs, Personal first-class, invitations waiting with a
  * badge, to join or decline in place, a new org, the org's settings, and for
- * staff, every org); beside every page (`orgs.overlay`), the small dialog
+ * staff, every org); on the rail, the sidebar folded (`orgs.rail`), the same
+ * as the org's face, named beside it, opening beside the rail; beside every
+ * page (`orgs.overlay`), the small dialog
  * that makes an org and going between them: a short transition while the
  * page starts over in the other org, and a word once it's there; and what
  * the shell's menu and palette list (`useShellOrgs`). Staff in an org that
@@ -35,6 +37,7 @@ import {
   type PaletteItem,
   type PaletteStep,
   Popover,
+  RailItem,
   Spinner,
   Time,
 } from "copilotz/web";
@@ -76,7 +79,15 @@ export const switcherView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode
   <Switcher call={ctx.call} />
 );
 
-function Switcher({ call }: { call: Call }): ReactNode {
+/**
+ * The switcher on the rail (`orgs.rail`, the `orgs` slot's), the sidebar folded: the org's face,
+ * named beside it, its invitations counted at its corner; it opens the same choices, beside it.
+ */
+export const switcherRailView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => (
+  <Switcher call={ctx.call} rail />
+);
+
+function Switcher({ call, rail }: { call: Call; rail?: boolean }): ReactNode {
   const orgs = useOrgs();
   const ready = orgs.status === "ready";
   const standing = useStanding(call, ready);
@@ -90,6 +101,7 @@ function Switcher({ call }: { call: Call }): ReactNode {
         standing={standing}
         staff={asStaff(orgs.value)}
         onNew={openNewOrg}
+        rail={rail}
       />
     </>
   );
@@ -193,7 +205,7 @@ function subline(org: Org | undefined, standing: Standing | undefined, staff: bo
 }
 
 export function OrgSwitcher(
-  { orgs, here, standing, staff, onNew }: {
+  { orgs, here, standing, staff, onNew, rail }: {
     orgs: Orgs;
     /** The org the person is in. */
     here?: Org;
@@ -202,6 +214,8 @@ export function OrgSwitcher(
     staff: boolean;
     /** Opens the dialog that makes one. */
     onNew(): void;
+    /** On the rail, the sidebar folded: the org's face alone, opening beside it. */
+    rail?: boolean;
   },
 ): ReactNode {
   const [failed, setFailed] = useState<string>();
@@ -216,42 +230,59 @@ export function OrgSwitcher(
     Number(b.kind === "personal") - Number(a.kind === "personal") ||
     a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
   );
+  const face = here
+    ? <OrgFace org={here} person={orgs.person} size={28} />
+    : <Avatar name={name} kind="org" size={28} />;
+  const title = staff ? say("inAsStaffTitle", { name }) : say("switchOrg", { name });
   return (
     <Popover
       label={say("yourOrgs")}
       width={312}
       className="copilotz-orgs"
-      trigger={(props) => (
-        <button
-          type="button"
-          {...props}
-          className="copilotz-org"
-          data-staff={staff || undefined}
-          title={staff ? say("inAsStaffTitle", { name }) : say("switchOrg", { name })}
-        >
-          {here
-            ? <OrgFace org={here} person={orgs.person} size={28} />
-            : <Avatar name={name} kind="org" size={28} />}
-          <span className="copilotz-org-text">
-            <span className="copilotz-org-name">{name}</span>
-            <span className="copilotz-org-sub">
-              {staff ? <Icon name="shield" size={12} /> : null}
-              {subline(here, standing, staff)}
-            </span>
-          </span>
-          {waiting
-            ? (
-              <span
-                className="copilotz-org-dot"
-                aria-label={say("invitationsCount", { count: waiting })}
-              >
-                {waiting}
+      {...(rail ? { side: "end" as const, align: "start" as const } : {})}
+      trigger={(props) =>
+        rail
+          ? (
+            <RailItem
+              {...props}
+              className="copilotz-org-rail"
+              data-staff={staff || undefined}
+              leading={face}
+              // Staff hear first that they're in as staff; anyone else, what waits for them.
+              label={waiting && !staff ? say("switchOrgWaiting", { name, count: waiting }) : title}
+              badge={waiting}
+              tooltip={!props["aria-expanded"]}
+            />
+          )
+          : (
+            <button
+              type="button"
+              {...props}
+              className="copilotz-org"
+              data-staff={staff || undefined}
+              title={title}
+            >
+              {face}
+              <span className="copilotz-org-text">
+                <span className="copilotz-org-name">{name}</span>
+                <span className="copilotz-org-sub">
+                  {staff ? <Icon name="shield" size={12} /> : null}
+                  {subline(here, standing, staff)}
+                </span>
               </span>
-            )
-            : null}
-          <Icon name="selector" size={15} className="copilotz-org-chevron" />
-        </button>
-      )}
+              {waiting
+                ? (
+                  <span
+                    className="copilotz-org-dot"
+                    aria-label={say("invitationsCount", { count: waiting })}
+                  >
+                    {waiting}
+                  </span>
+                )
+                : null}
+              <Icon name="selector" size={15} className="copilotz-org-chevron" />
+            </button>
+          )}
     >
       {(close) => (
         <div className="copilotz-orgs-box">

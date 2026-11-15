@@ -68,6 +68,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/<theme>/contract`    | each theme's plugins' contracts (`access`, `agents`, `models`, `interfaces`, `compute`): shapes, and the little code with them, for plugins built on them |
 | `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`, `surface`, `remind`)                             |
 | `copilotz/web/words`                   | the words alone, without the toolkit: `defineWords`, `wordsOf`, `formatDate`…                                                                             |
+| `copilotz/web/pt-br`                   | `ptBR`: every word of the web front ends and the sign-in page in Brazilian Portuguese, as a plugin of the page's                                          |
 | `copilotz/web/server`                  | the page's server half: `webPage` (the page, as a plugin), `widgetsOf`                                                                                    |
 | `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (MCP Apps, ChatGPT)                                                                       |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                                                           |
@@ -683,6 +684,9 @@ named by the protocol it speaks. The [models page](reference/plugins/models.md) 
   [WORDS.md](https://github.com/copilotzhq/copilotz/blob/main/hosts/web/WORDS.md). Blanks are
   `{name}`. Plurals are an object by the language's plural categories, chosen by `{count}`. Dates,
   numbers and currency follow the page's language, `page: { lang: "pt-BR" }`.
+- **Brazilian Portuguese** comes in the box: `ptBR` from `copilotz/web/pt-br`, first among the
+  page's plugins (`web({ plugins: [ptBR, webShell, …] })`), says every one of those words and the
+  sign-in page's. The app's own plugins after it still have the last word.
 - **Your own front end** says its words the same way: `const say = defineWords("acme", { … })`, then
   `say("key", { name })`.
 

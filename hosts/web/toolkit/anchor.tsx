@@ -1,8 +1,8 @@
 /**
  * Keeps a popover beside what it belongs to while it's open (a menu under
- * its button, a tooltip over what it explains), by script: placed when it
- * opens and again on scroll and resize, on the other side when there's no
- * room. Not by CSS anchor positioning: Safari's can loop on its style (a
+ * its button, a tooltip over what it explains, or after it: `end`, beside a
+ * rail's item), by script: placed when it opens and again on scroll and
+ * resize, on the other side when there's no room. Not by CSS anchor positioning: Safari's can loop on its style (a
  * tooltip or menu whose anchor goes or hides as a page changes keeps it
  * re-resolving, and the page hangs). Render `ANCHORED` with the popover,
  * which carries `copilotz-anchored`.
@@ -10,7 +10,9 @@
 import { sheet } from "./sheet.tsx";
 
 export type Placement = {
-  side?: "top" | "bottom";
+  /** Over or under it, or after it (to its right). */
+  side?: "top" | "bottom" | "end";
+  /** Along that side: from its start, its middle or its end (beside it: its top, middle, bottom). */
   align?: "start" | "center" | "end";
   /** Pixels between the two. */
   gap?: number;
@@ -32,6 +34,19 @@ export function anchor(
   const place = () => {
     const at = target.getBoundingClientRect();
     const size = popover.getBoundingClientRect();
+    if (side === "end") {
+      const after = at.right + gap;
+      const before = at.left - gap - size.width;
+      const left = after + size.width > innerWidth && before >= 0 ? before : after;
+      const top = align === "start"
+        ? at.top
+        : align === "end"
+        ? at.bottom - size.height
+        : at.top + (at.height - size.height) / 2;
+      popover.style.top = `${Math.max(8, Math.min(top, innerHeight - size.height - 8))}px`;
+      popover.style.left = `${Math.max(8, left)}px`;
+      return;
+    }
     const below = at.bottom + gap;
     const above = at.top - gap - size.height;
     const top = side === "bottom"

@@ -3,11 +3,13 @@
  * spaces, computers) may import from it: the shapes of its documents and of
  * the resource kinds it reads (`agents`, `tools`, `context`, `additions`,
  * `roster`, `agentSources`, `agentModel`, `contactSend`; on the web,
- * `conversation`, `home`, `toolViews`, `refusals` and `composerNotes`),
+ * `conversation` (with `Sending`, what its `beforeSend` is given), `home`,
+ * `toolViews`, `refusals` and `composerNotes`),
  * `tool()` to declare a tool, its runner (`runTool`, `toolText`: how a turn
  * runs one, for interfaces that run them for a model outside), and what
  * knowing agents takes (`agentsOf`, `defaults`, `modelOf`, `agentsNamed`,
- * `agentsShown`, `SEND`).
+ * `agentsShown`, `SEND`); and, on a page, putting words in a conversation's
+ * composer (`handDraft`).
  * Everything else they reach through the runtime: its collections by name
  * (`message`, `thread`…), its queries (`thread.agents`: who answers in a
  * space, and what each agent is), its events (`message.created`,
@@ -21,6 +23,12 @@ export type { AdditionShown } from "./collections/shown.ts";
 export type { Moving, MovingPlace, Thread } from "./collections/thread.ts";
 /** A chat's notes, by its id (`<chat>:notes`, see `chat.notes`). */
 export { notesOf } from "./shared/notes.ts";
+/**
+ * Words for a conversation's composer, on this page (a front end's own: a
+ * reply it suggests, a template picked): typed in after what's there, for
+ * the person to send (`handDraft(thread, text)`).
+ */
+export { handDraft } from "./views/web/handed.ts";
 export type { Wait } from "./collections/wait.ts";
 export type {
   Addition,
@@ -35,6 +43,7 @@ export type {
   Offer,
   Prompt,
   RefusalView,
+  Sending,
   ShownCall,
   Step,
   Tool,

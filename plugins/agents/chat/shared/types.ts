@@ -166,18 +166,57 @@ export type ChatSettings = {
 export type Step = ToolCall & { output: string; sent?: string; asked?: string };
 
 /**
- * A `conversation` resource: a View that a conversation shows on the web,
- * over where you type, with hints `{ thread, in, side, working, busy }` (the
- * thread, its space, its side threads, whether an agent's turn is running
- * there, and whose): something to answer there, such as an agent waiting on
- * your OK, here or in a side thread. `busy`
- * lists the agents with a turn step live in the thread or its subthreads,
- * each kept 600 ms after its last one ends (a turn's steps come about 50 ms
- * apart), and `working` is whether there are any; so a View that waits for
- * an agent's turn to be over shows once, when it is, whoever else works on.
- * Lowest `order` first; a View with nothing to show returns null.
+ * A `conversation` resource: what a front end adds where a conversation is
+ * typed in, on the web (its page, and a chat's staff notes beside it): a
+ * View, a hook before sending, or both. Lowest `order` first.
+ *
+ * Its `view` shows over where you type, with hints `{ thread, in, side,
+ * working, busy }` (the thread, its space, its side threads, whether an
+ * agent's turn is running there, and whose): something to answer there, such
+ * as an agent waiting on your OK, here or in a side thread. `busy` lists the
+ * agents with a turn step live in the thread or its subthreads, each kept
+ * 600 ms after its last one ends (a turn's steps come about 50 ms apart), and
+ * `working` is whether there are any; so a View that waits for an agent's
+ * turn to be over shows once, when it is, whoever else works on. A View with
+ * nothing to show returns null.
+ *
+ * Its `beforeSend` is asked as the person sends from that box (Enter, or the
+ * send button), before anything goes, with what's sent (`Sending`) and how
+ * the page calls Actions, as the person: to act first (take the conversation
+ * over) or to check it. It may take its time; the box says it's sending
+ * meanwhile. `false` holds the message: nothing goes, what's typed stays, and
+ * the front end says why itself (its View). Thrown, nothing goes either, and
+ * its words show over the box, as a refused send's do. Hooks run one after
+ * another; the first to hold or throw stops the rest. A function: a front
+ * end's resource, in the page's plugins.
+ *
+ * ```ts
+ * conversation: {
+ *   desk: { view: "desk.bar", order: 5, beforeSend: ({ thread }, call) => call("desk.take", { thread }) },
+ * }
+ * ```
  */
-export type ConversationView = { view: string; order?: number };
+export type ConversationView = {
+  view?: string;
+  order?: number;
+  beforeSend?(
+    sending: Sending,
+    call: ViewContext["call"],
+  ): boolean | void | Promise<boolean | void>;
+};
+
+/**
+ * What a `conversation` entry's `beforeSend` is given as the person sends:
+ * the conversation (a chat's notes are one too) and its space, the words
+ * (trimmed; empty for files alone), and the files going with them, a voice
+ * message among them, by name and media type.
+ */
+export type Sending = {
+  thread: string;
+  in?: string;
+  text: string;
+  files: { name: string; type: string }[];
+};
 
 /**
  * A `home` resource: a View home shows on the web, over its greeting, with

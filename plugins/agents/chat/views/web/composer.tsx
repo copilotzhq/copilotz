@@ -20,7 +20,11 @@
  * show a word of its own over the box (`mentionNote`: where they'd answer,
  * in a chat someone outside reads), with a way to take what's typed out.
  * Text handed to its conversation from elsewhere on the page (`handDraft`:
- * a question moved to a chat's staff notes) is typed in, after what's there.
+ * a question moved to a chat's staff notes; an app's own front end, through
+ * chat's contract) is typed in, after what's there. Before anything goes,
+ * what other front ends want done first is asked (`before`: the
+ * `conversation` resource's `beforeSend`): held, nothing goes and what's
+ * typed stays; failing, its words show as a send's would.
  */
 import {
   type ClipboardEvent,
@@ -50,7 +54,7 @@ import {
 import type { ComposerNote, RefusalView } from "../../shared/types.ts";
 import { matching, mention, type Mentionable, mentions, typingAt, unanswered } from "./agents.ts";
 import { type Attached, chosen, FILES, read, size } from "./attach.ts";
-import { takeDraft, useHanded } from "./handed.ts";
+import { handedTo, onHanded, takeDraft } from "./handed.ts";
 import { record, type Recorder as Recording, type Take } from "./record.ts";
 import { Recorder } from "./recorder.tsx";
 import { VoiceFailed } from "./voice-failed.tsx";
@@ -125,6 +129,12 @@ export function Composer(props: {
    * outside reads, that they'd answer there).
    */
   mentionNote?(typed: Mentioned): ReactNode;
+  /**
+   * Asked as it sends, before anything goes (uploading a voice message
+   * included), with the words and the files going: whether it goes. False
+   * holds it, and what's typed stays; thrown, its words show.
+   */
+  before?(sending: { text: string; files: { name: string; type: string }[] }): Promise<boolean>;
 }): ReactNode {
   const [text, setText] = useState(props.initial ?? "");
   const [files, setFiles] = useState<Attached[]>([]);
@@ -181,7 +191,7 @@ export function Composer(props: {
   }, [working.length]);
   // Text handed over from elsewhere on the page goes after what's typed, ready to send.
   const thread = props.place?.thread;
-  const handed = useHanded(thread);
+  const handed = useSyncExternalStore(onHanded, () => handedTo(thread), () => handedTo(thread));
   useEffect(() => {
     const given = handed && thread ? takeDraft(thread) : undefined;
     if (!given) return;
@@ -311,11 +321,15 @@ export function Composer(props: {
     } else if (!ready) return;
     const transcribing = options.transcribe !== false &&
       (!!voice || files.some((f) => audio(f.type)));
-    setSending(transcribing ? "transcribing" : "sending");
+    setSending("sending");
     setError(undefined);
     setFailed(undefined);
     setRefused(undefined);
     try {
+      // What other front ends do first: held, nothing goes and what's typed stays.
+      const going = [...(voice ? [voice] : []), ...files].map(({ name, type }) => ({ name, type }));
+      if (props.before && !(await props.before({ text: text.trim(), files: going }))) return;
+      if (transcribing) setSending("transcribing");
       const sent: Sent[] = files.map((f) => ({ id: f.uploaded! }));
       if (voice) sent.unshift({ id: await upload(voice) });
       await props.send(text.trim(), sent, options);

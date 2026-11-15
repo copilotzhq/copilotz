@@ -170,6 +170,15 @@ const notStarted = (error: unknown) => {
 /** How long a call waits for the connection to come back, in all. */
 const RECONNECT_MS = 30_000;
 
+/** How many tickets a client never let in tries, each refused, before it stays out. */
+const FIRST_TRIES = 3;
+
+/** Whether a connection failed because the owner refused its ticket (unknown, used or old). */
+const refusedTicket = (error: unknown) => {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "credential_rejected" || code === "credential_expired";
+};
+
 /** The key a read is watched by: the same read, the same key. */
 const keyOf = (read: Remote) => canonical(read);
 /** Reads watched elsewhere are collections of their own to `observe`. */
@@ -352,30 +361,49 @@ function open(options: ClientOptions): Client {
     }
     : undefined;
   let worker = oxian ? enrol(oxian) : undefined;
+  /** In: once the owner first lets one of its connections in (`ready`). */
+  const entered = Promise.withResolvers<void>();
+  entered.promise.catch(() => {});
+  let everIn = false;
   /**
    * Once in, its way back refused (who it was ended: signed out, erased, and
    * its resume credential with it; or an owner that never knew it), it comes
    * in again with a new ticket, which only a browser that's still someone gets
-   * (a page's `ticket` reloads it otherwise). One never let in stays out.
+   * (a page's `ticket` reloads it otherwise). Never in yet, its ticket refused
+   * (one the owner doesn't know: it restarted after issuing it, or the ticket
+   * went on a connection that dropped before it was in), it asks for a new one,
+   * `FIRST_TRIES` times in all; failing otherwise, or past them, it stays out.
    */
-  const follow = (current: NonNullable<typeof worker>, again = 0) => {
+  const follow = (current: NonNullable<typeof worker>, again = 0, tries = 1) => {
     current.closed.catch(() => {});
-    // Back in after having been in: a refusal (a busy moment) is tried again, longer apart.
-    const retry = () => {
-      if (closed || current !== worker || !again) return;
+    const retry = (error: unknown) => {
+      if (current !== worker) return;
+      if (!everIn) {
+        if (closed || !refusedTicket(error) || tries >= FIRST_TRIES) return entered.reject(error);
+        setTimeout(() => {
+          if (closed) return entered.reject(error);
+          worker = enrol(oxian!);
+          follow(worker, 0, tries + 1);
+        }, 250 * tries);
+        return;
+      }
+      // Back in after having been in: a refusal (a busy moment) is tried again, longer apart.
+      if (closed || !again) return;
       setTimeout(() => {
         if (closed || current !== worker) return;
         worker = enrol(oxian!);
         follow(worker, again + 1);
       }, Math.min(500 * 2 ** (again - 1), 5_000));
     };
-    void current.ready.then(() =>
-      current.closed.then((result) => {
+    void current.ready.then(() => {
+      everIn = true;
+      entered.resolve();
+      return current.closed.then((result) => {
         if (closed || current !== worker || result.reason !== "reenrollment_required") return;
         worker = enrol(oxian!);
         follow(worker, 1);
-      })
-    ).catch(retry);
+      });
+    }).catch(retry);
   };
   if (worker) follow(worker);
 
@@ -701,7 +729,7 @@ function open(options: ClientOptions): Client {
       update(answers.map(({ key, ...answer }) => [key, answer as Answer]));
     },
     update,
-    ready: worker ? worker.ready.then(() => {}) : Promise.resolve(),
+    ready: worker ? entered.promise : Promise.resolve(),
     close: () => {
       closed = true;
       direct.clear();

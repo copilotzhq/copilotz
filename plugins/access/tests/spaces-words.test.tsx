@@ -20,7 +20,7 @@ import { InviteForm } from "../spaces/views/web/invite.tsx";
 import { NewSpace } from "../spaces/views/web/new-space.tsx";
 import { Pending } from "../spaces/views/web/pending.tsx";
 import { SpaceTree } from "../spaces/views/web/tree.tsx";
-import { invitationsView } from "../spaces/views/web/invitations.tsx";
+import { invitationsRailView, invitationsView } from "../spaces/views/web/invitations.tsx";
 import { invitingView } from "../spaces/views/web/inviting.tsx";
 import { membersView } from "../spaces/views/web/members.tsx";
 import { notHereView } from "../spaces/views/web/not-here.tsx";
@@ -31,6 +31,7 @@ import { spacePanelView } from "../spaces/views/web/panel.tsx";
 import { spacePickView } from "../spaces/views/web/pick.tsx";
 import { settingsView } from "../spaces/views/web/settings.tsx";
 import { spaceView } from "../spaces/views/web/space.tsx";
+import { spacesRailView } from "../spaces/views/web/spaces.tsx";
 import { archiveStep, leaveStep, newSpaceStep, renameStep } from "../spaces/views/web/steps.ts";
 import { aRole, invitedNote, listed, roleName, spaceName } from "../spaces/views/web/who.ts";
 import { say } from "../spaces/views/web/words.ts";
@@ -251,6 +252,9 @@ function draw(): string {
       }, { path: "/chat" }),
     ),
   );
+  // On the rail, the sidebar folded.
+  view(invitationsRailView({}, ctxOf(reads, { path: "/chat" })));
+  view(spacesRailView({}, spaces({ in: "launch", path: "/" })));
   view(<Pending invitations={invitations} me="ana" call={noCall} />);
   view(<InviteForm space={launch} call={noCall} />);
   view(<NewSpace create={() => Promise.resolve()} />);
@@ -375,6 +379,7 @@ test("with every word replaced, no English of spaces is left", () => {
         "partsOf",
         "onlyReadsTitle",
         "membersPersonal",
+        "invitationsWaiting",
       ]
     ) {
       assert(

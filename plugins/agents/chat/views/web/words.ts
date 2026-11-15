@@ -315,4 +315,9 @@ export const say = defineWords("chat", {
     one: "and {count} more chat waiting on you",
     other: "and {count} more chats waiting on you",
   },
+  // …and on the rail, the sidebar folded
+  chatsWaiting: {
+    one: "{count} chat waiting on you",
+    other: "{count} chats waiting on you",
+  },
 });

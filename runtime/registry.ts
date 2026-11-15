@@ -8,6 +8,7 @@ import type {
   Adapters,
   CollectionDef,
   Context,
+  Description,
   EventDef,
   Guard,
   Labels,
@@ -258,6 +259,31 @@ export async function checked(registry: Registry, call: Merged["call"]): Promise
   }
 }
 
+/** Each registry's description, made once. */
+const descriptions = new WeakMap<Registry, Description>();
+
+/** What a registry's plugins declare (see `Description`), made once and kept. */
+export function described(registry: Registry): Description {
+  let made = descriptions.get(registry);
+  if (made) return made;
+  made = {
+    collections: Object.fromEntries(
+      Object.entries(registry.collections).map(([name, def]) => [name, { schema: def.schema }]),
+    ),
+    actions: Object.fromEntries(
+      Object.entries(registry.actions).map(([name, def]) => [name, {
+        ...(def.description ? { description: def.description } : {}),
+        ...(def.input ? { input: def.input } : {}),
+        ...(def.record === false ? { record: false as const } : {}),
+      }]),
+    ),
+    views: Object.keys(registry.views),
+    resources: registry.resources,
+  };
+  descriptions.set(registry, made);
+  return made;
+}
+
 /** Each unrecorded Action's input check, made once. */
 const inputChecks = new WeakMap<ActionDef, (value: unknown) => void>();
 
@@ -297,6 +323,7 @@ export async function readCall<R>(
   const ctx = {
     ...reads,
     call,
+    describe: () => described(registry),
     signal: reads.signal ?? new AbortController().signal,
     retry: false,
     emit: refuse,

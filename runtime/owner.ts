@@ -14,12 +14,12 @@ import { createApi } from "./api.ts";
 import type { IndexSpec, ScalarType } from "./store.ts";
 import { createHypervisor, type Hypervisor, type HypervisorOptions } from "@oxian/oxian-js";
 import type {
+  Description,
   Guard,
   Plugins,
   ProcessorDef,
   ReadContext,
   RenderOptions,
-  Resources,
   ViewDef,
   WorkerJob,
 } from "./define.ts";
@@ -65,6 +65,7 @@ import {
   canonical,
   checked,
   compile,
+  described,
   events,
   fingerprint,
   invalid,
@@ -135,16 +136,6 @@ export type Bytes = {
   size: number;
   /** The bytes from `start` up to `end` (not included), as `slice` takes them. */
   read(start: number, end: number): Promise<Uint8Array>;
-};
-
-/** What a runtime's plugins declare, for hosts: help, forms, defaults. */
-export type Description = {
-  collections: Record<string, { schema: unknown }>;
-  /** `record: false`: unrecorded, so nothing of its calls is in the log (a sign-in's). */
-  actions: Record<string, { description?: string; input?: unknown; record?: false }>;
-  /** The names of the Views plugins register. */
-  views: string[];
-  resources: Resources;
 };
 
 export type Owner = {
@@ -2235,20 +2226,7 @@ export async function createOwner(
         )
         : observers.observe(name, item, options),
     emit,
-    describe: () => ({
-      collections: Object.fromEntries(
-        Object.entries(registry.collections).map(([name, def]) => [name, { schema: def.schema }]),
-      ),
-      actions: Object.fromEntries(
-        Object.entries(registry.actions).map(([name, def]) => [name, {
-          ...(def.description ? { description: def.description } : {}),
-          ...(def.input ? { input: def.input } : {}),
-          ...(def.record === false ? { record: false as const } : {}),
-        }]),
-      ),
-      views: Object.keys(registry.views),
-      resources: registry.resources,
-    }),
+    describe: () => described(registry),
     async query(name, params, options = {}) {
       const dot = name.lastIndexOf(".");
       const [collection, query] = [name.slice(0, dot), name.slice(dot + 1)];

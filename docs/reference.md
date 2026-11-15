@@ -454,8 +454,13 @@ What plugin code gets. `Context` is an Action's, a Processor's and a tool's.
 | `cancel(target)`, `disconnect(actor)`   | stops a running call or delivery; ends an actor's browsers                                                  |
 | `workers`, `fetch`, `metrics`           | workers by kind and id; the outside `fetch` (a test's fake, if given); counters, histograms and gauges      |
 | `resources`, `adapters`                 | the merged configuration                                                                                    |
+| `describe()`                            | what the app declares, as `runtime.describe()`: its collections, Actions and Views by name, and resources   |
 | `kept(key, work)`                       | what a rule works out, kept until a commit changes what it read. Only the owner keeps it; here it just runs |
 | `event`, `scheduled`, `retry`, `signal` | the event a Processor handles; the timer that called; whether this ran before; when to stop                 |
+
+A call another plugin may not offer, because this one doesn't `require` it, asks first:
+`if (ctx.describe().actions["register.clear"]) await ctx.call("register.clear", {})`. Calling an
+Action nobody declares fails with `invalid` ("Unknown action"), and that's a bug, not a way to ask.
 
 `ctx.as(other)` records what it does as `other`, `via` the actor it acted for, and stays where the
 work is unless `other` says where (`in`, or `in: undefined` for nowhere). `ctx.transaction` holds

@@ -8,7 +8,16 @@ import { collection, type Query, type Run } from "./collection.ts";
 import type { Context, Plugins, ReadContext, TransactionScope } from "./define.ts";
 import { isRead, type Op, type Outcome, RESULTS, type TimerOp } from "./ops.ts";
 import type { Scheduled, ScheduleOptions } from "./schedules.ts";
-import { compile, events, fingerprint, invalid, json, merge, unprivate } from "./registry.ts";
+import {
+  compile,
+  described,
+  events,
+  fingerprint,
+  invalid,
+  json,
+  merge,
+  unprivate,
+} from "./registry.ts";
 import { presenter } from "./views.ts";
 import { refuseBlobKeys } from "./blobs.ts";
 import { querying as queryingOver, reading as readingOver } from "./reads.ts";
@@ -280,6 +289,7 @@ export function createExecutor(
       fetch: outside,
       resources: registry.resources,
       adapters: registry.adapters,
+      describe: () => described(registry),
       workers: working(job),
       event,
       ...(scheduled ? { scheduled } : {}),

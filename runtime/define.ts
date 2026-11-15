@@ -117,6 +117,14 @@ export type Context = {
   fetch: typeof fetch;
   resources: Resources;
   adapters: Adapters;
+  /**
+   * What the app's plugins declare, as `runtime.describe()` says it: its
+   * collections (with their schemas), Actions and Views, by name, and its
+   * resources. Whether another plugin's Action is there before an optional
+   * call, which a plugin that doesn't `require` it can't know:
+   * `if (ctx.describe().actions["register.clear"]) await ctx.call("register.clear", {})`.
+   */
+  describe(): Description;
   /** Workers of the kinds plugins declare (a computer…), sent jobs by kind and id. */
   workers: Workers;
   /**
@@ -184,6 +192,21 @@ export type ReadContext = {
    * plugin does (an embedding) without importing its code.
    */
   call<R = unknown>(action: string, input?: unknown): Promise<R>;
+};
+
+/**
+ * What a runtime's plugins declare: for hosts (help, forms, defaults), and
+ * for plugin code asking whether another plugin's Action or collection is
+ * there (`ctx.describe()`).
+ */
+export type Description = {
+  /** Every collection, by name, with its schema (the runtime's own `sys.` ones aside). */
+  collections: Record<string, { schema: unknown }>;
+  /** `record: false`: unrecorded, so nothing of its calls is in the log (a sign-in's). */
+  actions: Record<string, { description?: string; input?: unknown; record?: false }>;
+  /** The names of the Views plugins register. */
+  views: string[];
+  resources: Resources;
 };
 
 /** What a plugin's startup check reaches: the merged configuration, and unrecorded Actions to ask. */

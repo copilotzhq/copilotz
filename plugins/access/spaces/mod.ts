@@ -17,7 +17,9 @@
  *   `roster` resource (`space.roster`): only they answer there.
  * - **Reach:** an actor reaches the spaces they're a member of, and the
  *   spaces those draw on, with what the roles along the path allow. An agent
- *   acting for someone (`actor.for`) reaches what both reach.
+ *   acting for someone (`actor.for`) reaches what both reach. A space with
+ *   the public as a viewer is read by everyone: the public, and every person,
+ *   contact and agent, member or not (it isn't listed among their spaces).
  * - **Rules** (the runtime's guard): reads of a shared collection only see
  *   what's reached; inserts and what writes leave must be in a space you may
  *   write; a document shared on its own is reached through its own members.

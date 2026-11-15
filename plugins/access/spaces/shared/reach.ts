@@ -11,6 +11,11 @@
  * at its role. Everything that asks what someone may do asks here, so those
  * limits hold everywhere.
  *
+ * **What the public reads, anyone reads.** A space with the public as a
+ * viewer is read by every actor too, whoever and wherever they are (marked
+ * `open`, when that's all that lets them): a person, a contact, an agent, a
+ * key. Nothing there is anyone's to hide, so no narrowing takes it away.
+ *
  * **Where the work is.** Work for someone (an agent's, a key's) that is
  * somewhere (`actor.in`, a space) reaches only there, and what that space
  * draws on, at most with the role it draws on it with: the person's reach ∩
@@ -45,7 +50,8 @@ export type Verb = "read" | "write" | "manage";
  * own say their collection (`on`) and the space they live in (`home`).
  */
 export type Reach = Map<string, Reached>;
-type Reached = { can: Set<Verb>; on?: string; home?: string };
+/** `open`: reached only because the public reads it (see the module's header). */
+type Reached = { can: Set<Verb>; on?: string; home?: string; open?: true };
 
 /**
  * Where a document shared on its own is kept among reach and memberships: its
@@ -82,7 +88,7 @@ export const keyOf = (actor: { kind: string; key?: unknown }): string | undefine
 /**
  * The public, as a member (`public`): whoever calls a public interface
  * without being anyone. A space lets them read it by having them as a
- * viewer; they reach nothing more.
+ * viewer; they reach nothing more. Everyone else reads it too.
  */
 export const PUBLIC = "public";
 
@@ -203,11 +209,40 @@ async function reaching(actor: Actor, ctx: ReadContext): Promise<Reach> {
       reach.set(key, { ...held, can: new Set([...held.can].filter((v) => v !== "write")) });
     }
   }
+  if (actor.kind === PUBLIC) return reach;
   const where = whereOf(actor);
-  if (!narrows(actor) || where === undefined) return reach;
+  if (!narrows(actor) || where === undefined) return opened(reach, await openOf(ctx));
   const within = await narrowed(reach, where, worksFor(actor) ?? actor, ctx);
   const thread = threadOf(actor);
-  return thread === undefined ? within : await conversed(within, docKey(CHAT, thread), ctx);
+  const there = thread === undefined ? within : await conversed(within, docKey(CHAT, thread), ctx);
+  return opened(there, await openOf(ctx));
+}
+
+/**
+ * The spaces the public reads: those with it as a member, those alone (not
+ * what they draw on, nor a document shared on its own). Kept.
+ */
+const openOf = (ctx: ReadContext): Promise<Reach> =>
+  ctx.kept("spaces.public", async (ctx) => {
+    const open = await ctx.db.collection<Member>("member").find({ member: PUBLIC });
+    return new Map(
+      open.filter((m) => !m.on && m.space !== ORG).map((m) => [
+        m.space,
+        { can: new Set<Verb>(["read"]) },
+      ]),
+    );
+  });
+
+/** `reach`, reading too what the public reads (`open` where nothing else let it in). */
+function opened(reach: Reach, open: Reach): Reach {
+  for (const space of open.keys()) {
+    const held = reach.get(space);
+    if (!held) reach.set(space, { can: new Set<Verb>(["read"]), open: true });
+    else if (!held.can.has("read")) {
+      reach.set(space, { ...held, can: new Set([...held.can, "read"]) });
+    }
+  }
+  return reach;
 }
 
 /** Chats: a conversation's documents (`thread`), named so in a key (`thread:t1`). */
@@ -345,15 +380,7 @@ const worksFor = (actor: Actor): Actor | undefined =>
 async function unlimited(actor: Actor, ctx: ReadContext): Promise<Reach> {
   const principal = worksFor(actor);
   // The public reads the spaces that have it as a member, those alone (not what they draw on).
-  if (actor.kind === PUBLIC) {
-    const open = await ctx.db.collection<Member>("member").find({ member: PUBLIC });
-    return new Map(
-      open.filter((m) => !m.on && m.space !== ORG).map((m) => [
-        m.space,
-        { can: new Set<Verb>(["read"]) },
-      ]),
-    );
-  }
+  if (actor.kind === PUBLIC) return new Map(await openOf(ctx));
   if (!principal) {
     if (actor.kind === "person" && actor.staff === true) return await everything(ctx);
     const role = await orgRoleOf(actor, ctx);

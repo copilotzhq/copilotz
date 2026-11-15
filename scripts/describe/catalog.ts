@@ -150,4 +150,6 @@ export const LAYERS: Record<string, Placed | "skip"> = {
   accountsWeb: standard,
   // A test's helper, not a feature.
   testWho: "skip",
+  // A language for the web's words, not a feature (hosts/web/pt-br).
+  ptBR: "skip",
 };

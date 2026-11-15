@@ -274,13 +274,15 @@ It merges over Copilotz's, as the theme does:
   stays beside the app's own. `null` leaves the form alone.
 
 An app that says nothing shows Copilotz's words and pitch. Refusals are said in these words, by
-their code, never in the server's.
+their code, never in the server's. In Brazilian Portuguese, they're all said already: `ptBR`, from
+`copilotz/web/pt-br`, first among the page's plugins, gives every word of the sign-in page,
+Copilotz's pitch, and every word of the front ends (hosts/web/WORDS.md).
 
 The messages email sign-in sends are the server's `emailSignIn.messages`. Setting a message's `html`
 to `null` sends it as text alone. `page.lang` says the page's language, and Google's button follows
 it.
 
-An app in Portuguese, with its own pitch:
+An app in Portuguese, with its own pitch and a few words its own way (the rest are `ptBR`'s):
 
 ```tsx
 // browser.tsx
@@ -295,17 +297,15 @@ const brand = definePlugin({
         points: [{ icon: "sparkles", title: "Agentes que ajudam", text: "Respostas em segundos." }],
       },
       words: {
-        signIn: "Entrar",
-        email: "E-mail",
-        password: "Senha",
-        forgot: "Esqueceu a senha?",
-        codeLede: "Enviamos um código de 6 dígitos para {email}.",
-        // … every key of SIGN_IN_WORDS the app says otherwise
+        signIn: "Acessar",
+        codeLede: "Mandamos um código de 6 dígitos para {email}.",
+        // … any key of SIGN_IN_WORDS the app says its own way
       },
     },
   },
 });
-await web({ root, plugins: [webShell, chatWeb, spacesWeb, brand] });
+// ptBR (from copilotz/web/pt-br) first: the brand, after it, has the last word.
+await web({ root, plugins: [ptBR, webShell, chatWeb, spacesWeb, brand] });
 // server: page: { title: "Exemplo", lang: "pt-BR", code }, theme: themeOf([brand]),
 //         emailSignIn: { app: "Exemplo", messages: { verify: { subject: "{code} é o seu código" } } }
 ```

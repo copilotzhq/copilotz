@@ -2,7 +2,8 @@
 
 Every word Copilotz's web front ends show, by key, with its English. An app changes any of
 them with a `words` resource (see the README, "Words"). `{name}` is a blank; a phrase in
-braces `{one, other}` has plural forms, chosen by the `{count}` blank.
+braces `{one, other}` has plural forms, chosen by the `{count}` blank. Every one of them is
+said in Brazilian Portuguese by `ptBR`, from `copilotz/web/pt-br` (hosts/web/pt-br/).
 
 Generated: `deno run -A hosts/web/tests/keys.ts`.
 

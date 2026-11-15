@@ -62,6 +62,8 @@ same, as data.
 - [`models`](plugins/models.md): Models: talking to models, one way for every kind.
 - [`openapi`](plugins/openapi.md): OpenAPI: an HTTP API's operations as Actions and as tools for
   agents, made from its OpenAPI 3 spec.
+- [`password-sign-in`](plugins/password-sign-in.md): Password sign-in: people sign in by an
+  identifier (a username, a badge number, a CPF) and a password, with the identity plugin.
 - [`routines`](plugins/routines.md): Routines: a message sent to an agent on a schedule, in a space
   ("every weekday at 9:00, ask @researcher for the news on X").
 - [`routines-web`](plugins/routines-web.md): Routines' web front end, for the browser.

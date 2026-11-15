@@ -27,16 +27,19 @@ It keeps 3 collections, 1 of them on the record.
 
 ## What it lets callers do
 
-Only the app's own code calls its 10 Actions, `email.accept`, `email.forgot`, `email.import`,
-`email.invitation`, `email.invite`, `email.prune`, `email.reset`, `email.sign-in`, `email.sign-up`
-and `email.verify`: its plugins, its schedules and the system. Nobody outside does.
+Only the app's own code calls its 12 Actions, `email.accept`, `email.code`, `email.enter`,
+`email.forgot`, `email.import`, `email.invitation`, `email.invite`, `email.prune`, `email.reset`,
+`email.sign-in`, `email.sign-up` and `email.verify`: its plugins, its schedules and the system.
+Nobody outside does.
 
-It answers 7 routes over HTTP:
+It answers 9 routes over HTTP:
 
 | Method    | Path                       |
 | --------- | -------------------------- |
 | GET, HEAD | `/signin/email`            |
 | POST      | `/signin/email/accept`     |
+| POST      | `/signin/email/code`       |
+| POST      | `/signin/email/enter`      |
 | POST      | `/signin/email/forgot`     |
 | POST      | `/signin/email/invitation` |
 | POST      | `/signin/email/reset`      |
@@ -53,23 +56,27 @@ It has no Views: it shows nowhere on its own.
 
 You set it in `resources.emailSignIn` and `resources.links`: 2 settings are required.
 
-| Setting                | Type      | Required | What it is                                                                                                                                                                                                                                                                            |
-| ---------------------- | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `emailSignIn.signUp`   | `boolean` | no       | Whether people make an account themselves (`POST /signin/email/sign-up`); else only an invitation makes one (`email.invite`).                                                                                                                                                         |
-| `emailSignIn.app`      | `string`  | no       | What messages call the app (`{app}`): the host of the `links` origin unless said.                                                                                                                                                                                                     |
-| `emailSignIn.messages` | `object`  | yes      | The messages, by what they're for: a sign-up's code (`verify`), a new password's (`reset`), an invitation's link (`invite`), and a sign-up for an address that has an account already (`exists`).                                                                                     |
-| `emailSignIn.limits`   | `object`  | no       | How much one address, and one caller, may ask (`too_many` past it): messages to an address an hour (`sends`, 5); tries at a password, a code or a link for an address in 15 minutes (`tries`, 10); and everything one caller (by network address) asks in 15 minutes (`address`, 30). |
-| `links`                |           | yes      | emailSignIn needs the links resource ({ origin, secret }): its links go to the origin, and its codes are kept sealed with the secret.                                                                                                                                                 |
+| Setting                    | Type                              | Required | What it is                                                                                                                                                                                                                                                                            |
+| -------------------------- | --------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `emailSignIn.signUp`       | `boolean`                         | no       | Whether people make an account themselves (`POST /signin/email/sign-up`); else only an invitation makes one (`email.invite`).                                                                                                                                                         |
+| `emailSignIn.signInByCode` | `boolean`                         | no       | Whether people may sign in with a code sent to their address, with no password (`email.code`, then `email.enter`); with `signUp`, that makes an account too.                                                                                                                          |
+| `emailSignIn.app`          | `string`                          | no       | What messages call the app (`{app}`): the host of the `links` origin unless said.                                                                                                                                                                                                     |
+| `emailSignIn.messages`     | `EmailSignInMessages`             | yes      | The messages, by what they're for: a sign-up's code (`verify`), a new password's (`reset`), an invitation's link (`invite`), a sign-up for an address that has an account already (`exists`), and a code to sign in with (`signin`).                                                  |
+| `emailSignIn.hosts`        | `Record<string, EmailSignInHost>` | no       | Per host the page is served on (a brand's: `"brand.example"`), what changes there: its name, sender, words and links.                                                                                                                                                                 |
+| `emailSignIn.limits`       | `object`                          | no       | How much one address, and one caller, may ask (`too_many` past it): messages to an address an hour (`sends`, 5); tries at a password, a code or a link for an address in 15 minutes (`tries`, 10); and everything one caller (by network address) asks in 15 minutes (`address`, 30). |
+| `links`                    |                                   | yes      | emailSignIn needs the links resource ({ origin, secret }): its links go to the origin, and its codes are kept sealed with the secret.                                                                                                                                                 |
 
 Until it's set, the runtime doesn't start. With nothing set, its check says: "emailSignIn needs the
 links resource ({ origin, secret }): its links go to the origin, and its codes are kept sealed with
 the secret."
 
+It also reads `email`, resource kinds the app and other plugins fill.
+
 ## What it requires
 
 The runtime doesn't start without [`identity`](identity.md) and [`email`](email.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.47`.
+It ships with `copilotz@1.0.0-rc.49`.
 
 ## What it does on its own
 
@@ -80,10 +87,12 @@ Some of its work starts without a caller: an event, or the time.
 
 ## Listing
 
-It breaks 7 listing rules as it is:
+It breaks 9 listing rules as it is:
 
 - Route "/signin/email" isn't under /email-sign-in.
 - Route "/signin/email/accept" isn't under /email-sign-in.
+- Route "/signin/email/code" isn't under /email-sign-in.
+- Route "/signin/email/enter" isn't under /email-sign-in.
 - Route "/signin/email/forgot" isn't under /email-sign-in.
 - Route "/signin/email/invitation" isn't under /email-sign-in.
 - Route "/signin/email/reset" isn't under /email-sign-in.

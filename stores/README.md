@@ -154,11 +154,14 @@ All stores support:
   SQL stores run the match and the group as one `GROUP BY`: only the groups come back.
 - **Indexes** declared on a collection (`indexes: [["at"], ["tags.tenant", "at"]]`), on fields its
   schema types as scalars (strings, numbers, booleans), so they never hold arrays: filters on them
-  (equality, `$in`, comparisons with a value of the field's type) use the index, and so do sorts on
-  them (missing first, as MongoDB orders them). SQL stores make them as partial indexes, one
-  collection each, and drop ones no longer declared (Postgres: from a schema of its own; tenants
-  sharing one may run another version of the app). SQLite keeps the statistics its planner needs to
-  prefer them to the primary key: gathered at open when missing, and again each time the table about
+  (equality, `$in`, comparisons with a value of the field's type) use the index, in reads, updates
+  and deletes alike, and so do sorts on them (missing first, as MongoDB orders them). An array field
+  (`to: ["ana"]`) can't be indexed: find by a scalar beside it. SQL stores make them as partial
+  indexes, one collection each, as the store opens: a release that declares one makes it over the
+  documents already there on its first start, reading the table once (Postgres holds its writes
+  meanwhile). They drop ones no longer declared (Postgres: from a schema of its own; tenants sharing
+  one may run another version of the app). SQLite keeps the statistics its planner needs to prefer
+  them to the primary key: gathered at open when missing, and again each time the table about
   doubles; Postgres gathers its own. Until it has (a new table, or a tenant that grew fast since),
   its planner may read and sort more rows than an index would.
 - **`writeConcern: { w: 0 }`** on updates, replaces and deletes: in a transaction the write goes
@@ -174,6 +177,8 @@ All stores support:
 - **Operators:** `$eq` (or a plain value), `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`,
   `$exists`, `$not`, `$and`, `$or`, `$nor`.
 - **Paths:** dot paths into objects and arrays (`"o.k"`, `"tags.0"`).
+- **`_id`** equal to a string, or `$in` strings, looks up the primary key wherever it is in the
+  filter: beside a rule's (a person's reads come as `{ $and: [filter, rule] }`), or in an `$or`.
 - **`$in` lists** of one scalar type go to SQL as one parameter (a JSON array: SQLite `json_each`,
   Postgres `jsonb_array_elements`), so a statement is the same whatever their length; `null` and
   objects in them go one by one. On an indexed field the index serves them.

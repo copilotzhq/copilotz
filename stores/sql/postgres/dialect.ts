@@ -41,6 +41,7 @@ export const postgres: Dialect = {
     `${scalar(field, type)} ${direction === -1 ? "DESC NULLS LAST" : "ASC NULLS FIRST"}`,
   operand: (type, value, bind) =>
     `${bind(value)}::${type === "string" ? "text" : type === "number" ? "numeric" : "boolean"}`,
+  key: "id",
   natural: "n",
   unlimited: "ALL",
   equals(path, value, bind) {

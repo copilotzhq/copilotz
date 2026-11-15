@@ -47,6 +47,8 @@ export type Dialect = {
    * serve the order: null and missing first, as MongoDB orders them.
    */
   sorted(field: string, type: ScalarType, direction: 1 | -1): string;
+  /** The column that holds `_id`, the row's key: equality and `$in` on `_id` look it up. */
+  key: string;
   /** The column that keeps insertion order: ties sort by it, as in the reference. */
   natural: string;
   /** The LIMIT that means "no limit", for an OFFSET without one. */
@@ -78,16 +80,26 @@ function compile(filter: Filter, c: Context): string {
   return parts.length ? parts.join(" AND ") : "TRUE";
 }
 
+/**
+ * The type a field's index holds it as, if any: an indexed scalar's, or
+ * `string` for `_id`, which the key holds (always a string).
+ */
+const typeOf = (field: string, c: Context) => field === "_id" ? "string" : c.scalars?.get(field);
+
+/** The expression an index holds a field as: the key for `_id`, else its scalar's. */
+const indexed = (field: string, type: ScalarType, c: Context) =>
+  field === "_id" ? c.dialect.key : c.dialect.scalar(field, type);
+
 function test(field: string, condition: unknown, c: Context): string {
   const { dialect, bind } = c;
   const path = dialect.path(field);
-  const type = c.scalars?.get(field);
+  const type = typeOf(field, c);
   const operators = condition !== null && typeof condition === "object" &&
     !Array.isArray(condition) && Object.keys(condition).some((key) => key.startsWith("$"));
   if (!operators) {
-    // An indexed scalar equal to a value of its type: what its index serves.
+    // An indexed scalar (or `_id`) equal to a value of its type: what its index serves.
     return type && fits(type, condition)
-      ? `${dialect.scalar(field, type)} = ${dialect.operand(type, condition, bind)}`
+      ? `${indexed(field, type, c)} = ${dialect.operand(type, condition, bind)}`
       : dialect.equals(path, condition, bind);
   }
   const parts = Object.entries(condition as Record<string, unknown>).map(([op, arg]) => {
@@ -109,11 +121,12 @@ function test(field: string, condition: unknown, c: Context): string {
         const among = inner === "$in" || inner === "$eq" ? "$in" : "$nin";
         return dialect.elemMatch(path, among, [values].flat(), bind);
       }
+      // `_id` compares as its document holds it: the key's own order may not be code points'.
       case "$gt":
       case "$gte":
       case "$lt":
       case "$lte":
-        return type && type !== "boolean" && fits(type, arg)
+        return type && type !== "boolean" && field !== "_id" && fits(type, arg)
           ? `${dialect.scalar(field, type)} ${SQL_OPS[op]} ${dialect.operand(type, arg, bind)}`
           : dialect.compare(path, op, arg, bind);
       default:
@@ -143,15 +156,17 @@ function among(
     const of = values.filter((v) => typeof v === kind);
     if (of.length === 1) parts.push(test(field, of[0], c));
     else if (of.length && type === kind) {
-      parts.push(c.dialect.oneOf(c.dialect.scalar(field, type), type, of, c.bind));
+      parts.push(c.dialect.oneOf(indexed(field, type, c), type, of, c.bind));
     } else if (of.length) parts.push(c.dialect.among(path, kind, of, c.bind));
   }
   return parts.length ? `(${parts.join(" OR ")})` : "FALSE";
 }
 
 /**
- * A WHERE clause over the `doc` column; `_id` equality uses the primary key,
- * and filters on a collection's indexed fields (`scalars`) can use theirs.
+ * A WHERE clause over the `doc` column. `_id` equal to a string, or `$in`
+ * strings, looks up the primary key wherever it is in the filter (beside a
+ * rule's, in `$and`, in `$or`), and filters on a collection's indexed fields
+ * (`scalars`) can use theirs.
  */
 export function where(
   filter: Filter = {},
@@ -159,12 +174,7 @@ export function where(
   bind: Bind,
   scalars?: Scalars,
 ): string {
-  const c = { dialect, bind, scalars };
-  if (typeof filter._id === "string") {
-    const { _id, ...rest } = filter;
-    return `id = ${bind(_id)} AND ${compile(rest, c)}`;
-  }
-  return compile(filter, c);
+  return compile(filter, { dialect, bind, scalars });
 }
 
 /**

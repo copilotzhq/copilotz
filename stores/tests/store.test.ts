@@ -9,8 +9,9 @@ import { type Pipeline, plan } from "../../runtime/aggregate.ts";
 import { memoryStore } from "../memory/mod.ts";
 import { sqliteStore } from "../sql/sqlite/mod.ts";
 import { postgresStore } from "../sql/postgres/mod.ts";
-import { env, tempFile, temporary, test } from "../../testing/mod.ts";
+import { env, tempDir, tempFile, temporary, test } from "../../testing/mod.ts";
 import { pooled } from "./pooled.ts";
+import { tmpdir } from "node:os";
 
 const temp = () => tempFile(".sqlite");
 
@@ -115,6 +116,14 @@ const FILTERS: Filter[] = [
   { $and: [{ n: 2 }, { b: true }] },
   { $nor: [{ n: 2 }] },
   { $or: [] },
+  // `_id` anywhere in a filter: equal to a string, or among them, it's the row's key.
+  { $and: [{ _id: "a" }, { n: 1 }] },
+  { $and: [{ _id: { $in: ["a", "c", "e"] } }, { s: "x" }] },
+  { $or: [{ _id: "b" }, { _id: { $in: ["d"] } }] },
+  { _id: { $ne: "a" } },
+  { _id: { $nin: ["a", "b"] } },
+  { _id: { $eq: "c" } },
+  { _id: { $gt: "b" } },
 ];
 
 const PAGES: FindOptions[] = [
@@ -680,6 +689,47 @@ const shared: Record<string, () => () => Store | Promise<Store>> = {
     }
     : {}),
 };
+
+/** The declared indexes a store's database holds, by name. */
+const declared = async (store: Store) => {
+  const sql = store.inspect!(
+    "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'ix\\_%' ESCAPE '\\'",
+  ).catch(() =>
+    store.inspect!("SELECT indexname AS name FROM pg_indexes WHERE indexname LIKE 'ix\\_%'")
+  );
+  return (await sql).map((row) => String(row.name));
+};
+
+const reopened: Record<string, () => () => Store | Promise<Store>> = {
+  sqlite: shared.sqlite,
+  // A directory as a file:// URL (a POSIX path: Windows' runs the SQLite case).
+  ...(tmpdir().startsWith("/")
+    ? {
+      "pglite on disk": () => {
+        const dir = tempDir();
+        return () => postgresStore({ url: `file://${dir}` });
+      },
+    }
+    : {}),
+};
+
+for (const [name, database] of Object.entries(reopened)) {
+  test(`${name}: an index declared later is made over the documents there as it opens`, async () => {
+    const open = database();
+    const first = await open();
+    const { epoch } = await first.open();
+    await first.transaction(epoch, (tx) => tx.insert("things", structuredClone(DOCS)));
+    await first.close();
+    // The next version of the app declares one: the store makes it when it opens again.
+    const second = await open();
+    await second.open();
+    assertEquals(await declared(second), []);
+    await second.index?.({ things: [{ fields: [{ path: "s", type: "string" }] }] });
+    assertEquals((await declared(second)).length, 1);
+    assertEquals(ids(await second.find("things", { s: "x" })), ["a", "e"]);
+    await second.close();
+  });
+}
 
 for (const [name, database] of Object.entries(shared)) {
   test(`${name}: another process's owner fences this one, and data survives a restart`, async () => {

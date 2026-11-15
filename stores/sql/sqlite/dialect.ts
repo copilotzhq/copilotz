@@ -57,6 +57,7 @@ export const sqlite: Dialect = {
   operand: (type, value, bind) => type === "boolean" ? (value ? "1" : "0") : bind(value),
   // SQLite orders NULL (missing) below everything.
   sorted: (field, _type, direction) => `${scalar(field)} ${direction === -1 ? "DESC" : "ASC"}`,
+  key: "id",
   natural: "rowid",
   unlimited: "-1",
   equals(path, value, bind) {

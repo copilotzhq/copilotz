@@ -9812,6 +9812,10 @@
           "place": "web"
         },
         {
+          "name": "orgs.rail",
+          "place": "web"
+        },
+        {
           "name": "orgs.switcher",
           "place": "web"
         }
@@ -9828,6 +9832,7 @@
         "provides": {
           "orgs": {
             "overlay": {},
+            "rail": {},
             "switcher": {},
             "use": {}
           }

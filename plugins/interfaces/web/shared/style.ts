@@ -87,6 +87,7 @@ export const STYLE = `
 .copilotz-rail-head { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0 8px; }
 .copilotz-rail-head::after { content: ""; width: 24px; height: 1px; margin-top: 4px; background: var(--sidebar-border); }
 .copilotz-rail-mark { color: var(--sidebar-foreground); }
+.copilotz-rail-org { display: contents; }
 .copilotz-rail-sections { flex: 1; min-height: 0; align-self: stretch; display: flex; flex-direction: column;
   align-items: center; gap: 10px; padding: 4px 0 12px; overflow-y: auto; overscroll-behavior: contain;
   scrollbar-width: none; }

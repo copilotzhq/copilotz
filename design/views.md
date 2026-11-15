@@ -285,10 +285,12 @@ resource kinds (no list of tabs or sections anywhere):
   (Ctrl+B elsewhere, where the key isn't a field's own) or the palette fold it to about 60 pixels
   and back, sliding unless the person asks for less motion; the browser keeps which, for them, and
   the shell's `shell` resource says how it starts (`{ sidebar: "rail" }`). The rail is the app's
-  mark, unfolding, Search, then each section's `rail` View (`RailItem`s, read only while the rail
-  shows: chat's new chat and what waits on you, invitations counted, spaces as their faces), and the
-  person's face with their menu; each item named beside it as a tooltip. A section with no `rail`
-  waits for the sidebar to unfold. On a phone the sidebar stays a drawer.
+  mark (under it, where the app serves many orgs, the `orgs` slot's `rail`: the org's face, opening
+  the switcher's choices beside it), unfolding, Search, then each section's `rail` View
+  (`RailItem`s, read only while the rail shows: chat's new chat and what waits on you, invitations
+  counted, spaces as their faces), and the person's face with their menu; each item named beside it
+  as a tooltip. A section with no `rail` waits for the sidebar to unfold. On a phone the sidebar
+  stays a drawer.
 - **A space's page** (`/space/<id>`, spaces' `space` View) is its header (its name, renamed in place
   by managers; Personal or shared; its people; invite; a new chat there) and its tabs: `spaceTabs`
   (`{ title, view, icon?, order?, under?, group?, own?, menu? }`), each a View given `{ _id }` and

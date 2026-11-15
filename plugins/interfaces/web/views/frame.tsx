@@ -18,9 +18,9 @@
  *
  * Where the app serves many orgs, the front end that knows them fills the
  * `orgs` slot (see shared/orgs.ts): the top of the sidebar is its switcher
- * beside the app's mark, its overlay is drawn beside every page, and what
- * its hook lists joins the user menu and the palette. Without it, the top of
- * the sidebar is the app's whole logo.
+ * beside the app's mark (on the rail, its `rail` under the mark), its overlay
+ * is drawn beside every page, and what its hook lists joins the user menu and
+ * the palette. Without it, the top of the sidebar is the app's whole logo.
  */
 import {
   type CSSProperties,
@@ -57,8 +57,13 @@ import { type Offered, PanelSheet, PanelToggle, SidePanel, usePanel } from "./pa
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
-/** The `orgs` slot as drawn: its Views, and its hook. */
-export type Orgs = { switcher: ReactNode; overlay?: ReactNode; use?: OrgsSlot["use"] };
+/** The `orgs` slot as drawn: its Views (its `rail` by name, read while the rail shows), and its hook. */
+export type Orgs = {
+  switcher: ReactNode;
+  rail?: string;
+  overlay?: ReactNode;
+  use?: OrgsSlot["use"];
+};
 
 /** Where no front end fills the slot: nothing of orgs. */
 const none = (): OrgsShown | undefined => undefined;
@@ -309,6 +314,7 @@ export function Frame(
               ? (
                 <Rail
                   brand={brand}
+                  {...(switcher && orgs?.rail ? { org: orgs.rail } : {})}
                   mac={mac}
                   state={fold}
                   button={foldId}

@@ -97,6 +97,10 @@ type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
  *
  * - `switcher`: a View at the top of the sidebar, beside the app's mark (in
  *   place of its whole logo), with hints `{ in, path }`, once `use` answers.
+ * - `rail`: the switcher on the rail, the sidebar folded: a View of one
+ *   `RailItem` (the org's face, named beside it) that opens the same choices,
+ *   under the app's mark, with the same hints, once `use` answers. Without
+ *   one, the rail has the app's mark alone.
  * - `overlay`: a View drawn once beside every page, outside the sidebar (a
  *   drawer, on a phone): what going between orgs shows over the page.
  * - `use`: what the shell's own parts list for the person's orgs, kept
@@ -107,11 +111,14 @@ type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
  *   sidebar is then the app's whole logo, as without the slot.
  *
  * ```ts
- * resources: { orgs: { switcher: "orgs.switcher", overlay: "orgs.overlay", use: useShellOrgs } }
+ * resources: {
+ *   orgs: { switcher: "orgs.switcher", rail: "orgs.rail", overlay: "orgs.overlay", use: useShellOrgs },
+ * }
  * ```
  */
 export type OrgsSlot = {
   switcher: string;
+  rail?: string;
   overlay?: string;
   use?(call: Call): OrgsShown | undefined;
 };

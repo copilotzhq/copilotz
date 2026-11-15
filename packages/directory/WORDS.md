@@ -171,6 +171,7 @@ Generated: `deno run -A packages/directory/tests/words.ts`.
 | `shell.suspendTitle` | Suspend {name}? |
 | `shell.switchingTo` | Switching to |
 | `shell.switchOrg` | {name}: switch organization |
+| `shell.switchOrgWaiting` | one: {name}: switch organization ({count} invitation) / other: {name}: switch organization ({count} invitations) |
 | `shell.switchTo` | Switch to {name} |
 | `shell.takeBack` | Take back |
 | `shell.takeBackAbout` | Nobody can claim it after this, and that can't be undone. If someone still needs it, make them a new one. |

@@ -126,6 +126,10 @@ function draw(): string {
       staff={false}
       onNew={noop}
     />,
+    // On the rail, the sidebar folded: with invitations waiting, as staff, and with none.
+    <OrgSwitcher orgs={orgs} here={acme} staff={false} onNew={noop} rail />,
+    <OrgSwitcher orgs={orgs} here={acme} staff onNew={noop} rail />,
+    <OrgSwitcher orgs={{ ...orgs, invites: [] }} here={acme} staff={false} onNew={noop} rail />,
     <NewOrg open onClose={noop} />,
     orgView(null, ctx({}, {})),
     consoleView(null, ctx({ query: {} })),

@@ -5,8 +5,9 @@
  * top is the app's whole logo, as with no slot at all.
  *
  * And the sidebar folded to a rail: whole unless the app starts it as a rail (the `shell`
- * resource), with the button that folds it at its top; as a rail, the app's mark, the button
- * that unfolds it, Search, a place for each section's rail View, and the person's face.
+ * resource), with the button that folds it at its top; as a rail, the app's mark (and under it,
+ * where the app serves many orgs, the `orgs` slot's rail View), the button that unfolds it,
+ * Search, a place for each section's rail View, and the person's face.
  */
 import { assert, assertEquals, assertFalse, assertMatch, assertStringIncludes } from "@std/assert";
 import type { ReactNode } from "react";
@@ -109,4 +110,21 @@ test("started as a rail: the mark, unfolding, Search, each section's rail, and t
   assertStringIncludes(named(markup, "Ana"), 'aria-haspopup="menu"');
   assertStringIncludes(markup, "copilotz-me-rail");
   assertFalse(markup.includes("copilotz-me-button"));
+});
+
+test("on the rail, where the app serves many orgs: the switcher's own under the mark, once it answers", () => {
+  const rail = { sidebar: "rail" } as const;
+  const shown = { email: "ana@example.com", palette: [] };
+  const markup = draw({ ...slot(shown), rail: "orgs.rail" }, rail);
+  // A place for the slot's rail View (read only while the rail shows: nothing yet, on a server),
+  // after the app's mark and before the button that unfolds the sidebar.
+  const head = /<div class="copilotz-rail-head">[\s\S]*?<\/div><nav/.exec(markup)?.[0] ?? "";
+  const order = ["Harbor: home", "copilotz-rail-org", "Expand sidebar", "Search"]
+    .map((mark) => head.indexOf(mark));
+  assert(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), String(order));
+  // The whole switcher waits for the sidebar to unfold.
+  assertFalse(markup.includes('id="switcher"'));
+  // Until the slot's hook answers (or with one org), or with no rail View, the mark alone.
+  assertFalse(draw({ ...slot(undefined), rail: "orgs.rail" }, rail).includes("copilotz-rail-org"));
+  assertFalse(draw(slot(shown), rail).includes("copilotz-rail-org"));
 });

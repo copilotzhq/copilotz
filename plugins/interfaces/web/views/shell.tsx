@@ -9,8 +9,8 @@
  * the space the person works in. The command palette lists what front ends
  * offer there (the `palette` resource), for where the person is: the space,
  * the address, the page open (`{ kind, id }`) and its parameters. Where a
- * front end fills the `orgs` slot, its switcher is drawn with the same hints
- * as the sidebar's, and its overlay with none.
+ * front end fills the `orgs` slot, its switcher (and on the rail, its `rail`)
+ * is drawn with the same hints as the sidebar's, and its overlay with none.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../runtime/mod.ts";
@@ -85,6 +85,8 @@ export const shellView = (
         ? {
           orgs: {
             switcher: ctx.show(slot.switcher, {}, around),
+            // On the rail, read only while it shows, as sections' rails are.
+            ...(slot.rail ? { rail: slot.rail } : {}),
             // The same wherever the page is: what it shows outlives going elsewhere.
             ...(slot.overlay ? { overlay: ctx.show(slot.overlay, {}, {}) } : {}),
             ...(slot.use ? { use: slot.use } : {}),

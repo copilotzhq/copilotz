@@ -46,8 +46,9 @@
  *
  * The shell knows no orgs. Where the app serves many, the front end that
  * knows them fills the `orgs` slot (`@copilotz/directory`'s `directoryWeb`):
- * its switcher at the top of the sidebar, beside the app's mark; its overlay
- * beside every page; and, from its hook, entries in the user menu, groups in
+ * its switcher at the top of the sidebar, beside the app's mark (and on the
+ * rail, its `rail`, under the mark); its overlay beside every page; and, from
+ * its hook, entries in the user menu, groups in
  * the palette and the person's email. That front end draws the org's page
  * (`/org`), made of sections front ends add (the `orgSettings` resource:
  * `{ title, view, icon?, order?, roles? }`, each a View given item `{ _id }`
@@ -62,7 +63,7 @@
  *   panel: { view: "space.panel", on: ["thread"], title: "Space" },
  *   palette: { spaces: { view: "spaces.palette", order: 10 } },
  *   orgSettings: { members: { title: "Members", view: "org.members", icon: "users", order: 20 } },
- *   orgs: { switcher: "orgs.switcher", overlay: "orgs.overlay", use: useShellOrgs },
+ *   orgs: { switcher: "orgs.switcher", rail: "orgs.rail", overlay: "orgs.overlay", use: useShellOrgs },
  *   userMenu: { accounts: { label: "Connected accounts", icon: "lock", href: "/accounts" } },
  * }
  * ```

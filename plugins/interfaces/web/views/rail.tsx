@@ -1,6 +1,7 @@
 /**
  * The sidebar folded to a rail, on a wide screen: the app's mark (home), the
- * button that unfolds it, Search (the palette), then what sidebar sections
+ * org switcher's own (the `orgs` slot's `rail`, where the app serves many
+ * orgs), the button that unfolds it, Search (the palette), then what sidebar sections
  * offer there (a section's `rail`: a View of the toolkit's `RailItem`s, read
  * only while the rail shows, with the sidebar's hints `{ in, path }`), and
  * the person, with their menu, at its foot. Each item's name shows beside it
@@ -54,9 +55,11 @@ export function useSidebar(viewer: string, settings: ShellSettings | undefined, 
 export type SidebarState = ReturnType<typeof useSidebar>;
 
 export function Rail(
-  { brand, mac, state, button, sidebar, rails, hints, me }: {
+  { brand, org, mac, state, button, sidebar, rails, hints, me }: {
     /** The app's name: its mark goes home. */
     brand: string;
+    /** The org switcher on the rail (the `orgs` slot's `rail` View), once it's shown. */
+    org?: string;
     mac: boolean;
     state: SidebarState;
     /** The id of the button that unfolds it, and of the sidebar it unfolds. */
@@ -79,6 +82,13 @@ export function Rail(
           leading={<Logo size={24} />}
           className="copilotz-rail-mark"
         />
+        {org
+          ? (
+            <div className="copilotz-rail-org">
+              <LazyView kind={org} hints={hints} fallback={null} />
+            </div>
+          )
+          : null}
         <RailItem
           id={button}
           icon="sidebar"

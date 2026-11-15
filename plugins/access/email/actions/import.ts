@@ -2,9 +2,9 @@
  * `email.import` `{ person, email, hash, name?, at? }`: someone moving in from
  * another app with their password as it was hashed there: the person (by the
  * id the importer chose), their address confirmed, and their login with
- * that hash, kept as it is (legacy `salt:hash` hex, or ours: see
- * shared/password.ts). It's made again, stronger, the first time they sign
- * in. Run again, it updates what it made; an address that's someone else's
+ * that hash, kept as it is (legacy `salt:hash` hex, bcrypt's `$2a$`, `$2b$`
+ * or `$2y$`, or ours: see shared/password.ts). It's made again our way, the
+ * first time they sign in. Run again, it updates what it made; an address that's someone else's
  * already is refused. The system's alone (a migration), and unrecorded: its
  * input holds the hash.
  */

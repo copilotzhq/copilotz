@@ -26,8 +26,9 @@
  *   that works once for a day (`/#email-invite=<token>`), where they choose
  *   a password and arrive signed in (`email.accept`).
  * - **Moving in:** `email.import` brings a person with their password's
- *   hash as another app kept it (legacy `salt:hash` hex, PBKDF2-SHA256 at
- *   100,000), made stronger at their first sign-in.
+ *   hash as another app kept it (bcrypt's `$2a$`, `$2b$` or `$2y$`, as Rails,
+ *   PHP and Parse keep it; Copilotz 0.x's `salt:hash` hex, PBKDF2-SHA256 at
+ *   100,000), hashed again our way at their first sign-in.
  *
  * Passwords are hashed with PBKDF2-SHA256 on WebCrypto, in six stages of
  * 100,000 (workerd's most for one): `pbkdf2-sha256$6x100000$<salt>$<hash>`

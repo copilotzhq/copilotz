@@ -47,6 +47,9 @@ than a viewer. What the public reads, everyone reads: people, contacts and agent
 too, members or not, so the same documents serve the public server and the app's own pages. They
 aren't listed among a person's spaces (`space.reached`).
 
+With `until`, a space is the public's for a while: `member.set` with `until: "2026-12-31T23:59:59Z"`
+lets it go then.
+
 **What it lists.** Of the server's `tools`, only those that only read (`annotations.readOnly`, the
 tool's own or the server's), and whose `offer` doesn't say no to the public. The mark only chooses
 what's listed: what keeps the public from writing is its reach. No tool takes a `chat` handle, and

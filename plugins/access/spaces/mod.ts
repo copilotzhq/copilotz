@@ -20,6 +20,9 @@
  *   acting for someone (`actor.for`) reaches what both reach. A space with
  *   the public as a viewer is read by everyone: the public, and every person,
  *   contact and agent, member or not (it isn't listed among their spaces).
+ * - **Until a time:** `member.set` with `until` (ISO 8601) gives a
+ *   membership an end: past it, reach ignores it, and a timer removes it
+ *   (`member.expire`, the system's). Set again without one, it lasts.
  * - **Rules** (the runtime's guard): reads of a shared collection only see
  *   what's reached; inserts and what writes leave must be in a space you may
  *   write; a document shared on its own is reached through its own members.
@@ -67,7 +70,7 @@ import {
   declineInvitationAction,
   sendInvitationAction,
 } from "./actions/invitation.ts";
-import { removeMemberAction, setMemberAction } from "./actions/member.ts";
+import { expireMemberAction, removeMemberAction, setMemberAction } from "./actions/member.ts";
 import {
   inviteToOrgAction,
   joinOrgAction,
@@ -148,6 +151,7 @@ export const spaces: Plugin = definePlugin({
     "space.roster": rosterAction,
     "member.set": setMemberAction,
     "member.remove": removeMemberAction,
+    "member.expire": expireMemberAction,
     "org.join": joinOrgAction,
     "org.role": orgRoleAction,
     "org.remove": removeFromOrgAction,

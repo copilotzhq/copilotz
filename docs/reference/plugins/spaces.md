@@ -22,7 +22,7 @@ It keeps 5 collections, each on the record: every change to one is an event.
 | Collection   | Kept as   | Fields                                                   |
 | ------------ | --------- | -------------------------------------------------------- |
 | `invitation` | documents | `space`, `name`, `email`, `role`, `by`, `at`             |
-| `member`     | documents | `member`, `space`, `role`, `on`, `contacts`              |
+| `member`     | documents | `member`, `space`, `role`, `on`, `contacts`, `until`     |
 | `profile`    | documents | `name`, `picture`, `at`                                  |
 | `request`    | documents | `space`, `member`, `by`, `reason`, `at`                  |
 | `space`      | documents | `name`, `kind`, `owner`, `archived`, `agent`, `declared` |
@@ -40,7 +40,7 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 27 Actions, people may call 22; agents may call 8; contacts and someone signed out may call
+Of its 28 Actions, people may call 22; agents may call 8; contacts and someone signed out may call
 none.
 
 | Action               | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                                                               |
@@ -71,8 +71,8 @@ none.
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.
 
-Only the app's own code calls `org.join`, `org.seats`, `org.summary`, `space.keep` and
-`space.roster`: its plugins, its schedules and the system.
+Only the app's own code calls `member.expire`, `org.join`, `org.seats`, `org.summary`, `space.keep`
+and `space.roster`: its plugins, its schedules and the system.
 
 Agents act through its tool, as whoever they work for:
 
@@ -102,7 +102,7 @@ resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.47`.
+It ships with `copilotz@1.0.0-rc.49`.
 
 ## What it does on its own
 

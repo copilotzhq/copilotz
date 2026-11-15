@@ -26,6 +26,8 @@ export type Summary = Infer<typeof summarySchema> & { _id: string };
 
 export const summary = defineCollection({
   schema: summarySchema,
+  // A thread's tree, level by level: what `of` reads, and what goes when the thread does.
+  indexes: [["thread", "level", "index"]],
   queries: {
     /** A thread's summary tree, level by level. */
     of: (summaries, params: { thread: string }) =>

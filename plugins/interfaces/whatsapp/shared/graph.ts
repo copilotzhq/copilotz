@@ -1,6 +1,6 @@
 /**
  * Meta's Graph API, as a connected number uses it: sending a message (text,
- * buttons, a list, a carousel, an image, a document), uploading a file to
+ * buttons, a list, a carousel, an image, a document, a template), uploading a file to
  * send, marking what was read (and showing it's typing), fetching media
  * people sent, and what a number is. Its access token goes in each request and nowhere else: a failure
  * says what Meta said, never the token.
@@ -44,6 +44,18 @@ export const tokenRefused = (error: unknown) => {
   return e?.code === "graph" && (e.status === 401 || e.graph === 190);
 };
 
+/**
+ * Meta's code for a message past the 24 hours a business may write freely
+ * after the phone last wrote: only a template reaches them then.
+ */
+export const WINDOW_CLOSED = 131047;
+
+/** Whether a failure is Meta refusing a message past those 24 hours. */
+export const windowClosed = (error: unknown) => {
+  const e = error as Partial<GraphError>;
+  return e?.code === "graph" && e.graph === WINDOW_CLOSED;
+};
+
 /** What a number is, as Meta knows it: proves the token works for it. */
 export const numberInfo = (graph: Graph) =>
   call<{ id: string; display_phone_number?: string; verified_name?: string }>(
@@ -61,7 +73,18 @@ export const refused = (error: unknown) => {
   if (e?.code === "unsendable") return true;
   const g = e as Partial<GraphError>;
   return g?.code === "graph" && g.status === 400 &&
-    ![190, 131047, 130429, 131056].includes(g.graph ?? 0);
+    ![190, WINDOW_CLOSED, 130429, 131056].includes(g.graph ?? 0);
+};
+
+/**
+ * A template message, as it goes: Meta's name and language for it, and its
+ * components (its body's parameters, a header's, a button's).
+ */
+export type WaTemplate = {
+  type: "template";
+  name: string;
+  language: string;
+  components?: Record<string, unknown>[];
 };
 
 /** Media as the Graph API takes it: a link, or the id of one uploaded. */
@@ -73,10 +96,22 @@ export type Sendable = { link: string } | { id: string };
  */
 export type Resolve = (media: WaMedia, linked?: boolean) => Promise<Sendable>;
 
-/** A part, as the Graph API's message (its media resolved). */
-async function wireOf(part: WaPart, resolve: Resolve): Promise<Record<string, unknown>> {
+/** A part, or a template, as the Graph API's message (its media resolved). */
+async function wireOf(
+  part: WaPart | WaTemplate,
+  resolve: Resolve,
+): Promise<Record<string, unknown>> {
   const footer = (text?: string) => text ? { footer: { text } } : {};
   switch (part.type) {
+    case "template":
+      return {
+        type: "template",
+        template: {
+          name: part.name,
+          language: { code: part.language },
+          ...(part.components?.length ? { components: part.components } : {}),
+        },
+      };
     case "text":
       return {
         type: "text",
@@ -154,11 +189,11 @@ async function wireOf(part: WaPart, resolve: Resolve): Promise<Record<string, un
   }
 }
 
-/** Sends a part to someone (their WhatsApp id), and returns the sent message's id. */
+/** Sends a part (or a template) to someone (their WhatsApp id), and returns the sent message's id. */
 export async function sendPart(
   graph: Graph,
   to: string,
-  part: WaPart,
+  part: WaPart | WaTemplate,
   resolve: Resolve,
 ): Promise<string> {
   const sent = await call<{ messages?: { id: string }[] }>(

@@ -154,11 +154,14 @@ All stores support:
   SQL stores run the match and the group as one `GROUP BY`: only the groups come back.
 - **Indexes** declared on a collection (`indexes: [["at"], ["tags.tenant", "at"]]`), on fields its
   schema types as scalars (strings, numbers, booleans), so they never hold arrays: filters on them
-  (equality, `$in`, comparisons with a value of the field's type) use the index, and so do sorts on
-  them (missing first, as MongoDB orders them). SQL stores make them as partial indexes, one
-  collection each, and drop ones no longer declared (Postgres: from a schema of its own; tenants
-  sharing one may run another version of the app). SQLite keeps the statistics its planner needs to
-  prefer them to the primary key: gathered at open when missing, and again each time the table about
+  (equality, `$in`, comparisons with a value of the field's type) use the index, in reads, updates
+  and deletes alike, and so do sorts on them (missing first, as MongoDB orders them). An array field
+  (`to: ["ana"]`) can't be indexed: find by a scalar beside it. SQL stores make them as partial
+  indexes, one collection each, as the store opens: a release that declares one makes it over the
+  documents already there on its first start, reading the table once (Postgres holds its writes
+  meanwhile). They drop ones no longer declared (Postgres: from a schema of its own; tenants sharing
+  one may run another version of the app). SQLite keeps the statistics its planner needs to prefer
+  them to the primary key: gathered at open when missing, and again each time the table about
   doubles; Postgres gathers its own. Until it has (a new table, or a tenant that grew fast since),
   its planner may read and sort more rows than an index would.
 - **`writeConcern: { w: 0 }`** on updates, replaces and deletes: in a transaction the write goes
@@ -172,8 +175,11 @@ Not supported: projection, other `aggregate` stages and operators, `distinct`, `
 All stores support:
 
 - **Operators:** `$eq` (or a plain value), `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`,
-  `$exists`, `$not`, `$and`, `$or`, `$nor`.
+  `$exists`, `$not`, `$and`, `$or`, `$nor`, and `$regex` with `$options` (see
+  [Text patterns](#text-patterns)).
 - **Paths:** dot paths into objects and arrays (`"o.k"`, `"tags.0"`).
+- **`_id`** equal to a string, or `$in` strings, looks up the primary key wherever it is in the
+  filter: beside a rule's (a person's reads come as `{ $and: [filter, rule] }`), or in an `$or`.
 - **`$in` lists** of one scalar type go to SQL as one parameter (a JSON array: SQLite `json_each`,
   Postgres `jsonb_array_elements`), so a statement is the same whatever their length; `null` and
   objects in them go one by one. On an indexed field the index serves them.
@@ -189,8 +195,65 @@ With MongoDB's semantics:
 - **`$gte: null`** and **`$lte: null`** match null and missing; `$gt: null` and `$lt: null` match
   nothing.
 
-Not supported: `$regex`, `$elemMatch`, `$all`, `$size`, `$type`, `$mod`, `$expr`, `$text`, `$where`,
-geospatial and bitwise operators. A filter using one fails in every store.
+Not supported: `$elemMatch` (but with one of `$in`, `$nin`, `$eq` or `$ne`, on scalars), `$all`,
+`$size`, `$type`, `$mod`, `$expr`, `$text`, `$where`, geospatial and bitwise operators. A filter
+using one fails in every store.
+
+### Text patterns
+
+`{ name: { $regex: "^jo", $options: "i" } }` matches a string with the pattern somewhere in it (`^`
+and `$` anchor it), and an array when one of its strings does. Numbers, objects, null and missing
+fields don't match; `$not` turns it around, so they do. The pattern is a string: a `RegExp` object
+doesn't survive the trip as JSON, and is refused.
+
+Every store answers alike, because a pattern is the part of JavaScript's regular expressions they
+all read the same way, with JavaScript's `u` flag (by code point):
+
+- characters and escapes (`\.`, `\t`, `\n`, `\x41`, `\u00e9`, `\u{1F600}`), `.`, classes (`[a-z]`,
+  `[^0-9]`, `\d`, `\w`, `\s` and `\D`, `\W`, `\S`, with JavaScript's meanings: `\d` is `[0-9]`, `\w`
+  is ASCII), `^` and `$`, groups (`(…)`, `(?:…)`), `|`, and the quantifiers `*`, `+`, `?`, `{n}`,
+  `{n,}`, `{n,m}` (lazy or not);
+- options: `i` ignores case as JavaScript's `ui` flags fold it (`joão` matches `JOÃO`; `ß` isn't
+  `ss`); `s` lets `.` match line breaks (`\n`, `\r`, U+2028, U+2029), which it doesn't otherwise.
+
+Refused, as `invalid`, with a message that says why: backreferences, lookarounds, named groups, word
+boundaries (`\b`), Unicode property escapes, an empty class (`[]`, `[^]`), any other escape or
+option, a pattern over 512 characters, a quantifier over 255, and one that makes over 2,000 states.
+
+A pattern is parsed once into the code points each part stands for, with case folded there. The
+memory store, the owner's cache and Processor filters match it with a small automaton that reads
+each character once, never backtracking (`runtime/pattern.ts`): a value takes at most its length
+times the pattern's states. SQLite calls the same matcher, a function each connection registers
+(`node:sqlite` can). PostgreSQL gets the pattern written in its own syntax, every class spelled out
+as code points, and matches it with `~` on the text in the `C` collation: what the database's locale
+says about case or letters never comes into it, so PGlite and a server answer alike.
+
+- **No index serves a pattern:** it's matched on every document the rest of the filter leaves. On a
+  large collection, narrow it first with an indexed field (`{ in: space, name: { $regex } }`).
+- **`bun:sqlite` registers no functions,** nor may a database given with `open`. There the SQL reads
+  with the rest of the filter, sorted, and the store matches the pattern and pages in JavaScript:
+  the same answers, more rows read. Counts and groups do the same.
+- **A value kept as a blob** (a string over 16 KiB) is a reference in the document, not text:
+  patterns don't match it.
+- **Who may send one:** whoever may send a filter. Plugin code, rules and Processor `where`; and
+  from outside, REST filters and the browser's direct reads, within what the rules let them read.
+  Matching is linear, so no pattern makes a value cost more than its length times 2,000 steps
+  (PostgreSQL's engine backtracks only for backreferences, which are refused). Text meant literally,
+  such as what someone typed in a search box, is escaped first: `RegExp.escape(text)` where the
+  runtime has it (Node 24, Deno 2.9), else `text.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&")`.
+- **Accents:** a pattern ignores case, never accents (`joao` doesn't match `João`). For a search
+  that ignores both, as MySQL's `LIKE` does under a `_ci` collation, keep a folded copy of the field
+  beside it, written by the Action that writes the field, and search that:
+
+  ```ts
+  const fold = (text: string) => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+
+  await items.insertOne({ name, folded: fold(name) }); // and $set both when it changes
+  const found = await items.find({ folded: { $regex: RegExp.escape(fold(query)) } });
+  ```
+
+  Index the folded copy to find exact names by it (`{ folded: fold(name) }`), and sort by it for an
+  order that ignores case and accents.
 
 ### Sorting
 

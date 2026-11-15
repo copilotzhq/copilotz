@@ -42,8 +42,9 @@ Deno.serve(dir.fetch);
 ```
 
 In the browser, `directoryWeb` fills the web shell's `orgs` slot: the org switcher at the top of the
-sidebar, going between orgs, the org's page (`/org`, its sections the `orgSettings` resource's) and
-staff's console (`/console`). Without it, the shell has no switcher:
+sidebar (on the rail, the sidebar folded, the org's face under the app's mark), going between orgs,
+the org's page (`/org`, its sections the `orgSettings` resource's) and staff's console (`/console`).
+Without it, the shell has no switcher:
 
 ```ts
 import { directoryWeb } from "@copilotz/directory/web";

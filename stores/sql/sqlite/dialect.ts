@@ -1,6 +1,7 @@
 /**
  * SQLite's leaves for the shared MongoDB-to-SQL translation (../shared/filter.ts),
- * over JSON text with the JSON1 functions.
+ * over JSON text with the JSON1 functions. `$regex` calls the reference's
+ * matcher, registered on each connection as a function (`PATTERN_FUNCTION`).
  */
 import type { Aggregates } from "../shared/aggregate.ts";
 import type { Bind, Dialect } from "../shared/filter.ts";
@@ -46,6 +47,12 @@ const element = (path: unknown, bind: Bind, condition: string) =>
   `(json_type(doc, ${bind(path)}) = 'array' AND EXISTS (SELECT 1 FROM ` +
   `json_each(doc, ${bind(path)}) WHERE ${condition}))`;
 
+/**
+ * The function each connection has for `$regex`: `copilotz_regex(text, pattern,
+ * options)` is 1 when runtime/pattern.ts matches the pattern in the text.
+ */
+export const PATTERN_FUNCTION = "copilotz_regex";
+
 /** An indexed scalar's expression: the same text in its index and in every filter on it. */
 export const scalar = (field: string) =>
   `json_extract(doc, '${jsonPath(field).replaceAll("'", "''")}')`;
@@ -57,6 +64,7 @@ export const sqlite: Dialect = {
   operand: (type, value, bind) => type === "boolean" ? (value ? "1" : "0") : bind(value),
   // SQLite orders NULL (missing) below everything.
   sorted: (field, _type, direction) => `${scalar(field)} ${direction === -1 ? "DESC" : "ASC"}`,
+  key: "id",
   natural: "rowid",
   unlimited: "-1",
   equals(path, value, bind) {
@@ -94,6 +102,13 @@ export const sqlite: Dialect = {
   },
   exists: (path, present, bind) =>
     `(json_type(doc, ${bind(path)}) IS ${present ? "NOT " : ""}NULL)`,
+  regex(path, pattern, bind) {
+    const matched = (text: string) =>
+      `${PATTERN_FUNCTION}(${text}, ${bind(pattern.source)}, ${bind(pattern.options)})`;
+    return `COALESCE((json_type(doc, ${bind(path)}) = 'text' AND ${
+      matched(`json_extract(doc, ${bind(path)})`)
+    }) OR ${element(path, bind, `type = 'text' AND ${matched("value")}`)}, 0)`;
+  },
   among(path, type, values, bind) {
     const kind = KINDS[type];
     return `COALESCE((json_type(doc, ${bind(path)}) ${kind} AND json_extract(doc, ${

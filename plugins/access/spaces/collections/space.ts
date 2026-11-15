@@ -32,6 +32,7 @@ export const space = defineCollection({
      * The spaces the actor reaches, by name, each with what they may do there
      * (`can`: `read`, `write`, `manage`), so a front end offers only that;
      * archived ones too, marked (`archived`), for a front end to list apart.
+     * Not those they read only because the public does: those aren't theirs.
      */
     reached: {
       allow: people,
@@ -39,7 +40,7 @@ export const space = defineCollection({
         const found = await spaces.find({}, { sort: { name: 1 } });
         if (!ctx.actor) return found;
         const reach = await reachOf(ctx.actor, ctx);
-        return found.filter((s) => reach.has(s._id)).map((s) => ({
+        return found.filter((s) => reach.has(s._id) && !reach.get(s._id)!.open).map((s) => ({
           ...s,
           can: [...reach.get(s._id)!.can],
         }));

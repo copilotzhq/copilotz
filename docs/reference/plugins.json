@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "runtime": "1.0.0-rc.47",
+  "runtime": "1.0.0-rc.50",
   "plugins": [
     {
       "format": 1,
@@ -9,9 +9,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -663,9 +663,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -731,9 +731,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -1074,9 +1074,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -1163,9 +1163,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [
         {
@@ -2015,9 +2015,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -2104,9 +2104,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -2387,7 +2387,11 @@
           "private": [],
           "shared": true,
           "vectors": [],
-          "indexes": [],
+          "indexes": [
+            [
+              "thread"
+            ]
+          ],
           "queries": [
             {
               "name": "about",
@@ -2969,7 +2973,18 @@
           ],
           "shared": true,
           "vectors": [],
-          "indexes": [],
+          "indexes": [
+            [
+              "thread",
+              "at"
+            ],
+            [
+              "replyTo"
+            ],
+            [
+              "turn"
+            ]
+          ],
           "queries": [
             {
               "name": "conversation",
@@ -3168,7 +3183,15 @@
           "private": [],
           "shared": true,
           "vectors": [],
-          "indexes": [],
+          "indexes": [
+            [
+              "in",
+              "at"
+            ],
+            [
+              "parent.thread"
+            ]
+          ],
           "queries": [
             {
               "name": "agents",
@@ -4479,9 +4502,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -4607,9 +4630,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -4638,6 +4661,10 @@
           "place": "web"
         },
         {
+          "name": "chat.waiting.rail",
+          "place": "web"
+        },
+        {
           "name": "chats",
           "place": "web"
         },
@@ -4655,6 +4682,10 @@
         },
         {
           "name": "new-thread",
+          "place": "web"
+        },
+        {
+          "name": "new-thread.rail",
           "place": "web"
         },
         {
@@ -4794,9 +4825,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -6846,9 +6877,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -6897,9 +6928,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -7037,9 +7068,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -7270,9 +7301,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -7315,9 +7346,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [
         {
@@ -8391,9 +8422,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -8453,9 +8484,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -8541,9 +8572,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [
         {
@@ -9697,9 +9728,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -9781,9 +9812,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -9804,6 +9835,10 @@
           "place": "web"
         },
         {
+          "name": "orgs.rail",
+          "place": "web"
+        },
+        {
           "name": "orgs.switcher",
           "place": "web"
         }
@@ -9820,6 +9855,7 @@
         "provides": {
           "orgs": {
             "overlay": {},
+            "rail": {},
             "switcher": {},
             "use": {}
           }
@@ -9853,9 +9889,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [
         {
@@ -10578,9 +10614,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -10665,9 +10701,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10697,6 +10733,44 @@
               "html": {
                 "type": "string",
                 "maxLength": 500000
+              },
+              "from": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 320
+              },
+              "replyTo": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 254
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "filename": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "contentType": {
+                      "type": "string",
+                      "pattern": "^[\\w.+-]+/[\\w.+-]+$",
+                      "maxLength": 255
+                    },
+                    "content": {
+                      "type": "string",
+                      "maxLength": 14000000
+                    }
+                  },
+                  "required": [
+                    "filename",
+                    "content"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 10
               }
             },
             "required": [
@@ -10718,7 +10792,7 @@
         {
           "kind": "setting",
           "path": "email.adapter",
-          "summary": "Which adapter sends: `resend` (Resend's API), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in).",
+          "summary": "Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on Node, Deno and Bun), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in).",
           "required": true,
           "type": "string"
         },
@@ -10728,6 +10802,13 @@
           "summary": "Who messages are from: `\"Example <noreply@example.com>\"`.",
           "required": false,
           "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "email.senders",
+          "summary": "Who else a message may be from (its own `from`): addresses (`billing@example.com`), or every address at a domain (`@example.com`). Any other is refused.",
+          "required": false,
+          "type": "string[]"
         },
         {
           "kind": "setting",
@@ -10742,6 +10823,13 @@
           "summary": "The adapter's key (Resend's).",
           "required": false,
           "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "email.smtp",
+          "summary": "The `smtp` adapter's server: `{ host, port?, secure?, starttls?, user?, password?, ca?, name?, timeout? }` (see `SmtpSettings`). Its password is a secret: keep it out of your code.",
+          "required": false,
+          "type": "SmtpSettings"
         }
       ],
       "emits": [],
@@ -10771,7 +10859,8 @@
       "adapters": {
         "email": [
           "console",
-          "resend"
+          "resend",
+          "smtp"
         ]
       },
       "workers": [],
@@ -10780,7 +10869,7 @@
           "email"
         ],
         "asks": [],
-        "refuses": "set the email resource's adapter: resend or console (console on a laptop)"
+        "refuses": "set the email resource's adapter: resend or smtp or console (console on a laptop)"
       },
       "settings": [
         {
@@ -10792,7 +10881,7 @@
               "name": "adapter",
               "type": "string",
               "optional": false,
-              "doc": "Which adapter sends: `resend` (Resend's API), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in).",
+              "doc": "Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on Node, Deno and Bun), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in).",
               "secret": false
             },
             {
@@ -10800,6 +10889,13 @@
               "type": "string",
               "optional": true,
               "doc": "Who messages are from: `\"Example <noreply@example.com>\"`.",
+              "secret": false
+            },
+            {
+              "name": "senders",
+              "type": "string[]",
+              "optional": true,
+              "doc": "Who else a message may be from (its own `from`): addresses (`billing@example.com`), or every address at a domain (`@example.com`). Any other is refused.",
               "secret": false
             },
             {
@@ -10815,6 +10911,13 @@
               "optional": true,
               "doc": "The adapter's key (Resend's).",
               "secret": true
+            },
+            {
+              "name": "smtp",
+              "type": "SmtpSettings",
+              "optional": true,
+              "doc": "The `smtp` adapter's server: `{ host, port?, secure?, starttls?, user?, password?, ca?, name?, timeout? }` (see `SmtpSettings`). Its password is a secret: keep it out of your code.",
+              "secret": false
             }
           ],
           "doc": "The `email` resource: how the app sends email."
@@ -10836,9 +10939,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -10867,7 +10970,8 @@
                 "enum": [
                   "verify",
                   "reset",
-                  "invite"
+                  "invite",
+                  "signin"
                 ]
               },
               "hash": {
@@ -11040,6 +11144,71 @@
           "internal": true
         },
         {
+          "name": "email.code",
+          "summary": "Sends a code to sign in with to an address, if it's someone's (or, with sign-up, anyone's)",
+          "input": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 254
+              },
+              "address": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "host": {
+                "type": "string",
+                "maxLength": 253
+              }
+            },
+            "required": [
+              "email"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "email.enter",
+          "summary": "Signs in with the code sent to the address: the person, and a new session",
+          "input": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 254
+              },
+              "code": {
+                "type": "string",
+                "maxLength": 20
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "address": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              }
+            },
+            "required": [
+              "email",
+              "code"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
           "name": "email.forgot",
           "summary": "Sends a code to choose a new password, if the address has an account",
           "input": {
@@ -11054,6 +11223,10 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 80
+              },
+              "host": {
+                "type": "string",
+                "maxLength": 253
               }
             },
             "required": [
@@ -11150,6 +11323,10 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 200
+              },
+              "host": {
+                "type": "string",
+                "maxLength": 253
               }
             },
             "required": [
@@ -11227,6 +11404,10 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 80
+              },
+              "host": {
+                "type": "string",
+                "maxLength": 253
               }
             },
             "required": [
@@ -11262,6 +11443,10 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 80
+              },
+              "host": {
+                "type": "string",
+                "maxLength": 253
               }
             },
             "required": [
@@ -11329,6 +11514,24 @@
           "underName": false
         },
         {
+          "path": "/signin/email/code",
+          "method": "POST",
+          "methods": [
+            "POST"
+          ],
+          "host": false,
+          "underName": false
+        },
+        {
+          "path": "/signin/email/enter",
+          "method": "POST",
+          "methods": [
+            "POST"
+          ],
+          "host": false,
+          "underName": false
+        },
+        {
           "path": "/signin/email/forgot",
           "method": "POST",
           "methods": [
@@ -11384,6 +11587,13 @@
         },
         {
           "kind": "setting",
+          "path": "emailSignIn.signInByCode",
+          "summary": "Whether people may sign in with a code sent to their address, with no password (`email.code`, then `email.enter`); with `signUp`, that makes an account too. No unless said.",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "kind": "setting",
           "path": "emailSignIn.app",
           "summary": "What messages call the app (`{app}`): the host of the `links` origin unless said.",
           "required": false,
@@ -11392,9 +11602,16 @@
         {
           "kind": "setting",
           "path": "emailSignIn.messages",
-          "summary": "The messages, by what they're for: a sign-up's code (`verify`), a new password's (`reset`), an invitation's link (`invite`), and a sign-up for an address that has an account already (`exists`). English unless the app says; a later plugin patches one word of one.",
+          "summary": "The messages, by what they're for: a sign-up's code (`verify`), a new password's (`reset`), an invitation's link (`invite`), a sign-up for an address that has an account already (`exists`), and a code to sign in with (`signin`). English unless the app says; a later plugin patches one word of one.",
           "required": true,
-          "type": "object"
+          "type": "EmailSignInMessages"
+        },
+        {
+          "kind": "setting",
+          "path": "emailSignIn.hosts",
+          "summary": "Per host the page is served on (a brand's: `\"brand.example\"`), what changes there: its name, sender, words and links. The route says the host; a host not here says what the rest does.",
+          "required": false,
+          "type": "Record<string, EmailSignInHost>"
         },
         {
           "kind": "setting",
@@ -11438,6 +11655,12 @@
         },
         "reads": [
           {
+            "kind": "email",
+            "found": [
+              "source"
+            ]
+          },
+          {
             "kind": "emailSignIn",
             "found": [
               "source"
@@ -11446,7 +11669,8 @@
           {
             "kind": "links",
             "found": [
-              "check"
+              "check",
+              "source"
             ]
           }
         ]
@@ -11474,6 +11698,13 @@
               "secret": false
             },
             {
+              "name": "signInByCode",
+              "type": "boolean",
+              "optional": true,
+              "doc": "Whether people may sign in with a code sent to their address, with no password (`email.code`, then `email.enter`); with `signUp`, that makes an account too. No unless said.",
+              "secret": false
+            },
+            {
               "name": "app",
               "type": "string",
               "optional": true,
@@ -11482,9 +11713,16 @@
             },
             {
               "name": "messages",
-              "type": "object",
+              "type": "EmailSignInMessages",
               "optional": false,
-              "doc": "The messages, by what they're for: a sign-up's code (`verify`), a new password's (`reset`), an invitation's link (`invite`), and a sign-up for an address that has an account already (`exists`). English unless the app says; a later plugin patches one word of one.",
+              "doc": "The messages, by what they're for: a sign-up's code (`verify`), a new password's (`reset`), an invitation's link (`invite`), a sign-up for an address that has an account already (`exists`), and a code to sign in with (`signin`). English unless the app says; a later plugin patches one word of one.",
+              "secret": false
+            },
+            {
+              "name": "hosts",
+              "type": "Record<string, EmailSignInHost>",
+              "optional": true,
+              "doc": "Per host the page is served on (a brand's: `\"brand.example\"`), what changes there: its name, sender, words and links. The route says the host; a host not here says what the rest does.",
               "secret": false
             },
             {
@@ -11503,6 +11741,8 @@
         "problems": [
           "Route \"/signin/email\" isn't under /email-sign-in.",
           "Route \"/signin/email/accept\" isn't under /email-sign-in.",
+          "Route \"/signin/email/code\" isn't under /email-sign-in.",
+          "Route \"/signin/email/enter\" isn't under /email-sign-in.",
           "Route \"/signin/email/forgot\" isn't under /email-sign-in.",
           "Route \"/signin/email/invitation\" isn't under /email-sign-in.",
           "Route \"/signin/email/reset\" isn't under /email-sign-in.",
@@ -11521,9 +11761,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -11647,9 +11887,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -11799,7 +12039,13 @@
           "private": [],
           "shared": false,
           "vectors": [],
-          "indexes": [],
+          "indexes": [
+            [
+              "thread",
+              "level",
+              "index"
+            ]
+          ],
           "queries": [
             {
               "name": "of",
@@ -11992,9 +12238,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -12331,9 +12577,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -12627,9 +12873,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -13214,9 +13460,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -13693,9 +13939,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -13791,9 +14037,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -13844,9 +14090,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -13908,9 +14154,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -14454,9 +14700,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -14698,6 +14944,385 @@
     },
     {
       "format": 1,
+      "name": "password-sign-in",
+      "summary": "Password sign-in: people sign in by an identifier (a username, a badge number, a CPF) and a password, with the identity plugin.",
+      "requires": [
+        "identity"
+      ],
+      "package": {
+        "name": "copilotz",
+        "version": "1.0.0-rc.50"
+      },
+      "runtime": "1.0.0-rc.50",
+      "layer": "standard",
+      "keeps": [
+        {
+          "name": "password_login",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "person",
+            "hash",
+            "changed",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string"
+              },
+              "hash": {
+                "type": "string"
+              },
+              "changed": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "person",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [
+            "hash"
+          ],
+          "shared": false,
+          "vectors": [],
+          "indexes": [
+            [
+              "person"
+            ]
+          ],
+          "queries": []
+        },
+        {
+          "name": "password_rate",
+          "summary": "",
+          "kind": "live",
+          "fields": [
+            "count",
+            "until"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "until": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "until"
+            ]
+          },
+          "durable": false,
+          "recorded": false,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [],
+          "queries": []
+        }
+      ],
+      "indexes": [],
+      "shared": [],
+      "actions": [
+        {
+          "name": "password.change",
+          "summary": "Changes your password, with the one you have: your other sessions end",
+          "input": {
+            "type": "object",
+            "properties": {
+              "password": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "new": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "address": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              }
+            },
+            "required": [
+              "password",
+              "new"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "password.import",
+          "summary": "Brings in someone by identifier with their password's hash as another app kept it",
+          "input": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "identifier": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "hash": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "at": {
+                "type": "string",
+                "maxLength": 40
+              }
+            },
+            "required": [
+              "person",
+              "identifier",
+              "hash"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "password.prune",
+          "summary": "Drops password sign-in's counters that are past",
+          "input": {
+            "type": "object",
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "password.remove",
+          "summary": "Removes someone's account by identifier: they sign in that way no more",
+          "input": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "person"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "password.set",
+          "summary": "Makes or changes someone's account by identifier, and their password when given",
+          "input": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "identifier": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "password": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "person",
+              "identifier"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
+          "name": "password.sign-in",
+          "summary": "Signs in with an identifier and a password: the person, and a new session",
+          "input": {
+            "type": "object",
+            "properties": {
+              "identifier": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "password": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "address": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              }
+            },
+            "required": [
+              "identifier",
+              "password"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        }
+      ],
+      "tools": [],
+      "views": [],
+      "routes": [
+        {
+          "path": "/signin/password",
+          "method": "GET, HEAD",
+          "methods": [
+            "GET",
+            "HEAD"
+          ],
+          "host": false,
+          "underName": false
+        },
+        {
+          "path": "/signin/password/change",
+          "method": "POST",
+          "methods": [
+            "POST"
+          ],
+          "host": false,
+          "underName": false
+        }
+      ],
+      "needs": [
+        {
+          "kind": "setting",
+          "path": "passwordSignIn.ignore",
+          "summary": "Characters an identifier is read without, wherever it's typed or set: `\".-/\"` for a CPF typed with its dots. Spaces never count, nor case.",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "passwordSignIn.limits",
+          "summary": "How much one identifier, and one caller, may try (`too_many` past it): tries at an identifier's password in 15 minutes (`tries`, 10), and all one caller asks in 15 minutes (`address`, 30).",
+          "required": false,
+          "type": "object"
+        }
+      ],
+      "emits": [],
+      "changes": [
+        "password_login.created",
+        "password_login.updated",
+        "password_login.deleted"
+      ],
+      "listens": [],
+      "processors": [],
+      "schedules": [
+        {
+          "name": "password.prune",
+          "when": "every 10m",
+          "summary": "Drops password sign-in's counters that are past",
+          "call": "password.prune",
+          "every": "10m"
+        }
+      ],
+      "powers": [
+        "guard"
+      ],
+      "resources": {
+        "provides": {
+          "passwordSignIn": {}
+        },
+        "reads": [
+          {
+            "kind": "passwordSignIn",
+            "found": [
+              "source"
+            ]
+          }
+        ]
+      },
+      "adapters": {},
+      "workers": [],
+      "check": null,
+      "settings": [
+        {
+          "kind": "passwordSignIn",
+          "type": "PasswordSignInSettings",
+          "inContract": true,
+          "fields": [
+            {
+              "name": "ignore",
+              "type": "string",
+              "optional": true,
+              "doc": "Characters an identifier is read without, wherever it's typed or set: `\".-/\"` for a CPF typed with its dots. Spaces never count, nor case.",
+              "secret": false
+            },
+            {
+              "name": "limits",
+              "type": "object",
+              "optional": true,
+              "doc": "How much one identifier, and one caller, may try (`too_many` past it): tries at an identifier's password in 15 minutes (`tries`, 10), and all one caller asks in 15 minutes (`address`, 30).",
+              "secret": false
+            }
+          ],
+          "doc": "The `passwordSignIn` resource: how people sign in by an identifier (a username, a badge number, a CPF) and a password."
+        }
+      ],
+      "listing": {
+        "listable": false,
+        "problems": [
+          "Route \"/signin/password\" isn't under /password-sign-in.",
+          "Route \"/signin/password/change\" isn't under /password-sign-in."
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "format": 1,
       "name": "routines",
       "summary": "Routines: a message sent to an agent on a schedule, in a space (\"every weekday at 9:00, ask @researcher for the news on X\").",
       "requires": [
@@ -14706,9 +15331,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -15526,9 +16151,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -15610,9 +16235,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -16060,9 +16685,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -16137,9 +16762,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -16223,7 +16848,8 @@
             "space",
             "role",
             "on",
-            "contacts"
+            "contacts",
+            "until"
           ],
           "schema": {
             "type": "object",
@@ -16245,6 +16871,9 @@
                 "enum": [
                   "read"
                 ]
+              },
+              "until": {
+                "type": "string"
               }
             },
             "required": [
@@ -16565,6 +17194,33 @@
           "helper": "inPerson"
         },
         {
+          "name": "member.expire",
+          "summary": "Ends a membership whose time is up",
+          "input": {
+            "type": "object",
+            "properties": {
+              "space": {
+                "type": "string"
+              },
+              "member": {
+                "type": "string"
+              },
+              "until": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "space",
+              "member",
+              "until"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
           "name": "member.remove",
           "summary": "Removes someone from a space",
           "input": {
@@ -16613,7 +17269,7 @@
         },
         {
           "name": "member.set",
-          "summary": "Makes someone a member of a space, with a role",
+          "summary": "Makes someone a member of a space, with a role, until a time if said",
           "input": {
             "type": "object",
             "properties": {
@@ -16646,6 +17302,10 @@
                 "enum": [
                   "read"
                 ]
+              },
+              "until": {
+                "type": "string",
+                "maxLength": 40
               }
             },
             "required": [
@@ -17423,9 +18083,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -17515,9 +18175,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -17531,6 +18191,10 @@
         },
         {
           "name": "invitations.home",
+          "place": "web"
+        },
+        {
+          "name": "invitations.rail",
           "place": "web"
         },
         {
@@ -17571,6 +18235,10 @@
         },
         {
           "name": "spaces.palette",
+          "place": "web"
+        },
+        {
+          "name": "spaces.rail",
           "place": "web"
         },
         {
@@ -17699,9 +18367,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -17925,9 +18593,9 @@
       "requires": [],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -18102,9 +18770,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [
         {
@@ -18494,9 +19162,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -18562,9 +19230,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -18817,9 +19485,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -18879,9 +19547,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [
         {
@@ -19136,9 +19804,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -19200,9 +19868,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -19919,9 +20587,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -19971,9 +20639,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -20026,9 +20694,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -20913,9 +21581,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -21437,9 +22105,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -21626,9 +22294,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -21646,7 +22314,15 @@
         }
       ],
       "routes": [],
-      "needs": [],
+      "needs": [
+        {
+          "kind": "setting",
+          "path": "shell.sidebar",
+          "summary": "How the sidebar starts on a wide screen, until the person chooses: `full` (whole) or `rail`.",
+          "required": false,
+          "type": "\"full\" | \"rail\""
+        }
+      ],
       "emits": [],
       "changes": [],
       "listens": [],
@@ -21675,6 +22351,12 @@
             ]
           },
           {
+            "kind": "shell",
+            "found": [
+              "source"
+            ]
+          },
+          {
             "kind": "sidebar",
             "found": [
               "source"
@@ -21691,7 +22373,23 @@
       "adapters": {},
       "workers": [],
       "check": null,
-      "settings": [],
+      "settings": [
+        {
+          "kind": "shell",
+          "type": "ShellSettings",
+          "inContract": true,
+          "fields": [
+            {
+              "name": "sidebar",
+              "type": "\"full\" | \"rail\"",
+              "optional": true,
+              "doc": "How the sidebar starts on a wide screen, until the person chooses: `full` (whole) or `rail`.",
+              "secret": false
+            }
+          ],
+          "doc": "The `shell` resource: the web shell's settings."
+        }
+      ],
       "listing": {
         "listable": true,
         "problems": [],
@@ -21707,9 +22405,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -21977,9 +22675,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [
         {
@@ -22081,6 +22779,7 @@
             "rate",
             "quiet",
             "language",
+            "fallback",
             "declared",
             "at"
           ],
@@ -22130,6 +22829,39 @@
                   "pt"
                 ]
               },
+              "fallback": {
+                "type": "object",
+                "properties": {
+                  "template": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    ]
+                  },
+                  "components": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "required": [
+                  "template"
+                ]
+              },
               "declared": {
                 "type": "boolean"
               },
@@ -22169,6 +22901,7 @@
             "space",
             "thread",
             "contact",
+            "wrote",
             "told",
             "tries",
             "since",
@@ -22199,6 +22932,9 @@
                 "type": "string"
               },
               "contact": {
+                "type": "string"
+              },
+              "wrote": {
                 "type": "string"
               },
               "told": {
@@ -22353,6 +23089,63 @@
             ],
             [
               "wamid",
+              "thread"
+            ]
+          ],
+          "queries": []
+        },
+        {
+          "name": "whatsapp_template",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "thread",
+            "template",
+            "name",
+            "language",
+            "components",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "template": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              },
+              "components": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread",
+              "template",
+              "name",
+              "language",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": false,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [
+            [
               "thread"
             ]
           ],
@@ -22748,6 +23541,52 @@
                   "en",
                   "pt"
                 ]
+              },
+              "fallback": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "template": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "params": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "maxLength": 1024
+                            },
+                            "maxItems": 100
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string",
+                              "maxLength": 1024
+                            }
+                          }
+                        ]
+                      },
+                      "components": {
+                        "type": "array",
+                        "items": {
+                          "type": "object"
+                        },
+                        "maxItems": 20
+                      }
+                    },
+                    "required": [
+                      "template"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
               }
             },
             "required": [
@@ -22767,6 +23606,74 @@
             "maintenance": "no"
           },
           "helper": "inPerson"
+        },
+        {
+          "name": "whatsapp.template",
+          "summary": "Sends a WhatsApp template message in a WhatsApp chat",
+          "input": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "template": {
+                "type": "string",
+                "minLength": 1
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "maxItems": 100
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 1024
+                    }
+                  }
+                ]
+              },
+              "components": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "maxItems": 20
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "from": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "thread",
+              "template"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
         },
         {
           "name": "whatsapp.unlink",
@@ -22935,6 +23842,34 @@
           "summary": "The number as people dial it, and the business's name, as shown.",
           "required": false,
           "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "whatsapp.<name>.fallback",
+          "summary": "The template that goes in a message's place once Meta's 24 hours since the phone last wrote are past: one of `whatsappTemplates`, whose parameters may say `{name}` (the phone's WhatsApp name) and `{text}` (what the message said). Without it, that message stays in the app (`window_closed`).",
+          "required": false,
+          "type": "TemplateSend"
+        },
+        {
+          "kind": "setting",
+          "path": "whatsappTemplates.<name>.name",
+          "summary": "Meta's name for it, as approved: `order_update`.",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "whatsappTemplates.<name>.language",
+          "summary": "Its language, as Meta's code says it: `pt_BR`, `en_US`.",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "kind": "setting",
+          "path": "whatsappTemplates.<name>.body",
+          "summary": "Its body, as approved, its parameters where they go: numbered (`{{1}}`, `{{2}}`…) or named (`{{customer}}`). What chats show of it, filled.",
+          "required": true,
+          "type": "string"
         }
       ],
       "emits": [
@@ -23033,19 +23968,7 @@
           "where": {
             "doc.private": {
               "$ne": true
-            },
-            "$or": [
-              {
-                "doc.turn": {
-                  "$exists": true
-                }
-              },
-              {
-                "doc.hops": {
-                  "$gte": 1
-                }
-              }
-            ]
+            }
           },
           "keyed": true
         },
@@ -23079,7 +24002,8 @@
           "shared": {
             "whatsapp_number": {}
           },
-          "whatsapp": {}
+          "whatsapp": {},
+          "whatsappTemplates": {}
         },
         "reads": [
           {
@@ -23106,6 +24030,13 @@
               "check",
               "source"
             ]
+          },
+          {
+            "kind": "whatsappTemplates",
+            "found": [
+              "check",
+              "source"
+            ]
           }
         ]
       },
@@ -23114,7 +24045,8 @@
       "check": {
         "reads": [
           "links",
-          "whatsapp"
+          "whatsapp",
+          "whatsappTemplates"
         ],
         "asks": []
       },
@@ -23214,10 +24146,47 @@
               "optional": true,
               "doc": "The number as people dial it, and the business's name, as shown.",
               "secret": false
+            },
+            {
+              "name": "fallback",
+              "type": "TemplateSend",
+              "optional": true,
+              "doc": "The template that goes in a message's place once Meta's 24 hours since the phone last wrote are past: one of `whatsappTemplates`, whose parameters may say `{name}` (the phone's WhatsApp name) and `{text}` (what the message said). Without it, that message stays in the app (`window_closed`).",
+              "secret": false
             }
           ],
           "each": true,
           "doc": "The `whatsapp` resource: the declared numbers, by name."
+        },
+        {
+          "kind": "whatsappTemplates",
+          "type": "WhatsAppTemplatesSettings",
+          "inContract": true,
+          "fields": [
+            {
+              "name": "name",
+              "type": "string",
+              "optional": false,
+              "doc": "Meta's name for it, as approved: `order_update`.",
+              "secret": false
+            },
+            {
+              "name": "language",
+              "type": "string",
+              "optional": false,
+              "doc": "Its language, as Meta's code says it: `pt_BR`, `en_US`.",
+              "secret": false
+            },
+            {
+              "name": "body",
+              "type": "string",
+              "optional": false,
+              "doc": "Its body, as approved, its parameters where they go: numbered (`{{1}}`, `{{2}}`…) or named (`{{customer}}`). What chats show of it, filled.",
+              "secret": false
+            }
+          ],
+          "each": true,
+          "doc": "The `whatsappTemplates` resource: the template messages the app's numbers send, by the app's name for each (`resources.whatsappTemplates.<name>`)."
         }
       ],
       "listing": {
@@ -23238,9 +24207,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.47"
+        "version": "1.0.0-rc.50"
       },
-      "runtime": "1.0.0-rc.47",
+      "runtime": "1.0.0-rc.50",
       "layer": "standard",
       "keeps": [],
       "indexes": [],

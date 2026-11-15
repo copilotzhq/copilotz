@@ -41,6 +41,27 @@ const numberSchema = {
     quiet: { type: "number" },
     /** What customers are told in, when their message can't go on: `en`, `pt`. */
     language: { type: "string", enum: ["en", "pt"] },
+    /**
+     * The template that goes in a message's place once Meta's 24 hours since
+     * the phone last wrote are past: one the app declares
+     * (`whatsappTemplates`), its parameters saying `{name}` and `{text}` where
+     * the phone's WhatsApp name and the message's words go. Without it, that
+     * message stays in the app (`window_closed`).
+     */
+    fallback: {
+      type: "object",
+      properties: {
+        template: { type: "string" },
+        params: {
+          anyOf: [
+            { type: "array", items: { type: "string" } },
+            { type: "object", additionalProperties: { type: "string" } },
+          ],
+        },
+        components: { type: "array", items: { type: "object" } },
+      },
+      required: ["template"],
+    },
     /** The app's own line (its settings'): kept as they say, changed only there. */
     declared: { type: "boolean" },
     at: { type: "string" },

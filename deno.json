@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "1.0.0-rc.49",
+  "version": "1.0.0-rc.50",
   "exports": {
     ".": "./runtime/mod.ts",
     "./stores/memory": "./stores/memory/mod.ts",
@@ -53,6 +53,7 @@
     "./plugins/interfaces/voice": "./plugins/interfaces/voice/mod.ts",
     "./web": "./hosts/web/mod.ts",
     "./web/words": "./hosts/web/words.ts",
+    "./web/pt-br": "./hosts/web/pt-br/mod.ts",
     "./web/server": "./hosts/web/server.ts",
     "./web/widget": "./hosts/web/widget.tsx",
     "./web/theme": "./hosts/web/theme/css.ts",

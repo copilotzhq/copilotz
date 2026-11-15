@@ -2,7 +2,8 @@
 
 Every word Copilotz's web front ends show, by key, with its English. An app changes any of
 them with a `words` resource (see the README, "Words"). `{name}` is a blank; a phrase in
-braces `{one, other}` has plural forms, chosen by the `{count}` blank.
+braces `{one, other}` has plural forms, chosen by the `{count}` blank. Every one of them is
+said in Brazilian Portuguese by `ptBR`, from `copilotz/web/pt-br` (hosts/web/pt-br/).
 
 Generated: `deno run -A hosts/web/tests/keys.ts`.
 
@@ -47,6 +48,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.cantRecordHere` | This browser can't record audio here. |
 | `chat.chatMore` | This chat: more |
 | `chat.chats` | Chats |
+| `chat.chatsWaiting` | one: {count} chat waiting on you / other: {count} chats waiting on you |
 | `chat.close` | Close |
 | `chat.connectionLostSr` | Connection lost. Trying again. |
 | `chat.conversation` | Conversation |
@@ -344,12 +346,15 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `shell.cancel` | Cancel |
 | `shell.close` | Close |
 | `shell.closeSidebar` | Close sidebar |
+| `shell.collapseSidebar` | Collapse sidebar |
+| `shell.expandSidebar` | Expand sidebar |
 | `shell.general` | General |
 | `shell.goHome` | Go home |
 | `shell.hidePanel` | Hide the panel |
 | `shell.hidePanelTitled` | Hide the {title} panel |
 | `shell.homeOf` | {brand}: home |
 | `shell.keysPanel` | side panel toggle |
+| `shell.keysSidebar` | sidebar rail fold unfold hide show toggle |
 | `shell.nameAbout` | How people and agents here see you. |
 | `shell.nameEmpty` | Leave it empty to go by your email. |
 | `shell.nameLabel` | Name |
@@ -453,6 +458,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `spaces.hideWhat` | Hide {name}'s {what} |
 | `spaces.id` | Id |
 | `spaces.invitations` | Invitations |
+| `spaces.invitationsWaiting` | one: {count} invitation to a space / other: {count} invitations to spaces |
 | `spaces.invitationTo` | Invitation to {name} |
 | `spaces.invite` | Invite |
 | `spaces.inviteAbout` | They'll see what's in it (its chats, memories and computers) and work with its agents. |

@@ -3,7 +3,8 @@
  * store's writer, so none may keep it for long: an op that fails ends its
  * transaction, a write the rules refuse before it gets there included, and
  * one left idle is rolled back. Either way it's closed to its job, which
- * can't write on in it as if nothing had happened.
+ * can't write on in it as if nothing had happened. Idle is waiting on its
+ * executor: an op that is slow, or waits for the writer, isn't.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
@@ -37,6 +38,8 @@ const plugin = definePlugin({
     }),
     // No rule: anyone's code writes it.
     tally: defineCollection({ schema: object }),
+    // What a slowed store takes SLOW_MS to read in a transaction.
+    slow: defineCollection({ schema: object }),
   },
   actions: {
     // A note of its own, and a read, so the transaction is held open; then a note for `owner`,
@@ -91,6 +94,27 @@ const plugin = definePlugin({
           await notes.findOne({ _id: "any" });
         }),
     }),
+    // A note, an op that takes longer than the idle time, and another note.
+    "note.slow": defineAction({
+      input: object,
+      run: (ctx) =>
+        ctx.transaction(async (tx) => {
+          const notes = tx.db.collection("note");
+          await notes.insertOne({ owner: "slow" });
+          await tx.db.collection("slow").findOne({ _id: "any" });
+          await notes.insertOne({ owner: "slow" });
+        }),
+    }),
+    // A tally bumped and read in one transaction: held open, so it waits for the writer.
+    "tally.held": defineAction({
+      input: object,
+      run: (ctx) =>
+        ctx.transaction(async (tx) => {
+          const tally = tx.db.collection<{ n: number }>("tally");
+          await tally.updateOne({ _id: "n" }, { $inc: { n: 1 } }, { upsert: true });
+          return (await tally.findOne({ _id: "n" }))?.n;
+        }),
+    }),
     "tally.bump": defineAction({
       input: object,
       run: (ctx) =>
@@ -101,6 +125,23 @@ const plugin = definePlugin({
   guard: (actor, { collection }) => collection === "note" ? { owner: actor.id } : undefined,
 });
 
+/** How long a slowed store reads the `slow` collection in a transaction: past the idle time. */
+const SLOW_MS = 5_500;
+
+/** A store whose transactions take SLOW_MS to read the `slow` collection. */
+const slowed = (store: Store): Store => ({
+  ...store,
+  transaction: (epoch, work, options) =>
+    store.transaction(epoch, (tx) =>
+      work({
+        ...tx,
+        findOne: async (collection, filter, found) => {
+          if (collection === "slow") await new Promise((done) => setTimeout(done, SLOW_MS));
+          return await tx.findOne(collection, filter, found);
+        },
+      }), options),
+});
+
 const stores: Record<string, () => Store | Promise<Store>> = {
   memory: memoryStore,
   sqlite: () => sqliteStore({ path: tempFile(".sqlite") }),
@@ -109,9 +150,14 @@ const stores: Record<string, () => Store | Promise<Store>> = {
 
 type Run = { runtime: Runtime; store: Store; outcomes: () => unknown[] };
 
+/** Stores a test runs on only when it names them. */
+const more: Record<string, () => Store | Promise<Store>> = {
+  "memory, slowed": () => slowed(memoryStore()),
+};
+
 const each = (name: string, fn: (run: Run) => Promise<void>, only?: string[]) => {
-  for (const [kind, make] of Object.entries(stores)) {
-    if (only && !only.includes(kind)) continue;
+  for (const [kind, make] of Object.entries({ ...stores, ...more })) {
+    if (only ? !only.includes(kind) : kind in more) continue;
     test(`${kind}: ${name}`, async () => {
       begun = Promise.withResolvers();
       go = Promise.withResolvers();
@@ -180,6 +226,22 @@ for (const fail of ["first", "refused", "duplicate"]) {
     },
   );
 }
+
+each(
+  "an op slower than the idle time, and one waiting that long for the writer, aren't idle: both commit",
+  async ({ runtime, store, outcomes }) => {
+    const slow = runtime.call("note.slow", {}).then(() => "done", (error) => error.message);
+    // Sent while the slow one holds the writer: it waits there, past the idle time.
+    await new Promise((done) => setTimeout(done, 100));
+    const waited = await timed(async () => assertEquals(await runtime.call("tally.held", {}), 1));
+    assertEquals(await slow, "done");
+    assert(waited > 5_000, `The held tally waited only ${Math.round(waited)} ms`);
+    assertEquals((await store.find("note", {})).length, 2);
+    // Both committed: none rolled back as idle.
+    assertEquals(outcomes(), ["commit"]);
+  },
+  ["memory, slowed"],
+);
 
 each(
   "a transaction left idle is rolled back after 5 s, freeing the writer, and closed to its job",

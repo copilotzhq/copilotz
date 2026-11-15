@@ -13,8 +13,8 @@ import { defineAction, failure } from "../../../../runtime/mod.ts";
 import type { Code } from "../collections/code.ts";
 import type { Login } from "../collections/login.ts";
 import { issue } from "../shared/codes.ts";
-import { ADDRESS, EMAIL, emailIn, PASSWORD } from "../shared/inputs.ts";
-import { aSend, aTry } from "../shared/limits.ts";
+import { ADDRESS, EMAIL, emailIn, HOST, PASSWORD } from "../shared/inputs.ts";
+import { aSend, aTry, byEmail } from "../shared/limits.ts";
 import { mail } from "../shared/mail.ts";
 import { hashPassword, noPassword, stale, verifyPassword } from "../shared/password.ts";
 import { sessionFor } from "../shared/people.ts";
@@ -27,13 +27,13 @@ export const signInAction = defineAction({
   record: false,
   input: {
     type: "object",
-    properties: { email: EMAIL, password: PASSWORD, address: ADDRESS },
+    properties: { email: EMAIL, password: PASSWORD, address: ADDRESS, host: HOST },
     required: ["email", "password"],
     additionalProperties: false,
   },
   run: async (ctx, input) => {
     const email = emailIn(input.email);
-    await aTry(ctx, { email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address }, byEmail(ctx));
     const db = ctx.as().db;
     const logins = db.collection<Login>("email_login");
     const login = await logins.findOne({ _id: email });
@@ -53,11 +53,14 @@ export const signInAction = defineAction({
       .find({ email, purpose: "verify" }).sort({ at: -1 }).toArray();
     for (const signUp of waiting) {
       if (!signUp.pending || !await verifyPassword(input.password, signUp.pending)) continue;
-      const room = await aSend(ctx, { email }).then(() => true, (error) => {
+      const room = await aSend(ctx, { account: email }).then(() => true, (error) => {
         if ((error as { code?: string }).code === "too_many") return false;
         throw error;
       });
-      if (room) await mail(ctx, "verify", email, { code: await issue(ctx, linksFor(ctx), signUp) });
+      if (room) {
+        const code = await issue(ctx, linksFor(ctx), signUp);
+        await mail(ctx, "verify", email, { code }, input.host);
+      }
       throw failure(
         "unverified",
         room

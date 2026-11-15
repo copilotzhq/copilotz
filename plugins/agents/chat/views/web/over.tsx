@@ -11,12 +11,13 @@
  */
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { LazyView } from "../../../../../hosts/web/mod.ts";
-import type { ConversationView } from "../../shared/types.ts";
+
 import { held } from "./held.ts";
 
 export function Over(
   { entries, thread, space, side = [], live }: {
-    entries: ConversationView[];
+    /** The `conversation` resource's entries that have a View. */
+    entries: { view: string }[];
     thread: string;
     space?: string;
     /** The conversation's side threads. */

@@ -1,8 +1,10 @@
 /**
  * Memberships: who (a person, an agent, or another space) is a member of a
  * space, with what role. A space that's a member of another draws on it:
- * its members reach the other space too, with the role along that path.
- * They're documents, so every change is an event and reads are cached.
+ * its members reach the other space too, with the role along that path. One
+ * may last until a time (`until`): past it, reach ignores it, and a timer
+ * removes it. They're documents, so every change is an event and reads are
+ * cached.
  */
 import { defineCollection, type Infer } from "../../../../runtime/mod.ts";
 
@@ -20,6 +22,8 @@ const memberSchema = {
      * reference a line's customers may see (a catalog, policies).
      */
     contacts: { type: "string", enum: ["read"] },
+    /** When it ends (ISO 8601): `member.set`'s `until`. None, it lasts. */
+    until: { type: "string" },
   },
   required: ["member", "space", "role"],
 } as const;

@@ -4,7 +4,12 @@
  * messages' blanks filled.
  */
 import { linksOf, type LinksSettings, type Resources } from "../../../../runtime/mod.ts";
-import type { EmailSettings, EmailSignInSettings, EmailWords } from "../contract.ts";
+import type {
+  EmailSettings,
+  EmailSignInSettings,
+  EmailWords,
+  PasswordSignInSettings,
+} from "../contract.ts";
 
 /** How the app sends email: the `email` resource. */
 export const emailOf = (ctx: { resources: Resources }): EmailSettings =>
@@ -13,6 +18,10 @@ export const emailOf = (ctx: { resources: Resources }): EmailSettings =>
 /** What email sign-in says and allows: the `emailSignIn` resource. */
 export const signInOf = (ctx: { resources: Resources }): EmailSignInSettings =>
   ctx.resources.emailSignIn as EmailSignInSettings;
+
+/** How people sign in by an identifier: the `passwordSignIn` resource. */
+export const passwordOf = (ctx: { resources: Resources }): PasswordSignInSettings =>
+  (ctx.resources.passwordSignIn ?? {}) as PasswordSignInSettings;
 
 /** The app's `links` (its origin, and the secret codes are kept under): checked at start. */
 export const linksFor = (ctx: { resources: Resources }): LinksSettings => {

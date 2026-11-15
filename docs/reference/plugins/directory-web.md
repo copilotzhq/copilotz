@@ -28,8 +28,8 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `console`, `org`, `orgs.overlay`, `orgs.switcher`.
-- **What it adds to resources:** `orgs` (`overlay`, `switcher`, `use`).
+- **On the web:** `console`, `org`, `orgs.overlay`, `orgs.rail`, `orgs.switcher`.
+- **What it adds to resources:** `orgs` (`overlay`, `rail`, `switcher`, `use`).
 
 ## What it needs
 
@@ -39,7 +39,7 @@ Nothing to set. It reads `orgSettings`, resource kinds the app and other plugins
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It ships in a package of its own, `@copilotz/directory@1.0.0-rc.47`, for `copilotz` `1.0.0-rc.47`:
+It ships in a package of its own, `@copilotz/directory@1.0.0-rc.50`, for `copilotz` `1.0.0-rc.50`:
 install it beside `copilotz`.
 
 ## Listing

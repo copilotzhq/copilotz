@@ -53,7 +53,8 @@ export async function covers(
 ): Promise<boolean> {
   if (!narrows(actor) || whereOf(actor) === undefined) return true;
   for (const [key, held] of await reachOf(actor, ctx)) {
-    if (key === ORG || cover.has(key) || (held.home && cover.has(held.home))) continue;
+    // What the public reads, everyone there reads too.
+    if (key === ORG || held.open || cover.has(key) || (held.home && cover.has(held.home))) continue;
     return false;
   }
   return true;

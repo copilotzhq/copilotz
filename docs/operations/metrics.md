@@ -61,7 +61,8 @@ The runtime:
 | `copilotz.elevated.ops`         | ops trusted code made beyond the actor it acted for, as the system or a named grant, by grant  |
 
 `copilotz.transaction.duration` is new in 1.0.0-rc.31. A transaction's outcome is `commit`, `abort`,
-`idle` or `error`. A transaction with no op for 5 seconds rolls back as `idle`.
+`idle` or `error`. A transaction left waiting on its code for 5 seconds, from an answer to its next
+op, rolls back as `idle`.
 
 `copilotz.elevated.ops` is new in 1.0.0-rc.32. It counts the ops code makes past whom it acts for:
 `ctx.as()` counts as `grant: "system"`, and `ctx.as(grant("chat.hand-over"))` as

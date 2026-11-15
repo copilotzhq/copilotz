@@ -7,7 +7,8 @@
  * listed apart, folded under Archived. An org's owners and admins reach
  * every space in it: those they're in show as anyone's do, and the rest of
  * the org's (other people's Personal spaces among them) apart, folded under
- * "Across the org".
+ * "Across the org". On the rail, the sidebar folded (kind `spaces.rail`),
+ * the spaces in use that are yours, each its face, named beside it.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -15,7 +16,7 @@ import { go, Skeleton } from "../../../../../hosts/web/mod.ts";
 import type { Member, Reached, SpaceSidebar } from "../../contract.ts";
 import { STYLE } from "./style.ts";
 import { spacePath } from "./tabs.ts";
-import { SpaceTree } from "./tree.tsx";
+import { SpaceRail, SpaceTree } from "./tree.tsx";
 import { apart, ownersOf } from "./who.ts";
 import { namesIn } from "../../shared/names.ts";
 
@@ -54,6 +55,26 @@ export const spacesView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode =
           const { space } = await ctx.call<{ space: string }>("space.create", { name });
           go(spacePath(space));
         }}
+      />
+    </>
+  );
+};
+
+export const spacesRailView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
+  const spaces = ctx.db.collection("space").query<Reached[]>("reached", {}).value;
+  const me = ctx.viewer?.name ?? "";
+  const mine = ctx.db.collection<Member>("member").find({ member: `person:${me}` }).value;
+  if (spaces === undefined || mine === undefined) return null;
+  return (
+    <>
+      <style href="spaces-web" precedence="copilotz">{STYLE}</style>
+      <SpaceRail
+        spaces={apart(spaces).active}
+        joined={mine}
+        here={typeof ctx.hints.in === "string" ? ctx.hints.in : undefined}
+        path={typeof ctx.hints.path === "string" ? ctx.hints.path : undefined}
+        viewer={me}
+        call={ctx.call}
       />
     </>
   );

@@ -69,6 +69,8 @@ credits' composer note imported the directory's browser half (`useOrgs`, `asStaf
 - **The web shell's `orgs` slot,** a resource (its shape, `OrgsSlot`, in the shell's contract):
   - `switcher`, a View at the top of the sidebar beside the app's mark (in place of its whole logo),
     with the sidebar's hints, drawn once `use` answers;
+  - `rail`, the switcher on the rail (the sidebar folded): a View of one `RailItem`, the org's face
+    under the app's mark, opening the same choices, read only while the rail shows;
   - `overlay`, a View drawn once beside every page, outside the sidebar (a drawer on a phone):
     making an org, going into one, and the line along the top while in one as staff;
   - `use`, a React hook the frame calls on every draw: what the shell's own parts list (the person's

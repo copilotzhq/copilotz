@@ -45,6 +45,11 @@ const shell = {
   organizations: "Organizations",
   inAsStaffTitle: "You're in {name} as platform staff: what you do is on its record",
   switchOrg: "{name}: switch organization",
+  // …on the rail, the sidebar folded, with invitations waiting
+  switchOrgWaiting: {
+    one: "{name}: switch organization ({count} invitation)",
+    other: "{name}: switch organization ({count} invitations)",
+  },
   invitationsCount: "{count} invitations",
   signedInAs: "Signed in as {who}",
   inAsStaff: "You're in {name} as staff. What you do here is on its record.",

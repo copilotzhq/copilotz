@@ -27,11 +27,12 @@ import {
   codeIn,
   EMAIL,
   emailIn,
+  HOST,
   NAME,
   PASSWORD,
   passwordIn,
 } from "../shared/inputs.ts";
-import { aSend, aTry } from "../shared/limits.ts";
+import { aSend, aTry, byEmail } from "../shared/limits.ts";
 import { mail } from "../shared/mail.ts";
 import { hashPassword } from "../shared/password.ts";
 import { keepPassword, keepPerson, personFor, sessionFor } from "../shared/people.ts";
@@ -50,7 +51,7 @@ export const signUpAction = defineAction({
   record: false,
   input: {
     type: "object",
-    properties: { email: EMAIL, password: PASSWORD, name: NAME, address: ADDRESS },
+    properties: { email: EMAIL, password: PASSWORD, name: NAME, address: ADDRESS, host: HOST },
     required: ["email", "password"],
     additionalProperties: false,
   },
@@ -60,14 +61,14 @@ export const signUpAction = defineAction({
     }
     const email = emailIn(input.email);
     const password = passwordIn(input.password);
-    await aSend(ctx, { email, address: input.address });
+    await aSend(ctx, { account: email, address: input.address });
     const links = linksFor(ctx);
     // Hashed either way, so an address with an account answers as soon as one without.
     const pending = await hashPassword(password);
     const db = ctx.as().db;
     const login = await db.collection<Login>("email_login").findOne({ _id: email });
     if (login?.hash && login.verified) {
-      await mail(ctx, "exists", email);
+      await mail(ctx, "exists", email, {}, input.host);
       return { email };
     }
     const codes = db.collection<Code>("email_code");
@@ -88,7 +89,7 @@ export const signUpAction = defineAction({
       until: new Date(now + WAITS).toISOString(),
       at: new Date(now).toISOString(),
     });
-    await mail(ctx, "verify", email, { code });
+    await mail(ctx, "verify", email, { code }, input.host);
     return { email };
   },
 });
@@ -104,7 +105,7 @@ export const verifyAction = defineAction({
   },
   run: async (ctx, input) => {
     const email = emailIn(input.email);
-    await aTry(ctx, { email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address }, byEmail(ctx));
     const waiting = await redeem(ctx, linksFor(ctx), "verify", email, codeIn(input.code));
     if (!waiting?.pending) throw failure("invalid", WRONG_CODE, { public: true });
     const login = await ctx.as().db.collection<Login>("email_login").findOne({ _id: email });

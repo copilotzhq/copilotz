@@ -7,7 +7,8 @@
  * - **The switcher** (`orgs.switcher`), at the top of the sidebar beside the
  *   app's mark: the org you're in and your standing there; opened, your orgs
  *   (Personal first), invitations to join or decline in place, a new org, the
- *   org's settings, and for staff, every org.
+ *   org's settings, and for staff, every org. On the rail, the sidebar folded
+ *   (`orgs.rail`), the org's face under the app's mark, opening the same.
  * - **Beside every page** (`orgs.overlay`): the dialog that makes an org, the
  *   short transition while the page goes into another and the word once it's
  *   there, and, while in an org as platform staff, a line along the top.
@@ -31,7 +32,12 @@
 import { definePlugin, type Plugin } from "copilotz";
 import { consoleView } from "./views/web/console.tsx";
 import { orgView } from "./views/web/org.tsx";
-import { overlayView, switcherView, useShellOrgs } from "./views/web/switcher.tsx";
+import {
+  overlayView,
+  switcherRailView,
+  switcherView,
+  useShellOrgs,
+} from "./views/web/switcher.tsx";
 
 export * from "./views/web/orgs.ts";
 export { openNewOrg, useShellOrgs } from "./views/web/switcher.tsx";
@@ -41,12 +47,18 @@ export const directoryWeb: Plugin = definePlugin({
   requires: ["web-shell"],
   views: {
     "orgs.switcher": switcherView,
+    "orgs.rail": switcherRailView,
     "orgs.overlay": overlayView,
     org: orgView,
     console: consoleView,
   },
   resources: {
-    orgs: { switcher: "orgs.switcher", overlay: "orgs.overlay", use: useShellOrgs },
+    orgs: {
+      switcher: "orgs.switcher",
+      rail: "orgs.rail",
+      overlay: "orgs.overlay",
+      use: useShellOrgs,
+    },
   },
 });
 

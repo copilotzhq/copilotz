@@ -1,7 +1,8 @@
 /**
  * Calls between plugins: an unrecorded Action runs inline in its caller,
  * hands back whatever it returns (a stream too), and queries, Views and
- * startup checks may call it, read-only.
+ * startup checks may call it, read-only. Code asks what the app declares
+ * (`ctx.describe()`) before a call another plugin may not offer.
  */
 import { assertEquals, assertRejects } from "@std/assert";
 import {
@@ -158,4 +159,64 @@ test("a startup check asks another plugin's Actions", async () => {
     Error,
     "words: no words",
   );
+});
+
+test("code asks what the app declares before a call another plugin may not offer", async () => {
+  // Calls `words.upper` when the app has it; without it, says so, never trying.
+  const optional = definePlugin({
+    name: "optional",
+    actions: {
+      "optional.shout": defineAction({
+        input: { type: "object", properties: { word: { type: "string" } }, required: ["word"] },
+        run: async (ctx, input) => {
+          const declared = ctx.describe();
+          return {
+            word: declared.actions["words.upper"]
+              ? await ctx.call<string>("words.upper", input)
+              : input.word,
+            collections: Object.keys(declared.collections).sort(),
+          };
+        },
+      }),
+      // Unrecorded, called from a query: it asks too.
+      "optional.has": defineAction({
+        record: false,
+        input: { type: "object", properties: { action: { type: "string" } }, required: ["action"] },
+        run: (ctx, input) => input.action in ctx.describe().actions,
+      }),
+    },
+    collections: {
+      ask: {
+        schema: { type: "object" },
+        queries: {
+          has: (_asks, params: { action: string }, ctx) => ctx.call("optional.has", params),
+        },
+      },
+    },
+  });
+  const both = await createRuntime({ store: memoryStore(), plugins: [words, optional] });
+  try {
+    assertEquals(await both.call("optional.shout", { word: "hey" }), {
+      word: "HEY",
+      collections: ["ask", "word"],
+    });
+    assertEquals(await both.query("ask.has", { action: "words.upper" }), true);
+    // The same the runtime says to hosts.
+    assertEquals(both.describe().actions["words.upper"], {
+      input: words.actions!["words.upper"].input,
+      record: false,
+    });
+  } finally {
+    await both.close();
+  }
+  const alone = await createRuntime({ store: memoryStore(), plugins: [optional] });
+  try {
+    assertEquals(await alone.call("optional.shout", { word: "hey" }), {
+      word: "hey",
+      collections: ["ask"],
+    });
+    assertEquals(await alone.query("ask.has", { action: "words.upper" }), false);
+  } finally {
+    await alone.close();
+  }
 });

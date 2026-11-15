@@ -1,3 +1,133 @@
+## 1.0.0-rc.50 — 2026-11-15
+
+What rebuilding real systems on rc.49 asked of Copilotz: a retail point of sale (Open Source Point
+of Sale 3.3.9) and two client systems. Each gap was checked against the code first. What already
+existed is now documented where people look; what didn't is here.
+
+**Breaking, in small ways:**
+
+- **REST answers an app's own failure with a 4xx, not a 500.** `failure(code, message)` with a code
+  of the app's (`linha_lotada`) answers its code's status, or 422, with its code, and its words as
+  the caller may be told them. `failure(code, message, { status })` picks the status (400 to 599).
+  Errors with no code, and the runtime's own faults, stay a silent 500. Plugin routes keep a 500, so
+  webhook providers still retry.
+- **`TransactionScope` has `call`, and `Context` has `describe()`.** Only code that builds a fake
+  scope or context in its tests has to add them.
+- **What the public reads, everyone reads.** A space with the public as a viewer is read, read-only,
+  by people, contacts, agents and keys that aren't its members (they used to see less than someone
+  signed out). It isn't listed among their spaces.
+- **WhatsApp: what people say to a customer reaches their phone** (see below). A message said to a
+  whole WhatsApp chat (`to: []`) by a person now goes to the phone. In a chat the desk took over,
+  `chat.say` without `to` goes to the last person who wrote there, so app code says
+  `to: ["contact:<id>"]`.
+- `ConversationView.view` is optional (an entry can be a `beforeSend` alone).
+
+**Another plugin's work in the same commit.** An Action declared `atomic: true` (it only reads,
+writes, emits and schedules) can be called inside another plugin's transaction:
+`tx.call(action,
+input)`. Its reads see the transaction's writes; its writes, events and timers
+commit with it, or not at all; its own `ctx.transaction` joins; it may call only other atomic
+Actions; a stream, a fetch or a worker inside it throws. A recorded one's `action.started` and
+`action.completed` commit with the writes, so a retry after a rollback runs it again and a retry
+after a commit answers from the record. Each op is on record as its own Action's, with its own
+actor. A sale, its payments, its stock, a gift card's debit and reward points are one commit now.
+When an effect may come later, the outbox stays the pattern: emit in the transaction, and an
+idempotent Processor reacts (docs/architecture/the-owner.md).
+
+**A transaction waits for a slow op.** The 5 seconds after which a held transaction rolls back now
+count only while it waits on its own code: an op slower than 5 seconds, or one waiting for the
+store's writer behind another transaction, no longer closes its own transaction ("The transaction is
+closed.").
+
+**Code can see what the app declares:** `ctx.describe()`, the same as `runtime.describe()`
+(collections and their schemas, Actions, Views, resources). An optional call to another plugin's
+Action asks `ctx.describe().actions[name]` first.
+
+**Text search in filters: `$regex`.** `{ name: { $regex: "joão", $options: "i" } }` works in every
+filter (reads, counts, `$match`, updates and deletes, rules, Processors' `where`, REST and the
+browser's reads) and on every store alike. It's the part of JavaScript's patterns every store reads
+the same way (classes, groups, `|`, `^` and `$`, quantifiers up to 255; `i` folds case as JavaScript
+does, so `joão` matches `JOÃO`; `s`), matched in linear time, so a caller's pattern can't stall the
+app; backreferences, lookarounds and `\b` are refused as `invalid`. Escape typed text with
+`RegExp.escape`. Accents aren't folded: search a folded copy of the field (stores/README.md).
+
+**Chat and history read by indexes.** A thread's messages, its summaries, a space's recent chats,
+the questions waiting on someone and an agent's replies elsewhere are read by indexes declared on
+`message`, `thread`, `file` and `summary`: about 10 to 40 times faster at 30,000 messages. SQL
+stores now look an `_id` up by its key wherever a filter has it (inside `$and` and `$or`, as a
+person's reads come), and PostgreSQL's updates and deletes use declared indexes as reads do. A
+database made before builds the new indexes when it starts (on PostgreSQL, writes wait for them).
+`message.questions` takes `threads`, and finds questions older than the latest 20 too.
+
+**Sign-in by username and password.** `passwordSignIn` (from `copilotz/plugins/access`), for staff
+and back-office apps whose accounts an admin or an import makes: `password.set`, `password.import`
+and `password.remove` (trusted code's), `password.sign-in` and `password.change`, routes under
+`/signin/password`. An identifier is a username, a badge number or a CPF: read without spaces or
+case, and without what `ignore` lists (`".-/"`). It shares email sign-in's hashing, limits and
+sessions, and the sign-in page offers it.
+
+- **bcrypt hashes move in.** `$2a$`, `$2b$` and `$2y$` hashes (costs 4 to 15) verify through
+  `email.import` and `password.import`, and are hashed again Copilotz's way at the first sign-in.
+  Blowfish is in TypeScript, checked against published vectors; no new dependency.
+- **Sign-in by a code.** `emailSignIn.signInByCode`: "Email me a code instead" signs in with a
+  6-digit code (`email.code`, `email.enter`), and confirms the address.
+- **Per brand.** `emailSignIn.hosts` says, by the host the page was served on, the app's name, its
+  sender, its messages' words and where its links go; `email.invite` takes the host.
+
+**Email over SMTP.** The `email` resource's `adapter: "smtp"`
+(`smtp: { host, port, secure,
+starttls, user, password }`) sends over TLS from the start or by
+STARTTLS, on Node, Deno and Bun (not workerd). `email.send` takes `from` (the resource's, or one its
+`senders` allow), `replyTo` and `attachments` (`{ filename, contentType, content }`, base64, up to
+10 and 10 MiB), through Resend too.
+
+**Memberships until a time.** `member.set` takes `until`: reach ignores the membership after it, and
+a timer removes it then. Trusted code may seat a person directly with `member.set`.
+
+**Secrets, documented.** A collection's `private` fields never reach the log or an actor's reads:
+that's where a secret goes. Settings kept as keys and values keep their secrets in a collection of
+their own, with `private: ["value"]`.
+
+**The web.**
+
+- **The sidebar folds to a rail.** The button at its top, ⌘B (Ctrl+B elsewhere) or "Collapse
+  sidebar" in the palette folds it to a rail of icons, and back; the browser keeps it as each person
+  left it, and phones keep the drawer. A `sidebar` entry may name a `rail` View; chat, spaces and
+  invitations have one, and the org switcher sits on the rail (`OrgsSlot.rail`; the directory's
+  `orgs.rail`). The `shell` resource (`{ sidebar: "rail" }`) starts it folded. The toolkit has
+  `RailItem`, `side: "end"` on tooltips and popovers, and `shortcut` on `IconButton`.
+- **Brazilian Portuguese out of the box.** `ptBR`, from `copilotz/web/pt-br`, first among the page's
+  plugins, says every word of the front ends and of the sign-in page in Portuguese, Copilotz's pitch
+  too. An app's own words after it have the last word.
+- **An app puts words in the composer, and acts before it sends.** `handDraft(thread, text)`, from
+  chat's contract. A `conversation` entry's `beforeSend(sending, call)` runs before the box sends
+  anything: `false` holds the message, and a throw shows its words over the box.
+- **The first load after a restart no longer leaves the page blank.** A page whose ticket the server
+  refuses before it's in asks for a new one (3 in all).
+- **Phones.** A link followed from the sidebar's drawer closes it at once, and a page on its way
+  shows a thin bar at the top while it loads (the one before stays until it's ready). The shell, its
+  drawers and the command palette keep clear of the screen's safe areas (status bar, notch, home
+  indicator), so an installed web app no longer draws its header under the status bar.
+- `*.localhost` names are this machine's (RFC 6761): a page on `http://acme.localhost:8100` is no
+  longer refused as another site, and dev sign-in answers there.
+
+**WhatsApp.**
+
+- **What people say to a customer reaches their phone.** Someone at the desk taking a chat over
+  (`chat.send` with `to: ["contact:<id>"]`, or to the whole chat), the app's `chat.say`, and a
+  teammate writing to a linked person are sent, with their files, once. What's private, or said to
+  an agent alone, stays in the app. A customer quoting such a message answers its sender.
+- **Templates, for after Meta's 24 hours.** Declare them
+  (`whatsappTemplates: { reminder: { name,
+  language, body } }`) and send one with
+  `whatsapp.template` (people, agents for them, keys, app code). The plugin knows when each phone
+  last wrote: a message past the 24 hours goes as the number's `fallback` template (`{name}`,
+  `{text}`), or fails once as `window_closed` before Meta is asked. Meta's own refusal for it
+  (131047) gets the same fallback.
+
+**Documented, not built:** a View's handler asks a query through an unrecorded Action; a report's
+queries hang on a collection of its own; starting a runtime over is closing it and creating another.
+
 ## 1.0.0-rc.49 — 2026-11-13
 
 **Breaking: hosted computers and apps are Compass's, not Copilotz's.** `cloud`, `cloudPool`,

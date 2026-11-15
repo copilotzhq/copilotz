@@ -10,6 +10,15 @@
  * Views, the address too (`hints.path`). On a phone, the sidebar is a
  * drawer. Any kind without a web View of its own shows field by field.
  *
+ * On a wide screen the sidebar folds to a rail of icons, and back: from the
+ * button at its top, with ⌘B (Ctrl+B elsewhere), or from the palette. The
+ * rail has the app's mark, unfolding, Search, what sections offer there (a
+ * section's `rail`: a View of the toolkit's `RailItem`s, given the sidebar's
+ * hints, read only while the rail shows: chat's new chat, spaces' faces),
+ * and the person's face with their menu. This browser keeps it as the person
+ * left it; until they choose, the `shell` resource says how it starts
+ * (`{ sidebar: "rail" }`; whole by default).
+ *
  * The shell owns one side panel, beside the pages that offer it (the `panel`
  * resource): its View gets item `{ _id }` and hints `{ in, mode: "panel" }`,
  * the space the person works in, and is shown only while it's open. A
@@ -26,7 +35,8 @@
  * "Move to…" then a space. Groups with the same heading are one. By
  * custom, their `order`: 10 for what's open ("This chat", "This space"), 20
  * and 30 for where to go ("Spaces", "Chats"), 40 for making something
- * ("Create"), 90 for the shell's own ("General": the panel, signing out).
+ * ("Create"), 90 for the shell's own ("General": the panel, the sidebar,
+ * signing out).
  *
  * Who's signed in shows by their name (with none, their email; never their
  * id), and has a menu: their name, which they change or clear there
@@ -36,8 +46,9 @@
  *
  * The shell knows no orgs. Where the app serves many, the front end that
  * knows them fills the `orgs` slot (`@copilotz/directory`'s `directoryWeb`):
- * its switcher at the top of the sidebar, beside the app's mark; its overlay
- * beside every page; and, from its hook, entries in the user menu, groups in
+ * its switcher at the top of the sidebar, beside the app's mark (and on the
+ * rail, its `rail`, under the mark); its overlay beside every page; and, from
+ * its hook, entries in the user menu, groups in
  * the palette and the person's email. That front end draws the org's page
  * (`/org`), made of sections front ends add (the `orgSettings` resource:
  * `{ title, view, icon?, order?, roles? }`, each a View given item `{ _id }`
@@ -47,11 +58,12 @@
  *
  * ```ts
  * resources: {
- *   sidebar: { spaces: { title: "Spaces", view: "web.spaces" } },
+ *   sidebar: { spaces: { title: "Spaces", view: "web.spaces", rail: "spaces.rail" } },
+ *   shell: { sidebar: "rail" },
  *   panel: { view: "space.panel", on: ["thread"], title: "Space" },
  *   palette: { spaces: { view: "spaces.palette", order: 10 } },
  *   orgSettings: { members: { title: "Members", view: "org.members", icon: "users", order: 20 } },
- *   orgs: { switcher: "orgs.switcher", overlay: "orgs.overlay", use: useShellOrgs },
+ *   orgs: { switcher: "orgs.switcher", rail: "orgs.rail", overlay: "orgs.overlay", use: useShellOrgs },
  *   userMenu: { accounts: { label: "Connected accounts", icon: "lock", href: "/accounts" } },
  * }
  * ```
@@ -65,6 +77,7 @@ export type { Panel } from "./shared/panel.ts";
 export type { PaletteSource } from "./shared/palette.ts";
 export type { OrgSection, OrgsShown, OrgsSlot, Standing } from "./shared/orgs.ts";
 export type { UserMenuEntry } from "./shared/menu.ts";
+export type { ShellSettings } from "./shared/sidebar.ts";
 
 export const webShell: Plugin = definePlugin({
   name: "web-shell",

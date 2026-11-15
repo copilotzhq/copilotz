@@ -32,14 +32,20 @@ Its Views show on the web.
 
 ## What it needs
 
-Nothing to set. It reads `orgs`, `palette`, `panel`, `sidebar` and `userMenu`, resource kinds the
-app and other plugins fill.
+You set it in `resources.shell`.
+
+| Setting         | Type               | Required | What it is                                                                                   |
+| --------------- | ------------------ | -------- | -------------------------------------------------------------------------------------------- |
+| `shell.sidebar` | `"full" \| "rail"` | no       | How the sidebar starts on a wide screen, until the person chooses: `full` (whole) or `rail`. |
+
+It also reads `orgs`, `palette`, `panel`, `sidebar` and `userMenu`, resource kinds the app and other
+plugins fill.
 
 ## What it requires
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.47`.
+It ships with `copilotz@1.0.0-rc.50`.
 
 ## Listing
 

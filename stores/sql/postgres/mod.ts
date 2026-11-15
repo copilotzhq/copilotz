@@ -577,8 +577,9 @@ export async function postgresStore(options: {
       const along = held.docs.every(([c]) => c !== collection) ? held.docs.splice(0) : [];
       await flush();
       const { bind, params } = binder();
-      const c = bind(collection);
-      const match = where(filter, postgres, bind);
+      // As reads do: its indexes serve the filter.
+      const c = named(collection, bind);
+      const match = where(filter, postgres, bind, scalars.get(collection));
       const limit = many ? "" : " LIMIT 1";
       const value = next(bind);
       const insert = seed
@@ -695,12 +696,12 @@ export async function postgresStore(options: {
       async delete(collection, filter, options = {}) {
         await flush();
         const { bind, params } = binder();
-        const c = bind(collection);
+        const c = named(collection, bind);
         const rows = await run(
           tx,
           `DELETE FROM ${t("nodes")} t WHERE t.tenant = ${T} AND t.collection = ${c} AND t.id = ` +
             `ANY (ARRAY (SELECT id FROM ${t("nodes")} WHERE tenant = ${T} AND collection = ${c} ` +
-            `AND ${where(filter, postgres, bind)}${
+            `AND ${where(filter, postgres, bind, scalars.get(collection))}${
               page(options.many ? {} : { limit: 1 }, postgres, bind)
             })) RETURNING t.doc, t.n`,
           params,
@@ -1100,8 +1101,8 @@ export async function postgresStore(options: {
           }
           case "update":
           case "replace": {
-            const collection = bind(op.collection);
-            const match = where(op.filter, postgres, bind);
+            const collection = named(op.collection, bind);
+            const match = where(op.filter, postgres, bind, scalars.get(op.collection));
             const many = op.op === "update" && op.options.many;
             const value = op.op === "update"
               ? expression(op.update)!(bind)
@@ -1140,12 +1141,12 @@ export async function postgresStore(options: {
             break;
           }
           case "delete": {
-            const collection = bind(op.collection);
+            const collection = named(op.collection, bind);
             ctes.push(
               `del${n} AS (DELETE FROM ${t("nodes")} t WHERE t.tenant = ${T} AND t.collection = ` +
                 `${collection} AND t.id = ANY (ARRAY (SELECT id FROM ${t("nodes")} WHERE ${ok} ` +
                 `AND tenant = ${T} AND collection = ${collection} AND ` +
-                `${where(op.filter, postgres, bind)}` +
+                `${where(op.filter, postgres, bind, scalars.get(op.collection))}` +
                 `${page(op.options.many ? {} : { limit: 1 }, postgres, bind)})) RETURNING t.id, ` +
                 `t.doc, t.n)`,
             );

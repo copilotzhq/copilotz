@@ -60,7 +60,7 @@ Collections can say how they're kept:
   with no events. `ctx.record` appends one from any job, and it rides the job's next write.
 - **`durable: false`** lives in the owner's memory, not the store, with no events. Chat's live text
   is one. It goes in the commit that writes the reply it became, so a screen never shows both.
-- **`private: ["token"]`** keeps fields out of every event and every outside read.
+- **`private: ["token"]`** keeps fields out of every event and every outside read: where secrets go.
 
 ## One writer, and its transactions
 
@@ -76,10 +76,62 @@ job until it ends. So plugin code keeps slow work, such as a model call, outside
   transaction is closed.", even when the code caught the error. A write the rules refuse counts:
   before 1.0.0-rc.31 it left the transaction open, holding the writer, and every write in the app
   waited.
-- **An idle transaction rolls back.** One with no op for 5 seconds is rolled back, so a stuck
-  executor can't hold the writer for long.
+- **An idle transaction rolls back.** One left waiting on its executor for 5 seconds, from the
+  owner's answer to an op until the next op arrives, is rolled back, so a stuck executor can't hold
+  the writer for long. An op that is slow itself, or that waits for the writer behind another
+  transaction, isn't idle: before 1.0.0-rc.50 the 5 seconds ran from when an op arrived, so such an
+  op rolled back its own transaction.
 - **Each one is measured.** `copilotz.transaction.duration` records how long it held the writer, by
   outcome: `commit`, `abort`, `idle` or `error`. See [Metrics](../operations/metrics.md).
+
+### Another plugin's work in a transaction
+
+Some work belongs to another plugin and must still commit with yours: a sale debits a gift card and
+sets a customer's points, in the commit that saves the sale. Plugins reach each other only through
+the runtime, so a transaction calls that plugin's Action: `tx.call(action, input)`.
+
+```ts
+// The gift cards plugin: its debit only reads, writes and emits, so a transaction may run it.
+"giftcard.debit": defineAction({
+  atomic: true,
+  allow: people,
+  input: { type: "object", properties: { card: { type: "string" }, amount: { type: "number" } } },
+  run: async (ctx, { card, amount }) => {
+    const found = await ctx.db.collection("giftcard").findOne({ _id: card });
+    if (!found || found.value < amount) throw failure("card_short", "Not enough on the card.");
+    await ctx.db.collection("giftcard").updateOne({ _id: card }, { $inc: { value: -amount } });
+  },
+}),
+
+// The register: the sale, its payment, and the debit, in one commit.
+await ctx.transaction(async (tx) => {
+  await tx.db.collection("sale").insertOne(sale);
+  await tx.call("giftcard.debit", { card, amount });
+  await tx.call("customer.setPoints", { customer, points });
+});
+```
+
+- **Only atomic Actions.** An Action declares `atomic: true` when it does only what commits with a
+  transaction: `db`, `graph`, `emit`, `schedule`, its own `transaction`, and calls of other atomic
+  Actions. Called into one, its `ctx.stream`, `ctx.fetch`, `ctx.workers`, `ctx.cancel` and
+  `ctx.disconnect` throw. Called any other way, it's an Action like any.
+- **Checked as `ctx.call` is,** as the caller's actor: its `allow`, its input. An Action that isn't
+  atomic, or isn't there, is refused before any of it runs, and that ends nothing.
+- **Bound to the transaction.** Its reads see the transaction's writes, its writes are the
+  transaction's, and its own `ctx.transaction` joins it. Calls run one at a time, in the order made.
+- **All or nothing.** Its failure ends the transaction, which rolls back, the caller's writes and
+  other callees' with it. Its failure is on the record apart, as a nested call's is.
+- **On the record with it.** A recorded callee's `action.started` and `action.completed` commit in
+  the same transaction, and each write answers to the call that made it (its `cause`). A retry after
+  a rollback runs it again, so its effects happen once; a retry after a commit answers from its
+  record without running it.
+
+What may happen a moment later needn't hold the writer meanwhile. The transaction emits an event,
+which commits with its writes or not at all, and the other plugin's Processor reacts to it in a job
+of its own: the outbox. A Processor hears each event at least once, so its work is idempotent, keyed
+by the event (a write with an `_id` derived from `event.id`, or `$set` to a value rather than
+`$inc`). A sale that must not complete when the card can't pay calls the debit in its transaction;
+points that may land a moment later go through the outbox.
 
 A new owner claims the store with `open`, which moves its fencing epoch. From then on, an old
 owner's commits fail with `fenced`, so 2 owners never write one store.

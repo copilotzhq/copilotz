@@ -53,6 +53,8 @@ const threadSchema = {
 
 export const thread = defineCollection({
   schema: threadSchema,
+  // A space's latest conversations; those started from one (`chat.stop` stops them too).
+  indexes: [["in", "at"], ["parent.thread"]],
   queries: {
     /**
      * Who answers in a space's conversations (`here`, `default`; every agent,

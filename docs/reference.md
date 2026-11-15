@@ -16,19 +16,19 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.49   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.50   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
 `deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
 the version.
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.49"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.50"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
 too, at Copilotz's version (`npm install @copilotz/work@next`,
-`deno add jsr:@copilotz/work@^1.0.0-rc.49`): see [Product packages](#product-packages).
+`deno add jsr:@copilotz/work@^1.0.0-rc.50`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -49,10 +49,10 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/agents/web`          | their web front ends: `chatWeb`, `memoryWeb`, `skillsWeb`, `routinesWeb`                                                                                  |
 | `copilotz/plugins/agents/terminal`     | their terminal front ends: `chatTerminal`, `memoryTerminal`                                                                                               |
 | `copilotz/plugins/agents/<name>`       | one of them alone, `<name>` being `chat`, `history`, `memory`, `skills`, `routines`, `openapi`, `webtools`                                                |
-| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `googleSignIn`, `emailSignIn`, `email`, `devSignIn`, `accounts`                                              |
+| `copilotz/plugins/access`              | `access` (`spaces`, `identity`, `contacts`), `googleSignIn`, `emailSignIn`, `passwordSignIn`, `email`, `devSignIn`, `accounts`                            |
 | `copilotz/plugins/access/web`          | `spacesWeb`, `contactsWeb`, `accountsWeb`                                                                                                                 |
 | `copilotz/plugins/access/terminal`     | `accessTerminal`                                                                                                                                          |
-| `copilotz/plugins/access/<name>`       | one of them alone, `<name>` being `spaces`, `identity`, `contacts`, `google`, `email`, `dev`, `accounts`                                                  |
+| `copilotz/plugins/access/<name>`       | one of them alone, `<name>` being `spaces`, `identity`, `contacts`, `google`, `email` (with `passwordSignIn`), `dev`, `accounts`                          |
 | `copilotz/plugins/billing`             | `usage`: the ledger, and the port an app's pricing plugs into (`spending`)                                                                                |
 | `copilotz/plugins/billing/web`         | `usageWeb`                                                                                                                                                |
 | `copilotz/plugins/billing/terminal`    | `usageTerminal`                                                                                                                                           |
@@ -68,6 +68,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/plugins/<theme>/contract`    | each theme's plugins' contracts (`access`, `agents`, `models`, `interfaces`, `compute`): shapes, and the little code with them, for plugins built on them |
 | `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`, `surface`, `remind`)                             |
 | `copilotz/web/words`                   | the words alone, without the toolkit: `defineWords`, `wordsOf`, `formatDate`…                                                                             |
+| `copilotz/web/pt-br`                   | `ptBR`: every word of the web front ends and the sign-in page in Brazilian Portuguese, as a plugin of the page's                                          |
 | `copilotz/web/server`                  | the page's server half: `webPage` (the page, as a plugin), `widgetsOf`                                                                                    |
 | `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (MCP Apps, ChatGPT)                                                                       |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                                                           |
@@ -88,7 +89,7 @@ same plugin, with less code in the server's memory.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.49` goes with `copilotz@1.0.0-rc.49`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.50` goes with `copilotz@1.0.0-rc.50`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.
@@ -300,7 +301,7 @@ types its documents and queries from the schema.
 | `schema`  | the JSON Schema every write is checked against                                              |
 | `queries` | named reads: a function, or `{ allow, run }` to let actors run it from outside              |
 | `vectors` | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
-| `indexes` | lists of fields (`[["at"], ["tags.tenant", "at"]]`), each a scalar its schema types         |
+| `indexes` | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
 | `private` | fields only trusted code reads: an actor's queries and Views get the documents without them |
 | `records` | `true`: a ledger, appended to and never changed, whose documents are their own record       |
 | `durable` | `false`: kept in the owner's memory, never in the store, with no events                     |
@@ -311,7 +312,12 @@ types its documents and queries from the schema.
 `nearest(vector, { filter, limit })` and `query(name, params)`.
 
 - **Filters:** `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$exists`, `$elemMatch`,
-  `$and`, `$or`, `$nor`, `$not`.
+  `$and`, `$or`, `$nor`, `$not`, and `$regex` with `$options` `i` (ignore case) and `s` (`.` matches
+  line breaks): the part of JavaScript's patterns every store reads alike, matched in linear time,
+  so any caller may send one. Escape text meant literally (`RegExp.escape(text)`). A pattern ignores
+  case, not accents: search a folded copy of the field for that. The
+  [stores' README](../stores/README.md#text-patterns) has what's in the subset, its limits, and the
+  folded copy.
 - **Updates:** `$set`, `$unset`, `$inc`, `$push` (with `$each`), `$addToSet`, `$pull`; `upsert`.
 - **Finds:** `sort`, `limit`, `skip`, and `projection` (`{ name: 1 }` keeps fields, `{ data: 0 }`
   leaves them out), applied before any large value is loaded.
@@ -322,6 +328,20 @@ types its documents and queries from the schema.
 
 Plugin code runs any named query, as whoever it acts for, under the rules. From outside,
 `runtime.query("message.history", params, { actor })` runs only a query whose `allow` lets them in.
+A query is named under a collection, usually the one it reads. A plugin whose queries read only
+other plugins' collections (reports) declares a collection of its own to name them under: one that
+holds no documents costs nothing.
+
+**Secrets** go in a `private` field: a token, an API key, an SMTP password. No event holds it, so
+the log keeps the document without it (an update's `changed` may name the field, never its value).
+An actor's queries and Views read the document without it, and REST and the socket never read,
+filter by or write it. Actions and Processors read it. A path names the same field in every
+document, so settings kept as key and value documents (`{ _id: "smtp_pass", value }`) keep their
+secrets in a collection of their own, with `private: ["value"]`, beside the one for the rest. An
+Action whose input or result holds a secret says so in its own `private`: the log keeps its call
+without it, and a result that had one is kept whole apart (`sys.results`), so a retry answers with
+all of it. Maintenance SQL goes around all of this: it reads the store as it is, and records each
+write's statement and params, so a secret is written through an Action, never through SQL.
 
 ### Actions
 
@@ -335,6 +355,7 @@ What can be done, by name. `defineAction` types `run`'s input from the schema.
 | `description` | what it does, for people and for tools that list Actions                                         |
 | `record`      | `false`: unrecorded. It runs inline in its caller's job, with no events and no commit of its own |
 | `private`     | fields its calls are recorded without, as dot paths, in its input and its result                 |
+| `atomic`      | `true`: it does only what commits with a transaction, so another's `tx.call` runs it there       |
 
 Every recorded call is on the record (`action.started`, then `action.completed` or `action.failed`),
 retryable by id, and everything it causes is its caller's, where its caller is. Queries, Views and
@@ -371,7 +392,10 @@ elements in the terminal, React in the browser. A name says what it shows (`book
   `{ status: "ready", value }`. The runtime runs the View again until a pass reads nothing new.
 - **`ctx.show(name, item, hints?)`** shows exactly the View it names. Observed, the shown View is a
   part that runs again on its own.
-- **`ctx.call`** and **`ctx.emit`** act from a handler, as the actor looking.
+- **`ctx.call`** and **`ctx.emit`** act from a handler, as the actor looking. A handler that needs
+  what the View didn't read (suggestions as someone types) calls an unrecorded Action
+  (`record: false`, with an `allow`) that runs the query and returns it: nothing goes on record. It
+  reads as Actions do, private fields included, so it returns only what its caller may see.
 - **`runtime.render(name, item, { viewer?, hints? })`** renders once, as the system. Code renders
   with `ctx.render`, as its actor: a turn renders its agent's prompt, the `llm.thread` View, that
   way.
@@ -388,7 +412,7 @@ elements in the terminal, React in the browser. A name says what it shows (`book
   a later plugin patches an earlier one's entries, so an app changes one agent's `effort` without
   redefining it.
 - **Adapters** are implementations of a port, by port and name: `llm.openai`, `embeddings.hash`,
-  `email.resend`. A later plugin's adapter of a name replaces an earlier one's.
+  `email.resend`, `email.smtp`. A later plugin's adapter of a name replaces an earlier one's.
 
 ### Routes and `who`
 
@@ -443,7 +467,7 @@ What plugin code gets. `Context` is an Action's, a Processor's and a tool's.
 | `db.collection(name)`                   | the collection API. Each write commits on its own                                                           |
 | `call(action, input)`                   | calls an Action as `actor`, asking its `allow`                                                              |
 | `as(actor?)`                            | this context acting as someone else, or as the system (`as()`), or as a grant. Trusted code only            |
-| `transaction(tx => …)`                  | several writes, events and timers, atomic                                                                   |
+| `transaction(tx => …)`                  | several writes, events and timers, atomic; `tx.call(action, input)` runs an atomic Action in it             |
 | `emit(type, data, { id? })`             | commits a declared event                                                                                    |
 | `schedule(action, input, when)`         | has time call an Action, and returns the timer's id; `unschedule(id)` removes it                            |
 | `record(collection, doc)`               | appends to a ledger with the job's next write, kept even if the job fails                                   |
@@ -454,13 +478,22 @@ What plugin code gets. `Context` is an Action's, a Processor's and a tool's.
 | `cancel(target)`, `disconnect(actor)`   | stops a running call or delivery; ends an actor's browsers                                                  |
 | `workers`, `fetch`, `metrics`           | workers by kind and id; the outside `fetch` (a test's fake, if given); counters, histograms and gauges      |
 | `resources`, `adapters`                 | the merged configuration                                                                                    |
+| `describe()`                            | what the app declares, as `runtime.describe()`: its collections, Actions and Views by name, and resources   |
 | `kept(key, work)`                       | what a rule works out, kept until a commit changes what it read. Only the owner keeps it; here it just runs |
 | `event`, `scheduled`, `retry`, `signal` | the event a Processor handles; the timer that called; whether this ran before; when to stop                 |
+
+A call another plugin may not offer, because this one doesn't `require` it, asks first:
+`if (ctx.describe().actions["register.clear"]) await ctx.call("register.clear", {})`. Calling an
+Action nobody declares fails with `invalid` ("Unknown action"), and that's a bug, not a way to ask.
 
 `ctx.as(other)` records what it does as `other`, `via` the actor it acted for, and stays where the
 work is unless `other` says where (`in`, or `in: undefined` for nowhere). `ctx.transaction` holds
 the store's writer: an op in it that fails, a write the rules refuse included, ends it and rolls it
-back, and one with no op for 5 seconds rolls back too ([one writer](architecture/the-owner.md)).
+back, and one whose code sends no op for 5 seconds after its last answer rolls back too
+([one writer](architecture/the-owner.md)). `tx.call` brings another plugin's atomic Action into it:
+its reads and writes are the transaction's, its own `ctx.transaction` joins it, and its failure
+rolls it all back
+([another plugin's work in a transaction](architecture/the-owner.md#another-plugins-work-in-a-transaction)).
 
 The others are narrower:
 
@@ -506,6 +539,11 @@ const runtime = await createRuntime({ store, plugins });
 
 Without `actor`, a call runs as the system. An actor's `in` says where.
 
+Nothing resets a runtime in place: its cache, Processors' cursors and timers all follow its store.
+To start over (a test against a running server), close it, empty its store (a new memory store, a
+new SQLite file, a dropped schema) and create another. In a pool of `runtimes()`, `close(id)` then
+`get(id)` starts one over, its `open` making the empty store: `get` waits until it has closed.
+
 The rest of `copilotz`:
 
 - **Running many:** `runtimes(open)`, a pool of runtimes by id, each opened on first use and closed
@@ -513,8 +551,10 @@ The rest of `copilotz`:
   and its executors apart ([topology](architecture/topology.md)).
 - **The client:** `connect(url, { key?, over?, plugins? })` reaches an app over its socket or its
   REST API ([the REST API and the client](guides/rest-and-the-client.md)).
-- **Errors:** `failure(code, message, { public? })`, `forbidden`, `invalid`, `isPublic`. Only a
-  public error's words reach a caller outside.
+- **Errors:** `failure(code, message, { public?, status? })`, `forbidden`, `invalid`, `isPublic`.
+  Only a public error's words reach a caller outside. Over REST a failure answers a 4xx with its
+  code (422 for an app's own, or the `status` it says), and an error with no code a 500
+  ([errors](guides/rest-and-the-client.md#errors)).
 - **Links and addresses:** `signLink`, `verifyLink`, `linksOf`, `clientAddress`, `callerOf`…
 - **Metrics:** `createMetrics`, `noMetrics` ([metrics](operations/metrics.md)).
 - **Time:** `manualClock`, `systemClock`.
@@ -649,6 +689,9 @@ named by the protocol it speaks. The [models page](reference/plugins/models.md) 
   [WORDS.md](https://github.com/copilotzhq/copilotz/blob/main/hosts/web/WORDS.md). Blanks are
   `{name}`. Plurals are an object by the language's plural categories, chosen by `{count}`. Dates,
   numbers and currency follow the page's language, `page: { lang: "pt-BR" }`.
+- **Brazilian Portuguese** comes in the box: `ptBR` from `copilotz/web/pt-br`, first among the
+  page's plugins (`web({ plugins: [ptBR, webShell, …] })`), says every one of those words and the
+  sign-in page's. The app's own plugins after it still have the last word.
 - **Your own front end** says its words the same way: `const say = defineWords("acme", { … })`, then
   `say("key", { name })`.
 
@@ -675,6 +718,7 @@ shows, what it needs, and what it builds on. [The index](reference/plugins.md) l
   [`contacts`](reference/plugins/contacts.md) ([web](reference/plugins/contacts-web.md)),
   [`googleSignIn`](reference/plugins/google-sign-in.md),
   [`emailSignIn`](reference/plugins/email-sign-in.md), [`email`](reference/plugins/email.md),
+  [`passwordSignIn`](reference/plugins/password-sign-in.md),
   [`devSignIn`](reference/plugins/dev-sign-in.md), [`accounts`](reference/plugins/accounts.md)
   ([web](reference/plugins/accounts-web.md)).
 - **Computers:** [`computers`](reference/plugins/computers.md)

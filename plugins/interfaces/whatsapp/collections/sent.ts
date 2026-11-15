@@ -1,5 +1,5 @@
 /**
- * What went out to WhatsApp: each part of an agent's message, once sent
+ * What went out to WhatsApp: each part of a message, once sent
  * (`<message>:<part>`), and of what went after it (an addition,
  * `<message>:<key>:<part>`), with WhatsApp's id for it. A ledger: a retried
  * delivery sends only the parts not on it, and a reply quoting one (or a

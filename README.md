@@ -152,7 +152,7 @@ ana sees: Tue 10:00, Wed 15:00
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.49   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.50   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
@@ -166,7 +166,7 @@ OPENAI_API_KEY=sk-… node salon.ts    # or bun salon.ts, or deno run -A salon.t
 ```
 
 On Deno, map the name `copilotz` in `deno.json`
-(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.49"`) so the imports read the same everywhere.
+(`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.50"`) so the imports read the same everywhere.
 Copilotz runs on Node 24+, Deno 2.9+ and Bun, and it's built on web standards for Cloudflare Workers
 and the browser.
 
@@ -265,7 +265,8 @@ beside the theme.
   them. `skills` gives them know-how, and `routines` runs them on a schedule. `openapi` turns an
   API's spec into tools, and `webTools` searches and reads the web.
 - **Access:** `access` for spaces, people and contacts, with `googleSignIn`, `emailSignIn` and
-  `email`, and `devSignIn` for this machine. `accounts` connects a person's own accounts.
+  `email` (Resend or SMTP), `passwordSignIn` (a username and a password), and `devSignIn` for this
+  machine. `accounts` connects a person's own accounts.
 - **Billing:** `usage` keeps a ledger of what every model call used and cost.
 - **Compute:** `computers`, people's own machines, where agents run commands once their person says
   yes.

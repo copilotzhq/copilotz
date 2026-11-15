@@ -27,10 +27,13 @@
  * waiting, changing roles and taking someone out, handing over the spaces
  * only they managed). Owners and admins reach every space; the sidebar
  * lists the ones they're in, and the rest of the org's apart.
+ *
+ * On the rail, the sidebar folded (the web shell's), the spaces in use are a
+ * face each (`spaces.rail`), and invitations one mark (`invitations.rail`).
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { PROFILE } from "./shared/names.ts";
-import { invitationsView } from "./views/web/invitations.tsx";
+import { invitationsRailView, invitationsView } from "./views/web/invitations.tsx";
 import { invitedView } from "./views/web/invited.tsx";
 import { invitingView } from "./views/web/inviting.tsx";
 import { membersView } from "./views/web/members.tsx";
@@ -42,7 +45,7 @@ import { spacePanelView } from "./views/web/panel.tsx";
 import { spacePickView } from "./views/web/pick.tsx";
 import { settingsView } from "./views/web/settings.tsx";
 import { spaceView } from "./views/web/space.tsx";
-import { spacesView } from "./views/web/spaces.tsx";
+import { spacesRailView, spacesView } from "./views/web/spaces.tsx";
 import { say } from "./views/web/words.ts";
 
 export const spacesWeb: Plugin = definePlugin({
@@ -50,6 +53,7 @@ export const spacesWeb: Plugin = definePlugin({
   requires: ["spaces", "web-shell"],
   views: {
     "web.spaces": spacesView,
+    "spaces.rail": spacesRailView,
     space: spaceView,
     "space.panel": spacePanelView,
     "space.members": membersView,
@@ -58,6 +62,7 @@ export const spacesWeb: Plugin = definePlugin({
     "space.pick": spacePickView,
     "spaces.palette": spacesPaletteView,
     invitations: invitationsView,
+    "invitations.rail": invitationsRailView,
     "invitations.home": invitedView,
     "space.not-here": notHereView,
     "org.about": orgAboutView,
@@ -67,13 +72,14 @@ export const spacesWeb: Plugin = definePlugin({
     // Where people's names are, for Views here too: a browser loads only front ends.
     names: { people: { collection: PROFILE } },
     sidebar: {
-      invitations: { view: "invitations", order: 3 },
+      invitations: { view: "invitations", order: 3, rail: "invitations.rail" },
       spaces: {
         get title() {
           return say("spacesGroup");
         },
         view: "web.spaces",
         order: 10,
+        rail: "spaces.rail",
       },
     },
     spaceTabs: {

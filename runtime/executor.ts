@@ -5,10 +5,20 @@
  */
 import { createWorker, type WorkerOptions } from "@oxian/oxian-js";
 import { collection, type Query, type Run } from "./collection.ts";
-import type { Context, Plugins, ReadContext, TransactionScope } from "./define.ts";
+import type { ActionDef, Context, Plugins, ReadContext, TransactionScope } from "./define.ts";
 import { isRead, type Op, type Outcome, RESULTS, type TimerOp } from "./ops.ts";
 import type { Scheduled, ScheduleOptions } from "./schedules.ts";
-import { compile, events, fingerprint, invalid, json, merge, unprivate } from "./registry.ts";
+import {
+  canonical,
+  compile,
+  described,
+  events,
+  fingerprint,
+  invalid,
+  json,
+  merge,
+  unprivate,
+} from "./registry.ts";
 import { presenter } from "./views.ts";
 import { refuseBlobKeys } from "./blobs.ts";
 import { querying as queryingOver, reading as readingOver } from "./reads.ts";
@@ -56,6 +66,74 @@ type Reach = {
   /** Numbers the nested calls made under each cause, in call order. */
   next(cause: string): number;
 };
+
+/** For whom ops in a held transaction go: what their writes answer to, as whom, in whose code. */
+type Who = { cause?: string; actor?: Actor; action?: string };
+
+/** An op waiting to go in a held transaction, and for whom. */
+type Sent = { op: Op; who: Who };
+
+/** An atomic Action asked for in a transaction, checked: its declaration and its input. */
+type Asked = { name: string; def: ActionDef; input: unknown };
+
+/** A transaction a job holds open on the owner (see `holding`). */
+type Held = {
+  /** Sends an op (or, unanswered, queues it), for `who`. */
+  run(op: Op, who: Who, options?: { unanswered?: boolean }): Promise<unknown>;
+  /** Queues an op for the next request or the commit; throws once it's closed. */
+  queue(op: Op, who: Who): void;
+  /** Throws once it's closed: committed, rolled back, or ended under it. */
+  ensure(): void;
+  /** Runs work in it (an atomic Action, a transaction joining it): failing, it ends it. */
+  join<R>(work: () => Promise<R>): Promise<R>;
+  commit(): Promise<void>;
+  abort(): Promise<void>;
+};
+
+/** Whether ops for `a` and `b` may go in one request. */
+const alike = (a: Who, b: Who) =>
+  a === b ||
+  (a.cause === b.cause && a.action === b.action &&
+    canonical(a.actor ?? null) === canonical(b.actor ?? null));
+
+/** Ops in order, in runs of the same `Who`: a request each. */
+const byWho = (ops: Sent[]): { who: Who; ops: Op[] }[] => {
+  const runs: { who: Who; ops: Op[] }[] = [];
+  for (const { op, who } of ops) {
+    const last = runs.at(-1);
+    if (last && alike(last.who, who)) last.ops.push(op);
+    else runs.push({ who, ops: [op] });
+  }
+  return runs;
+};
+
+/**
+ * Who code acting as `other` is (see `Context.as`): `other`, `via` `actor`,
+ * where the work is unless it says where, and (as someone else) in its
+ * conversation, with what its person approved: a tool acting as its agent's
+ * person is bound as the agent is. None: the system, via `actor`.
+ */
+const acting = (actor: Actor | undefined, other?: Actor): Actor | undefined =>
+  other
+    ? {
+      ...other,
+      ...(actor ? { via: actor } : {}),
+      ...(!("in" in other) && whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
+      ...(!("thread" in other) && typeof actor?.thread === "string"
+        ? { thread: actor.thread }
+        : {}),
+      ...(!("approved" in other) && Array.isArray(actor?.approved)
+        ? { approved: actor.approved }
+        : {}),
+    }
+    : actor
+    ? {
+      kind: "system",
+      id: "system",
+      via: actor,
+      ...(whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
+    }
+    : undefined;
 
 const reply = async (callHost: HostCaller, request: OpRequest) => {
   const call = await callHost({ workload: OP, body: encode(request) });
@@ -115,67 +193,334 @@ export function createExecutor(
     actor?: Actor,
     action?: string,
   ): Promise<R> => {
-    const who = { ...(actor ? { actor } : {}), ...(action ? { action } : {}) };
+    const opener: Who = {
+      ...(cause ? { cause } : {}),
+      ...(actor ? { actor } : {}),
+      ...(action ? { action } : {}),
+    };
+    const held = holding(job, opener);
+    try {
+      const result = await work(scoped(job, held, opener, numbering));
+      await held.commit();
+      return result;
+    } catch (error) {
+      await held.abort();
+      throw error;
+    }
+  };
+
+  /**
+   * A transaction this job holds. Each op goes for whoever made it (its
+   * `Who`): the code that opened it, or an atomic Action it called. A run of
+   * ops by the same one is one request, so each write answers to its own
+   * Action's call, and what each sends is checked as its actor.
+   */
+  const holding = (job: Reach, opener: Who): Held => {
     const id = crypto.randomUUID();
-    const queued: Op[] = [];
+    const queued: Sent[] = [];
     let begun = false;
     let active = true;
     let chain: Promise<unknown> = Promise.resolve();
-    const run: Run = (op, options) => {
-      if (!active) return Promise.reject(invalid("The transaction is closed."));
-      if (UNANSWERED.has(op.op) || options?.unanswered) {
-        queued.push(op);
-        return Promise.resolve(undefined);
+    const closed = () => invalid("The transaction is closed.");
+    /** Sends ops, a request for each run of them by one `Who`; `end` goes with the last. */
+    const send = async (ops: Sent[], end?: "commit") => {
+      const runs = byWho(ops);
+      if (!runs.length) runs.push({ who: opener, ops: [] });
+      let value: unknown;
+      for (const [i, { who, ops }] of runs.entries()) {
+        const last = i === runs.length - 1;
+        value = await job.send({ tx: id, ops, ...who, ...(end && last ? { end } : {}) });
       }
-      begun = true;
-      const ops = [...queued.splice(0), op];
-      const result = chain.then(() => job.send({ tx: id, ops, cause, ...who }));
-      chain = result.catch(() => {});
-      return result;
+      return value;
     };
-    const scope: TransactionScope = {
-      db: { collection: (name) => collection(name, run, querying(run, job.record, actor)) },
+    const ensure = () => {
+      if (!active) throw closed();
+    };
+    const abort = async () => {
+      if (!active) return;
+      active = false;
+      queued.length = 0;
+      await chain;
+      if (begun) await job.send({ tx: id, ops: [], end: "abort", ...opener }).catch(() => {});
+    };
+    return {
+      run(op, who, options) {
+        if (!active) return Promise.reject(closed());
+        if (UNANSWERED.has(op.op) || options?.unanswered) {
+          queued.push({ op, who });
+          return Promise.resolve(undefined);
+        }
+        begun = true;
+        const ops = [...queued.splice(0), { op, who }];
+        const result = chain.then(() => send(ops));
+        chain = result.catch(() => {});
+        return result;
+      },
+      queue(op, who) {
+        ensure();
+        queued.push({ op, who });
+      },
+      ensure,
+      async join(work) {
+        ensure();
+        try {
+          return await work();
+        } catch (error) {
+          // What it queued, or sent, can't be told from the rest: it all rolls back.
+          await abort();
+          throw error;
+        }
+      },
+      async commit() {
+        await chain;
+        // Ended under it (an atomic Action failed): nothing commits.
+        ensure();
+        active = false;
+        const rest = queued.splice(0);
+        const runs = byWho(rest);
+        if (begun || runs.length > 1) {
+          begun = true;
+          await send(rest, "commit");
+        } else if (runs.length) await job.send({ ops: runs[0].ops, ...runs[0].who });
+      },
+      abort,
+    };
+  };
+
+  /**
+   * What code acting as `who` does in a held transaction: the opener's
+   * scope, or an atomic Action's. Its calls run one at a time, in the order
+   * they're made; each is numbered as it's made, so calls made together
+   * number stably.
+   */
+  const scoped = (
+    job: Reach,
+    held: Held,
+    who: Who,
+    numbering: string | undefined,
+  ): TransactionScope => {
+    const run: Run = (op, options) => held.run(op, who, options);
+    let turn: Promise<unknown> = Promise.resolve();
+    return {
+      db: { collection: (name) => collection(name, run, querying(run, job.record, who.actor)) },
       graph: {
         link: (from, type, to, data) =>
           run({ op: "link", edge: { from, type, to, data } }).then(() => {}),
         unlink: (from, type, to) => run({ op: "unlink", edge: { from, type, to } }).then(() => {}),
       },
       emit: (type, data = {}, options = {}) => {
-        if (!active) throw invalid("The transaction is closed.");
+        held.ensure();
         declared(type, data);
-        queued.push({ op: "emit", event: { id: options.id, type, data: json(data), cause } });
+        const event = { id: options.id, type, data: json(data), cause: who.cause };
+        held.queue({ op: "emit", event }, who);
       },
       schedule: (action, input, when) => {
-        if (!active) throw invalid("The transaction is closed.");
+        held.ensure();
         const op = scheduling(job, numbering, action, input, when);
-        queued.push(op);
+        held.queue(op, who);
         return op.timer;
       },
-      unschedule: (timer) => {
-        if (!active) throw invalid("The transaction is closed.");
-        queued.push({ op: "unschedule", timer });
+      unschedule: (timer) => held.queue({ op: "unschedule", timer }, who),
+      call: <R>(action: string, input?: unknown): Promise<R> => {
+        let asked: Asked;
+        try {
+          held.ensure();
+          asked = atomicOf(action, input, who.actor);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        const position = asked.def.record !== false && numbering ? job.next(numbering) : 0;
+        const result = turn.then(() => atomic<R>(job, held, asked, who, numbering, position));
+        turn = result.catch(() => {});
+        return result;
       },
     };
+  };
+
+  /**
+   * An atomic Action a transaction may call, checked before anything of it
+   * runs, as `ctx.call` checks: declared, atomic, its input, and its `allow`
+   * for `actor`. A refusal here ends nothing: none of the Action ran.
+   */
+  const atomicOf = (name: string, input: unknown, actor: Actor | undefined): Asked => {
+    const def = registry.actions[name];
+    if (!def) throw invalid(`Unknown action "${name}"`);
+    if (!def.atomic) {
+      throw invalid(
+        `"${name}" isn't atomic: a transaction calls only Actions declared \`atomic: true\`. ` +
+          "Call it once the transaction has committed, or have it hear an event the transaction emits.",
+      );
+    }
+    const normalized = json(input);
+    inputs[name]?.(normalized);
+    refuseBlobKeys(normalized);
+    if (def.allow && actor && actor.kind !== "system" && !allows(def.allow, actor, normalized)) {
+      throw forbidden(`${actor.kind} ${actor.id} may not call "${name}".`);
+    }
+    return { name, def, input: normalized };
+  };
+
+  /**
+   * Runs an atomic Action in a held transaction (`tx.call`), as `who`'s
+   * actor, with a context bound to it (see `joined`). A recorded one's
+   * `action.started` and `action.completed` go in the transaction, so they
+   * commit with its writes, or not at all; its retry check is asked there.
+   * Its failure ends the transaction, which rolls back, and is on record
+   * apart, as a nested call's is.
+   */
+  const atomic = async <R>(
+    job: Reach,
+    held: Held,
+    { name, def, input }: Asked,
+    who: Who,
+    numbering: string | undefined,
+    position: number,
+  ): Promise<R> => {
+    const { actor } = who;
+    // Closed before its turn came (a call before it failed): it never ran.
+    held.ensure();
+    if (def.record === false) {
+      const its: Who = { ...who, action: name };
+      return await held.join(async () =>
+        await def.run(joined(job, held, its, who.cause), input) as R
+      );
+    }
+    const inputHash = await fingerprint(name, input);
+    const id = numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID();
+    let attempt = 1;
+    let after: "failed" | "lost" | undefined;
+    if (who.cause && job.retry) {
+      const prior = await held.run({ op: "outcome", call: id }, who) as Outcome;
+      if (prior.completed) return prior.result as R;
+      attempt = prior.attempts + 1;
+      if (prior.attempts) after = prior.lost ? "lost" : "failed";
+    }
+    // Its own: what it writes answers to its call.
+    const its: Who = { cause: id, ...(actor ? { actor } : {}) };
+    const hidden = def.private ?? [];
+    const marks: Op[] = [{
+      op: "emit",
+      event: {
+        id,
+        type: "action.started",
+        data: {
+          action: name,
+          input: unprivate(input ?? null, hidden),
+          inputHash,
+          startedAt: new Date().toISOString(),
+          attempt,
+        },
+        cause: who.cause,
+      },
+    }];
+    if (after) {
+      marks.push({
+        op: "emit",
+        event: {
+          id: `${id}:retry:${attempt}`,
+          type: "action.retried",
+          data: { action: name, attempt, after },
+          cause: id,
+        },
+      });
+    }
+    const begun = performance.now();
+    const elapsed = () => Math.round((performance.now() - begun) * 100) / 100;
+    job.frame("action", { type: "started", id, action: name, attempt });
     try {
-      const result = await work(scope);
-      await chain;
-      active = false;
-      if (begun) {
-        await chain.then(() =>
-          job.send({ tx: id, ops: queued.splice(0), end: "commit", cause, ...who })
-        );
-      } else if (queued.length) await job.send({ ops: queued.splice(0), cause, ...who });
+      for (const mark of marks) held.queue(mark, its);
+      const result = await def.run(joined(job, held, its, id), input) as R;
+      const whole = json(result) ?? null;
+      refuseBlobKeys(whole);
+      const logged = unprivate(whole, hidden);
+      const apart = logged !== whole && JSON.stringify(logged) !== JSON.stringify(whole);
+      held.queue({
+        op: "emit",
+        event: {
+          type: "action.completed",
+          data: {
+            action: name,
+            result: logged,
+            ms: elapsed(),
+            attempt,
+            ...(apart ? { private: true } : {}),
+          },
+          cause: id,
+        },
+      }, its);
+      if (apart) {
+        held.queue({
+          op: "insert",
+          collection: RESULTS,
+          docs: [{ _id: id, result: whole }],
+          ifAbsent: true,
+        }, its);
+      }
       return result;
     } catch (error) {
-      if (active) {
-        active = false;
-        await chain;
-        if (begun) {
-          await job.send({ tx: id, ops: [], end: "abort", cause, ...who }).catch(() => {});
-        }
-      }
+      await held.abort();
+      const failed: Op = {
+        op: "emit",
+        event: {
+          type: "action.failed",
+          data: { action: name, error: failure(error), ms: elapsed(), attempt },
+          cause: id,
+        },
+      };
+      await job.send({ ops: [...marks, failed], cause: id, ...(actor ? { actor } : {}) })
+        .catch(() => {});
       throw error;
     }
+  };
+
+  /**
+   * An atomic Action's context in the transaction it was called into: its
+   * reads see the transaction's writes and its writes are the transaction's,
+   * its own `transaction` joins it (flattened), and it calls only atomic
+   * Actions, in it too. What can't be rolled back, or waits on the world,
+   * throws: streams, `fetch`, workers, cancelling, ending browsers.
+   */
+  const joined = (job: Reach, held: Held, who: Who, numbering: string | undefined): Context => {
+    const { actor } = who;
+    const tx = scoped(job, held, who, numbering);
+    const run: Run = (op, options) => held.run(op, who, options);
+    const refused = (what: string) => () => {
+      throw invalid(
+        `${what} isn't for an atomic Action: it does only what commits with its transaction`,
+      );
+    };
+    const where = whereOf(actor);
+    const ctx: Context = {
+      db: tx.db,
+      graph: { ...tx.graph, edges: (query) => run({ op: "edges", query }) as Promise<Edge[]> },
+      emit: async (type, data, options) => tx.emit(type, data, options),
+      transaction: (work) => held.join(() => work(tx)),
+      stream: refused("ctx.stream"),
+      call: (action, input) => tx.call(action, input),
+      branch: (key) => joined(job, held, who, `${numbering ?? crypto.randomUUID()}/${key}`),
+      ...(actor ? { actor } : {}),
+      ...(where !== undefined ? { in: where } : {}),
+      as: (other) => {
+        const as = acting(actor, other);
+        return joined(job, held, { ...who, ...(as ? { actor: as } : {}) }, numbering);
+      },
+      schedule: async (action, input, when) => tx.schedule(action, input, when),
+      unschedule: async (timer) => Number(await run({ op: "unschedule", timer })) > 0,
+      cancel: refused("ctx.cancel"),
+      disconnect: refused("ctx.disconnect"),
+      render: presenter(registry.views, () => reading(run, job.record, actor)),
+      kept: (_key, work) => work(ctx),
+      record: job.record,
+      metrics,
+      fetch: refused("ctx.fetch"),
+      resources: registry.resources,
+      adapters: registry.adapters,
+      describe: () => described(registry),
+      workers: { dispatch: refused("ctx.workers"), call: refused("ctx.workers") },
+      retry: job.retry,
+      signal: job.signal,
+    };
+    return ctx;
   };
 
   /**
@@ -222,38 +567,7 @@ export function createExecutor(
         ),
       ...(actor ? { actor } : {}),
       ...(whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
-      // Acting as someone else, or as the system: what it does says on whose behalf, and stays
-      // where the work is unless it says where (and, as someone else, in its conversation, with
-      // what its person approved: a tool acting as its agent's person is bound as the agent is).
-      as: (other) =>
-        context(
-          job,
-          cause,
-          event,
-          scheduled,
-          numbering,
-          other
-            ? {
-              ...other,
-              ...(actor ? { via: actor } : {}),
-              ...(!("in" in other) && whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
-              ...(!("thread" in other) && typeof actor?.thread === "string"
-                ? { thread: actor.thread }
-                : {}),
-              ...(!("approved" in other) && Array.isArray(actor?.approved)
-                ? { approved: actor.approved }
-                : {}),
-            }
-            : actor
-            ? {
-              kind: "system",
-              id: "system",
-              via: actor,
-              ...(whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
-            }
-            : undefined,
-          action,
-        ),
+      as: (other) => context(job, cause, event, scheduled, numbering, acting(actor, other), action),
       schedule: async (action, input, when) => {
         const op = scheduling(job, numbering, action, input, when);
         await run(op);
@@ -280,6 +594,7 @@ export function createExecutor(
       fetch: outside,
       resources: registry.resources,
       adapters: registry.adapters,
+      describe: () => described(registry),
       workers: working(job),
       event,
       ...(scheduled ? { scheduled } : {}),

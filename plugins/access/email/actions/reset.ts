@@ -20,8 +20,17 @@ import type { Person } from "../../identity/contract.ts";
 import type { Code } from "../collections/code.ts";
 import type { Login } from "../collections/login.ts";
 import { CODE_MINUTES, codeText, newCode, newToken, redeem, seal } from "../shared/codes.ts";
-import { ADDRESS, CODE, codeIn, EMAIL, emailIn, PASSWORD, passwordIn } from "../shared/inputs.ts";
-import { aSend, aTry } from "../shared/limits.ts";
+import {
+  ADDRESS,
+  CODE,
+  codeIn,
+  EMAIL,
+  emailIn,
+  HOST,
+  PASSWORD,
+  passwordIn,
+} from "../shared/inputs.ts";
+import { aSend, aTry, byEmail } from "../shared/limits.ts";
 import { mail } from "../shared/mail.ts";
 import { hashPassword } from "../shared/password.ts";
 import { keepPassword, keepPerson, personFor, sessionFor } from "../shared/people.ts";
@@ -33,13 +42,13 @@ export const forgotAction = defineAction({
   record: false,
   input: {
     type: "object",
-    properties: { email: EMAIL, address: ADDRESS },
+    properties: { email: EMAIL, address: ADDRESS, host: HOST },
     required: ["email"],
     additionalProperties: false,
   },
   run: async (ctx, input) => {
     const email = emailIn(input.email);
-    await aSend(ctx, { email, address: input.address });
+    await aSend(ctx, { account: email, address: input.address });
     const db = ctx.as().db;
     const codes = db.collection<Code>("email_code");
     const known = await db.collection<Login>("email_login").findOne({ _id: email }) ??
@@ -61,7 +70,7 @@ export const forgotAction = defineAction({
       at: new Date(now).toISOString(),
     });
     try {
-      await mail(ctx, "reset", email, { code });
+      await mail(ctx, "reset", email, { code }, input.host);
     } catch (error) {
       console.error("email-sign-in: a reset code didn't go:", (error as Error).message);
     }
@@ -81,7 +90,7 @@ export const resetAction = defineAction({
   run: async (ctx, input) => {
     const email = emailIn(input.email);
     const password = passwordIn(input.password);
-    await aTry(ctx, { email, address: input.address });
+    await aTry(ctx, { account: email, address: input.address }, byEmail(ctx));
     if (!await redeem(ctx, linksFor(ctx), "reset", email, codeIn(input.code))) {
       throw failure("invalid", WRONG_CODE, { public: true });
     }

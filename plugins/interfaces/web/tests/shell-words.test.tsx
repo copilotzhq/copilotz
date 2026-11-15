@@ -12,9 +12,11 @@ import { setWords } from "../../../../hosts/web/words.ts";
 import { englishLeft, pseudoWords } from "../../../../testing/words.ts";
 import { ORG_ROLES, orgRoleName } from "../shared/orgs.ts";
 import { toggleLabel } from "../shared/panel.ts";
+import { foldLabel } from "../shared/sidebar.ts";
 import { Me } from "../views/me.tsx";
 import { defaultView } from "../views/default.tsx";
 import { PanelSheet, PanelToggle, SidePanel, usePanel } from "../views/panel.tsx";
+import { Rail, useSidebar } from "../views/rail.tsx";
 
 const noCall = () => Promise.resolve({} as never);
 
@@ -56,6 +58,23 @@ function Panels(): ReactNode {
   );
 }
 
+/** The sidebar folded to a rail, with the person's face at its foot. */
+function Rails(): ReactNode {
+  const state = useSidebar("ana", { sidebar: "rail" }, "fold");
+  return (
+    <Rail
+      brand="Harbor"
+      mac={false}
+      state={state}
+      button="fold"
+      sidebar="side"
+      rails={["spaces.rail"]}
+      hints={{}}
+      me={<Me rail name="Ana" call={noCall} />}
+    />
+  );
+}
+
 function draw(): string {
   const parts: ReactNode[] = [];
   parts.push(
@@ -68,6 +87,8 @@ function draw(): string {
     <Me name="Ana" call={noCall} />,
     <Me email="ana@example.com" call={noCall} />,
     <Panels />,
+    <Rails />,
+    <Me rail call={noCall} />,
     defaultView({ _id: "x" }, ctx({ of: "note" })),
     defaultView({ _id: "x", title: "Plan", body: "Hi" }, ctx({ of: "note" })),
   );
@@ -82,6 +103,8 @@ function sayings(): string {
     orgRoleName("owner"),
     toggleLabel(true, "Space"),
     toggleLabel(false),
+    foldLabel(true),
+    foldLabel(false),
   ]);
 }
 
@@ -90,12 +113,24 @@ test("with every word replaced, no English of the shell is left", () => {
   try {
     const markup = draw();
     assertEquals(englishLeft(shown(markup), "shell"), []);
-    for (const key of ["signedIn", "yourAccount", "signOut", "nothingToShow", "panelWidth"]) {
+    for (
+      const key of [
+        "signedIn",
+        "yourAccount",
+        "signOut",
+        "nothingToShow",
+        "panelWidth",
+        "expandSidebar",
+        "homeOf",
+        "search",
+      ]
+    ) {
       assert(markup.includes(`«shell.${key}»`), key);
     }
     assertEquals(englishLeft(sayings(), "shell"), []);
     assertStringIncludes(sayings(), "«shell.roleOwnerLets»");
     assertStringIncludes(sayings(), "«shell.hidePanelTitled»");
+    assertStringIncludes(sayings(), "«shell.collapseSidebar»");
   } finally {
     restore();
   }
@@ -103,18 +138,34 @@ test("with every word replaced, no English of the shell is left", () => {
 
 test("with none given, the shell says what it always did", () => {
   const markup = draw();
-  for (const phrase of ["Your account", "Sign out", "Nothing to show", "Panel width"]) {
+  for (
+    const phrase of [
+      "Your account",
+      "Sign out",
+      "Nothing to show",
+      "Panel width",
+      'aria-label="Expand sidebar"',
+      'aria-label="Harbor: home"',
+    ]
+  ) {
     assertStringIncludes(markup, phrase);
   }
   assertEquals(toggleLabel(true, "Space"), "Hide the space panel");
   assertEquals(toggleLabel(false), "Show the panel");
   assertEquals(orgRoleName("admin"), "Admin");
+  assertEquals(foldLabel(false), "Collapse sidebar");
 });
 
 test("in another language a plural and a blank follow that language", () => {
-  const restore = setWords({ "shell.showPanelTitled": "Mostrar o painel {title}" });
+  const restore = setWords({
+    "shell.showPanelTitled": "Mostrar o painel {title}",
+    "shell.collapseSidebar": "Recolher a barra lateral",
+    "shell.expandSidebar": "Expandir a barra lateral",
+  });
   try {
     assertEquals(toggleLabel(false, "Espaço"), "Mostrar o painel espaço");
+    assertEquals(foldLabel(false), "Recolher a barra lateral");
+    assertEquals(foldLabel(true), "Expandir a barra lateral");
   } finally {
     restore();
   }

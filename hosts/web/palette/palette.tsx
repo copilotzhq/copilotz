@@ -124,8 +124,8 @@ const SHEET = sheet(
   .copilotz-palette-row { min-height: 48px; }
 }
 @media (max-width: 640px) {
-  .copilotz-palette { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); margin-top: 8px;
-    border-radius: var(--radius-xl); }
+  .copilotz-palette { width: calc(100vw - 16px); max-height: calc(100dvh - 16px - env(safe-area-inset-top));
+    margin-top: calc(8px + env(safe-area-inset-top)); border-radius: var(--radius-xl); }
   .copilotz-palette-step { max-width: 40%; }
 }
 `,

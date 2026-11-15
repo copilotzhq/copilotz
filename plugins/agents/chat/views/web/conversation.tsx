@@ -13,7 +13,9 @@
  * chat's space: `thread.agents`. A message refused for a reason another
  * front end helps with (the `refusals` resource: `not_here`, spaces') shows
  * that front end's View over where you type, as does what they want known
- * before sending (`composerNotes`). A message of yours waiting for an agent
+ * before sending (`composerNotes`); what they want done first, before it
+ * sends (the `conversation` resource's `beforeSend`: take the chat over,
+ * check what's typed), is asked as it does, and may hold it. A message of yours waiting for an agent
  * still at work on an earlier one says so (see queued.tsx).
  *
  * A chat shared with someone outside its space (a contact, a member of the
@@ -31,8 +33,9 @@ import type { Message } from "../../collections/message.ts";
 import type { Thread } from "../../collections/thread.ts";
 import type { Team } from "../../shared/agents.ts";
 import { notesOf } from "../../shared/notes.ts";
-import type { ComposerNote, ConversationView, RefusalView } from "../../shared/types.ts";
+import type { ComposerNote, ConversationView, RefusalView, Sending } from "../../shared/types.ts";
 import { mentionable, shownAll } from "./agents.ts";
+import { beforeSend } from "./before-send.ts";
 import { Composer, type Mentioned } from "./composer.tsx";
 import { Header, type Someone } from "./header.tsx";
 import { Missing } from "./missing.tsx";
@@ -217,9 +220,15 @@ export function talk(
       sort: { at: 1 },
     }).value ?? []
     : [];
+  // What agents still wait on me for, among these messages: asked by their threads.
+  const threads = [...new Set(said.map((m) => m.thread))].sort();
   const asked = new Set(
-    (ctx.db.collection<Message>("message").query<Message[]>("questions", { person: me }).value ??
-      []).map((m) => m._id),
+    (threads.length
+      ? ctx.db.collection<Message>("message").query<Message[]>("questions", {
+        person: me,
+        threads,
+      }).value ?? []
+      : []).map((m) => m._id),
   );
   const space = within
     ? ctx.db.collection<Space>("space").findOne({ _id: within }).value ?? undefined
@@ -276,12 +285,16 @@ export function talk(
   const addressed = thread?.agents?.length
     ? say("messageAgents", { names: names(thread.agents.map((name) => who[name]?.name ?? name)) })
     : say("messageTheAgents");
-  // What other front ends show here, over where you type.
+  // What other front ends add where you type: Views over it, and what they do before it sends.
+  const added = Object.values(
+    (ctx.resources.conversation ?? {}) as Record<string, ConversationView | null>,
+  )
+    .filter((entry): entry is ConversationView => !!entry)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const over = thread
-    ? Object.values((ctx.resources.conversation ?? {}) as Record<string, ConversationView>)
-      .filter((entry) => entry?.view)
-      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    ? added.filter((entry): entry is ConversationView & { view: string } => !!entry.view)
     : [];
+  const hooks = added.filter((entry) => entry.beforeSend);
   const made = o.made ?? (() => Promise.resolve(id));
 
   const main = (
@@ -346,6 +359,16 @@ export function talk(
         {...(o.note ? { note: o.note } : {})}
         {...(o.mentionNote ? { mentionNote: o.mentionNote } : {})}
         {...(o.autoFocus !== undefined ? { autoFocus: o.autoFocus } : {})}
+        {...(hooks.length
+          ? {
+            before: (sending: Omit<Sending, "thread" | "in">) =>
+              beforeSend(
+                hooks,
+                { thread: id, ...(within ? { in: within } : {}), ...sending },
+                ctx.call,
+              ),
+          }
+          : {})}
       />
     </>
   );

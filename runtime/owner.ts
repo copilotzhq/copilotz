@@ -14,12 +14,12 @@ import { createApi } from "./api.ts";
 import type { IndexSpec, ScalarType } from "./store.ts";
 import { createHypervisor, type Hypervisor, type HypervisorOptions } from "@oxian/oxian-js";
 import type {
+  Description,
   Guard,
   Plugins,
   ProcessorDef,
   ReadContext,
   RenderOptions,
-  Resources,
   ViewDef,
   WorkerJob,
 } from "./define.ts";
@@ -65,6 +65,7 @@ import {
   canonical,
   checked,
   compile,
+  described,
   events,
   fingerprint,
   invalid,
@@ -135,16 +136,6 @@ export type Bytes = {
   size: number;
   /** The bytes from `start` up to `end` (not included), as `slice` takes them. */
   read(start: number, end: number): Promise<Uint8Array>;
-};
-
-/** What a runtime's plugins declare, for hosts: help, forms, defaults. */
-export type Description = {
-  collections: Record<string, { schema: unknown }>;
-  /** `record: false`: unrecorded, so nothing of its calls is in the log (a sign-in's). */
-  actions: Record<string, { description?: string; input?: unknown; record?: false }>;
-  /** The names of the Views plugins register. */
-  views: string[];
-  resources: Resources;
 };
 
 export type Owner = {
@@ -282,9 +273,11 @@ export type Owner = {
 const SYSTEM = "sys.";
 const WRITES = ["insert", "update", "replace", "delete"];
 /**
- * A held transaction with no op for this long is rolled back (its executor
- * stuck, or gone unnoticed). Short: it holds the store's writer, the app's
- * only one, and every other write waits for it.
+ * A held transaction left waiting on its executor this long is rolled back
+ * (the executor stuck, or gone unnoticed): from when it answered an op until
+ * the next one arrives. Short: it holds the store's writer, the app's only
+ * one, and every other write waits for it. An op queued or running, however
+ * long it takes, isn't idleness.
  */
 const HOLD_IDLE_MS = 5_000;
 /** An idle owner saves Processor cursors this long after their last advance. */
@@ -1303,17 +1296,19 @@ export async function createOwner(
     let closed = false;
     let idle = false;
     let ending: { reply: PromiseWithResolvers<unknown>; value: unknown } | undefined;
+    // Armed only while it waits on its executor: from an answer to the next request.
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const waiting = () => {
+      timer = setTimeout(() => {
+        idle = true;
+        send({ tx: id, ops: [], end: "abort" }).catch(() => {});
+      }, HOLD_IDLE_MS);
+    };
     const send: Held["send"] = (request) => {
       if (closed) return Promise.reject(invalid("The transaction is closed."));
       clearTimeout(timer);
+      timer = undefined;
       if (request.end) closed = true;
-      else {
-        timer = setTimeout(() => {
-          idle = true;
-          send({ tx: id, ops: [], end: "abort" }).catch(() => {});
-        }, HOLD_IDLE_MS);
-      }
       const reply = Promise.withResolvers<unknown>();
       inbox.push({ request, reply });
       wake?.();
@@ -1356,6 +1351,8 @@ export async function createOwner(
           }
           if (!request.end) {
             reply.resolve(value);
+            // Answered, and nothing else asked: it waits on its executor now.
+            if (!inbox.length && !closed) waiting();
             continue;
           }
           ending = { reply, value };
@@ -2229,20 +2226,7 @@ export async function createOwner(
         )
         : observers.observe(name, item, options),
     emit,
-    describe: () => ({
-      collections: Object.fromEntries(
-        Object.entries(registry.collections).map(([name, def]) => [name, { schema: def.schema }]),
-      ),
-      actions: Object.fromEntries(
-        Object.entries(registry.actions).map(([name, def]) => [name, {
-          ...(def.description ? { description: def.description } : {}),
-          ...(def.input ? { input: def.input } : {}),
-          ...(def.record === false ? { record: false as const } : {}),
-        }]),
-      ),
-      views: Object.keys(registry.views),
-      resources: registry.resources,
-    }),
+    describe: () => described(registry),
     async query(name, params, options = {}) {
       const dot = name.lastIndexOf(".");
       const [collection, query] = [name.slice(0, dot), name.slice(dot + 1)];

@@ -509,6 +509,14 @@ each("a message to someone else, or sent for the person, answers no question", a
     actor: { kind: "person", id: "ana" },
   });
   assertEquals(open.map((m) => m.text), ["Which color?"]);
+  // Asked by the threads it may be in: where it was asked, not elsewhere.
+  for (const [threads, expected] of [[[open[0].thread], ["Which color?"]], [[thread], []]]) {
+    const there = await runtime.query<Message[]>("message.questions", {
+      person: "ana",
+      threads,
+    }, { actor: { kind: "person", id: "ana" } });
+    assertEquals(there.map((m) => m.text), expected);
+  }
   assert(calls.some((c) => c.agent === "lead" && text(c.messages.at(-1)!).includes("Weekly")));
   await runtime.close();
 });

@@ -13,7 +13,7 @@
  * - **An open number:** those who manage the space open it to
  *   anyone (`whatsapp.set`), or the app declares one in its settings
  *   (`resources.whatsapp.<name>`: the space, Meta's ids, token and secret,
- *   its verify token, its webhook's path, its agent and gap), kept as they
+ *   its verify token, its webhook's path, its agent, gap and fallback), kept as they
  *   say with no person, and changed only there. A stranger who writes is then a contact
  *   (someone outside the org), in a chat of their own in the number's
  *   space, answered by its agent: they reach that chat and nothing else; the
@@ -27,9 +27,25 @@
  *   they say: `whatsapp.move`, or `/space <name>` from the phone); photos,
  *   documents and voice notes too (chat transcribes audio). `/new` starts a
  *   new conversation. Meta delivering a message again changes nothing.
- * - **What agents say there** to them goes back to the phone, as WhatsApp
- *   formats it, a long answer in several messages; "typing…" shows while
- *   they work, and nothing says "please wait".
+ * - **What's said there to them** goes back to the phone, as WhatsApp
+ *   formats it, a long one in several messages, with its files: agents'
+ *   answers, the app's fixed messages (`chat.say`), and what the space's
+ *   people say when they take a customer's chat over (`chat.send` with
+ *   `to: ["contact:<id>"]`, or to nobody in particular, `to: []`). Their own
+ *   words never come back to them; what's private, or said to an agent
+ *   alone, stays in the app. "Typing…" shows while agents work, and nothing
+ *   says "please wait".
+ * - **Meta's 24 hours:** a business writes to a phone freely only in the 24
+ *   hours after it last wrote (the plugin keeps when, `wrote`); past them,
+ *   only a template message reaches it. The app declares its templates, as
+ *   Meta approved them (`resources.whatsappTemplates.<name>`: Meta's name,
+ *   its language, its body), and people who may write in a chat, agents
+ *   working for them and the app's code send one there (`whatsapp.template`,
+ *   its parameters checked against its body): it's said in the chat as its
+ *   body, filled, and goes to the phone as the template. Anything else that
+ *   finds the 24 hours past goes as the number's `fallback` template, once,
+ *   its `{name}` and `{text}` filled; with none, it fails once, plainly
+ *   (`window_closed`, on the record), and stays in the app.
  * - **WhatsApp has Views of its own:** a `whatsapp.*` View returns
  *   parts, each one WhatsApp message, built with the toolkit in the contract
  *   (`text`, `buttons`, `list`, `carousel`, `image`, `document`), which
@@ -48,7 +64,15 @@
  * ```ts
  * plugins: [models, chat, ...access, whatsapp]
  * resources: {
- *   whatsapp: { vendas: { in: "customers", phoneId, token, secret, verify, agent: "mobi" } },
+ *   whatsapp: {
+ *     vendas: {
+ *       in: "customers", phoneId, token, secret, verify, agent: "mobi",
+ *       fallback: { template: "retomar", params: ["{name}"] },
+ *     },
+ *   },
+ *   whatsappTemplates: {
+ *     retomar: { name: "retomar_conversa", language: "pt_BR", body: "Olá {{1}}! Temos novidades." },
+ *   },
  * }
  * ```
  */
@@ -58,6 +82,7 @@ import { disconnectAction, webhookAction } from "./actions/disconnect.ts";
 import { numberAction, receiveAction } from "./actions/hook.ts";
 import { linkAction, moveAction, unlinkAction } from "./actions/link.ts";
 import { blockAction, setAction } from "./actions/set.ts";
+import { templateAction } from "./actions/template.ts";
 import { code } from "./collections/code.ts";
 import { number } from "./collections/number.ts";
 import { phone } from "./collections/phone.ts";
@@ -65,6 +90,7 @@ import { rate } from "./collections/rate.ts";
 import { blocked } from "./collections/blocked.ts";
 import { secret } from "./collections/secret.ts";
 import { sent } from "./collections/sent.ts";
+import { templated } from "./collections/template.ts";
 import { chat } from "./collections/thread.ts";
 import { typing } from "./collections/typing.ts";
 import { received } from "./events/received.ts";
@@ -76,7 +102,8 @@ import { typingProcessor } from "./processors/typing.ts";
 import { hookRoute } from "./routes/hook.ts";
 import { messageView } from "./views/message.ts";
 import { rules } from "./shared/rules.ts";
-import { numbersOf } from "./shared/settings.ts";
+import { numbersOf, templatesOf } from "./shared/settings.ts";
+import { fallbackOf, wrongIn } from "./shared/template.ts";
 
 export { hookRoute } from "./routes/hook.ts";
 export * from "./contract.ts";
@@ -91,6 +118,7 @@ export const whatsapp: Plugin = definePlugin({
     whatsapp_code: code,
     whatsapp_thread: chat,
     whatsapp_sent: sent,
+    whatsapp_template: templated,
     whatsapp_typing: typing,
     whatsapp_rate: rate,
     whatsapp_blocked: blocked,
@@ -108,6 +136,7 @@ export const whatsapp: Plugin = definePlugin({
     "whatsapp.move": moveAction,
     "whatsapp.set": setAction,
     "whatsapp.block": blockAction,
+    "whatsapp.template": templateAction,
   },
   processors: {
     "whatsapp.receive": receiveProcessor,
@@ -119,9 +148,14 @@ export const whatsapp: Plugin = definePlugin({
   // WhatsApp's Views: what a message is there (a feature's additions bring their own).
   views: { "whatsapp.message": messageView },
   guard: rules,
-  // At start: links to what it sends (a secret too short is refused), and the app's own numbers.
+  // At start: links to what it sends (a secret too short is refused), the app's own numbers and
+  // its templates.
   check: (merged) => {
     linksOf(merged.resources);
+    for (const [name, template] of Object.entries(templatesOf(merged))) {
+      const wrong = wrongIn(template);
+      if (wrong) throw new Error(`whatsappTemplates.${name} ${wrong}`);
+    }
     for (const [name, number] of Object.entries(numbersOf(merged))) {
       for (const field of ["in", "phoneId", "token", "secret", "verify"] as const) {
         if (typeof number?.[field] !== "string" || !number[field]) {
@@ -131,12 +165,20 @@ export const whatsapp: Plugin = definePlugin({
       if (number.path !== undefined && !number.path.startsWith("/")) {
         throw new Error(`whatsapp.${name}: its path starts with "/"`);
       }
+      if (number.fallback) {
+        try {
+          fallbackOf(merged, number.fallback, { name: "Ana", text: "Hi" });
+        } catch (error) {
+          throw new Error(`whatsapp.${name}.fallback: ${(error as Error).message}`);
+        }
+      }
     }
   },
   // Meta's webhook: each connected number's, and the app's own numbers' under it.
   routes: { "/hooks/whatsapp/*": hookRoute },
   resources: {
     whatsapp: {},
+    whatsappTemplates: {},
     // A number lives in a space: its members see it, its managers change it.
     shared: { whatsapp_number: { write: "manage" } },
   },

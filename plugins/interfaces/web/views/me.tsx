@@ -1,12 +1,14 @@
 /**
  * Who's signed in, at the foot of the sidebar, and their menu. They show by
- * their name; with none, by their email; never by their id. The menu opens
- * with their name, which they change or clear there (`person.rename`, in a
- * dialog), then what front ends put there (the `userMenu` resource:
- * `{ label, icon?, href, order? }`, Connected accounts, say), then what the
- * `orgs` slot lists where the app serves many orgs (the org's settings;
- * every org, for staff), then signing out (of every org). The name they give
- * shows at once, wherever they're shown: the host follows their record.
+ * their name; with none, by their email; never by their id. On the rail (the
+ * sidebar folded), by their face alone, named beside it as a tooltip. The
+ * menu opens with their name, which they change or clear there
+ * (`person.rename`, in a dialog), then what front ends put there (the
+ * `userMenu` resource: `{ label, icon?, href, order? }`, Connected accounts,
+ * say), then what the `orgs` slot lists where the app serves many orgs (the
+ * org's settings; every org, for staff), then signing out (of every org).
+ * The name they give shows at once, wherever they're shown: the host follows
+ * their record.
  */
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import {
@@ -19,6 +21,7 @@ import {
   Menu,
   type MenuItem,
   message,
+  RailItem,
   signOut,
 } from "../../../../hosts/web/mod.ts";
 import { isPublic } from "../../../../runtime/mod.ts";
@@ -34,7 +37,7 @@ const LONGEST = 80;
 const tidy = (name: string) => name.replace(/[\s\p{Cc}]+/gu, " ").trim();
 
 export function Me(
-  { name, email, menu = [], call }: {
+  { name, email, menu = [], call, rail }: {
     /** Their name, when they have one. */
     name?: string;
     email?: string | null;
@@ -42,6 +45,8 @@ export function Me(
     menu?: UserMenuEntry[];
     /** How the shell calls Actions: their name is changed with it. */
     call: Call;
+    /** On the rail: their face alone. */
+    rail?: boolean;
   },
 ): ReactNode {
   const [naming, setNaming] = useState(false);
@@ -60,18 +65,29 @@ export function Me(
     "separator",
     { label: say("signOut"), icon: "signout", onSelect: () => void signOut() },
   ];
+  const shown = name || email || "";
   return (
-    <div className="copilotz-me copilotz-me-menu">
+    <div className={rail ? "copilotz-me copilotz-me-rail" : "copilotz-me copilotz-me-menu"}>
       <Menu
         label={say("yourAccount")}
         side="top"
         items={items}
-        trigger={(props) => (
-          <button type="button" {...props} className="copilotz-me-button">
-            <Who name={name} email={email} />
-            <Icon name="selector" size={15} className="copilotz-me-chevron" />
-          </button>
-        )}
+        trigger={(props) =>
+          rail
+            ? (
+              <RailItem
+                {...props}
+                label={shown || say("yourAccount")}
+                leading={<Avatar name={shown} size={28} />}
+                tooltip={!props["aria-expanded"]}
+              />
+            )
+            : (
+              <button type="button" {...props} className="copilotz-me-button">
+                <Who name={name} email={email} />
+                <Icon name="selector" size={15} className="copilotz-me-chevron" />
+              </button>
+            )}
       />
       <NameDialog
         key={opened}

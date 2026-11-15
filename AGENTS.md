@@ -398,3 +398,5 @@ npm run build && node scripts/npm/smoke.ts && deno publish --dry-run    # the pa
 - `testing/agents-md.test.ts` checks this file's imports, links and version;
   `node scripts/version.ts <version>` moves its version with the rest. Releases are tags the
   maintainers push: don't tag or publish.
+- CI runs for a release's tag only: the publish workflow runs the test workflow, once. Don't start
+  the test workflow by hand to check a branch or before a release; run the checks above here.

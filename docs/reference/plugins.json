@@ -17227,7 +17227,7 @@
         },
         {
           "name": "member.set",
-          "summary": "Makes someone a member of a space, with a role",
+          "summary": "Makes someone a member of a space, with a role, until a time if said",
           "input": {
             "type": "object",
             "properties": {

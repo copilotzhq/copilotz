@@ -162,3 +162,27 @@ test("an end is a time to come, and never the last manager's", async () => {
     assertEquals(await set(ana, "manager", later), "done");
   });
 });
+
+test("trusted code seats someone until a time, as an app's provisioning does", async () => {
+  await setup(async ({ rt, store, team, clock }) => {
+    const cy: Actor = { kind: "person", id: "cy" };
+    assertEquals(await rt.call("note.list", {}, { actor: cy }), []);
+    // A manager invites people; the system (an app's own code) seats them.
+    assertEquals(
+      await code(rt.call("member.set", { space: team, member: cy, role: "viewer" }, {
+        actor: ana,
+      })),
+      "invalid",
+    );
+    const until = new Date(Date.now() + HOUR).toISOString();
+    await rt.call("member.set", { space: team, member: cy, role: "viewer", until });
+    assertEquals(await rt.call("note.list", {}, { actor: cy }), ["plan"]);
+    clock.set(until);
+    await eventually(async () =>
+      (await store.events(0)).find((e) =>
+        e.type === "member.deleted" && e.data._id === `${team}|person:cy`
+      )
+    );
+    assertEquals(await rt.call("note.list", {}, { actor: cy }), []);
+  });
+});

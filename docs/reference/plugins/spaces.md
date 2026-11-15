@@ -49,7 +49,7 @@ none.
 | `invitation.decline` | yes    | no    | no      | no     | no  | no      | Turns down an invitation to your email; a space's managers take one back.                                                  |
 | `invitation.send`    | yes    | no    | no      | no     | no  | no      | Invites someone into a shared space by email, with a role; they join once they accept.                                     |
 | `member.remove`      | yes    | no    | no      | no     | no  | no      | Removes someone from a space.                                                                                              |
-| `member.set`         | yes    | no    | no      | no     | no  | no      | Makes someone a member of a space, with a role.                                                                            |
+| `member.set`         | yes    | no    | no      | no     | no  | no      | Makes someone a member of a space, with a role, until a time if said.                                                      |
 | `org.invite`         | yes    | no    | no      | no     | no  | no      | Invites someone to the org by email, with a role; they join when they accept.                                              |
 | `org.invites`        | yes    | yes   | no      | no     | yes | yes     | The org's invitations waiting to be accepted.                                                                              |
 | `org.me`             | yes    | yes   | no      | no     | yes | yes     | Your standing in the org: your role, whether you're platform staff, and the org (in an app serving many).                  |

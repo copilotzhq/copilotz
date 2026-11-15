@@ -6,7 +6,9 @@
  * space, `on` its collection; managing its space manages its sharing. A
  * contact (someone outside the org) is a member of documents only: its chat.
  * People join a space by accepting an invitation (`invitation.send`) or a
- * request they made: here, a person who's in already only changes role.
+ * request they made: here, a person who's in already only changes role. The
+ * app's own trusted code (the system: provisioning, an import) seats people
+ * directly.
  * An agent joins at once, as a viewer or an editor, if the manager adding
  * it has met it (see agents.ts); taken out, it no longer answers there. A
  * key (`{ kind: "key", id }`) is seated by the plugin that made it, with
@@ -100,7 +102,7 @@ function appsOwn(ctx: Context, space: string, member: { kind: string; id: string
 }
 
 export const setMemberAction = defineAction({
-  description: "Makes someone a member of a space, with a role",
+  description: "Makes someone a member of a space, with a role, until a time if said",
   input: {
     type: "object",
     properties: {
@@ -134,7 +136,8 @@ export const setMemberAction = defineAction({
     if (!input.on) {
       joinable(await ctx.as().db.collection("space").findOne({ _id: input.space }), key);
       if (input.member.kind === "agent") await mustKnow(ctx, input.member.id);
-      if (input.member.kind === "person" && !before) {
+      // Trusted code seats people itself; a person managing a space invites them.
+      if (input.member.kind === "person" && !before && ctx.actor && ctx.actor.kind !== "system") {
         throw Object.assign(
           new Error(
             "People join by invitation: invite them by email, and they join once they accept.",

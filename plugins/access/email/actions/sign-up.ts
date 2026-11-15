@@ -27,6 +27,7 @@ import {
   codeIn,
   EMAIL,
   emailIn,
+  HOST,
   NAME,
   PASSWORD,
   passwordIn,
@@ -50,7 +51,7 @@ export const signUpAction = defineAction({
   record: false,
   input: {
     type: "object",
-    properties: { email: EMAIL, password: PASSWORD, name: NAME, address: ADDRESS },
+    properties: { email: EMAIL, password: PASSWORD, name: NAME, address: ADDRESS, host: HOST },
     required: ["email", "password"],
     additionalProperties: false,
   },
@@ -67,7 +68,7 @@ export const signUpAction = defineAction({
     const db = ctx.as().db;
     const login = await db.collection<Login>("email_login").findOne({ _id: email });
     if (login?.hash && login.verified) {
-      await mail(ctx, "exists", email);
+      await mail(ctx, "exists", email, {}, input.host);
       return { email };
     }
     const codes = db.collection<Code>("email_code");
@@ -88,7 +89,7 @@ export const signUpAction = defineAction({
       until: new Date(now + WAITS).toISOString(),
       at: new Date(now).toISOString(),
     });
-    await mail(ctx, "verify", email, { code });
+    await mail(ctx, "verify", email, { code }, input.host);
     return { email };
   },
 });

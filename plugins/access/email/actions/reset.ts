@@ -20,7 +20,16 @@ import type { Person } from "../../identity/contract.ts";
 import type { Code } from "../collections/code.ts";
 import type { Login } from "../collections/login.ts";
 import { CODE_MINUTES, codeText, newCode, newToken, redeem, seal } from "../shared/codes.ts";
-import { ADDRESS, CODE, codeIn, EMAIL, emailIn, PASSWORD, passwordIn } from "../shared/inputs.ts";
+import {
+  ADDRESS,
+  CODE,
+  codeIn,
+  EMAIL,
+  emailIn,
+  HOST,
+  PASSWORD,
+  passwordIn,
+} from "../shared/inputs.ts";
 import { aSend, aTry } from "../shared/limits.ts";
 import { mail } from "../shared/mail.ts";
 import { hashPassword } from "../shared/password.ts";
@@ -33,7 +42,7 @@ export const forgotAction = defineAction({
   record: false,
   input: {
     type: "object",
-    properties: { email: EMAIL, address: ADDRESS },
+    properties: { email: EMAIL, address: ADDRESS, host: HOST },
     required: ["email"],
     additionalProperties: false,
   },
@@ -61,7 +70,7 @@ export const forgotAction = defineAction({
       at: new Date(now).toISOString(),
     });
     try {
-      await mail(ctx, "reset", email, { code });
+      await mail(ctx, "reset", email, { code }, input.host);
     } catch (error) {
       console.error("email-sign-in: a reset code didn't go:", (error as Error).message);
     }

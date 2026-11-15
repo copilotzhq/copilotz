@@ -108,6 +108,28 @@ export type EmailSettings = {
  */
 export type EmailWords = { subject: string; text: string; html?: string };
 
+/** The messages email sign-in sends, by what they're for. */
+export type EmailSignInMessages = {
+  verify: EmailWords;
+  reset: EmailWords;
+  invite: EmailWords;
+  exists: EmailWords;
+  /** A code to sign in with (`signInByCode`); English unless the app says. */
+  signin?: EmailWords;
+};
+
+/**
+ * What email sign-in says on one host (a brand the app serves there): its
+ * name, who its messages are from (one the `email` resource allows), its
+ * messages' words, and where its links go (`https://<host>` unless said).
+ */
+export type EmailSignInHost = {
+  app?: string;
+  from?: string;
+  messages?: { [K in keyof EmailSignInMessages]?: Partial<EmailWords> };
+  origin?: string;
+};
+
 /** The `emailSignIn` resource: what email sign-in says, and whether people make accounts. */
 export type EmailSignInSettings = {
   /**
@@ -115,20 +137,28 @@ export type EmailSignInSettings = {
    * else only an invitation makes one (`email.invite`). Yes unless said.
    */
   signUp?: boolean;
+  /**
+   * Whether people may sign in with a code sent to their address, with no
+   * password (`email.code`, then `email.enter`); with `signUp`, that makes
+   * an account too. No unless said.
+   */
+  signInByCode?: boolean;
   /** What messages call the app (`{app}`): the host of the `links` origin unless said. */
   app?: string;
   /**
    * The messages, by what they're for: a sign-up's code (`verify`), a new
-   * password's (`reset`), an invitation's link (`invite`), and a sign-up for
-   * an address that has an account already (`exists`). English unless the
-   * app says; a later plugin patches one word of one.
+   * password's (`reset`), an invitation's link (`invite`), a sign-up for an
+   * address that has an account already (`exists`), and a code to sign in
+   * with (`signin`). English unless the app says; a later plugin patches one
+   * word of one.
    */
-  messages: {
-    verify: EmailWords;
-    reset: EmailWords;
-    invite: EmailWords;
-    exists: EmailWords;
-  };
+  messages: EmailSignInMessages;
+  /**
+   * Per host the page is served on (a brand's: `"brand.example"`), what
+   * changes there: its name, sender, words and links. The route says the
+   * host; a host not here says what the rest does.
+   */
+  hosts?: Record<string, EmailSignInHost>;
   /**
    * How much one address, and one caller, may ask (`too_many` past it):
    * messages to an address an hour (`sends`, 5); tries at a password, a code

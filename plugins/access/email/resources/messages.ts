@@ -5,7 +5,7 @@
  * HTML, escaped. The HTML is one plain card, inline-styled, as mail apps
  * want it.
  */
-import type { EmailSignInSettings } from "../contract.ts";
+import type { EmailSignInMessages } from "../contract.ts";
 
 /** A message's HTML: a heading, what it says, and what to act on, in one card. */
 const card = (heading: string, body: string) =>
@@ -32,7 +32,7 @@ const button = (label: string) =>
   `border-radius:10px;background:#1c1917;color:#ffffff;font-size:15px;font-weight:600;` +
   `text-decoration:none">${label}</a></p>`;
 
-export const MESSAGES: EmailSignInSettings["messages"] = {
+export const MESSAGES: Required<EmailSignInMessages> = {
   verify: {
     subject: "{code} is your code for {app}",
     text: "Your code to confirm this email for {app}:\n\n{code}\n\n" +
@@ -67,6 +67,18 @@ export const MESSAGES: EmailSignInSettings["messages"] = {
         quiet(
           "The link works once, for {hours} hours. If you weren't expecting it, ignore this email.",
         ),
+    ),
+  },
+  signin: {
+    subject: "{code} is your code to sign in to {app}",
+    text: "Your code to sign in to {app}:\n\n{code}\n\n" +
+      "It works for {minutes} minutes. If you didn't ask for it, ignore this email: " +
+      "nobody signs in without the code.",
+    html: card(
+      "Sign in",
+      p("Enter this code where you're signing in:") + code +
+        p("It works for {minutes} minutes.") +
+        quiet("If you didn't ask for it, ignore this email: nobody signs in without the code."),
     ),
   },
   exists: {

@@ -13,7 +13,7 @@ import { defineAction, failure } from "../../../../runtime/mod.ts";
 import type { Code } from "../collections/code.ts";
 import type { Login } from "../collections/login.ts";
 import { issue } from "../shared/codes.ts";
-import { ADDRESS, EMAIL, emailIn, PASSWORD } from "../shared/inputs.ts";
+import { ADDRESS, EMAIL, emailIn, HOST, PASSWORD } from "../shared/inputs.ts";
 import { aSend, aTry } from "../shared/limits.ts";
 import { mail } from "../shared/mail.ts";
 import { hashPassword, noPassword, stale, verifyPassword } from "../shared/password.ts";
@@ -27,7 +27,7 @@ export const signInAction = defineAction({
   record: false,
   input: {
     type: "object",
-    properties: { email: EMAIL, password: PASSWORD, address: ADDRESS },
+    properties: { email: EMAIL, password: PASSWORD, address: ADDRESS, host: HOST },
     required: ["email", "password"],
     additionalProperties: false,
   },
@@ -57,7 +57,10 @@ export const signInAction = defineAction({
         if ((error as { code?: string }).code === "too_many") return false;
         throw error;
       });
-      if (room) await mail(ctx, "verify", email, { code: await issue(ctx, linksFor(ctx), signUp) });
+      if (room) {
+        const code = await issue(ctx, linksFor(ctx), signUp);
+        await mail(ctx, "verify", email, { code }, input.host);
+      }
       throw failure(
         "unverified",
         room

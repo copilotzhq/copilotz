@@ -13,7 +13,7 @@
  * the contract).
  *
  * **`emailSignIn`** (with identity and `email`) signs people in with an
- * email and a password:
+ * email and a password, or a code sent to it:
  *
  * - **Making an account:** `email.sign-up` sends a six-digit code, its
  *   password waiting for it; `email.verify` with the code makes the account
@@ -21,7 +21,9 @@
  *   with the same answer. `signUp: false` leaves only invitations.
  * - **Signing in:** `email.sign-in`, refused with `unverified` (and a new
  *   code sent) for an address not confirmed yet, the page's cue to ask for
- *   the code.
+ *   the code. With `signInByCode`, by a code instead: `email.code` sends
+ *   one to an address someone has (with sign-up, to any), and `email.enter`
+ *   signs in with it, confirming the address.
  * - **A new password:** `email.forgot` sends a code, answering the same for
  *   an address nobody has; `email.reset` with it sets the password, ends
  *   every other session and signs in.
@@ -33,6 +35,10 @@
  *   hash as another app kept it (bcrypt's `$2a$`, `$2b$` or `$2y$`, as Rails,
  *   PHP and Parse keep it; Copilotz 0.x's `salt:hash` hex, PBKDF2-SHA256 at
  *   100,000), hashed again our way at their first sign-in.
+ *
+ * - **Per host:** an app serving brands on hosts of their own says, per
+ *   host, its name, sender, words and where links go (`hosts`); the page's
+ *   steps say the host it was served on, and an invitation takes one.
  *
  * Passwords are hashed with PBKDF2-SHA256 on WebCrypto, in six stages of
  * 100,000 (workerd's most for one): `pbkdf2-sha256$6x100000$<salt>$<hash>`
@@ -61,6 +67,7 @@
  * ```
  */
 import { definePlugin, linksOf, nearby, type Plugin } from "../../../runtime/mod.ts";
+import { codeAction, enterAction } from "./actions/code.ts";
 import { importAction } from "./actions/import.ts";
 import { acceptAction, invitationAction, inviteAction } from "./actions/invite.ts";
 import { pruneAction } from "./actions/prune.ts";
@@ -77,6 +84,8 @@ import { rate } from "./collections/rate.ts";
 import { MESSAGES } from "./resources/messages.ts";
 import {
   acceptRoute,
+  codeRoute,
+  enterRoute,
   forgotRoute,
   invitationRoute,
   resetRoute,
@@ -84,7 +93,8 @@ import {
   signUpRoute,
   verifyRoute,
 } from "./routes/sign-in.ts";
-import type { EmailSettings } from "./contract.ts";
+import { allowed } from "./shared/addresses.ts";
+import type { EmailSettings, EmailSignInSettings } from "./contract.ts";
 
 export * from "./contract.ts";
 export { passwordSignIn } from "./password.ts";
@@ -154,6 +164,8 @@ export const emailSignIn: Plugin = definePlugin({
     "email.invitation": invitationAction,
     "email.accept": acceptAction,
     "email.import": importAction,
+    "email.code": codeAction,
+    "email.enter": enterAction,
     "email.prune": pruneAction,
   },
   schedules: { "email.prune": { every: "10m", call: "email.prune", input: {} } },
@@ -165,6 +177,8 @@ export const emailSignIn: Plugin = definePlugin({
     "/signin/email/reset": resetRoute,
     "/signin/email/invitation": invitationRoute,
     "/signin/email/accept": acceptRoute,
+    "/signin/email/code": codeRoute,
+    "/signin/email/enter": enterRoute,
   },
   resources: { emailSignIn: { messages: MESSAGES } },
   // Nobody but the system reads or writes them: every actor's ops find nothing.
@@ -176,6 +190,17 @@ export const emailSignIn: Plugin = definePlugin({
         "emailSignIn needs the links resource ({ origin, secret }): its links go to the " +
           "origin, and its codes are kept sealed with the secret",
       );
+    }
+    // A host's sender is one the email resource allows, or its messages would never go.
+    const settings = merged.resources.emailSignIn as Partial<EmailSignInSettings> | undefined;
+    const mail = merged.resources.email as EmailSettings | undefined;
+    for (const [host, here] of Object.entries(settings?.hosts ?? {})) {
+      if (here?.from && mail && !allowed(mail, here.from)) {
+        throw new Error(
+          `emailSignIn.hosts["${host}"].from (${here.from}) isn't an address the email ` +
+            "resource allows: add it to its senders",
+        );
+      }
     }
   },
 });

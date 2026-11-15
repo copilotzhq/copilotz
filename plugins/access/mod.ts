@@ -10,9 +10,10 @@
  *   names your client);
  * - `devSignIn`: sign-in by name, from this machine only, for trying things
  *   out;
- * - `emailSignIn`: sign-in with an email and a password (codes, resets and
- *   invitations by email), with `email`, the app's email port (Resend's, a
- *   mail server's over SMTP, or the log on a laptop);
+ * - `emailSignIn`: sign-in with an email and a password, or a code sent to
+ *   it (codes, resets and invitations by email), with `email`, the app's
+ *   email port (Resend's, a mail server's over SMTP, or the log on a
+ *   laptop);
  * - `passwordSignIn`: sign-in with an identifier (a username, a badge
  *   number, a CPF) and a password, for accounts an admin or an import makes;
  * - `accounts`: outside accounts people connect for their agents to use (a

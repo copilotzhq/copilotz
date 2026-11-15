@@ -2,13 +2,14 @@
  * Accounts trusted code makes (a webhook, once someone bought): a link by
  * email where its person chooses a password and arrives signed in.
  *
- * - `email.invite` `{ email, name?, person? }`: the person this address is
- *   (who it already was; else someone new, by the id given or one made),
- *   answered at once so the caller can hand them what they bought. When
- *   they have no password yet, a link goes to the address (the `invite`
- *   message: `<links origin>/#email-invite=<token>`), working once, for a
- *   day; links sent before still work until one is used. Trusted code's:
- *   no actor calls it.
+ * - `email.invite` `{ email, name?, person?, host? }`: the person this
+ *   address is (who it already was; else someone new, by the id given or one
+ *   made), answered at once so the caller can hand them what they bought.
+ *   When they have no password yet, a link goes to the address (the `invite`
+ *   message: `<links origin>/#email-invite=<token>`; for a `host` the
+ *   `emailSignIn` resource names, its words, sender and origin), working
+ *   once, for a day; links sent before still work until one is used.
+ *   Trusted code's: no actor calls it.
  * - `email.invitation` `{ token }`: which address a link is for, while it
  *   works: the page shows it as the person chooses their password.
  * - `email.accept` `{ token, password, name? }`: the link used: the password
@@ -23,9 +24,9 @@ import { type Context, defineAction, failure } from "../../../../runtime/mod.ts"
 import type { Code } from "../collections/code.ts";
 import type { Login } from "../collections/login.ts";
 import { LINK_HOURS, newToken, seal, sealsOf, tokenText } from "../shared/codes.ts";
-import { ADDRESS, EMAIL, emailIn, NAME, PASSWORD, passwordIn } from "../shared/inputs.ts";
+import { ADDRESS, EMAIL, emailIn, HOST, NAME, PASSWORD, passwordIn } from "../shared/inputs.ts";
 import { aTry } from "../shared/limits.ts";
-import { mail } from "../shared/mail.ts";
+import { mail, originFor } from "../shared/mail.ts";
 import { hashPassword } from "../shared/password.ts";
 import { keepPassword, keepPerson, personFor, sessionFor } from "../shared/people.ts";
 import { linksFor } from "../shared/settings.ts";
@@ -59,6 +60,8 @@ export const inviteAction = defineAction({
       name: NAME,
       /** The id a new person gets (else one is made). */
       person: { type: "string", minLength: 1, maxLength: 200 },
+      /** The host whose words, sender and origin the message has (`emailSignIn.hosts`). */
+      host: HOST,
     },
     required: ["email"],
     additionalProperties: false,
@@ -99,7 +102,8 @@ export const inviteAction = defineAction({
       until: expires,
       at: new Date(now).toISOString(),
     });
-    await mail(ctx, "invite", email, { link: `${links.origin}/#${INVITE_FRAGMENT}=${token}` });
+    const link = `${originFor(ctx, input.host)}/#${INVITE_FRAGMENT}=${token}`;
+    await mail(ctx, "invite", email, { link }, input.host);
     return { person, new: made, sent: true };
   },
 });

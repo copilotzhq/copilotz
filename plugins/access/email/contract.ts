@@ -1,9 +1,16 @@
 /**
  * The email plugins' contract: what other plugins may import. The shape of a
  * message (`email.send`'s input), of an adapter of the `email` port (to send
- * another way than Resend's), and of both plugins' settings. They reach the
- * rest by name: `email.send`, `email.invite`, `email.import`.
+ * another way than Resend's or SMTP), and of the plugins' settings. They
+ * reach the rest by name: `email.send`, `email.invite`, `email.import`.
  */
+
+/**
+ * A file sent with a message: its name as the reader sees it, its type
+ * (`application/pdf`; else guessed from the name's ending, else
+ * `application/octet-stream`), and its bytes in base64.
+ */
+export type EmailAttachment = { filename: string; contentType?: string; content: string };
 
 /** A message to send: `email.send`'s input, and what an adapter is handed. */
 export type EmailMessage = {
@@ -14,11 +21,22 @@ export type EmailMessage = {
   text: string;
   /** The same, as HTML, for mail apps that show it. */
   html?: string;
+  /**
+   * Who it's from, when not the `email` resource's `from`: one of the
+   * addresses it allows (its `from`, and its `senders`). A name may go with
+   * it: `"Billing <billing@example.com>"`.
+   */
+  from?: string;
+  /** Where replies go: this message's, else the `email` resource's. */
+  replyTo?: string;
+  /** Files sent with it (10 at most, 10 MiB in all). */
+  attachments?: EmailAttachment[];
 };
 
 /**
- * An adapter of the `email` port: sends one message, with the app's settings
- * (`from`, its key) and the `fetch` plugin code calls out with (`ctx.fetch`,
+ * An adapter of the `email` port: sends one message, from whom it's from
+ * (the message's `from`, else the app's), with the app's settings (its key,
+ * its SMTP server) and the `fetch` plugin code calls out with (`ctx.fetch`,
  * which tests replace). It throws when the message didn't go.
  */
 export type EmailAdapter = {
@@ -28,20 +46,58 @@ export type EmailAdapter = {
   ): Promise<{ id?: string }>;
 };
 
+/**
+ * The `smtp` adapter's server: where it connects, and how it signs in. On
+ * Node, Deno and Bun (it speaks over `node:net` and `node:tls`), not on
+ * workerd.
+ */
+export type SmtpSettings = {
+  /** The server: `smtp.example.com`. */
+  host: string;
+  /** Its port: 465 when `secure`, else 587. */
+  port?: number;
+  /**
+   * TLS from the start (port 465). Else it starts plain and moves to TLS
+   * with STARTTLS before anything is said: refused when the server doesn't
+   * offer it, unless `starttls` is false.
+   */
+  secure?: boolean;
+  /** False only for a server on this machine (a test's, Mailpit): it then stays plain. */
+  starttls?: boolean;
+  /** Who it signs in as (AUTH PLAIN or LOGIN, after TLS); none, it doesn't. */
+  user?: string;
+  password?: string;
+  /** Certificates to trust besides the platform's (PEM): a relay with a private CA's. */
+  ca?: string;
+  /** What it calls itself to the server (EHLO): the `from` address's domain unless said. */
+  name?: string;
+  /** How long it waits for the server at each step (ms): 30,000. */
+  timeout?: number;
+};
+
 /** The `email` resource: how the app sends email. */
 export type EmailSettings = {
   /**
-   * Which adapter sends: `resend` (Resend's API), or `console` on a laptop,
-   * which writes each message to the log (refused where the app's `links`
-   * origin is public: a code in a log is a way in).
+   * Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on
+   * Node, Deno and Bun), or `console` on a laptop, which writes each message
+   * to the log (refused where the app's `links` origin is public: a code in a
+   * log is a way in).
    */
   adapter: string;
   /** Who messages are from: `"Example <noreply@example.com>"`. */
   from?: string;
+  /**
+   * Who else a message may be from (its own `from`): addresses
+   * (`billing@example.com`), or every address at a domain (`@example.com`).
+   * Any other is refused.
+   */
+  senders?: string[];
   /** Where replies go, when not to `from`. */
   replyTo?: string;
   /** The adapter's key (Resend's). */
   apiKey?: string;
+  /** The `smtp` adapter's server. */
+  smtp?: SmtpSettings;
 };
 
 /**

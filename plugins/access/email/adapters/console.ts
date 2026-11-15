@@ -8,11 +8,22 @@ import type { EmailAdapter } from "../contract.ts";
 
 const indent = (text: string) => text.split("\n").map((line) => `  ${line}`).join("\n");
 
+/** A file's size, from its base64. */
+const sizeOf = (base64: string) => {
+  const kib = Math.floor(base64.replace(/\s+/g, "").length * 3 / 4) / 1024;
+  return kib < 1024 ? `${Math.ceil(kib)} KiB` : `${(kib / 1024).toFixed(1)} MiB`;
+};
+
 export const consoleEmail: EmailAdapter = {
-  send(message, { from }) {
+  send(message, { from, settings }) {
+    const replies = message.replyTo ?? settings.replyTo;
+    const files = (message.attachments ?? []).map((file) =>
+      `\n  + ${file.filename} (${sizeOf(file.content)})`
+    ).join("");
     console.log(
-      `\n[email] to ${message.to}${from ? `, from ${from}` : ""}\n  ${message.subject}\n\n` +
-        `${indent(message.text)}\n`,
+      `\n[email] to ${message.to}${from ? `, from ${from}` : ""}` +
+        `${replies ? `, replies to ${replies}` : ""}\n  ${message.subject}\n\n` +
+        `${indent(message.text)}\n${files ? `${files}\n` : ""}`,
     );
     return Promise.resolve({});
   },

@@ -2,11 +2,15 @@
  * Email: sending it, and signing in with it.
  *
  * **`email`** is the app's email port: `email.send` `{ to, subject, text,
- * html? }` (trusted code's, unrecorded) sends through the adapter the
- * `email` resource names: `resend` (Resend's API, with its `apiKey`), or
- * `console`, which writes each message to the log, for a laptop (an app
- * whose `links` origin is public doesn't start with it). An adapter of
- * your own is an `email` adapter (`EmailAdapter`, in the contract).
+ * html?, from?, replyTo?, attachments? }` (trusted code's, unrecorded)
+ * sends through the adapter the `email` resource names: `resend` (Resend's
+ * API, with its `apiKey`), `smtp` (a mail server: its `smtp` settings, on
+ * Node, Deno and Bun, not workerd), or `console`, which writes each message
+ * to the log, for a laptop (an app whose `links` origin is public doesn't
+ * start with it). A message is from the resource's `from`, or from another
+ * address its `senders` allow; files go as MIME parts (base64, 10 MiB in
+ * all). An adapter of your own is an `email` adapter (`EmailAdapter`, in
+ * the contract).
  *
  * **`emailSignIn`** (with identity and `email`) signs people in with an
  * email and a password:
@@ -66,6 +70,7 @@ import { signInAction } from "./actions/sign-in.ts";
 import { signUpAction, verifyAction } from "./actions/sign-up.ts";
 import { consoleEmail } from "./adapters/console.ts";
 import { resend } from "./adapters/resend.ts";
+import { smtp } from "./adapters/smtp.ts";
 import { code } from "./collections/code.ts";
 import { login } from "./collections/login.ts";
 import { rate } from "./collections/rate.ts";
@@ -99,7 +104,7 @@ const publicOrigin = (resources: Record<string, unknown>): string | undefined =>
 export const email: Plugin = definePlugin({
   name: "email",
   actions: { "email.send": sendAction },
-  adapters: { email: { resend, console: consoleEmail } },
+  adapters: { email: { resend, smtp, console: consoleEmail } },
   check(merged) {
     const settings = merged.resources.email as Partial<EmailSettings> | undefined;
     const adapters = Object.keys(merged.adapters.email ?? {});
@@ -110,6 +115,16 @@ export const email: Plugin = definePlugin({
     }
     if (settings.adapter === "resend" && (!settings.apiKey || !settings.from)) {
       throw new Error("the email resource's resend adapter needs its apiKey and from");
+    }
+    if (settings.adapter === "smtp" && (!settings.smtp?.host || !settings.from)) {
+      throw new Error("the email resource's smtp adapter needs its from, and smtp: { host }");
+    }
+    for (const sender of settings.senders ?? []) {
+      if (typeof sender !== "string" || !/@[^\s@]+\.[^\s@]+>?\s*$/.test(sender.trim())) {
+        throw new Error(
+          `the email resource's senders are addresses, or @domain: "${String(sender)}" isn't`,
+        );
+      }
     }
     const origin = publicOrigin(merged.resources);
     if (settings.adapter === "console" && origin) {

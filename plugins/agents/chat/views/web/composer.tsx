@@ -1,6 +1,7 @@
 /**
  * Where you type. Enter sends, Shift+Enter starts a new line, Escape stops
- * the agents working. It grows with what you write, and takes files from the
+ * the agents working; on a touch screen, Enter starts a new line and the
+ * Send button sends (`sends`). It grows with what you write, and takes files from the
  * clip, a paste or a drop, and a voice message from the microphone: recorded
  * here, listened back, then sent, with words or without. Audio is
  * transcribed as it's sent, which says so; if that fails, nothing went, and
@@ -90,6 +91,28 @@ const audio = (type: string) => type.startsWith("audio/");
 /** Why transcribing failed, without what the notice already says. */
 const reason = (error: unknown) => message(error).replace(/^Couldn't transcribe [^:]*:\s*/, "");
 
+/** A mouse or a trackpad: a computer, whose keyboard sends with Enter. */
+const FINE = "(pointer: fine)";
+const pointer = {
+  subscribe(changed: () => void) {
+    const query = matchMedia(FINE);
+    query.addEventListener("change", changed);
+    return () => query.removeEventListener("change", changed);
+  },
+  fine: () => matchMedia(FINE).matches,
+};
+
+/**
+ * Whether a key sends what's typed. On a computer (`fine`), Enter does, and
+ * Shift+Enter starts a new line. On a touch screen, Enter starts a new line,
+ * as its keyboard's return key says, and the Send button sends; so does
+ * Enter with ⌘ or Ctrl, from a keyboard attached to it.
+ */
+export const sends = (
+  key: { key: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
+  fine: boolean,
+): boolean => key.key === "Enter" && !key.shiftKey && (fine || key.metaKey || key.ctrlKey);
+
 export function Composer(props: {
   /**
    * Uploads a file to send (`chat.attach`), on its own: each as it's chosen,
@@ -172,14 +195,14 @@ export function Composer(props: {
   const notes = Object.values(props.notes ?? {})
     .filter((note): note is ComposerNote => !!note?.view)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const fine = () => matchMedia("(pointer: fine)").matches;
+  const fine = useSyncExternalStore(pointer.subscribe, pointer.fine, () => true);
 
   // Ready to type after what's there, where there's a keyboard (on a phone, it waits for a tap).
   useEffect(() => {
     const take = typeof props.autoFocus === "function"
       ? props.autoFocus()
       : props.autoFocus ?? true;
-    if (fine() && take) {
+    if (fine && take) {
       area.current?.focus();
       area.current?.setSelectionRange(text.length, text.length);
     }
@@ -255,7 +278,7 @@ export function Composer(props: {
     }
     return uploaded;
   };
-  const typeOn = () => requestAnimationFrame(() => fine() && area.current?.focus());
+  const typeOn = () => requestAnimationFrame(() => fine && area.current?.focus());
   const remove = (gone: Attached) => {
     if (gone.preview) URL.revokeObjectURL(gone.preview);
     setFiles((now) => now.filter((x) => x.id !== gone.id));
@@ -273,7 +296,7 @@ export function Composer(props: {
     setRecorder(undefined);
     setFailed(undefined);
     requestAnimationFrame(() =>
-      fine() ? area.current?.focus() : mic.current?.querySelector("button")?.focus()
+      fine ? area.current?.focus() : mic.current?.querySelector("button")?.focus()
     );
   };
 
@@ -421,7 +444,7 @@ export function Composer(props: {
         return setClosed(typing!.start);
       }
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (sends(event, fine) && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void submit();
     } else if (event.key === "Escape" && working.length) {
@@ -605,7 +628,7 @@ export function Composer(props: {
               className="chat-input"
               value={text}
               placeholder={take ? say("addMessage") : props.placeholder ?? say("message")}
-              enterKeyHint="send"
+              enterKeyHint={fine ? "send" : "enter"}
               readOnly={!!sending}
               aria-autocomplete={props.agents?.length ? "list" : undefined}
               aria-controls={props.agents?.length ? list : undefined}
@@ -708,12 +731,16 @@ export function Composer(props: {
           : null}
         <p className="chat-hint">
           {props.note}
-          <span className="chat-keys">
-            {say.nodes("keysHint", {
-              enter: <Kbd>{say("keyEnter")}</Kbd>,
-              shift: <Kbd>{say("keyShift")}</Kbd>,
-            })}
-          </span>
+          {fine
+            ? (
+              <span className="chat-keys">
+                {say.nodes("keysHint", {
+                  enter: <Kbd>{say("keyEnter")}</Kbd>,
+                  shift: <Kbd>{say("keyShift")}</Kbd>,
+                })}
+              </span>
+            )
+            : null}
         </p>
       </div>
     </form>

@@ -28,8 +28,9 @@ Front ends are `.tsx` (Ink, React). Deno and Bun run them as they are. Node runs
 package's JavaScript.
 
 The test workflow, `.github/workflows/test.yml`, runs the suite on Deno, Node and Bun against
-PostgreSQL with pgvector, and on Node on macOS and Windows. On Deno it also checks the format, the
-types and the JSR package. On Node it also builds the npm package and smoke-tests it.
+PostgreSQL with pgvector, and on Node on Windows. macOS is off there for now: run the suite on a Mac
+before tagging. On Deno it also checks the format, the types and the JSR package. On Node it also
+builds the npm package and smoke-tests it.
 
 The workflow runs when the publish workflow calls it, before a release, and on demand. It doesn't
 run on pushes or pull requests. So run what a change touches locally before merging it.

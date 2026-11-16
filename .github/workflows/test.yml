@@ -1,6 +1,6 @@
 # The same suite on every runtime Copilotz supports, against PostgreSQL (with
-# pgvector), PGlite, SQLite and memory stores; Node's also on macOS and Windows,
-# where the computer program runs too. It runs when the publish workflow calls
+# pgvector), PGlite, SQLite and memory stores; Node's also on Windows, where the
+# computer program runs too (macOS is checked on a Mac before tagging). It runs when the publish workflow calls
 # it, before a release, and on demand (Actions → Test → Run workflow): not on
 # pushes or pull requests. A release whose tests fail publishes nothing; it's
 # fixed forward and tagged again. Run what a change touches locally before
@@ -75,7 +75,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        # macOS is off for now: Copilotz is developed and checked on a Mac before a tag, and
+        # GitHub's macOS runners can queue for longer than the rest of the run takes.
+        # os: [macos-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:

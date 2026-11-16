@@ -14,8 +14,9 @@ import "../mod.ts";
 import { definePlugin } from "../../../runtime/mod.ts";
 import { test } from "../../../testing/mod.ts";
 import { COPILOTZ_ABOUT, SIGN_IN_WORDS, signInPageOf } from "../signin-words.ts";
-import { knownWords, type Phrase, wordsOf } from "../words.ts";
+import { type Phrase, wordsOf } from "../words.ts";
 import { ptBR } from "../pt-br/mod.ts";
+import { frontEndWords } from "./keys.ts";
 
 /** The blanks a text has (`{name}`), sorted. */
 const blanksOf = (text = "") => [...text.matchAll(/\{(\w+)\}/g)].map(([, name]) => name).sort();
@@ -44,7 +45,7 @@ function wrong(key: string, english: Phrase, said: Phrase | undefined): string[]
 }
 
 test("a phrase for every key the web front ends show, with the English's blanks and plurals", () => {
-  const english = knownWords();
+  const english = frontEndWords();
   const said = wordsOf([ptBR]);
   const keys = Object.keys(english);
   assert(keys.length > 700, `${keys.length} keys known: the front ends' words weren't loaded`);

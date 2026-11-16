@@ -8,8 +8,16 @@ import "../../../plugins/access/web.tsx";
 import "../../../plugins/billing/web.tsx";
 import "../../../plugins/interfaces/web.tsx";
 import "../mod.ts";
-import { knownWords } from "../words.ts";
+import { knownWords, type Phrase } from "../words.ts";
 import { wordsList } from "../../../testing/words.ts";
+
+/**
+ * Every front end's words, by key, with its English: what `knownWords` holds, less the words a
+ * test defines for itself (`demo`, in words.test.ts). On Bun, test files share one process, so
+ * the tests after that one know its words too.
+ */
+export const frontEndWords = (): Record<string, Phrase> =>
+  Object.fromEntries(Object.entries(knownWords()).filter(([key]) => !key.startsWith("demo.")));
 
 export function keysDoc(): string {
   const lines = [
@@ -23,7 +31,7 @@ export function keysDoc(): string {
     "Generated: `deno run -A hosts/web/tests/keys.ts`.",
     "",
   ];
-  lines.push(...wordsList(knownWords()));
+  lines.push(...wordsList(frontEndWords()));
   return lines.join("\n") + "\n";
 }
 

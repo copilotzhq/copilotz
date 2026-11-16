@@ -1,3 +1,14 @@
+## 1.0.0-rc.51 — 2026-11-16
+
+**Phones.**
+
+- **A voice message records on an iPhone.** The live waveform's bars are scaled to their level, not
+  animated. Safari on iOS kept memory for every transition the bars started, many times a second,
+  until iOS closed the page, within a minute of recording, and the recording with it.
+- **On a touch screen, Enter starts a new line in chat's composer**, as the keyboard's return key
+  says, and the Send button sends (so does Enter with ⌘ or Ctrl, from a keyboard attached to it). On
+  a computer, Enter still sends, and the hint about the keys shows only there.
+
 ## 1.0.0-rc.50 — 2026-11-15
 
 What rebuilding real systems on rc.49 asked of Copilotz: a retail point of sale (Open Source Point

@@ -7,7 +7,9 @@
  * position as a slider: a click or a drag seeks, and so do the arrow keys
  * (by `step`), Page Up and Down, Home and End. `live` draws levels as they
  * come instead, unscaled, the newest at the end and the oldest falling off
- * the start.
+ * the start. Its bars are scaled, never animated: they change many times a
+ * second, and a CSS transition started that often grows Safari's memory
+ * until iOS closes the page (an iPhone, recording for half a minute).
  *
  * ```tsx
  * <Waveform peaks={peaks} progress={0.4} onSeek={seek} label="Position" valueText="0:04 of 0:10" />
@@ -38,7 +40,8 @@ const SHEET = sheet(
 .copilotz-waveform-seek:focus-visible { outline-offset: 4px; }
 .copilotz-waveform[aria-disabled=true] { cursor: default; }
 .copilotz-waveform-live { justify-content: flex-end; gap: 2px; overflow: hidden; }
-.copilotz-waveform-live i { flex: none; width: 3px; opacity: .9; transition: height .08s linear; }
+.copilotz-waveform-live i { flex: none; width: 3px; height: 100%; transform: scaleY(var(--level)); opacity: .9;
+  transition: none; }
 .copilotz-waveform-live i.copilotz-waveform-idle { opacity: .22; }
 `,
 );

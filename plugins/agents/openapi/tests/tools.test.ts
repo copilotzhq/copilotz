@@ -131,16 +131,18 @@ test("an API's error is what the agent reads: HTTP, its status, what the API sai
 });
 
 test("files in a response are the conversation's files; the agent gets a reference", async () => {
-  const answers = [
+  const maps = [
     json({ caption: "Porto to Lisbon", image: `data:image/png;base64,${PNG}` }),
-    // A response that is a file is one, whole.
-    new Response(Uint8Array.from(atob(PNG), (c) => c.charCodeAt(0)), {
-      headers: { "content-type": "image/png" },
-    }),
     // The same image again is the same file.
     json({ caption: "Again", image: PNG }),
   ];
-  const api = fake(() => answers.shift()!);
+  // A response that is a file is one, whole.
+  const image = () =>
+    new Response(Uint8Array.from(atob(PNG), (c) => c.charCodeAt(0)), {
+      headers: { "content-type": "image/png" },
+    });
+  // Answered by what's asked: the two calls of one turn reach the API in either order.
+  const api = fake(({ url }) => url.endsWith("/photo") ? image() : maps.shift()!);
   const { runtime, calls, ask } = await start(
     ({ turn }) =>
       turn === 0

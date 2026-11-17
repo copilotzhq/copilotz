@@ -150,12 +150,21 @@ A blob is a large value, kept once.
   list that shows no pictures reads none.
 - **As bytes:** trusted host code (a route) reads one with
   `runtime.bytes(collection, filter, field, { actor })`: the first document `filter` finds, read as
-  `actor` reads it, or as the system without one. It answers its `size` and `read(start, end)`, the
-  UTF-8 bytes of the string: a `data:` address's text, which the route decodes. The owner loads the
-  blob once, at the first part asked for, and its reference never leaves the owner. Where no rule
-  speaks for the collection, any actor reads it, the anonymous too: check who asks first.
-  [A business app's screens](../guides/a-business-apps-screens.md) serves pictures this way; chat's
-  `/files/<id>` streams files of any size, with ranges.
+  `actor` reads it, under the rules and without private fields, or as the system without one. An
+  actor reads only a collection a rule speaks for, and their scope (a key's) lists: anywhere else,
+  and in `sys.*`, it's refused (`forbidden`), as their own reads from outside are. It answers its
+  `size` and `read(start, end)`, the UTF-8 bytes of the string: a `data:` address's text, which the
+  route decodes. The owner loads the blob once, at the first part asked for, and its reference never
+  leaves the owner. The route still checks who asks first: that's who gets in, and the rules, which
+  documents they reach. A collection no rule speaks for is read as the system, once the route has
+  let them in. [A business app's screens](../guides/a-business-apps-screens.md) serves pictures this
+  way; chat's `/files/<id>` streams files of any size, with ranges.
+- **Typed as text:** a blob holds a string's UTF-8 bytes, so its type is
+  `text/plain; charset=utf-8`, whatever the string says. A picture's `data:` address is kept as that
+  text, and sent to a bucket (`httpBlobs`, `gcsBlobs`) as text, not as an image: labelled
+  `image/png`, base64 would be a broken picture. What a file is lives in the document: in its
+  `data:` address, or in a field beside it (chat's `file.type`), where a route reads it to say
+  `content-type`. A bucket of blobs is the runtime's, never a site: keep it private.
 - **Not searched:** a `$regex` doesn't match a value kept as a blob, since the store holds its
   reference.
 - **Never deleted:** nothing in the runtime deletes a blob. A document deleted or changed leaves its

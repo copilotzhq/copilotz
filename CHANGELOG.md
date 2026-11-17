@@ -1,9 +1,25 @@
 ## Unreleased
 
+**Security:**
+
+- **`runtime.bytes` reads for an actor only where a rule speaks for them.** With `{ actor }`, it
+  read under the rules, but a collection no rule speaks for has nothing to narrow, so it answered
+  any actor, the anonymous one too: a route of the app's that didn't check who asked served such a
+  collection's files to anyone. Now an actor (anyone but the system) reads only a collection a rule
+  speaks for, and their scope (a key's) lists, as their own reads from outside do; elsewhere, and in
+  `sys.*`, it's refused (`forbidden`). Without an actor, or as a grant, it reads as the system, as
+  before. Chat's `/files/<id>` is unchanged for people and contacts; a key now needs
+  `read: ["file"]` in its scope to fetch a file there. **Upgrading:** a route that passes
+  `{ actor }` for a collection with no rule (`shared` or a `guard`) is now refused: check who asks
+  in the route, then read as the system.
+
+**Docs:**
+
 - **Docs: the record and bytes.** AGENTS.md says what the record keeps and how to read it back, what
   stays out of it (`private`, `record: false`, keys), where large values go (blobs, kept once by
-  hash, never deleted) and how a route serves one with `runtime.bytes`, as whoever asks. Stores, the
-  business app's guide (pictures in a list), Build Compass chapter 36 and Events say the rest.
+  hash, never deleted) and how a route serves one with `runtime.bytes`, once it has checked who
+  asks. Stores, the business app's guide (pictures in a list), Build Compass chapter 36 and Events
+  say the rest.
 
 ## 1.0.0-rc.54 — 2026-11-17
 

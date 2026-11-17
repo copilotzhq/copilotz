@@ -333,17 +333,15 @@ Test what callers may not do as well: call as someone else, and `assert.rejects`
 
 **The record lasts as the store does.** Each commit appends its events to the `events` table, and
 the runtime never changes or deletes one. An event is `{ seq, id, type, data, cause, actor, at }`:
-`cause` is the event behind it (a write's: its call's `action.started`), `actor` the whole actor
-(`for`, `in`, `via`), `at` its commit's time. `action.started` holds
-`{ action, input, inputHash, startedAt, attempt }`, `action.completed` the `result`, a collection's
-event `{ _id, doc }`. Read it with `store.events(afterSeq, limit)` in a test or script,
-`runtime.subscribe` live, or SQL (`sqlite3`, `psql`,
-[maintenance](https://copilotz.com/docs/operations/maintenance.md)). Plugin code reads no log; a
-history screen reads the app's own collection.
+`cause` is the event behind it, `actor` the whole actor (`for`, `in`, `via`), `at` its commit's
+time. `action.started` holds `{ action, input, inputHash, startedAt, attempt }`, `action.completed`
+the `result`, a collection's event `{ _id, doc }`. Read it with `store.events(afterSeq, limit)` in a
+test or script, `runtime.subscribe` live, or SQL (`sqlite3`, `psql`,
+[maintenance](https://copilotz.com/docs/operations/maintenance.md)). Plugin code reads no log.
 
-**Kept out:** a collection's `private` fields (keys, tokens), an Action's `private` input and result
-fields, an unrecorded Action's call (`record: false`; not its writes), and collections with
-`events: false` or `durable: false`. All else an Action is given stays for good.
+**Kept out:** a collection's `private` fields (keys, tokens), an Action's `private` fields, an
+unrecorded Action's call (`record: false`; not its writes), and collections with `events: false` or
+`durable: false`. All else an Action is given stays for good.
 
 **Large values.** A string over 16 KiB is a blob, stored once by its hash: documents and events keep
 a reference, and reads load it whole unless a `projection` leaves the field out. Blobs live in the
@@ -354,7 +352,9 @@ record. [Stores](https://copilotz.com/docs/operations/stores.md) and
 the rest.
 
 **A list reads names, not pictures:** its query leaves them out (`projection: { picture: 0 }`), and
-each row shows `/pictures/<id>`, a route reading it as whoever asks:
+each row shows `/pictures/<id>`, a route that checks who asks before it reads. With `{ actor }`,
+`runtime.bytes` reads only where a rule speaks for the collection (else it's refused); `service` has
+none, so it's read as the system:
 
 ```ts
 import { definePlugin, people } from "copilotz";
@@ -366,8 +366,8 @@ export const pictures = definePlugin({
   routes: {
     "/pictures/:id": async (_request, { runtime, actor, params }) => {
       const none = new Response("Not found", { status: 404 });
-      if (!people(actor)) return none; // as the screens' queries `allow`
-      const kept = await runtime.bytes("service", { _id: params.id }, "picture", { actor });
+      if (!people(actor)) return none;
+      const kept = await runtime.bytes("service", { _id: params.id }, "picture");
       if (!kept) return none;
       const text = new TextDecoder().decode(await kept.read(0, kept.size));
       const [, type, base64] = PICTURE.exec(text) ?? [];
@@ -382,7 +382,7 @@ export const pictures = definePlugin({
 ```
 
 **Common mistakes:** a list reading pictures whole; a key in an Action's input or in a field that
-isn't `private`; a route reading as the system; counting on a delete to erase a file.
+isn't `private`; a route reading before it checks who asks; counting on a delete to erase a file.
 
 ## A business app's web front end
 

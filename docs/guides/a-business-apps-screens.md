@@ -1400,8 +1400,8 @@ export function ServiceForm({ service, save, close }: {
 ### Pictures in a list
 
 A list reads names, not pictures. Its query leaves the picture out, so no blob is even read, and
-each row shows the picture from a route of the plugin's, which reads it with `runtime.bytes` as
-whoever asks:
+each row shows the picture from a route of the plugin's, which checks who asks, then reads it with
+`runtime.bytes`:
 
 ```ts
 // plugins/services/queries.ts
@@ -1424,12 +1424,12 @@ import { people, type Route } from "copilotz";
 /** A picture as the Action keeps it: a PNG, JPEG, GIF or WebP `data:` address. */
 const PICTURE = /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/;
 
-/** `GET /pictures/<id>`: a service's picture, read as whoever asks. */
+/** `GET /pictures/<id>`: a service's picture, to whom the list's query lets in. */
 export const picture: Route = async (_request, { runtime, actor, params }) => {
   const none = new Response("Not found", { status: 404 });
-  // Whom the list's query lets in. No rule speaks for "service": nothing else would stop anyone.
   if (!people(actor)) return none;
-  const kept = await runtime.bytes("service", { _id: params.id }, "picture", { actor });
+  // No rule speaks for "service", so it's read as the system, now the route has let them in.
+  const kept = await runtime.bytes("service", { _id: params.id }, "picture");
   if (!kept) return none;
   const text = new TextDecoder().decode(await kept.read(0, kept.size));
   const [, type, base64] = PICTURE.exec(text) ?? [];
@@ -1509,10 +1509,12 @@ export const servicesScreen = (_where: Where, ctx: ViewContext<ReactNode>): Reac
 };
 ```
 
-- **Check who asks before reading.** `runtime.bytes` reads as the actor it's given, under the rules;
-  where no rule speaks for a collection (`shared`, a `guard`), that's anyone's read, the anonymous's
-  too. So the route lets in whom the list's query does. Without `actor` it reads as the system:
-  never for a request.
+- **Check who asks before reading.** A route is trusted code: it decides who gets in, as a query's
+  `allow` does. `runtime.bytes` with `{ actor }` then reads under the rules, and only a collection a
+  rule speaks for (`shared`, a `guard`): elsewhere it's refused (`forbidden`), since no rule would
+  narrow what they reach. `service` has none, so the route reads it as the system once `people` let
+  them in, as the list's query reads it for them. A collection in `shared` is read as the actor
+  instead, so the rules decide which of its documents they reach (out of reach: none, a 404).
 - **`Avatar`** takes a path on the app's own origin, and the browser sends the session's cookie with
   it. A picture that fails to load (none, or out of reach: a 404 alike) shows the initial.
 - **A file of more than a few MB** (a PDF, a scan) goes in a call of its own, since a call carries

@@ -33,8 +33,9 @@ The runtime records 3 kinds of events of its own:
   `{ _id, doc }`. An update also says which fields `changed` and which were `removed`. The document
   goes without the collection's private fields.
 - **An Action's calls:** `action.started`, `action.completed` and `action.failed`, and
-  `action.retried` when a call runs again. The call's input goes without the Action's private
-  fields, and an unrecorded Action (`record: false`) leaves no events at all.
+  `action.retried` when a call runs again. The call's input and result go without the Action's
+  private fields. An unrecorded Action (`record: false`) leaves no events of its calls; what it
+  writes is recorded as any write is, with no call as its cause.
 - **A Processor's trouble:** `processor.retried`, and `processor.failed` with what failed.
 
 Maintenance SQL records `maintenance.sql`. Every other event is a plugin's, and a plugin declares it

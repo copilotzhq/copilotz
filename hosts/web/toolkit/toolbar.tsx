@@ -1,8 +1,8 @@
 /**
  * A row of controls over what they act on: what's at its `start` (the
- * screen's actions: New, Delete), anything between (`children`), and what's
- * at its `end` (search, filters, a date range), a `grow` item taking the room left between them (a search field), spaced by a step of the
- * toolkit's scale (`gap`, `sm` by default). It wraps when they don't fit,
+ * screen's actions: New, Delete), anything between (`children`), a `grow`
+ * item taking the room left (a search field), and what's at its `end`
+ * (filters, a date range), spaced by a step of the toolkit's scale (`gap`, `sm` by default). It wraps when they don't fit,
  * the end's group staying at the end. Named by `label` for screen readers,
  * it's a group they can skip.
  *

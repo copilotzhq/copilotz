@@ -132,7 +132,7 @@ test("text and headings: tones, sizes, weights, and the heading's level and size
 test("hidden reaches the element of every layout piece, and the base hides what carries it", async () => {
   const { BASE } = await import("../style.ts");
   assertStringIncludes(html(<Stack hidden>a</Stack>), "hidden");
-  assertStringIncludes(html(<Grid hidden>a</Grid>), 'hidden=""');
+  assertStringIncludes(html(<Grid hidden>a</Grid>), '<div class="copilotz-grid-box" hidden="">');
   assertStringIncludes(BASE, ':where([class*="copilotz-"])[hidden] { display: none !important; }');
 });
 

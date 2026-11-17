@@ -59,11 +59,10 @@ const SHEET = sheet(
 .copilotz-page-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .copilotz-page-actions { grid-column: 3; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
   gap: 8px; margin-left: 16px; }
-.copilotz-page-description { grid-column: 2 / -1; max-width: 560px; margin: 8px 0 0; color: var(--muted-foreground); }
+.copilotz-page-description { grid-column: 2 / -1; max-width: var(--page-description-width, 560px); margin: 8px 0 0; color: var(--muted-foreground); }
 .copilotz-page-body { margin-top: var(--page-body-gap, 20px); }
 .copilotz-page-center .copilotz-page-titles { justify-content: center; text-align: center; }
-.copilotz-page-center .copilotz-page-description { grid-column: 1 / -1; max-width: var(--page-description-width, 560px);
-  margin-inline: auto; text-align: center; }
+.copilotz-page-center .copilotz-page-description { grid-column: 1 / -1; margin-inline: auto; text-align: center; }
 @container copilotz-page (max-width: 560px) {
   .copilotz-page-inner { padding: var(--page-padding-sm, 16px 16px 48px); }
   .copilotz-page-lead { margin-block: -3px; margin-right: 12px; }

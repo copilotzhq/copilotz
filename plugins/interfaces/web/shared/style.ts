@@ -12,7 +12,7 @@
  * keep their header's end clear of its button by `--copilotz-inset-end`.
  * Where a front end fills the `orgs` slot, the top of the sidebar makes room
  * for its switcher beside the app's mark; and the user menu, with the dialog
- * where the person names themselves.
+ * where the person names themselves. Printed, the page is alone, all of it.
  *
  * The page spans a phone's whole screen (`viewport-fit=cover`), so the shell
  * keeps clear of what covers its edges: the status bar, where an installed
@@ -119,4 +119,12 @@ export const STYLE = `
 .copilotz-me-preview { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 12px;
   border: 1px solid var(--sidebar-border); border-radius: var(--radius-lg); background: var(--sidebar);
   color: var(--sidebar-foreground); }
+
+/* Printed: the page alone, all of it, without the shell's frame */
+@media print {
+  .copilotz-shell { display: block; height: auto; padding: 0; overflow: visible; }
+  .copilotz-shell > .copilotz-sidebar, .copilotz-shell-menu, .copilotz-panel-toggle, .copilotz-panel {
+    display: none; }
+  .copilotz-stage, .copilotz-main { display: block; overflow: visible; }
+}
 `;

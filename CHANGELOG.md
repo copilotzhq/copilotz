@@ -1,3 +1,91 @@
+## 1.0.0-rc.52 — 2026-11-16
+
+The web toolkit becomes a whole app's: what rebuilding a point of sale on Copilotz asked of it, in
+Copilotz's own look. A screen is made of the toolkit's pieces and writes no CSS. Its look is the
+app's theme, down to each piece's sizes. [The web toolkit](docs/guides/the-web-toolkit.md) is the
+new guide to all of it.
+
+**Breaking, in small ways:**
+
+- **`Card`'s `title` is its heading** (a node), no longer the HTML attribute. No caller passed one.
+- **The popover's width variable is `--popover-width`**, a token like any other (it was
+  `--copilotz-popover-width`).
+- **A small `Select` is 36px tall**, as a small `Input` is, so fields side by side line up (it was
+  34px).
+- **`ctx.show` after a View returned throws**, saying to show the View in the View's body or with
+  `LazyView`. A component that rendered later and called it got a part that never loaded.
+- **An `Input` with an addon** puts its `className` on the group.
+
+**A look from the theme alone:**
+
+- **`theme.tokens`**: tokens the same on light and dark screens (sizes, paddings, radii, weights),
+  merged token by token as `light` and `dark` are.
+- **Every piece's look is tokens**: its sizes, paddings, radii, fonts and own colours
+  (`button-height`, `table-stripe`, `dialog-head-background`…), each with Copilotz's value as its
+  default. The guide lists all 546, and a test keeps the list whole. `className` stays as an escape
+  hatch.
+- **The toolkit's styles stay over the page's base** wherever React puts them in the page (a page
+  served without the web host had its buttons' text in the base's colour).
+
+**Laying a screen out:** `Stack` (with `Spacer` and `Divider`), `Grid` and `GridItem`, `Toolbar`,
+`Split` (a main column beside an aside that stays in view: a register's cart and its summary),
+`ListGroup`, `Text` and `Heading`, on one spacing scale (`space-xs` to `space-2xl`). `Card` takes a
+heading: `title`, `icon`, `action`. Grids and splits stack by their own width, not the window's.
+
+**Forms:**
+
+- **`Button`**: `success`, `info` and `warning` variants, an `xs` size, and `block`.
+- **`Input`**: `addon` and `addonEnd`, segments joined outside the box (words, an icon, a button, a
+  switch).
+- **`Field`**: `required`, a control as its child with `htmlFor`, and `layout="row"`, the label in a
+  column beside its control, aligned on its text.
+- **New**: `Radio`; `Switch`, with words on and off if wanted; `TagsInput`; `Picker` and
+  `MultiPicker`, a choice the app draws, with `search` for a long list; `FileInput`, the browser's
+  file field drawn as the toolkit's, files dropped on it too; `RowsEditor`, a list of records edited
+  as one form, a row of fields each.
+- **`Form` with parts**: each part joins its save with `useFormSubmit`, another plugin's View shown
+  inside it too, handing values up or stopping the save with its reason.
+- **`Dialog`**: `placement="top"`, and `focus="dialog"` not to focus its first field.
+- `className` on `Menu` and `Autocomplete`, `justified` tabs, and tooltips at the `start` side.
+
+**Tables:** `DataTable` lists rows with a toolbar (the screen's actions, a search box that folds
+case and accents, a column chooser, an export menu), headers that sort, rows to tick, details under
+a row, and pages. It pages rows it's given, or shows a page its View asked for, with the state kept
+in the address (`tableAddress(where, 25)`, `tableState`, `tableQuery`). `Pagination` stands on its
+own. Its files: CSV (with a BOM, and guarded against formulas), a real `.xlsx`, PDF, JSON, XML, TXT,
+SQL and the HTML `.xls`, with no dependency; `exportFile` makes them on a server too.
+
+**Dates:** `DateRangePicker` (presets beside two months), `DatePicker` and `Calendar`, a keyboard
+grid. Days are `YYYY-MM-DD` in the app's time zone (`todayIn`), in the app's format (a pattern or a
+function), with month and weekday names in the page's language. `rangePresets` builds the presets by
+key, a fiscal year's included. `DateTimePicker` picks a day and a time of it. `LiveClock` shows the
+time now in a format and a time zone.
+
+**An app's own bars:** `AppBar` (the brand, the places with their icons, the current one marked),
+`TopBar` (a thin strip: a clock, the company, the person), and `TileGrid`, a home page's places.
+**`toast()`** says a few seconds' word over the page from anywhere; the shell shows them, and an app
+without it renders `<Toasts />`.
+
+**Icons:** every piece that takes an icon takes an app's own too: `<Icon drawing={…} />` (its paths,
+`rule: "evenodd"` for glyphs drawn that way) or `<Icon src="…" />`.
+
+**Shortcuts and printing:** `useShortcuts` binds keys to a screen's commands, waiting while a dialog
+is open or someone types; `shortcutLabel` says them. A printed page leaves out the shell's frame and
+what only works on a screen (bars, toolbars, toasts, buttons); `NoPrint` and `PrintOnly` mark an
+app's own parts.
+
+**Documents:** `documentPdf` draws a document as a PDF (text, lines, rectangles, barcodes; A4,
+letter, or a receipt's width) on a server too, and `Barcode` draws Code 128.
+**`copilotz/web/export`** has the toolkit's files without React: the tables' formats, `documentPdf`,
+and Code 128's bars.
+
+**A route's own page:** `routePage(runtime, { title, body })`, from `copilotz/web/server`, answers a
+page made with the toolkit, in the app's theme and words: an import screen before anyone signs in, a
+password reset.
+
+**Words:** the new pieces' words are the app's to change (`toolkit.*`), and Brazilian Portuguese
+says them all.
+
 ## 1.0.0-rc.51 — 2026-11-16
 
 **Phones.**

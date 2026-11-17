@@ -17,9 +17,9 @@ import { sheet } from "./sheet.tsx";
 const SHEET = sheet(
   "chip",
   `
-.copilotz-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 30px;
-  padding: 4px 11px; border: 1px solid transparent; border-radius: var(--radius-full);
-  background: var(--muted); color: var(--secondary-foreground); font-size: 13px; font-weight: 500;
+.copilotz-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: var(--chip-height, 30px);
+  padding: 4px 11px; border: 1px solid transparent; border-radius: var(--chip-radius, var(--radius-full));
+  background: var(--muted); color: var(--secondary-foreground); font-size: var(--chip-font-size, 13px); font-weight: 500;
   line-height: 1.35; text-align: left; text-decoration: none; white-space: nowrap; list-style: none;
   user-select: none; transition: background-color .15s, border-color .15s, color .15s; }
 .copilotz-chip::-webkit-details-marker { display: none; }

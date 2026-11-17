@@ -16,7 +16,7 @@
  */
 import type { MouseEventHandler, ReactNode } from "react";
 import { cx } from "./cx.ts";
-import { Icon, type IconName } from "./icon.tsx";
+import { type IconLike, iconOf } from "./icon.tsx";
 import { sheet } from "./sheet.tsx";
 
 const SHEET = sheet(
@@ -62,7 +62,7 @@ export function NavItem(
   }: {
     href?: string;
     onClick?: MouseEventHandler<HTMLElement>;
-    icon?: IconName;
+    icon?: IconLike;
     leading?: ReactNode;
     end?: ReactNode;
     description?: ReactNode;
@@ -81,7 +81,7 @@ export function NavItem(
         {icon
           ? (
             <span className="copilotz-nav-icon">
-              <Icon name={icon} size={16} />
+              {iconOf(icon, 16)}
             </span>
           )
           : leading}

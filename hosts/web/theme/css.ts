@@ -1,8 +1,9 @@
 /**
- * A theme as the page's CSS variables: its tokens for a light screen, those
- * for a dark one under `prefers-color-scheme: dark` (or when the page's root
- * says `data-theme="dark"`, as a widget's host does), the radii that scale
- * from `radius`, and the fonts. `themeOf` is the app's theme: the defaults,
+ * A theme as the page's CSS variables: its tokens for both screens
+ * (`tokens`) and for a light one, those for a dark one under
+ * `prefers-color-scheme: dark` (or when the page's root says
+ * `data-theme="dark"`, as a widget's host does), the radii that scale from
+ * `radius`, and the fonts. `themeOf` is the app's theme: the defaults,
  * with the front ends' `theme` resources merged over them in order, as every
  * resource merges, except that `font` and `logo` are each given whole. A
  * theme without `dark` is light only.
@@ -113,6 +114,7 @@ export function themeCss(theme: Theme): string {
     "font-sans": theme.font?.sans ?? SYSTEM_SANS,
     "font-display": theme.font?.display ?? "var(--font-sans)",
     "font-mono": theme.font?.mono ?? SYSTEM_MONO,
+    ...theme.tokens,
     ...theme.light,
   });
   // Dark by the system's preference, unless the page says which (`data-theme`: a widget's

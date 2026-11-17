@@ -44,7 +44,7 @@ other plugins fill.
 The runtime doesn't start without [`computers`](computers.md) and [`web-shell`](web-shell.md): add
 them too.
 
-It ships with `copilotz@1.0.0-rc.51`.
+It ships with `copilotz@1.0.0-rc.52`.
 
 ## Listing
 

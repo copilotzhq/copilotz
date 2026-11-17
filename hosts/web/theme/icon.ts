@@ -24,8 +24,10 @@ export function iconSvg(theme: Theme): string | undefined {
   const night = plainColour(theme.dark?.foreground);
   const style = `svg{color:${ink}}` +
     (night ? `@media (prefers-color-scheme:dark){svg{color:${night}}}` : "");
-  const paths = mark.paths.map(({ d, fill }) =>
-    `<path d="${attribute(d)}" fill="${attribute(fill ?? "currentColor")}"/>`
+  const paths = mark.paths.map(({ d, fill, rule }) =>
+    `<path d="${attribute(d)}" fill="${attribute(fill ?? "currentColor")}"${
+      rule ? ` fill-rule="${rule}"` : ""
+    }/>`
   );
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${box}"><style>${style}</style>${
     paths.join("")

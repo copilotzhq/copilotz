@@ -2,8 +2,9 @@
  * A `<dialog>` shown modally while `open` (the page behind it inert, focus
  * kept inside and given back after), for `Dialog` and `Drawer`. Opened, focus
  * goes to the first thing to use in what it holds (past its header's close
- * button), or to that button when there's nothing else. Escape, a press on
- * the backdrop or `close()` all end in `onClose`.
+ * button), or to that button when there's nothing else; or, with `focus:
+ * "dialog"`, to the dialog itself (Tab then goes to its first control).
+ * Escape, a press on the backdrop or `close()` all end in `onClose`.
  */
 import { type PointerEvent, useEffect, useRef } from "react";
 
@@ -11,7 +12,11 @@ import { type PointerEvent, useEffect, useRef } from "react";
 const FIRST = ":is(input, textarea, select, button, a[href], [tabindex]):not(" +
   '.copilotz-dialog-head *, .copilotz-drawer-head *, :disabled, [tabindex="-1"], [hidden])';
 
-export function useModal(open: boolean, onClose: () => void) {
+export function useModal(
+  open: boolean,
+  onClose: () => void,
+  { focus = "first" }: { focus?: "first" | "dialog" } = {},
+) {
   const ref = useRef<HTMLDialogElement>(null);
   const pressed = useRef(false);
   useEffect(() => {
@@ -19,7 +24,8 @@ export function useModal(open: boolean, onClose: () => void) {
     if (!dialog) return;
     if (open && !dialog.open) {
       dialog.showModal();
-      dialog.querySelector<HTMLElement>(FIRST)?.focus();
+      if (focus === "dialog") dialog.focus();
+      else dialog.querySelector<HTMLElement>(FIRST)?.focus();
     }
     if (!open && dialog.open) dialog.close();
   }, [open]);

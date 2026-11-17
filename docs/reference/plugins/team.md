@@ -67,7 +67,7 @@ fill.
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships in a package of its own, `@copilotz/team@1.0.0-rc.51`, for `copilotz` `1.0.0-rc.51`:
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.52`, for `copilotz` `1.0.0-rc.52`:
 install it beside `copilotz`.
 
 ## Listing

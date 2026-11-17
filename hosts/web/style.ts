@@ -1,9 +1,17 @@
 /**
  * The page's base, under the theme's variables (`theme/`): type, the reset,
- * focus rings, selection and reduced motion, and `copilotz-sr` (for screen
- * readers only). It declares the layers: this base, then the toolkit's
- * pieces (`toolkit/`); a front end's own CSS is in no layer, so it always
- * wins over both.
+ * focus rings, selection and reduced motion, `copilotz-sr` (for screen
+ * readers only), and what a printed page leaves out. It declares the layers:
+ * this base, then the toolkit's pieces (`toolkit/`); a front end's own CSS is
+ * in no layer, so it always wins over both.
+ *
+ * Printed, a page is what it shows, on paper: the whole of it, not the
+ * screenful a scrolling pane held, without what's for working the screen
+ * (the toolkit's bars, toolbars, pages of a table, toasts, buttons, what
+ * pops over), and without `NoPrint`'s parts; `PrintOnly`'s show only there.
+ * Links keep their words. These rules are important, so they win over the
+ * toolkit's own layer; a printed document's own layout (a receipt's width,
+ * an invoice's margins) is its app's CSS, the one place an app writes some.
  */
 export const BASE = `
 @layer copilotz-base, copilotz-toolkit;
@@ -40,5 +48,16 @@ code, kbd, pre, samp { font-family: var(--font-mono); font-variant-ligatures: no
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important;
     transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+/* Printed: all of the page, without what's for working the screen. */
+@media print {
+  html, body, #app { height: auto !important; overflow: visible !important; }
+  .copilotz-page-full { height: auto !important; overflow: visible !important; }
+  .copilotz-no-print, .copilotz-appbar, .copilotz-topbar, .copilotz-toolbar, .copilotz-toasts,
+  .copilotz-table-toolbar, .copilotz-table-control, .copilotz-pagination,
+  .copilotz-button, .copilotz-icon-button, .copilotz-popover, .copilotz-menu, .copilotz-tooltip,
+  .copilotz-autocomplete, .copilotz-going, .copilotz-skip { display: none !important; }
+  .copilotz-table-box { overflow: visible !important; }
+}
+@media not print { .copilotz-print-only { display: none !important; } }
 }
 `;

@@ -3,7 +3,9 @@
  * `warning`, `destructive` or `neutral`, with the tone's icon (another, or
  * none: `icon={false}`). Plain words take the tone's color; under a `title`,
  * they're quieter. An `action` (a button) sits at its end. `role="alert"`
- * when it reports a failure as it happens.
+ * when it reports a failure as it happens. The icon is the toolkit's by
+ * name, or an element of the app's own. Its shape is the theme's:
+ * `notice-padding`, `notice-radius`, `notice-font-size`.
  *
  * ```tsx
  * <Notice tone="warning" icon="lock" action={<Button size="sm">Share</Button>}>
@@ -13,7 +15,7 @@
  */
 import type { ReactNode } from "react";
 import { cx } from "./cx.ts";
-import { Icon, type IconName } from "./icon.tsx";
+import { type IconLike, type IconName, iconOf } from "./icon.tsx";
 import { sheet } from "./sheet.tsx";
 
 const ICONS: Record<string, IconName> = {
@@ -29,8 +31,9 @@ const SHEET = sheet(
   `
 .copilotz-notice { --tone: var(--info); --tone-text: var(--info-text); --tone-soft: var(--info-soft);
   --tone-border: var(--info-border);
-  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--tone-border);
-  border-radius: var(--radius-lg); background: var(--tone-soft); color: var(--tone-text); font-size: 14px;
+  display: flex; align-items: flex-start; gap: 10px; padding: var(--notice-padding, 10px 12px);
+  border: 1px solid var(--tone-border); border-radius: var(--notice-radius, var(--radius-lg));
+  background: var(--tone-soft); color: var(--tone-text); font-size: var(--notice-font-size, 14px);
   line-height: 1.45; }
 .copilotz-notice > .copilotz-icon { margin-top: 1px; color: var(--tone); }
 .copilotz-notice-neutral { --tone: var(--muted-foreground); --tone-text: var(--secondary-foreground);
@@ -53,7 +56,7 @@ export function Notice(
   { tone = "info", title, icon, action, role, className, children }: {
     tone?: "info" | "success" | "warning" | "destructive" | "neutral";
     title?: ReactNode;
-    icon?: IconName | false;
+    icon?: IconLike | false;
     action?: ReactNode;
     role?: "alert" | "status";
     className?: string;
@@ -67,7 +70,7 @@ export function Notice(
       className={cx("copilotz-notice", tone !== "info" && `copilotz-notice-${tone}`, className)}
     >
       {SHEET}
-      {glyph ? <Icon name={glyph} size={16} /> : null}
+      {glyph ? iconOf(glyph, 16) : null}
       <div className="copilotz-notice-body">
         {title ? <strong className="copilotz-notice-title">{title}</strong> : null}
         {children ? <div className="copilotz-notice-text">{children}</div> : null}

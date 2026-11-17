@@ -77,13 +77,27 @@ export { Textarea } from "./toolkit/textarea.tsx";
 export { type Control, Field } from "./toolkit/field.tsx";
 export { Select } from "./toolkit/select.tsx";
 export { Checkbox } from "./toolkit/checkbox.tsx";
+export { Radio } from "./toolkit/radio.tsx";
+export { Switch } from "./toolkit/switch.tsx";
+export { TagsInput } from "./toolkit/tags-input.tsx";
+export { MultiPicker, Picker, type PickerOption } from "./toolkit/picker.tsx";
+export { FileInput } from "./toolkit/file-input.tsx";
+export { RowsEditor } from "./toolkit/rows-editor.tsx";
+// Forms whose parts (another plugin's View too) take part in one save.
+export {
+  Form,
+  type PartAnswer,
+  type PartSubmit,
+  useFormState,
+  useFormSubmit,
+} from "./toolkit/form.tsx";
 export { Autocomplete, type AutocompleteOption, optionId } from "./toolkit/autocomplete.tsx";
 // Surfaces and labels.
 export { Card } from "./toolkit/card.tsx";
 export { Badge, type Tone } from "./toolkit/badge.tsx";
 export { Chip } from "./toolkit/chip.tsx";
 export { Avatar } from "./toolkit/avatar.tsx";
-export { Icon, type IconName, ICONS } from "./toolkit/icon.tsx";
+export { Icon, type IconLike, type IconName, iconOf, ICONS } from "./toolkit/icon.tsx";
 export { Logo } from "./toolkit/logo.tsx";
 // Overlays and navigation.
 export { Menu, type MenuItem, type MenuTrigger } from "./toolkit/menu.tsx";
@@ -95,6 +109,93 @@ export { NavItem } from "./toolkit/nav-item.tsx";
 export { RailItem, type RailItemProps } from "./toolkit/rail-item.tsx";
 export { ResizeHandle } from "./toolkit/resize-handle.tsx";
 export { Tooltip } from "./toolkit/tooltip.tsx";
+// Laying a screen out without CSS: stacks, grids, toolbars, two columns, lists, words.
+export { type Space } from "./toolkit/space.tsx";
+export { type Align, Divider, type Justify, Spacer, Stack } from "./toolkit/stack.tsx";
+export { Grid, GridItem } from "./toolkit/grid.tsx";
+export { Toolbar } from "./toolkit/toolbar.tsx";
+export { Split } from "./toolkit/split.tsx";
+export { ListGroup, type ListGroupItem } from "./toolkit/list-group.tsx";
+export { Heading, Text, type TextTone } from "./toolkit/text.tsx";
+// An app's own bars and home, without the Copilotz shell.
+export { AppBar, type AppBarItem, TopBar } from "./toolkit/app-bar.tsx";
+export { type Tile, TileGrid } from "./toolkit/tile-grid.tsx";
+// Tables: rows to read, find and act on, their pages, and their files.
+export { DataTable, type ExportChoice } from "./toolkit/data-table.tsx";
+export { Pagination } from "./toolkit/pagination.tsx";
+export {
+  type Column,
+  type Key as RowKey,
+  PAGE_SIZES,
+  type TableState,
+  tableView,
+} from "./toolkit/table.ts";
+export { tableAddress, tableQuery, tableState } from "./table-address.ts";
+export {
+  download,
+  EXPORT_FORMATS,
+  exportFile,
+  type ExportFormat,
+  type ExportOptions,
+  type Sheet,
+  toCsv,
+  toExcel,
+  toJson,
+  toPdf,
+  toSql,
+  toXlsx,
+  toXml,
+} from "./toolkit/export.ts";
+export {
+  documentPdf,
+  type Drawn,
+  type PageSize,
+  type PdfFont,
+  type PdfOptions,
+  tablePdf,
+  textWidth,
+  wrapText,
+} from "./toolkit/pdf.ts";
+// Dates: days as `YYYY-MM-DD`, in the app's format and time zone.
+export { Calendar, type CalendarValue, type DayFormat, formatDay } from "./toolkit/calendar.tsx";
+export {
+  DatePicker,
+  DateRangePicker,
+  type RangePreset,
+  rangePresets,
+  STANDARD_PRESETS,
+} from "./toolkit/date-picker.tsx";
+export {
+  addDays,
+  addMonths,
+  clampDayTime,
+  type DateRange,
+  type DayTime,
+  formatPattern,
+  isDay,
+  isDayTime,
+  nowIn,
+  type Preset,
+  presetRange,
+  todayIn,
+} from "./toolkit/dates.ts";
+export { DateTimePicker, type DayTimeFormat, formatDayTime } from "./toolkit/date-time-picker.tsx";
+export { LiveClock } from "./toolkit/live-clock.tsx";
+// Telling: a few seconds' word over the page.
+export {
+  dismissToast,
+  toast,
+  type ToastOptions,
+  type ToastPlacement,
+  Toasts,
+  type ToastTone,
+} from "./toolkit/toast.tsx";
+// A screen's keyboard shortcuts, and what a printed page leaves out.
+export { type Binding, shortcutLabel, useShortcuts } from "./toolkit/shortcuts.ts";
+export { NoPrint, PrintOnly } from "./toolkit/print.tsx";
+// Barcodes: Code 128, drawn, and as bars for a document made elsewhere.
+export { Barcode } from "./toolkit/barcode.tsx";
+export { bars, code128 } from "./toolkit/code128.ts";
 // Pages and details.
 export { Page } from "./toolkit/page.tsx";
 export { type Detail, DetailList } from "./toolkit/detail-list.tsx";

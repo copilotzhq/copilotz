@@ -6,7 +6,13 @@
  * (↑ ↓ move `active`, Enter or Tab choose, Escape closes), naming the active
  * option by `aria-activedescendant` (`optionId`). A click chooses too, and
  * the pointer moves `active` as it goes. With nothing to offer, it says
- * `empty`, or hides. A `title` heads it ("Agents in Launch").
+ * `empty`, or hides. A `title` heads it ("Agents in Launch"). `className`
+ * is the list's.
+ *
+ * Its look is the theme's: `autocomplete-*` (width, padding, radius, border
+ * colour, shadow) and `autocomplete-option-*` (height, padding, radius, font
+ * size and weight, and the active one's `autocomplete-active-background`
+ * and `-foreground`).
  *
  * ```tsx
  * <Autocomplete id={list} target={box} open={!!typing} label="Agents here" options={found}
@@ -16,6 +22,7 @@
  */
 import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 import { anchor, ANCHORED } from "./anchor.tsx";
+import { cx } from "./cx.ts";
 import { sheet } from "./sheet.tsx";
 
 /** One choice: a `key` the field uses, what it shows, and maybe an avatar before it. */
@@ -36,22 +43,25 @@ export const optionId = (list: string, index: number) => `${list}-option-${index
 const SHEET = sheet(
   "autocomplete",
   `
-.copilotz-autocomplete { width: min(380px, calc(100vw - 16px)); max-height: min(320px, calc(100vh - 32px));
-  overflow-y: auto; overscroll-behavior: contain; padding: 5px; border: 1px solid var(--border);
-  border-radius: var(--radius-xl); background: var(--popover); color: var(--popover-foreground);
-  box-shadow: var(--shadow-lg); scrollbar-width: thin; }
+.copilotz-autocomplete { width: min(var(--autocomplete-width, 380px), calc(100vw - 16px));
+  max-height: min(320px, calc(100vh - 32px)); overflow-y: auto; overscroll-behavior: contain;
+  padding: var(--autocomplete-padding, 5px); border: 1px solid var(--autocomplete-border-color, var(--border));
+  border-radius: var(--autocomplete-radius, var(--radius-xl)); background: var(--popover);
+  color: var(--popover-foreground); box-shadow: var(--autocomplete-shadow, var(--shadow-lg)); scrollbar-width: thin; }
 .copilotz-autocomplete:popover-open { animation: copilotz-autocomplete .12s ease-out; }
 @keyframes copilotz-autocomplete { from { opacity: 0; transform: translateY(3px); } }
 .copilotz-autocomplete[data-side=bottom]:popover-open { animation-name: copilotz-autocomplete-down; }
 @keyframes copilotz-autocomplete-down { from { opacity: 0; transform: translateY(-3px); } }
 .copilotz-autocomplete-title { margin: 0; padding: 6px 9px 5px; color: var(--muted-foreground); font-size: 11.5px;
   font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
-.copilotz-autocomplete-option { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 5px 9px;
-  border-radius: var(--radius-md); cursor: pointer; user-select: none; }
-.copilotz-autocomplete-option[aria-selected=true] { background: var(--accent); color: var(--accent-foreground); }
+.copilotz-autocomplete-option { display: flex; align-items: center; gap: 10px;
+  min-height: var(--autocomplete-option-height, 40px); padding: var(--autocomplete-option-padding, 5px 9px);
+  border-radius: var(--autocomplete-option-radius, var(--radius-md)); cursor: pointer; user-select: none; }
+.copilotz-autocomplete-option[aria-selected=true] { background: var(--autocomplete-active-background, var(--accent));
+  color: var(--autocomplete-active-foreground, var(--accent-foreground)); }
 .copilotz-autocomplete-text { flex: 1; display: grid; min-width: 0; line-height: 1.3; }
-.copilotz-autocomplete-label { overflow: hidden; font-size: 14px; font-weight: 560; text-overflow: ellipsis;
-  white-space: nowrap; }
+.copilotz-autocomplete-label { overflow: hidden; font-size: var(--autocomplete-option-font-size, 14px);
+  font-weight: var(--autocomplete-option-font-weight, 560); text-overflow: ellipsis; white-space: nowrap; }
 .copilotz-autocomplete-description { overflow: hidden; color: var(--muted-foreground); font-size: 12.5px;
   text-overflow: ellipsis; white-space: nowrap; }
 .copilotz-autocomplete-end { flex: none; display: flex; align-items: center; }
@@ -73,6 +83,7 @@ export function Autocomplete(
     onPick,
     empty,
     side = "top",
+    className,
   }: {
     /** The list's id: the field's `aria-controls`. */
     id: string;
@@ -90,6 +101,8 @@ export function Autocomplete(
     /** What it says when nothing matches; without it, it hides. */
     empty?: ReactNode;
     side?: "top" | "bottom";
+    /** The list's box. */
+    className?: string;
   },
 ): ReactNode {
   const list = useRef<HTMLDivElement>(null);
@@ -122,7 +135,7 @@ export function Autocomplete(
         popover="manual"
         role="listbox"
         aria-label={label}
-        className="copilotz-autocomplete copilotz-anchored"
+        className={cx("copilotz-autocomplete copilotz-anchored", className)}
       >
         {title ? <p className="copilotz-autocomplete-title" aria-hidden="true">{title}</p> : null}
         {options.map((option, i) => (

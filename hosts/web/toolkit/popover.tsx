@@ -10,6 +10,10 @@
  * `data-popover-item`); arrows, Home and End move between items; closing it
  * gives focus back to the button.
  *
+ * Its look is the theme's: `popover-width` (or `width`, for one),
+ * `popover-padding`, `popover-radius`, `popover-border-color` and
+ * `popover-shadow`.
+ *
  * ```tsx
  * <Popover label="Switch org" trigger={(p) => <button {...p}>Acme</button>}>
  *   {(close) => <button data-popover-item onClick={close}>Personal</button>}
@@ -43,10 +47,11 @@ export type PopoverTrigger = {
 const SHEET = sheet(
   "popover",
   `
-.copilotz-popover { width: var(--copilotz-popover-width, 300px); max-width: calc(100vw - 16px);
-  max-height: min(560px, calc(100dvh - 24px)); padding: 6px; overflow: auto; overscroll-behavior: contain;
-  border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--popover);
-  color: var(--popover-foreground); box-shadow: var(--shadow-lg); scrollbar-width: thin; }
+.copilotz-popover { width: var(--popover-width, 300px); max-width: calc(100vw - 16px);
+  max-height: min(560px, calc(100dvh - 24px)); padding: var(--popover-padding, 6px); overflow: auto;
+  overscroll-behavior: contain; border: 1px solid var(--popover-border-color, var(--border));
+  border-radius: var(--popover-radius, var(--radius-xl)); background: var(--popover);
+  color: var(--popover-foreground); box-shadow: var(--popover-shadow, var(--shadow-lg)); scrollbar-width: thin; }
 .copilotz-popover:popover-open { animation: copilotz-popover .15s cubic-bezier(.2, .8, .2, 1); }
 .copilotz-popover[data-side=top]:popover-open { animation-name: copilotz-popover-up; }
 @keyframes copilotz-popover { from { opacity: 0; transform: translateY(-4px) scale(.985); } }
@@ -140,9 +145,7 @@ export function Popover(
         role="dialog"
         aria-label={label}
         className={cx("copilotz-popover copilotz-anchored", className)}
-        style={width
-          ? { "--copilotz-popover-width": `${width}px` } as Record<string, string>
-          : undefined}
+        style={width ? { "--popover-width": `${width}px` } as Record<string, string> : undefined}
         onToggle={toggled}
         onKeyDown={keys}
       >

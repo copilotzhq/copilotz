@@ -1,13 +1,21 @@
 /**
  * Icons for web front ends: line glyphs on a 24-pixel grid, drawn in the
  * text's color. Decorative unless given a `label`. Named, so resources can
- * name them too.
+ * name them too. An app's own icon is a `drawing` (its paths in their box,
+ * filled with the text's colour unless a path says otherwise: a solid glyph
+ * set) or an image file (`src`). Every piece that takes an icon takes it by
+ * name or as an element (`IconLike`): an `<Icon drawing={…} />`, an `<img>`,
+ * an `<svg>` of the app's own.
  *
  * ```tsx
  * <button aria-label="Send"><Icon name="send" /></button>
+ * <Icon drawing={{ viewBox: "0 0 16 16", paths: [{ d: "M8 1a3.5 3.5 0 1 1 0 7…" }] }} />
+ * <Button icon={<Icon src="/assets/modules/sales.png" />}>Sales</Button>
  * ```
  */
-import type { ReactNode } from "react";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
+import type { Drawing } from "../theme/picture.ts";
+import { cx } from "./cx.ts";
 import { sheet } from "./sheet.tsx";
 
 const PATHS = {
@@ -114,25 +122,71 @@ export type IconName = keyof typeof PATHS;
 /** Every icon's name. */
 export const ICONS = Object.keys(PATHS) as IconName[];
 
+/** An icon a piece takes: one of the toolkit's by name, or an element (an app's own). */
+export type IconLike = IconName | ReactElement;
+
+/** Where an icon comes from: the toolkit's set, an app's drawing, or an image file. */
+type Source =
+  | { name: IconName; drawing?: undefined; src?: undefined }
+  | { drawing: Drawing; name?: undefined; src?: undefined }
+  | { src: string; name?: undefined; drawing?: undefined };
+
 const SHEET = sheet(
   "icon",
-  `.copilotz-icon { flex: none; display: inline-block; vertical-align: middle; }`,
+  `.copilotz-icon { flex: none; display: inline-block; vertical-align: middle; }
+img.copilotz-icon { object-fit: contain; }`,
 );
 
 export function Icon(
-  { name, size = 18, filled, label, className }: {
-    name: IconName;
+  { name, drawing, src, size = 18, filled, label, className }: Source & {
     size?: number;
+    /** A named icon, filled with the text's colour instead of drawn in lines. */
     filled?: boolean;
     label?: string;
     className?: string;
   },
 ): ReactNode {
+  const a11y = label ? { role: "img", "aria-label": label } : { "aria-hidden": true };
+  if (src !== undefined) {
+    return (
+      <>
+        {SHEET}
+        <img
+          className={cx("copilotz-icon", className)}
+          src={src}
+          width={size}
+          height={size}
+          alt={label ?? ""}
+          {...(label ? {} : { "aria-hidden": true })}
+        />
+      </>
+    );
+  }
+  if (drawing !== undefined) {
+    return (
+      <>
+        {SHEET}
+        <svg
+          className={cx("copilotz-icon", className)}
+          width={size}
+          height={size}
+          viewBox={drawing.viewBox}
+          fill="currentColor"
+          focusable="false"
+          {...a11y}
+        >
+          {drawing.paths.map((path, i) => (
+            <path key={i} d={path.d} fill={path.fill} fillRule={path.rule} />
+          ))}
+        </svg>
+      </>
+    );
+  }
   return (
     <>
       {SHEET}
       <svg
-        className={className ? `copilotz-icon ${className}` : "copilotz-icon"}
+        className={cx("copilotz-icon", className)}
         width={size}
         height={size}
         viewBox="0 0 24 24"
@@ -141,10 +195,19 @@ export function Icon(
         strokeWidth={1.8}
         strokeLinecap="round"
         strokeLinejoin="round"
-        {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
+        {...a11y}
       >
         <path d={PATHS[name]} />
       </svg>
     </>
   );
+}
+
+/**
+ * An icon a piece was given, at its size: a name drawn as the toolkit's `Icon`, an element (an
+ * app's own) as it is; nothing for none.
+ */
+export function iconOf(icon: IconLike | undefined, size: number): ReactNode {
+  if (icon === undefined) return null;
+  return isValidElement(icon) ? icon : <Icon name={icon as IconName} size={size} />;
 }

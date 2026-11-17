@@ -15,14 +15,14 @@
  */
 import type { ComponentProps, ReactNode } from "react";
 import { cx } from "./cx.ts";
-import { Icon, type IconName } from "./icon.tsx";
+import { type IconLike, iconOf } from "./icon.tsx";
 import { Kbd } from "./kbd.tsx";
 import { sheet } from "./sheet.tsx";
 import { Tooltip } from "./tooltip.tsx";
 
 type Own = {
   label: string;
-  icon?: IconName;
+  icon?: IconLike;
   /** Instead of an icon: an avatar, the app's mark. */
   leading?: ReactNode;
   current?: "page" | "location";
@@ -87,7 +87,7 @@ export function RailItem(props: RailItemProps): ReactNode {
   } = props;
   const inside = (
     <>
-      {icon ? <Icon name={icon} size={18} /> : leading}
+      {icon ? iconOf(icon, 18) : leading}
       {badge ? <span className="copilotz-rail-badge" aria-hidden="true">{badge}</span> : null}
     </>
   );

@@ -1,6 +1,7 @@
 ## 1.0.0-rc.54 — 2026-11-17
 
-What rebuilding a point of sale on rc.52 still asked of the toolkit, and of e-mail.
+What a business app's screens still asked of the toolkit and of e-mail, and the docs that show a
+coding agent how to build them.
 
 **Changed:**
 
@@ -21,6 +22,9 @@ What rebuilding a point of sale on rc.52 still asked of the toolkit, and of e-ma
 - **A popover with no room over or under its field** (a range's panel low in a short window) goes on
   the roomier side, as tall as that room, and scrolls inside: it no longer runs past the window's
   foot, so the range's Apply and Cancel stay in view.
+- **New exports:** `TimeFields` (a time of day's fields alone, the pickers' own; its value a
+  `Clock`, `{ hour, minute, second? }`), `parseDay` (a day read back in a picker's `format`),
+  `parsePattern` (a day read back by a pattern) and `partsOfDayTime`.
 
 **Tables and fields:**
 
@@ -55,6 +59,23 @@ What rebuilding a point of sale on rc.52 still asked of the toolkit, and of e-ma
 - **Inline images:** an attachment with an `id` is inline, and the HTML shows it as `cid:<id>` (a
   receipt's logo, without a data address counting against the HTML's 500,000 characters). SMTP,
   sendmail and Resend send them.
+
+**Docs:**
+
+- **AGENTS.md has a business app's web front end:** the files (`plugins/<name>/web/`, one View per
+  file, `web.tsx` only naming them), the names (`screen:`, `dialog:`, `panel:`), an app's own frame
+  (`web.shell`), Views that read with `ctx.db` and handlers that call Actions, `ctx.show` in a
+  View's body, where a form's errors come from, the toolkit first with no CSS, its pieces by job,
+  short recipes, and the common mistakes.
+- **[A business app's screens](docs/guides/a-business-apps-screens.md)**, a new guide: the recipes
+  in full, as files that compile: an app's frame and home of tiles, a list with search, filters,
+  paging and exports, a form in a dialog, a View inside a View, dates, sign-in, a printed document,
+  keyboard shortcuts, files and pictures.
+- **[The web toolkit](docs/guides/the-web-toolkit.md)** for rc.54: `Screen` for a sign-in or a
+  route's own page; `Field`'s widths as shares of the whole row, and how to convert one from rc.53;
+  the range's typed From and To, and why a typed range wants a pattern `format` (a function can't be
+  read back); ends with times, a preset's `00:00` to `23:59`; seconds in day-times; `TimeFields` and
+  the day-time helpers.
 
 ## 1.0.0-rc.53 — 2026-11-16
 

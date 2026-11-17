@@ -329,6 +329,61 @@ Test what callers may not do as well: call as someone else, and `assert.rejects`
 - **Online:** `devSignIn` is for this machine only; Copilotz won't start it with a public origin.
   Keep the `links` secret (32 bytes or more) across restarts, or MCP conversations start over.
 
+## The record and bytes
+
+**The record lasts as the store does.** Each commit appends its events to the `events` table, and
+the runtime never changes or deletes one. An event is `{ seq, id, type, data, cause, actor, at }`:
+`cause` is the event behind it (a write's: its call's `action.started`), `actor` the whole actor
+(`for`, `in`, `via`), `at` its commit's time. `action.started` holds
+`{ action, input, inputHash, startedAt, attempt }`, `action.completed` the `result`, a collection's
+event `{ _id, doc }`. Read it with `store.events(afterSeq, limit)` in a test or script,
+`runtime.subscribe` live, or SQL (`sqlite3`, `psql`,
+[maintenance](https://copilotz.com/docs/operations/maintenance.md)). Plugin code reads no log; a
+history screen reads the app's own collection.
+
+**Kept out:** a collection's `private` fields (keys, tokens), an Action's `private` input and result
+fields, an unrecorded Action's call (`record: false`; not its writes), and collections with
+`events: false` or `durable: false`. All else an Action is given stays for good.
+
+**Large values.** A string over 16 KiB is a blob, stored once by its hash: documents and events keep
+a reference, and reads load it whole unless a `projection` leaves the field out. Blobs live in the
+store, or in files or a bucket (`createRuntime({ blobs })`), chosen before it fills. A file is a
+string (a `data:` address, base64). Nothing deletes a blob: a value deleted or replaced stays on the
+record. [Stores](https://copilotz.com/docs/operations/stores.md) and
+[BC 36](https://copilotz.com/docs/build-compass/part-12-shipping/36-postgresql-and-blobs.md) have
+the rest.
+
+**A list reads names, not pictures:** its query leaves them out (`projection: { picture: 0 }`), and
+each row shows `/pictures/<id>`, a route reading it as whoever asks:
+
+```ts
+import { definePlugin, people } from "copilotz";
+
+const PICTURE = /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/;
+
+export const pictures = definePlugin({
+  name: "pictures",
+  routes: {
+    "/pictures/:id": async (_request, { runtime, actor, params }) => {
+      const none = new Response("Not found", { status: 404 });
+      if (!people(actor)) return none; // as the screens' queries `allow`
+      const kept = await runtime.bytes("service", { _id: params.id }, "picture", { actor });
+      if (!kept) return none;
+      const text = new TextDecoder().decode(await kept.read(0, kept.size));
+      const [, type, base64] = PICTURE.exec(text) ?? [];
+      if (!base64) return none;
+      const body = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      return new Response(body, {
+        headers: { "content-type": type, "x-content-type-options": "nosniff" },
+      });
+    },
+  },
+});
+```
+
+**Common mistakes:** a list reading pictures whole; a key in an Action's input or in a field that
+isn't `private`; a route reading as the system; counting on a delete to erase a file.
+
 ## A business app's web front end
 
 Screens for people at work: lists, forms in dialogs, dates, a home, printed documents.
@@ -455,8 +510,8 @@ The pieces, by job:
 - **File and image inputs:** `FileInput` (`accept`; `chooseLabel`, `changeLabel`, `removeLabel`;
   `current` and `onRemove` for a stored file). A picture chosen shows in an `Avatar`
   (`picture={URL.createObjectURL(file)}`, `initial={false}`). The form sends it to an Action as a
-  `data:` address, the Action `private: ["picture"]` so its record doesn't keep it twice; big files
-  are served by a route with `runtime.bytes`.
+  `data:` address; `private: ["picture"]` keeps it out of the call's record, and a list shows it
+  from a route (The record and bytes).
 
 **Common mistakes:**
 

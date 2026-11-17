@@ -157,7 +157,13 @@ export {
   wrapText,
 } from "./toolkit/pdf.ts";
 // Dates: days as `YYYY-MM-DD`, in the app's format and time zone.
-export { Calendar, type CalendarValue, type DayFormat, formatDay } from "./toolkit/calendar.tsx";
+export {
+  Calendar,
+  type CalendarValue,
+  type DayFormat,
+  formatDay,
+  parseDay,
+} from "./toolkit/calendar.tsx";
 export {
   DatePicker,
   DateRangePicker,
@@ -175,11 +181,19 @@ export {
   isDay,
   isDayTime,
   nowIn,
+  parsePattern,
+  partsOfDayTime,
   type Preset,
   presetRange,
   todayIn,
 } from "./toolkit/dates.ts";
-export { DateTimePicker, type DayTimeFormat, formatDayTime } from "./toolkit/date-time-picker.tsx";
+export {
+  type Clock,
+  DateTimePicker,
+  type DayTimeFormat,
+  formatDayTime,
+  TimeFields,
+} from "./toolkit/date-time-picker.tsx";
 export { LiveClock } from "./toolkit/live-clock.tsx";
 // Telling: a few seconds' word over the page.
 export {

@@ -14,10 +14,12 @@ import {
   roundMinute,
 } from "../toolkit/dates.ts";
 
-test("a day-time is a real day and a time of it, to the minute", () => {
+test("a day-time is a real day and a time of it, to the minute or the second", () => {
   assert(isDayTime("2026-11-16 14:30"));
   assert(isDayTime("2024-02-29 00:00"));
   assert(isDayTime("2026-12-31 23:59"));
+  assert(isDayTime("2026-11-16 14:30:00"));
+  assert(isDayTime("2026-11-16 23:59:59"));
   for (
     const not of [
       "2026-11-16",
@@ -25,7 +27,8 @@ test("a day-time is a real day and a time of it, to the minute", () => {
       "2026-11-16 12:60",
       "2026-02-30 10:00",
       "2026-11-16T14:30",
-      "2026-11-16 14:30:00",
+      "2026-11-16 14:30:60",
+      "2026-11-16 14:30:5",
       "2026-11-16 9:30",
       20261116,
     ]
@@ -69,4 +72,23 @@ test("the app's now, in its time zone, its minute on the step", () => {
   assertEquals(nowIn("America/Sao_Paulo", 1, at), "2026-11-16 22:38");
   assertEquals(nowIn("America/Sao_Paulo", 15, at), "2026-11-16 22:45");
   assertEquals(nowIn("UTC", 5, at), "2026-11-17 01:40");
+});
+
+test("seconds: parts and values keep them, bounds compare to the second, now can have them", () => {
+  assertEquals(partsOfDayTime("2026-11-16 09:05:42"), {
+    day: "2026-11-16",
+    hour: 9,
+    minute: 5,
+    second: 42,
+  });
+  assertEquals(dayTimeOf("2026-11-16", 9, 5, 7), "2026-11-16 09:05:07");
+  assertEquals(boundOf("2026-11-16", "max", true), "2026-11-16 23:59:59");
+  // The last evening second of a max day is in, and seconds are not dropped.
+  assertEquals(clampDayTime("2026-11-16 23:59:30", undefined, "2026-11-16"), "2026-11-16 23:59:30");
+  assertEquals(clampDayTime("2026-11-17 00:00:01", undefined, "2026-11-16"), "2026-11-16 23:59:59");
+  assertEquals(clampDayTime("2026-11-16 08:00:10", "2026-11-16 08:00"), "2026-11-16 08:00:10");
+  assertEquals(clampDayTime("2026-11-16 07:59:59", "2026-11-16 08:00"), "2026-11-16 08:00");
+  const at = new Date("2026-11-16T12:34:56Z");
+  assertEquals(nowIn("UTC", 5, at), "2026-11-16 12:35");
+  assertEquals(nowIn("UTC", 5, at, true), "2026-11-16 12:34:56");
 });

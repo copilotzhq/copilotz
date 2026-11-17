@@ -1,3 +1,10 @@
+## 1.0.0-rc.53 — 2026-11-16
+
+**A page on `*.localhost` connects.** A page served on a `*.localhost` host (`shop.localhost`) now
+connects: Oxian 0.23.7 lets its socket use `ws://` to any `*.localhost` host, which browsers keep on
+the machine (RFC 6761). Before, such a page loaded and stayed blank. rc.50 already let `devSignIn`
+answer there.
+
 ## 1.0.0-rc.52 — 2026-11-16
 
 The web toolkit becomes a whole app's: what rebuilding a point of sale on Copilotz asked of it, in

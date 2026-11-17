@@ -39,7 +39,7 @@ Nothing to set. It reads `boardsText`, resource kinds the app and other plugins 
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It ships in a package of its own, `@copilotz/work@1.0.0-rc.52`, for `copilotz` `1.0.0-rc.52`:
+It ships in a package of its own, `@copilotz/work@1.0.0-rc.53`, for `copilotz` `1.0.0-rc.53`:
 install it beside `copilotz`.
 
 ## Listing

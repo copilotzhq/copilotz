@@ -5,11 +5,13 @@
  * html?, from?, replyTo?, attachments? }` (trusted code's, unrecorded)
  * sends through the adapter the `email` resource names: `resend` (Resend's
  * API, with its `apiKey`), `smtp` (a mail server: its `smtp` settings, on
- * Node, Deno and Bun, not workerd), or `console`, which writes each message
+ * Node, Deno and Bun, not workerd), `sendmail` (a sendmail program: its
+ * `sendmail` settings, `{ path?, args?, timeout? }`, same platforms), or `console`, which writes each message
  * to the log, for a laptop (an app whose `links` origin is public doesn't
  * start with it). A message is from the resource's `from`, or from another
  * address its `senders` allow; files go as MIME parts (base64, 10 MiB in
- * all). An adapter of your own is an `email` adapter (`EmailAdapter`, in
+ * all; one with an `id` is inline: the HTML says `cid:id`). `mime` writes
+ * a message's source, for an adapter of your own. An adapter of your own is an `email` adapter (`EmailAdapter`, in
  * the contract).
  *
  * **`emailSignIn`** (with identity and `email`) signs people in with an
@@ -77,6 +79,7 @@ import { signInAction } from "./actions/sign-in.ts";
 import { signUpAction, verifyAction } from "./actions/sign-up.ts";
 import { consoleEmail } from "./adapters/console.ts";
 import { resend } from "./adapters/resend.ts";
+import { sendmail } from "./adapters/sendmail.ts";
 import { smtp } from "./adapters/smtp.ts";
 import { code } from "./collections/code.ts";
 import { login } from "./collections/login.ts";
@@ -97,6 +100,7 @@ import { allowed } from "./shared/addresses.ts";
 import type { EmailSettings, EmailSignInSettings } from "./contract.ts";
 
 export * from "./contract.ts";
+export { mime, quotedPrintable, typeOf } from "./shared/mime.ts";
 export { passwordSignIn } from "./password.ts";
 export { hashPassword, verifyPassword } from "./shared/password.ts";
 export { INVITE_FRAGMENT } from "./actions/invite.ts";
@@ -115,7 +119,7 @@ const publicOrigin = (resources: Record<string, unknown>): string | undefined =>
 export const email: Plugin = definePlugin({
   name: "email",
   actions: { "email.send": sendAction },
-  adapters: { email: { resend, smtp, console: consoleEmail } },
+  adapters: { email: { resend, smtp, sendmail, console: consoleEmail } },
   check(merged) {
     const settings = merged.resources.email as Partial<EmailSettings> | undefined;
     const adapters = Object.keys(merged.adapters.email ?? {});
@@ -129,6 +133,9 @@ export const email: Plugin = definePlugin({
     }
     if (settings.adapter === "smtp" && (!settings.smtp?.host || !settings.from)) {
       throw new Error("the email resource's smtp adapter needs its from, and smtp: { host }");
+    }
+    if (settings.adapter === "sendmail" && !settings.from) {
+      throw new Error("the email resource's sendmail adapter needs its from");
     }
     for (const sender of settings.senders ?? []) {
       if (typeof sender !== "string" || !/@[^\s@]+\.[^\s@]+>?\s*$/.test(sender.trim())) {

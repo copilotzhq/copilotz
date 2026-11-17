@@ -8,9 +8,13 @@
  *   `=?UTF-8?B?…?=`), a file's name as RFC 2231 says (`filename*=`); long
  *   ones fold. Nothing in one ends a line: `email.send` refuses that.
  * - **Text and HTML:** quoted-printable, in UTF-8.
- * - **Files:** base64, as they came.
+ * - **Files:** base64, as they came. A file with an `id` is inline (a
+ *   `Content-ID`, `Content-Disposition: inline`): it goes with the HTML in a
+ *   `multipart/related`, which `cid:id` there points to.
+ * - **Injection:** a header's value is one line; a CR or LF in an address,
+ *   the subject, a file's name, type or id makes `mime` throw.
  */
-import type { EmailMessage } from "../contract.ts";
+import type { EmailAttachment, EmailMessage } from "../contract.ts";
 import { addressOf, nameOf } from "./addresses.ts";
 
 const encoder = new TextEncoder();
@@ -141,24 +145,63 @@ const boundaryOf = () =>
       .join("")
   }`;
 
+/** Throws when a value that goes in a header has a line break (it would start another header). */
+function oneLine(what: string, value: string | undefined): void {
+  if (value !== undefined && /[\r\n]/.test(value)) {
+    throw new Error(`MIME: ${what} can't hold a line break`);
+  }
+}
+
 /** A message's source, from `from`, and its id (`<…@domain>`). */
 export function mime(
   message: EmailMessage,
   from: string,
   options: { date?: Date; replyTo?: string } = {},
 ): { source: string; id: string } {
+  oneLine("from", from);
+  oneLine("to", message.to);
+  oneLine("subject", message.subject);
+  oneLine("replyTo", message.replyTo ?? options.replyTo);
+  for (const file of message.attachments ?? []) {
+    oneLine("a file's name", file.filename);
+    oneLine("a file's type", file.contentType);
+    oneLine("a file's id", file.id);
+  }
   const domain = addressOf(from).split("@")[1] || "localhost";
   const id = `<${crypto.randomUUID()}@${domain}>`;
   const text = part([
     "Content-Type: text/plain; charset=utf-8",
     "Content-Transfer-Encoding: quoted-printable",
   ], quotedPrintable(message.text));
-  const html = message.html
+  const files = message.attachments ?? [];
+  const inline = files.filter((file) => file.id);
+  const beside = files.filter((file) => !file.id);
+  if (inline.length && !message.html) {
+    throw new Error("MIME: an inline file (with an id) needs an html body that points to it");
+  }
+  const filePart = (file: EmailAttachment) =>
+    part([
+      `Content-Type: ${file.contentType ?? typeOf(file.filename)}`,
+      "Content-Transfer-Encoding: base64",
+      ...(file.id ? [`Content-ID: <${file.id}>`] : []),
+      header(
+        "Content-Disposition",
+        `${file.id ? "inline" : "attachment"}; ${filename(file.filename)}`,
+      ),
+    ], wrapped(file.content.replace(/\s+/g, "")));
+  let html = message.html
     ? part([
       "Content-Type: text/html; charset=utf-8",
       "Content-Transfer-Encoding: quoted-printable",
     ], quotedPrintable(message.html))
     : undefined;
+  if (html && inline.length) {
+    const boundary = boundaryOf();
+    html = part(
+      [`Content-Type: multipart/related;${CRLF} boundary="${boundary}"`],
+      multipart(boundary, [html, ...inline.map(filePart)]),
+    );
+  }
   let body = text;
   if (html) {
     const boundary = boundaryOf();
@@ -167,18 +210,11 @@ export function mime(
       multipart(boundary, [text, html]),
     );
   }
-  if (message.attachments?.length) {
+  if (beside.length) {
     const boundary = boundaryOf();
-    const files = message.attachments.map((file) =>
-      part([
-        `Content-Type: ${file.contentType ?? typeOf(file.filename)}`,
-        "Content-Transfer-Encoding: base64",
-        header("Content-Disposition", `attachment; ${filename(file.filename)}`),
-      ], wrapped(file.content.replace(/\s+/g, "")))
-    );
     body = part(
       [`Content-Type: multipart/mixed;${CRLF} boundary="${boundary}"`],
-      multipart(boundary, [body, ...files]),
+      multipart(boundary, [body, ...beside.map(filePart)]),
     );
   }
   const date = (options.date ?? new Date()).toUTCString().replace(/GMT$/, "+0000");

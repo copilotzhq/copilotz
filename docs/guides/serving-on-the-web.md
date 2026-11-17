@@ -267,11 +267,13 @@ plugins: [
 ];
 ```
 
-Email goes through Resend (`adapter: "resend"`), a mail server (`adapter: "smtp"`), or, on a laptop,
-the log (`adapter: "console"`). The `smtp` adapter speaks over `node:net` and `node:tls`, so it runs
-on Node, Deno and Bun, not on workerd. It moves to TLS before it says anything: from the start with
-`secure: true` (port 465), else with STARTTLS (port 587), and it refuses a server that doesn't offer
-STARTTLS unless `starttls: false` says it's one on this machine:
+Email goes through Resend (`adapter: "resend"`), a mail server (`adapter: "smtp"`), a sendmail
+program (`adapter: "sendmail"`, with `sendmail: { path?, args?, timeout? }`: the message goes on its
+stdin, never through a shell), or, on a laptop, the log (`adapter: "console"`). The `smtp` adapter
+speaks over `node:net` and `node:tls`, so it runs on Node, Deno and Bun, not on workerd. It moves to
+TLS before it says anything: from the start with `secure: true` (port 465), else with STARTTLS (port
+587), and it refuses a server that doesn't offer STARTTLS unless `starttls: false` says it's one on
+this machine:
 
 ```ts
 email: {
@@ -293,6 +295,15 @@ await ctx.call("email.send", {
   text: "Your invoice is attached.",
   attachments: [{ filename: `${invoice.number}.pdf`, content: pdfBase64 }],
 });
+```
+
+A file with an `id` is inline: the HTML points to it as `cid:logo` (`<img src="cid:logo">`), so a
+big logo needn't be a data URL in the 500,000 characters of `html`. It needs `html`, and goes as a
+`multipart/related` part with a `Content-ID`. `mime` (exported by the email plugin) writes a
+message's source, for an adapter of your own.
+
+```ts
+attachments: [{ filename: "logo.png", content: logoBase64, id: "logo" }],
 ```
 
 Accounts by username are trusted code's. An admin's screen calls `password.set` through an Action of

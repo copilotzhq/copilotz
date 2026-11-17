@@ -11,7 +11,18 @@
  * (`application/pdf`; else guessed from the name's ending, else
  * `application/octet-stream`), and its bytes in base64.
  */
-export type EmailAttachment = { filename: string; contentType?: string; content: string };
+export type EmailAttachment = {
+  filename: string;
+  contentType?: string;
+  content: string;
+  /**
+   * Makes the file inline: its Content-ID, which the message's `html` points
+   * to as `cid:logo` (`<img src="cid:logo">`). Letters, digits, `.`, `_`,
+   * `-`, `+` (and one `@`). An inline file needs `html`; it counts in the
+   * 10 files and 10 MiB, but not in the HTML's 500,000 characters.
+   */
+  id?: string;
+};
 
 /** A message to send: `email.send`'s input, and what an adapter is handed. */
 export type EmailMessage = {
@@ -76,11 +87,26 @@ export type SmtpSettings = {
   timeout?: number;
 };
 
+/**
+ * The `sendmail` adapter's program: it gets the whole message on its stdin,
+ * run as `path -i -f <sender> [args…] -- <recipient>`, never through a
+ * shell. On Node, Deno and Bun (it spawns a process), not on workerd.
+ */
+export type SendmailSettings = {
+  /** The program: `/usr/sbin/sendmail` unless said. */
+  path?: string;
+  /** Arguments to add before `--` (`["-oi"]`); each is one argument as given. */
+  args?: string[];
+  /** How long it waits for the program to finish (ms): 30,000. */
+  timeout?: number;
+};
+
 /** The `email` resource: how the app sends email. */
 export type EmailSettings = {
   /**
    * Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on
-   * Node, Deno and Bun), or `console` on a laptop, which writes each message
+   * Node, Deno and Bun), `sendmail` (a sendmail program, on Node, Deno and
+   * Bun), or `console` on a laptop, which writes each message
    * to the log (refused where the app's `links` origin is public: a code in a
    * log is a way in).
    */
@@ -103,6 +129,8 @@ export type EmailSettings = {
    * a secret: keep it out of your code.
    */
   smtp?: SmtpSettings;
+  /** The `sendmail` adapter's program (see `SendmailSettings`). */
+  sendmail?: SendmailSettings;
 };
 
 /**

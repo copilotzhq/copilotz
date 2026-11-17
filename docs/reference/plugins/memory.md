@@ -83,7 +83,7 @@ You set it in `resources.memory`.
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.52`.
+It ships with `copilotz@1.0.0-rc.53`.
 
 ## Listing
 

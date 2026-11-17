@@ -83,7 +83,7 @@ It also reads `accountProviders`, `model` and `org`, resource kinds the app and 
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.52`.
+It ships with `copilotz@1.0.0-rc.53`.
 
 ## What it does on its own
 

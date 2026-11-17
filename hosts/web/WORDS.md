@@ -702,6 +702,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `toolkit.previousMonth` | Previous month |
 | `toolkit.previousPage` | Previous page |
 | `toolkit.print` | Print |
+| `toolkit.rangeFrom` | From |
+| `toolkit.rangeTo` | To |
 | `toolkit.removeFile` | Remove |
 | `toolkit.removeRow` | Remove row {row} |
 | `toolkit.removeTag` | Remove {tag} |

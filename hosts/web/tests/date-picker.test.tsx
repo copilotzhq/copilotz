@@ -7,7 +7,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
-import { Calendar, formatDay, weekStartOf } from "../toolkit/calendar.tsx";
+import { Calendar, formatDay, parseDay, weekStartOf } from "../toolkit/calendar.tsx";
 import { DatePicker, DateRangePicker, rangePresets } from "../toolkit/date-picker.tsx";
 import { clockText, LiveClock } from "../toolkit/live-clock.tsx";
 
@@ -157,4 +157,60 @@ test("the clock: no time drawn on the server; the app's zone and format when it 
   assertEquals(clockText(now, "dd/MM/yyyy HH:mm:ss", "America/Sao_Paulo"), "16/11/2026 22:30:05");
   assertEquals(clockText(now, (at) => `[${at}]`, "Asia/Tokyo"), "[2026-11-17 10:30:05]");
   assertStringIncludes(clockText(now, undefined, "UTC"), "1:30:05");
+});
+
+test("typed days read back in the format the field shows", () => {
+  assertEquals(parseDay("16/11/2026", "dd/MM/yyyy"), "2026-11-16");
+  assertEquals(parseDay("11/16/2026"), "2026-11-16"); // the page language's short date
+  assertEquals(parseDay("2026-11-16", (day) => day.split("-").reverse().join(".")), "2026-11-16");
+  assertEquals(parseDay("16/11/2026", "dd/MM/yyyy"), "2026-11-16");
+  assertEquals(parseDay("45/11/2026", "dd/MM/yyyy"), undefined);
+  assertEquals(parseDay("hello"), undefined);
+});
+
+test("a range picker: From and To typed over the months, in the field's format", () => {
+  const html = markup(
+    <DateRangePicker
+      value={{ start: "2026-11-01", end: "2026-11-16" }}
+      onChange={() => {}}
+      today="2026-11-16"
+      format="dd/MM/yyyy"
+    />,
+  );
+  assertStringIncludes(html, ">From</label>");
+  assertStringIncludes(html, ">To</label>");
+  assertStringIncludes(html, 'value="01/11/2026"');
+  assertStringIncludes(html, 'value="16/11/2026"');
+  assert(!html.includes("spinbutton"));
+});
+
+test("a long range opens its months on its start", () => {
+  const html = markup(
+    <DateRangePicker
+      value={{ start: "2010-01-01", end: "2026-11-16" }}
+      onChange={() => {}}
+      today="2026-11-16"
+    />,
+  );
+  assertStringIncludes(html, ">January 2010</h2>");
+  assertStringIncludes(html, ">February 2010</h2>");
+  assert(!html.includes("November 2026</h2>"));
+});
+
+test("a range picker with times: each end has a time of day, from the value's day-times", () => {
+  const html = markup(
+    <DateRangePicker
+      time
+      value={{ start: "2026-11-01 08:15", end: "2026-11-16 17:45" }}
+      onChange={() => {}}
+      today="2026-11-16"
+      format="dd/MM/yyyy"
+    />,
+  );
+  assertStringIncludes(html, 'aria-label="From: Time of day"');
+  assertStringIncludes(html, 'aria-label="To: Time of day"');
+  assertEquals(count(html, /role="spinbutton"/g), 4);
+  assertStringIncludes(html, 'aria-valuenow="8"');
+  assertStringIncludes(html, 'aria-valuenow="45"');
+  assertStringIncludes(html, "01/11/2026 08:15 – 16/11/2026 17:45");
 });

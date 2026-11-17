@@ -268,6 +268,73 @@ export function formatPattern(at: string | Moment, pattern: string, locale = "en
   });
 }
 
+const escaped = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A day read from text written by a pattern (what `formatPattern` writes: `dd/MM/yyyy`,
+ * `d MMM yyyy`, `yyyy-MM-dd`), or `undefined` when the text isn't a real day. Day and month take
+ * one or two digits, `yyyy` four, `yy` two (20xx); month names are read in the language's, in any
+ * case; weekday names are skipped. A pattern with no year, month or day can't be read.
+ */
+export function parsePattern(text: string, pattern: string, locale = "en"): string | undefined {
+  const order: string[] = [];
+  let source = "";
+  let last = 0;
+  const literal = (end: number) => {
+    source += escaped(pattern.slice(last, end)).replace(/\s+/g, "\\s*");
+  };
+  for (const hit of pattern.matchAll(TOKENS)) {
+    literal(hit.index);
+    last = hit.index + hit[0].length;
+    const token = hit[0];
+    if (token[0] === "'") {
+      source += escaped(token.slice(1, -1));
+    } else if (token === "yyyy") {
+      source += "(\\d{4})";
+      order.push("y");
+    } else if (token === "yy") {
+      source += "(\\d{2})";
+      order.push("yy");
+    } else if (token === "MMMM" || token === "MMM") {
+      source += "(\\p{L}+\\.?)";
+      order.push(token);
+    } else if (token === "MM" || token === "M") {
+      source += "(\\d{1,2})";
+      order.push("M");
+    } else if (token === "dd" || token === "d") {
+      source += "(\\d{1,2})";
+      order.push("d");
+    } else if (token === "EEEE" || token === "EEE") {
+      source += "\\p{L}+\\.?";
+    } else return undefined; // a time's letters: not a day
+  }
+  literal(pattern.length);
+  if (!order.some((o) => o === "y" || o === "yy") || !order.includes("d")) return undefined;
+  if (!order.some((o) => o === "M" || o === "MMM" || o === "MMMM")) return undefined;
+  const match = new RegExp(`^${source}$`, "iu").exec(text.trim());
+  if (!match) return undefined;
+  let year = 0, month = 0, day = 0;
+  for (const [i, kind] of order.entries()) {
+    const part = match[i + 1];
+    if (kind === "y") year = +part;
+    else if (kind === "yy") year = 2000 + +part;
+    else if (kind === "d") day = +part;
+    else if (kind === "M") month = +part;
+    else {
+      const wanted = part.toLowerCase().replace(/\.$/, "");
+      month = Array.from({ length: 12 }, (_, m) => m + 1).find((m) => {
+        const name = formatPattern(dayOf(2000, m, 1), kind, locale).toLowerCase();
+        return name.replace(/\.$/, "") === wanted;
+      }) ?? 0;
+    }
+  }
+  const result = dayOf(year, month, day);
+  return month >= 1 && month <= 12 && day >= 1 && isDay(result) && partsOf(result)[1] === month &&
+      partsOf(result)[2] === day
+    ? result
+    : undefined;
+}
+
 /** Whether a pattern shows seconds: a clock that doesn't ticks once a minute. */
 export const showsSeconds = (pattern: string): boolean =>
   /ss/.test(pattern.replace(/'[^']*'/g, ""));
@@ -356,47 +423,65 @@ export function clampRange(range: DateRange, min?: string, max?: string): DateRa
 
 /**
  * A day and a time of it, as the date-time pieces keep them: `"2026-11-16 14:30"`, the app's own
- * clock time (no zone, no seconds), so it reads the same wherever the page is open, and its text
- * sorts as its moments do.
+ * clock time (no zone), so it reads the same wherever the page is open, and its text sorts as its
+ * moments do. A value may carry seconds, `"2026-11-16 14:30:05"`: they are kept as they are until
+ * the time is changed (or always written, by a picker's `seconds`).
  */
 export type DayTime = string;
 
-const DAY_TIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2})$/;
+const DAY_TIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?$/;
 
-/** Whether a string is a real day and a time of it, `YYYY-MM-DD HH:mm`. */
+/** Whether a string is a real day and a time of it, `YYYY-MM-DD HH:mm` or `YYYY-MM-DD HH:mm:ss`. */
 export function isDayTime(value: unknown): value is DayTime {
   if (typeof value !== "string") return false;
   const match = DAY_TIME.exec(value);
-  return !!match && isDay(match[1]) && +match[2] < 24 && +match[3] < 60;
+  return !!match && isDay(match[1]) && +match[2] < 24 && +match[3] < 60 &&
+    (match[4] === undefined || +match[4] < 60);
 }
 
-/** A day and a time, `YYYY-MM-DD HH:mm`. */
-export const dayTimeOf = (day: string, hour: number, minute: number): DayTime =>
-  `${day} ${two(hour)}:${two(minute)}`;
+/** A day and a time, `YYYY-MM-DD HH:mm`; with a `second`, `YYYY-MM-DD HH:mm:ss`. */
+export const dayTimeOf = (day: string, hour: number, minute: number, second?: number): DayTime =>
+  `${day} ${two(hour)}:${two(minute)}${second === undefined ? "" : `:${two(second)}`}`;
 
-/** A day-time's parts: its day, and its hour and minute. */
-export function partsOfDayTime(value: DayTime): { day: string; hour: number; minute: number } {
+/** A day-time's parts: its day, its hour and minute, and its second (none when it has no seconds). */
+export function partsOfDayTime(
+  value: DayTime,
+): { day: string; hour: number; minute: number; second?: number } {
   const match = DAY_TIME.exec(value);
   if (!match) return { day: value.slice(0, 10), hour: 0, minute: 0 };
-  return { day: match[1], hour: +match[2], minute: +match[3] };
+  const parts = { day: match[1], hour: +match[2], minute: +match[3] };
+  return match[4] === undefined ? parts : { ...parts, second: +match[4] };
 }
+
+/** A day-time with its seconds written (`:00` when it has none): for comparing. */
+const full = (value: string): string => (value.length === 16 ? `${value}:00` : value);
 
 /**
  * A bound as a day-time: one given as a day is that day's first minute (`min`) or its last
- * (`max`), so `max: "2026-11-16"` still allows the evening of the 16th.
+ * (`max`), so `max: "2026-11-16"` still allows the evening of the 16th. With `seconds`, a day's
+ * ends are its first and last second.
  */
-export function boundOf(bound: string | undefined, end: "min" | "max"): DayTime | undefined {
+export function boundOf(
+  bound: string | undefined,
+  end: "min" | "max",
+  seconds = false,
+): DayTime | undefined {
   if (bound === undefined) return undefined;
-  if (isDay(bound)) return `${bound} ${end === "min" ? "00:00" : "23:59"}`;
+  if (isDay(bound)) {
+    return `${bound} ${end === "min" ? "00:00" : "23:59"}${
+      seconds ? (end === "min" ? ":00" : ":59") : ""
+    }`;
+  }
   return bound;
 }
 
-/** A day-time kept within bounds (days, or day-times). */
+/** A day-time kept within bounds (days, or day-times), seconds counting when it has them. */
 export function clampDayTime(value: DayTime, min?: string, max?: string): DayTime {
-  const low = boundOf(min, "min");
-  const high = boundOf(max, "max");
-  if (low && value < low) return low;
-  if (high && value > high) return high;
+  const seconds = value.length > 16;
+  const low = boundOf(min, "min", seconds);
+  const high = boundOf(max, "max", seconds);
+  if (low && full(value) < full(low)) return low;
+  if (high && full(value) > full(high)) return high;
   return value;
 }
 
@@ -406,8 +491,21 @@ export function roundMinute(minute: number, step = 1): number {
   return Math.min(Math.round(minute / by) * by, 60 - by);
 }
 
-/** Now, in a time zone (the app's), or the page's own: a day-time, its minute on the step. */
-export function nowIn(timeZone?: string, step = 1, now: Date = new Date()): DayTime {
+/**
+ * Now, in a time zone (the app's), or the page's own: a day-time, its minute on the step; with
+ * `seconds`, its second too.
+ */
+export function nowIn(
+  timeZone?: string,
+  step = 1,
+  now: Date = new Date(),
+  seconds = false,
+): DayTime {
   const m = momentIn(now, timeZone);
-  return dayTimeOf(dayOf(m.year, m.month, m.day), m.hour, roundMinute(m.minute, step));
+  return dayTimeOf(
+    dayOf(m.year, m.month, m.day),
+    m.hour,
+    seconds ? m.minute : roundMinute(m.minute, step),
+    seconds ? m.second : undefined,
+  );
 }

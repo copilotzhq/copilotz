@@ -14,6 +14,7 @@ import {
   isDay,
   monthsBetween,
   monthWeeks,
+  parsePattern,
   type Preset,
   presetRange,
   showsSeconds,
@@ -124,4 +125,23 @@ test("a range kept within bounds, or none when it's wholly outside", () => {
   assertEquals(clampRange(range, "2026-11-10"), { start: "2026-11-10", end: "2026-11-30" });
   assertEquals(clampRange(range, "2026-12-01"), undefined);
   assertEquals(clampRange(range, undefined, "2026-10-31"), undefined);
+});
+
+test("a day read back from the text a pattern writes, or nothing when it isn't a real day", () => {
+  assertEquals(parsePattern("16/11/2026", "dd/MM/yyyy"), "2026-11-16");
+  assertEquals(parsePattern("6/1/2026", "dd/MM/yyyy"), "2026-01-06");
+  assertEquals(parsePattern("11/16/26", "M/d/yy"), "2026-11-16");
+  assertEquals(parsePattern("2026-11-16", "yyyy-MM-dd"), "2026-11-16");
+  assertEquals(parsePattern("16 nov 2026", "d MMM yyyy"), "2026-11-16");
+  assertEquals(parsePattern("Mon, 16 November 2026", "EEE, d MMMM yyyy"), "2026-11-16");
+  assertEquals(
+    parsePattern("16 de novembro de 2026", "d 'de' MMMM 'de' yyyy", "pt-BR"),
+    "2026-11-16",
+  );
+  assertEquals(parsePattern("31/02/2026", "dd/MM/yyyy"), undefined);
+  assertEquals(parsePattern("16/13/2026", "dd/MM/yyyy"), undefined);
+  assertEquals(parsePattern("16/11/26", "dd/MM/yyyy"), undefined);
+  assertEquals(parsePattern("soon", "dd/MM/yyyy"), undefined);
+  assertEquals(parsePattern("", "dd/MM/yyyy"), undefined);
+  assertEquals(parsePattern("16/11", "HH:mm"), undefined);
 });

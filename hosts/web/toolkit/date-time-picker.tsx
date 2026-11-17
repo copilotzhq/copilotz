@@ -10,7 +10,9 @@
  * it was.
  *
  * Values are `YYYY-MM-DD HH:mm`: the app's clock time, with no zone, as
- * `LiveClock` writes it. With none, it opens at the app's now (its
+ * `LiveClock` writes it. A value with seconds (`YYYY-MM-DD HH:mm:ss`) is
+ * read too, and keeps its seconds while the time isn't changed; `seconds`
+ * adds a seconds field, and the value then always has them. With none, it opens at the app's now (its
  * `timeZone`'s, or the page's), on `today` when given. `min` and `max` are
  * days or day-times (a day as a bound takes all of it). `name` sends the
  * value with a form, as it's written.
@@ -72,6 +74,7 @@ const SHEET = sheet(
   font-size: var(--date-picker-panel-font-size, 13px); }
 .copilotz-date-time-clock { display: flex; align-items: center; gap: var(--date-time-picker-gap, 6px);
   margin-top: var(--date-picker-foot-gap, 12px); }
+.copilotz-date-time-fields { display: inline-flex; align-items: center; gap: var(--date-time-picker-gap, 6px); }
 .copilotz-date-time-clock-label { margin-inline-end: auto; color: var(--muted-foreground); font-weight: 560; }
 .copilotz-date-time-spin.copilotz-input { width: var(--date-time-picker-spin-width, 3.6em); padding: 0;
   justify-content: center; }
@@ -109,20 +112,24 @@ const GLYPH = (
 const two = (n: number) => String(n).padStart(2, "0");
 
 /** A day-time written by a format: the pattern's, the function's, or the page language's short ones. */
-export function formatDayTime(value: DayTime, format?: DayTimeFormat): string {
+export function formatDayTime(
+  value: DayTime,
+  format?: DayTimeFormat,
+  seconds = false,
+): string {
   if (typeof format === "function") return format(value);
   if (format) return formatPattern(value, format, lang());
-  const { day, hour, minute } = partsOfDayTime(value);
+  const { day, hour, minute, second } = partsOfDayTime(value);
   const [year, month, date] = partsOf(day);
-  return formatDateTime(new Date(Date.UTC(year, month - 1, date, hour, minute)), {
+  return formatDateTime(new Date(Date.UTC(year, month - 1, date, hour, minute, second ?? 0)), {
     dateStyle: "short",
-    timeStyle: "short",
+    timeStyle: seconds || second !== undefined ? "medium" : "short",
     timeZone: "UTC",
   });
 }
 
 /** A field's name for a part of a time (the hour, the minute), in the page's language. */
-function partName(part: "hour" | "minute"): string {
+function partName(part: "hour" | "minute" | "second"): string {
   try {
     return new Intl.DisplayNames([lang()], { type: "dateTimeField" }).of(part) ?? part;
   } catch {
@@ -191,6 +198,68 @@ function Spin(
   );
 }
 
+/** A time of day as the pickers hold it: its second is none for a time kept to the minute. */
+export type Clock = { hour: number; minute: number; second?: number };
+
+/**
+ * A time of day's fields, hours and minutes (and seconds, with `seconds`), each typed or
+ * stepped. The date-time picker's, and the range picker's when it takes times.
+ */
+export function TimeFields(
+  { value, onChange, step = 1, seconds = false, label, onEnter }: {
+    value: Clock;
+    onChange(value: Clock): void;
+    /** The minutes' step. */
+    step?: number;
+    /** Whether it has a seconds field. */
+    seconds?: boolean;
+    /** What the group is, said to screen readers. */
+    label?: string;
+    onEnter?(): void;
+  },
+): ReactNode {
+  const enter = onEnter ?? (() => {});
+  // Changing the time drops seconds a value had, unless they're shown.
+  const kept = seconds ? value.second ?? 0 : undefined;
+  return (
+    <span className="copilotz-date-time-fields" role="group" aria-label={label}>
+      {SHEET}
+      <Spin
+        value={value.hour}
+        onChange={(hour) => onChange({ hour, minute: value.minute, second: kept })}
+        max={23}
+        step={1}
+        label={partName("hour")}
+        onEnter={enter}
+      />
+      <span className="copilotz-date-time-colon" aria-hidden="true">:</span>
+      <Spin
+        value={value.minute}
+        onChange={(minute) => onChange({ hour: value.hour, minute, second: kept })}
+        max={59}
+        step={step}
+        label={partName("minute")}
+        onEnter={enter}
+      />
+      {seconds
+        ? (
+          <>
+            <span className="copilotz-date-time-colon" aria-hidden="true">:</span>
+            <Spin
+              value={value.second ?? 0}
+              onChange={(second) => onChange({ hour: value.hour, minute: value.minute, second })}
+              max={59}
+              step={1}
+              label={partName("second")}
+              onEnter={enter}
+            />
+          </>
+        )
+        : null}
+    </span>
+  );
+}
+
 export function DateTimePicker(
   {
     value,
@@ -201,6 +270,7 @@ export function DateTimePicker(
     min,
     max,
     minuteStep = 1,
+    seconds = false,
     weekStart,
     monthFormat,
     label = say("chooseDateTime"),
@@ -225,6 +295,8 @@ export function DateTimePicker(
     max?: string;
     /** The minutes' step: what the arrows move by, and where a new time starts (1 by default). */
     minuteStep?: number;
+    /** Shows a seconds field; the value then always has seconds (`YYYY-MM-DD HH:mm:ss`). */
+    seconds?: boolean;
     /** The week's first day: 0 Sunday … 6 Saturday (the page language's by default). */
     weekStart?: number;
     /** The month's heading: a pattern (`MMM yyyy`) or a function of its first day. */
@@ -243,16 +315,19 @@ export function DateTimePicker(
   },
 ): ReactNode {
   const step = Math.max(1, Math.min(30, Math.floor(minuteStep)));
-  const start = (): { day: string; hour: number; minute: number } => {
-    if (value && isDayTime(value)) return partsOfDayTime(value);
-    const now = partsOfDayTime(nowIn(timeZone, step));
+  const start = (): { day: string } & Clock => {
+    if (value && isDayTime(value)) {
+      const at = partsOfDayTime(value);
+      return seconds ? { ...at, second: at.second ?? 0 } : at;
+    }
+    const now = partsOfDayTime(nowIn(timeZone, step, new Date(), seconds));
     return today ? { ...now, day: today } : now;
   };
   const [draft, setDraft] = useState(start);
   const [month, setMonth] = useState(() => monthOf(draft.day));
   const time = useId();
-  const chosen = dayTimeOf(draft.day, draft.hour, draft.minute);
-  const text = value && isDayTime(value) ? formatDayTime(value, format) : "";
+  const chosen = dayTimeOf(draft.day, draft.hour, draft.minute, draft.second);
+  const text = value && isDayTime(value) ? formatDayTime(value, format, seconds) : "";
   const days = { min: min?.slice(0, 10), max: max?.slice(0, 10) };
 
   const open = () => {
@@ -315,27 +390,17 @@ export function DateTimePicker(
               />
               <div className="copilotz-date-time-clock" role="group" aria-labelledby={time}>
                 <span id={time} className="copilotz-date-time-clock-label">{say("time")}</span>
-                <Spin
-                  value={draft.hour}
-                  onChange={(hour) => setDraft({ ...draft, hour })}
-                  max={23}
-                  step={1}
-                  label={partName("hour")}
-                  onEnter={apply}
-                />
-                <span className="copilotz-date-time-colon" aria-hidden="true">:</span>
-                <Spin
-                  value={draft.minute}
-                  onChange={(minute) => setDraft({ ...draft, minute })}
-                  max={59}
+                <TimeFields
+                  value={draft}
+                  onChange={(clock) => setDraft({ ...draft, ...clock })}
                   step={step}
-                  label={partName("minute")}
+                  seconds={seconds}
                   onEnter={apply}
                 />
               </div>
               <div className="copilotz-date-time-foot">
                 <span className="copilotz-date-time-foot-text" aria-live="polite">
-                  {formatDayTime(clampDayTime(chosen, min, max), format)}
+                  {formatDayTime(clampDayTime(chosen, min, max), format, seconds)}
                 </span>
                 <Button size="sm" onClick={close}>{say("cancel")}</Button>
                 <Button size="sm" variant="primary" onClick={apply}>{say("apply")}</Button>

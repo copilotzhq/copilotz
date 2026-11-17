@@ -14,6 +14,9 @@
  *   spacing, no margins of its own, and its heading an `h2`. Its container
  *   scrolls it. A `DetailList` in it stacks.
  *
+ * The header (title row and actions) doesn't print unless `printHeader`;
+ * `align="center"` centres its title and description.
+ *
  * ```tsx
  * <Page title="Memories" description="What agents remember." actions={<Button>Export</Button>}>
  *   …
@@ -58,6 +61,9 @@ const SHEET = sheet(
   gap: 8px; margin-left: 16px; }
 .copilotz-page-description { grid-column: 2 / -1; max-width: 560px; margin: 8px 0 0; color: var(--muted-foreground); }
 .copilotz-page-body { margin-top: var(--page-body-gap, 20px); }
+.copilotz-page-center .copilotz-page-titles { justify-content: center; text-align: center; }
+.copilotz-page-center .copilotz-page-description { grid-column: 1 / -1; max-width: var(--page-description-width, 560px);
+  margin-inline: auto; text-align: center; }
 @container copilotz-page (max-width: 560px) {
   .copilotz-page-inner { padding: var(--page-padding-sm, 16px 16px 48px); }
   .copilotz-page-lead { margin-block: -3px; margin-right: 12px; }
@@ -89,6 +95,8 @@ export function Page(
     back,
     badges,
     actions,
+    align = "start",
+    printHeader,
     density = "full",
     width = "md",
     className,
@@ -110,6 +118,10 @@ export function Page(
     badges?: ReactNode;
     /** What to do here, at the title's end (`Button`s). */
     actions?: ReactNode;
+    /** Where the header's title and description sit: `center` puts them in the middle. */
+    align?: "start" | "center";
+    /** Keep the header (title and actions) on a printed page: left out of print by default. */
+    printHeader?: boolean;
     density?: "full" | "panel";
     /** How wide what it holds may grow, in `full` density. */
     width?: "md" | "lg" | "full";
@@ -136,13 +148,14 @@ export function Page(
         "copilotz-page",
         `copilotz-page-${density}`,
         !panel && width === "lg" && "copilotz-page-lg",
+        align === "center" && "copilotz-page-center",
         !panel && width === "full" && "copilotz-page-fill",
         className,
       )}
     >
       {SHEET}
       <div className="copilotz-page-inner">
-        <header className="copilotz-page-head">
+        <header className={cx("copilotz-page-head", printHeader && "copilotz-page-head-print")}>
           {back
             ? (
               <a className="copilotz-page-back" href={back.href}>

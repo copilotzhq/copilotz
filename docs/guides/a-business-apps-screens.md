@@ -544,8 +544,8 @@ export const customersScreen = (where: Where, ctx: ViewContext<ReactNode>): Reac
   formatted.
 - **Exports:** the menu saves the visible columns of the rows shown, as `<exportName>.csv`, `.xlsx`
   or `.pdf` (`exports` picks the formats). In server mode that's the page. To export every matching
-  row, either give the table every row (the next section's list: `exportAll`), or add an Action with
-  `record: false` that returns them, and a `Menu` in the table's `actions` that saves them with
+  row, either give the table every row (the visits list under Dates: `exportAll`), or add an Action
+  with `record: false` that returns them, and a `Menu` in the table's `actions` that saves them with
   `download(format, { headers, rows }, name)`. Totals in a table's `footer` aren't exported: put
   them in the sheet yourself when the file needs them.
 - **Search in the store** is a `$regex` with `$options: "i"`, and what someone typed is escaped
@@ -696,11 +696,10 @@ Where its errors come from:
 - **The Action's `input` schema** checks the shape. Its messages are for developers, not people:
   check what people get wrong in `run`, with words of your own.
 
-The dialog closes, and says "saved" with a `toast`, only after the Action answered.
-`Field
-layout="row"` puts labels in a column beside their controls: `labelWidth` and `controlWidth`
-are each a share of the whole row (`"33.33%"` and `"66.67%"` fill it). The footer's Save button
-submits the form by its id (`form="customer"`), since a dialog's footer is outside it.
+The dialog closes, and says "saved" with a `toast`, only after the Action answered. A row `Field`
+(`layout="row"`) puts its label in a column beside its control: `labelWidth` and `controlWidth` are
+each a share of the whole row (`"33.33%"` and `"66.67%"` fill it). The footer's Save button submits
+the form by its id (`form="customer"`), since a dialog's footer is outside it.
 
 ## A View inside a View
 
@@ -1359,13 +1358,7 @@ export function ServiceForm({ service, save, close }: {
           <Input id="name" name="name" defaultValue={service?.name} required />
         </Field>
         <Field layout="row" label="Picture" htmlFor="picture">
-          <Stack direction="row" gap="md" align="center">
-            <Avatar
-              name={service?.name ?? "New service"}
-              picture={shown}
-              initial={false}
-              size={64}
-            />
+          <Stack gap="sm">
             <FileInput
               id="picture"
               accept="image/png,image/jpeg,image/webp"
@@ -1379,6 +1372,12 @@ export function ServiceForm({ service, save, close }: {
                 setRemoved(true);
               }}
             />
+            <Avatar
+              name={service?.name ?? "New service"}
+              picture={shown}
+              initial={false}
+              size={64}
+            />
           </Stack>
         </Field>
       </Form>
@@ -1387,6 +1386,8 @@ export function ServiceForm({ service, save, close }: {
 }
 ```
 
+- **The file field comes first** in the control's column, the preview under it: a row `Field`'s
+  label lines up with the first line of text beside it.
 - **`private: ["picture"]`** keeps the picture out of the call's record: it's kept once, in the
   service. A string over 16 KiB is stored as a blob, out of the document, and read back whole.
 - **Bigger files**, or many pictures in a list, are better served by a route of the app's, as chat

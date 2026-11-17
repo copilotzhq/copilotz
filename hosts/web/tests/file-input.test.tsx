@@ -3,7 +3,7 @@
  * tab order, read by its button instead), a button named by its words or a label, what's chosen
  * said as it changes, and a field a `Field` names by the button's id.
  */
-import { assertStringIncludes } from "@std/assert";
+import { assert, assertStringIncludes } from "@std/assert";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import { Field } from "../toolkit/field.tsx";
@@ -40,4 +40,29 @@ test("a Field's label names its button, and a disabled one can't be used", () =>
   const off = markup(<FileInput disabled />);
   assertStringIncludes(off, 'data-disabled=""');
   assertStringIncludes(off, 'disabled="" aria-describedby');
+});
+
+test("its own words, and a stored file: Change, its name, and Remove that tells the app", () => {
+  const own = markup(<FileInput chooseLabel="Select image" />);
+  assertStringIncludes(own, ">Select image</button>");
+  const stored = markup(
+    <FileInput
+      current="https://files.example/pics/a%20cat.png?v=2"
+      chooseLabel="Select image"
+      changeLabel="Change image"
+      removeLabel="Remove image"
+      onRemove={() => {}}
+    />,
+  );
+  assertStringIncludes(stored, ">Change image</button>");
+  assertStringIncludes(stored, "a cat.png");
+  assertStringIncludes(stored, ">Remove image</button>");
+  // Without onRemove there's nothing to remove; the app's words are the default.
+  const plain = markup(<FileInput current="a.png" />);
+  assertStringIncludes(plain, ">Change</button>");
+  assert(!plain.includes("copilotz-file-input-remove"));
+  assertStringIncludes(
+    markup(<FileInput current="a.png" onRemove={() => {}} />),
+    ">Remove</button>",
+  );
 });

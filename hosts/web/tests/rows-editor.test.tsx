@@ -3,7 +3,7 @@
  * group named by its number, its add-after and remove buttons named by the row, an error under a
  * row's fields that describes them, the bounds disabling the buttons, and "Add a row" at the end.
  */
-import { assert, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import { Input } from "../toolkit/input.tsx";
@@ -83,3 +83,34 @@ test("the bounds: no add at max, no remove at min; with no rows, only the add bu
 function assertEquals2(actual: number, expected: number) {
   assert(actual === expected, `${actual} isn't ${expected}`);
 }
+
+test("no add buttons, and the remove control's icon and words are the app's", () => {
+  const html = markup(
+    <RowsEditor
+      rows={codes}
+      onChange={() => {}}
+      make={() => ({ code: "", name: "" })}
+      render={fields}
+      add={false}
+      removeIcon="close"
+      removeLabel={(_, i) => `Drop line ${i + 1}`}
+    />,
+  );
+  assert(!html.includes("copilotz-rows-add"));
+  assert(!html.includes("Add a row"));
+  assert(!html.includes("Add a row after"));
+  assertStringIncludes(html, 'aria-label="Drop line 2"');
+  assertEquals(count(html, /Drop line/g), 2);
+  assertStringIncludes(
+    markup(
+      <RowsEditor
+        rows={codes}
+        onChange={() => {}}
+        make={() => codes[0]}
+        render={fields}
+        removeLabel="Delete"
+      />,
+    ),
+    'aria-label="Delete"',
+  );
+});

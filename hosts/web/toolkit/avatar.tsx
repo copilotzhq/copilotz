@@ -3,9 +3,11 @@
  * a bright rounded square, a space's in a soft one, an org's initials (two,
  * from its first words) on a tile of its own; or, given an `icon` (an
  * emoji: an agent's), that on a soft tile of its color. Given a `picture`
- * (a person's photo, from where they signed in: an `https:` address or a
- * path on the app's own origin), that, with the initial until it loads and
- * if it fails. The color comes from the name (or a `tint` given: an org's
+ * (a person's photo, from where they signed in: an `https:` address, a
+ * path on the app's own origin, or an image chosen but not yet sent: a
+ * `blob:` URL or a png, jpeg, gif or webp `data:` URL), that, with the
+ * initial until it loads and if it fails. `initial={false}` draws no initial:
+ * an empty box (soft, outlined) until the picture is there. The color comes from the name (or a `tint` given: an org's
  * id, so renaming it keeps its colour), so someone looks the same
  * everywhere. Decorative: say the name beside it.
  */
@@ -44,6 +46,8 @@ const SHEET = sheet(
   .copilotz-avatar:not(.copilotz-avatar-agent, .copilotz-avatar-org) { background: hsl(var(--hue) 32% 25%); color: hsl(var(--hue) 85% 86%); }
   .copilotz-avatar.copilotz-avatar-icon { background: hsl(var(--hue) 30% 22%); box-shadow: inset 0 0 0 1px hsl(var(--hue) 30% 30%); }
 }
+.copilotz-avatar.copilotz-avatar-empty { background: var(--avatar-empty-background, var(--muted)); color: inherit;
+  box-shadow: inset 0 0 0 1px var(--avatar-empty-border-color, var(--border)); }
 `,
 );
 
@@ -64,10 +68,16 @@ const initials = (name: string) => {
 
 /** A picture shown only from where it may come: the web, securely, or the app's own origin. */
 const pictureOf = (src: string | undefined) =>
-  src && (/^https:\/\/[^\s"'<>]+$/.test(src) || /^\/(?!\/)[^\s"'<>]*$/.test(src)) ? src : undefined;
+  src &&
+    (/^https:\/\/[^\s"'<>]+$/.test(src) || /^\/(?!\/)[^\s"'<>]*$/.test(src) ||
+      // A picked image not yet sent: an object URL, or a small image's own data.
+      /^blob:[^\s"'<>]+$/.test(src) ||
+      /^data:image\/(?:png|jpeg|gif|webp)(?:;base64)?,[^\s"'<>]*$/.test(src))
+    ? src
+    : undefined;
 
 export function Avatar(
-  { name, kind = "person", size = 28, icon, picture, tint, title, className }: {
+  { name, kind = "person", size = 28, icon, picture, initial = true, tint, title, className }: {
     name: string;
     kind?: "person" | "agent" | "space" | "org";
     size?: number;
@@ -75,6 +85,8 @@ export function Avatar(
     icon?: string;
     /** A photo to show instead: a person's, from their sign-in. */
     picture?: string;
+    /** Draw the initial (yes); `false`: an empty box with no picture. */
+    initial?: boolean;
     /** What the colour comes from, when not the name: an id that never changes. */
     tint?: string;
     title?: string;
@@ -85,6 +97,7 @@ export function Avatar(
   const glyph = icon?.trim() ? first(icon.trim()) : undefined;
   const src = pictureOf(picture);
   const photo = src && failed !== src ? src : undefined;
+  const empty = !initial && !glyph && !photo;
   const letters = kind === "org" ? initials(name) : (first(name.trim()) ?? "?").toUpperCase();
   return (
     <>
@@ -92,12 +105,12 @@ export function Avatar(
       <span
         className={`copilotz-avatar copilotz-avatar-${kind}${glyph ? " copilotz-avatar-icon" : ""}${
           photo ? " copilotz-avatar-picture" : ""
-        }${className ? ` ${className}` : ""}`}
+        }${empty ? " copilotz-avatar-empty" : ""}${className ? ` ${className}` : ""}`}
         style={{ "--hue": hue(tint ?? name), "--size": `${size}px` } as CSSProperties}
         title={title}
         aria-hidden="true"
       >
-        {glyph ?? letters}
+        {glyph ?? (initial ? letters : null)}
         {photo
           ? (
             <img

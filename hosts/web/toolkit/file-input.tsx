@@ -8,6 +8,13 @@
  * "Drop files here". `onChange` hears the files each time they change. `id`
  * is its button's, so a `Field`'s label (`htmlFor`) names it.
  *
+ * Words are the app's (`toolkit.chooseFile`…), or each field's own: `chooseLabel`,
+ * `changeLabel` and `removeLabel` ("Select image", "Change image", "Remove
+ * image"). A file already stored is `current` (its name, or its URL, whose last
+ * part is shown): with nothing new chosen the field shows it, its button says
+ * "Change", and Remove (given `onRemove`) tells the app to drop it; removing a
+ * new choice brings the stored file back.
+ *
  * Its look is the input's (`--input-*`: its height, border, radius,
  * background), and `--file-input-*` for its own: the choose button, and
  * the field while files are dragged over it.
@@ -65,11 +72,37 @@ const SHEET = sheet(
 `,
 );
 
+/** A stored file's name: the last part of its path, without query or fragment. */
+const nameOfStored = (current: string): string => {
+  const last = current.split(/[?#]/)[0].split("/").filter(Boolean).pop() ?? current;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+};
+
 /** Whether a drag carries files (not text, not a link). */
 const carriesFiles = (event: DragEvent) => [...event.dataTransfer.types].includes("Files");
 
 export function FileInput(
-  { id, name, accept, multiple, required, disabled, placeholder, label, onChange, className }: {
+  {
+    id,
+    name,
+    accept,
+    multiple,
+    required,
+    disabled,
+    placeholder,
+    label,
+    chooseLabel,
+    changeLabel,
+    removeLabel,
+    current,
+    onRemove,
+    onChange,
+    className,
+  }: {
     /** Its button's id: a `Field`'s label (`htmlFor`) names it. */
     id?: string;
     /** Sends the chosen files with a form, under this name. */
@@ -84,6 +117,16 @@ export function FileInput(
     placeholder?: ReactNode;
     /** What it chooses, said to screen readers when no label names it. */
     label?: string;
+    /** The choose button's words, with nothing chosen (the app's "Choose a file"). */
+    chooseLabel?: string;
+    /** The choose button's words once a file is chosen or stored (the app's "Change"). */
+    changeLabel?: string;
+    /** The remove button's words (the app's "Remove"). */
+    removeLabel?: string;
+    /** A file already stored: its name or URL. */
+    current?: string;
+    /** Remove asked of the stored file (`current`): the app drops it. */
+    onRemove?(): void;
     /** The files chosen, each time they change (none when removed). */
     onChange?(files: File[]): void;
     className?: string;
@@ -121,10 +164,11 @@ export function FileInput(
   };
 
   const one = files.length === 1 ? files[0] : undefined;
+  const stored = !files.length && current ? current : undefined;
   return (
     <div
       className={cx("copilotz-file-input", className)}
-      data-chosen={files.length ? "" : undefined}
+      data-chosen={files.length || stored ? "" : undefined}
       data-dragging={dragging ? "" : undefined}
       data-disabled={disabled ? "" : undefined}
       onDragEnter={(event) => {
@@ -166,13 +210,15 @@ export function FileInput(
         onClick={() => input.current?.click()}
       >
         <Icon name="attach" size={15} />
-        {files.length ? say("changeFile") : multiple ? say("chooseFiles") : say("chooseFile")}
+        {files.length || stored
+          ? changeLabel ?? say("changeFile")
+          : chooseLabel ?? (multiple ? say("chooseFiles") : say("chooseFile"))}
       </button>
       <span
         id={said}
         className="copilotz-file-input-text"
         aria-live="polite"
-        title={files.map((f) => f.name).join(", ") || undefined}
+        title={files.map((f) => f.name).join(", ") || stored || undefined}
       >
         {dragging ? say("dropFiles") : one
           ? (
@@ -183,12 +229,18 @@ export function FileInput(
           )
           : files.length
           ? say("files", { count: files.length })
+          : stored
+          ? nameOfStored(stored)
           : placeholder}
       </span>
-      {files.length && !disabled
+      {!disabled && (files.length || (stored && onRemove))
         ? (
-          <button type="button" className="copilotz-file-input-remove" onClick={remove}>
-            {say("removeFile")}
+          <button
+            type="button"
+            className="copilotz-file-input-remove"
+            onClick={files.length ? remove : onRemove}
+          >
+            {removeLabel ?? say("removeFile")}
           </button>
         )
         : null}

@@ -18,7 +18,7 @@ export const consoleEmail: EmailAdapter = {
   send(message, { from, settings }) {
     const replies = message.replyTo ?? settings.replyTo;
     const files = (message.attachments ?? []).map((file) =>
-      `\n  + ${file.filename} (${sizeOf(file.content)})`
+      `\n  + ${file.filename}${file.id ? ` (cid:${file.id})` : ""} (${sizeOf(file.content)})`
     ).join("");
     console.log(
       `\n[email] to ${message.to}${from ? `, from ${from}` : ""}` +

@@ -1,9 +1,10 @@
 /**
  * `email.send`: one message, through the app's email port: the adapter the
- * `email` resource names (`resend`, `smtp`, or `console` on a laptop), from
+ * `email` resource names (`resend`, `smtp`, `sendmail`, or `console` on a laptop), from
  * its `from` or another address it allows (the message's own `from`: one of
  * its `senders`), with where replies go (`replyTo`) and files
- * (`attachments`, in base64: 10 at most, 10 MiB in all). Trusted code's
+ * (`attachments`, in base64: 10 at most, 10 MiB in all; one with an `id` is
+ * inline, which the HTML points to as `cid:id`). Trusted code's
  * (sign-in's codes and links, an app's receipts and invoices), never an
  * actor's. Unrecorded: a message may carry a code or a link, which the log
  * never holds. A message that didn't go fails, saying so to anyone; why is
@@ -29,6 +30,8 @@ const attachment = {
     contentType: { type: "string", pattern: "^[\\w.+-]+/[\\w.+-]+$", maxLength: 255 },
     /** Its bytes, in base64. */
     content: { type: "string", maxLength: 14_000_000 },
+    /** Inline: its Content-ID, which the HTML points to as `cid:<id>`. */
+    id: { type: "string", pattern: "^[\\w.+-]+(@[\\w.-]+)?$", minLength: 1, maxLength: 200 },
   },
   required: ["filename", "content"],
   additionalProperties: false,
@@ -42,6 +45,9 @@ function checked(message: EmailMessage) {
     }
   }
   let weight = 0;
+  if (message.attachments?.some((file) => file.id) && !message.html) {
+    throw failure("invalid", "email.send: an inline file (with an id) needs an html body");
+  }
   for (const file of message.attachments ?? []) {
     if (LINE.test(file.filename)) throw failure("invalid", "email.send: a file's name is one line");
     const content = file.content.replace(/\s+/g, "");

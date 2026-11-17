@@ -18,6 +18,9 @@ What rebuilding a point of sale on rc.52 still asked of the toolkit, and of e-ma
 - **`DateTimePicker`** and the day-time helpers take `YYYY-MM-DD HH:mm:ss`: a value's seconds are
   kept until its time is changed (a form saving a record's date unchanged dropped them), and
   `seconds` shows them in a field of their own.
+- **A popover with no room over or under its field** (a range's panel low in a short window) goes on
+  the roomier side, as tall as that room, and scrolls inside: it no longer runs past the window's
+  foot, so the range's Apply and Cancel stay in view.
 
 **Tables and fields:**
 

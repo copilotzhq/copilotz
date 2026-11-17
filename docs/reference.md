@@ -16,19 +16,19 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.53   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.54   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
 `deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
 the version.
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.53"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.54"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
 too, at Copilotz's version (`npm install @copilotz/work@next`,
-`deno add jsr:@copilotz/work@^1.0.0-rc.53`): see [Product packages](#product-packages).
+`deno add jsr:@copilotz/work@^1.0.0-rc.54`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -90,7 +90,7 @@ same plugin, with less code in the server's memory.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.53` goes with `copilotz@1.0.0-rc.53`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.54` goes with `copilotz@1.0.0-rc.54`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.
@@ -413,7 +413,8 @@ elements in the terminal, React in the browser. A name says what it shows (`book
   a later plugin patches an earlier one's entries, so an app changes one agent's `effort` without
   redefining it.
 - **Adapters** are implementations of a port, by port and name: `llm.openai`, `embeddings.hash`,
-  `email.resend`, `email.smtp`. A later plugin's adapter of a name replaces an earlier one's.
+  `email.resend`, `email.smtp`, `email.sendmail`. A later plugin's adapter of a name replaces an
+  earlier one's.
 
 ### Routes and `who`
 
@@ -688,8 +689,8 @@ named by the protocol it speaks. The [models page](reference/plugins/models.md) 
   own come from Google Fonts or from the app's `page.assets`.
 - **The toolkit:** front ends compose the host's pieces (`Button`, `DataTable`, `DateRangePicker`,
   `Dialog`, `Stack`, `Grid`…) and write no CSS: the theme is their look. A route's own page uses
-  them too (`routePage` from `copilotz/web/server`). [The web toolkit](guides/the-web-toolkit.md)
-  shows every piece and lists every token.
+  them too (`routePage` from `copilotz/web/server`, with `Screen` to centre a card in the window).
+  [The web toolkit](guides/the-web-toolkit.md) shows every piece and lists every token.
 - **Words:** every word the web front ends show is English by key (`chat.send`), and an app changes
   any with a `words` resource. The keys and their English are in
   [WORDS.md](https://github.com/copilotzhq/copilotz/blob/main/hosts/web/WORDS.md). Blanks are

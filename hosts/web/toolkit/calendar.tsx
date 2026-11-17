@@ -30,9 +30,11 @@ import {
   addMonths,
   clampDay,
   formatPattern,
+  isDay,
   lastOfMonth,
   monthOf,
   monthWeeks,
+  parsePattern,
   partsOf,
   utcDate,
   weekOf,
@@ -121,6 +123,33 @@ export function formatDay(day: string, format?: DayFormat): string {
   if (typeof format === "function") return format(day);
   if (format) return formatPattern(day, format, lang());
   return formatDate(utcDate(day), { timeZone: "UTC" });
+}
+
+/** The pattern `formatDay`'s short date is written by (`M/d/yyyy`, `dd/MM/yyyy`), read off a sample. */
+function shortPattern(): string {
+  const sample = formatDate(utcDate("2003-04-25"), { timeZone: "UTC" });
+  return sample.split(/(\d+)/).map((part, i) =>
+    i % 2 === 0
+      ? (part ? `'${part.replaceAll("'", "")}'` : "")
+      : part === "2003"
+      ? "yyyy"
+      : part === "25"
+      ? "d"
+      : "M"
+  ).join("");
+}
+
+/**
+ * A day read from text typed in the same format `formatDay` writes (a pattern, or the page
+ * language's short date), or `undefined` when it isn't a real day. A function format can't be
+ * turned back, so its text is read as the page language's short date, or as `YYYY-MM-DD`.
+ */
+export function parseDay(text: string, format?: DayFormat): string | undefined {
+  const pattern = typeof format === "string" ? format : undefined;
+  const read = (by: string) => parsePattern(text, by, lang());
+  const found = read(pattern ?? shortPattern());
+  if (found || pattern) return found;
+  return isDay(text.trim()) ? text.trim() : read("yyyy-MM-dd");
 }
 
 /** The start and end a value marks, and the days chosen (its ends, or the day). */

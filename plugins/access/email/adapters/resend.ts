@@ -33,6 +33,8 @@ export const resend: EmailAdapter = {
               filename: file.filename,
               content: file.content,
               ...(file.contentType ? { content_type: file.contentType } : {}),
+              // Resend's `content_id` makes it inline: the HTML's `cid:<id>`.
+              ...(file.id ? { content_id: file.id } : {}),
             })),
           }
           : {}),

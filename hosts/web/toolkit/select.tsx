@@ -5,6 +5,10 @@
  * Input's tokens (`input-height`, `input-radius`…) unless the theme sets its
  * own (`select-height`, `select-padding`…).
  *
+ * `addon` before it and `addonEnd` after it are joined to it as the Input's
+ * are (same classes and `input-addon-*` tokens); `className` is then the
+ * group's. In a table cell it fills the cell and has no minimum width.
+ *
  * ```tsx
  * <Select value={role} onChange={…}><option value="viewer">Viewer</option>…</Select>
  * ```
@@ -12,6 +16,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import { cx } from "./cx.ts";
 import { Icon } from "./icon.tsx";
+import { AddonGroup } from "./input.tsx";
 import { sheet } from "./sheet.tsx";
 
 const SHEET = sheet(
@@ -43,19 +48,40 @@ const SHEET = sheet(
 );
 
 export function Select(
-  { size = "md", className, children, ...rest }:
-    & { size?: "sm" | "md" | "lg"; className?: string }
+  { size = "md", addon, addonEnd, className, children, ...rest }:
+    & {
+      size?: "sm" | "md" | "lg";
+      /** Before the box, joined to it: words, a glyph or a control. */
+      addon?: ReactNode;
+      /** After the box, joined to it. */
+      addonEnd?: ReactNode;
+      className?: string;
+    }
     & Omit<ComponentProps<"select">, "size">,
 ): ReactNode {
+  const grouped = addon !== undefined || addonEnd !== undefined;
+  const box = (
+    <span
+      className={cx(
+        "copilotz-select",
+        size !== "md" && `copilotz-select-${size}`,
+        !grouped && className,
+      )}
+    >
+      <select {...rest}>{children}</select>
+      <Icon name="chevron-down" size={16} />
+    </span>
+  );
   return (
     <>
       {SHEET}
-      <span
-        className={cx("copilotz-select", size !== "md" && `copilotz-select-${size}`, className)}
-      >
-        <select {...rest}>{children}</select>
-        <Icon name="chevron-down" size={16} />
-      </span>
+      {grouped
+        ? (
+          <AddonGroup addon={addon} addonEnd={addonEnd} size={size} className={className}>
+            {box}
+          </AddonGroup>
+        )
+        : box}
     </>
   );
 }

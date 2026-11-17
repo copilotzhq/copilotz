@@ -70,6 +70,14 @@ const SHEET = sheet(
   border-start-start-radius: 0; border-end-start-radius: 0; }
 .copilotz-input-group > .copilotz-input:not(:last-child) {
   border-start-end-radius: 0; border-end-end-radius: 0; }
+/* A Select or a Picker in the group: it takes the room, its joined corners square. */
+.copilotz-input-group > :is(.copilotz-select, .copilotz-picker) { flex: 1; min-width: 0; }
+.copilotz-input-group:has(> .copilotz-input-addon:first-child) > .copilotz-select > select,
+.copilotz-input-group:has(> .copilotz-input-addon:first-child) > .copilotz-picker {
+  border-start-start-radius: 0; border-end-start-radius: 0; }
+.copilotz-input-group:has(> .copilotz-input-addon:last-child) > .copilotz-select > select,
+.copilotz-input-group:has(> .copilotz-input-addon:last-child) > .copilotz-picker {
+  border-start-end-radius: 0; border-end-end-radius: 0; }
 .copilotz-input-addon { display: flex; align-items: center; justify-content: center; flex: none;
   min-width: var(--input-addon-min-width, 36px); padding: var(--input-addon-padding, 0 10px);
   border: var(--input-addon-border-width, var(--input-border-width, 1px)) solid var(--input);
@@ -97,6 +105,38 @@ const SHEET = sheet(
   border-radius: 0; }
 `,
 );
+
+/**
+ * What joins addons to a field: `addon` before it, `addonEnd` after it, in a
+ * group of the Input's own classes and tokens (also the Select's and the
+ * pickers'). `className` is the group's.
+ */
+export function AddonGroup(
+  { addon, addonEnd, size = "md", className, children }: {
+    addon?: ReactNode;
+    addonEnd?: ReactNode;
+    size?: "sm" | "md" | "lg";
+    className?: string;
+    children: ReactNode;
+  },
+): ReactNode {
+  return (
+    <>
+      {SHEET}
+      <span
+        className={cx(
+          "copilotz-input-group",
+          size !== "md" && `copilotz-input-group-${size}`,
+          className,
+        )}
+      >
+        {addon !== undefined ? <span className="copilotz-input-addon">{addon}</span> : null}
+        {children}
+        {addonEnd !== undefined ? <span className="copilotz-input-addon">{addonEnd}</span> : null}
+      </span>
+    </>
+  );
+}
 
 export function Input(
   { icon, end, addon, addonEnd, size = "md", invalid, className, ...rest }:
@@ -145,19 +185,8 @@ export function Input(
     );
   }
   return (
-    <>
-      {SHEET}
-      <span
-        className={cx(
-          "copilotz-input-group",
-          size !== "md" && `copilotz-input-group-${size}`,
-          className,
-        )}
-      >
-        {addon !== undefined ? <span className="copilotz-input-addon">{addon}</span> : null}
-        {box}
-        {addonEnd !== undefined ? <span className="copilotz-input-addon">{addonEnd}</span> : null}
-      </span>
-    </>
+    <AddonGroup addon={addon} addonEnd={addonEnd} size={size} className={className}>
+      {box}
+    </AddonGroup>
   );
 }

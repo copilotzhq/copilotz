@@ -1,7 +1,7 @@
 /**
  * Where a popover goes beside what it belongs to: under it from its start (a menu), and after it,
  * centred beside it (a rail item's tooltip), or before it when there's no room after; never off
- * the window.
+ * the window: over or under with room on neither side, on the roomier one, as tall as its room.
  */
 import { assertEquals } from "@std/assert";
 import { anchor, type Placement } from "../toolkit/anchor.tsx";
@@ -9,7 +9,10 @@ import { test } from "../../../testing/mod.ts";
 
 type Box = { left: number; top: number; width: number; height: number };
 
-/** Places a popover of `size` beside a target at `at`, in a window 1000 by 600: where it went. */
+/**
+ * Places a popover of `size` beside a target at `at`, in a window 1000 by 600: where it went, and
+ * the height it was capped to (none when it fits; lifted again when it closes).
+ */
 function placed(at: Box, size: { width: number; height: number }, placement: Placement) {
   const scope = globalThis as unknown as Record<string, unknown>;
   const before = Object.fromEntries(
@@ -32,8 +35,15 @@ function placed(at: Box, size: { width: number; height: number }, placement: Pla
   };
   const target = { getBoundingClientRect: () => rect(at) };
   try {
-    anchor(popover as unknown as HTMLElement, target as unknown as HTMLElement, placement)();
-    return { left: popover.style.left, top: popover.style.top, side: popover.dataset.side };
+    const stop = anchor(
+      popover as unknown as HTMLElement,
+      target as unknown as HTMLElement,
+      placement,
+    );
+    const { left, top, maxHeight } = popover.style;
+    stop();
+    assertEquals(popover.style.maxHeight ?? "", "");
+    return { left, top, side: popover.dataset.side, ...(maxHeight ? { maxHeight } : {}) };
   } finally {
     for (const [key, descriptor] of Object.entries(before)) {
       if (descriptor) Object.defineProperty(scope, key, descriptor);
@@ -65,4 +75,36 @@ test("after it, centred beside it (a rail item's tooltip); before it when there'
   // Never off the window: near its foot, it stays inside.
   const low = { left: 10, top: 590, width: 40, height: 40 };
   assertEquals(placed(low, tip, { side: "end", align: "center", gap: 8 }).top, "568px");
+});
+
+test("over or under: the other side when there's no room; with room on neither, the roomier one, as tall as its room", () => {
+  const panel = { width: 300, height: 500 };
+  // Under a field near the window's foot there's no room, over it there is.
+  assertEquals(
+    placed({ left: 100, top: 500, width: 200, height: 40 }, { width: 300, height: 200 }, {}),
+    {
+      left: "100px",
+      top: "294px",
+      side: "bottom",
+    },
+  );
+  // Room on neither side, more under it: under it, 296px tall (to 8px from the window's foot).
+  assertEquals(placed({ left: 100, top: 250, width: 200, height: 40 }, panel, {}), {
+    left: "100px",
+    top: "296px",
+    side: "bottom",
+    maxHeight: "296px",
+  });
+  // More over it: over it, from 8px under the window's top to 6px over the field.
+  assertEquals(placed({ left: 100, top: 350, width: 200, height: 40 }, panel, {}), {
+    left: "100px",
+    top: "8px",
+    side: "bottom",
+    maxHeight: "336px",
+  });
+  // `side="top"` with room on neither keeps to the roomier one too.
+  assertEquals(
+    placed({ left: 100, top: 250, width: 200, height: 40 }, panel, { side: "top" }).maxHeight,
+    "296px",
+  );
 });

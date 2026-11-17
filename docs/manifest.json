@@ -311,7 +311,12 @@
         {
           "title": "The web toolkit",
           "slug": "guides/the-web-toolkit",
-          "description": "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, tables and their files, dates, bars, toasts, shortcuts, printing, PDFs, barcodes, a route's own page, and every token a theme sets."
+          "description": "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, tables and their files, dates, bars, toasts, shortcuts, printing, PDFs, barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
+        },
+        {
+          "title": "A business app's screens",
+          "slug": "guides/a-business-apps-screens",
+          "description": "The screens back-office apps are made of, the Copilotz way: one View per file, Views that read and Actions that write, an app's own frame and home, lists with search, filters, paging and exports, forms in dialogs, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
         }
       ]
     },

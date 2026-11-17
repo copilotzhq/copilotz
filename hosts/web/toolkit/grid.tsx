@@ -63,6 +63,7 @@ export function Grid(
     collapse = "sm",
     className,
     style,
+    hidden,
     children,
     ...rest
   }:
@@ -82,7 +83,7 @@ export function Grid(
     & Omit<ComponentProps<"div">, "className" | "children">,
 ): ReactNode {
   return (
-    <div className="copilotz-grid-box">
+    <div className="copilotz-grid-box" hidden={hidden}>
       {SHEET}
       {GAPS}
       {createElement(

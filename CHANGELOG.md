@@ -1,3 +1,84 @@
+## 1.0.0-rc.54 — 2026-11-17
+
+What a business app's screens still asked of the toolkit and of e-mail, and the docs that show a
+coding agent how to build them.
+
+**Changed:**
+
+- **`Field`'s `controlWidth` is a share of the whole row** (label and control), as a grid column is,
+  no longer of the control's column: `labelWidth="33.33%"` with `controlWidth="66.67%"` fills the
+  row. Its token `field-row-control-width` is `1fr` by default.
+- **A `Page`'s header doesn't print**, as the toolkit's bars don't; `printHeader` keeps it.
+
+**Dates:**
+
+- **`DateRangePicker`** has typed From and To fields over its months, in the field's `format`: a
+  date moves the range and the months, anything else is marked and changes nothing. A long range
+  opens on its start's months. `time` gives each end a time of day. Apply and Cancel stay in view
+  when the panel scrolls.
+- **`DateTimePicker`** and the day-time helpers take `YYYY-MM-DD HH:mm:ss`: a value's seconds are
+  kept until its time is changed (a form saving a record's date unchanged dropped them), and
+  `seconds` shows them in a field of their own.
+- **A popover with no room over or under its field** (a range's panel low in a short window) goes on
+  the roomier side, as tall as that room, and scrolls inside: it no longer runs past the window's
+  foot, so the range's Apply and Cancel stay in view.
+- **New exports:** `TimeFields` (a time of day's fields alone, the pickers' own; its value a
+  `Clock`, `{ hour, minute, second? }`), `parseDay` (a day read back in a picker's `format`),
+  `parsePattern` (a day read back by a pattern) and `partsOfDayTime`.
+
+**Tables and fields:**
+
+- **Fields in `DataTable` cells** fill their column and shrink with it, `Select` and the pickers
+  without their minimum width there; `layout="fixed"` keeps columns at their `width`s.
+- **`detailOpen`** opens a table's detail rows: all of them (`true`, with no button) or those a
+  function picks.
+- **A wide table no longer widens the page**: its screen-reader header words stay inside its scroll.
+- **`Select`, `Picker` and `MultiPicker` take `addon` and `addonEnd`**, as `Input` does.
+- **`FileInput`** takes its own words (`chooseLabel`, `changeLabel`, `removeLabel`) and a file
+  already stored (`current`, removed by `onRemove`).
+- **`FileInput` wraps in a narrow column** (a phone, a table's cell): the name takes a line of its
+  own, cut short, and its buttons' words wrap, so Remove no longer runs past the field.
+- **`RowsEditor`**: `add={false}` leaves out its add buttons; `removeIcon` and `removeLabel` set the
+  remove button.
+- **`Avatar`** shows a picture picked but not yet sent (`blob:`, image `data:`), and
+  `initial={false}` draws an empty box.
+
+**Layout:**
+
+- **`hidden` hides any toolkit piece**: a `Stack`'s or `Grid`'s own display no longer wins over it.
+- **`Screen`**: a frame that fills the window, centring what it holds and keeping a `footer` at the
+  window's foot: a sign-in's card, a route's own page.
+- **`Page` `align="center"`** centres the title and description; **`Toolbar` `grow`** takes the room
+  left (a search field).
+- **Icons:** `cart`, `gift`, `credit-card`, `piggy-bank`, `tags`.
+
+**E-mail:**
+
+- **The `sendmail` adapter** hands a message to a sendmail program (Postfix's, Exim's, msmtp's):
+  `adapter: "sendmail"`, `sendmail: { path, args, timeout }`. It runs the program with arguments,
+  never a shell, recipients after `--`. The e-mail plugin exports its MIME writer (`mime`) for an
+  app's own adapter, and the writer refuses a line break in a header.
+- **Inline images:** an attachment with an `id` is inline, and the HTML shows it as `cid:<id>` (a
+  receipt's logo, without a data address counting against the HTML's 500,000 characters). SMTP,
+  sendmail and Resend send them.
+
+**Docs:**
+
+- **AGENTS.md has a business app's web front end:** the files (`plugins/<name>/web/`, one View per
+  file, `web.tsx` only naming them), the names (`screen:`, `dialog:`, `panel:`), an app's own frame
+  (`web.shell`), Views that read with `ctx.db` and handlers that call Actions, `ctx.show` in a
+  View's body, where a form's errors come from, the toolkit first with no CSS, its pieces by job,
+  short recipes, and the common mistakes.
+- **[A business app's screens](docs/guides/a-business-apps-screens.md)**, a new guide: the recipes
+  in full, as files that compile: an app's frame and home of tiles, a list with search, filters,
+  paging and exports, a form in a dialog, a View inside a View, dates, sign-in, a printed document,
+  keyboard shortcuts, files and pictures.
+- **[The web toolkit](docs/guides/the-web-toolkit.md)** for rc.54: `Screen` for a sign-in or a
+  route's own page; `Field`'s widths as shares of the whole row, and how to convert one from rc.53;
+  the range's typed From and To, and why a typed range wants a pattern `format` (a function can't be
+  read back); ends with times, a preset's `00:00` to `23:59`; seconds in day-times; `TimeFields` and
+  the day-time helpers.
+
 ## 1.0.0-rc.53 — 2026-11-16
 
 **A page on `*.localhost` connects.** A page served on a `*.localhost` host (`shop.localhost`) now

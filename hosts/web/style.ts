@@ -36,6 +36,8 @@ a { color: inherit; }
 code, kbd, pre, samp { font-family: var(--font-mono); font-variant-ligatures: none; }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 ::selection { background: color-mix(in oklab, var(--primary-text) 28%, transparent); }
+/* \`hidden\` hides every toolkit piece, whatever display its own rule gives it. */
+:where([class*="copilotz-"])[hidden] { display: none !important; }
 .copilotz-sr { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 /* Touch screens: text a little larger, and fields at 16px at least, so phones never zoom in on
@@ -52,7 +54,7 @@ code, kbd, pre, samp { font-family: var(--font-mono); font-variant-ligatures: no
 @media print {
   html, body, #app { height: auto !important; overflow: visible !important; }
   .copilotz-page-full { height: auto !important; overflow: visible !important; }
-  .copilotz-no-print, .copilotz-appbar, .copilotz-topbar, .copilotz-toolbar, .copilotz-toasts,
+  .copilotz-page-head:not(.copilotz-page-head-print), .copilotz-no-print, .copilotz-appbar, .copilotz-topbar, .copilotz-toolbar, .copilotz-toasts,
   .copilotz-table-toolbar, .copilotz-table-control, .copilotz-pagination,
   .copilotz-button, .copilotz-icon-button, .copilotz-popover, .copilotz-menu, .copilotz-tooltip,
   .copilotz-autocomplete, .copilotz-going, .copilotz-skip { display: none !important; }

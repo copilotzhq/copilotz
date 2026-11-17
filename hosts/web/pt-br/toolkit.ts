@@ -68,6 +68,8 @@ export const toolkit: Words = {
   "toolkit.previousMonth": "Mês anterior",
   "toolkit.previousPage": "Página anterior",
   "toolkit.print": "Imprimir",
+  "toolkit.rangeFrom": "De",
+  "toolkit.rangeTo": "Até",
   "toolkit.removeFile": "Remover",
   "toolkit.removeRow": "Remover a linha {row}",
   "toolkit.removeTag": "Remover {tag}",

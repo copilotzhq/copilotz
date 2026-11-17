@@ -65,7 +65,7 @@ You set it in `resources.passwordSignIn`.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.53`.
+It ships with `copilotz@1.0.0-rc.54`.
 
 ## What it does on its own
 

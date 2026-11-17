@@ -16,6 +16,14 @@
  * that starts in any month. A day's popover is one month: picking a day
  * takes it and closes.
  *
+ * Over the months, From and To are typed fields in the same format as the
+ * field's: a valid date moves the range and the months shown, and text that
+ * isn't a date marks the field invalid and changes nothing. The months open
+ * on the range's start. `time` gives each end a time of day too (hours and
+ * minutes, like `DateTimePicker`), and the value's ends are then
+ * `YYYY-MM-DD HH:mm` (a preset is its days, whole). The foot stays in view
+ * when the panel scrolls.
+ *
  * The field, the presets and the foot take their look from `--date-picker-*`
  * tokens, and the days from the calendar's (`--calendar-*`).
  *
@@ -25,20 +33,25 @@
  * <DatePicker label="Due" value={due} onChange={setDue} format="d MMM yyyy" />
  * ```
  */
-import { type ReactNode, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Button } from "./button.tsx";
-import { Calendar, type DayFormat, formatDay } from "./calendar.tsx";
+import { Calendar, type DayFormat, formatDay, parseDay } from "./calendar.tsx";
 import { cx } from "./cx.ts";
 import {
   addMonth,
   clampRange,
   type DateRange,
+  dayTimeOf,
+  isDayTime,
   monthOf,
   monthsBetween,
+  partsOfDayTime,
   type Preset,
   presetRange,
   todayIn,
 } from "./dates.ts";
+import { type Clock, TimeFields } from "./date-time-picker.tsx";
+import { Input } from "./input.tsx";
 import { Popover, type PopoverTrigger } from "./popover.tsx";
 import { sheet } from "./sheet.tsx";
 import { say } from "./words.ts";
@@ -118,8 +131,16 @@ const SHEET = sheet(
   background: var(--date-picker-preset-active-background, var(--primary-soft));
   color: var(--date-picker-preset-active-foreground, var(--primary-text)); font-weight: 600; }
 .copilotz-date-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px;
-  margin-top: var(--date-picker-foot-gap, 12px); padding-top: var(--date-picker-foot-gap, 12px);
-  border-top: 1px solid var(--border); }
+  position: sticky; bottom: calc(-1 * var(--date-picker-panel-padding, 12px)); z-index: 1;
+  margin: var(--date-picker-foot-gap, 12px) 0 calc(-1 * var(--date-picker-panel-padding, 12px));
+  padding: var(--date-picker-foot-gap, 12px) 0 var(--date-picker-panel-padding, 12px);
+  border-top: 1px solid var(--border); background: var(--popover); }
+.copilotz-date-months { display: grid; gap: var(--date-picker-fields-gap, 10px); min-width: 0; }
+.copilotz-date-ends { display: flex; flex-wrap: wrap; align-items: center; gap: var(--date-picker-fields-gap, 10px); }
+.copilotz-date-end { display: inline-flex; align-items: center; gap: var(--date-picker-fields-gap, 10px); }
+.copilotz-date-end-label { color: var(--muted-foreground); font-weight: 560; }
+.copilotz-date-end-input.copilotz-input { width: var(--date-picker-end-width, 9.5em); }
+.copilotz-date-end-input.copilotz-input > input { font-variant-numeric: tabular-nums; }
 .copilotz-date-foot-text { margin-inline-end: auto; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 /* Phones: the presets over the months, which stack */
 @media (max-width: 640px) {
@@ -188,16 +209,94 @@ function Field(
   );
 }
 
-/** The first of the two months a range shows: its start's, unless its end then wouldn't show. */
-function firstMonth(range: { start: string; end?: string }, min?: string, max?: string): string {
+/**
+ * The first of the two months a range shows: its start's, so a long range opens where it begins.
+ * Kept within `min` and `max`; `towards: "end"` shows the end instead when it's out of view.
+ */
+function firstMonth(
+  range: { start: string; end?: string },
+  min?: string,
+  max?: string,
+  towards: "start" | "end" = "start",
+): string {
   const end = range.end ?? range.start;
-  let first = monthsBetween(range.start, end) >= 2
+  let first = towards === "end" && monthsBetween(range.start, end) >= 2
     ? addMonth(monthOf(end), -1)
     : monthOf(range.start);
   if (max && first >= monthOf(max)) first = addMonth(monthOf(max), -1);
   if (min && first < monthOf(min)) first = monthOf(min);
   return first;
 }
+
+/** A typed day: the text as the field writes it, read back as it's typed; wrong text is marked and changes nothing. */
+function DayField(
+  { label, day, format, min, max, onDay }: {
+    label: string;
+    day?: string;
+    format?: DayFormat;
+    min?: string;
+    max?: string;
+    onDay(day: string): void;
+  },
+): ReactNode {
+  const id = useId();
+  const written = day ? formatDay(day, format) : "";
+  const [text, setText] = useState(written);
+  const [bad, setBad] = useState(false);
+  // A day chosen elsewhere (the calendar, a preset) is written; the one being typed stays as typed.
+  useEffect(() => {
+    if (!text || parseDay(text, format) !== day) {
+      setText(written);
+      setBad(false);
+    }
+  }, [day, written]);
+  return (
+    <>
+      <label htmlFor={id} className="copilotz-date-end-label">{label}</label>
+      <Input
+        id={id}
+        size="sm"
+        className="copilotz-date-end-input"
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        value={text}
+        invalid={bad}
+        onFocus={(event) => event.currentTarget.select()}
+        onChange={(event) => {
+          const next = event.target.value;
+          const typed = parseDay(next, format);
+          const fits = typed !== undefined && (!min || typed >= min) && (!max || typed <= max);
+          setText(next);
+          setBad(!fits && next.trim() !== "");
+          if (fits) onDay(typed);
+        }}
+        onBlur={() => {
+          setText(written);
+          setBad(false);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.preventDefault();
+        }}
+      />
+    </>
+  );
+}
+
+const START: Clock = { hour: 0, minute: 0 };
+const END: Clock = { hour: 23, minute: 59 };
+
+/** The time of day an end of a value has: its own, or the day's first (or last) minute. */
+const clockOf = (value: string | undefined, whole: Clock): Clock => {
+  if (!value || !isDayTime(value)) return whole;
+  const { hour, minute, second } = partsOfDayTime(value);
+  return { hour, minute, second };
+};
+
+const two = (n: number) => String(n).padStart(2, "0");
+const clockText = (c: Clock): string =>
+  `${two(c.hour)}:${two(c.minute)}${c.second === undefined ? "" : `:${two(c.second)}`}`;
+const secondsOf = (c: Clock): number => c.hour * 3600 + c.minute * 60 + (c.second ?? 0);
 
 /** The props both pickers take. */
 type Common = {
@@ -232,6 +331,7 @@ export function DateRangePicker(
     max,
     presets = true,
     separator = " – ",
+    time = false,
     weekStart,
     monthFormat,
     label = say("chooseDates"),
@@ -246,25 +346,60 @@ export function DateRangePicker(
     presets?: RangePreset[] | boolean;
     /** Between the two days, in the field and the foot. */
     separator?: string;
+    /** Gives each end a time of day: the value's ends are then `YYYY-MM-DD HH:mm`. */
+    time?: boolean;
   },
 ): ReactNode {
   const today = given ?? todayIn();
   const panel = useRef<HTMLDivElement>(null);
-  const start = value ?? { start: today, end: today };
+  const days = (v?: DateRange) => ({
+    start: v?.start.slice(0, 10) ?? today,
+    end: v?.end.slice(0, 10) ?? today,
+  });
+  const clocks = (v?: DateRange) => ({ from: clockOf(v?.start, START), to: clockOf(v?.end, END) });
+  const start = days(value);
   const [draft, setDraft] = useState<{ start: string; end?: string }>(start);
+  const [times, setTimes] = useState(() => clocks(value));
   const [month, setMonth] = useState(() => firstMonth(start, min, max));
   const list = presets === true ? rangePresets(today, { min, max }) : presets || [];
-  const show = (range: DateRange) =>
-    `${formatDay(range.start, format)}${separator}${formatDay(range.end, format)}`;
+  const written = (day: string, clock: Clock) =>
+    time ? `${formatDay(day, format)} ${clockText(clock)}` : formatDay(day, format);
+  const show = (range: DateRange) => {
+    const [a, b] = [days(range), clocks(range)];
+    return `${written(a.start, b.from)}${separator}${written(a.end, b.to)}`;
+  };
   const shown = draft.end === undefined
-    ? `${formatDay(draft.start, format)}${separator}…`
-    : show({ start: draft.start, end: draft.end });
+    ? `${written(draft.start, times.from)}${separator}…`
+    : `${written(draft.start, times.from)}${separator}${written(draft.end, times.to)}`;
+  const whole = secondsOf(times.from) === 0 && secondsOf(times.to) === secondsOf(END);
   const active = list.find((p) =>
-    p.range.start === draft.start && p.range.end === (draft.end ?? draft.start)
+    p.range.start === draft.start && p.range.end === (draft.end ?? draft.start) &&
+    (!time || whole)
   );
+  const out = (day: string, clock: Clock) =>
+    time ? dayTimeOf(day, clock.hour, clock.minute, clock.second) : day;
+  const give = (first: string, last: string, from: Clock, to: Clock) => {
+    // On one day the end can't come before the start.
+    const later = time && first === last && secondsOf(to) < secondsOf(from) ? from : to;
+    onChange({ start: out(first, from), end: out(last, later) });
+  };
   const open = () => {
     setDraft(start);
+    setTimes(clocks(value));
     setMonth(firstMonth(start, min, max));
+  };
+  const typedFrom = (day: string) => {
+    const range = { start: day, end: draft.end !== undefined && draft.end < day ? day : draft.end };
+    setDraft(range);
+    setMonth(firstMonth(range, min, max));
+  };
+  const typedTo = (day: string) => {
+    const range = { start: day < draft.start ? day : draft.start, end: day };
+    setDraft(range);
+    const second = addMonth(month, 1);
+    if (monthOf(day) < month || monthOf(day) > second) {
+      setMonth(firstMonth(range, min, max, "end"));
+    }
   };
   const pick = (day: string) =>
     setDraft((range) =>
@@ -308,7 +443,10 @@ export function DateRangePicker(
                           data-popover-item=""
                           aria-pressed={preset === active}
                           onClick={() => {
-                            onChange(preset.range);
+                            onChange({
+                              start: out(preset.range.start, START),
+                              end: out(preset.range.end, END),
+                            });
                             close();
                           }}
                         >
@@ -333,19 +471,61 @@ export function DateRangePicker(
                   </ul>
                 )
                 : null}
-              <Calendar
-                months={2}
-                month={month}
-                onMonth={setMonth}
-                value={draft}
-                onPick={pick}
-                min={min}
-                max={max}
-                today={today}
-                weekStart={weekStart}
-                monthFormat={monthFormat}
-                label={label}
-              />
+              <div className="copilotz-date-months">
+                <div className="copilotz-date-ends">
+                  <span className="copilotz-date-end">
+                    <DayField
+                      label={say("rangeFrom")}
+                      day={draft.start}
+                      format={format}
+                      min={min}
+                      max={max}
+                      onDay={typedFrom}
+                    />
+                    {time
+                      ? (
+                        <TimeFields
+                          value={times.from}
+                          onChange={(from) => setTimes({ ...times, from })}
+                          label={`${say("rangeFrom")}: ${say("time")}`}
+                        />
+                      )
+                      : null}
+                  </span>
+                  <span className="copilotz-date-end">
+                    <DayField
+                      label={say("rangeTo")}
+                      day={draft.end}
+                      format={format}
+                      min={min}
+                      max={max}
+                      onDay={typedTo}
+                    />
+                    {time
+                      ? (
+                        <TimeFields
+                          value={times.to}
+                          onChange={(to) => setTimes({ ...times, to })}
+                          label={`${say("rangeTo")}: ${say("time")}`}
+                        />
+                      )
+                      : null}
+                  </span>
+                </div>
+                <Calendar
+                  months={2}
+                  month={month}
+                  onMonth={setMonth}
+                  value={draft}
+                  onPick={pick}
+                  min={min}
+                  max={max}
+                  today={today}
+                  weekStart={weekStart}
+                  monthFormat={monthFormat}
+                  label={label}
+                />
+              </div>
             </div>
             <div className="copilotz-date-foot">
               <span className="copilotz-date-foot-text" aria-live="polite">{shown}</span>
@@ -356,7 +536,7 @@ export function DateRangePicker(
                 disabled={draft.end === undefined}
                 onClick={() => {
                   if (draft.end === undefined) return;
-                  onChange({ start: draft.start, end: draft.end });
+                  give(draft.start, draft.end, times.from, times.to);
                   close();
                 }}
               >

@@ -8,6 +8,17 @@
  * "Drop files here". `onChange` hears the files each time they change. `id`
  * is its button's, so a `Field`'s label (`htmlFor`) names it.
  *
+ * Words are the app's (`toolkit.chooseFile`…), or each field's own: `chooseLabel`,
+ * `changeLabel` and `removeLabel` ("Select image", "Change image", "Remove
+ * image"). A file already stored is `current` (its name, or its URL, whose last
+ * part is shown): with nothing new chosen the field shows it, its button says
+ * "Change", and Remove (given `onRemove`) tells the app to drop it; removing a
+ * new choice brings the stored file back.
+ *
+ * In a narrow column (a phone, a table's cell) it wraps: the name takes a
+ * line of its own, cut short with an ellipsis, and the buttons' words wrap
+ * rather than run past the field.
+ *
  * Its look is the input's (`--input-*`: its height, border, radius,
  * background), and `--file-input-*` for its own: the choose button, and
  * the field while files are dragged over it.
@@ -29,7 +40,7 @@ import { say } from "./words.ts";
 const SHEET = sheet(
   "file-input",
   `
-.copilotz-file-input { position: relative; display: flex; align-items: center; gap: var(--file-input-gap, 10px);
+.copilotz-file-input { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: var(--file-input-gap, 10px);
   min-width: 0; min-height: var(--input-height, 40px); padding: var(--file-input-padding, 4px 6px 4px 4px);
   border: var(--input-border-width, 1px) dashed var(--input); border-radius: var(--input-radius, var(--radius-lg));
   background: var(--input-background, var(--card)); color: var(--foreground);
@@ -43,33 +54,61 @@ const SHEET = sheet(
 .copilotz-file-input[data-disabled] { opacity: .55; }
 .copilotz-file-input-native { position: absolute; inset: auto auto 0 0; width: 1px; height: 1px; margin: 0;
   padding: 0; border: 0; opacity: 0; pointer-events: none; }
-.copilotz-file-input-choose { display: inline-flex; flex: none; align-items: center; gap: 6px;
-  height: var(--file-input-button-height, 30px); margin: 0; padding: var(--file-input-button-padding, 0 11px);
+.copilotz-file-input-choose { display: inline-flex; flex: none; align-items: center; gap: 6px; max-width: 100%;
+  min-height: var(--file-input-button-height, 30px); margin: 0; padding: var(--file-input-button-padding, 0 11px);
   border: 0; border-radius: var(--file-input-button-radius, var(--radius-md));
   background: var(--file-input-button-background, var(--secondary));
   color: var(--file-input-button-foreground, var(--secondary-foreground)); font: inherit; font-size: 13px;
-  font-weight: var(--file-input-button-font-weight, 560); white-space: nowrap; cursor: pointer; }
+  font-weight: var(--file-input-button-font-weight, 560); text-align: start; overflow-wrap: anywhere;
+  cursor: pointer; }
 .copilotz-file-input-choose:hover:not(:disabled) { background: var(--accent); color: var(--accent-foreground); }
 .copilotz-file-input-choose:disabled { cursor: default; }
-.copilotz-file-input-text { flex: 1; min-width: 0; overflow: hidden; color: var(--muted-foreground);
+.copilotz-file-input-text { flex: 1 1 6em; min-width: 0; overflow: hidden; color: var(--muted-foreground);
   text-overflow: ellipsis; white-space: nowrap; }
 .copilotz-file-input[data-chosen] .copilotz-file-input-text { color: var(--foreground); }
 .copilotz-file-input-size { margin-inline-start: 6px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-.copilotz-file-input-remove { flex: none; height: var(--file-input-button-height, 30px); margin: 0; padding: 0 8px;
-  border: 0; border-radius: var(--file-input-button-radius, var(--radius-md)); background: transparent;
+.copilotz-file-input-remove { flex: none; max-width: 100%; min-height: var(--file-input-button-height, 30px);
+  margin: 0; margin-inline-start: auto; padding: 0 8px; overflow-wrap: anywhere; border: 0;
+  border-radius: var(--file-input-button-radius, var(--radius-md)); background: transparent;
   color: var(--muted-foreground); font: inherit; font-size: 13px; font-weight: 560; cursor: pointer; }
 .copilotz-file-input-remove:hover { background: var(--accent); color: var(--accent-foreground); }
 @media (pointer: coarse) {
-  .copilotz-file-input-choose, .copilotz-file-input-remove { height: 40px; }
+  .copilotz-file-input-choose, .copilotz-file-input-remove { min-height: 40px; }
 }
 `,
 );
+
+/** A stored file's name: the last part of its path, without query or fragment. */
+const nameOfStored = (current: string): string => {
+  const last = current.split(/[?#]/)[0].split("/").filter(Boolean).pop() ?? current;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+};
 
 /** Whether a drag carries files (not text, not a link). */
 const carriesFiles = (event: DragEvent) => [...event.dataTransfer.types].includes("Files");
 
 export function FileInput(
-  { id, name, accept, multiple, required, disabled, placeholder, label, onChange, className }: {
+  {
+    id,
+    name,
+    accept,
+    multiple,
+    required,
+    disabled,
+    placeholder,
+    label,
+    chooseLabel,
+    changeLabel,
+    removeLabel,
+    current,
+    onRemove,
+    onChange,
+    className,
+  }: {
     /** Its button's id: a `Field`'s label (`htmlFor`) names it. */
     id?: string;
     /** Sends the chosen files with a form, under this name. */
@@ -84,6 +123,16 @@ export function FileInput(
     placeholder?: ReactNode;
     /** What it chooses, said to screen readers when no label names it. */
     label?: string;
+    /** The choose button's words, with nothing chosen (the app's "Choose a file"). */
+    chooseLabel?: string;
+    /** The choose button's words once a file is chosen or stored (the app's "Change"). */
+    changeLabel?: string;
+    /** The remove button's words (the app's "Remove"). */
+    removeLabel?: string;
+    /** A file already stored: its name or URL. */
+    current?: string;
+    /** Remove asked of the stored file (`current`): the app drops it. */
+    onRemove?(): void;
     /** The files chosen, each time they change (none when removed). */
     onChange?(files: File[]): void;
     className?: string;
@@ -121,10 +170,11 @@ export function FileInput(
   };
 
   const one = files.length === 1 ? files[0] : undefined;
+  const stored = !files.length && current ? current : undefined;
   return (
     <div
       className={cx("copilotz-file-input", className)}
-      data-chosen={files.length ? "" : undefined}
+      data-chosen={files.length || stored ? "" : undefined}
       data-dragging={dragging ? "" : undefined}
       data-disabled={disabled ? "" : undefined}
       onDragEnter={(event) => {
@@ -166,13 +216,15 @@ export function FileInput(
         onClick={() => input.current?.click()}
       >
         <Icon name="attach" size={15} />
-        {files.length ? say("changeFile") : multiple ? say("chooseFiles") : say("chooseFile")}
+        {files.length || stored
+          ? changeLabel ?? say("changeFile")
+          : chooseLabel ?? (multiple ? say("chooseFiles") : say("chooseFile"))}
       </button>
       <span
         id={said}
         className="copilotz-file-input-text"
         aria-live="polite"
-        title={files.map((f) => f.name).join(", ") || undefined}
+        title={files.map((f) => f.name).join(", ") || stored || undefined}
       >
         {dragging ? say("dropFiles") : one
           ? (
@@ -183,12 +235,18 @@ export function FileInput(
           )
           : files.length
           ? say("files", { count: files.length })
+          : stored
+          ? nameOfStored(stored)
           : placeholder}
       </span>
-      {files.length && !disabled
+      {!disabled && (files.length || (stored && onRemove))
         ? (
-          <button type="button" className="copilotz-file-input-remove" onClick={remove}>
-            {say("removeFile")}
+          <button
+            type="button"
+            className="copilotz-file-input-remove"
+            onClick={files.length ? remove : onRemove}
+          >
+            {removeLabel ?? say("removeFile")}
           </button>
         )
         : null}

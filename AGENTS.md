@@ -4,7 +4,7 @@ A guide for coding agents (Claude Code, Codex, Cursor, Gemini) building an app w
 it whole before you write code. The last section is for work on Copilotz itself.
 
 It ships in the package (`node_modules/copilotz/AGENTS.md`, and `@copilotz/copilotz` on JSR) and
-goes with `copilotz@1.0.0-rc.53`. Every docs page is Markdown at
+goes with `copilotz@1.0.0-rc.54`. Every docs page is Markdown at
 `https://copilotz.com/docs/<slug>.md`, and https://copilotz.com/llms.txt lists them all. When you're
 unsure of a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`).
 Don't guess.
@@ -64,12 +64,12 @@ There's no project generator. Set a project up as the docs' courses do, on Node 
 ```sh
 mkdir my-app && cd my-app
 npm init -y && npm pkg set type=module
-npm install copilotz@1.0.0-rc.53 react@19 react-dom@19
+npm install copilotz@1.0.0-rc.54 react@19 react-dom@19
 npm install -D typescript @types/node @types/react @types/react-dom esbuild
 ```
 
 Pin the version: npm's `latest` tag still points at an early release candidate. On Deno, run
-`deno add jsr:@copilotz/copilotz` and map `"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.53"` in
+`deno add jsr:@copilotz/copilotz` and map `"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.54"` in
 `deno.json`, so imports read the same.
 
 Node runs `.ts` files as they are, so there's no build step. It doesn't run `.tsx`: tests that load
@@ -95,8 +95,10 @@ plugins/<name>/
   actions.ts …    one file per primitive; or collections/, actions/, views/… with one file per
                   declaration, as Copilotz's own plugins are laid out
   contract.ts     what other plugins may import: shapes and small helpers, never code
-  web.tsx         its web front end (React Views); terminal.ts, its terminal one
+  web.tsx         names its web Views, and nothing else; terminal.ts, its terminal front end
+  web/            one View per file (screen:…, dialog:…, panel:…), the components they draw beside
 server.ts         the web host: reads the environment, passes settings to plugins()
+front.ts          the browser's plugins, in order; browser.tsx, the page's code: web({ plugins })
 tests/kit.ts      the app as app.ts makes it, in memory, with a scripted model
 tests/*.test.ts
 .env              OPENAI_API_KEY=… (optional; dev and terminal read it: --env-file-if-exists=.env)
@@ -108,7 +110,7 @@ line `@AGENTS.md` (Claude Code reads `CLAUDE.md`, and follows the import). Keep 
 ```markdown
 # AGENTS.md
 
-This app runs on Copilotz (copilotz@1.0.0-rc.53). Read node_modules/copilotz/AGENTS.md first;
+This app runs on Copilotz (copilotz@1.0.0-rc.54). Read node_modules/copilotz/AGENTS.md first;
 https://copilotz.com/llms.txt lists the docs, as Markdown.
 
 - `npm test` runs every test offline, with a scripted model: run it after each change.
@@ -306,7 +308,8 @@ Test what callers may not do as well: call as someone else, and `assert.rejects`
 - **Settings are resources, not code.** `app.ts` reads no environment: the server, the terminal or a
   test passes settings in. Agents name a model alias that the app sets.
 - **Writes that must agree go in one `ctx.transaction`.** A refused write rolls it all back. It
-  holds the store's writer, so keep slow work out.
+  holds the store's writer, so keep slow work out. Another plugin's Action joins it with `tx.call`
+  when that Action is `atomic: true`.
 - **Who acts:** `personOf(ctx.actor)`, not `ctx.actor.id` (an agent's is its own). Where: `ctx.in`.
   A tool works where its chat is.
 - **Going past the actor's reach is a named grant,** `ctx.as(grant("…"))`, in trusted code, on the
@@ -325,6 +328,163 @@ Test what callers may not do as well: call as someone else, and `assert.rejects`
   `callId`), then write the result.
 - **Online:** `devSignIn` is for this machine only; Copilotz won't start it with a public origin.
   Keep the `links` secret (32 bytes or more) across restarts, or MCP conversations start over.
+
+## A business app's web front end
+
+Screens for people at work: lists, forms in dialogs, dates, a home, printed documents.
+[A business app's screens](https://copilotz.com/docs/guides/a-business-apps-screens.md) builds each
+one in full, as files that compile;
+[the web toolkit](https://copilotz.com/docs/guides/the-web-toolkit.md) has every piece, prop and
+token. Read both before the first screen.
+
+**Files and names.**
+
+- **One View per file**, in `plugins/<name>/web/`, with the React components it draws beside it.
+  `web.tsx` only names the plugin's Views, as `mod.ts` assembles the server side. Not one big
+  `web.tsx`, and no shared UI library of the app's own.
+- **A name says where a View shows.** `screen:<place>` is a whole screen at `/<place>…`.
+  `dialog:<name>` is a dialog over a screen, at an address of that screen (`/customers/12`), so Back
+  closes it and the list behind keeps its page. `panel:<name>` is a part of another View that reads
+  its own data.
+- **The app's frame** is a View named `web.shell`, the one the web host observes for the address:
+  given `{ path, query }`, it draws the bars and shows ``ctx.show(`screen:${place}`, where)``. List
+  its plugin last among the browser's. Under Copilotz's own shell (`webShell`), `/<kind>/<id>` shows
+  the View named `<kind>` or `web.<kind>` instead.
+
+**Views read, handlers call Actions.**
+
+- **A View reads in its own body** with `ctx.db`: a named query, `.query(name, params)`, or `find`,
+  `findOne`, `countDocuments`. A read is `{ status: "loading" }`, then `{ status: "ready", value }`,
+  and the View runs again when a commit changes it. It hands values to React components. Don't fetch
+  in an effect, poll, or call `/api/` from the page.
+- **Screens read named queries with an `allow`** (`people`): they run on the server, as whoever
+  asks. In the browser a View's own `find` reaches only a collection a rule speaks for (`shared`, or
+  a `guard`); any other answers `forbidden` ("You can't see this here").
+- **Handlers call Actions** with `ctx.call(name, input)`: a click, a submit. A View never writes,
+  and calls nothing while it renders. Suggestions as someone types come from an unrecorded Action
+  (`record: false`, with an `allow`) that runs the query.
+- **A View is a function the runtime runs again, not a component:** no hooks, no state. A form's
+  draft, a chosen file and `useShortcuts` live in a component the View returns.
+- **`ctx.show(name, item)` goes in a View's body only.** It's how a View shows a View: what it
+  returns is a part that reads and redraws on its own, handed to a component as a child or a prop.
+  Another plugin's View is shown by name, without importing its code (`undefined` when there's
+  none). Called later (a component's render, a handler, a table's `render` or `detail`), it throws:
+  `<LazyView kind="panel:…" item={…} />` shows a View on demand.
+- **Validation errors come from the Action.** The browser's `required` and `type` help first. Then
+  the Action checks, for every caller, and throws
+  `failure("invalid", "Give the name.", { public:
+  true })`: `ctx.call` rejects with those words,
+  and a `Form` whose `onSubmit` throws shows them at its top. A refusal about one field names it in
+  `detail` (`Object.assign(failure(…), { detail: {
+  field: "name" } })`), and the form puts it in
+  that `Field`'s `error`. An `input` schema's messages are for developers. A dialog closes only
+  after the Action answered.
+
+**Toolkit first.**
+
+- **Every screen is the toolkit's pieces**, `copilotz/web`, layout included. The look is the theme's
+  configuration and nothing else: the `theme` resource's colours (`light`, `dark`), sizes (`tokens`)
+  and each piece's own tokens (`button-height`, `table-stripe`…). No stylesheet, no `style={{…}}`
+  for a look, no rule on a `.copilotz-*` class, no restyled copy of a piece. `className` may name an
+  element for a test, never restyle it.
+- **Something the toolkit lacks is a gap to report**, with the smallest example of what's needed,
+  never a reason for CSS. Compose first: most "missing" pieces are a `Grid`, a `Stack` or a `Card`
+  of existing ones.
+- **The one exception is a printed document's paper layout**: `@media print` rules beside it.
+- **Words and formats are the app's.** The toolkit's words (`toolkit.noRows`, the date presets) are
+  changed by key in the `words` resource
+  ([WORDS.md](https://github.com/copilotzhq/copilotz/blob/main/hosts/web/WORDS.md) lists them). Time
+  zone and date patterns are settings the screens read, never the browser's locale.
+- **Where the names are:** the toolkit guide's sections and its "Every piece's tokens" tables; the
+  types, `node_modules/copilotz/hosts/web/toolkit/*.d.ts`, and the theme's,
+  `node_modules/copilotz/hosts/web/theme/default.d.ts`.
+
+The pieces, by job:
+
+- **Layout:** `Page`, `Screen`, `Stack`, `Grid`, `GridItem`, `Toolbar`, `Split`, `Card`,
+  `ListGroup`, `Tabs`, `Divider`, `Spacer`, `Heading`, `Text`.
+- **Fields:** `Form`, `Field`, `Input`, `Textarea`, `Select`, `Checkbox`, `Radio`, `Switch`,
+  `Picker`, `MultiPicker`, `Autocomplete`, `TagsInput`, `FileInput`, `RowsEditor`, `DatePicker`,
+  `DateRangePicker`, `DateTimePicker`, `TimeFields`.
+- **Actions and overlays:** `Button`, `IconButton`, `Menu`, `Popover`, `Dialog`, `Drawer`,
+  `Tooltip`, `toast` and `Toasts`.
+- **Data:** `DataTable` (with `tableAddress`, `tableQuery`), `Pagination`, `DetailList`, `Badge`,
+  `Chip`, `Avatar`, `Notice`, `EmptyState`, `Skeleton`, `Spinner`, `Kbd`.
+- **An app's own frame:** `AppBar`, `TopBar`, `TileGrid`, `LiveClock`, `Logo`, `Icon` (`drawing`: an
+  app's own glyph).
+- **Paper and files:** `NoPrint`, `PrintOnly`, `Barcode`, `download`, `exportFile`; on a server,
+  `documentPdf` from `copilotz/web/export`. **Keys:** `useShortcuts`, `shortcutLabel`.
+
+**Short recipes** (whole, in the guide):
+
+- **A list with search, filters, paging and exports:** a `Page` (`width="lg"`, New in `actions`)
+  over a `Toolbar` of filters and a `DataTable`. Up to a few thousand rows, give the table every row
+  and it searches, sorts, pages and exports them (`exportAll`: every matching row). More, a named
+  query takes the table's state and answers `{ rows, total }`: spread `tableAddress(where, 25)` on
+  the table, give it `total`, and keep each filter in the address too, back to the first page
+  (`go(path + tableQuery(where, { ...state, offset: 0 }, { from, to }))`). The export menu saves the
+  rows shown; every row of a server-paged list is an unrecorded Action's, saved with `download`.
+- **A create or edit form in a dialog:** the screen shows
+  `ctx.show("dialog:customer", { _id, back
+  })` when its address names one (`/customers/new`,
+  `/customers/<id>`). The dialog's View reads the record and returns a component: a `Dialog`
+  (`placement="top"`) around a `Form` of `Field
+  layout="row"`s, Save in its footer submitting the
+  form by its id (`form="customer"`). `onSubmit` calls the Action, then `toast()` and `go(back)`.
+- **Date, date-time and date-range fields:** days are `YYYY-MM-DD` and times `YYYY-MM-DD HH:mm` or
+  `HH:mm:ss`, the app's clock time with no zone, never ISO timestamps. `todayIn(timeZone)` and
+  `nowIn(timeZone)` in the app's zone, `format` patterns from its settings. `DatePicker`;
+  `DateTimePicker` keeps a value's seconds until its time changes (`seconds` shows them);
+  `DateRangePicker` has `presets` (or `rangePresets(…)`), typed From and To, and `time` for ends
+  with a time of day.
+- **A sign-in page:** Copilotz's own, with `passwordSignIn` (staff with usernames) or `emailSignIn`:
+  the theme gives its look (`themeOf([look])` on the server), the `signInPage` resource its words
+  and pitch. Accounts come from an Action of the app's that calls `password.set`. Don't write a
+  sign-in route or a session cookie. A page before sign-in is `routePage` (`copilotz/web/server`)
+  with a `Screen`, which centres a card and keeps a footer at the window's foot.
+- **A home of tiles with an app bar:** the frame's `web.shell`: a `TopBar` (`LiveClock`, who's
+  signed in, Sign out with `signOut()`), an `AppBar` (`items`, `active`), the screen, and
+  `<Toasts />` once. At `/`, a `Page` of a `TileGrid`.
+- **A printed document:** a screen at its own address: a `Page` with Print in a `NoPrint`, its
+  content (`DetailList`, `DataTable`, `Barcode`), `PrintOnly` for paper's words, and the paper's
+  `@media print` rules beside it. It prints without the bars, buttons or the page's header
+  (`printHeader` keeps it). The same as a PDF on a server, for e-mail: `documentPdf`.
+- **Keyboard shortcuts:** `useShortcuts({ "Alt+N": add, Escape: { run: close, inFields: true } })`
+  in a component of the screen, and `<Kbd>{shortcutLabel("Alt+N")}</Kbd>` where it's offered. Keys
+  wait while someone types in a field or a dialog is open. No `keydown` listener on `document`.
+- **File and image inputs:** `FileInput` (`accept`; `chooseLabel`, `changeLabel`, `removeLabel`;
+  `current` and `onRemove` for a stored file). A picture chosen shows in an `Avatar`
+  (`picture={URL.createObjectURL(file)}`, `initial={false}`). The form sends it to an Action as a
+  `data:` address, the Action `private: ["picture"]` so its record doesn't keep it twice; big files
+  are served by a route with `runtime.bytes`.
+
+**Common mistakes:**
+
+- A UI kit and stylesheets of the app's own, inline styles for looks, or overrides of `.copilotz-*`,
+  instead of the toolkit and the theme. Hand-made `<table>`s of fields (use `DataTable` with fields
+  in cells, or `RowsEditor`), a hidden `<input type="file">` behind buttons (`FileInput`), the
+  browser's `datetime-local` (`DateTimePicker`), a `document` key listener (`useShortcuts`), a form
+  part listening for the DOM's `submit` (`Form` and `useFormSubmit`).
+- One big `web.tsx`; a View that holds state or hooks; a screen fetching `/api/queries/…` from an
+  effect instead of reading `ctx.db` in the View; a browser View's `find` on a collection no rule
+  speaks for, instead of a named query; `ctx.show` in a row's `render`.
+- A refusal returned as a value (`{ ok: false }`) instead of a thrown public `failure`: the REST API
+  answers 200 and a script believes it worked. A second Action, or a second input shape, for
+  scripts.
+- A table's page, sort and filters kept in component state: Back and a closed dialog lose them. Keep
+  them in the address.
+- Forms as pages, a capability reachable only by an Action no screen calls, a disabled placeholder
+  for a field that should work. Open every screen in a browser and use it, not only its tests.
+- A save per field on blur, racing the next one: keep a record's edits together and send them once
+  (Save, or a row's Update and Enter).
+- Dates in the browser's locale (`toLocaleString`, `<input type="date">`) or as ISO timestamps given
+  to a picker; a function `format` on a range people type into (it can't be read back: use a
+  pattern); a record's date-time saved unchanged without its seconds.
+- A `controlWidth` from rc.52–53 or from a CSS-grid habit. Both `labelWidth` and `controlWidth` are
+  shares of the whole row: `"33.33%"` and `"66.67%"` fill it.
+- A workaround copied from an older release: rc.54 has `Screen`, typed range ends, seconds, `hidden`
+  on layout pieces, fields that fit table cells, `detailOpen`, `Toolbar grow`, a file field's own
+  words and picture previews.
 
 ## Recipes
 

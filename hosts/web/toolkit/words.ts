@@ -96,6 +96,8 @@ export const say = defineWords("toolkit", {
   lastFiscalYear: "Last fiscal year",
   allTime: "All time",
   customRange: "Custom range",
+  rangeFrom: "From",
+  rangeTo: "To",
   // Choosing
   noneChosen: "None chosen",
   chosen: { one: "{count} chosen", other: "{count} chosen" },

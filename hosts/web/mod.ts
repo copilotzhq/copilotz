@@ -114,6 +114,7 @@ export { type Space } from "./toolkit/space.tsx";
 export { type Align, Divider, type Justify, Spacer, Stack } from "./toolkit/stack.tsx";
 export { Grid, GridItem } from "./toolkit/grid.tsx";
 export { Toolbar } from "./toolkit/toolbar.tsx";
+export { Screen } from "./toolkit/screen.tsx";
 export { Split } from "./toolkit/split.tsx";
 export { ListGroup, type ListGroupItem } from "./toolkit/list-group.tsx";
 export { Heading, Text, type TextTone } from "./toolkit/text.tsx";
@@ -157,7 +158,13 @@ export {
   wrapText,
 } from "./toolkit/pdf.ts";
 // Dates: days as `YYYY-MM-DD`, in the app's format and time zone.
-export { Calendar, type CalendarValue, type DayFormat, formatDay } from "./toolkit/calendar.tsx";
+export {
+  Calendar,
+  type CalendarValue,
+  type DayFormat,
+  formatDay,
+  parseDay,
+} from "./toolkit/calendar.tsx";
 export {
   DatePicker,
   DateRangePicker,
@@ -175,11 +182,19 @@ export {
   isDay,
   isDayTime,
   nowIn,
+  parsePattern,
+  partsOfDayTime,
   type Preset,
   presetRange,
   todayIn,
 } from "./toolkit/dates.ts";
-export { DateTimePicker, type DayTimeFormat, formatDayTime } from "./toolkit/date-time-picker.tsx";
+export {
+  type Clock,
+  DateTimePicker,
+  type DayTimeFormat,
+  formatDayTime,
+  TimeFields,
+} from "./toolkit/date-time-picker.tsx";
 export { LiveClock } from "./toolkit/live-clock.tsx";
 // Telling: a few seconds' word over the page.
 export {

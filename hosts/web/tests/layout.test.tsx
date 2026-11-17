@@ -128,3 +128,54 @@ test("text and headings: tones, sizes, weights, and the heading's level and size
     '<h1 id="t" class="copilotz-heading copilotz-heading-3">x</h1>',
   );
 });
+
+test("hidden reaches the element of every layout piece, and the base hides what carries it", async () => {
+  const { BASE } = await import("../style.ts");
+  assertStringIncludes(html(<Stack hidden>a</Stack>), "hidden");
+  assertStringIncludes(html(<Grid hidden>a</Grid>), '<div class="copilotz-grid-box" hidden="">');
+  assertStringIncludes(BASE, ':where([class*="copilotz-"])[hidden] { display: none !important; }');
+});
+
+test("new line icons: cart, gift, credit card, piggy bank, tags", async () => {
+  const { ICONS } = await import("../toolkit/icon.tsx");
+  for (const name of ["cart", "gift", "credit-card", "piggy-bank", "tags"] as const) {
+    assert(ICONS.includes(name), name);
+    const svg = html(<Icon name={name} />);
+    assertStringIncludes(svg, 'viewBox="0 0 24 24"');
+    assertStringIncludes(svg, 'stroke-width="1.8"');
+  }
+});
+
+test("a toolbar's grow item sits between the children and the end, and takes the room", () => {
+  const out = html(<Toolbar start="S" grow="G" end="E" />);
+  assert(
+    out.indexOf("S") < out.indexOf('copilotz-toolbar-grow">G') &&
+      out.indexOf("G") < out.indexOf(">E<"),
+  );
+  assert(!html(<Toolbar start="S" />).includes("copilotz-toolbar-grow"));
+});
+
+test("a page: header out of print unless kept, title centred on ask", async () => {
+  const { Page } = await import("../toolkit/page.tsx");
+  const { BASE } = await import("../style.ts");
+  assertStringIncludes(BASE, ".copilotz-page-head:not(.copilotz-page-head-print)");
+  assert(!html(<Page title="T">x</Page>).includes("copilotz-page-head-print"));
+  assertStringIncludes(
+    html(<Page title="T" printHeader>x</Page>),
+    'class="copilotz-page-head copilotz-page-head-print"',
+  );
+  assertStringIncludes(html(<Page title="T" align="center">x</Page>), "copilotz-page-center");
+  assert(!html(<Page title="T">x</Page>).includes("copilotz-page-center"));
+});
+
+test("a screen: content centred, the footer kept at the foot, inside a route's page", async () => {
+  const { Screen } = await import("../toolkit/screen.tsx");
+  const { routePageHtml } = await import("../route-page.ts");
+  const out = html(<Screen footer="Acme">card</Screen>);
+  assertStringIncludes(out, '<div class="copilotz-screen-content">card</div>');
+  assertStringIncludes(out, '<footer class="copilotz-screen-footer">Acme</footer>');
+  assert(!html(<Screen>card</Screen>).includes("<footer"));
+  const page = routePageHtml({} as never, { title: "In", body: <Screen>card</Screen> });
+  assertStringIncludes(page, "min-height: 100dvh");
+  assertStringIncludes(page, "var(--screen-width, 420px)");
+});

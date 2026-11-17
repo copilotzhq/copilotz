@@ -7,8 +7,8 @@
  * its look).
  *
  * Stacked, the label over the control (the default); or `layout="row"`, the
- * label in a column beside it (`labelWidth`, and `controlWidth` for a
- * narrower control), stacked again on a narrow screen. Its look is the
+ * label in a column beside it (`labelWidth`, and `controlWidth`, each a
+ * share of the whole row, as a grid column is), stacked again on a narrow screen. Its look is the
  * theme's: `field-gap`, `field-label-*`, `field-required-color`,
  * `field-row-label-width`, `field-row-gap`…
  *
@@ -41,9 +41,8 @@ const SHEET = sheet(
 .copilotz-field-error { color: var(--destructive-text); }
 .copilotz-field[data-invalid] :is(.copilotz-input, .copilotz-select > select, .copilotz-textarea) {
   border-color: var(--destructive); }
-.copilotz-field-control { display: grid; align-content: start; gap: var(--field-gap, 7px); min-width: 0;
-  max-width: var(--field-row-control-width, none); }
-.copilotz-field-row { grid-template-columns: var(--field-row-label-width, 30%) minmax(0, 1fr);
+.copilotz-field-control { display: grid; align-content: start; gap: var(--field-gap, 7px); min-width: 0; }
+.copilotz-field-row { grid-template-columns: var(--field-row-label-width, 30%) minmax(0, var(--field-row-control-width, 1fr));
   column-gap: var(--field-row-gap, 16px); align-items: first baseline; }
 .copilotz-field-row > .copilotz-field-label { padding-top: var(--field-row-label-offset, 0);
   text-align: var(--field-row-label-align, start); overflow-wrap: anywhere; }
@@ -78,7 +77,10 @@ export function Field(
     layout?: "stacked" | "row";
     /** In a row, the label's column: a length or a share (`"160px"`, `"25%"`). */
     labelWidth?: string;
-    /** In a row, the most the control takes (`"33%"`): a narrower control. */
+    /**
+     * In a row, the control's column: a share of the whole row, as a grid column is (`"66.67%"`
+     * with a `labelWidth` of `"33.33%"` fills it), or a length (`"320px"`).
+     */
     controlWidth?: string;
     className?: string;
     children: ReactNode | ((control: Control) => ReactNode);

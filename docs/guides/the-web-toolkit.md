@@ -108,13 +108,44 @@ Reports, as a card of links:
 </Grid>;
 ```
 
+**A page that is the whole window.** `Page` frames a View under its title, at a width. A page with
+no title over it, a sign-in, a landing, an error, or a route's own page, is a `Screen`: it fills the
+window (at least its height), centres what it holds both ways at `screen-width` (420px), and keeps
+its `footer` at the window's foot. Taller than the window, it grows, and the footer follows it.
+
+```tsx
+<Screen
+  footer={
+    <Text size="sm" tone="muted">
+      Acme Stores · <a href="/help">Help</a>
+    </Text>
+  }
+>
+  <Card title="Sign in">
+    <Stack as="form" method="post" action="/sign-in">
+      <Field label="Email" htmlFor="email" required>
+        <Input id="email" name="email" type="email" autoComplete="username" />
+      </Field>
+      <Field label="Password" htmlFor="password" required>
+        <Input id="password" name="password" type="password" autoComplete="current-password" />
+      </Field>
+      <Button type="submit" variant="primary" block>Sign in</Button>
+    </Stack>
+  </Card>
+</Screen>;
+```
+
 ## Forms
 
 - **`Field`** labels a control: a `hint` under it, or the `error` in its place. `required` adds a
   mark that screen readers say as "required". Its children are a function of the control's props, or
-  the control itself with `htmlFor`. `layout="row"` puts the label in a column beside the control
-  (`labelWidth` and `controlWidth`, each a share of the whole row as a grid column is; tokens
-  `field-row-*`), and it stacks again under 560px.
+  the control itself with `htmlFor`. `layout="row"` puts the label in a column beside the control,
+  and it stacks again under 560px. `labelWidth` (30% by default) and `controlWidth` (the rest by
+  default) are each a share of the whole row, as a grid's columns are: `"33.33%"` and `"66.67%"`
+  fill the row, `"25%"` and `"50%"` leave its last quarter empty, and a length (`"320px"`) is the
+  most the control takes. The tokens `field-row-label-width` and `field-row-control-width` set them
+  for every field. Before rc.54, `controlWidth` was a share of the control's own column: an older
+  `"50%"` beside a 30% label is now about `"35%"`.
 - **`Input`**: `sm`, `md`, `lg`; an `icon` inside the box; `end` for buttons that act on it;
   **`addon`** and **`addonEnd`**, segments outside the box and joined to it: words or an icon get a
   tinted face, and a button or a `Switch` there is the segment itself.
@@ -148,6 +179,9 @@ Reports, as a card of links:
 <Stack as="form" onSubmit={save}>
   <Field layout="row" label="Email" htmlFor="email" required error={errors.email}>
     <Input id="email" type="email" icon="mail" />
+  </Field>
+  <Field layout="row" label="Postcode" htmlFor="postcode" controlWidth="35%">
+    <Input id="postcode" autoComplete="postal-code" />
   </Field>
   <Field layout="row" label="Discount" htmlFor="discount">
     <Input
@@ -251,8 +285,8 @@ const columns: Column<Item>[] = [
 - A column titled `""` holds links or buttons: it isn't sorted, searched, chosen or exported; its
   `label` names it for screen readers. `text` is what search, sorting and the files use; `numeric`
   sorts by number; `hidden` starts it hidden in the chooser.
-- **Search** finds every word typed in any titled column, whatever its case and accents ("joao
-  silva" finds "João Silva"), 500 ms after the last key.
+- **Search** finds every word typed in any titled column, whatever its case and accents ("zoe
+  muller" finds "Zoë Müller"), 500 ms after the last key.
 - A click on a row ticks it (not on a link, button or field in it); the header's box ticks the page.
   `actions(ticked, clear)` gets the ticked rows' keys.
 - `detail(row)` opens a row under each, by a button with `aria-expanded`; `detailOpen` opens them
@@ -347,36 +381,53 @@ e-mailed PDF); `download(…)` saves it in the browser.
 
 ## Dates
 
-Days are `YYYY-MM-DD` strings, in the app's time zone: `todayIn("America/Sao_Paulo")` is the app's
+Days are `YYYY-MM-DD` strings, in the app's time zone: `todayIn("America/New_York")` is the app's
 today, which every picker takes as `today` (never the browser's clock when given). `format` is a
 pattern (`dd/MM/yyyy`, `d MMM yyyy`; `yyyy yy MMMM MMM MM M dd d EEEE EEE`, and `'quoted words'`) or
 a function of the day; by default, the page language's short date. Month and weekday names are the
 page language's.
 
 - **`DateRangePicker`**: a field showing the range; open, the presets beside two months (stacked on
-  a phone). A preset applies at once; the first day clicked starts a range and the second ends it;
-  Apply takes it, Cancel or Escape keep the value. Over the months, From and To are typed in the
-  field's `format`: a date moves the range and the months, anything else is marked and changes
-  nothing. A long range opens on its start's months. `time` gives each end a time of day (the ends
-  are then `YYYY-MM-DD HH:mm`). `presets` is a list, `true` for the standard ones, or `false`; `min`
-  and `max` bound what can be picked; `separator` sits between the days.
+  a phone), with the range's From and To over the months as typed fields. A preset applies at once;
+  the first day clicked starts a range and the second ends it; Apply takes it, Cancel or Escape keep
+  the value, and both stay in view when the panel scrolls. From and To are written and read in the
+  field's `format`: a day typed moves the range and the months shown, and anything else (not a day,
+  or outside `min` and `max`) is marked and changes nothing. Give `format` as a pattern where people
+  type: a function can't be read back, so typed text is then read as the page language's short date
+  or as `YYYY-MM-DD`. A long range opens on its start's months. `presets` is a list, `true` for the
+  standard ones, or `false`; `min` and `max` bound what can be picked; `separator` sits between the
+  days. From and To are the words `toolkit.rangeFrom` and `toolkit.rangeTo`.
+- **`DateRangePicker` with `time`**: each end has hours and minutes too, and the ends are
+  `YYYY-MM-DD HH:mm`; a preset is its whole days, `00:00` to `23:59`. On one day, the end is never
+  before the start. A stored time with seconds sorts after its minute (`"… 23:59:30" > "… 23:59"`),
+  so compare one with an end to the minute: `at.slice(0, 16) <= range.end`.
 - **`rangePresets(today, { keys, fiscalYearStart, min, max })`** builds presets by key, in the order
   given: `today`, `yesterday`, `todayLastYear`, `last7Days`, `last30Days`, `thisMonth`,
   `sameMonthToDateLastYear`, `sameMonthLastYear`, `lastMonth`, `thisYear`, `lastYear`,
   `thisFiscalYear`, `lastFiscalYear`, `allTime` (with a `min`). Their labels are words
   (`toolkit.thisMonth`), so an app renames them with its `words`.
 - **`DatePicker`**: one day, one month; picking closes it.
-- **`DateTimePicker`**: a day and a time of it, `YYYY-MM-DD HH:mm` (the app's clock time, as
-  `LiveClock` writes it), or `YYYY-MM-DD HH:mm:ss`: a value's seconds are kept until its time is
-  changed, and `seconds` shows them in a field of their own (the value then always has them).
-  Opened, the month and the hours and minutes (typed, or stepped with the arrows by `minuteStep`);
-  Apply takes both. `min` and `max` are days or day-times; with no value it opens at the app's now
-  (`timeZone`). `name` sends the value with a form.
+- **`DateTimePicker`**: a day and a time of it, in the app's clock time with no zone (as `LiveClock`
+  writes it): `YYYY-MM-DD HH:mm`, or `YYYY-MM-DD HH:mm:ss`. Opened, the month and the time's fields,
+  each typed or stepped with the arrows (the minutes by `minuteStep`); Apply takes both. A value's
+  seconds are kept until its time is changed, so a form that saves a record's time unchanged keeps
+  them; changing the hours or minutes drops them, unless `seconds` shows them in a field of their
+  own (the value then always has them, `:00` when it had none). A `format` shows them with `ss`
+  (`dd/MM/yyyy HH:mm:ss`); the default one shows them when the value has them. `min` and `max` are
+  days or day-times; with no value it opens at the app's now (`timeZone`). `name` sends the value
+  with a form.
+- **`TimeFields`**: a time of day's fields alone, the pickers' own: hours, minutes, and `seconds` if
+  wanted; its value is a `Clock`, `{ hour, minute, second? }`.
 - **`Calendar`**: one month's grid, alone: arrows move a day, Page Up and Page Down a month (a year
   with Shift), Home and End the week's ends, Enter or Space pick; each day is named by its full
   date.
 - **`LiveClock`**: now, in a `format` and a `timeZone`, ticking each second (each minute when the
   format shows no seconds); nothing on the server.
+- **Helpers:** `isDay` and `isDayTime`; `partsOfDayTime` (`{ day, hour, minute, second? }`);
+  `addDays` and `addMonths`; `clampDayTime(value, min, max)`; `nowIn(timeZone, step, at, seconds)`,
+  now (or the `Date` `at`) as the app's day-time; `formatDay` and `parseDay`, a day written in a
+  picker's `format` and read back; `formatDayTime`; `formatPattern` and `parsePattern`, which take a
+  time's letters too (`HH`, `hh`, `mm`, `ss`, `a`).
 
 ```tsx
 <DateRangePicker
@@ -387,6 +438,17 @@ page language's.
   presets={rangePresets(today, { fiscalYearStart: 4, min: "2010-01-01", max: today })}
   min="2010-01-01"
   max={today}
+/>;
+// Shifts, each end with its time: { start: "2026-11-02 08:00", end: "2026-11-08 17:30" }
+<DateRangePicker value={shifts} onChange={setShifts} today={today} format="dd/MM/yyyy" time />;
+// A stored time, "2026-11-16 14:30:05": saved unchanged, it keeps its seconds.
+<DateTimePicker
+  label="Received"
+  value={received}
+  onChange={setReceived}
+  format="dd/MM/yyyy HH:mm:ss"
+  timeZone={zone}
+  name="received_at"
 />;
 ```
 
@@ -474,7 +536,7 @@ const receipt = documentPdf([[
   { text: "Acme", x: 12, y: 12, width: 203, align: "center", font: "bold", size: 12 },
   { line: [12, 32, 215, 32] },
   { text: "Total", x: 12, y: 38 },
-  { text: "R$ 12,50", x: 12, y: 38, width: 203, align: "right" },
+  { text: "12.50", x: 12, y: 38, width: 203, align: "right" },
   { barcode: "POS 12", x: 12, y: 60, width: 200, height: 40 },
 ]], { size: "receipt" });
 ```
@@ -493,8 +555,8 @@ A route that answers a page of its own (an import screen before anyone signs in,
 makes it with the toolkit too: `routePage(runtime, { title, body, status, headers, lang })` from
 `copilotz/web/server` gives a `Response` whose head is the app page's (its theme, base, icons,
 colour and fonts) and whose body is React made on the server, with the app's words. No script runs
-on it, so its links and forms that post are what work. `Screen` centres a sign-in's card in the
-window and keeps a footer at its foot.
+on it, so its links and forms that post are what work. Its body is a `Page`, or a `Screen` when
+nothing titles it (a sign-in's card, [above](#laying-out-a-screen)).
 
 ```tsx
 "/import": (request, { runtime }) => routePage(runtime, {

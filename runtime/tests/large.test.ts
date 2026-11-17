@@ -207,6 +207,57 @@ for (const [name, place] of Object.entries(places)) {
   });
 }
 
+test("runtime.bytes reads for someone only where a rule speaks for them, in their scope", async () => {
+  // "doc" has a rule (each person their own); "note" has none: it's plugin code's alone.
+  const notes = definePlugin({
+    name: "notes",
+    collections: { note: defineCollection({ schema: { type: "object" } }) },
+    actions: {
+      "note.put": defineAction({
+        input: { type: "object" },
+        run: async (ctx, note: Record<string, unknown>) => {
+          await ctx.db.collection("note").insertOne(note);
+        },
+      }),
+    },
+  });
+  const rt = await createRuntime({ store: memoryStore(), plugins: [docs, notes] });
+  try {
+    await rt.call("doc.put", doc);
+    await rt.call("note.put", { _id: "n1", text: LARGE });
+    const size = encoder.encode(LARGE).length;
+    const anonymous: Actor = { kind: "anonymous", id: "" };
+    // No rule speaks for "note": refused to anyone, the anonymous and people alike.
+    for (const actor of [anonymous, ana]) {
+      const refused = await assertRejects(() => rt.bytes("note", { _id: "n1" }, "text", { actor }));
+      assertEquals(code(refused), "forbidden", actor.kind);
+    }
+    // The runtime's own collections: nobody's outside.
+    const own = await assertRejects(() => rt.bytes("sys.results", {}, "result", { actor: ana }));
+    assertEquals(code(own), "forbidden");
+    // Where a rule speaks, its reach as before: their own document; someone else's is none.
+    assertEquals((await rt.bytes("doc", { _id: "d1" }, "data", { actor: ana }))?.size, size);
+    assertEquals(await rt.bytes("doc", { _id: "d1" }, "data", { actor: bob }), null);
+    assertEquals(await rt.bytes("doc", { _id: "d1" }, "data", { actor: anonymous }), null);
+    // A key's scope lists what it reads.
+    const key = (read: string[]): Actor => ({ ...ana, scope: { read } });
+    const unlisted = await assertRejects(() =>
+      rt.bytes("doc", { _id: "d1" }, "data", { actor: key(["note"]) })
+    );
+    assertEquals(code(unlisted), "forbidden");
+    assertEquals(
+      (await rt.bytes("doc", { _id: "d1" }, "data", { actor: key(["doc"]) }))?.size,
+      size,
+    );
+    // The system reads anything, as before: without an actor, or as a grant.
+    assertEquals((await rt.bytes("note", { _id: "n1" }, "text"))?.size, size);
+    const grant: Actor = { kind: "system", id: "files" };
+    assertEquals((await rt.bytes("note", { _id: "n1" }, "text", { actor: grant }))?.size, size);
+  } finally {
+    await rt.close();
+  }
+});
+
 test("a field a projection leaves out loads no blob; runtime.bytes loads one once", async () => {
   const blobs = counting();
   await setup(() => ({ store: memoryStore(), blobs }), async (rt) => {

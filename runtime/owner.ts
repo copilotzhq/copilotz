@@ -168,6 +168,12 @@ export type Owner = {
    * as the system without one. Null when none is in reach, or its field
    * isn't a string.
    *
+   * An actor (anyone but the system) reads it only as they read the
+   * collection directly from outside: where a rule speaks for its reads by
+   * them, and their scope (a key's) lists it. Elsewhere it's refused
+   * (`forbidden`): a collection no rule speaks for is plugin code's alone,
+   * and the runtime's own (`sys.*`) nobody's outside.
+   *
    * The owner reads it itself, so it crosses no wire: a query's answer comes
    * whole from an executor over Oxian, no way to move megabytes. Nor does the
    * blob's reference leave the owner: the caller gets bytes, never a
@@ -1005,13 +1011,16 @@ export async function createOwner(
    * Whether any rule speaks for a collection's reads (or writes) by this
    * actor: from outside, an actor reads (or writes) nothing else directly.
    * Asked as its own read (`direct`), with its filter: a rule may refuse one
-   * it won't watch (thrown), as is one its scope doesn't list.
+   * it won't watch (thrown), as is one its scope doesn't list. Not `direct`
+   * for a read trusted host code makes for them once (`bytes`), which no rule
+   * watches.
    */
   const ruled = async (
     actor: Actor,
     collection: string,
     filter?: Filter,
     access: "read" | "write" = "read",
+    direct = true,
   ) => {
     if (!inScope(actor, access, collection)) {
       throw forbidden(
@@ -1022,7 +1031,7 @@ export async function createOwner(
     for (const guard of registry.guards as Guard[]) {
       const said = await guard(
         actor,
-        { collection, access, ...(filter ? { filter } : {}), direct: true },
+        { collection, access, ...(filter ? { filter } : {}), ...(direct ? { direct: true } : {}) },
         ruleReads,
       );
       if (said !== undefined) found = true;
@@ -2255,6 +2264,16 @@ export async function createOwner(
       };
       known(op);
       const { actor } = options;
+      // For someone, only what they'd read from outside: a collection a rule speaks for, in their
+      // scope. Without one, the rules have nothing to narrow, and the read would be everyone's.
+      if (actor && actor.kind !== "system") {
+        if (collection.startsWith(SYSTEM)) {
+          throw forbidden(`"${collection}" is the runtime's own: nobody outside reads it.`);
+        }
+        if (!await ruled(actor, collection, filter, "read", false)) {
+          throw forbidden(`No rule lets ${actor.kind} ${actor.id} read "${collection}".`);
+        }
+      }
       const [read] = (await guard([op], actor)).ops as ReadOp[];
       const doc = await stored(store, read);
       const value = get(actor ? hidden(read, doc) : doc, field);

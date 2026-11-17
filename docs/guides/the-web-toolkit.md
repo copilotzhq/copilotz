@@ -1,6 +1,6 @@
 ---
 title: "The web toolkit"
-description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, tables and their files, dates, bars, toasts, shortcuts, printing, PDFs, barcodes, a route's own page, and every token a theme sets."
+description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, tables and their files, dates, bars, toasts, shortcuts, printing, PDFs, barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
 section: Guides
 order: 7
 ---
@@ -87,13 +87,13 @@ A list screen:
 </Page>;
 ```
 
-A register, its cart beside its summary:
+A visit being booked, its services beside its total:
 
 ```tsx
-<Split aside={<Card title="Summary"><Stack>…<Button variant="primary" block>Complete sale</Button></Stack></Card>} sticky label="Summary">
+<Split aside={<Card title="Total"><Stack>…<Button variant="primary" block>Book the visit</Button></Stack></Card>} sticky label="Total">
   <Stack>
     <Autocomplete … />
-    <DataTable columns={cart} rows={lines} rowKey={(l) => l.id} toolbar={false} pagination={false} />
+    <DataTable columns={chosen} rows={services} rowKey={(s) => s.id} toolbar={false} pagination={false} />
   </Stack>
 </Split>
 ```
@@ -103,7 +103,10 @@ Reports, as a card of links:
 ```tsx
 <Grid min="280px">
   <Card title="Summary reports" icon="chart" padding="none">
-    <ListGroup flush items={[{ href: "/reports/sales", label: "Sales", description: "By day" }]} />
+    <ListGroup
+      flush
+      items={[{ href: "/reports/visits", label: "Visits", description: "By day" }]}
+    />
   </Card>
 </Grid>;
 ```
@@ -117,7 +120,7 @@ its `footer` at the window's foot. Taller than the window, it grows, and the foo
 <Screen
   footer={
     <Text size="sm" tone="muted">
-      Acme Stores · <a href="/help">Help</a>
+      Acme Salon · <a href="/help">Help</a>
     </Text>
   }
 >
@@ -217,7 +220,7 @@ its `footer` at the window's foot. Taller than the window, it grows, and the foo
 
 ```tsx
 <RowsEditor
-  label="Tax codes"
+  label="Rooms"
   rows={codes}
   onChange={setCodes}
   make={() => ({ code: "", name: "" })}
@@ -251,14 +254,14 @@ keeps the save one transaction.
 ```tsx
 <Form
   onSubmit={(values, form) =>
-    ctx.call("rewards.save", { on: new FormData(form).has("on"), packages: values.packages })}
+    ctx.call("bookings.settings.save", { on: new FormData(form).has("on"), hours: values.hours })}
 >
-  <Checkbox name="on" label="Enable rewards" />
-  {ctx.show("panel:reward_packages", {})}
+  <Checkbox name="on" label="Take bookings online" />
+  {ctx.show("panel:opening_hours", {})}
   <Button type="submit" variant="primary">Save</Button>
 </Form>;
 // In the panel's View:
-const { inForm } = useFormSubmit(() => (valid(rows) ? { packages: rows } : false));
+const { inForm } = useFormSubmit(() => (valid(rows) ? { hours: rows } : false));
 ```
 
 **Dialogs:** `Dialog` is the browser's modal `<dialog>`. `placement="top"` opens it near the top
@@ -466,10 +469,10 @@ For an app without the Copilotz shell:
   `description` is its tooltip and what screen readers say after the name.
 
 ```tsx
-<TopBar start={<LiveClock format="dd/MM/yyyy HH:mm:ss" timeZone={zone} />} center="Acme Stores" end={<a href="/me">Ana</a>} />
-<AppBar brand="Acme" href="/" active="/sales" layout="stacked" items={[
-  { href: "/sales", label: "Sales", icon: <Icon src="/assets/modules/sales.png" /> },
-  { href: "/items", label: "Items", icon: "archive" },
+<TopBar start={<LiveClock format="dd/MM/yyyy HH:mm:ss" timeZone={zone} />} center="Acme Salon" end={<a href="/me">Ana</a>} />
+<AppBar brand="Acme" href="/" active="/visits" layout="stacked" items={[
+  { href: "/visits", label: "Visits", icon: <Icon src="/assets/places/visits.png" /> },
+  { href: "/customers", label: "Customers", icon: "users" },
 ]} />
 ```
 

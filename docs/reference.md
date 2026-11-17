@@ -534,7 +534,7 @@ const runtime = await createRuntime({ store, plugins });
 | `render(name, item, { viewer?, hints? })`           | renders a View once, as the system                                                |
 | `subscribe(listener)`                               | hears committed events and live frames as they happen                             |
 | `fetch(request)`                                    | answers HTTP                                                                      |
-| `bytes(collection, filter, field, { actor? })`      | a large value's `size` and `read(start, end)`, for host code serving a file       |
+| `bytes(collection, filter, field, { actor? })`      | a value's `size` and `read(start, end)`; for an actor, only where a rule speaks   |
 | `idle()`                                            | resolves when no delivery or timer is pending and observed Views caught up        |
 | `close({ drain? })`                                 | stops, giving running work `drain` ms (5 s) to finish                             |
 | `cancel`, `disconnect`, `wake`, `stats`, `describe` | stops a call; ends an actor's browsers; fires due timers; counts; what's declared |

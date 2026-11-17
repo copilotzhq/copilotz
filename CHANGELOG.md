@@ -1,3 +1,10 @@
+## Unreleased
+
+- **Docs: the record and bytes.** AGENTS.md says what the record keeps and how to read it back, what
+  stays out of it (`private`, `record: false`, keys), where large values go (blobs, kept once by
+  hash, never deleted) and how a route serves one with `runtime.bytes`, as whoever asks. Stores, the
+  business app's guide (pictures in a list), Build Compass chapter 36 and Events say the rest.
+
 ## 1.0.0-rc.54 — 2026-11-17
 
 What a business app's screens still asked of the toolkit and of e-mail, and the docs that show a

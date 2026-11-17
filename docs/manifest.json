@@ -326,7 +326,7 @@
         {
           "title": "Stores",
           "slug": "operations/stores",
-          "description": "Where an app keeps what it keeps: memory, SQLite or PostgreSQL, with the same MongoDB semantics in all three, and blobs in the store, in files or in a bucket."
+          "description": "Where an app keeps what it keeps: memory, SQLite or PostgreSQL, with the same MongoDB semantics in all three; the record of every change, and how to read it back; and large values, kept once, in the store, in files or in a bucket."
         },
         {
           "title": "Maintenance",

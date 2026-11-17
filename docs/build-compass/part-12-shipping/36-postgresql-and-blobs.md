@@ -99,6 +99,12 @@ the runtime looks for blobs in one place: with `blobs`, only there; without, onl
 `COMPASS_BLOBS` on a store that already holds large values, and they're still in its `blobs` table,
 where the runtime no longer looks. So decide where blobs live when you decide where the store does.
 
+Nor does anything delete a blob. A message deleted, or a long value replaced, leaves its blob in the
+folder, and the record still refers to it: the events of the document's earlier versions hold the
+reference, and so does its `.deleted` event. The folder only grows. Back it up with the database,
+whose documents and events refer to it; [Stores](../../operations/stores.md) has the rest of what
+blobs and the record keep.
+
 ## Run it
 
 Two messages, the second one 21 000 bytes long, with a folder for blobs:

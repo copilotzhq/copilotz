@@ -15,6 +15,10 @@
  * "Change", and Remove (given `onRemove`) tells the app to drop it; removing a
  * new choice brings the stored file back.
  *
+ * In a narrow column (a phone, a table's cell) it wraps: the name takes a
+ * line of its own, cut short with an ellipsis, and the buttons' words wrap
+ * rather than run past the field.
+ *
  * Its look is the input's (`--input-*`: its height, border, radius,
  * background), and `--file-input-*` for its own: the choose button, and
  * the field while files are dragged over it.
@@ -36,7 +40,7 @@ import { say } from "./words.ts";
 const SHEET = sheet(
   "file-input",
   `
-.copilotz-file-input { position: relative; display: flex; align-items: center; gap: var(--file-input-gap, 10px);
+.copilotz-file-input { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: var(--file-input-gap, 10px);
   min-width: 0; min-height: var(--input-height, 40px); padding: var(--file-input-padding, 4px 6px 4px 4px);
   border: var(--input-border-width, 1px) dashed var(--input); border-radius: var(--input-radius, var(--radius-lg));
   background: var(--input-background, var(--card)); color: var(--foreground);
@@ -50,24 +54,26 @@ const SHEET = sheet(
 .copilotz-file-input[data-disabled] { opacity: .55; }
 .copilotz-file-input-native { position: absolute; inset: auto auto 0 0; width: 1px; height: 1px; margin: 0;
   padding: 0; border: 0; opacity: 0; pointer-events: none; }
-.copilotz-file-input-choose { display: inline-flex; flex: none; align-items: center; gap: 6px;
-  height: var(--file-input-button-height, 30px); margin: 0; padding: var(--file-input-button-padding, 0 11px);
+.copilotz-file-input-choose { display: inline-flex; flex: none; align-items: center; gap: 6px; max-width: 100%;
+  min-height: var(--file-input-button-height, 30px); margin: 0; padding: var(--file-input-button-padding, 0 11px);
   border: 0; border-radius: var(--file-input-button-radius, var(--radius-md));
   background: var(--file-input-button-background, var(--secondary));
   color: var(--file-input-button-foreground, var(--secondary-foreground)); font: inherit; font-size: 13px;
-  font-weight: var(--file-input-button-font-weight, 560); white-space: nowrap; cursor: pointer; }
+  font-weight: var(--file-input-button-font-weight, 560); text-align: start; overflow-wrap: anywhere;
+  cursor: pointer; }
 .copilotz-file-input-choose:hover:not(:disabled) { background: var(--accent); color: var(--accent-foreground); }
 .copilotz-file-input-choose:disabled { cursor: default; }
-.copilotz-file-input-text { flex: 1; min-width: 0; overflow: hidden; color: var(--muted-foreground);
+.copilotz-file-input-text { flex: 1 1 6em; min-width: 0; overflow: hidden; color: var(--muted-foreground);
   text-overflow: ellipsis; white-space: nowrap; }
 .copilotz-file-input[data-chosen] .copilotz-file-input-text { color: var(--foreground); }
 .copilotz-file-input-size { margin-inline-start: 6px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-.copilotz-file-input-remove { flex: none; height: var(--file-input-button-height, 30px); margin: 0; padding: 0 8px;
-  border: 0; border-radius: var(--file-input-button-radius, var(--radius-md)); background: transparent;
+.copilotz-file-input-remove { flex: none; max-width: 100%; min-height: var(--file-input-button-height, 30px);
+  margin: 0; margin-inline-start: auto; padding: 0 8px; overflow-wrap: anywhere; border: 0;
+  border-radius: var(--file-input-button-radius, var(--radius-md)); background: transparent;
   color: var(--muted-foreground); font: inherit; font-size: 13px; font-weight: 560; cursor: pointer; }
 .copilotz-file-input-remove:hover { background: var(--accent); color: var(--accent-foreground); }
 @media (pointer: coarse) {
-  .copilotz-file-input-choose, .copilotz-file-input-remove { height: 40px; }
+  .copilotz-file-input-choose, .copilotz-file-input-remove { min-height: 40px; }
 }
 `,
 );

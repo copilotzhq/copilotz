@@ -1,9 +1,11 @@
 /**
  * The file field as the page draws it: the browser's own file field (sent with a form, out of the
  * tab order, read by its button instead), a button named by its words or a label, what's chosen
- * said as it changes, and a field a `Field` names by the button's id.
+ * said as it changes, and a field a `Field` names by the button's id; in a narrow column it wraps.
  */
 import { assert, assertStringIncludes } from "@std/assert";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import { Field } from "../toolkit/field.tsx";
@@ -65,4 +67,26 @@ test("its own words, and a stored file: Change, its name, and Remove that tells 
     markup(<FileInput current="a.png" onRemove={() => {}} />),
     ">Remove</button>",
   );
+});
+
+test("in a narrow column it wraps: the name on a line of its own, the buttons never past the field", () => {
+  const css = readFileSync(
+    fileURLToPath(new URL("../toolkit/file-input.tsx", import.meta.url)),
+    "utf8",
+  );
+  assertStringIncludes(css, "display: flex; flex-wrap: wrap;");
+  // The name keeps a share of a line, or takes its own, cut short there.
+  assertStringIncludes(
+    css,
+    ".copilotz-file-input-text { flex: 1 1 6em; min-width: 0; overflow: hidden;",
+  );
+  // Each button at most the field's width, its words wrapping (even a long one) and its height
+  // growing with them.
+  for (const part of ["choose", "remove"]) {
+    const rule = css.match(new RegExp(`\\.copilotz-file-input-${part} \\{[^}]*\\}`))?.[0] ?? "";
+    assertStringIncludes(rule, "max-width: 100%;");
+    assertStringIncludes(rule, "min-height: var(--file-input-button-height, 30px);");
+    assertStringIncludes(rule, "overflow-wrap: anywhere;");
+    assert(!rule.includes("nowrap"), part);
+  }
 });

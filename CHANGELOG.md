@@ -36,6 +36,8 @@ coding agent how to build them.
 - **`Select`, `Picker` and `MultiPicker` take `addon` and `addonEnd`**, as `Input` does.
 - **`FileInput`** takes its own words (`chooseLabel`, `changeLabel`, `removeLabel`) and a file
   already stored (`current`, removed by `onRemove`).
+- **`FileInput` wraps in a narrow column** (a phone, a table's cell): the name takes a line of its
+  own, cut short, and its buttons' words wrap, so Remove no longer runs past the field.
 - **`RowsEditor`**: `add={false}` leaves out its add buttons; `removeIcon` and `removeLabel` set the
   remove button.
 - **`Avatar`** shows a picture picked but not yet sent (`blob:`, image `data:`), and

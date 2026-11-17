@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "runtime": "1.0.0-rc.53",
+  "runtime": "1.0.0-rc.54",
   "plugins": [
     {
       "format": 1,
@@ -9,9 +9,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -663,9 +663,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -731,9 +731,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -1074,9 +1074,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -1163,9 +1163,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [
         {
@@ -2015,9 +2015,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -2104,9 +2104,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -4502,9 +4502,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -4630,9 +4630,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -4825,9 +4825,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -6877,9 +6877,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -6928,9 +6928,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -7068,9 +7068,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -7301,9 +7301,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -7346,9 +7346,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [
         {
@@ -8422,9 +8422,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -8484,9 +8484,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -8572,9 +8572,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [
         {
@@ -9728,9 +9728,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -9812,9 +9812,9 @@
       ],
       "package": {
         "name": "@copilotz/directory",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -9889,9 +9889,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [
         {
@@ -10614,9 +10614,9 @@
       ],
       "package": {
         "name": "@copilotz/work",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -10701,9 +10701,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -10762,6 +10762,12 @@
                     "content": {
                       "type": "string",
                       "maxLength": 14000000
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[\\w.+-]+(@[\\w.-]+)?$",
+                      "minLength": 1,
+                      "maxLength": 200
                     }
                   },
                   "required": [
@@ -10792,7 +10798,7 @@
         {
           "kind": "setting",
           "path": "email.adapter",
-          "summary": "Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on Node, Deno and Bun), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in).",
+          "summary": "Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on Node, Deno and Bun), `sendmail` (a sendmail program, on Node, Deno and Bun), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in).",
           "required": true,
           "type": "string"
         },
@@ -10830,6 +10836,13 @@
           "summary": "The `smtp` adapter's server: `{ host, port?, secure?, starttls?, user?, password?, ca?, name?, timeout? }` (see `SmtpSettings`). Its password is a secret: keep it out of your code.",
           "required": false,
           "type": "SmtpSettings"
+        },
+        {
+          "kind": "setting",
+          "path": "email.sendmail",
+          "summary": "The `sendmail` adapter's program (see `SendmailSettings`).",
+          "required": false,
+          "type": "SendmailSettings"
         }
       ],
       "emits": [],
@@ -10860,6 +10873,7 @@
         "email": [
           "console",
           "resend",
+          "sendmail",
           "smtp"
         ]
       },
@@ -10869,7 +10883,7 @@
           "email"
         ],
         "asks": [],
-        "refuses": "set the email resource's adapter: resend or smtp or console (console on a laptop)"
+        "refuses": "set the email resource's adapter: resend or smtp or sendmail or console (console on a laptop)"
       },
       "settings": [
         {
@@ -10881,7 +10895,7 @@
               "name": "adapter",
               "type": "string",
               "optional": false,
-              "doc": "Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on Node, Deno and Bun), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in).",
+              "doc": "Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on Node, Deno and Bun), `sendmail` (a sendmail program, on Node, Deno and Bun), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in).",
               "secret": false
             },
             {
@@ -10918,6 +10932,13 @@
               "optional": true,
               "doc": "The `smtp` adapter's server: `{ host, port?, secure?, starttls?, user?, password?, ca?, name?, timeout? }` (see `SmtpSettings`). Its password is a secret: keep it out of your code.",
               "secret": false
+            },
+            {
+              "name": "sendmail",
+              "type": "SendmailSettings",
+              "optional": true,
+              "doc": "The `sendmail` adapter's program (see `SendmailSettings`).",
+              "secret": false
             }
           ],
           "doc": "The `email` resource: how the app sends email."
@@ -10939,9 +10960,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -11761,9 +11782,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -11887,9 +11908,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -12238,9 +12259,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -12577,9 +12598,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -12873,9 +12894,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -13460,9 +13481,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -13939,9 +13960,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -14037,9 +14058,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -14090,9 +14111,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -14154,9 +14175,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -14700,9 +14721,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -14951,9 +14972,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -15331,9 +15352,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -16151,9 +16172,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -16235,9 +16256,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -16685,9 +16706,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -16762,9 +16783,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -18083,9 +18104,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -18175,9 +18196,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -18367,9 +18388,9 @@
       ],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -18593,9 +18614,9 @@
       "requires": [],
       "package": {
         "name": "@copilotz/billing",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -18770,9 +18791,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [
         {
@@ -19162,9 +19183,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -19230,9 +19251,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -19485,9 +19506,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -19547,9 +19568,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [
         {
@@ -19804,9 +19825,9 @@
       ],
       "package": {
         "name": "@copilotz/team",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "package",
       "keeps": [],
       "indexes": [],
@@ -19868,9 +19889,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -20587,9 +20608,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -20639,9 +20660,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -20694,9 +20715,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -21581,9 +21602,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -22105,9 +22126,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -22294,9 +22315,9 @@
       "requires": [],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -22405,9 +22426,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],
@@ -22675,9 +22696,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [
         {
@@ -24207,9 +24228,9 @@
       ],
       "package": {
         "name": "copilotz",
-        "version": "1.0.0-rc.53"
+        "version": "1.0.0-rc.54"
       },
-      "runtime": "1.0.0-rc.53",
+      "runtime": "1.0.0-rc.54",
       "layer": "standard",
       "keeps": [],
       "indexes": [],

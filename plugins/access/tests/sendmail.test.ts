@@ -6,13 +6,16 @@
  * Skipped on Windows, where the fakes are shell scripts.
  */
 import { assert, assertEquals, assertMatch, assertRejects, assertThrows } from "@std/assert";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import { createRuntime, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { access, email, mime } from "../mod.ts";
 import { test } from "../../../testing/mod.ts";
 
-const windows = Deno.build.os === "windows";
+const windows = process.platform === "win32";
 
 async function start(settings: Record<string, unknown>, fetch?: typeof globalThis.fetch) {
   return await createRuntime({
@@ -24,10 +27,10 @@ async function start(settings: Record<string, unknown>, fetch?: typeof globalThi
 
 /** A fake sendmail in a temp dir: `body` is its shell script. */
 async function fake(body: string) {
-  const dir = await Deno.makeTempDir({ prefix: "sendmail-" });
+  const dir = await mkdtemp(join(tmpdir(), "sendmail-"));
   const path = join(dir, "sendmail");
-  await Deno.writeTextFile(path, `#!/bin/sh\n${body}\n`);
-  await Deno.chmod(path, 0o755);
+  await writeFile(path, `#!/bin/sh\n${body}\n`);
+  await chmod(path, 0o755);
   return { dir, path, out: join(dir, "out.txt"), args: join(dir, "args.txt") };
 }
 
@@ -38,7 +41,7 @@ test({
   name: "sendmail: the message goes on stdin, the recipient as an argument, never a shell",
   ignore: windows,
   fn: async () => {
-    const dir = await Deno.makeTempDir({ prefix: "sendmail-" });
+    const dir = await mkdtemp(join(tmpdir(), "sendmail-"));
     const f = await fake(KEEPS(dir));
     const rt = await start({
       adapter: "sendmail",
@@ -51,18 +54,18 @@ test({
         subject: "Olá, nota nº 1",
         text: "Segue.",
       });
-      const source = await Deno.readTextFile(join(dir, "out.txt"));
+      const source = await readFile(join(dir, "out.txt"), "utf8");
       assertMatch(source, /^From: "Loja" <loja@example\.com>\n/);
       assert(source.includes('To: "Ana" <ana@example.com>\n'));
       assert(source.includes(`Message-ID: ${sent.id}\n`));
       assertEquals(
-        (await Deno.readTextFile(join(dir, "args.txt"))).trim().split("\n"),
+        (await readFile(join(dir, "args.txt"), "utf8")).trim().split("\n"),
         ["-i", "-f", "loja@example.com", "-oi", "--", "ana@example.com"],
       );
     } finally {
       await rt.close();
-      await Deno.remove(dir, { recursive: true });
-      await Deno.remove(f.dir, { recursive: true });
+      await rm(dir, { recursive: true });
+      await rm(f.dir, { recursive: true });
     }
   },
 });
@@ -94,8 +97,8 @@ test({
       await rt1.close();
       await rt2.close();
       await rt3.close();
-      await Deno.remove(bad.dir, { recursive: true });
-      await Deno.remove(slow.dir, { recursive: true });
+      await rm(bad.dir, { recursive: true });
+      await rm(slow.dir, { recursive: true });
     }
   },
 });
@@ -104,7 +107,7 @@ test({
   name: "sendmail: an address that isn't one never reaches the program",
   ignore: windows,
   fn: async () => {
-    const dir = await Deno.makeTempDir({ prefix: "sendmail-" });
+    const dir = await mkdtemp(join(tmpdir(), "sendmail-"));
     const f = await fake(KEEPS(dir));
     const rt = await start({
       adapter: "sendmail",
@@ -136,11 +139,11 @@ test({
         Error,
         "line break",
       );
-      await assertRejects(() => Deno.stat(join(dir, "out.txt")));
+      await assertRejects(() => stat(join(dir, "out.txt")));
     } finally {
       await rt.close();
-      await Deno.remove(dir, { recursive: true });
-      await Deno.remove(f.dir, { recursive: true });
+      await rm(dir, { recursive: true });
+      await rm(f.dir, { recursive: true });
     }
   },
 });

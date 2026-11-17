@@ -55,8 +55,9 @@ brand everywhere.
 
 ## Laying out a screen
 
-`Page` is a View's frame: its title, actions, description, and the width it centres at. Inside it,
-these place things without CSS. Gaps are steps of one spacing scale, `xs` (4px), `sm` (8px), `md`
+`Page` is a View's frame: its title, actions, description, and the width it centres at
+(`align="center"` centres the title and description too). Inside it, these place things without CSS,
+and `hidden` hides any of them. Gaps are steps of one spacing scale, `xs` (4px), `sm` (8px), `md`
 (12px), `lg` (16px), `xl` (24px), `2xl` (32px), each a token (`space-md`).
 
 | Piece               | What it is                                                                                                                                                                                             |
@@ -64,10 +65,11 @@ these place things without CSS. Gaps are steps of one spacing scale, `xs` (4px),
 | `Stack`             | Things one after another, down (`direction="column"`, the default) or along (`row`): `gap`, `align`, `justify`, `wrap`; `as` makes it a `form`, a `section`, a list.                                   |
 | `Spacer`, `Divider` | The room left in a row, pushing what follows to its end; a line between parts.                                                                                                                         |
 | `Grid`, `GridItem`  | Columns: `columns={3}`, a template (`"1fr 2fr"`), or as many as fit (`min="220px"`). One column when the grid itself is narrower than `collapse` (`sm`, 480px, by default). `GridItem span={2}` spans. |
-| `Toolbar`           | A row of controls over what they act on: `start` (the screen's actions), `end` (search, filters, dates); it wraps.                                                                                     |
+| `Toolbar`           | A row of controls over what they act on: `start` (the screen's actions), `grow` (a field taking the room left), `end` (filters, dates); it wraps.                                                      |
 | `Split`             | Two columns: the screen's main one, and an `aside` that stays in view (`sticky`), at the `end` or `start`, `sm`/`md`/`lg` wide; they stack when narrow.                                                |
 | `Card`              | A surface; with `title` (and `icon`, `action`), a heading over its body.                                                                                                                               |
 | `ListGroup`         | Rows one under another: links, actions, or text, with a description, an icon and an `end`; the `active` one marked. `flush` inside a card.                                                             |
+| `Screen`            | A frame that fills the window: what it holds centred in the window's height at `screen-width`, and a `footer` kept at the window's foot. For a sign-in or a route's own page.                          |
 | `Text`, `Heading`   | Words in the theme's type: `Text` with a `size`, `tone`, `weight`, `align`, `mono`, `truncate`; `Heading` `h1` to `h4`.                                                                                |
 
 A list screen:
@@ -111,12 +113,13 @@ Reports, as a card of links:
 - **`Field`** labels a control: a `hint` under it, or the `error` in its place. `required` adds a
   mark that screen readers say as "required". Its children are a function of the control's props, or
   the control itself with `htmlFor`. `layout="row"` puts the label in a column beside the control
-  (`labelWidth`, `controlWidth`; tokens `field-row-*`), and it stacks again under 560px.
+  (`labelWidth` and `controlWidth`, each a share of the whole row as a grid column is; tokens
+  `field-row-*`), and it stacks again under 560px.
 - **`Input`**: `sm`, `md`, `lg`; an `icon` inside the box; `end` for buttons that act on it;
   **`addon`** and **`addonEnd`**, segments outside the box and joined to it: words or an icon get a
   tinted face, and a button or a `Switch` there is the segment itself.
-- **`Select`**, **`Textarea`**, **`Checkbox`**, and **`Radio`** (radios sharing a `name` are one
-  choice).
+- **`Select`** (with `addon` and `addonEnd`, as `Input`'s), **`Textarea`**, **`Checkbox`**, and
+  **`Radio`** (radios sharing a `name` are one choice).
 - **`Switch`**: a setting that takes effect as it's flipped (`role="switch"`), with words `on` and
   `off` if wanted; `joined="end"` in an `addonEnd`.
 - **`TagsInput`**: values as tags. Enter or a comma adds what's typed, a paste of "a, b, c" adds
@@ -124,16 +127,20 @@ Reports, as a card of links:
   comma-separated value.
 - **`Picker`** and **`MultiPicker`**: a choice the app draws, not the browser: a button showing the
   choice, opening its options. `search` puts a box over a long list. `MultiPicker` ticks several and
-  says "None chosen", the one chosen, or "{count} chosen". `name` sends the choice with a form.
+  says "None chosen", the one chosen, or "{count} chosen". `name` sends the choice with a form. Both
+  take `addon` and `addonEnd`.
 - **`FileInput`**: the browser's own file field (`name`, `accept`, `multiple`, `required`, so a form
   sends the files), drawn as a toolkit field: a button ("Choose a file", then "Change"), what's
   chosen, and Remove. Files dropped on it are chosen too, only those `accept` takes.
-  `onChange(files)` hears each change.
+  `onChange(files)` hears each change. `chooseLabel`, `changeLabel` and `removeLabel` are one
+  field's own words ("Select image"); `current` names a file already stored (its name or address),
+  shown until another is chosen, and its Remove calls `onRemove`.
 - **`RowsEditor`**: a list of records edited as one form, one row of fields each
   (`render(row,
   index, set)`), numbered, with a button to add a row after each and to remove it,
   "Add a row" at the end, `min` and `max`, and an `error` under a row. Adding focuses the new row's
-  first field.
+  first field. `add={false}` leaves the add buttons out; `removeIcon` and `removeLabel` set the
+  remove button.
 - **`Button`**: `primary`, `secondary`, `outline` (the default), `ghost`, `destructive`, `success`,
   `info`, `warning`, `link`; `xs`, `sm`, `md`, `lg`; `block` fills its box.
 
@@ -248,7 +255,10 @@ const columns: Column<Item>[] = [
   silva" finds "João Silva"), 500 ms after the last key.
 - A click on a row ticks it (not on a link, button or field in it); the header's box ticks the page.
   `actions(ticked, clear)` gets the ticked rows' keys.
-- `detail(row)` opens a row under each, by a button with `aria-expanded`.
+- `detail(row)` opens a row under each, by a button with `aria-expanded`; `detailOpen` opens them
+  all (`true`, with no button) or those a function picks.
+- Fields in cells fill their column and shrink with it. `layout="fixed"` keeps the columns at their
+  `width`s.
 - `search`, `chooseColumns`, `exports`, `toolbar` and `pagination` set to `false` take each away;
   `pageSizes` sets the sizes (10, 25, 50, 100 by default).
 
@@ -345,8 +355,11 @@ page language's.
 
 - **`DateRangePicker`**: a field showing the range; open, the presets beside two months (stacked on
   a phone). A preset applies at once; the first day clicked starts a range and the second ends it;
-  Apply takes it, Cancel or Escape keep the value. `presets` is a list, `true` for the standard
-  ones, or `false`; `min` and `max` bound what can be picked; `separator` sits between the days.
+  Apply takes it, Cancel or Escape keep the value. Over the months, From and To are typed in the
+  field's `format`: a date moves the range and the months, anything else is marked and changes
+  nothing. A long range opens on its start's months. `time` gives each end a time of day (the ends
+  are then `YYYY-MM-DD HH:mm`). `presets` is a list, `true` for the standard ones, or `false`; `min`
+  and `max` bound what can be picked; `separator` sits between the days.
 - **`rangePresets(today, { keys, fiscalYearStart, min, max })`** builds presets by key, in the order
   given: `today`, `yesterday`, `todayLastYear`, `last7Days`, `last30Days`, `thisMonth`,
   `sameMonthToDateLastYear`, `sameMonthLastYear`, `lastMonth`, `thisYear`, `lastYear`,
@@ -354,9 +367,11 @@ page language's.
   (`toolkit.thisMonth`), so an app renames them with its `words`.
 - **`DatePicker`**: one day, one month; picking closes it.
 - **`DateTimePicker`**: a day and a time of it, `YYYY-MM-DD HH:mm` (the app's clock time, as
-  `LiveClock` writes it). Opened, the month and the hours and minutes (typed, or stepped with the
-  arrows by `minuteStep`); Apply takes both. `min` and `max` are days or day-times; with no value it
-  opens at the app's now (`timeZone`). `name` sends the value with a form.
+  `LiveClock` writes it), or `YYYY-MM-DD HH:mm:ss`: a value's seconds are kept until its time is
+  changed, and `seconds` shows them in a field of their own (the value then always has them).
+  Opened, the month and the hours and minutes (typed, or stepped with the arrows by `minuteStep`);
+  Apply takes both. `min` and `max` are days or day-times; with no value it opens at the app's now
+  (`timeZone`). `name` sends the value with a form.
 - **`Calendar`**: one month's grid, alone: arrows move a day, Page Up and Page Down a month (a year
   with Shift), Home and End the week's ends, Enter or Space pick; each day is named by its full
   date.
@@ -407,7 +422,9 @@ shell's, so a toast never shows twice.
 
 Every piece that takes an icon takes one of the toolkit's by name or any element (`IconLike`):
 `<Icon drawing={…} />` draws an app's own glyph (its paths in their box, `rule: "evenodd"` for holes
-drawn that way), and `<Icon src="/assets/…png" />` an image file.
+drawn that way), and `<Icon src="/assets/…png" />` an image file. `Avatar` shows a picture from
+`https:`, the app's own origin, or one picked but not yet sent (a `blob:` or image `data:` address);
+`initial={false}` draws an empty box when there's none.
 
 ```tsx
 const GLYPH = {
@@ -431,10 +448,10 @@ shell's own keys (⌘K, the palette) come first. `shortcutLabel("Alt+1")` says i
 
 A printed page is the whole page, not its scrolling pane's screenful, and it leaves out what only
 works on a screen: the shell's sidebar and menu, the toolkit's bars, toolbars, toasts, pages,
-buttons, popovers, and a table's toolbar and tick column. Links keep their words. `NoPrint` and
-`PrintOnly` mark an app's own parts. A printed document's own layout (a receipt's width, an
-invoice's margins) is the one place an app writes CSS: its `@media print` rules, beside the
-document.
+buttons, popovers, a `Page`'s header (unless `printHeader`), and a table's toolbar and tick column.
+Links keep their words. `NoPrint` and `PrintOnly` mark an app's own parts. A printed document's own
+layout (a receipt's width, an invoice's margins) is the one place an app writes CSS: its
+`@media print` rules, beside the document.
 
 ```tsx
 <NoPrint><Button icon="file" onClick={() => print()}>Print</Button></NoPrint>
@@ -476,7 +493,8 @@ A route that answers a page of its own (an import screen before anyone signs in,
 makes it with the toolkit too: `routePage(runtime, { title, body, status, headers, lang })` from
 `copilotz/web/server` gives a `Response` whose head is the app page's (its theme, base, icons,
 colour and fonts) and whose body is React made on the server, with the app's words. No script runs
-on it, so its links and forms that post are what work.
+on it, so its links and forms that post are what work. `Screen` centres a sign-in's card in the
+window and keeps a footer at its foot.
 
 ```tsx
 "/import": (request, { runtime }) => routePage(runtime, {
@@ -515,6 +533,7 @@ and `dark`. The default is Copilotz's look; one that names another token follows
 | `toolbar-padding`    | `0`           |
 | `toolbar-radius`     | `0`           |
 | `toolbar-background` | `transparent` |
+| `toolbar-grow-basis` | `200px`       |
 
 ### Split
 
@@ -538,6 +557,14 @@ and `dark`. The default is Copilotz's look; one that names another token follows
 | `list-group-font-weight`  | `560`              |
 | `list-group-end-padding`  | `14px`             |
 
+### Screen
+
+| Token            | Default |
+| ---------------- | ------- |
+| `screen-padding` | `24px`  |
+| `screen-width`   | `420px` |
+| `screen-gap`     | `24px`  |
+
 ### Text and Heading
 
 | Token                    | Default               |
@@ -556,17 +583,18 @@ and `dark`. The default is Copilotz's look; one that names another token follows
 
 ### Page
 
-| Token                | Default               |
-| -------------------- | --------------------- |
-| `page-width`         | `820px`               |
-| `page-padding`       | `34px 24px 64px`      |
-| `page-width-lg`      | `1040px`              |
-| `page-title-font`    | `var(--font-display)` |
-| `page-title-size`    | `28px`                |
-| `page-title-weight`  | `680`                 |
-| `page-body-gap`      | `20px`                |
-| `page-padding-sm`    | `16px 16px 48px`      |
-| `page-title-size-sm` | `22px`                |
+| Token                    | Default               |
+| ------------------------ | --------------------- |
+| `page-width`             | `820px`               |
+| `page-padding`           | `34px 24px 64px`      |
+| `page-width-lg`          | `1040px`              |
+| `page-title-font`        | `var(--font-display)` |
+| `page-title-size`        | `28px`                |
+| `page-title-weight`      | `680`                 |
+| `page-description-width` | `560px`               |
+| `page-body-gap`          | `20px`                |
+| `page-padding-sm`        | `16px 16px 48px`      |
+| `page-title-size-sm`     | `22px`                |
 
 ### Card
 
@@ -733,8 +761,8 @@ and `dark`. The default is Copilotz's look; one that names another token follows
 | `field-label-color`       | `var(--foreground)`       |
 | `field-required-color`    | `var(--destructive-text)` |
 | `field-note-font-size`    | `12.5px`                  |
-| `field-row-control-width` | `none`                    |
 | `field-row-label-width`   | `30%`                     |
+| `field-row-control-width` | `1fr`                     |
 | `field-row-gap`           | `16px`                    |
 | `field-row-label-offset`  | `0`                       |
 | `field-row-label-align`   | `start`                   |
@@ -945,6 +973,13 @@ and `dark`. The default is Copilotz's look; one that names another token follows
 | `tooltip-foreground` | `var(--background)` |
 | `tooltip-font-size`  | `12.5px`            |
 
+### Avatar
+
+| Token                       | Default         |
+| --------------------------- | --------------- |
+| `avatar-empty-background`   | `var(--muted)`  |
+| `avatar-empty-border-color` | `var(--border)` |
+
 ### Badge
 
 | Token               | Default              |
@@ -1078,6 +1113,8 @@ and `dark`. The default is Copilotz's look; one that names another token follows
 | `date-picker-preset-active-background` | `var(--primary-soft)`                                         |
 | `date-picker-preset-active-foreground` | `var(--primary-text)`                                         |
 | `date-picker-foot-gap`                 | `12px`                                                        |
+| `date-picker-fields-gap`               | `10px`                                                        |
+| `date-picker-end-width`                | `9.5em`                                                       |
 | `date-picker-height-touch`             | `44px`                                                        |
 | `date-picker-preset-height-touch`      | `40px`                                                        |
 

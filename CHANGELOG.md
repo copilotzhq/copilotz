@@ -1,3 +1,58 @@
+## 1.0.0-rc.54 — 2026-11-17
+
+What rebuilding a point of sale on rc.52 still asked of the toolkit, and of e-mail.
+
+**Changed:**
+
+- **`Field`'s `controlWidth` is a share of the whole row** (label and control), as a grid column is,
+  no longer of the control's column: `labelWidth="33.33%"` with `controlWidth="66.67%"` fills the
+  row. Its token `field-row-control-width` is `1fr` by default.
+- **A `Page`'s header doesn't print**, as the toolkit's bars don't; `printHeader` keeps it.
+
+**Dates:**
+
+- **`DateRangePicker`** has typed From and To fields over its months, in the field's `format`: a
+  date moves the range and the months, anything else is marked and changes nothing. A long range
+  opens on its start's months. `time` gives each end a time of day. Apply and Cancel stay in view
+  when the panel scrolls.
+- **`DateTimePicker`** and the day-time helpers take `YYYY-MM-DD HH:mm:ss`: a value's seconds are
+  kept until its time is changed (a form saving a record's date unchanged dropped them), and
+  `seconds` shows them in a field of their own.
+
+**Tables and fields:**
+
+- **Fields in `DataTable` cells** fill their column and shrink with it, `Select` and the pickers
+  without their minimum width there; `layout="fixed"` keeps columns at their `width`s.
+- **`detailOpen`** opens a table's detail rows: all of them (`true`, with no button) or those a
+  function picks.
+- **A wide table no longer widens the page**: its screen-reader header words stay inside its scroll.
+- **`Select`, `Picker` and `MultiPicker` take `addon` and `addonEnd`**, as `Input` does.
+- **`FileInput`** takes its own words (`chooseLabel`, `changeLabel`, `removeLabel`) and a file
+  already stored (`current`, removed by `onRemove`).
+- **`RowsEditor`**: `add={false}` leaves out its add buttons; `removeIcon` and `removeLabel` set the
+  remove button.
+- **`Avatar`** shows a picture picked but not yet sent (`blob:`, image `data:`), and
+  `initial={false}` draws an empty box.
+
+**Layout:**
+
+- **`hidden` hides any toolkit piece**: a `Stack`'s or `Grid`'s own display no longer wins over it.
+- **`Screen`**: a frame that fills the window, centring what it holds and keeping a `footer` at the
+  window's foot: a sign-in's card, a route's own page.
+- **`Page` `align="center"`** centres the title and description; **`Toolbar` `grow`** takes the room
+  left (a search field).
+- **Icons:** `cart`, `gift`, `credit-card`, `piggy-bank`, `tags`.
+
+**E-mail:**
+
+- **The `sendmail` adapter** hands a message to a sendmail program (Postfix's, Exim's, msmtp's):
+  `adapter: "sendmail"`, `sendmail: { path, args, timeout }`. It runs the program with arguments,
+  never a shell, recipients after `--`. The e-mail plugin exports its MIME writer (`mime`) for an
+  app's own adapter, and the writer refuses a line break in a header.
+- **Inline images:** an attachment with an `id` is inline, and the HTML shows it as `cid:<id>` (a
+  receipt's logo, without a data address counting against the HTML's 500,000 characters). SMTP,
+  sendmail and Resend send them.
+
 ## 1.0.0-rc.53 — 2026-11-16
 
 **A page on `*.localhost` connects.** A page served on a `*.localhost` host (`shop.localhost`) now

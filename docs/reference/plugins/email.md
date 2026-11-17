@@ -24,7 +24,7 @@ It keeps nothing of its own.
 Only the app's own code calls its 1 Action, `email.send`: its plugins, its schedules and the system.
 Nobody outside does.
 
-Other plugins call it through its adapters: `email` (`console`, `resend`, `smtp`).
+Other plugins call it through its adapters: `email` (`console`, `resend`, `sendmail`, `smtp`).
 
 ## Where it shows
 
@@ -34,17 +34,18 @@ It has no Views: it shows nowhere on its own.
 
 You set it in `resources.email`: 1 setting is required, and 1 is a secret, kept out of your code.
 
-| Setting         | Type           | Required | What it is                                                                                                                                                                                                                                   |
-| --------------- | -------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `email.adapter` | `string`       | yes      | Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on Node, Deno and Bun), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in). |
-| `email.from`    | `string`       | no       | Who messages are from: `"Example <noreply@example.com>"`.                                                                                                                                                                                    |
-| `email.senders` | `string[]`     | no       | Who else a message may be from (its own `from`): addresses (`billing@example.com`), or every address at a domain (`@example.com`).                                                                                                           |
-| `email.replyTo` | `string`       | no       | Where replies go, when not to `from`.                                                                                                                                                                                                        |
-| `email.apiKey`  | `string`       | no       | Secret. The adapter's key (Resend's).                                                                                                                                                                                                        |
-| `email.smtp`    | `SmtpSettings` | no       | The `smtp` adapter's server: `{ host, port?, secure?, starttls?, user?, password?, ca?, name?, timeout? }` (see `SmtpSettings`).                                                                                                             |
+| Setting          | Type               | Required | What it is                                                                                                                                                                                                                                                                                           |
+| ---------------- | ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `email.adapter`  | `string`           | yes      | Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on Node, Deno and Bun), `sendmail` (a sendmail program, on Node, Deno and Bun), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in). |
+| `email.from`     | `string`           | no       | Who messages are from: `"Example <noreply@example.com>"`.                                                                                                                                                                                                                                            |
+| `email.senders`  | `string[]`         | no       | Who else a message may be from (its own `from`): addresses (`billing@example.com`), or every address at a domain (`@example.com`).                                                                                                                                                                   |
+| `email.replyTo`  | `string`           | no       | Where replies go, when not to `from`.                                                                                                                                                                                                                                                                |
+| `email.apiKey`   | `string`           | no       | Secret. The adapter's key (Resend's).                                                                                                                                                                                                                                                                |
+| `email.smtp`     | `SmtpSettings`     | no       | The `smtp` adapter's server: `{ host, port?, secure?, starttls?, user?, password?, ca?, name?, timeout? }` (see `SmtpSettings`).                                                                                                                                                                     |
+| `email.sendmail` | `SendmailSettings` | no       | The `sendmail` adapter's program (see `SendmailSettings`).                                                                                                                                                                                                                                           |
 
 Until it's set, the runtime doesn't start. With nothing set, its check says: "set the email
-resource's adapter: resend or smtp or console (console on a laptop)."
+resource's adapter: resend or smtp or sendmail or console (console on a laptop)."
 
 It also reads `links`, resource kinds the app and other plugins fill.
 
@@ -52,7 +53,7 @@ It also reads `links`, resource kinds the app and other plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.53`.
+It ships with `copilotz@1.0.0-rc.54`.
 
 ## Listing
 

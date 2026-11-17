@@ -87,7 +87,7 @@ It also reads `caller`, resource kinds the app and other plugins fill.
 
 The runtime doesn't start without [`identity`](identity.md): add it too.
 
-It ships in a package of its own, `@copilotz/directory@1.0.0-rc.53`, for `copilotz` `1.0.0-rc.53`:
+It ships in a package of its own, `@copilotz/directory@1.0.0-rc.54`, for `copilotz` `1.0.0-rc.54`:
 install it beside `copilotz`.
 
 ## Listing

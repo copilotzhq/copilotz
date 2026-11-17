@@ -636,6 +636,10 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 
 | Key | English |
 |---|---|
+| `toolkit.addRow` | Add a row |
+| `toolkit.addRowAfter` | Add a row after row {row} |
+| `toolkit.allTime` | All time |
+| `toolkit.apply` | Apply |
 | `toolkit.audio` | Audio |
 | `toolkit.audioFailed` | Couldn't load the {label}. Try again |
 | `toolkit.audioLabel` | {label}, {length} |
@@ -646,12 +650,25 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `toolkit.audioPosition` | {label}: position |
 | `toolkit.audioProgress` | {at} of {length} |
 | `toolkit.cancel` | Cancel |
+| `toolkit.changeFile` | Change |
+| `toolkit.chooseDate` | Choose a date |
+| `toolkit.chooseDates` | Choose dates |
+| `toolkit.chooseDateTime` | Choose a date and time |
+| `toolkit.chooseFile` | Choose a file |
+| `toolkit.chooseFiles` | Choose files |
+| `toolkit.chosen` | one: {count} chosen / other: {count} chosen |
 | `toolkit.close` | Close |
+| `toolkit.columns` | Columns |
 | `toolkit.copied` | Copied |
 | `toolkit.copy` | Copy |
 | `toolkit.copyCode` | Copy code |
 | `toolkit.copyId` | Copy ID |
+| `toolkit.customRange` | Custom range |
 | `toolkit.done` | Done |
+| `toolkit.dropFiles` | Drop files here |
+| `toolkit.export` | Export |
+| `toolkit.files` | one: {count} file / other: {count} files |
+| `toolkit.hideDetails` | Hide details |
 | `toolkit.hoursAgo` | one: {count} hour ago / other: {count} hours ago |
 | `toolkit.hoursShort` | {count}h |
 | `toolkit.inHours` | one: in {count} hour / other: in {count} hours |
@@ -660,14 +677,46 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `toolkit.inMinutesShort` | in {count}m |
 | `toolkit.items` | one: {count} item / other: {count} items |
 | `toolkit.justNow` | just now |
+| `toolkit.last30Days` | Last 30 days |
+| `toolkit.last7Days` | Last 7 days |
+| `toolkit.lastFiscalYear` | Last fiscal year |
+| `toolkit.lastMonth` | Last month |
+| `toolkit.lastYear` | Last year |
+| `toolkit.loadingRows` | Loading… |
 | `toolkit.mathLoading` | Loading math |
 | `toolkit.mathPending` | Still being written |
 | `toolkit.minutesAgo` | one: {count} minute ago / other: {count} minutes ago |
 | `toolkit.minutesShort` | {count}m |
+| `toolkit.navigation` | Navigation |
+| `toolkit.nextMonth` | Next month |
+| `toolkit.nextPage` | Next page |
 | `toolkit.no` | No |
+| `toolkit.noMatches` | Nothing matches “{text}” |
+| `toolkit.noneChosen` | None chosen |
+| `toolkit.noRows` | Nothing to show |
+| `toolkit.notifications` | Notifications |
+| `toolkit.notSaved` | It wasn't saved. Try again. |
 | `toolkit.now` | now |
+| `toolkit.page` | Page {page} |
+| `toolkit.pages` | Pages |
+| `toolkit.previousMonth` | Previous month |
+| `toolkit.previousPage` | Previous page |
+| `toolkit.print` | Print |
+| `toolkit.removeFile` | Remove |
+| `toolkit.removeRow` | Remove row {row} |
+| `toolkit.removeTag` | Remove {tag} |
+| `toolkit.required` | required |
+| `toolkit.row` | Row {row} |
+| `toolkit.rowsPerPage` | {size} rows per page |
+| `toolkit.sameMonthLastYear` | This month last year |
+| `toolkit.sameMonthToDateLastYear` | This month to date, last year |
 | `toolkit.save` | Save |
+| `toolkit.search` | Search |
+| `toolkit.selectAll` | Select all rows |
+| `toolkit.selectRow` | Select this row |
+| `toolkit.showDetails` | Show details |
 | `toolkit.showEarlierLines` | one: Show {count} earlier line / other: Show {count} earlier lines |
+| `toolkit.showingRows` | Showing {from} to {to} of {total} rows |
 | `toolkit.showLess` | Show less |
 | `toolkit.showMore` | Show more |
 | `toolkit.showMoreLines` | one: Show {count} more line / other: Show {count} more lines |
@@ -676,6 +725,12 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `toolkit.terminalFailed` | Check your connection, then try again. |
 | `toolkit.terminalFailedTitle` | The terminal didn't load |
 | `toolkit.terminalOpening` | Opening the terminal… |
+| `toolkit.thisFiscalYear` | This fiscal year |
+| `toolkit.thisMonth` | This month |
+| `toolkit.thisYear` | This year |
+| `toolkit.time` | Time of day |
+| `toolkit.today` | Today |
+| `toolkit.todayLastYear` | Today last year |
 | `toolkit.toDo` | To do |
 | `toolkit.tomorrow` | Tomorrow |
 | `toolkit.tryAgain` | Try again |

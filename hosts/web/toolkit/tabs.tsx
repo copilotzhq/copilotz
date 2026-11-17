@@ -7,7 +7,13 @@
  * `role="tabpanel"`. A tab with an `href` is a link (a page's tab that the
  * address says, `?tab=files`): following it is choosing it, and it opens in
  * a new browser tab as links do. Where they don't all fit, they scroll
- * sideways, and the chosen one is kept in view.
+ * sideways, and the chosen one is kept in view; `justified`, they share the
+ * width between them instead. A tab's `icon` is the toolkit's by name, or an
+ * element of the app's own.
+ *
+ * Its look is the theme's: `tabs-tab-*` (height, padding, radius, font,
+ * colour), `tabs-segmented-*` (the track) and `tabs-line-*` (the underlined
+ * kind: its tab's border widths and colours, chosen and under the pointer).
  *
  * ```tsx
  * <Tabs label="Which memories" value={which} onChange={setWhich} panel={id}
@@ -16,13 +22,13 @@
  */
 import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef } from "react";
 import { cx } from "./cx.ts";
-import { Icon, type IconName } from "./icon.tsx";
+import { type IconLike, iconOf } from "./icon.tsx";
 import { sheet } from "./sheet.tsx";
 
 export type Tab<T extends string> = {
   value: T;
   label: ReactNode;
-  icon?: IconName;
+  icon?: IconLike;
   count?: number;
   /** Where choosing it goes, as a link. */
   href?: string;
@@ -35,30 +41,43 @@ const SHEET = sheet(
   `
 .copilotz-tabs { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; overflow-x: auto;
   scrollbar-width: none; }
-.copilotz-tab { display: inline-flex; text-decoration: none; align-items: center; gap: 6px; flex: none; height: 34px; padding: 0 12px;
-  border: 0; border-radius: var(--radius-md); background: transparent; color: var(--muted-foreground);
-  font-size: 13.5px; font-weight: 560; white-space: nowrap; cursor: pointer;
+.copilotz-tab { display: inline-flex; text-decoration: none; align-items: center; gap: 6px; flex: none;
+  height: var(--tabs-tab-height, 34px); padding: var(--tabs-tab-padding, 0 12px);
+  border: 0; border-radius: var(--tabs-tab-radius, var(--radius-md)); background: transparent;
+  color: var(--tabs-tab-color, var(--muted-foreground));
+  font-size: var(--tabs-tab-font-size, 13.5px); font-weight: var(--tabs-tab-font-weight, 560);
+  white-space: nowrap; cursor: pointer;
   transition: background-color .15s, color .15s, box-shadow .15s, border-color .15s; }
-.copilotz-tab:hover { color: var(--foreground); }
+.copilotz-tab:hover { color: var(--tabs-tab-hover-color, var(--foreground)); }
 .copilotz-tab:focus-visible { outline-offset: -1px; }
 .copilotz-tab-count { color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
-.copilotz-tabs-segmented { padding: 3px; border-radius: var(--radius-lg); background: var(--muted); }
+.copilotz-tabs-segmented { padding: var(--tabs-segmented-padding, 3px);
+  border-radius: var(--tabs-segmented-radius, var(--radius-lg)); background: var(--tabs-segmented-background, var(--muted)); }
 .copilotz-tabs-segmented .copilotz-tab[aria-selected=true] { background: var(--card); color: var(--card-foreground);
-  box-shadow: var(--shadow-sm); }
-.copilotz-tabs-line { gap: 6px; border-bottom: 1px solid var(--border); }
-.copilotz-tabs-line .copilotz-tab { height: 40px; padding: 0 6px; border-radius: 0; border-bottom: 2px solid transparent;
-  margin-bottom: -1px; }
-.copilotz-tabs-line .copilotz-tab[aria-selected=true] { color: var(--foreground); border-bottom-color: var(--primary); }
+  box-shadow: var(--tabs-segmented-shadow, var(--shadow-sm)); }
+.copilotz-tabs-line { gap: var(--tabs-line-gap, 6px); border-bottom: 1px solid var(--border); }
+.copilotz-tabs-line .copilotz-tab { height: var(--tabs-line-tab-height, 40px); padding: var(--tabs-line-tab-padding, 0 6px);
+  border-radius: var(--tabs-line-tab-radius, 0); border-style: solid;
+  border-width: var(--tabs-line-tab-border-width, 0 0 2px); border-color: transparent; margin-bottom: -1px; }
+.copilotz-tabs-line .copilotz-tab:hover { background: var(--tabs-line-hover-background, transparent);
+  border-color: var(--tabs-line-hover-border-color, transparent); }
+.copilotz-tabs-line .copilotz-tab[aria-selected=true] { color: var(--tabs-selected-color, var(--foreground));
+  background: var(--tabs-line-selected-background, transparent);
+  border-color: var(--tabs-line-selected-border-color, transparent transparent var(--primary)); }
+.copilotz-tabs-justified { display: flex; width: 100%; }
+.copilotz-tabs-justified .copilotz-tab { flex: 1 1 0; justify-content: center; }
 `,
 );
 
 export function Tabs<T extends string>(
-  { label, value, onChange, tabs, variant = "segmented", panel, className }: {
+  { label, value, onChange, tabs, variant = "segmented", justified, panel, className }: {
     label: string;
     value: T;
     onChange(value: NoInfer<T>): void;
     tabs: Tab<NoInfer<T>>[];
     variant?: "segmented" | "line";
+    /** As wide as their box, each tab an equal share. */
+    justified?: boolean;
     panel?: string;
     className?: string;
   },
@@ -96,7 +115,12 @@ export function Tabs<T extends string>(
       ref={list}
       role="tablist"
       aria-label={label}
-      className={cx("copilotz-tabs", `copilotz-tabs-${variant}`, className)}
+      className={cx(
+        "copilotz-tabs",
+        `copilotz-tabs-${variant}`,
+        justified && "copilotz-tabs-justified",
+        className,
+      )}
       onKeyDown={keys}
     >
       {SHEET}
@@ -113,7 +137,7 @@ export function Tabs<T extends string>(
         };
         const inside = (
           <>
-            {tab.icon ? <Icon name={tab.icon} size={15} /> : null}
+            {iconOf(tab.icon, 15)}
             {tab.label}
             {tab.count !== undefined
               ? <span className="copilotz-tab-count">{tab.count}</span>

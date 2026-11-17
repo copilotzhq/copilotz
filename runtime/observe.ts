@@ -119,6 +119,8 @@ type Run = Pass & {
   counts: Map<string, number>;
   /** Parts this run is running too (new, or shown with something new), by key. */
   nested: Map<string, Nested>;
+  /** Its View is running now: what it shows becomes its parts. */
+  passing?: boolean;
 };
 type Nested = {
   part: Part;
@@ -319,7 +321,12 @@ export function createObservers(env: {
     run.counts = new Map();
     const view = env.views[p.name];
     if (!view) return undefined;
-    return view(item, context(p, run, viewCollections(run.source, run), p.name, hints));
+    run.passing = true;
+    try {
+      return view(item, context(p, run, viewCollections(run.source, run), p.name, hints));
+    } finally {
+      run.passing = false;
+    }
   };
 
   /** `ctx.show` in a part: inline, or the shown View as a part of the parent's, kept across runs. */
@@ -334,6 +341,15 @@ export function createObservers(env: {
     if (!env.views[name]) return undefined;
     if (!parent.place) {
       return env.views[name]?.(item, context(parent, run, db, name, hints));
+    }
+    // A part is shown while its parent's View runs: one asked for later (by a component that
+    // renders after the View returned, on a click) would join a run that has settled, and never
+    // show. The host's own way to show a View later is its lazy View (the web's `LazyView`).
+    if (!run.passing) {
+      throw new Error(
+        `ctx.show("${name}") was called after the View "${parent.name}" returned: show Views ` +
+          "in the View's body, or show one later with the host's lazy View (LazyView on the web)",
+      );
     }
     const n = run.counts.get(name) ?? 0;
     run.counts.set(name, n + 1);

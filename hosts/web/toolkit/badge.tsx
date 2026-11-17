@@ -1,7 +1,9 @@
 /**
  * A small label, as a pill: a count, a state, a tag. A `tone` (`neutral`,
  * the default; `primary`, `success`, `warning`, `destructive`, `info`), soft
- * (the default), `outline` or `solid`.
+ * (the default), `outline` or `solid`. Its shape is the theme's:
+ * `badge-radius`, `badge-padding`, `badge-font-size`, `badge-font-weight`,
+ * `badge-min-width`.
  *
  * ```tsx
  * <Badge>side thread</Badge> <Badge tone="success" variant="solid">Live</Badge>
@@ -18,9 +20,10 @@ const SHEET = sheet(
   `
 .copilotz-badge { --tone: var(--muted-foreground); --tone-soft: var(--muted); --tone-border: var(--input);
   --tone-fill: var(--secondary-foreground); --tone-on: var(--secondary);
-  display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 20px;
-  padding: 1px 7px; border: 1px solid transparent; border-radius: var(--radius-full);
-  background: var(--tone-soft); color: var(--tone); font-size: 11.5px; font-weight: 600; line-height: 1.4;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-width: var(--badge-min-width, 20px); padding: var(--badge-padding, 1px 7px); border: 1px solid transparent;
+  border-radius: var(--badge-radius, var(--radius-full)); background: var(--tone-soft); color: var(--tone);
+  font-size: var(--badge-font-size, 11.5px); font-weight: var(--badge-font-weight, 600); line-height: 1.4;
   letter-spacing: .01em; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .copilotz-badge-primary { --tone: var(--primary-text); --tone-soft: var(--primary-soft); --tone-border: var(--primary-border);
   --tone-fill: var(--primary); --tone-on: var(--primary-foreground); }

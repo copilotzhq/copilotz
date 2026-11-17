@@ -31,6 +31,18 @@
  * status sets that status alone. Copilotz's focus `ring` is its own colour
  * on a light screen (the logo's blue): a brand sets it too for a focus in
  * its own. Every token is a CSS variable: `var(--primary)`.
+ *
+ * The toolkit's pieces have tokens of their own too, named by the piece
+ * (`button-height`, `input-radius`, `dialog-head-background`: the toolkit's
+ * guide lists them), each at its default unless a theme sets it. Sizes,
+ * paddings, radii and weights are the same on both screens, so a theme gives
+ * them once, in `tokens`; a piece's colours go in `light` and `dark` as the
+ * others do:
+ *
+ * ```ts
+ * { tokens: { "button-height": "45px", "button-border-width": "2px" },
+ *   light: { "dialog-head-background": "#337ab7", "dialog-head-foreground": "#ffffff" } }
+ * ```
  */
 import { COPILOTZ_FULL, COPILOTZ_MARK } from "./copilotz.ts";
 import type { Picture } from "./picture.ts";
@@ -78,6 +90,11 @@ export type Theme = {
      */
     icon?: string;
   } | null;
+  /**
+   * Tokens the same on a light screen and a dark one, by name (no `--`): the pieces' sizes,
+   * paddings, radii and weights (`{ "button-height": "34px" }`). `light` and `dark` win over them.
+   */
+  tokens?: Record<string, string | null>;
   /** Tokens for a light screen, by name (no `--`): `{ primary: "#0f766e" }`. */
   light?: Record<string, string | null>;
   /** Tokens for a dark one. */

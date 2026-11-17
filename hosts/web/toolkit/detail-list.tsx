@@ -34,11 +34,13 @@ export type Detail = {
 const SHEET = sheet(
   "detail-list",
   `
-.copilotz-details { container-type: inline-size; margin: 0; border: 1px solid var(--border); border-radius: var(--radius-xl);
-  background: var(--card); color: var(--card-foreground); box-shadow: var(--shadow-sm); font-size: 14px; line-height: 1.5; }
+.copilotz-details { container-type: inline-size; margin: 0; border: 1px solid var(--border);
+  border-radius: var(--detail-list-radius, var(--radius-xl)); background: var(--card); color: var(--card-foreground);
+  box-shadow: var(--shadow-sm); font-size: var(--detail-list-font-size, 14px); line-height: 1.5; }
 .copilotz-details-bare { border: 0; border-radius: 0; background: none; box-shadow: none; }
-.copilotz-details-row { display: grid; grid-template-columns: clamp(7rem, 30%, 13rem) minmax(0, 1fr); align-items: baseline;
-  gap: 2px 20px; padding: 11px 16px; }
+.copilotz-details-row { display: grid;
+  grid-template-columns: var(--detail-list-label-width, clamp(7rem, 30%, 13rem)) minmax(0, 1fr);
+  align-items: baseline; gap: 2px 20px; padding: var(--detail-list-padding, 11px 16px); }
 .copilotz-details-row + .copilotz-details-row { border-top: 1px solid var(--border); }
 .copilotz-details-row > dt { min-width: 0; color: var(--muted-foreground); font-size: 13.5px; overflow-wrap: anywhere; }
 .copilotz-details-row > dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }

@@ -10,14 +10,23 @@ import { sheet } from "./sheet.tsx";
 const SHEET = sheet(
   "textarea",
   `
-.copilotz-textarea { display: block; width: 100%; min-height: 84px; margin: 0; padding: 10px 12px;
-  border: 1px solid var(--input); border-radius: var(--radius-lg); background: var(--card);
-  color: var(--foreground); font-size: 14.5px; line-height: 1.5; resize: vertical;
+.copilotz-textarea { display: block; width: 100%; min-height: var(--textarea-min-height, 84px); margin: 0;
+  padding: var(--textarea-padding, 10px 12px);
+  border: var(--textarea-border-width, var(--input-border-width, 1px)) solid var(--input);
+  border-radius: var(--textarea-radius, var(--input-radius, var(--radius-lg)));
+  background: var(--textarea-background, var(--input-background, var(--card)));
+  color: var(--foreground); font-size: var(--textarea-font-size, var(--input-font-size, 14.5px));
+  line-height: var(--textarea-line-height, 1.5); resize: vertical;
   transition: border-color .15s, box-shadow .15s; }
 .copilotz-textarea:focus-visible { outline: none; border-color: var(--ring);
-  box-shadow: 0 0 0 4px color-mix(in oklab, var(--ring) 16%, transparent); }
+  box-shadow: var(--textarea-focus-shadow,
+    var(--input-focus-shadow, 0 0 0 4px color-mix(in oklab, var(--ring) 16%, transparent))); }
 .copilotz-textarea[aria-invalid=true] { border-color: var(--destructive); }
-.copilotz-textarea::placeholder { color: var(--muted-foreground); opacity: .85; }
+.copilotz-textarea:is(:disabled, [readonly]):not(.copilotz-textarea-bare) {
+  background: var(--textarea-disabled-background, var(--input-disabled-background,
+    var(--textarea-background, var(--input-background, var(--card))))); }
+.copilotz-textarea::placeholder { color: var(--input-placeholder, var(--muted-foreground));
+  opacity: var(--input-placeholder-opacity, .85); }
 .copilotz-textarea-grow { resize: none; overflow-y: auto; }
 .copilotz-textarea-bare, .copilotz-textarea-bare:focus-visible { min-height: 0; padding: 0; border: 0; border-radius: 0;
   background: transparent; box-shadow: none; outline: none; resize: none; }

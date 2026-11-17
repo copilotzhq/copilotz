@@ -45,6 +45,7 @@ import {
   Palette,
   type PaletteGroup,
   signOut,
+  Toasts,
 } from "../../../../hosts/web/mod.ts";
 import type { OrgsShown, OrgsSlot } from "../shared/orgs.ts";
 import { apple, opens, type PaletteSource, shortcutOf } from "../shared/palette.ts";
@@ -375,6 +376,7 @@ export function Frame(
       </div>
       {panel && narrow ? <PanelSheet panel={panel} state={side} id={panelId} /> : null}
       <Palette sources={palette.sources} hints={palette.hints} own={own} />
+      <Toasts />
       {orgs?.overlay ?? null}
     </div>
   );

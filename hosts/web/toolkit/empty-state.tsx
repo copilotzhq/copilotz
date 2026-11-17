@@ -20,13 +20,14 @@ const SHEET = sheet(
   `
 .copilotz-empty { display: grid; justify-items: center; gap: 8px; max-width: 420px; margin: 0 auto;
   text-align: center; }
-.copilotz-empty-icon { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 10px;
-  border: 1px solid var(--border); border-radius: var(--radius-2xl); background: var(--muted);
+.copilotz-empty-icon { display: grid; place-items: center; width: var(--empty-state-icon-size, 56px);
+  height: var(--empty-state-icon-size, 56px); margin-bottom: 10px;
+  border: 1px solid var(--border); border-radius: var(--empty-state-icon-radius, var(--radius-2xl)); background: var(--muted);
   color: var(--muted-foreground); }
 .copilotz-empty-primary .copilotz-empty-icon { border-color: transparent; background: var(--primary-soft);
   color: var(--primary-text); }
-.copilotz-empty-title { margin: 0; font-family: var(--font-display); font-size: 20px; line-height: 1.25;
-  font-weight: 650; letter-spacing: -.015em; color: var(--foreground); }
+.copilotz-empty-title { margin: 0; font-family: var(--font-display); font-size: var(--empty-state-title-size, 20px);
+  line-height: 1.25; font-weight: 650; letter-spacing: -.015em; color: var(--foreground); }
 h1.copilotz-empty-title { font-size: 21px; }
 .copilotz-empty-text { margin: 0; color: var(--muted-foreground); }
 .copilotz-empty-action { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 12px; }

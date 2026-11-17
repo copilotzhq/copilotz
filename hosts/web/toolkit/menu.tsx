@@ -10,7 +10,13 @@
  * placed under its button (`anchor`). Opening it, or ArrowDown on the
  * button, focuses the first item; arrows, Home, End and a letter move
  * between them; choosing one, Escape or Tab closes it, and focus returns to
- * the button.
+ * the button. An item's `icon` is the toolkit's by name, or an element of
+ * the app's own; `className` is the menu's box.
+ *
+ * Its look is the theme's: `menu-*` (min width, padding, radius, border
+ * colour, shadow) and `menu-item-*` (height, padding, radius, font size,
+ * colour, and under the pointer or keys: `menu-item-hover-background`,
+ * `menu-item-hover-foreground`).
  *
  * ```tsx
  * <Menu label="Conversation" items={[
@@ -31,15 +37,16 @@ import {
   useState,
 } from "react";
 import { anchor, ANCHORED } from "./anchor.tsx";
+import { cx } from "./cx.ts";
 import { Button } from "./button.tsx";
-import { Icon, type IconName } from "./icon.tsx";
+import { type IconLike, iconOf } from "./icon.tsx";
 import { IconButton } from "./icon-button.tsx";
 import { Kbd } from "./kbd.tsx";
 import { sheet } from "./sheet.tsx";
 
 export type MenuItem = {
   label: string;
-  icon?: IconName;
+  icon?: IconLike;
   onSelect?(): void;
   href?: string;
   tone?: "destructive";
@@ -50,18 +57,23 @@ export type MenuItem = {
 const SHEET = sheet(
   "menu",
   `
-.copilotz-menu { min-width: 200px; max-width: min(320px, calc(100vw - 16px)); padding: 5px;
-  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--popover);
-  color: var(--popover-foreground); box-shadow: var(--shadow-md); overflow: auto;
+.copilotz-menu { min-width: var(--menu-min-width, 200px); max-width: min(320px, calc(100vw - 16px));
+  padding: var(--menu-padding, 5px); border: 1px solid var(--menu-border-color, var(--border));
+  border-radius: var(--menu-radius, var(--radius-lg)); background: var(--popover);
+  color: var(--popover-foreground); box-shadow: var(--menu-shadow, var(--shadow-md)); overflow: auto;
   max-height: min(420px, calc(100vh - 32px)); }
 .copilotz-menu:popover-open { animation: copilotz-menu .14s ease-out; }
 @keyframes copilotz-menu { from { opacity: 0; transform: translateY(-3px) scale(.98); } }
-.copilotz-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px;
-  padding: 6px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit;
-  font-size: 14px; text-align: left; text-decoration: none; cursor: pointer; outline: none; }
+.copilotz-menu-item { display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: var(--menu-item-height, 34px); padding: var(--menu-item-padding, 6px 10px); border: 0;
+  border-radius: var(--menu-item-radius, var(--radius-sm)); background: transparent;
+  color: var(--menu-item-color, inherit); font-size: var(--menu-item-font-size, 14px); text-align: left;
+  text-decoration: none; cursor: pointer; outline: none; }
 .copilotz-menu-item > .copilotz-icon { color: var(--muted-foreground); }
 .copilotz-menu-item:hover, .copilotz-menu-item:focus-visible, .copilotz-menu-item:focus {
-  background: var(--accent); color: var(--accent-foreground); }
+  background: var(--menu-item-hover-background, var(--accent));
+  color: var(--menu-item-hover-foreground, var(--accent-foreground)); }
+.copilotz-menu-item:is(:hover, :focus) > .copilotz-icon { color: var(--menu-item-hover-icon, var(--muted-foreground)); }
 .copilotz-menu-item:disabled { opacity: .5; cursor: default; background: transparent; }
 .copilotz-menu-item[data-tone=destructive], .copilotz-menu-item[data-tone=destructive] > .copilotz-icon {
   color: var(--destructive-text); }
@@ -98,10 +110,11 @@ export function Menu(
     side = "bottom",
     variant,
     size,
+    className,
   }: {
     /** What the menu is, said to screen readers (and the icon button's tooltip). */
     label: string;
-    icon?: IconName;
+    icon?: IconLike;
     /** A button with words instead of an icon. */
     text?: string;
     /** A button of the front end's own instead (a person's row), given what opens the menu. */
@@ -112,6 +125,8 @@ export function Menu(
     side?: "top" | "bottom";
     variant?: "ghost" | "outline" | "secondary";
     size?: "sm" | "md" | "lg";
+    /** The menu's box. */
+    className?: string;
   },
 ): ReactNode {
   const id = useId();
@@ -211,7 +226,7 @@ export function Menu(
         popover="auto"
         role="menu"
         aria-label={label}
-        className="copilotz-menu copilotz-anchored"
+        className={cx("copilotz-menu copilotz-anchored", className)}
         onToggle={toggled}
         onKeyDown={keys}
       >
@@ -228,7 +243,7 @@ export function Menu(
 function Item({ item, done }: { item: MenuItem; done(): void }): ReactNode {
   const inside = (
     <>
-      {item.icon ? <Icon name={item.icon} size={16} /> : null}
+      {iconOf(item.icon, 16)}
       <span className="copilotz-menu-label">{item.label}</span>
       {item.shortcut ? <Kbd>{item.shortcut}</Kbd> : null}
     </>

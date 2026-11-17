@@ -61,7 +61,12 @@ function Art(
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
     >
       {picture.paths.map((path, i) => (
-        <path key={i} d={path.d} style={{ fill: path.fill ?? "currentColor" }} />
+        <path
+          key={i}
+          d={path.d}
+          style={{ fill: path.fill ?? "currentColor" }}
+          fillRule={path.rule}
+        />
       ))}
     </svg>
   );

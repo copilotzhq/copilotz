@@ -3,7 +3,7 @@
  * a part that runs again on its own, handlers that call Actions, and
  * collections kept only in memory for state that is only live.
  */
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import {
   createRuntime,
   defineAction,
@@ -133,6 +133,10 @@ const plugin = definePlugin({
       ctx.show("broken", {}),
       ctx.show("note", { _id: "n0", text: "fine" }),
     ],
+    // A note shown later, as a component that renders on a click would.
+    later: (_: unknown, ctx: ViewContext) => ({
+      open: () => ctx.show("note", { _id: "n1", text: "later" }),
+    }),
   },
 });
 
@@ -284,6 +288,26 @@ each("a part that fails shows why, and its parent still shows", async (rt) => {
   assertEquals((failed.error as Error).message, "no luck");
   assertEquals(shown(fine.part.get()), "fine (0)");
   shelf.close();
+});
+
+each("a part shown after its View returned fails at once, saying what to do", async (rt) => {
+  const later = rt.observe("later", {}, parts);
+  const out = await later.ready;
+  assert(out.status === "ready");
+  const { open } = out.value as { open(): unknown };
+  const error = assertThrows(open);
+  assertStringIncludes(
+    (error as Error).message,
+    'ctx.show("note") was called after the View "later"',
+  );
+  assertStringIncludes((error as Error).message, "LazyView");
+  later.close();
+  // Without parts, it renders inline, whenever it's asked.
+  const inline = rt.observe("later", {});
+  const plainly = await inline.ready;
+  assert(plainly.status === "ready");
+  assertEquals((plainly.value as { open(): unknown }).open(), "later (0)");
+  inline.close();
 });
 
 each("without parts, shown Views render inline, and the whole runs again", async (rt) => {

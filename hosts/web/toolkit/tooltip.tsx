@@ -2,7 +2,9 @@
  * A short line about the one element it wraps: shown after a moment under
  * the pointer, at once when Tab brings focus to it (not when a dialog or a
  * menu hands focus back), hidden by leaving, a press or Escape. It's a manual popover (the top layer, over anything),
- * placed above (or below, or after it: `end`, beside a rail's item) by `anchor`. It describes its element, unless
+ * placed above (or below, or beside it: `end` after it, beside a rail's item, or `start` before it) by `anchor`.
+ * Its look is the theme's: `tooltip-background`, `tooltip-foreground`, `tooltip-padding`, `tooltip-radius`,
+ * `tooltip-font-size`, `tooltip-max-width`. It describes its element, unless
  * `describe` is false (an icon button already named by the same words);
  * `disabled`, it stays hidden (its element stays as it is).
  *
@@ -18,9 +20,10 @@ const SHEET = sheet(
   "tooltip",
   `
 .copilotz-tooltip-for { display: contents; }
-.copilotz-tooltip { max-width: min(280px, calc(100vw - 16px)); padding: 5px 9px; border: 0;
-  border-radius: var(--radius-sm); background: var(--foreground); color: var(--background);
-  font-size: 12.5px; font-weight: 520; line-height: 1.35; box-shadow: var(--shadow-md);
+.copilotz-tooltip { max-width: min(var(--tooltip-max-width, 280px), calc(100vw - 16px));
+  padding: var(--tooltip-padding, 5px 9px); border: 0; border-radius: var(--tooltip-radius, var(--radius-sm));
+  background: var(--tooltip-background, var(--foreground)); color: var(--tooltip-foreground, var(--background));
+  font-size: var(--tooltip-font-size, 12.5px); font-weight: 520; line-height: 1.35; box-shadow: var(--shadow-md);
   pointer-events: none; overflow-wrap: anywhere; animation: copilotz-tooltip .12s ease-out; }
 .copilotz-tooltip > .copilotz-kbd { margin-left: 8px; border-color: color-mix(in oklab, var(--background) 30%, transparent);
   background: transparent; color: inherit; opacity: .75; }
@@ -40,7 +43,7 @@ globalThis.addEventListener?.("keydown", (event) => {
 export function Tooltip(
   { text, side = "top", describe = true, disabled, children }: {
     text: ReactNode;
-    side?: "top" | "bottom" | "end";
+    side?: "top" | "bottom" | "start" | "end";
     describe?: boolean;
     disabled?: boolean;
     children: ReactNode;

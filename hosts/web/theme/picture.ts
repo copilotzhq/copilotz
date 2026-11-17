@@ -16,8 +16,14 @@
  */
 import { ownPath } from "./own-path.ts";
 
-/** Paths in a box, each filled with a colour: the text's (`currentColor`) unless given. */
-export type Drawing = { viewBox: string; paths: { d: string; fill?: string }[] };
+/**
+ * Paths in a box, each filled with a colour: the text's (`currentColor`) unless given, by the
+ * nonzero rule unless `rule` says `evenodd` (a glyph whose holes are drawn that way).
+ */
+export type Drawing = {
+  viewBox: string;
+  paths: { d: string; fill?: string; rule?: "evenodd" | "nonzero" }[];
+};
 
 /** A drawing, or the path of an image file. */
 export type Picture = Drawing | string;
@@ -61,9 +67,13 @@ function drawingOf(value: object): Drawing | undefined {
       Array.isArray(paths) && paths.length > 0 && paths.length <= 200 &&
       paths.every((p) =>
         typeof p === "object" && p !== null && typeof p.d === "string" && PATH.test(p.d) &&
-        (p.fill === undefined || isColour(p.fill))
+        (p.fill === undefined || isColour(p.fill)) &&
+        (p.rule === undefined || p.rule === "evenodd" || p.rule === "nonzero")
       )
-    ? { viewBox: viewBox.trim(), paths: paths.map(({ d, fill }) => ({ d, fill })) }
+    ? {
+      viewBox: viewBox.trim(),
+      paths: paths.map(({ d, fill, rule }) => ({ d, fill, ...(rule ? { rule } : {}) })),
+    }
     : undefined;
   kept.set(value, drawing);
   return drawing;

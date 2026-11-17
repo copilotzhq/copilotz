@@ -21,7 +21,7 @@ import { say } from "./words.ts";
 const SHEET = sheet(
   "drawer",
   `
-.copilotz-drawer { position: fixed; inset: 0 auto 0 0; width: min(86vw, 320px); max-width: none; height: 100dvh;
+.copilotz-drawer { position: fixed; inset: 0 auto 0 0; width: min(86vw, var(--drawer-width, 320px)); max-width: none; height: 100dvh;
   max-height: none; margin: 0; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
   border: 0; background: var(--popover); color: var(--popover-foreground);
   box-shadow: var(--shadow-lg); transform: translateX(-102%);

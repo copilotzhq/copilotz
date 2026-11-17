@@ -1,7 +1,7 @@
 /**
  * Keeps a popover beside what it belongs to while it's open (a menu under
- * its button, a tooltip over what it explains, or after it: `end`, beside a
- * rail's item), by script: placed when it opens and again on scroll and
+ * its button, a tooltip over what it explains, or beside it: `end` after it,
+ * beside a rail's item, `start` before it), by script: placed when it opens and again on scroll and
  * resize, on the other side when there's no room. Not by CSS anchor positioning: Safari's can loop on its style (a
  * tooltip or menu whose anchor goes or hides as a page changes keeps it
  * re-resolving, and the page hangs). Render `ANCHORED` with the popover,
@@ -10,8 +10,8 @@
 import { sheet } from "./sheet.tsx";
 
 export type Placement = {
-  /** Over or under it, or after it (to its right). */
-  side?: "top" | "bottom" | "end";
+  /** Over or under it, or after it (to its right) or before it (to its left). */
+  side?: "top" | "bottom" | "start" | "end";
   /** Along that side: from its start, its middle or its end (beside it: its top, middle, bottom). */
   align?: "start" | "center" | "end";
   /** Pixels between the two. */
@@ -34,10 +34,12 @@ export function anchor(
   const place = () => {
     const at = target.getBoundingClientRect();
     const size = popover.getBoundingClientRect();
-    if (side === "end") {
+    if (side === "end" || side === "start") {
       const after = at.right + gap;
       const before = at.left - gap - size.width;
-      const left = after + size.width > innerWidth && before >= 0 ? before : after;
+      const left = side === "end"
+        ? (after + size.width > innerWidth && before >= 0 ? before : after)
+        : (before < 0 && after + size.width <= innerWidth ? after : before);
       const top = align === "start"
         ? at.top
         : align === "end"

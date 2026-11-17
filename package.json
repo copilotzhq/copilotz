@@ -1,6 +1,6 @@
 {
   "name": "copilotz",
-  "version": "1.0.0-rc.51",
+  "version": "1.0.0-rc.52",
   "private": true,
   "type": "module",
   "description": "The open-source runtime that makes your app usable by people, your own agents and their assistants.",
@@ -63,6 +63,7 @@
     "./web/server": "./hosts/web/server.ts",
     "./web/widget": "./hosts/web/widget.tsx",
     "./web/theme": "./hosts/web/theme/css.ts",
+    "./web/export": "./hosts/web/export.ts",
     "./web/node": "./hosts/web/node/mod.ts",
     "./terminal": "./hosts/terminal/mod.ts",
     "./exporters": "./exporters/mod.ts",

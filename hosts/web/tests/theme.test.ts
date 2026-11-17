@@ -49,6 +49,33 @@ test("as CSS: light on :root, dark under the media query, radii from radius", ()
   assertMatch(css, /:root\[data-theme="light"\] \{\n  color-scheme: light;\n\}/);
 });
 
+test("tokens for both screens: on :root, merged token by token, light's and dark's win", () => {
+  const merged = themeOf([
+    theme("a", {
+      tokens: { "button-height": "45px", "input-radius": "3px", "dialog-width": "500px" },
+    }),
+    theme("b", {
+      tokens: { "button-height": "31px", "dialog-width": null },
+      light: { "input-radius": "4px" },
+    }),
+  ]);
+  assertEquals(merged.tokens, { "button-height": "31px", "input-radius": "3px" });
+  const css = themeCss(merged);
+  const root = css.slice(0, css.indexOf("}"));
+  assertMatch(root, /--button-height: 31px;/);
+  // On both screens: nothing of them under the dark media query.
+  assert(!css.slice(root.length).includes("--button-height"));
+  assert(!css.includes("--dialog-width"), "null takes a token out");
+  // Light's own wins over a token for both screens of the same name.
+  assertMatch(root, /--input-radius: 4px;/);
+  assert(!root.includes("--input-radius: 3px"));
+  // A value that could end the declaration is left out, as any token's.
+  const bad = themeCss(
+    themeOf([theme("c", { tokens: { "button-height": "1px; } body { x: y" } })]),
+  );
+  assert(!bad.includes("--button-height"));
+});
+
 test("Copilotz by default: its logo, Manrope for text and Space Grotesk for headings, its own", () => {
   const theme = themeOf([]);
   assertEquals(theme.logo?.mark, COPILOTZ_MARK);

@@ -16,19 +16,19 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.51   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.52   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
 `deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
 the version.
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.51"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.52"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
 too, at Copilotz's version (`npm install @copilotz/work@next`,
-`deno add jsr:@copilotz/work@^1.0.0-rc.51`): see [Product packages](#product-packages).
+`deno add jsr:@copilotz/work@^1.0.0-rc.52`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -69,9 +69,10 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/web`                         | the web host in the browser (`web`), its toolkit (`Button`, `Markdown`…), what a widget asks (`display`, `surface`, `remind`)                             |
 | `copilotz/web/words`                   | the words alone, without the toolkit: `defineWords`, `wordsOf`, `formatDate`…                                                                             |
 | `copilotz/web/pt-br`                   | `ptBR`: every word of the web front ends and the sign-in page in Brazilian Portuguese, as a plugin of the page's                                          |
-| `copilotz/web/server`                  | the page's server half: `webPage` (the page, as a plugin), `widgetsOf`                                                                                    |
+| `copilotz/web/server`                  | the page's server half: `webPage` (the page, as a plugin), `widgetsOf`, `routePage` (a route's own page in the app's look)                                |
 | `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (MCP Apps, ChatGPT)                                                                       |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                                                           |
+| `copilotz/web/export`                  | the toolkit's files without React, on a server too: `exportFile` (CSV, `.xlsx`, PDF…), `documentPdf`, Code 128's `bars`                                   |
 | `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)                                          |
 | `copilotz/terminal`                    | the terminal host, `terminal({ runtime, me })`, and its toolkit                                                                                           |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                                                                  |
@@ -89,7 +90,7 @@ same plugin, with less code in the server's memory.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.51` goes with `copilotz@1.0.0-rc.51`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.52` goes with `copilotz@1.0.0-rc.52`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.
@@ -679,11 +680,16 @@ named by the protocol it speaks. The [models page](reference/plugins/models.md) 
 ## The web's look and words
 
 - **The theme:** the web host owns a vocabulary of tokens and its defaults, which are Copilotz's
-  look. An app rebrands with a `theme` resource (`{ radius, font, logo, light, dark }`), applied
-  from the first paint. Front ends compose the host's toolkit (`Button`, `Menu`, `Dialog`,
-  `Markdown`…), and their own CSS is only layout, on the theme's variables. The default fonts are
-  served under `/assets/copilotz/`. A theme's own come from Google Fonts or from the app's
-  `page.assets`.
+  look. An app rebrands with a `theme` resource (`{ radius, font, logo, tokens, light, dark }`),
+  applied from the first paint. `tokens` are the same on light and dark screens (sizes, radii);
+  `light` and `dark` are each screen's colours. Besides the theme's own (`primary`, `border`…), each
+  toolkit piece has tokens for its sizes and surfaces (`button-height`, `table-stripe`), with
+  Copilotz's values as defaults. The default fonts are served under `/assets/copilotz/`. A theme's
+  own come from Google Fonts or from the app's `page.assets`.
+- **The toolkit:** front ends compose the host's pieces (`Button`, `DataTable`, `DateRangePicker`,
+  `Dialog`, `Stack`, `Grid`…) and write no CSS: the theme is their look. A route's own page uses
+  them too (`routePage` from `copilotz/web/server`). [The web toolkit](guides/the-web-toolkit.md)
+  shows every piece and lists every token.
 - **Words:** every word the web front ends show is English by key (`chat.send`), and an app changes
   any with a `words` resource. The keys and their English are in
   [WORDS.md](https://github.com/copilotzhq/copilotz/blob/main/hosts/web/WORDS.md). Blanks are

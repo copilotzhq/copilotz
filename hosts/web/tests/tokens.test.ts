@@ -8,11 +8,13 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { assertEquals } from "@std/assert";
 import { test } from "../../../testing/mod.ts";
 import { DEFAULT_THEME } from "../theme/default.ts";
 
-const toolkit = new URL("../toolkit/", import.meta.url).pathname;
+// A path, not the URL's: on Windows a URL's pathname is "/D:/…".
+const toolkit = fileURLToPath(new URL("../toolkit/", import.meta.url));
 const guide = readFileSync(
   new URL("../../../docs/guides/the-web-toolkit.md", import.meta.url),
   "utf8",

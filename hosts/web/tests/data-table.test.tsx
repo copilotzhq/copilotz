@@ -7,6 +7,8 @@
  * written back to it with the address's other keys.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import { tableQuery, tableState } from "../table-address.ts";
@@ -200,4 +202,37 @@ test("the address holds a table's state, beside its other keys", () => {
   );
   assertEquals(tableQuery(where, undefined, { from: undefined, to: "x" }).includes("from="), false);
   assertEquals(tableQuery({ path: "/" }), "");
+});
+
+test("detail rows: closed at first, open always (no button), or open per row", () => {
+  const some = rows.slice(0, 3);
+  const detail = (r: Row) => <b>more {r.id}</b>;
+  const base = { columns, rows: some, rowKey: (r: Row) => r.id, detail, pagination: false };
+  const closed = html(<DataTable {...base} />);
+  assertEquals(count(closed, "copilotz-table-expand"), 3);
+  assertEquals(count(closed, "<b>more"), 0);
+  const always = html(<DataTable {...base} detailOpen />);
+  assertEquals(count(always, "copilotz-table-expand"), 0);
+  assertEquals(count(always, "<b>more"), 3);
+  const some1 = html(<DataTable {...base} detailOpen={(r) => r.id === 2} />);
+  assertEquals(count(some1, "<b>more"), 1);
+  assertEquals(count(some1, 'aria-expanded="true"'), 1);
+  assertEquals(count(some1, "copilotz-table-expand"), 3);
+});
+
+test("a fixed layout is a class; the scroll box is the positioned one and cell fields shrink", () => {
+  const fixed = html(
+    <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} layout="fixed" />,
+  );
+  assertStringIncludes(fixed, "copilotz-table-grid copilotz-table-fixed");
+  assert(
+    !html(<DataTable columns={columns} rows={rows} rowKey={(r) => r.id} />).includes("-fixed"),
+  );
+  const css = readFileSync(
+    fileURLToPath(new URL("../toolkit/data-table.tsx", import.meta.url)),
+    "utf8",
+  );
+  assertStringIncludes(css, ".copilotz-table-box { position: relative; overflow-x: auto;");
+  assertStringIncludes(css, "width: 100%; min-width: 0; }");
+  assertStringIncludes(css, "table-layout: fixed");
 });

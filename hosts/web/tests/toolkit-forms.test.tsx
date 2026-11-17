@@ -9,6 +9,7 @@
  */
 import { assert, assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
@@ -21,6 +22,8 @@ import { Field } from "../toolkit/field.tsx";
 import { Icon } from "../toolkit/icon.tsx";
 import { Input } from "../toolkit/input.tsx";
 import { Menu } from "../toolkit/menu.tsx";
+import { MultiPicker, Picker } from "../toolkit/picker.tsx";
+import { Select } from "../toolkit/select.tsx";
 import { Radio } from "../toolkit/radio.tsx";
 import { Tabs } from "../toolkit/tabs.tsx";
 
@@ -214,4 +217,53 @@ test("a piece's own token always has its default where it's used; a theme's neve
       else assertEquals(comma, ",", `${piece}: --${name} is used without its default`);
     }
   }
+});
+
+test("selects and pickers take addons as an Input does; a field's controlWidth is a share of the row", () => {
+  const sel = html(
+    <Select addon="$" addonEnd="USD" className="wide" size="sm">
+      <option>a</option>
+    </Select>,
+  );
+  assertMatch(
+    sel,
+    /^<span class="copilotz-input-group copilotz-input-group-sm wide"><span class="copilotz-input-addon">\$<\/span><span class="copilotz-select copilotz-select-sm"><select>/,
+  );
+  assertStringIncludes(sel, '<span class="copilotz-input-addon">USD</span></span>');
+  assert(
+    !html(
+      <Select>
+        <option>a</option>
+      </Select>,
+    ).includes("copilotz-input-group"),
+  );
+  const pick = html(
+    <Picker
+      label="Mode"
+      value="a"
+      options={[{ value: "a", label: "A" }]}
+      onChange={() => {}}
+      addon="#"
+    />,
+  );
+  assertStringIncludes(
+    pick,
+    '<span class="copilotz-input-group"><span class="copilotz-input-addon">#</span><button',
+  );
+  const many = html(
+    <MultiPicker
+      label="Modes"
+      values={[]}
+      options={[]}
+      onChange={() => {}}
+      addonEnd="x"
+      className="k"
+    />,
+  );
+  assertMatch(many, /^<span class="copilotz-input-group k"><button[^>]*class="copilotz-picker"/);
+  assert(many.endsWith('<span class="copilotz-input-addon">x</span></span>'));
+
+  const css = readFileSync(fileURLToPath(new URL("../toolkit/field.tsx", import.meta.url)), "utf8");
+  assertStringIncludes(css, "minmax(0, var(--field-row-control-width, 1fr))");
+  assert(!css.includes("max-width: var(--field-row-control-width"));
 });

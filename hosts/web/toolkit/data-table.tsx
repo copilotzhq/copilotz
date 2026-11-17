@@ -17,7 +17,9 @@
  *
  * A click on a row ticks it (not on a link, button or field in it); `actions`
  * are given the ticked rows' keys, and a way to clear them. `detail` opens a
- * row under each one, by a button at its start. The export takes the
+ * row under each one, by a button at its start (`detailOpen`: open at first, or
+ * always, with no button). `layout="fixed"` shares the width by the columns'
+ * `width`s; fields in cells fill their column. The export takes the
  * visible columns of the rows shown, or of every row that matches
  * (`exportAll`), into `<exportName>.<extension>` (see `export.ts`).
  *
@@ -94,7 +96,7 @@ const SHEET = sheet(
   .copilotz-table-tools { flex: 1 1 100%; }
   .copilotz-table-search { flex: 1 1 auto; width: auto; }
 }
-.copilotz-table-box { overflow-x: auto; border: 1px solid ${LINE}; border-radius: var(--table-radius, var(--radius-lg));
+.copilotz-table-box { position: relative; overflow-x: auto; border: 1px solid ${LINE}; border-radius: var(--table-radius, var(--radius-lg));
   background: var(--table-background, var(--card)); }
 .copilotz-table-grid { width: 100%; margin: 0; border-collapse: separate; border-spacing: 0;
   color: var(--card-foreground); line-height: 1.45; }
@@ -106,6 +108,11 @@ const SHEET = sheet(
   background: var(--table-head-background, color-mix(in oklab, var(--muted) 70%, var(--card)));
   color: var(--table-head-foreground, var(--muted-foreground)); font-size: var(--table-head-font-size, 12.5px);
   font-weight: var(--table-head-font-weight, 600); white-space: nowrap; vertical-align: bottom; }
+.copilotz-table-fixed { table-layout: fixed; }
+/* Fields in cells fill their column and shrink with it (a Select's minimum goes too). */
+.copilotz-table-grid td :is(.copilotz-input, .copilotz-input-group, .copilotz-select, .copilotz-picker,
+  .copilotz-textarea, .copilotz-tags-input, .copilotz-file-input) { box-sizing: border-box; width: 100%; min-width: 0; }
+.copilotz-table-grid td :is(.copilotz-select, .copilotz-picker) { min-width: 0; }
 .copilotz-table-grid thead th.copilotz-table-sortable { padding: 0; }
 .copilotz-table-sort { display: flex; align-items: center; gap: 4px; width: 100%; margin: 0; padding: ${CELL};
   border: 0; background: none; color: inherit; font: inherit; text-align: inherit; cursor: pointer; }
@@ -217,6 +224,16 @@ export function DataTable<R>(props: {
   footer?: ReactNode;
   /** A row under each one, shown by a button at its start. */
   detail?(row: R): ReactNode;
+  /**
+   * Whether the `detail` rows are open at first: `true` shows them always (no button), or a
+   * function says per row (the button still closes and opens it).
+   */
+  detailOpen?: boolean | ((row: R) => boolean);
+  /**
+   * The table's layout: `"auto"` (the browser shares the width out by content) or `"fixed"`
+   * (by the columns' `width`s, the rest shared evenly; cells never widen their column).
+   */
+  layout?: "auto" | "fixed";
   /** The toolbar, and the pages under the rows (both, by default). */
   toolbar?: boolean;
   pagination?: boolean;
@@ -303,7 +320,9 @@ export function DataTable<R>(props: {
         ? EXPORT_FORMATS.find((f) => f.format === choice) ?? { format: choice, label: choice }
         : choice
     );
-  const span = visible.length + (selectable ? 1 : 0) + (props.detail ? 1 : 0);
+  const always = props.detailOpen === true;
+  const toggles = !!props.detail && !always;
+  const span = visible.length + (selectable ? 1 : 0) + (toggles ? 1 : 0);
   const cellClass = (column: Column<R>) =>
     cx(
       ALIGN[column.align ?? "left"],
@@ -400,13 +419,13 @@ export function DataTable<R>(props: {
       <div className="copilotz-table-box">
         <table
           id={props.id}
-          className="copilotz-table-grid"
+          className={cx("copilotz-table-grid", props.layout === "fixed" && "copilotz-table-fixed")}
           aria-label={props.label}
           aria-busy={props.loading || undefined}
         >
           <thead>
             <tr>
-              {props.detail
+              {toggles
                 ? (
                   <th className="copilotz-table-control" scope="col">
                     <span className="copilotz-sr">{say("showDetails")}</span>
@@ -489,7 +508,11 @@ export function DataTable<R>(props: {
               : page.map((row, index) => {
                 const key = rowKey(row);
                 const on = selected.includes(key);
-                const open = !!props.detail && opened.includes(key);
+                const firstOpen = typeof props.detailOpen === "function"
+                  ? props.detailOpen(row)
+                  : always;
+                // `opened` holds the rows the user turned from how they began.
+                const open = !!props.detail && (always || firstOpen !== opened.includes(key));
                 const detailId = `${base}-detail-${index}`;
                 return (
                   <Fragment key={key}>
@@ -503,7 +526,7 @@ export function DataTable<R>(props: {
                         if (selectable && !ownClick(event)) tick(key, !on);
                       }}
                     >
-                      {props.detail
+                      {toggles
                         ? (
                           <td className="copilotz-table-control">
                             <button

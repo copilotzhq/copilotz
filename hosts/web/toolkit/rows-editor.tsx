@@ -4,7 +4,9 @@
  * the row, its place, and `set`, which changes it. Each row is numbered
  * ("Row 1", or the app's `rowLabel`) and has two buttons after it: one adds
  * a row after it, and one takes it out. "Add a row" at the end adds one
- * there, and with no rows it's all there is. `make()` is a new row. `min`
+ * there, and with no rows it's all there is. `add={false}` has neither (the rows are
+ * the app's to make); `removeIcon` and `removeLabel` change the remove button's
+ * icon and words. `make()` is a new row. `min`
  * and `max` bound how many rows there are: the buttons that would pass them
  * are disabled. A row's `error` (a function of the row) shows under its
  * fields and names the row's fields as invalid.
@@ -31,6 +33,7 @@ import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Button } from "./button.tsx";
 import { cx } from "./cx.ts";
 import { IconButton } from "./icon-button.tsx";
+import type { IconLike } from "./icon.tsx";
 import {
   canAdd,
   canRemove,
@@ -90,6 +93,9 @@ export function RowsEditor<R>(
     max,
     label,
     addLabel,
+    add: adds = true,
+    removeIcon = "trash",
+    removeLabel,
     className,
   }: {
     rows: readonly R[];
@@ -112,6 +118,12 @@ export function RowsEditor<R>(
     label?: string;
     /** The add button's words ("Add a row" by default). */
     addLabel?: string;
+    /** The buttons that add a row, one after each row and "Add a row" at the end (yes). */
+    add?: boolean;
+    /** The remove button's icon (a trash). */
+    removeIcon?: IconLike;
+    /** The remove button's words, said to screen readers: fixed, or from the row ("Remove row 1"). */
+    removeLabel?: string | ((row: R, index: number) => string);
     className?: string;
   },
 ): ReactNode {
@@ -153,7 +165,7 @@ export function RowsEditor<R>(
     onChange(replaceAt(rows, index, row));
   };
 
-  const more = canAdd(rows.length, max);
+  const more = adds && canAdd(rows.length, max);
   const fewer = canRemove(rows.length, min);
   return (
     <div ref={box} className={cx("copilotz-rows", className)} role="group" aria-label={label}>
@@ -183,17 +195,23 @@ export function RowsEditor<R>(
                     {render(row, i, set(i))}
                   </div>
                   <div className="copilotz-rows-actions">
+                    {adds
+                      ? (
+                        <IconButton
+                          icon="plus"
+                          size="sm"
+                          label={say("addRowAfter", { row: i + 1 })}
+                          disabled={!more}
+                          onClick={() => add(i)}
+                        />
+                      )
+                      : null}
                     <IconButton
-                      icon="plus"
+                      icon={removeIcon}
                       size="sm"
-                      label={say("addRowAfter", { row: i + 1 })}
-                      disabled={!more}
-                      onClick={() => add(i)}
-                    />
-                    <IconButton
-                      icon="trash"
-                      size="sm"
-                      label={say("removeRow", { row: i + 1 })}
+                      label={typeof removeLabel === "function"
+                        ? removeLabel(row, i)
+                        : removeLabel ?? say("removeRow", { row: i + 1 })}
                       disabled={!fewer}
                       onClick={() => remove(i)}
                     />

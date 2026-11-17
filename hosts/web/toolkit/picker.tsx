@@ -11,6 +11,10 @@
  * `MultiPicker` stays open to tick more). Given a `name`, the choice goes
  * with a form, as a hidden field (several, for a `MultiPicker`).
  *
+ * `addon` and `addonEnd` join words, a glyph or a control to either side, as the
+ * Input's do (`className` is then the group's). In a table cell the button fills
+ * the cell and has no minimum width.
+ *
  * ```tsx
  * <Picker label="Register mode" value={mode} onChange={setMode}
  *   options={[{ value: "sale", label: "Sale" }, { value: "return", label: "Return" }]} />
@@ -21,6 +25,7 @@
 import { type ReactNode, type Ref, useEffect, useRef, useState } from "react";
 import { cx } from "./cx.ts";
 import { Icon } from "./icon.tsx";
+import { AddonGroup } from "./input.tsx";
 import { Popover, type PopoverTrigger } from "./popover.tsx";
 import { sheet } from "./sheet.tsx";
 import { say } from "./words.ts";
@@ -101,7 +106,11 @@ type Common<T extends string> = {
   side?: "top" | "bottom";
   align?: "start" | "end";
   disabled?: boolean;
-  /** The button's class. */
+  /** Before the button, joined to it: words, a glyph or a control. */
+  addon?: ReactNode;
+  /** After the button, joined to it. */
+  addonEnd?: ReactNode;
+  /** The button's class, or the group's when it has addons. */
   className?: string;
 };
 
@@ -244,6 +253,8 @@ export function Picker<T extends string>(
     side,
     align,
     disabled,
+    addon,
+    addonEnd,
     className,
   }:
     & Common<T>
@@ -255,46 +266,59 @@ export function Picker<T extends string>(
     },
 ): ReactNode {
   const list = useRef<HTMLUListElement | null>(null);
+  const grouped = addon !== undefined || addonEnd !== undefined;
+  const join = (node: ReactNode) =>
+    grouped
+      ? (
+        <AddonGroup addon={addon} addonEnd={addonEnd} size={size} className={className}>
+          {node}
+        </AddonGroup>
+      )
+      : node;
   const chosen = options.find((o) => o.value === value);
   return (
     <>
       {SHEET}
-      <Popover
-        label={label}
-        side={side}
-        align={align ?? "start"}
-        className="copilotz-picker-menu"
-        trigger={(opener) => (
-          <Trigger
-            opener={opener}
+      {join(
+        <>
+          <Popover
             label={label}
-            text={chosen?.label ?? placeholder ?? ""}
-            empty={!chosen}
-            id={id}
-            size={size}
-            disabled={disabled}
-            className={className}
-            list={list}
-            search={search}
-          />
-        )}
-      >
-        {(close) => (
-          <Options
-            label={label}
-            options={options}
-            search={search}
-            chosen={value === undefined ? [] : [value]}
-            multiple={false}
-            list={list}
-            onPick={(picked) => {
-              close();
-              if (picked !== value) onChange(picked);
-            }}
-          />
-        )}
-      </Popover>
-      {name && value !== undefined ? <input type="hidden" name={name} value={value} /> : null}
+            side={side}
+            align={align ?? "start"}
+            className="copilotz-picker-menu"
+            trigger={(opener) => (
+              <Trigger
+                opener={opener}
+                label={label}
+                text={chosen?.label ?? placeholder ?? ""}
+                empty={!chosen}
+                id={id}
+                size={size}
+                disabled={disabled}
+                className={grouped ? undefined : className}
+                list={list}
+                search={search}
+              />
+            )}
+          >
+            {(close) => (
+              <Options
+                label={label}
+                options={options}
+                search={search}
+                chosen={value === undefined ? [] : [value]}
+                multiple={false}
+                list={list}
+                onPick={(picked) => {
+                  close();
+                  if (picked !== value) onChange(picked);
+                }}
+              />
+            )}
+          </Popover>
+          {name && value !== undefined ? <input type="hidden" name={name} value={value} /> : null}
+        </>,
+      )}
     </>
   );
 }
@@ -314,6 +338,8 @@ export function MultiPicker<T extends string>(
     side,
     align,
     disabled,
+    addon,
+    addonEnd,
     className,
   }:
     & Common<T>
@@ -325,6 +351,15 @@ export function MultiPicker<T extends string>(
     },
 ): ReactNode {
   const list = useRef<HTMLUListElement | null>(null);
+  const grouped = addon !== undefined || addonEnd !== undefined;
+  const join = (node: ReactNode) =>
+    grouped
+      ? (
+        <AddonGroup addon={addon} addonEnd={addonEnd} size={size} className={className}>
+          {node}
+        </AddonGroup>
+      )
+      : node;
   const picked = options.filter((o) => values.includes(o.value));
   const text = picked.length === 0
     ? none ?? say("noneChosen")
@@ -334,40 +369,44 @@ export function MultiPicker<T extends string>(
   return (
     <>
       {SHEET}
-      <Popover
-        label={label}
-        side={side}
-        align={align ?? "start"}
-        className="copilotz-picker-menu"
-        trigger={(opener) => (
-          <Trigger
-            opener={opener}
+      {join(
+        <>
+          <Popover
             label={label}
-            text={text}
-            empty={picked.length === 0}
-            id={id}
-            size={size}
-            disabled={disabled}
-            className={className}
-            list={list}
-            search={search}
-          />
-        )}
-      >
-        <Options
-          label={label}
-          options={options}
-          search={search}
-          chosen={values}
-          multiple
-          list={list}
-          onPick={(value) =>
-            onChange(
-              values.includes(value) ? values.filter((v) => v !== value) : [...values, value],
+            side={side}
+            align={align ?? "start"}
+            className="copilotz-picker-menu"
+            trigger={(opener) => (
+              <Trigger
+                opener={opener}
+                label={label}
+                text={text}
+                empty={picked.length === 0}
+                id={id}
+                size={size}
+                disabled={disabled}
+                className={grouped ? undefined : className}
+                list={list}
+                search={search}
+              />
             )}
-        />
-      </Popover>
-      {name ? values.map((v) => <input key={v} type="hidden" name={name} value={v} />) : null}
+          >
+            <Options
+              label={label}
+              options={options}
+              search={search}
+              chosen={values}
+              multiple
+              list={list}
+              onPick={(value) =>
+                onChange(
+                  values.includes(value) ? values.filter((v) => v !== value) : [...values, value],
+                )}
+            />
+          </Popover>
+          {name ? values.map((v) => <input key={v} type="hidden" name={name} value={v} />) : null}
+        </>,
+      )}
     </>
   );
 }

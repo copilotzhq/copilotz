@@ -31,8 +31,10 @@ Name a collection in the `shared` resource first, and the access plugin's rules 
 document lives `in` a space, and reads and writes reach only what the actor reaches. `part` ties a
 document to another one, as a booking to the chat it was made in
 (`shared: { booking: { part: "thread" } }`). For anything else, a plugin declares a `guard` (in its
-`plugin.ts`), which returns the filter an actor's documents must match: one function answering for
-each collection it rules, its larger parts in `lib/guards/<collection>.ts`.
+`plugin.ts`), which returns the filter an actor's documents must match:
+`byCollection({ sale: …, item: … })`, a rule per collection it rules, its larger rules in
+`lib/guards/<collection>.ts`. A rule knows which write it's asked about (`write`: `"insert"`,
+`"update"`, `"replace"` or `"delete"`), so it can let people add documents but not delete them.
 
 Don't write `find({ owner: ctx.actor.id })` as access control in an Action or a View. It holds only
 on that one path. The REST API, the socket, a View or another plugin's Action reads the collection

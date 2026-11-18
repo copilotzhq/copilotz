@@ -220,6 +220,8 @@ export const tools = {
       return { task: insertedId };
     },
   }),
+  // An Action, as a tool: its description and input are the Action's.
+  complete_task: { action: "task.complete" },
 };
 ```
 
@@ -231,6 +233,7 @@ import { defineAction, failure, people } from "copilotz";
 
 /** Done once, by whoever reaches the task: a rule the schema can't say, so an Action. */
 export const complete = defineAction({
+  description: "Marks a task done, once",
   input: { type: "object", properties: { task: { type: "string" } }, required: ["task"] },
   allow: people,
   run: async (ctx, { task }) => {
@@ -277,7 +280,12 @@ export const shared = { task: {} };
 
 ```ts
 export const agents = {
-  helper: { default: true, instructions: "Keep tasks.", model: "helper", tools: ["add_task"] },
+  helper: {
+    default: true,
+    instructions: "Keep tasks.",
+    model: "helper",
+    tools: ["add_task", "complete_task"],
+  },
 };
 ```
 
@@ -436,8 +444,29 @@ for (const plugin of [tasks]) {
 }
 ```
 
+And one that holds the app's plugins to their boundaries (`copilotz/testing`'s `boundaries`: one
+imports another only through its `contract.ts`, and only one it `requires`),
+`tests/boundaries.test.ts`:
+
+```ts
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { boundaries } from "copilotz/testing";
+import { plugins } from "../app.ts";
+
+test("each plugin imports another only through its contract, and requires it", () => {
+  assert.deepEqual(
+    boundaries({ root: new URL("../plugins/", import.meta.url), plugins: plugins() }),
+    [],
+  );
+});
+```
+
 ## Rules: do this, not that
 
+- **A tool can be an Action, by name:** `tools: { complete_task: { action: "task.complete" } }`
+  offers the model the Action's description and input, and calls it as the agent; don't write its
+  schema twice. A tool that only saves writes the collection (`ctx.db`).
 - **Plain saves are collection writes.** A screen's handler writes with its View's collections
   (`ctx.db.collection("customer").insertOne(…)`, `updateOne`, `deleteOne`), a tool with `ctx.db`, a
   script with `connect()`'s `db`, REST at `/api/collections/<name>`. Each writes as its caller,
@@ -450,9 +479,11 @@ for (const plugin of [tasks]) {
 - **Rules at the data, `shared` first.** Name a collection in the `shared` resource: its documents
   live `in` a space (`field` says where else), `part` ties one to another document (a booking to its
   chat), `write: "manage"` keeps writes to managers. What `shared` can't say goes in the plugin's
-  `guard` (in `plugin.ts`): one function that answers for each collection it rules
-  (`collection === "sale" ? { store: … } : undefined`), its larger parts in
-  `lib/guards/<collection>.ts`. Don't filter by who's asking inside an Action.
+  `guard` (in `plugin.ts`): `byCollection({ sale: …, item: … })`, a rule for each collection it
+  rules and none for any other, its larger rules in `lib/guards/<collection>.ts`. A rule knows which
+  write it's asked about (`write`: `"insert"`, `"update"`, `"replace"` or `"delete"`), so it can let
+  people add and change documents but not delete them. Don't filter by who's asking inside an
+  Action.
 - **A schema says what a document is, and every write keeps to it.** Name each field and its type,
   say what's required, and close it (`additionalProperties: false`). Inserts and replaces are
   checked; so are updates, as MongoDB's `$jsonSchema` validator checks them: what `$set` gives must
@@ -602,7 +633,10 @@ token. Read both before the first screen.
   `error`. An Action's own rule throws `failure("invalid", "Give the name.", { public: true })`,
   with `detail: { field }` when it's about one field (`Object.assign(failure(…), { detail })`), and
   the form shows it at its top or by its field. An Action's `input` schema's messages are for
-  developers. A dialog closes only after the save, or the Action, answered.
+  developers, so a form says each field's refusal its own way (`{ name: "Give the name." }`, by
+  `detail.field`), and the schema's text where it has none. A record whose fields the server sets
+  (who made it, when, a number in a sequence) keeps an Action: a browser's View doesn't know who's
+  looking. A dialog closes only after the save, or the Action, answered.
 
 **Toolkit first.**
 

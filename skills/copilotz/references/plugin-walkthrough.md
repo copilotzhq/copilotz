@@ -165,6 +165,7 @@ import { defineAction, failure, people } from "copilotz";
 
 /** Done once, by whoever reaches the task: a rule the schema can't say, so an Action. */
 export const complete = defineAction({
+  description: "Marks a task done, once",
   input: { type: "object", properties: { task: { type: "string" } }, required: ["task"] },
   allow: people,
   run: async (ctx, { task }) => {
@@ -187,12 +188,14 @@ a browser's socket, a View's handler) in the `guard`, in `plugin.ts`. Copilotz's
 documents do the same:
 
 ```ts
-guard: (_actor, { collection, access, direct }) => {
-  if (collection === "task" && direct && access === "write") {
-    throw failure("forbidden", "Tasks change through their Actions.", { public: true });
-  }
-  return undefined; // no rule of its own: the access plugin's `shared` rule still holds
-},
+guard: byCollection({
+  task: (_actor, { access, direct }) => {
+    if (direct && access === "write") {
+      throw failure("forbidden", "Tasks change through their Actions.", { public: true });
+    }
+    return undefined; // no rule of its own: the access plugin's `shared` rule still holds
+  },
+}),
 ```
 
 ## 4. Views: what people and the model read

@@ -76,7 +76,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)                                          |
 | `copilotz/terminal`                    | the terminal host, `terminal({ runtime, me })`, and its toolkit                                                                                           |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                                                                  |
-| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`, `openTo`, `createWorker`…                               |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`, `openTo`, `boundaries`, `createWorker`…                 |
 | `copilotz/testing/words`               | testing a front end's words (`pseudoWords`, `englishLeft`), and listing them (`wordsList`)                                                                |
 | `copilotz/describe`                    | `describe(plugin)`: what a plugin declares, as JSON                                                                                                       |
 
@@ -300,7 +300,7 @@ types its documents and queries from the schema.
 | Field        | What it does                                                                                |
 | ------------ | ------------------------------------------------------------------------------------------- |
 | `schema`     | the JSON Schema every write keeps to: inserts, replaces, and what updates set and leave     |
-| `queries`    | named reads: a function, or `{ allow, run }` to let actors run it from outside              |
+| `queries`    | named reads: a function, or `{ allow, description?, input?, run }` for actors from outside  |
 | `vectors`    | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
 | `indexes`    | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
 | `private`    | fields only trusted code reads: an actor's queries and Views get the documents without them |
@@ -458,11 +458,15 @@ REST API at `/api/`) and plugins' routes. Hosts only listen: `Deno.serve(runtime
 
 ### Rules: `guard` and `labels`
 
-- **`guard(actor, { collection, access, filter, direct? }, ctx)`** returns the filter an actor's
-  documents must match. Reads and deletes reach only what matches it. Inserts, and what updates
-  leave, must match it. `true` restricts nothing, and `undefined` means the collection has no rule.
-  The owner asks it on every op an actor's work makes. A collection no rule speaks for never reaches
-  an outsider's own reads and writes (REST, the socket).
+- **`guard(actor, { collection, access, write?, filter, direct? }, ctx)`** returns the filter an
+  actor's documents must match. Reads and deletes reach only what matches it. Inserts, and what
+  updates leave, must match it. `true` restricts nothing, and `undefined` means the collection has
+  no rule. `write` says which write it's asked about (`"insert"`, `"update"`, `"replace"`,
+  `"delete"`); a rule may throw to refuse one. The owner asks it on every op an actor's work makes.
+  A collection no rule speaks for never reaches an outsider's own reads and writes (REST, the
+  socket, a View's handler).
+- **`byCollection({ sale: …, item: … })`** makes a plugin's guard of a rule per collection,
+  answering nothing (`undefined`) for any other.
 - **`labels`** carries what a job read (a document's space) to what it then writes, so an answer
   drawn from a space not everyone sees is marked. Work done for someone from their own Personal
   space carries nothing: it's theirs.
@@ -537,17 +541,18 @@ The others are narrower:
 const runtime = await createRuntime({ store, plugins });
 ```
 
-| Option      | What it sets                                                                                   |
-| ----------- | ---------------------------------------------------------------------------------------------- |
-| `store`     | where it keeps everything: memory, SQLite or PostgreSQL                                        |
-| `plugins`   | the app: a list of plugins, which may nest                                                     |
-| `blobs`     | where large values live (the store, by default); `blobThreshold`: past how many bytes (16 KiB) |
-| `cache`     | the owner's read cache (`{ documents, queries }`), or `false`                                  |
-| `executors` | executors in this process (1); `transports` and `key` for others to connect                    |
-| `metrics`   | where it records metrics (`createMetrics`)                                                     |
-| `clock`     | what timers run on: the system's, or `manualClock(start)` in tests                             |
-| `fetch`     | what `ctx.fetch` calls outside services with                                                   |
-| `browsers`  | how much browsers may hold: sockets, tickets a minute, contacts' together                      |
+| Option      | What it sets                                                                                                                      |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `store`     | where it keeps everything: memory, SQLite or PostgreSQL                                                                           |
+| `plugins`   | the app: a list of plugins, which may nest                                                                                        |
+| `blobs`     | where large values live (the store, by default); `blobThreshold`: past how many bytes (16 KiB)                                    |
+| `warn`      | what's told at startup of what looks wrong (a schema naming no fields…): the console by default, once a message; `false`, nothing |
+| `cache`     | the owner's read cache (`{ documents, queries }`), or `false`                                                                     |
+| `executors` | executors in this process (1); `transports` and `key` for others to connect                                                       |
+| `metrics`   | where it records metrics (`createMetrics`)                                                                                        |
+| `clock`     | what timers run on: the system's, or `manualClock(start)` in tests                                                                |
+| `fetch`     | what `ctx.fetch` calls outside services with                                                                                      |
+| `browsers`  | how much browsers may hold: sockets, tickets a minute, contacts' together                                                         |
 
 | Method                                              | What it does                                                                      |
 | --------------------------------------------------- | --------------------------------------------------------------------------------- |

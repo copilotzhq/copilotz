@@ -39,6 +39,22 @@ Updates keep to the schema on every store, as MongoDB's do.
   that field), and the error is about the innermost value that failed. A write from outside (REST,
   the socket, a View's handler) says it to its caller as a public failure, so a `Form` shows it by
   its field; REST's error body carries `detail` for a public failure.
+- **A guard knows which write it's asked about** (`write`: `"insert"`, `"update"`, `"replace"`,
+  `"delete"`), so a rule can let people add and change documents but not delete them.
+  `byCollection({ sale: …, item: … })` makes a plugin's guard of a rule per collection.
+- **A query says what it answers and what its params are** (`description`, `input`): callers from
+  outside are held to its input, as an Action's are, and `GET /api/` and `describe()` list both.
+  `describe()` lists a collection's `validation` too (the format is the same).
+- **A chat tool can be an Action, by name**
+  (`tools: { complete_task: { action: "task.complete" }
+  }`): offered with the Action's description
+  and input, called as the agent. Read contexts and Views can `describe()` the app, as Actions do.
+- **Startup says what looks wrong** (`warn`: the console by default, once a message; `false` for
+  none): a collection whose schema names no fields, and one another plugin's `shared` rule alone
+  opens to outsiders. An unknown Action, collection or query is refused naming the closest known
+  one.
+- **`boundaries({ root, plugins })`** (`copilotz/testing`): what breaks an app's plugin boundaries
+  (another plugin's code imported, or a contract of one not required), for an app's test.
 - **`validation: "moderate"` on a collection**, as MongoDB's `validationLevel`: updates are checked
   only on documents that were valid, for a collection whose older documents predate its schema.
   Inserts and replaces are always checked.

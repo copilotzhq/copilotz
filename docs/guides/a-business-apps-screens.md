@@ -572,8 +572,18 @@ import { Button, DatePicker, Dialog, Field, Form, Input, Stack, toast } from "co
 import { type ReactNode, useState } from "react";
 import type { Customer } from "../../contract.ts";
 
-/** A refusal as `ctx.call` rejects with it: its words, and the field it's about, if any. */
+/** A refusal as a save or `ctx.call` rejects with it: its words, and the field it's about, if any. */
 type Refused = { message: string; detail?: { field?: string } };
+
+/**
+ * What the form says of a field the schema refuses: the schema names the field, in words for
+ * developers; these are the words for people.
+ */
+const SAYS: Record<string, string> = {
+  name: "Give the customer's name.",
+  email: "That email address isn't complete.",
+  since: "Give the day they first came.",
+};
 
 /** The customer's form: a React component, so it keeps what's typed (a View can't). */
 export function CustomerForm({ customer, today, dayFormat, save, close, visits }: {
@@ -586,7 +596,8 @@ export function CustomerForm({ customer, today, dayFormat, save, close, visits }
 }): ReactNode {
   const [since, setSince] = useState(customer?.since ?? today);
   const [refused, setRefused] = useState<Refused>();
-  const errorOf = (field: string) => refused?.detail?.field === field ? refused.message : undefined;
+  const errorOf = (field: string) =>
+    refused?.detail?.field === field ? SAYS[field] ?? refused.message : undefined;
   return (
     <Dialog
       open
@@ -1042,8 +1053,13 @@ export function VisitForm({ visit, customers, now, timeZone, dayTimeFormat, save
 }
 ```
 
+A visit is more than a save, so it keeps an Action: it checks the customer is there, copies their
+name onto the visit (a field the server sets, which a browser's View can't), and turns the price
+into cents. A record whose fields the server sets (who made it, when, a number in a sequence) keeps
+its Action the same way.
+
 ```ts
-// plugins/visits/actions.ts
+// plugins/visits/actions/save.ts
 import { defineAction, failure, people } from "copilotz";
 
 const refuse = (message: string) => failure("invalid", message, { public: true });
@@ -1237,8 +1253,11 @@ Don't add `keydown` listeners to the document.
 `blob:` address (`URL.createObjectURL`), with `initial={false}` for an empty box when there's none.
 Sending it is the Action's: the form reads the file as a `data:` address and passes it in the input.
 
+The picture is private (only trusted code reads or writes it, and no event holds it), so a service
+is saved by an Action, which outsiders' writes, a View's included, can't do.
+
 ```ts
-// plugins/services/actions.ts
+// plugins/services/actions/save.ts
 import { defineAction, failure, people } from "copilotz";
 
 /** A picture as the form sends it: a PNG, JPEG or WebP `data:` address, 1 MB or so at most. */

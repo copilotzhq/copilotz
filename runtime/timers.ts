@@ -13,7 +13,7 @@
 import type { ActionDef } from "./define.ts";
 import type { Metrics } from "./metrics.ts";
 import { type Op, outcome, type StoreOp, type WriteOp } from "./ops.ts";
-import { compile, invalid } from "./registry.ts";
+import { compile, invalid, unknown } from "./registry.ts";
 import {
   backoff,
   type Clock,
@@ -285,7 +285,7 @@ export function createTimers(options: {
       if (op.op === "unschedule") {
         return { op: "delete", collection: TIMERS, filter: { _id: op.timer }, options: {} };
       }
-      if (!actions[op.call]) throw invalid(`Unknown action "${op.call}"`);
+      if (!actions[op.call]) throw unknown("action", op.call, Object.keys(actions));
       if ((op.when as { once?: unknown }).once !== undefined) {
         throw invalid("`once` is a declared schedule's: a one-off at a time takes `at`");
       }

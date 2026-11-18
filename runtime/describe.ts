@@ -44,7 +44,7 @@ import type {
   ViewDef,
 } from "./define.ts";
 import { contacts, inPerson, people, peopleOrContacts } from "./errors.ts";
-import { merge, patch } from "./registry.ts";
+import { merge, patch, says } from "./registry.ts";
 import type { ScheduleDef, SchedulePatch } from "./schedules.ts";
 import type { Actor, Filter } from "./store.ts";
 
@@ -827,12 +827,6 @@ function needsOf(
 // Listing
 
 /** Whether a schema says anything about its documents' fields. */
-const says = (schema: unknown): boolean =>
-  plain(schema) &&
-  (plain(schema.properties) && Object.keys(schema.properties).length > 0 ||
-    ["anyOf", "oneOf", "allOf"].some((key) => Array.isArray(schema[key])) ||
-    plain(schema.additionalProperties) || plain(schema.patternProperties));
-
 const opened = (callers?: Callers) => !!callers && callers.anonymous !== "no";
 
 /**

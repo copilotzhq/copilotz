@@ -128,6 +128,8 @@ export type Registry = {
   checks: { name: string; check: NonNullable<Plugin["check"]> }[];
   /** Who reaches what: every plugin's rules, which restrict together. */
   guards: Guard[];
+  /** What looks wrong at startup, though the app runs (see `warningsOf`): logged once. */
+  warnings: string[];
   /** What reads reveal to writes: the last plugin's. */
   labels?: Labels;
   /** Kinds of worker, by name. */
@@ -159,6 +161,87 @@ export function patch(target: unknown, value: unknown): unknown {
   return out;
 }
 
+/** Whether a schema says what its documents hold: fields, or the shapes they may take. */
+export const says = (schema: unknown): boolean =>
+  plain(schema) &&
+  (plain(schema.properties) && Object.keys(schema.properties).length > 0 ||
+    ["anyOf", "oneOf", "allOf"].some((key) => Array.isArray(schema[key])) ||
+    plain(schema.additionalProperties) || plain(schema.patternProperties));
+
+/**
+ * What looks wrong, though the app runs: a collection whose schema names no
+ * fields (its documents may hold anything, and writes check nothing); one
+ * that another plugin's `shared` rule alone opens to outsiders (its own
+ * plugin says nothing of who may reach it). A guard can't be read without
+ * running it, so only `shared` entries are looked at.
+ */
+function warningsOf(
+  plugins: Plugin[],
+  registry: Registry,
+  declaredBy: Map<string, Plugin>,
+): string[] {
+  const out: string[] = [];
+  for (const [name, def] of Object.entries(registry.collections)) {
+    if (!says(def.schema)) {
+      out.push(
+        `Collection "${name}" (${declaredBy.get(name)?.name}) has a schema that names no fields: ` +
+          "its documents may hold anything, and writes check nothing. Name its fields.",
+      );
+    }
+  }
+  const sharedOf = (p: Plugin) =>
+    plain(p.resources?.shared) ? Object.keys(p.resources.shared as object) : [];
+  for (const other of plugins) {
+    for (const name of sharedOf(other)) {
+      const own = declaredBy.get(name);
+      if (!own || own === other || own.guard || sharedOf(own).includes(name)) continue;
+      out.push(
+        `Collection "${name}" (${own.name}) is opened to outsiders by ${other.name}'s ` +
+          `"shared" rule alone: say who reaches it in ${own.name}.`,
+      );
+    }
+  }
+  return out;
+}
+
+/** Every named query, as `collection.query`. */
+export const queriesOf = (registry: Pick<Registry, "collections">): string[] =>
+  Object.entries(registry.collections).flatMap(([name, def]) =>
+    Object.keys(def.queries ?? {}).map((query) => `${name}.${query}`)
+  );
+
+/** An unknown name refused, with the closest known one when there's one near it. */
+export function unknown(kind: string, name: string, known: Iterable<string>): Error {
+  const near = closest(name, known);
+  return invalid(`Unknown ${kind} "${name}"${near ? ` (did you mean "${near}"?)` : ""}`);
+}
+
+/** The known name nearest `name`, within two edits (a quarter of a long name's letters). */
+export function closest(name: string, known: Iterable<string>): string | undefined {
+  let best: string | undefined;
+  let score = Infinity;
+  for (const candidate of known) {
+    const d = distance(name, candidate);
+    if (d < score) [best, score] = [candidate, d];
+  }
+  return best !== undefined && score <= Math.max(2, Math.floor(name.length / 4)) ? best : undefined;
+}
+
+/** Levenshtein distance. */
+function distance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const was = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = was;
+    }
+  }
+  return row[b.length];
+}
+
 /**
  * Plugins merge in order. Collections, Actions and Processors are unique: two
  * of one name are a mistake. Everything else is configuration a later plugin
@@ -181,6 +264,7 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     schedules: {},
     checks: [],
     guards: [],
+    warnings: [],
     workers: {},
     routes: {},
     whos: [],
@@ -202,10 +286,13 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
       else target[name] = value;
     }
   };
+  // Which plugin declared each collection, for the warnings below.
+  const declaredBy = new Map<string, Plugin>();
   for (const plugin of plugins) {
     for (const [name, def] of Object.entries(plugin.collections ?? {})) {
       if ("schema" in def) {
         into(registry.collections, { [name]: def }, "collection");
+        declaredBy.set(name, plugin);
         continue;
       }
       // A patch: indexes on a collection an earlier plugin declared (its definition stays as it is).
@@ -273,6 +360,7 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     if (missing.length) throw invalid(`${plugin.name} needs ${missing.join(", ")}: add it too`);
   }
   registry.checks = plugins.flatMap((p) => p.check ? [{ name: p.name, check: p.check }] : []);
+  if (!options.elsewhere) registry.warnings = warningsOf(plugins, registry, declaredBy);
   registry.requires = Object.fromEntries(plugins.map((p) => [p.name, p.requires ?? []]));
   return registry;
 }
@@ -340,7 +428,7 @@ export async function readCall<R>(
   actingAs?: (other?: Actor) => ReadContext,
 ): Promise<R> {
   const def = registry.actions[name];
-  if (!def) throw invalid(`Unknown action "${name}"`);
+  if (!def) throw unknown("action", name, Object.keys(registry.actions));
   if (def.record !== false) {
     throw invalid(`"${name}" is recorded: a read calls only unrecorded Actions`);
   }

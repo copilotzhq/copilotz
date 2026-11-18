@@ -7,7 +7,7 @@ import { collection, type Query, type Run } from "./collection.ts";
 import type { Context, ReadContext } from "./define.ts";
 import type { Metrics } from "./metrics.ts";
 import { isRead } from "./ops.ts";
-import { invalid, json, readCall, type Registry } from "./registry.ts";
+import { invalid, json, queriesOf, readCall, type Registry, unknown } from "./registry.ts";
 import type { Actor, Edge } from "./store.ts";
 import { presenter } from "./views.ts";
 import { acting, whereOf } from "./actor.ts";
@@ -84,7 +84,7 @@ export const querying = (
 ): Query =>
 async (name, queryName, params) => {
   const def = registry.collections[name]?.queries?.[queryName];
-  if (!def) throw invalid(`Unknown query "${name}.${queryName}"`);
+  if (!def) throw unknown("query", `${name}.${queryName}`, queriesOf(registry));
   const ctx = reading(registry, run, record, metrics, fetch, actor, unkept, runAs);
   return await (typeof def === "function" ? def : def.run)(
     ctx.db.collection(name),

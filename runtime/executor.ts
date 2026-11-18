@@ -17,6 +17,7 @@ import {
   invalid,
   json,
   merge,
+  unknown,
   unprivate,
 } from "./registry.ts";
 import { presenter } from "./views.ts";
@@ -325,7 +326,7 @@ export function createExecutor(
    */
   const atomicOf = (name: string, input: unknown, actor: Actor | undefined): Asked => {
     const def = registry.actions[name];
-    if (!def) throw invalid(`Unknown action "${name}"`);
+    if (!def) throw unknown("action", name, Object.keys(registry.actions));
     if (!def.atomic) {
       throw invalid(
         `"${name}" isn't atomic: a transaction calls only Actions declared \`atomic: true\`. ` +
@@ -626,7 +627,7 @@ export function createExecutor(
     input: unknown,
     when: ScheduleOptions,
   ): Extract<TimerOp, { op: "schedule" }> => {
-    if (!registry.actions[action]) throw invalid(`Unknown action "${action}"`);
+    if (!registry.actions[action]) throw unknown("action", action, Object.keys(registry.actions));
     const normalized = json(input);
     inputs[action]?.(normalized);
     const { id, ...rest } = json(when ?? {}) as ScheduleOptions;
@@ -658,7 +659,7 @@ export function createExecutor(
     actor?: Actor,
   ): Promise<R> => {
     const action = registry.actions[name];
-    if (!action) throw invalid(`Unknown action "${name}"`);
+    if (!action) throw unknown("action", name, Object.keys(registry.actions));
     const normalized = json(input);
     inputs[name]?.(normalized);
     // An Action's input may hold no `$blob` key (see blobs.ts), as the owner checks outside calls'.

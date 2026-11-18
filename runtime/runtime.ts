@@ -44,6 +44,12 @@ export async function createRuntime(
      * `contactsPool()` shared with other runtimes on the same listener.
      */
     browsers?: BrowserLimits;
+    /**
+     * What's told of what looks wrong at startup (a schema that names no
+     * fields…): each message, once a process, on the console by default;
+     * `false` tells nothing.
+     */
+    warn?: ((message: string) => void) | false;
   },
 ): Promise<Runtime> {
   const transport = {
@@ -65,6 +71,7 @@ export async function createRuntime(
     metrics: options.metrics,
     clock: options.clock,
     fetch: options.fetch,
+    ...(options.warn !== undefined ? { warn: options.warn } : {}),
   });
   const executors = Array.from(
     { length: options.executors ?? 1 },

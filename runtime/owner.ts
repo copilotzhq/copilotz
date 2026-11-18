@@ -86,7 +86,9 @@ import {
   invalid,
   json,
   merge,
+  queriesOf,
   schemaFailure,
+  unknown,
   unprivate,
 } from "./registry.ts";
 import type {
@@ -378,6 +380,12 @@ export async function createOwner(
     clock?: Clock;
     /** How much browsers may hold (see browsers.ts): contacts' caps, a pool shared with others. */
     browsers?: BrowserLimits;
+    /**
+     * What's told of what looks wrong at startup (a schema that names no
+     * fields…): each message, once a process, on the console by default;
+     * `false` tells nothing.
+     */
+    warn?: ((message: string) => void) | false;
   },
 ): Promise<Owner> {
   const { store } = options;
@@ -385,6 +393,9 @@ export async function createOwner(
   if (limited) throw invalid(limited);
   const registry = merge(options.plugins);
   checkHttp(registry);
+  if (options.warn !== false) {
+    for (const message of registry.warnings) (options.warn ?? warnOnce)(message);
+  }
   // What browsers connect with: a one-time ticket, from `POST /connect` (see fetch.ts).
   const tickets = createTickets(
     options.browsers?.tickets !== undefined ? { perMinute: options.browsers.tickets } : {},
@@ -534,7 +545,9 @@ export async function createOwner(
     }
     if (inMemory(op) && !isRead(op)) refuseBlobKeys(op);
     if (!("collection" in op) || op.collection.startsWith(SYSTEM)) return;
-    if (!validators[op.collection]) throw invalid(`Unknown collection "${op.collection}"`);
+    if (!validators[op.collection]) {
+      throw unknown("collection", op.collection, Object.keys(registry.collections));
+    }
     // An update says what changes, with operators: one with none would replace the whole
     // document unchecked. MongoDB refuses it too; replaceOne replaces.
     if (op.op === "update" && !Object.keys(op.update).some((key) => key.startsWith("$"))) {
@@ -2346,7 +2359,7 @@ export async function createOwner(
     },
     call(action, input, options = {}) {
       const def = registry.actions[action];
-      if (!def) return Promise.reject(invalid(`Unknown action "${action}"`));
+      if (!def) return Promise.reject(unknown("action", action, Object.keys(registry.actions)));
       const { actor } = options;
       // An actor calls only what lets them (an agent, for whom it works for too), and what their
       // scope lists (a key's).
@@ -2393,7 +2406,7 @@ export async function createOwner(
       const dot = name.lastIndexOf(".");
       const [collection, query] = [name.slice(0, dot), name.slice(dot + 1)];
       if (!registry.collections[collection]?.queries?.[query]) {
-        throw invalid(`Unknown query "${name}"`);
+        throw unknown("query", name, queriesOf(registry));
       }
       const { actor } = options;
       // An actor runs only what lets them, with params its `input` takes.
@@ -2571,6 +2584,14 @@ function outsideWrite(given: unknown): Extract<WriteOp, { collection: string }> 
       throw invalid("A write is an insert, an update, a replace or a delete.");
   }
 }
+
+/** Each warning once a process, however many runtimes start (tests start many). */
+const warned = new Set<string>();
+const warnOnce = (message: string) => {
+  if (warned.has(message)) return;
+  warned.add(message);
+  console.warn(`copilotz: ${message}`);
+};
 
 /** An observation that failed before it began: refused. */
 function refusedView<R>(error: Error): Observation<R> {

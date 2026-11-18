@@ -498,11 +498,18 @@ export function createApi(env: ApiEnv): Api {
         path: `/api/actions/${enc(name)}`,
       };
     };
-    const query = (name: string) => ({
-      name,
-      method: "POST" as const,
-      path: `/api/queries/${enc(name)}`,
-    });
+    const query = (name: string) => {
+      const dot = name.lastIndexOf(".");
+      const def = registry.collections[name.slice(0, dot)]?.queries?.[name.slice(dot + 1)];
+      const about = typeof def === "object" ? def : undefined;
+      return {
+        name,
+        ...(about?.description ? { description: about.description } : {}),
+        ...(about?.input ? { input: about.input } : {}),
+        method: "POST" as const,
+        path: `/api/queries/${enc(name)}`,
+      };
+    };
     const view = (name: string) => ({
       name,
       method: "GET" as const,

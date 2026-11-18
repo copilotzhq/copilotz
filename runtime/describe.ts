@@ -115,6 +115,10 @@ export type Helper =
 /** Who outside reaches a named query (`internal`: plugin code alone, a bare function). */
 export type QueryDeclaration = {
   name: string;
+  /** What it answers (its `description`). */
+  summary?: string;
+  /** Its params' JSON Schema (its `input`). */
+  input?: JSONSchema;
   internal?: true;
   callers?: Callers;
   helper?: Helper;
@@ -140,6 +144,8 @@ export type CollectionDeclaration = {
   shared: boolean;
   /** Fields holding vectors (embeddings). */
   vectors: string[];
+  /** `moderate`: updates are checked only on documents that were valid (`validation`). */
+  validation?: "moderate";
   indexes: string[][];
   queries: QueryDeclaration[];
 };
@@ -593,8 +599,11 @@ function keepsOf(plugin: Plugin, shared: Set<string>) {
       indexes: json(def.indexes ?? []),
       queries: Object.entries(def.queries ?? {}).map(([query, q]: [string, QueryDef]) => ({
         name: query,
+        ...(typeof q === "object" && q.description ? { summary: words(q.description) } : {}),
+        ...(typeof q === "object" && q.input ? { input: json(q.input) as JSONSchema } : {}),
         ...(typeof q === "function" ? { internal: true as const } : accessOf(q.allow, {})),
       })).sort(byName),
+      ...(def.validation === "moderate" ? { validation: "moderate" as const } : {}),
     });
   }
   return { keeps: keeps.sort(byName), indexes: indexes.sort(by((i) => i.collection)) };

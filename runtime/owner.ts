@@ -1174,6 +1174,16 @@ export async function createOwner(
     return typeof def === "object" && allows(def.allow, actor, params) &&
       inScope(actor, "query", `${collection}.${query}`);
   };
+  // Queries' `input`, compiled once each.
+  const paramChecks = new Map<string, (value: unknown) => void>();
+  const paramsCheck = (collection: string, query: string) => {
+    const def = registry.collections[collection]?.queries?.[query];
+    if (typeof def !== "object" || !def.input) return undefined;
+    const key = `${collection}.${query}`;
+    let check = paramChecks.get(key);
+    if (!check) paramChecks.set(key, check = compile(def.input, `query "${key}" params`));
+    return check;
+  };
   const both = (filter: Filter | undefined, rule: Filter): Filter =>
     filter && Object.keys(filter).length ? { $and: [filter, rule] } : rule;
 
@@ -2386,10 +2396,11 @@ export async function createOwner(
         throw invalid(`Unknown query "${name}"`);
       }
       const { actor } = options;
-      // An actor runs only what lets them.
+      // An actor runs only what lets them, with params its `input` takes.
       if (actor && !askable(actor, collection, query, params)) {
         throw forbidden(`${actor.kind} ${actor.id} may not run "${name}".`);
       }
+      if (actor && actor.kind !== "system") paramsCheck(collection, query)?.(json(params ?? {}));
       return await run({
         kind: "query",
         collection,

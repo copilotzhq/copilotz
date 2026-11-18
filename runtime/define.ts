@@ -358,6 +358,10 @@ export type QueryFn<T = any> = (
 export type QueryDef<T = any> = QueryFn<T> | {
   // deno-lint-ignore no-explicit-any
   allow(actor: Actor, params: any): boolean;
+  /** What it answers, in a line: `GET /api/` and `describe()` list it. */
+  description?: string;
+  /** Its params' JSON Schema: checked for callers from outside, and listed with it. */
+  input?: JSONSchema;
   run: QueryFn<T>;
 };
 

@@ -730,6 +730,16 @@ export type Plugins = (Plugin | Plugins)[];
 
 export const definePlugin = (plugin: Plugin): Plugin => plugin;
 
+/**
+ * A plugin's guard, by collection: each collection's rule (`{ sale: … }`), and no
+ * rule (`undefined`) for any other collection, so other plugins' rules decide
+ * those. A large rule goes in a file of its own (`lib/guards/sale.ts`).
+ */
+export const byCollection = (rules: Record<string, Guard>): Guard => (actor, operation, ctx) =>
+  Object.hasOwn(rules, operation.collection)
+    ? rules[operation.collection](actor, operation, ctx)
+    : undefined;
+
 /** A collection whose documents (and queries' collection) are typed from its JSON Schema. */
 export const defineCollection = <const S extends JSONSchema>(
   def: {

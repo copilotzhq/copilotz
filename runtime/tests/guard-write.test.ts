@@ -6,6 +6,7 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import {
   type Actor,
+  byCollection,
   createRuntime,
   defineAction,
   defineCollection,
@@ -72,4 +73,23 @@ test("a guard knows an insert from an update, a replacement and a delete", async
   } finally {
     await rt.close();
   }
+});
+
+test("byCollection: each collection's rule, and none for any other", async () => {
+  const guard = byCollection({
+    note: (_actor, { write }) => (write === "delete" ? { never: true } : true),
+    tag: () => ({ mine: true }),
+  });
+  const ctx = {} as Parameters<typeof guard>[2];
+  assertEquals(
+    await guard(ana, { collection: "note", access: "write", write: "insert" }, ctx),
+    true,
+  );
+  assertEquals(await guard(ana, { collection: "note", access: "write", write: "delete" }, ctx), {
+    never: true,
+  });
+  assertEquals(await guard(ana, { collection: "tag", access: "read" }, ctx), { mine: true });
+  assertEquals(await guard(ana, { collection: "other", access: "read" }, ctx), undefined);
+  // Not one of Object's own names either.
+  assertEquals(await guard(ana, { collection: "toString", access: "read" }, ctx), undefined);
 });

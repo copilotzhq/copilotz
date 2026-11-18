@@ -27,8 +27,9 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `tiers.agent`, `tiers.org`, `tiers.space`.
-- **What it adds to resources:** `orgSettings` (`models`), `spaceAgents` (`tiers`).
+- **On the web:** `tiers.agent`, `tiers.composer`, `tiers.org`, `tiers.setup`, `tiers.space`.
+- **What it adds to resources:** `agentKinds` (`query`), `composerControls` (`tiers`), `orgSettings`
+  (`models`), `spaceAgents` (`tiers`), `welcome` (`tiers`).
 
 ## What it needs
 

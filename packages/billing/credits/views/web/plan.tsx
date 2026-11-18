@@ -166,7 +166,15 @@ function PlanCredits(
 
 /** The plans they can move to; none while a subscription runs (that's Manage billing's). */
 export function PlanOffers(
-  { state, personal = false, call }: { state: BillingState; personal?: boolean; call: Call },
+  { state, personal = false, call, back, title }: {
+    state: BillingState;
+    personal?: boolean;
+    call: Call;
+    /** Where the payment page comes back to (a path); else Billing. */
+    back?: string;
+    /** The card's heading, in place of "Move to a plan". */
+    title?: string;
+  },
 ): ReactNode {
   const plan = state.plan;
   const offers = (state.pay?.plans ?? []).filter((offer) => offer.name !== plan?.name);
@@ -180,7 +188,7 @@ export function PlanOffers(
   return (
     <Card as="section" className="billing-card" aria-labelledby="billing-offers">
       <header className="billing-card-head">
-        <h3 id="billing-offers">{offers.length ? "Move to a plan" : "Plans"}</h3>
+        <h3 id="billing-offers">{title ?? (offers.length ? "Move to a plan" : "Plans")}</h3>
         {offers.length
           ? <p className="billing-small">You'll confirm on a secure payment page before you pay.</p>
           : null}
@@ -195,6 +203,7 @@ export function PlanOffers(
                 state={state}
                 personal={personal}
                 call={call}
+                {...(back ? { back } : {})}
               />
             ))}
           </ul>
@@ -223,11 +232,12 @@ function ForTeams({ offers }: { offers: Offer[] }): ReactNode {
 
 /** A plan they can move to: what it costs them, before they go. */
 function OfferRow(
-  { offer, state, personal, call }: {
+  { offer, state, personal, call, back }: {
     offer: Offer;
     state: BillingState;
     personal: boolean;
     call: Call;
+    back?: string;
   },
 ): ReactNode {
   const { busy, error, run, release } = useAct();
@@ -247,7 +257,10 @@ function OfferRow(
         loading={busy}
         onClick={() =>
           void run(async () => {
-            const { url } = await call<{ url: string }>("billing.checkout", { plan: offer.name });
+            const { url } = await call<{ url: string }>("billing.checkout", {
+              plan: offer.name,
+              ...(back ? { back } : {}),
+            });
             leavingFor(url, state);
           }, true)}
       >

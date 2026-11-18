@@ -243,4 +243,9 @@ export const STYLE = `
   .agent-new-end .agent-form-note:empty { display: none; }
   .agent-new-end .copilotz-button { flex: 1; }
 }
+
+/* Making an agent: what it should do, first */
+.agent-describe { display: grid; gap: 12px; }
+.agent-describe-end { display: flex; justify-content: flex-end; gap: 8px; }
+.agent-describe-wait { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted-foreground); font-size: 13px; }
 `;

@@ -27,8 +27,9 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `billing.composer`, `billing.org`.
-- **What it adds to resources:** `composerNotes` (`billing`), `orgSettings` (`billing`).
+- **On the web:** `billing.composer`, `billing.org`, `billing.setup`.
+- **What it adds to resources:** `composerNotes` (`billing`), `orgSettings` (`billing`), `welcome`
+  (`plan`).
 
 ## What it needs
 

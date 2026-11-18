@@ -1,10 +1,10 @@
 /**
- * Tiers: which model each of the app's agents thinks with, the first that
- * applies of a space's pick, the space's tier, the org's pick, the org's tier
- * and the plan's; a pick keeps the tier's list behind it; a tier that doesn't
- * name an agent, and agents people make, keep their own; who may change what;
- * what a page reads, with where each model comes from and a typical reply's
- * price; and every model call says its space.
+ * Tiers as templates: every agent does a kind of work, and the tier in force
+ * (the chat's, the person's default, the space's, the org's, the plan's)
+ * gives that kind its model chain; the org customizes tiers, makes new ones,
+ * takes them away and adds kinds of work; a cap bounds what members choose;
+ * agents people make do a kind too; what a page reads; and every model call
+ * says its space.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
@@ -21,6 +21,7 @@ import models, { type LlmAdapter, type ModelUse } from "copilotz/plugins/models"
 import { chat, type Message } from "copilotz/plugins/agents";
 import { team } from "../team/mod.ts";
 import { type AgentNow, type Shown, tiers } from "../tiers/mod.ts";
+import { ORG } from "copilotz/plugins/access/contract";
 import { access } from "copilotz/plugins/access";
 import { usage } from "copilotz/plugins/billing";
 import { join } from "./join.ts";
@@ -68,7 +69,7 @@ const TIERS = {
 };
 
 async function start(
-  more: { prices?: boolean; store?: Store; tiers?: typeof TIERS; joined?: boolean } = {},
+  more: { prices?: boolean; store?: Store; tiers?: Record<string, unknown>; joined?: boolean } = {},
 ) {
   calls.length = 0;
   uses.length = 0;
@@ -141,112 +142,103 @@ async function asked(rt: Runtime, space: string, agent = "north", actor = ana) {
 const refused = (promise: Promise<unknown>) =>
   promise.then(() => "done", (error) => (error as { code?: string }).code ?? "failed");
 
-test("who chooses: the space's pick, its tier, the org's pick, its tier, the plan's, else its own", async () => {
+/** A chat in `space`, and what its reply came from; then again in the same chat. */
+async function chatIn(rt: Runtime, space: string, actor = ana) {
+  const { thread } = await rt.call<{ thread: string }>("chat.send", {
+    text: "@north hi",
+    in: space,
+  }, { actor });
+  await rt.idle();
+  const last = async () =>
+    (await rt.query<Message[]>("message.history", { thread }, { actor })).at(-1)!.text!
+      .replace("from ", "");
+  return {
+    thread,
+    first: await last(),
+    again: async () => {
+      await rt.call("chat.send", { thread, text: "@north again" }, { actor });
+      await rt.idle();
+      return await last();
+    },
+  };
+}
+
+test("which tier: the chat's, the person's default, the space's, the org's, the plan's", async () => {
   const rt = await start();
   try {
     const launch = await spaceOf(rt, "Launch", ana);
-    assertEquals(await asked(rt, launch), "own-north", "nothing chosen: its own");
-    planTier = "everyday";
-    assertEquals(await asked(rt, launch), "haiku", "the plan's tier");
-    await rt.call("tiers.choose", { tier: "expert" }, { actor: ana });
-    assertEquals(await asked(rt, launch), "opus", "the org's tier");
+    assertEquals(await asked(rt, launch), "haiku", "nothing chosen: the app's first tier");
+    planTier = "expert";
+    assertEquals(await asked(rt, launch), "opus", "the plan's tier");
     assertEquals(calls.at(-1), { model: "opus", effort: "medium" }, "with its settings");
-    await rt.call("tiers.pick", { agent: "north", model: "s/sonnet" }, { actor: ana });
-    assertEquals(await asked(rt, launch), "sonnet", "the org's pick");
-    await rt.call("tiers.choose", { space: launch, tier: "everyday" }, { actor: ana });
-    assertEquals(await asked(rt, launch), "haiku", "the space's tier, over the org's pick");
-    await rt.call("tiers.pick", { space: launch, agent: "north", model: "s/fable" }, {
-      actor: ana,
-    });
-    assertEquals(await asked(rt, launch), "fable", "the space's pick");
+    await rt.call("tiers.choose", { tier: "everyday" }, { actor: ana });
+    assertEquals(await asked(rt, launch), "haiku", "the org's");
+    await rt.call("tiers.choose", { space: launch, tier: "expert" }, { actor: ana });
+    assertEquals(await asked(rt, launch), "opus", "the space's, over the org's");
+    await rt.call("tiers.choose", { tier: "everyday", mine: true }, { actor: ana });
+    assertEquals(await asked(rt, launch), "haiku", "the person's own default, over the space's");
+    await join(rt, launch, bob, "editor", ana);
+    assertEquals(await asked(rt, launch, "north", bob), "opus", "someone else's isn't");
+    const chat = await chatIn(rt, launch);
+    assertEquals(chat.first, "haiku");
+    await rt.call("tiers.choose", { thread: chat.thread, tier: "expert" }, { actor: ana });
+    assertEquals(await chat.again(), "opus", "the chat's, over everything");
 
     // Back, one step at a time.
-    await rt.call("tiers.pick", { space: launch, agent: "north", model: null }, { actor: ana });
-    assertEquals(await asked(rt, launch), "haiku");
-    await rt.call("tiers.choose", { space: launch, tier: null }, { actor: ana });
-    assertEquals(await asked(rt, launch), "sonnet");
-    await rt.call("tiers.choose", { tier: "expert", picks: null }, { actor: ana });
-    assertEquals(await asked(rt, launch), "opus", "back to the tier as it is");
-    await rt.call("tiers.choose", { tier: null }, { actor: ana });
-    assertEquals(await asked(rt, launch), "haiku", "the plan's again");
+    await rt.call("tiers.choose", { thread: chat.thread, tier: null }, { actor: ana });
+    assertEquals(await chat.again(), "haiku");
+    await rt.call("tiers.choose", { tier: null, mine: true }, { actor: ana });
+    assertEquals(await asked(rt, launch), "opus", "the space's again");
     // Other spaces never saw Launch's choices.
     const other = await spaceOf(rt, "Other", ana);
-    await rt.call("tiers.choose", { space: launch, tier: "expert" }, { actor: ana });
     assertEquals(await asked(rt, other), "haiku");
   } finally {
     await rt.close();
   }
 });
 
-test("a pick keeps the tier's list behind it; with no tier naming it, its own model is", async () => {
+test("a chain falls back in order; a kind a tier doesn't name keeps the agent's own model", async () => {
   const rt = await start();
   try {
     const launch = await spaceOf(rt, "Launch", ana);
-    await rt.call("tiers.choose", { tier: "expert" }, { actor: ana });
-    // The pick fails before writing anything: the tier's list takes over.
-    await rt.call("tiers.pick", { agent: "north", model: "s/broken" }, { actor: ana });
-    calls.length = 0;
-    assertEquals(await asked(rt, launch), "opus");
-    assertEquals(calls.map((c) => c.model), ["broken", "opus"]);
-    // With no tier naming it, its own model is behind its pick.
-    await rt.call("tiers.pick", { space: launch, agent: "east", model: "s/broken" }, {
+    await rt.call("tiers.save", { tier: "expert", kinds: { north: ["s/broken", "s/sonnet"] } }, {
       actor: ana,
     });
+    await rt.call("tiers.choose", { tier: "expert" }, { actor: ana });
+    calls.length = 0;
+    assertEquals(await asked(rt, launch), "sonnet");
+    assertEquals(calls.map((c) => c.model), ["broken", "sonnet"]);
+    // Everyday names no builder: East thinks with its own.
     await rt.call("tiers.choose", { tier: "everyday" }, { actor: ana });
-    assertEquals(await rt.call("tiers.model", { agent: "east", space: launch }), [
-      "s/broken",
-      { model: "s/own-east" },
-    ]);
+    assertEquals(await rt.call("tiers.model", { agent: "east", space: launch }), null);
+    assertEquals(await asked(rt, launch, "east"), "own-east");
   } finally {
     await rt.close();
   }
 });
 
-test("a pick keeps the maxTokens of what it replaces, and its effort when the model takes it", async () => {
-  const deep = {
-    title: "Deep",
-    agents: {
-      north: { model: "anthropic/claude-opus-5-5", effort: "xhigh", maxTokens: 30_000 },
+test("a chain set by hand keeps the maxTokens and effort of the one it replaces, where taken", async () => {
+  const withSettings = {
+    ...TIERS,
+    expert: {
+      ...TIERS.expert,
+      agents: {
+        ...TIERS.expert.agents,
+        north: { model: "anthropic/claude-opus-5-5", effort: "medium", maxTokens: 30_000 },
+      },
     },
   };
-  const rt = await start({ tiers: { ...TIERS, deep } as typeof TIERS });
+  const rt = await start({ tiers: withSettings });
   try {
-    const launch = await spaceOf(rt, "Launch", ana);
-    await rt.call("tiers.choose", { tier: "deep" }, { actor: ana });
-    const pick = async (model: unknown) => {
-      await rt.call("tiers.pick", { agent: "north", model }, { actor: ana });
-      await asked(rt, launch);
-      return calls.at(-1);
-    };
-    // Haiku takes extra-high effort, as the catalog says: both carry over.
-    assertEquals(await pick("anthropic/claude-haiku-5-5"), {
-      model: "claude-haiku-5-5",
-      effort: "xhigh",
-      maxTokens: 30_000,
-    });
-    // Argon doesn't: it keeps the tokens, and thinks as it does by default.
-    assertEquals(await pick("google/gemini-4-argon"), {
-      model: "gemini-4-argon",
-      maxTokens: 30_000,
-    });
-    // Nor is an effort given to a model the catalog doesn't know.
-    assertEquals(await pick("s/plain"), { model: "plain", maxTokens: 30_000 });
-    // What a pick sets itself wins.
-    assertEquals(await pick({ model: "anthropic/claude-haiku-5-5", effort: "low" }), {
-      model: "claude-haiku-5-5",
-      effort: "low",
-      maxTokens: 30_000,
-    });
-    // A space's pick carries over the same, and pages show it as it runs.
-    await rt.call("tiers.pick", {
-      space: launch,
-      agent: "north",
-      model: "anthropic/claude-sonnet-5-5",
+    await rt.call("tiers.save", {
+      tier: "expert",
+      kinds: { north: ["anthropic/claude-sonnet-5-5", "s/plain"] },
     }, { actor: ana });
-    assertEquals(await asked(rt, launch), "claude-sonnet-5-5");
-    assertEquals(calls.at(-1), { model: "claude-sonnet-5-5", effort: "xhigh", maxTokens: 30_000 });
-    const here = await rt.query<Shown>("modelChoice.offered", { space: launch }, { actor: ana });
-    assertEquals(here.now.agents.north.model.effort, "xhigh");
+    await rt.call("tiers.choose", { tier: "expert" }, { actor: ana });
+    assertEquals(await rt.call("tiers.model", { agent: "north" }), [
+      { model: "anthropic/claude-sonnet-5-5", maxTokens: 30_000, effort: "medium" },
+      { model: "s/plain", maxTokens: 30_000 },
+    ]);
   } finally {
     await rt.close();
   }
@@ -271,134 +263,190 @@ test("a choice keeps a tier's name: retuning the tier moves everyone on it", asy
   }
 });
 
-test("a tier that doesn't name an agent, and agents people make, keep their own model", async () => {
+test("the org's tiers: customized, made, taken away and put back", async () => {
   const rt = await start();
   try {
     const launch = await spaceOf(rt, "Launch", ana);
-    await rt.call("tiers.choose", { tier: "everyday" }, { actor: ana });
-    assertEquals(await asked(rt, launch, "east"), "own-east");
-    const { agent } = await rt.call<{ agent: string }>("agent.create", {
-      in: launch,
+    // Its version of one of the app's.
+    await rt.call("tiers.save", { tier: "everyday", kinds: { north: ["s/fable"] } }, {
+      actor: ana,
+    });
+    assertEquals(await asked(rt, launch), "fable");
+    let shown = await rt.query<Shown>("modelChoice.offered", {}, { actor: ana });
+    assertEquals(shown.tiers.find((t) => t.name === "everyday")?.changed, true);
+    await rt.call("tiers.restore", { tier: "everyday" }, { actor: ana });
+    assertEquals(await asked(rt, launch), "haiku", "back as the app has it");
+
+    // A new one, from another, mixing models.
+    const { tier } = await rt.call<{ tier: string }>("tiers.save", {
+      title: "Balanced",
+      from: "expert",
+      kinds: { east: ["s/haiku"] },
+    }, { actor: ana });
+    assertEquals(tier, "balanced");
+    await rt.call("tiers.choose", { tier }, { actor: ana });
+    assertEquals(await asked(rt, launch), "opus", "North as Expert has it");
+    assertEquals(await asked(rt, launch, "east"), "haiku", "East its own way");
+    shown = await rt.query<Shown>("modelChoice.offered", {}, { actor: ana });
+    assertEquals(shown.tiers.map((t) => [t.name, !!t.made]), [
+      ["everyday", false],
+      ["expert", false],
+      ["balanced", true],
+    ]);
+
+    // Taken away: where it was chosen, what's above applies; put back, it's there again.
+    await rt.call("tiers.choose", { space: launch, tier: "expert" }, { actor: ana });
+    await rt.call("tiers.remove", { tier: "expert" }, { actor: ana });
+    shown = await rt.query<Shown>("modelChoice.offered", { space: launch }, { actor: ana });
+    assertEquals(shown.tiers.map((t) => t.name), ["everyday", "balanced"]);
+    assertEquals(shown.removed, [{ name: "expert", title: "Expert" }]);
+    assertEquals(shown.now, { tier: "balanced", by: "org" });
+    await rt.call("tiers.restore", { tier: "expert" }, { actor: ana });
+    assertEquals(await asked(rt, launch), "opus", "the space's choice again");
+    // One the org made is deleted; the last can't go.
+    await rt.call("tiers.remove", { tier: "balanced" }, { actor: ana });
+    await rt.call("tiers.remove", { tier: "expert" }, { actor: ana });
+    assertEquals(
+      await refused(rt.call("tiers.remove", { tier: "everyday" }, { actor: ana })),
+      "invalid",
+    );
+  } finally {
+    await rt.close();
+  }
+});
+
+test("kinds of work: an org's own, from one of the app's; agents people make do one", async () => {
+  const rt = await start();
+  try {
+    const launch = await spaceOf(rt, "Launch", ana);
+    await rt.call("tiers.choose", { tier: "expert" }, { actor: ana });
+    // An agent made without a kind does the app's first; one with a kind, that one's.
+    const { agent: maya } = await rt.call<{ agent: string }>("agent.create", {
       name: "Maya",
-      description: "Writes",
-      instructions: "I write.",
-      model: "s/maya",
+      in: launch,
+    }, { actor: ana });
+    assertEquals(await rt.call("tiers.model", { agent: maya, space: launch }), [
+      { model: "s/opus", effort: "medium" },
+      "s/sol",
+    ]);
+    const { kind } = await rt.call<{ kind: string }>("tiers.kind", {
+      title: "Numbers",
+      base: "east",
+    }, { actor: ana });
+    assertEquals(kind, "numbers");
+    const { agent: ledger } = await rt.call<{ agent: string }>("agent.create", {
+      name: "Ledger",
+      in: ORG,
+      like: kind,
     }, { actor: ana });
     await rt.call("member.set", {
       space: launch,
-      member: { kind: "agent", id: agent },
+      member: { kind: "agent", id: ledger },
       role: "editor",
-    }, { actor: ana });
-    await rt.call("tiers.choose", { space: launch, tier: "expert" }, { actor: ana });
-    assertEquals(await asked(rt, launch, agent), "maya");
-    assertEquals(await rt.call("tiers.model", { agent, space: launch }), null);
-    // Nor can one be picked for it.
-    assertEquals(
-      await refused(
-        rt.call("tiers.pick", { space: launch, agent, model: "s/opus" }, { actor: ana }),
-      ),
-      "invalid",
-    );
+    }, { actor: ana }).catch(() => {});
+    assertEquals(await rt.call("tiers.model", { agent: kind, space: launch }), {
+      model: "s/sonnet",
+      effort: "high",
+    }, "its base's chain, until the tier names it");
+    await rt.call("tiers.save", { tier: "expert", kinds: { numbers: ["s/sol"] } }, { actor: ana });
+    assertEquals(await asked(rt, launch, ledger), "sol");
+    const shown = await rt.query<Shown>("modelChoice.offered", {}, { actor: ana });
+    assertEquals(shown.kinds.map((k) => [k.kind, k.title, k.base ?? null]), [
+      ["north", "North", null],
+      ["east", "East", null],
+      ["numbers", "Numbers", "east"],
+    ]);
   } finally {
     await rt.close();
   }
 });
 
-test("the org's owners and admins choose for it; a space's managers for the space; in person", async () => {
+test("who may: owners and admins change the org's tiers and its cap; members choose within it", async () => {
   const rt = await start();
   try {
-    const launch = await spaceOf(rt, "Launch", bob);
-    await join(rt, launch, cy, "editor", bob);
-    // Bob is a member of the org: not its.
+    const launch = await spaceOf(rt, "Launch", ana);
+    await join(rt, launch, bob, "editor", ana);
+    for (
+      const call of [
+        rt.call("tiers.choose", { tier: "expert" }, { actor: bob }),
+        rt.call("tiers.save", { tier: "expert", kinds: { north: ["s/x"] } }, { actor: bob }),
+        rt.call("tiers.remove", { tier: "expert" }, { actor: bob }),
+        rt.call("tiers.cap", { tier: "everyday" }, { actor: bob }),
+        rt.call("tiers.choose", { space: launch, tier: "expert" }, { actor: bob }),
+      ]
+    ) assertEquals(await refused(call), "forbidden");
+    // An agent working for the owner doesn't choose for them: in person only.
+    const north: Actor = { kind: "agent", id: "north", for: ana };
     assertEquals(
-      await refused(rt.call("tiers.choose", { tier: "expert" }, { actor: bob })),
+      await refused(rt.call("tiers.choose", { tier: "expert" }, { actor: north })),
       "forbidden",
     );
-    // He manages Launch: any tier there, however it costs.
-    await rt.call("tiers.choose", { space: launch, tier: "expert" }, { actor: bob });
-    await rt.call("tiers.pick", { space: launch, agent: "east", model: "s/fable" }, {
-      actor: bob,
-    });
-    // Cy edits there; she doesn't choose.
+
+    // Within the cap, members choose for their chats and themselves.
+    await rt.call("tiers.cap", { tier: "everyday" }, { actor: ana });
     assertEquals(
-      await refused(rt.call("tiers.choose", { space: launch, tier: null }, { actor: cy })),
+      await refused(rt.call("tiers.choose", { tier: "expert", mine: true }, { actor: bob })),
       "forbidden",
     );
-    // Ana runs the org: she reaches every space.
-    await rt.call("tiers.choose", { space: launch, tier: "everyday" }, { actor: ana });
-    // A key never decides; nor is a tier that isn't there, nor a model that can't be called.
+    await rt.call("tiers.choose", { tier: "everyday", mine: true }, { actor: bob });
+    const chat = await chatIn(rt, launch, bob);
     assertEquals(
       await refused(
-        rt.call("tiers.choose", { tier: "expert" }, { actor: { ...ana, key: "k1" } as Actor }),
+        rt.call("tiers.choose", { thread: chat.thread, tier: "expert" }, { actor: bob }),
       ),
       "forbidden",
     );
+    // The owner isn't bound by it.
+    await rt.call("tiers.choose", { thread: chat.thread, tier: "expert" }, { actor: ana });
+    assertEquals(await chat.again(), "opus");
+    // Someone outside a chat doesn't change it.
     assertEquals(
-      await refused(rt.call("tiers.choose", { tier: "gold" }, { actor: ana })),
-      "invalid",
-    );
-    assertEquals(
-      await refused(rt.call("tiers.pick", { agent: "north", model: "nowhere/x" }, { actor: ana })),
-      "invalid",
+      await refused(rt.call("tiers.choose", { thread: chat.thread, tier: null }, { actor: cy })),
+      "forbidden",
     );
   } finally {
     await rt.close();
   }
 });
 
-test("what a page reads: the tiers on offer, what each level chose, and where each model comes from", async () => {
+test("what a page reads: the org's tiers and kinds, prices, each level's choice and what applies", async () => {
   const rt = await start({ prices: true });
   try {
     const launch = await spaceOf(rt, "Launch", ana);
-    const secret = await spaceOf(rt, "Secret", ana);
     planTier = "everyday";
-    const org = await rt.query<Shown>("modelChoice.offered", {}, { actor: bob });
-    assertEquals(org.tiers.map((t) => t.name), ["everyday", "expert"]);
-    assertEquals(org.tiers[1].agents.map((a) => [a.agent, a.model.id, a.model.effort]), [
+    await join(rt, launch, bob, "editor", ana);
+    await rt.call("tiers.choose", { space: launch, tier: "expert" }, { actor: ana });
+    const org = await rt.query<Shown>("modelChoice.offered", {}, { actor: ana });
+    assertEquals(org.tiers.map((t) => [t.name, t.title]), [["everyday", "Everyday"], [
+      "expert",
+      "Expert",
+    ]]);
+    assertEquals(org.tiers[1].kinds.map((k) => [k.kind, k.model.id, k.model.effort ?? null]), [
       ["north", "s/opus", "medium"],
       ["east", "s/sonnet", "high"],
     ]);
-    // A typical reply: 20k in, 16k of them cached, 1k out, at the org's prices (a 20% margin).
-    const reply = (4_000 * 1 + 16_000 * 0.1 + 1_000 * 5) / 1e6 / 0.8;
-    assert(Math.abs(org.tiers[0].price! - reply) < 1e-6, `${org.tiers[0].price} is ${reply}`);
-    assertEquals(org.plan, "everyday");
-    assertEquals(org.now.tier, { name: "everyday", by: "plan" });
-    assertEquals(org.now.agents.north.from, { by: "plan", tier: "everyday", title: "Everyday" });
-    assertEquals(org.now.agents.east.from, { by: "app" });
-    assertEquals(org.now.agents.east.model.id, "s/own-east");
-
-    await rt.call("tiers.choose", { tier: "expert" }, { actor: ana });
-    await rt.call("tiers.pick", { space: launch, agent: "east", model: "s/fable" }, {
+    assertEquals(org.tiers[1].kinds[0].model.fallbacks, [{ id: "s/sol", name: "sol" }]);
+    assert(org.tiers.every((t) => t.price! > 0), "each priced a reply, at the org's prices");
+    assertEquals(org.per, "reply");
+    assertEquals(org.kinds.map((k) => [k.kind, k.agents.map((a) => a.agent)]), [
+      ["north", ["north"]],
+      ["east", ["east"]],
+    ]);
+    assertEquals([org.plan, org.org, org.now], ["everyday", { tier: null, cap: null }, {
+      tier: "everyday",
+      by: "plan",
+    }]);
+    const here = await rt.query<Shown>("modelChoice.offered", { space: launch }, { actor: bob });
+    assertEquals([here.space, here.now], [{ tier: "expert" }, { tier: "expert", by: "space" }]);
+    const now = await rt.query<AgentNow>("modelChoice.agent", { agent: "north", space: launch }, {
       actor: ana,
     });
-    const here = await rt.query<Shown>("modelChoice.offered", { space: launch }, { actor: ana });
-    assertEquals(here.org.tier, "expert");
-    assertEquals(here.space, { tier: null, custom: { east: here.space!.custom.east } });
-    assertEquals(here.space!.custom.east.id, "s/fable");
-    assertEquals(here.now.tier, { name: "expert", by: "org" });
-    assertEquals(here.now.agents.north.from, { by: "org", tier: "expert", title: "Expert" });
-    assertEquals(here.now.agents.east.from, {
-      by: "space",
-      custom: true,
-      tier: "expert",
-      title: "Expert",
-    });
-    // One agent, as its row in the space says it: and where taking its pick back leaves it.
-    const east = await rt.query<AgentNow & { without?: AgentNow }>("modelChoice.agent", {
-      agent: "east",
-      space: launch,
-    }, { actor: ana });
-    assertEquals(east.model.id, "s/fable");
-    assertEquals([east.without?.model.id, east.without?.from], ["s/sonnet", {
-      by: "org",
-      tier: "expert",
-      title: "Expert",
-    }]);
-    // A space is read by who reaches it.
-    assertEquals(
-      await refused(rt.query("modelChoice.offered", { space: secret }, { actor: bob })),
-      "forbidden",
-    );
+    assertEquals([now.kind, now.tier, now.by, now.model.id], [
+      "north",
+      "expert",
+      "space",
+      "s/opus",
+    ]);
   } finally {
     await rt.close();
   }
@@ -417,7 +465,7 @@ test("every model call says its space, beside its thread, agent and turn", async
   }
 });
 
-test("a tier naming an agent the app hasn't, or a model it can't call, stops the app starting", async () => {
+test("a tier with a model the app can't call stops the app starting", async () => {
   const bad = (agents: Record<string, unknown>) =>
     createRuntime({
       store: memoryStore(),
@@ -437,6 +485,5 @@ test("a tier naming an agent the app hasn't, or a model it can't call, stops the
         }),
       ],
     });
-  await assertRejects(() => bad({ south: "s/x" }), Error, `names "south"`);
   await assertRejects(() => bad({ north: "elsewhere/x" }), Error, `Tier "odd", north`);
 });

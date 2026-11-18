@@ -316,6 +316,8 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .chat-home-hero p { margin: 0; color: var(--muted-foreground); font-size: 16px; }
 .chat-home-hero b { color: var(--secondary-foreground); font-weight: 600; }
 .chat-home-where { display: inline-flex; align-items: center; gap: 6px; }
+.chat-welcome-count { align-self: center; margin-inline-end: auto; color: var(--muted-foreground); font-size: 13px; font-variant-numeric: tabular-nums; }
+.chat-welcome-step { display: grid; gap: 14px; min-width: 0; }
 .chat-home-top { display: grid; gap: 10px; margin: 0 0 32px; padding: 0 24px; }
 .chat-home-top:empty, .chat-home-top > .copilotz-loading { display: none; }
 

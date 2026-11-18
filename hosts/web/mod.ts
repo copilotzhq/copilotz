@@ -25,6 +25,7 @@ export {
   lang,
   type Phrase,
   type Say,
+  sayText,
   setWords,
   type Words,
   wordsOf,

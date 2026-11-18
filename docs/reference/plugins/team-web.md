@@ -27,12 +27,12 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `agent`, `agent.add`, `agent.palette`, `model.pick`.
+- **On the web:** `agent`, `agent.add`, `agent.org`, `agent.palette`, `model.pick`.
 - **What it adds to resources:** `palette` (`agents`), `spaceInvite` (`agents`).
 
 ## What it needs
 
-Nothing to set: it works as it comes.
+Nothing to set. It reads `agentKinds`, resource kinds the app and other plugins fill.
 
 ## What it requires
 

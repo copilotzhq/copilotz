@@ -1,66 +1,219 @@
 /**
- * Tiers, and which model each of the app's agents thinks with: the app's
- * tiers (its `tiers` resource), what an org and a space chose (`modelChoice`),
- * and what the org's plan gives, worked out the same way for a turn and for a
- * page. Only plain data in and out: no reads here.
+ * Tiers as templates, worked out the same way for a turn and for a page. Only
+ * plain data in and out: no reads here.
+ *
+ * - **A kind of work** (`north`, as the app calls it, titled "Decides") is
+ *   what an agent does, as far as its model goes. The app's kinds are its
+ *   tiers' keys, titled by its `tierKinds` resource; an org adds its own,
+ *   each based on one of the app's (`tierKind`). Every agent has one: one of
+ *   the app's agents is its own kind when the tiers name it; any other says
+ *   which (`like`), else it's the app's first.
+ * - **A tier** is a template: for each kind of work, a model chain (as an
+ *   agent's `model` takes one: a model, settings around one, or a list tried
+ *   in order). The app declares its tiers (`tiers`); an org keeps its own
+ *   version of one (`tierTemplate`: kinds' chains changed, or `off`, taken
+ *   away) and makes new ones (`made`). A kind a tier doesn't name takes its
+ *   base kind's chain there.
+ * - **Which tier a turn uses**, the first that applies: the conversation's,
+ *   the person's own default for new chats, the space's, the org's, the
+ *   plan's (`modelChoice`).
  */
 import type { Resources } from "copilotz";
 import type { ModelRef } from "copilotz/plugins/models/contract";
-import { agentsOf, modelOf } from "copilotz/plugins/agents/contract";
+import { agentsOf, defaults } from "copilotz/plugins/agents/contract";
 
-/** A tier: a model for each of the app's agents, named by what it's good for. */
+/** A tier: a model chain for each kind of work, named by what it's good for. */
 export type Tier = {
   title: string;
   /** What it's good for, in a line: "Quick answers, routine work, volume". */
   description?: string;
   /** Among the tiers, lowest first. */
   order?: number;
-  /** Each agent's model, as an agent's `model` takes it: one, settings around one, or a list. */
+  /** Each kind of work's chain, by kind, as an agent's `model` takes it. */
   agents: Record<string, ModelRef>;
 };
 
-/** What an org or a space chose: a tier by its name, and models picked for some agents. Unset: theirs above. */
-export type Choice = { tier?: string; custom?: Record<string, ModelRef> };
+/** A tier as the org has it: the app's (as it is, or `changed`), or one the org `made`. */
+export type OrgTier = Tier & { app?: true; changed?: true; made?: true };
 
-/** Where a choice is kept: the org's, or a space's. */
+/** What an org keeps of a tier: its version of the app's (or that it took it away), or one it made. */
+export type Template = {
+  _id: string;
+  title?: string;
+  description?: string;
+  order?: number;
+  agents?: Record<string, ModelRef>;
+  /** One of the app's the org took away. */
+  off?: boolean;
+  /** One the org made. */
+  made?: boolean;
+  at: string;
+};
+
+/** A kind of work: what it's called, and for one an org added, the app's kind it starts from. */
+export type Kind = { title: string; description?: string; base?: string };
+
+/** One an org added (`tierKind`), by its name. */
+export type OrgKind = {
+  _id: string;
+  title: string;
+  description?: string;
+  base: string;
+  at: string;
+};
+
+/** What a level chose: a tier by its name; the org's also the highest tier its members may use. */
+export type Choice = { tier?: string; cap?: string };
+
+/** Where a choice is kept. */
 export const ORG_CHOICE = "org";
 export const spaceChoice = (space: string): string => `space:${space}`;
+export const threadChoice = (thread: string): string => `thread:${thread}`;
+export const personChoice = (person: string): string => `person:${person}`;
 
-/** The app's tiers. */
-export const tiersOf = (ctx: { resources: Resources }): Record<string, Tier> =>
+/** Who chose the tier in force. */
+export type By = "thread" | "person" | "space" | "org" | "plan";
+
+/** What applies, at each level: each a choice, or none. */
+export type Levels = {
+  thread?: Choice | null;
+  person?: Choice | null;
+  space?: Choice | null;
+  org?: Choice | null;
+  plan?: string | null;
+};
+
+/** The app's tiers, as it declares them. */
+export const appTiersOf = (ctx: { resources: Resources }): Record<string, Tier> =>
   (ctx.resources.tiers ?? {}) as Record<string, Tier>;
 
-/** Where a model comes from: picked here, a tier chosen here, the plan's tier, or the agent's own. */
-export type From =
-  | { by: "space" | "org"; custom: true; tier?: string }
-  | { by: "space" | "org" | "plan"; tier: string }
-  | { by: "app" };
+/** The app's kinds of work: its tiers' keys, in the order its agents are declared, titled. */
+export function appKindsOf(ctx: { resources: Resources }): Record<string, Kind> {
+  const named = (ctx.resources.tierKinds ?? {}) as Record<string, Kind | null>;
+  const agents = agentsOf(ctx);
+  const keys = new Set(
+    Object.values(appTiersOf(ctx)).flatMap((t) => Object.keys(t.agents ?? {})),
+  );
+  const order = [
+    ...Object.keys(agents).filter((a) => keys.has(a)),
+    ...[...keys].filter((k) => !agents[k]),
+  ];
+  return Object.fromEntries(order.map((key) => [key, {
+    title: named[key]?.title ?? agents[key]?.name ?? key[0].toUpperCase() + key.slice(1),
+    ...(named[key]?.description ? { description: named[key]!.description } : {}),
+  }]));
+}
 
-/** What applies, at one level and those above it: each a choice, or none. */
-export type Levels = { space?: Choice | null; org?: Choice | null; plan?: string | null };
+/** Every kind of work: the app's, then those the org added (on an app's kind still there). */
+export function kindsIn(ctx: { resources: Resources }, own: OrgKind[]): Record<string, Kind> {
+  const app = appKindsOf(ctx);
+  const added = own.filter((k) => !app[k._id] && app[k.base])
+    .sort((a, b) => a.at.localeCompare(b.at) || a._id.localeCompare(b._id));
+  return {
+    ...app,
+    ...Object.fromEntries(added.map((k) => [k._id, {
+      title: k.title,
+      ...(k.description ? { description: k.description } : {}),
+      base: k.base,
+    }])),
+  };
+}
+
+/** The kind an agent works as: what it says (`like`); its own, where tiers name it; else the app's first. */
+export function kindOf(
+  ctx: { resources: Resources },
+  name: string,
+  like: string | undefined,
+  kinds: Record<string, Kind>,
+): string | undefined {
+  if (like && kinds[like]) return like;
+  if (kinds[name]) return name;
+  const agents = agentsOf(ctx);
+  return defaults(agents).find((a) => kinds[a]) ?? Object.keys(kinds)[0];
+}
+
+/**
+ * The org's tiers: the app's as the org keeps them (its version over them,
+ * those it took away left out), then those it made; each by its name, in
+ * order.
+ */
+export function tiersIn(
+  ctx: { resources: Resources },
+  templates: Template[],
+): Record<string, OrgTier> {
+  const app = appTiersOf(ctx);
+  const kept = new Map(templates.map((t) => [t._id, t]));
+  const out: [string, OrgTier][] = [];
+  for (const [name, tier] of Object.entries(app)) {
+    const mine = kept.get(name);
+    if (mine?.off) continue;
+    const changed = !!mine && (Object.keys(mine.agents ?? {}).length > 0 ||
+      mine.title !== undefined || mine.description !== undefined);
+    out.push([name, {
+      ...tier,
+      ...(mine?.title ? { title: mine.title } : {}),
+      ...(mine?.description !== undefined ? { description: mine.description } : {}),
+      agents: { ...tier.agents, ...mine?.agents },
+      app: true,
+      ...(changed ? { changed: true } : {}),
+    }]);
+  }
+  for (const mine of templates) {
+    if (!mine.made || app[mine._id] || mine.off) continue;
+    out.push([mine._id, {
+      title: mine.title ?? mine._id,
+      ...(mine.description ? { description: mine.description } : {}),
+      order: mine.order ?? 1000,
+      agents: { ...mine.agents },
+      made: true,
+    }]);
+  }
+  return Object.fromEntries(
+    out.sort(([a, x], [b, y]) => (x.order ?? 0) - (y.order ?? 0) || a.localeCompare(b)),
+  );
+}
+
+/** A kind's chain in a tier: its own entry there, else its base kind's. */
+export function entryOf(
+  tier: Tier | undefined,
+  kind: string | undefined,
+  kinds: Record<string, Kind>,
+): ModelRef | undefined {
+  if (!tier || !kind) return undefined;
+  if (tier.agents[kind] !== undefined) return tier.agents[kind];
+  const base = kinds[kind]?.base;
+  return base && tier.agents[base] !== undefined ? tier.agents[base] : undefined;
+}
 
 /** A tier that's still offered: one that's gone counts as none chosen. */
-const offered = (tiers: Record<string, Tier>, name?: string | null) =>
+const offered = (tiers: Record<string, unknown>, name?: string | null) =>
   name && Object.hasOwn(tiers, name) ? name : undefined;
 
-/** The tier in force: the space's, else the org's, else the plan's; and who chose it. */
+/** The tier in force, and who chose it: the conversation, the person, the space, the org, the plan. */
 export function tierIn(
-  tiers: Record<string, Tier>,
+  tiers: Record<string, unknown>,
   levels: Levels,
-): { tier: string; by: "space" | "org" | "plan" } | undefined {
-  const space = offered(tiers, levels.space?.tier);
-  if (space) return { tier: space, by: "space" };
-  const org = offered(tiers, levels.org?.tier);
-  if (org) return { tier: org, by: "org" };
-  const plan = offered(tiers, levels.plan);
+): { tier: string; by: By } | undefined {
+  for (const by of ["thread", "person", "space", "org"] as const) {
+    const tier = offered(tiers, levels[by]?.tier);
+    if (tier) return { tier, by };
+  }
+  const plan = offered(tiers, levels.plan) ?? Object.keys(tiers)[0];
   return plan ? { tier: plan, by: "plan" } : undefined;
 }
 
+/** Whether a tier is above the highest the org lets its members use (`cap`). */
+export function aboveCap(tiers: Record<string, unknown>, tier: string, cap?: string): boolean {
+  if (!cap || !Object.hasOwn(tiers, cap) || !Object.hasOwn(tiers, tier)) return false;
+  const names = Object.keys(tiers);
+  return names.indexOf(tier) > names.indexOf(cap);
+}
+
 /** A model, as a list: what's tried in order. */
-const listOf = (ref: ModelRef): ModelRef[] => Array.isArray(ref) ? ref : [ref];
+export const listOf = (ref: ModelRef): ModelRef[] => Array.isArray(ref) ? ref : [ref];
 
 /** The model a ref tries first, as `"provider/model"` when it says so plainly. */
-const firstId = (ref: ModelRef): string | undefined => {
+export const firstId = (ref: ModelRef): string | undefined => {
   const first = listOf(ref)[0];
   if (typeof first === "string") return first;
   if (first && typeof first === "object" && !Array.isArray(first)) {
@@ -69,73 +222,12 @@ const firstId = (ref: ModelRef): string | undefined => {
   return undefined;
 };
 
-/** What `resolve` says: the model, where it comes from, and for a pick, what it stands in front of. */
-export type Resolved = {
-  model: ModelRef | null;
-  from: From;
-  /** A pick: itself, the entry it replaces (whose settings carry over), and the list behind it. */
-  pick?: { ref: ModelRef; replaces: ModelRef; behind: ModelRef[] };
-};
-
-/**
- * Which model one of the app's agents thinks with, and where it comes from,
- * the first that applies: the space's pick for it, the space's tier, the
- * org's pick, the org's tier, the plan's tier. A tier that doesn't name the
- * agent leaves it on its own model; so does nothing chosen (`model` null).
- * A pick keeps the list it stands in front of behind it (the tier in force
- * below it, or the agent's own), so a model that fails falls back as before;
- * `carried` gives it that entry's settings. An agent that isn't the app's is
- * none of this: null.
- */
-export function resolve(
-  ctx: { resources: Resources },
-  agent: string,
-  levels: Levels,
-): Resolved {
-  const tiers = tiersOf(ctx);
-  const own = agentsOf(ctx)[agent];
-  if (!own) return { model: null, from: { by: "app" } };
-  const below = (from: "space" | "org") => {
-    const rest = from === "space" ? levels : { ...levels, space: null };
-    const tier = tierIn(tiers, rest);
-    return tier && Object.hasOwn(tiers[tier.tier].agents, agent)
-      ? { list: tiers[tier.tier].agents[agent], tier: tier.tier }
-      : { list: modelOf(own) as ModelRef };
-  };
-  for (const by of ["space", "org"] as const) {
-    const choice = levels[by];
-    const pick = choice?.custom?.[agent];
-    if (pick !== undefined) {
-      const { list, tier } = below(by);
-      const picked = firstId(pick);
-      const behind = listOf(list).filter((ref) => !picked || firstId(ref) !== picked);
-      return {
-        model: [...listOf(pick), ...behind],
-        from: { by, custom: true, ...(tier ? { tier } : {}) },
-        pick: { ref: pick, replaces: listOf(list)[0], behind },
-      };
-    }
-    const tier = offered(tiers, choice?.tier);
-    if (tier) {
-      return Object.hasOwn(tiers[tier].agents, agent)
-        ? { model: tiers[tier].agents[agent], from: { by, tier } }
-        : { model: null, from: { by: "app" } };
-    }
-  }
-  const plan = offered(tiers, levels.plan);
-  if (plan && Object.hasOwn(tiers[plan].agents, agent)) {
-    return { model: tiers[plan].agents[agent], from: { by: "plan", tier: plan } };
-  }
-  return { model: null, from: { by: "app" } };
-}
-
 /** What a model's first choice is set to think and write with. */
-type Settings = { effort?: string; maxTokens?: number };
+export type Settings = { effort?: string; maxTokens?: number };
 
 /**
  * The model a ref tries first, with the effort and most tokens it's asked
- * for, following aliases (`resources.model`): what a page shows of it, and
- * what a pick carries over.
+ * for, following aliases (`resources.model`): what a page shows of it.
  */
 export function primaryOf(
   ctx: { resources: Resources },
@@ -161,28 +253,29 @@ export function primaryOf(
 }
 
 /**
- * The model `resolve` found, a pick given what the entry it replaces sets:
- * its `maxTokens`, and its `effort` when the picked model takes that level
- * (the catalog's, `models.efforts`), else none, so a pick isn't cut short by
- * an adapter's default nor refused for an effort it doesn't have. What the
- * pick sets itself wins.
+ * A chain someone set on a page (each entry a model), with what the chain it
+ * replaces sets on its first entry: its `maxTokens`, and its `effort` where
+ * each model takes it and none was said (the catalog's, `models.efforts`).
+ * So a chain set by hand isn't cut short by an adapter's default.
  */
-export async function carried(
+export async function settled(
   ctx: { resources: Resources; call<R>(action: string, input?: unknown): Promise<R> },
-  resolved: Resolved,
-): Promise<ModelRef | null> {
-  if (!resolved.pick) return resolved.model;
-  const { ref, replaces, behind } = resolved.pick;
-  const from = primaryOf(ctx, replaces);
-  const picked = primaryOf(ctx, ref);
-  const levels = from?.effort && picked
-    ? await ctx.call<string[] | null>("models.efforts", { model: picked.id }).catch(() => null)
-    : null;
-  const settings = {
-    ...(from?.maxTokens !== undefined ? { maxTokens: from.maxTokens } : {}),
-    ...(from?.effort && levels?.includes(from.effort) ? { effort: from.effort } : {}),
-  };
-  if (!Object.keys(settings).length) return resolved.model;
-  const [first, ...rest] = listOf(ref);
-  return [{ model: first, ...settings }, ...rest, ...behind];
+  chain: ModelRef[],
+  like: ModelRef | undefined,
+): Promise<ModelRef[]> {
+  const from = like ? primaryOf(ctx, like) : undefined;
+  return await Promise.all(chain.map(async (entry) => {
+    const picked = primaryOf(ctx, entry);
+    if (!picked || !from) return entry;
+    const levels = from.effort && !picked.effort
+      ? await ctx.call<string[] | null>("models.efforts", { model: picked.id }).catch(() => null)
+      : null;
+    const settings = {
+      ...(from.maxTokens !== undefined && picked.maxTokens === undefined
+        ? { maxTokens: from.maxTokens }
+        : {}),
+      ...(from.effort && levels?.includes(from.effort) ? { effort: from.effort } : {}),
+    };
+    return Object.keys(settings).length ? { model: entry, ...settings } as ModelRef : entry;
+  }));
 }

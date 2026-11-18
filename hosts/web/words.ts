@@ -132,6 +132,17 @@ export function setWords(words: Words): () => void {
   };
 }
 
+/**
+ * Text the app's data holds, in the app's words when it gives them: what the server sends as the
+ * app declared it (a tier's description, a kind of work's title, an agent's description). The
+ * app gives them under `text.` and the English as it is (`"text.Quick answers.": "Respostas
+ * rápidas."`); text it gives none for (one an org wrote) shows as it is.
+ */
+export function sayText(text: string): string {
+  const phrase = given[`text.${text}`];
+  return phrase === undefined ? text : render(phrase);
+}
+
 /** Every key Copilotz's front ends define (those loaded), with its English. */
 export const knownWords = (): Record<string, Phrase> => Object.fromEntries(english);
 

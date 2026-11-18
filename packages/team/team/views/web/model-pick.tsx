@@ -20,8 +20,10 @@ import { STYLE } from "./style.ts";
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export type ModelPick = {
-  action: string;
+  action?: string;
   input?: Record<string, unknown>;
+  /** Called with the model chosen, in place of `action`: a page that does more with it. */
+  onPick?(model: string): Promise<unknown>;
   look?: "field" | "link";
   label?: string;
   disabled?: boolean;
@@ -45,7 +47,8 @@ function Pick({ value, pick, call }: { value: string; pick: ModelPick; call: Cal
     setBusy(true);
     setError(undefined);
     try {
-      await call(pick.action, { ...pick.input, model });
+      if (pick.onPick) await pick.onPick(model);
+      else if (pick.action) await call(pick.action, { ...pick.input, model });
     } catch (e) {
       setError(message(e));
     } finally {

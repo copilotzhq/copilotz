@@ -237,6 +237,44 @@ test("an org's key goes on its calls, at the catalog's address, over the app's",
   });
 });
 
+test("a person's own key goes on calls for them, over the org's; theirs alone", async () => {
+  await setup(async (rt, space) => {
+    const MINE = "sk-mine-0123456789-ABCD";
+    await rt.call("modelKey.set", { provider: "groq", key: CANARY }, { actor: ana });
+    // Anyone keeps their own: Bob isn't an owner.
+    const made = await rt.call<{ hint: string }>("modelKey.set", {
+      provider: "groq",
+      key: MINE,
+      mine: true,
+    }, { actor: bob });
+    assertEquals(made.hint, "••••ABCD");
+    assertEquals(await rt.query("modelKey.mine", {}, { actor: bob }), [
+      {
+        provider: "groq",
+        hint: "••••ABCD",
+        at: (await rt.query<{ at: string }[]>("modelKey.mine", {}, { actor: bob }))[0].at,
+      },
+    ]);
+    assertEquals(await rt.query("modelKey.mine", {}, { actor: ana }), []);
+    // The org's list doesn't show it; a call for Bob opens his, anyone else's the org's.
+    assertEquals(
+      (await rt.call<{ provider: string }[]>("modelKey.list", {})).map((k) => k.provider),
+      ["groq"],
+    );
+    assertEquals(await rt.call("modelKey.open", { provider: "groq", person: "bob" }), MINE);
+    assertEquals(await rt.call("modelKey.open", { provider: "groq", person: "ana" }), CANARY);
+    assertEquals(await rt.call("modelKey.open", { provider: "groq" }), CANARY);
+    // An agent working for Ana uses the org's.
+    await ask(rt, space, "hello");
+    assertEquals(sent.at(-1)?.apiKey, CANARY);
+    // Removing his own leaves the org's.
+    await rt.call("modelKey.remove", { provider: "groq", mine: true }, { actor: bob });
+    assertEquals(await rt.call("modelKey.open", { provider: "groq", person: "bob" }), CANARY);
+    await rt.idle();
+    assert(!seen.some((event) => event.includes(MINE)), "a key in an event");
+  });
+});
+
 test("a list moves on from a provider with no key", async () => {
   await setup(async (rt, space) => {
     await ask(rt, space, "@chain hello");

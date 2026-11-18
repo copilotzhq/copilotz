@@ -867,3 +867,39 @@ test("the model tier an org's plan gives: its terms', as the app's plan says bef
     teamOrg,
   );
 });
+
+test("what a plan gives in credits: a trial's once, a plan's a month, per seat; a team on Free none", async () => {
+  await setup(
+    async (rt) => {
+      assertEquals(await rt.call("billing.credits", {}), {
+        plan: "free",
+        title: "Free",
+        amount: 2,
+        every: "once",
+      });
+      await rt.call("billing.setPlan", { name: "personal" }, { actor: staff });
+      assertEquals(await rt.call("billing.credits", {}), {
+        plan: "personal",
+        title: "Personal",
+        amount: 10,
+        every: "month",
+        perSeat: true,
+      });
+    },
+    KINDS,
+    personalOrg,
+  );
+  await setup(
+    async (rt) => {
+      // A team's Free gives no trial.
+      assertEquals(await rt.call("billing.credits", {}), {
+        plan: "free",
+        title: "Free",
+        amount: 0,
+        every: "once",
+      });
+    },
+    KINDS,
+    teamOrg,
+  );
+});

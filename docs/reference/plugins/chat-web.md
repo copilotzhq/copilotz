@@ -38,8 +38,9 @@ Its Views show on the web.
 
 ## What it needs
 
-Nothing to set. It reads `agentSources`, `agents`, `askViews`, `composerNotes`, `conversation`,
-`home`, `refusals`, `suggestions` and `toolViews`, resource kinds the app and other plugins fill.
+Nothing to set. It reads `agentSources`, `agents`, `askViews`, `composerControls`, `composerNotes`,
+`conversation`, `home`, `refusals`, `suggestions`, `toolViews` and `welcome`, resource kinds the app
+and other plugins fill.
 
 ## What it requires
 

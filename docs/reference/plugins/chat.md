@@ -17,7 +17,7 @@ import { chat } from "copilotz/plugins/agents";
 
 ## What it keeps
 
-It keeps 9 collections, 6 of them on the record.
+It keeps 10 collections, 7 of them on the record.
 
 | Collection | Kept as                             | Fields                                                                                                                                                                                                                                           |
 | ---------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -30,6 +30,7 @@ It keeps 9 collections, 6 of them on the record.
 | `shown`    | records, appended and never changed | `thread`, `in`, `key`, `after`, `medium`, `fallback`, `note`, `at`                                                                                                                                                                               |
 | `thread`   | documents                           | `title`, `renamable`, `agents`, `parent`, `fork`, `in`, `about`, `held`, `messages`, `opened`, `latest`, `at`                                                                                                                                    |
 | `wait`     | documents                           | `agent`, `thread`, `trigger`, `hops`, `waitingFor`, `received`, `step`, `at`                                                                                                                                                                     |
+| `welcome`  | documents                           | `at`                                                                                                                                                                                                                                             |
 
 The access rules cover `file`, `live`, `message`, `shown` and `thread`: each document is in a space,
 and only those who reach the space reach it.
@@ -50,11 +51,12 @@ Its named queries read for callers, as the rules let them:
 | `thread.moving`        | people, agents for a person, keys and routines                     |
 | `thread.prompt`        | people, keys and routines; agents for a person, depending on input |
 | `thread.recent`        | people, agents for a person, keys and routines                     |
+| `welcome.seen`         | people, agents for a person, keys and routines                     |
 
 ## What it lets callers do
 
-Of its 16 Actions, people may call 9; agents may call 4; contacts may call 2; someone signed out may
-call none.
+Of its 17 Actions, people may call 10; agents may call 4; contacts may call 2; someone signed out
+may call none.
 
 | Action             | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                           |
 | ------------------ | ------ | ----- | ------- | ------ | --- | ------- | ----------- | -------------------------------------------------------------------------------------- |
@@ -68,6 +70,7 @@ call none.
 | `chat.send`        | yes    | no    | yes     | no     | yes | yes     | no          |                                                                                        |
 | `chat.stop`        | yes    | yes   | no      | no     | yes | yes     | no          | Stops agents' turns in a conversation (and its subthreads).                            |
 | `chat.unmark`      | no     | no    | no      | no     | no  | no      | yes         | Takes the old marks off messages: each goes where only those who could read it see it. |
+| `chat.welcomed`    | yes    | no    | no      | no     | no  | no      | no          | Marks that you've seen the app's welcome.                                              |
 
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.

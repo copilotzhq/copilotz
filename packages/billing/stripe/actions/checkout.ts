@@ -53,6 +53,8 @@ export const checkoutAction = defineAction({
       credits: { type: "number", exclusiveMinimum: 0 },
       plan: { type: "string" },
       country: { type: "string", minLength: 2, maxLength: 2 },
+      /** Where in the app the payment page comes back to (a path); else Billing. */
+      back: { type: "string", pattern: "^/[^/\\\\]", maxLength: 200 },
     },
     additionalProperties: false,
   },
@@ -75,11 +77,13 @@ export const checkoutAction = defineAction({
     const chosen = sellerFor(set, plan.seller, input.country);
     if (!chosen) throw failure("no_seller", "Paying isn't set up here yet.");
     const [name, seller] = chosen;
-    const back = (paid: string) => `${set.url}/org?tab=billing&paid=${paid}`;
+    const where = input.back ?? "/org?tab=billing";
+    const back = (paid: string) =>
+      `${set.url}${where}${where.includes("?") ? "&" : "?"}paid=${paid}`;
     const common = {
       ...(plan.customer ? { customer: plan.customer } : {}),
       client_reference_id: org,
-      cancel_url: `${set.url}/org?tab=billing`,
+      cancel_url: `${set.url}${where}`,
     };
     const call = (params: Record<string, unknown>) =>
       stripeCall<{ url: string }>(

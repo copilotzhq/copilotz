@@ -23,7 +23,7 @@ It keeps 3 collections, 1 of them on the record.
 | ------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `account`     | documents                  | `person`, `provider`, `status`, `label`, `plan`, `problem`, `connected`, `refreshed`, `expires`, `rev`; private: `tokens` |
 | `accountFlow` | in memory, gone on restart | `person`, `provider`, `verifier`, `redirect`, `expires`                                                                   |
-| `modelKey`    | documents                  | `hint`, `by`, `at`; private: `sealed`                                                                                     |
+| `modelKey`    | documents                  | `hint`, `person`, `provider`, `by`, `at`; private: `sealed`                                                               |
 
 Its named queries read for callers, as the rules let them:
 
@@ -31,6 +31,7 @@ Its named queries read for callers, as the rules let them:
 | ------------------- | ---------------------------------------------- |
 | `account.providers` | people, agents for a person, keys and routines |
 | `account.uses`      | people, agents for a person, keys and routines |
+| `modelKey.mine`     | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
@@ -45,7 +46,7 @@ none.
 | `account.disconnect` | yes    | no    | no      | no     | no  | no      | Disconnects one of your accounts, and asks its provider to end its sign-in. |
 | `modelKey.may`       | yes    | yes   | no      | no     | yes | yes     | Whether you may change the org's keys for model providers.                  |
 | `modelKey.remove`    | yes    | no    | no      | no     | no  | no      | Removes the org's own key for a model provider.                             |
-| `modelKey.set`       | yes    | no    | no      | no     | no  | no      | Adds or replaces the org's own key for a model provider.                    |
+| `modelKey.set`       | yes    | no    | no      | no     | no  | no      | Adds or replaces a key for a model provider: the org's, or your own (mine). |
 
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.

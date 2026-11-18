@@ -1,34 +1,35 @@
 /**
- * What an org and its spaces chose for the app's agents' models: the org's
- * (`_id: "org"`) and each space's (`space:<id>`), each a tier by its name and
- * models picked for some agents. Never a copy of a tier's lists: retuning a
- * tier moves everyone on it. Changed only through `tiers.choose` and
- * `tiers.pick`, which say who may; read by `_id`, so a turn's asking costs
- * what the owner has cached.
+ * Which tier applies where (`modelChoice`): the org's (`_id: "org"`, with
+ * `cap`, the highest tier its members may choose), a space's (`space:<id>`),
+ * a conversation's (`thread:<id>`) and a person's own default for new chats
+ * (`person:<id>`). Each a tier by its name, never a copy: changing a tier
+ * moves everyone on it. Changed only through `tiers.choose` and `tiers.cap`,
+ * which say who may; read by `_id`, so a turn's asking costs what the owner
+ * has cached.
  *
  * Queries, for front ends, as the person looking:
- * - `offered` `{ space? }`: the tiers on offer with each agent's model and a
- *   typical reply's price at this org's prices, what the org chose and the
- *   plan gives, and with `space`, what the space chose; then what applies
- *   there, each agent's model and where it comes from. Anyone in the org reads
- *   the org's; a space's, those who reach it.
- * - `agent` `{ agent, space }`: one of the app's agents in a space, its model
- *   and where it comes from, and when it's picked for the space, where taking
- *   the pick back leaves it (`without`); null for an agent that isn't the app's.
+ * - `offered` `{ space?, thread? }`: the org's tiers with each kind of
+ *   work's chain and a typical message's price at this org's prices, the
+ *   kinds and the app's agents of each, what each level chose, and what
+ *   applies there. Anyone in the org reads it; a space's and a
+ *   conversation's, those who reach them.
+ * - `agent` `{ agent, space?, thread? }`: one agent there: its kind, the tier
+ *   in force and its chain in it.
  */
-import { defineCollection, forbidden, people } from "copilotz";
-import type { ModelRef } from "copilotz/plugins/models/contract";
+import { defineCollection, forbidden, people, type ReadContext } from "copilotz";
 import { agentAt, shownAt } from "../shared/shown.ts";
 
 const choiceSchema = {
   type: "object",
   properties: {
-    /** The space it's for; none: the org's. */
+    /** The space or conversation it's for, or the person whose default it is; none: the org's. */
     space: { type: "string" },
-    /** A tier by its name; none: the one above (the org's, then the plan's). */
+    thread: { type: "string" },
+    person: { type: "string" },
+    /** A tier by its name; none: the one above. */
     tier: { type: "string" },
-    /** Models picked for some of the app's agents, by name, as an agent's `model` takes one. */
-    custom: { type: "object" },
+    /** The org's: the highest tier its members may choose; none: any. */
+    cap: { type: "string" },
     at: { type: "string" },
   },
   required: ["at"],
@@ -37,18 +38,21 @@ const choiceSchema = {
 export type ModelChoice = {
   _id: string;
   space?: string;
+  thread?: string;
+  person?: string;
   tier?: string;
-  custom?: Record<string, ModelRef>;
+  cap?: string;
   at: string;
 };
 
-/** Only someone who reaches the space reads what it chose: the rules say whether they do. */
-async function reached(
-  ctx: Parameters<typeof shownAt>[0],
-  space: string,
-): Promise<void> {
-  const found = await ctx.db.collection("space").findOne({ _id: space });
-  if (!found) throw forbidden("You can't read that space.");
+/** Only someone who reaches the space or the conversation reads what it chose: the rules say. */
+async function reached(ctx: ReadContext, where: { space?: string; thread?: string }) {
+  if (where.space && !await ctx.db.collection("space").findOne({ _id: where.space })) {
+    throw forbidden("You can't read that space.");
+  }
+  if (where.thread && !await ctx.db.collection("thread").findOne({ _id: where.thread })) {
+    throw forbidden("You can't read that conversation.");
+  }
 }
 
 export const modelChoice = defineCollection({
@@ -56,16 +60,24 @@ export const modelChoice = defineCollection({
   queries: {
     offered: {
       allow: people,
-      run: async (_, params: { space?: string }, ctx) => {
-        if (params.space) await reached(ctx, params.space);
-        return await shownAt(ctx, params.space);
+      run: async (_, params: { space?: string; thread?: string }, ctx) => {
+        const where = {
+          ...(params.space ? { space: params.space } : {}),
+          ...(params.thread ? { thread: params.thread } : {}),
+        };
+        await reached(ctx, where);
+        return await shownAt(ctx, where);
       },
     },
     agent: {
       allow: people,
-      run: async (_, params: { agent: string; space: string }, ctx) => {
-        await reached(ctx, params.space);
-        return await agentAt(ctx, params.agent, params.space);
+      run: async (_, params: { agent: string; space?: string; thread?: string }, ctx) => {
+        const where = {
+          ...(params.space ? { space: params.space } : {}),
+          ...(params.thread ? { thread: params.thread } : {}),
+        };
+        await reached(ctx, where);
+        return await agentAt(ctx, params.agent, where);
       },
     },
   },

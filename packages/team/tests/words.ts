@@ -6,9 +6,13 @@
 import { writeFileSync } from "node:fs";
 import { keyed, wordsList } from "copilotz/testing/words";
 import { PHRASES } from "../team/views/web/words.ts";
+import { PHRASES as TIERS } from "../tiers/views/web/say.ts";
 
 export function wordsDoc(): string {
-  const words = Object.assign({}, ...Object.entries(PHRASES).map(([area, p]) => keyed(area, p)));
+  const words = Object.assign(
+    {},
+    ...Object.entries({ ...PHRASES, ...TIERS }).map(([area, p]) => keyed(area, p)),
+  );
   return [
     "# @copilotz/team's words",
     "",

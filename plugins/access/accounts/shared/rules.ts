@@ -12,12 +12,13 @@ import { failure, type Guard } from "../../../../runtime/mod.ts";
 const NOBODY = { _id: { $in: [] } };
 
 export const rules: Guard = (actor, { collection, access, direct }) => {
-  if (collection === "account" && direct && access === "write") {
-    throw failure("forbidden", "Accounts change through their Actions.", { public: true });
+  if ((collection === "account" || collection === "modelKey") && direct && access === "write") {
+    throw failure("forbidden", "Accounts and keys change through their Actions.", { public: true });
   }
-  return collection === "account"
+  // A person reads their own accounts, and their own keys (never a key itself: it's private).
+  return collection === "account" || collection === "modelKey"
     ? actor.kind === "person" ? { person: actor.id } : NOBODY
-    : collection === "accountFlow" || collection === "modelKey"
+    : collection === "accountFlow"
     ? NOBODY
     : undefined;
 };

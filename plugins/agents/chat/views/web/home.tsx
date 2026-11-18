@@ -1,7 +1,10 @@
 /**
  * Home (kind `home`): a new conversation, where the person works
  * (`hints.in`). A greeting, where you type, and a few ways to start (the
- * `suggestions` resource: strings an app adds to, or `null`s out). What you
+ * `suggestions` resource: strings an app adds to, or `null`s out). The first
+ * time each person comes to it, the app's welcome over it (the `welcome`
+ * resource's steps, in a dialog: views/web/welcome.tsx); `?welcome=1`
+ * shows it again. What you
  * send starts the conversation there, and opens it. Over the greeting, what
  * other front ends put there (the `home` resource: a View each, with hints
  * `{ in }`, such as invitations to join a space), nothing when they've
@@ -16,11 +19,18 @@ import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { EmptyState, go, Icon, Logo, Title } from "../../../../../hosts/web/mod.ts";
 import type { Team } from "../../shared/agents.ts";
-import type { ComposerNote, HomeView, RefusalView } from "../../shared/types.ts";
+import type {
+  ComposerControl,
+  ComposerNote,
+  HomeView,
+  RefusalView,
+  WelcomeStep,
+} from "../../shared/types.ts";
 import { mentionable } from "./agents.ts";
 import { Composer } from "./composer.tsx";
 import { STYLE } from "./style.ts";
 import { greeted } from "./who.ts";
+import { Welcome } from "./welcome.tsx";
 import { say } from "./words.ts";
 
 type Space = { _id: string; name: string; kind: string };
@@ -47,6 +57,29 @@ export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
     .filter((entry): entry is HomeView => !!entry?.view)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .map((entry) => ctx.show(entry.view, {}, here ? { in: here } : {}));
+  // The app's welcome, the first time they come here (or asked for again).
+  const query = (ctx.hints.query ?? {}) as Record<string, unknown>;
+  const steps = Object.entries((ctx.resources.welcome ?? {}) as Record<string, WelcomeStep | null>)
+    .filter((entry): entry is [string, WelcomeStep] => !!entry[1]?.view)
+    .sort(([, a], [, b]) => (a.order ?? 0) - (b.order ?? 0));
+  const seen = steps.length
+    ? ctx.db.collection("welcome").query<{ seen: boolean }>("seen", {}).value
+    : undefined;
+  const again = query.welcome === "1";
+  const welcome = steps.length && seen && (!seen.seen || again)
+    ? (
+      <Welcome
+        steps={steps.map(([key, step]) => ({
+          ...step,
+          key,
+          part: ctx.show(step.view, {}, here ? { in: here } : {}),
+        }))}
+        call={ctx.call}
+        again={again}
+        {...(here ? { here } : {})}
+      />
+    )
+    : null;
   if (here && space === null) {
     return (
       <section className="chat chat-missing" aria-labelledby="chat-home-title">
@@ -62,6 +95,7 @@ export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
     <section className="chat chat-home" aria-labelledby="chat-home-title">
       <style href="chat-web" precedence="copilotz">{STYLE}</style>
       <Title text={shared ? space.name : say("newChat")} />
+      {welcome}
       <div className="chat-home-body">
         {tops.length ? <div className="chat-home-top">{tops}</div> : null}
         <div className="chat-home-hero">
@@ -80,6 +114,9 @@ export const homeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => 
           where={space ? space.kind === "personal" ? say("personal") : space.name : undefined}
           refusals={ctx.resources.refusals as Record<string, RefusalView | null> | undefined}
           notes={ctx.resources.composerNotes as Record<string, ComposerNote | null> | undefined}
+          controls={ctx.resources.composerControls as
+            | Record<string, ComposerControl | null>
+            | undefined}
           place={here ? { in: here } : {}}
           attach={(file) => ctx.call<{ id: string }>("chat.attach", file)}
           send={async (text, files, options) => {

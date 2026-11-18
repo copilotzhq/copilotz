@@ -138,6 +138,8 @@ import { message } from "./collections/message.ts";
 import { shown } from "./collections/shown.ts";
 import { thread } from "./collections/thread.ts";
 import { wait } from "./collections/wait.ts";
+import { welcome } from "./collections/welcome.ts";
+import { welcomedAction } from "./actions/welcomed.ts";
 import { turnRequested } from "./events/turn-requested.ts";
 import { failedProcessor } from "./processors/failed.ts";
 import { turnProcessor } from "./processors/turn.ts";
@@ -153,14 +155,23 @@ export * from "./contract.ts";
 export { lineage } from "./shared/lineage.ts";
 
 /** Chat's collections, changed only through its Actions. */
-const CHAT_RECORDS = ["message", "live", "thread", "file", "shown", "approval", "grant"];
+const CHAT_RECORDS = [
+  "message",
+  "live",
+  "thread",
+  "file",
+  "shown",
+  "approval",
+  "grant",
+  "welcome",
+];
 /** What a person reaches only their own of: what agents ask them, and what they let. */
 const OWNED = ["approval", "grant"];
 
 export const chat: Plugin = definePlugin({
   name: "chat",
   requires: ["models"],
-  collections: { thread, message, wait, live, file, intent, shown, approval, grant },
+  collections: { thread, message, wait, live, file, intent, shown, approval, grant, welcome },
   views: {
     "llm.thread": prompt,
     participants: participants,
@@ -201,6 +212,7 @@ export const chat: Plugin = definePlugin({
     "chat.import": importAction,
     "chat.approve": approveAction,
     "chat.forgetGrant": forgetGrantAction,
+    "chat.welcomed": welcomedAction,
   },
   events: { "turn.requested": turnRequested },
   schedules: {

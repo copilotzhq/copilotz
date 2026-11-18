@@ -10,6 +10,7 @@ import { Avatar, Button, Field, Icon, message, Select } from "copilotz/web";
 import { AGENT_ROLES } from "copilotz/plugins/access/contract";
 import type { Agent } from "copilotz/plugins/agents/contract";
 import { AgentFields, type Draft } from "./agent-fields.tsx";
+import { Describe, KindField, type KindOption } from "./agent-describe.tsx";
 import { agentPath, handleOf, type Options, shownAs, usualTools } from "./agents.ts";
 import { type Place, placeName } from "./places.ts";
 import { say } from "./words.ts";
@@ -23,8 +24,10 @@ type MadeAgent = { id: string; name: string; icon?: string; role: string };
 const leaving = (event: MouseEvent<HTMLElement>) => event.currentTarget.closest("dialog")?.close();
 
 export function NewAgent(
-  { space, known, options, call, from: first, onBack }: {
+  { space, known, options, call, from: first, onBack, kinds }: {
     space: Place;
+    /** Kinds of work, where tiers give agents their models: one in place of a model. */
+    kinds?: KindOption[];
     /** Every agent the person has met: the app's, to start from; and names taken. */
     known: Record<string, Agent>;
     options: Options;
@@ -61,12 +64,36 @@ export function NewAgent(
   const [from, setFrom] = useState(first && known[first] && !known[first].in ? first : "");
   const [draft, setDraft] = useState<Draft>(() => from ? like(from) : blank());
   const [role, setRole] = useState("editor");
+  const [kind, setKind] = useState(kinds?.[0]?.kind ?? "");
+  // Described first, unless it starts from one of the app's agents.
+  const [step, setStep] = useState<"describe" | "form">(from ? "form" : "describe");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [made, setMade] = useState<MadeAgent>();
   const name = draft.name.trim();
   const handle = name ? handleOf(name, (taken) => taken in known) : "";
   const where = placeName(space);
+
+  if (step === "describe" && !made) {
+    return (
+      <Describe
+        kinds={kinds}
+        call={call}
+        onSkip={() => setStep("form")}
+        onDraft={(sketch) => {
+          setDraft((now) => ({
+            ...now,
+            name: sketch.name,
+            icon: sketch.icon,
+            description: sketch.description,
+            instructions: sketch.instructions,
+          }));
+          if (sketch.like) setKind(sketch.like);
+          setStep("form");
+        }}
+      />
+    );
+  }
 
   if (made) {
     return (
@@ -78,6 +105,7 @@ export function NewAgent(
           setMade(undefined);
           setFrom("");
           setDraft(blank());
+          setStep("describe");
         }}
       />
     );
@@ -89,7 +117,7 @@ export function NewAgent(
       aria-label={say("newAgentForm")}
       onSubmit={async (event) => {
         event.preventDefault();
-        if (!name || !draft.model || busy) return;
+        if (!name || (!kinds?.length && !draft.model) || busy) return;
         setBusy(true);
         setError(undefined);
         try {
@@ -98,7 +126,7 @@ export function NewAgent(
             name,
             ...(draft.description.trim() ? { description: draft.description.trim() } : {}),
             ...(draft.instructions.trim() ? { instructions: draft.instructions.trim() } : {}),
-            model: draft.model,
+            ...(kinds?.length ? (kind ? { like: kind } : {}) : { model: draft.model }),
             tools: draft.tools,
             ...(draft.icon ? { icon: draft.icon } : {}),
             ...(from ? { from } : {}),
@@ -157,6 +185,9 @@ export function NewAgent(
         handle={handle}
         call={call}
         autoFocus
+        model={kinds?.length
+          ? <KindField kinds={kinds} value={kind} onChange={setKind} disabled={busy} />
+          : undefined}
       />
       <Field
         label={say("worksInAs", { place: where })}
@@ -184,7 +215,7 @@ export function NewAgent(
           variant="primary"
           icon="plus"
           loading={busy}
-          disabled={!name || !draft.model}
+          disabled={!name || (!kinds?.length && !draft.model)}
           aria-describedby={`${id}-said`}
         >
           {name ? say("createNamed", { name }) : say("createAgent")}

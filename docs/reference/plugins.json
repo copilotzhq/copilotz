@@ -169,6 +169,8 @@
           "kind": "documents",
           "fields": [
             "hint",
+            "person",
+            "provider",
             "by",
             "at"
           ],
@@ -176,6 +178,12 @@
             "type": "object",
             "properties": {
               "hint": {
+                "type": "string"
+              },
+              "person": {
+                "type": "string"
+              },
+              "provider": {
                 "type": "string"
               },
               "by": {
@@ -198,7 +206,21 @@
           "shared": false,
           "vectors": [],
           "indexes": [],
-          "queries": []
+          "queries": [
+            {
+              "name": "mine",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            }
+          ]
         }
       ],
       "indexes": [],
@@ -417,6 +439,9 @@
             "properties": {
               "provider": {
                 "type": "string"
+              },
+              "person": {
+                "type": "string"
               }
             },
             "required": [
@@ -436,6 +461,9 @@
             "properties": {
               "provider": {
                 "type": "string"
+              },
+              "mine": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -458,7 +486,7 @@
         },
         {
           "name": "modelKey.set",
-          "summary": "Adds or replaces the org's own key for a model provider",
+          "summary": "Adds or replaces a key for a model provider: the org's, or your own (mine)",
           "input": {
             "type": "object",
             "properties": {
@@ -469,6 +497,9 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 4096
+              },
+              "mine": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -678,6 +709,10 @@
           "place": "web"
         },
         {
+          "name": "accounts.keys",
+          "place": "web"
+        },
+        {
           "name": "accounts.palette",
           "place": "web"
         },
@@ -710,7 +745,14 @@
             "accounts": {}
           }
         },
-        "reads": []
+        "reads": [
+          {
+            "kind": "agentKinds",
+            "found": [
+              "source"
+            ]
+          }
+        ]
       },
       "adapters": {},
       "workers": [],
@@ -3312,6 +3354,46 @@
           "vectors": [],
           "indexes": [],
           "queries": []
+        },
+        {
+          "name": "welcome",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [],
+          "queries": [
+            {
+              "name": "seen",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            }
+          ]
         }
       ],
       "indexes": [],
@@ -4150,6 +4232,26 @@
             "maintenance": "yes"
           },
           "helper": "isMaintenance"
+        },
+        {
+          "name": "chat.welcomed",
+          "summary": "Marks that you've seen the app's welcome",
+          "input": {
+            "type": "object",
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
         }
       ],
       "tools": [
@@ -4306,7 +4408,10 @@
         "thread.deleted",
         "wait.created",
         "wait.updated",
-        "wait.deleted"
+        "wait.deleted",
+        "welcome.created",
+        "welcome.updated",
+        "welcome.deleted"
       ],
       "listens": [
         "processor.failed",
@@ -4768,6 +4873,12 @@
             ]
           },
           {
+            "kind": "composerControls",
+            "found": [
+              "source"
+            ]
+          },
+          {
             "kind": "composerNotes",
             "found": [
               "source"
@@ -4799,6 +4910,12 @@
           },
           {
             "kind": "toolViews",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "welcome",
             "found": [
               "source"
             ]
@@ -7836,6 +7953,17 @@
           "internal": true
         },
         {
+          "name": "billing.credits",
+          "summary": "What credits the org's plan gives",
+          "input": {
+            "type": "object",
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "internal": true
+        },
+        {
           "name": "billing.grant",
           "summary": "Gives the org credits, or takes some away",
           "input": {
@@ -8285,6 +8413,9 @@
             "topUps": {},
             "warnAt": {}
           },
+          "planCredits": {
+            "action": {}
+          },
           "planTier": {
             "action": {}
           },
@@ -8439,6 +8570,10 @@
         {
           "name": "billing.org",
           "place": "web"
+        },
+        {
+          "name": "billing.setup",
+          "place": "web"
         }
       ],
       "routes": [],
@@ -8460,6 +8595,13 @@
             "billing": {
               "title": "Billing",
               "view": "billing.org"
+            }
+          },
+          "welcome": {
+            "plan": {
+              "description": "Your agents start working once the org has credits.",
+              "title": "Choose a plan",
+              "view": "billing.setup"
             }
           }
         },
@@ -18413,6 +18555,11 @@
                 "type": "string",
                 "minLength": 2,
                 "maxLength": 2
+              },
+              "back": {
+                "type": "string",
+                "pattern": "^/[^/\\\\]",
+                "maxLength": 200
               }
             },
             "additionalProperties": false
@@ -18809,6 +18956,8 @@
             "tools",
             "icon",
             "in",
+            "off",
+            "like",
             "by",
             "at"
           ],
@@ -18842,6 +18991,12 @@
               "in": {
                 "type": "string"
               },
+              "off": {
+                "type": "boolean"
+              },
+              "like": {
+                "type": "string"
+              },
               "by": {
                 "type": "string"
               },
@@ -18852,7 +19007,6 @@
             "required": [
               "name",
               "instructions",
-              "model",
               "at"
             ]
           },
@@ -18878,6 +19032,19 @@
             },
             {
               "name": "options",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            },
+            {
+              "name": "team",
               "callers": {
                 "person": "yes",
                 "agent": "yes",
@@ -18945,6 +19112,9 @@
               "icon": {
                 "type": "string",
                 "maxLength": 16
+              },
+              "like": {
+                "type": "string"
               }
             },
             "required": [
@@ -18963,7 +19133,8 @@
             "routine": "no",
             "maintenance": "no"
           },
-          "helper": "inPerson"
+          "helper": "inPerson",
+          "tool": "propose_agent"
         },
         {
           "name": "agent.define",
@@ -19056,6 +19227,117 @@
           "helper": "people"
         },
         {
+          "name": "agent.reset",
+          "summary": "Drops the org's changes to one of the app's agents: back to the app's, on the team",
+          "input": {
+            "type": "object",
+            "properties": {
+              "agent": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "agent"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "agent.restore",
+          "summary": "Puts one of the app's agents the org took off its team back on it",
+          "input": {
+            "type": "object",
+            "properties": {
+              "agent": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "agent"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "agent.sketch",
+          "summary": "Drafts a whole agent from what it should do",
+          "input": {
+            "type": "object",
+            "properties": {
+              "asked": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 1000
+              },
+              "kinds": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "title"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "asked"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
           "name": "agent.update",
           "summary": "Changes an agent people made: what it's shown as, does, is told, uses",
           "input": {
@@ -19094,6 +19376,9 @@
               "icon": {
                 "type": "string",
                 "maxLength": 16
+              },
+              "like": {
+                "type": "string"
               }
             },
             "required": [
@@ -19115,7 +19400,54 @@
           "helper": "inPerson"
         }
       ],
-      "tools": [],
+      "tools": [
+        {
+          "name": "propose_agent",
+          "summary": "Propose a new agent for a job that keeps coming back, for the person you work for to approve (they see it and answer Allow or No; the turn waits). Give it a short name, an emoji, what it does in a sentence or two, its instructions in the second person (\"You are…\"), the kind of work it does (one your context lists), and where it works: this space, or the whole org's team. Use it when the person asks for one, or when a specialist would clearly do a recurring job better; never for a one-off.",
+          "title": "Propose an agent",
+          "input": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "icon": {
+                "type": "string",
+                "maxLength": 16
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "instructions": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20000
+              },
+              "kind": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "where": {
+                "type": "string",
+                "enum": [
+                  "space",
+                  "org"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "instructions"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ],
       "views": [],
       "routes": [],
       "needs": [],
@@ -19140,6 +19472,12 @@
           },
           "shared": {
             "agent": {}
+          },
+          "tools": {
+            "propose_agent": {
+              "description": "Propose a new agent for a job that keeps coming back, for the person you work for to approve (they see it and answer Allow or No; the turn waits). Give it a short name, an emoji, what it does in a sentence or two, its instructions in the second person (\"You are…\"), the kind of work it does (one your context lists), and where it works: this space, or the whole org's team. Use it when the person asks for one, or when a specialist would clearly do a recurring job better; never for a one-off.",
+              "title": "Propose an agent"
+            }
           }
         },
         "reads": [
@@ -19151,6 +19489,12 @@
           },
           {
             "kind": "model",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "roster",
             "found": [
               "source"
             ]
@@ -19202,6 +19546,10 @@
           "place": "web"
         },
         {
+          "name": "agent.org",
+          "place": "web"
+        },
+        {
           "name": "agent.palette",
           "place": "web"
         },
@@ -19232,7 +19580,14 @@
             }
           }
         },
-        "reads": []
+        "reads": [
+          {
+            "kind": "agentKinds",
+            "found": [
+              "source"
+            ]
+          }
+        ]
       },
       "adapters": {},
       "workers": [],
@@ -19561,7 +19916,7 @@
     {
       "format": 1,
       "name": "tiers",
-      "summary": "Tiers: which models the app's agents think with, chosen by what the work needs rather than model by model.",
+      "summary": "Tiers: how hard an app's agents think, chosen by budget rather than model by model.",
       "requires": [
         "chat",
         "spaces"
@@ -19579,8 +19934,10 @@
           "kind": "documents",
           "fields": [
             "space",
+            "thread",
+            "person",
             "tier",
-            "custom",
+            "cap",
             "at"
           ],
           "schema": {
@@ -19589,11 +19946,17 @@
               "space": {
                 "type": "string"
               },
+              "thread": {
+                "type": "string"
+              },
+              "person": {
+                "type": "string"
+              },
               "tier": {
                 "type": "string"
               },
-              "custom": {
-                "type": "object"
+              "cap": {
+                "type": "string"
               },
               "at": {
                 "type": "string"
@@ -19637,28 +20000,112 @@
               "helper": "people"
             }
           ]
+        },
+        {
+          "name": "tierKind",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "title",
+            "description",
+            "base",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "base",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [],
+          "queries": []
+        },
+        {
+          "name": "tierTemplate",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "title",
+            "description",
+            "order",
+            "agents",
+            "off",
+            "made",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "order": {
+                "type": "number"
+              },
+              "agents": {
+                "type": "object"
+              },
+              "off": {
+                "type": "boolean"
+              },
+              "made": {
+                "type": "boolean"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [],
+          "queries": []
         }
       ],
       "indexes": [],
       "shared": [],
       "actions": [
         {
-          "name": "tiers.choose",
-          "summary": "Chooses the tier of models the app's agents use, in the org or a space",
+          "name": "tiers.cap",
+          "summary": "Sets the highest tier the org's members may choose",
           "input": {
             "type": "object",
             "properties": {
-              "space": {
-                "type": "string"
-              },
               "tier": {
                 "type": [
                   "string",
                   "null"
                 ]
-              },
-              "picks": {
-                "type": "null"
               }
             },
             "required": [
@@ -19680,8 +20127,89 @@
           "helper": "inPerson"
         },
         {
+          "name": "tiers.choose",
+          "summary": "Chooses the tier for the org, a space, a conversation or your new chats",
+          "input": {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "space": {
+                "type": "string"
+              },
+              "thread": {
+                "type": "string"
+              },
+              "mine": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "tier"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "tiers.kind",
+          "summary": "Adds or renames a kind of work of the org's own",
+          "input": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "base": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "base"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
           "name": "tiers.model",
-          "summary": "The model one of the app's agents thinks with in a space",
+          "summary": "The model chain an agent thinks with in a conversation",
           "input": {
             "type": "object",
             "properties": {
@@ -19689,6 +20217,9 @@
                 "type": "string"
               },
               "space": {
+                "type": "string"
+              },
+              "thread": {
                 "type": "string"
               }
             },
@@ -19702,24 +20233,93 @@
           "internal": true
         },
         {
-          "name": "tiers.pick",
-          "summary": "Picks the model one of the app's agents uses, in the org or a space",
+          "name": "tiers.remove",
+          "summary": "Takes one of the app's tiers away from the org, or deletes one it made",
           "input": {
             "type": "object",
             "properties": {
-              "space": {
+              "tier": {
                 "type": "string"
-              },
-              "agent": {
-                "type": "string",
-                "minLength": 1
-              },
-              "model": {}
+              }
             },
             "required": [
-              "agent",
-              "model"
+              "tier"
             ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "tiers.restore",
+          "summary": "Puts one of the app's tiers back as the app has it",
+          "input": {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tier"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "tiers.save",
+          "summary": "Saves one of the org's tiers: its version of the app's, or a new one",
+          "input": {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "kinds": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "maxItems": 8
+                }
+              },
+              "from": {
+                "type": "string"
+              }
+            },
             "additionalProperties": false
           },
           "recorded": true,
@@ -19744,7 +20344,13 @@
       "changes": [
         "modelChoice.created",
         "modelChoice.updated",
-        "modelChoice.deleted"
+        "modelChoice.deleted",
+        "tierKind.created",
+        "tierKind.updated",
+        "tierKind.deleted",
+        "tierTemplate.created",
+        "tierTemplate.updated",
+        "tierTemplate.deleted"
       ],
       "listens": [],
       "processors": [],
@@ -19760,13 +20366,19 @@
         },
         "reads": [
           {
-            "kind": "agents",
+            "kind": "agentSources",
             "found": [
-              "check"
+              "source"
             ]
           },
           {
             "kind": "model",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "planCredits",
             "found": [
               "source"
             ]
@@ -19784,9 +20396,21 @@
             ]
           },
           {
+            "kind": "tierKinds",
+            "found": [
+              "source"
+            ]
+          },
+          {
             "kind": "tiers",
             "found": [
               "check",
+              "source"
+            ]
+          },
+          {
+            "kind": "typicalMessage",
+            "found": [
               "source"
             ]
           },
@@ -19802,7 +20426,6 @@
       "workers": [],
       "check": {
         "reads": [
-          "agents",
           "tiers"
         ],
         "asks": []
@@ -19840,7 +20463,15 @@
           "place": "web"
         },
         {
+          "name": "tiers.composer",
+          "place": "web"
+        },
+        {
           "name": "tiers.org",
+          "place": "web"
+        },
+        {
+          "name": "tiers.setup",
           "place": "web"
         },
         {
@@ -19858,15 +20489,30 @@
       "powers": [],
       "resources": {
         "provides": {
+          "agentKinds": {
+            "query": {}
+          },
+          "composerControls": {
+            "tiers": {
+              "view": "tiers.composer"
+            }
+          },
           "orgSettings": {
             "models": {
-              "title": "Agents' models",
+              "title": "Agents",
               "view": "tiers.org"
             }
           },
           "spaceAgents": {
             "tiers": {
               "view": "tiers.space"
+            }
+          },
+          "welcome": {
+            "tiers": {
+              "description": "Pick the default for new chats. Anyone can switch a chat's tier as they write, and you can change this any time in your org's settings.",
+              "title": "How hard should your agents think?",
+              "view": "tiers.setup"
             }
           }
         },

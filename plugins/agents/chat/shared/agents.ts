@@ -44,8 +44,9 @@ const sourcesOf = (ctx: Pick<ReadContext, "resources">) =>
   Object.values((ctx.resources.agentSources ?? {}) as Record<string, AgentSource>);
 
 /**
- * Which of `names` are agents, and what each is: the app's, then what the
- * `agentSources` say of the rest. The rest are people. Without sources, it
+ * Which of `names` are agents, and what each is: what the `agentSources` say
+ * (one of the app's agents a source answers for is an org's own version of it,
+ * over the app's), then the app's. The rest are people. Without sources, it
  * reads nothing.
  */
 export async function agentsNamed(
@@ -54,16 +55,16 @@ export async function agentsNamed(
 ): Promise<Record<string, Agent>> {
   const declared = agentsOf(ctx);
   const found: Record<string, Agent> = {};
-  let rest: string[] = [];
-  for (const name of new Set(names)) {
-    if (declared[name]) found[name] = declared[name];
-    else if (name) rest.push(name);
-  }
+  let rest = [...new Set(names)].filter(Boolean);
   for (const source of sourcesOf(ctx)) {
     if (!rest.length) break;
-    Object.assign(found, await ctx.call<Record<string, Agent>>(source.action, { names: rest }));
+    const told = await ctx.call<Record<string, Agent>>(source.action, { names: rest });
+    for (const [name, agent] of Object.entries(told)) {
+      found[name] = declared[name] ? { ...declared[name], ...agent } : agent;
+    }
     rest = rest.filter((name) => !found[name]);
   }
+  for (const name of rest) if (declared[name]) found[name] = declared[name];
   return found;
 }
 
@@ -77,16 +78,16 @@ export function agentsShown(
   names: Iterable<string>,
 ): Record<string, Agent> | undefined {
   const declared = agentsOf(ctx);
-  const found: Record<string, Agent> = {};
-  const rest: string[] = [];
-  for (const name of new Set(names)) {
-    if (declared[name]) found[name] = declared[name];
-    else if (name) rest.push(name);
-  }
+  const all = [...new Set(names)].filter(Boolean);
   const front = !Object.keys(declared).length;
-  if (!rest.length || (!front && !sourcesOf(ctx).length)) return found;
-  const team = ctx.db.collection("thread").query<Team>("agents", { names: rest.sort() });
-  return team.value ? { ...found, ...team.value.agents } : undefined;
+  // No sources: the app's are all there is (an org's own versions come from a source).
+  if (!all.length || (!front && !sourcesOf(ctx).length)) {
+    return Object.fromEntries(
+      all.flatMap((name) => declared[name] ? [[name, declared[name]]] : []),
+    );
+  }
+  const team = ctx.db.collection("thread").query<Team>("agents", { names: all.sort() });
+  return team.value ? team.value.agents : undefined;
 }
 
 /**
@@ -130,10 +131,11 @@ export async function teamOf(
 }
 
 /**
- * An `agentModel` resource: the Action saying which model one of the app's
- * agents thinks with in a space (the tiers plugin's), `{ agent, space? }` in,
- * a model (as `model` takes it) or null (its own) out. Asked as the turn, once
- * each run, so it reads only what's cheap.
+ * An `agentModel` resource: the Action saying which model an agent thinks
+ * with in a conversation (the tiers plugin's), `{ agent, space?, thread? }`
+ * in (`agent`: the kind it works `like`, else its name), a model (as `model`
+ * takes it) or null (its own) out. Asked as the turn, once each run, so it
+ * reads only what's cheap.
  */
 export type AgentModel = { action: string };
 

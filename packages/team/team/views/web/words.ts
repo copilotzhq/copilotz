@@ -211,6 +211,37 @@ const team = {
   mediaAudio: "Audio",
   mediaVideo: "Video",
   reasoning: "Reasoning",
+  // Making an agent: what it should do first, then drafted
+  describeHint:
+    "A sentence or two is enough: its name, instructions and the rest are drafted for you to check.",
+  describePlaceholder:
+    "Keeps the numbers straight for our clients: prices, costs and margins, with sources.",
+  fillMyself: "Fill it in myself",
+  draftIt: "Draft it",
+  drafting: "Drafting…",
+  draftingWait: "Writing its instructions, a few seconds…",
+  kindLabel: "Kind of work",
+  kindHint: "Its model comes from the tier each chat runs on, for this kind of work.",
+  kindLike: "{kind} · like {agents}",
+  // The org's team
+  orgForm: "A new agent for the org",
+  orgJoins: "It joins every space in the org, and every new one.",
+  back: "Back",
+  addToTeamNamed: "Add {name} to the team",
+  addToTeam: "Add to the team",
+  removeFromTeamMenu: "Remove from the team…",
+  changedForOrg: "Changed for your org",
+  orgsTeam: "Your org's team",
+  tierModel:
+    "Its model comes from the tier each chat runs on. Change the tiers' models under {place}.",
+  tierModelPlace: "Organization settings › Agents",
+  removeTeamTitle: "Remove {name} from the team?",
+  removeButton: "Remove",
+  teamLeaves: "{bold}, and won't join new ones.",
+  teamLeavesBold: "It leaves every space in the org",
+  teamSaidStays: "What it already said stays in its chats.",
+  teamAddBack: "You can add it back under Organization settings › Agents.",
+  teamDeleted: "It's deleted: its instructions are gone.",
 };
 
 export const say = defineWords("team", team);

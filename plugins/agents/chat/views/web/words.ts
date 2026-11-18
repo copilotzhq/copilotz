@@ -25,6 +25,11 @@ export const say = defineWords("chat", {
   homePlaceholder: "Ask anything; @name asks a particular agent",
   startsInSpace: "Starts in {space}, for its members",
   startsInPersonal: "Starts in Personal, just for you",
+  // The app's welcome, over home
+  welcomeStep: "{at} of {count}",
+  welcomeBack: "Back",
+  welcomeNext: "Next",
+  welcomeDone: "Get started",
   notYourSpaceTitle: "Not your space",
   notInSpace: "You're not in this space",
   notInSpaceBody:

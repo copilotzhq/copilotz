@@ -86,14 +86,22 @@ const spaceOf = async (ctx: Context, thread: string) =>
 
 /**
  * The model it thinks with this turn: what the `agentModel` resource says for
- * it in this space, when one says anything, else its own.
+ * it in this conversation and space (with the kind it works `like`, else its
+ * name), when one says anything, else its own.
  */
-async function modelFor(ctx: Context, name: string, agent: Agent, space?: string) {
+async function modelFor(
+  ctx: Context,
+  name: string,
+  agent: Agent,
+  space?: string,
+  thread?: string,
+) {
   const [source] = Object.values((ctx.resources.agentModel ?? {}) as Record<string, AgentModel>);
   if (!source) return modelOf(agent);
   const chosen = await ctx.call<ModelRef | null>(source.action, {
-    agent: name,
+    agent: agent.like ?? name,
     ...(space ? { space } : {}),
+    ...(thread ? { thread } : {}),
   });
   return chosen ?? modelOf(agent);
 }
@@ -256,7 +264,7 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
     offered.every((tool) => tools[tool.name]?.aside === true),
   );
   // Asked once a run: a change reaches its next reply, never a step halfway.
-  const model = await modelFor(ctx, t.agent, agent, current.in);
+  const model = await modelFor(ctx, t.agent, agent, current.in, t.thread);
 
   const { maxSteps } = settingsOf(ctx);
   for (; maxSteps === undefined || step < maxSteps; step++) {

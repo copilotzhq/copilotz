@@ -63,4 +63,21 @@ export const STYLE = `
 .accounts-uses span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .accounts-uses-plan .copilotz-icon { flex: none; color: var(--primary-text); }
 .accounts-uses-reconnect a { color: var(--warning-text); }
+
+/* The person's own API keys */
+.own-keys { display: grid; gap: 12px; margin-top: 16px; padding: 16px 18px; }
+.own-keys-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; }
+.own-keys-head h2 { margin: 0; font-size: 15px; font-weight: 650; }
+.own-keys-head p { max-width: 62ch; margin: 3px 0 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.45; }
+.own-keys-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.own-keys-list li { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+.own-keys-list li + li { border-top: 1px solid var(--border); }
+.own-keys-text { flex: 1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; font-size: 14px; }
+.own-keys-hint { color: var(--muted-foreground); font-family: var(--font-mono); font-size: 12.5px; }
+.own-keys-used { flex-basis: 100%; color: var(--success-text, var(--muted-foreground)); font-size: 12.5px; }
+.own-keys-used[data-unused] { color: var(--warning-text, var(--muted-foreground)); }
+.own-keys-none { margin: 0; color: var(--muted-foreground); font-size: 13px; }
+.own-keys-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; }
+.own-keys-end { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 560px) { .own-keys-add { grid-template-columns: minmax(0, 1fr); } }
 `;

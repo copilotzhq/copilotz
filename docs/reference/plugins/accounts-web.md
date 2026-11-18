@@ -40,7 +40,7 @@ Nothing to set. It reads `agentKinds`, resource kinds the app and other plugins 
 The runtime doesn't start without [`accounts`](accounts.md) and [`web-shell`](web-shell.md): add
 them too.
 
-It ships with `copilotz@1.0.0-rc.54`.
+It ships with `copilotz@1.0.0-rc.56`.
 
 ## Listing
 

@@ -1388,12 +1388,140 @@ export function ServiceForm({ service, save, close }: {
 
 - **The file field comes first** in the control's column, the preview under it: a row `Field`'s
   label lines up with the first line of text beside it.
-- **`private: ["picture"]`** keeps the picture out of the call's record: it's kept once, in the
-  service. A string over 16 KiB is stored as a blob, out of the document, and read back whole.
-- **Bigger files**, or many pictures in a list, are better served by a route of the app's, as chat
-  serves `/files/<id>` with `runtime.bytes`: a list then reads names, not pictures.
+- **`private: ["picture"]`** keeps the picture out of the call's record: its `action.started` holds
+  the rest of the input. The service keeps it, and so does the record of the service's changes: a
+  string over 16 KiB is a blob, stored once by the hash of its content, and the document and each of
+  its events hold a small reference to it. Reads load it whole.
+- **A picture replaced or taken away isn't erased.** Nothing deletes a blob: it stays where blobs
+  live, and the service's earlier events still refer to it.
 - **A file to import** (a CSV of customers) is read in the browser, its rows checked and sent to one
   Action that saves them in one `ctx.transaction`.
+
+### Pictures in a list
+
+A list reads names, not pictures. Its query leaves the picture out, so no blob is even read, and
+each row shows the picture from a route of the plugin's, which checks who asks, then reads it with
+`runtime.bytes`:
+
+```ts
+// plugins/services/queries.ts
+import { people } from "copilotz";
+import type { QueryDef } from "copilotz";
+
+type Service = { _id: string; name: string; picture?: string };
+
+/** `service.list`: every service, its picture left out. */
+export const list: QueryDef<Service> = {
+  allow: people,
+  run: (services) => services.find({}, { sort: { name: 1 }, projection: { picture: 0 } }),
+};
+```
+
+```ts
+// plugins/services/routes.ts
+import { people, type Route } from "copilotz";
+
+/** A picture as the Action keeps it: a PNG, JPEG, GIF or WebP `data:` address. */
+const PICTURE = /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/;
+
+/** `GET /pictures/<id>`: a service's picture, to whom the list's query lets in. */
+export const picture: Route = async (_request, { runtime, actor, params }) => {
+  const none = new Response("Not found", { status: 404 });
+  if (!people(actor)) return none;
+  // No rule speaks for "service", so it's read as the system, now the route has let them in.
+  const kept = await runtime.bytes("service", { _id: params.id }, "picture");
+  if (!kept) return none;
+  const text = new TextDecoder().decode(await kept.read(0, kept.size));
+  const [, type, base64] = PICTURE.exec(text) ?? [];
+  if (!base64) return none;
+  const body = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return new Response(body, {
+    headers: {
+      "content-type": type,
+      // Never read as anything but the image it says it is.
+      "x-content-type-options": "nosniff",
+      // A changed picture keeps its address: the browser asks again, and nothing shared keeps it.
+      "cache-control": "private, no-cache",
+    },
+  });
+};
+```
+
+```ts
+// plugins/services/mod.ts
+import { definePlugin, type Plugin } from "copilotz";
+import { save } from "./actions.ts";
+import { list } from "./queries.ts";
+import { picture } from "./routes.ts";
+
+export const services: Plugin = definePlugin({
+  name: "services",
+  collections: {
+    service: {
+      schema: {
+        type: "object",
+        properties: { name: { type: "string" }, picture: { type: "string" } },
+        required: ["name"],
+      },
+      queries: { list },
+    },
+  },
+  actions: { "service.save": save },
+  routes: { "/pictures/:id": picture },
+});
+```
+
+```tsx
+// plugins/services/web/services-screen.tsx
+import type { ViewContext } from "copilotz";
+import { Avatar, DataTable, Page } from "copilotz/web";
+import type { Column, Where } from "copilotz/web";
+import type { ReactNode } from "react";
+
+/** A service as the list reads it: no picture. */
+type Listed = { _id: string; name: string };
+
+const columns: Column<Listed>[] = [
+  {
+    key: "picture",
+    title: "",
+    label: "Picture",
+    // Fetched as any image is: the initial shows until it loads, and when there's none.
+    render: (s) => <Avatar name={s.name} picture={`/pictures/${s._id}`} size={32} />,
+  },
+  { key: "name", title: "Name" },
+];
+
+/** `screen:services`, at `/services`: every service, with its picture. */
+export const servicesScreen = (_where: Where, ctx: ViewContext<ReactNode>): ReactNode => {
+  const found = ctx.db.collection("service").query<Listed[]>("list", {});
+  return (
+    <Page title="Services" width="lg">
+      <DataTable
+        label="Services"
+        columns={columns}
+        rows={found.value ?? []}
+        loading={found.status === "loading"}
+        rowKey={(s) => s._id}
+      />
+    </Page>
+  );
+};
+```
+
+- **Check who asks before reading.** A route is trusted code: it decides who gets in, as a query's
+  `allow` does. `runtime.bytes` with `{ actor }` then reads under the rules, and only a collection a
+  rule speaks for (`shared`, a `guard`): elsewhere it's refused (`forbidden`), since no rule would
+  narrow what they reach. `service` has none, so the route reads it as the system once `people` let
+  them in, as the list's query reads it for them. A collection in `shared` is read as the actor
+  instead, so the rules decide which of its documents they reach (out of reach: none, a 404).
+- **`Avatar`** takes a path on the app's own origin, and the browser sends the session's cookie with
+  it. A picture that fails to load (none, or out of reach: a 404 alike) shows the initial.
+- **A file of more than a few MB** (a PDF, a scan) goes in a call of its own, since a call carries
+  at most 16 MiB, and is better kept as plain base64 beside its name and type, then streamed:
+  `kept.read(start, end)` hands over a part at a time (the owner loads the blob once), and each four
+  base64 characters decode on their own. Chat does so: `chat.attach` takes one file a call,
+  unrecorded, and `/files/<id>` streams it, with ranges.
 
 ## When the toolkit lacks something
 

@@ -38,7 +38,7 @@ Nothing to set: it works as it comes.
 The runtime doesn't start without [`computers`](computers.md) and
 [`terminal-shell`](terminal-shell.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.54`.
+It ships with `copilotz@1.0.0-rc.56`.
 
 ## Listing
 

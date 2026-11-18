@@ -538,6 +538,10 @@ test("an agent says a fixed message to a contact's chat without a turn, once", a
       runtime.query<{ name: string } | null>("file.about", { id }, { actor });
     assertEquals((await receipt(files[0], carla))?.name, "receipt.pdf");
     assertEquals(await receipt(files[0], dani), null);
+    // Its content too, as chat's `/files/<id>` reads it for them: a read once, which no rule watches.
+    const content = (actor: Actor) => runtime.bytes("file", { _id: files[0] }, "data", { actor });
+    assertEquals((await content(carla))?.size, btoa("%PDF-1.4 receipt").length);
+    assertEquals(await content(dani), null);
     // Said only by an agent that answers in the chat.
     assertEquals(
       await code(runtime.call("chat.say", { id: "y", thread: carlas, from: "ops", text: "hi" })),

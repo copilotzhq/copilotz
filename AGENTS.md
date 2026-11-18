@@ -4,7 +4,7 @@ A guide for coding agents (Claude Code, Codex, Cursor, Gemini) building an app w
 it whole before you write code. The last section is for work on Copilotz itself.
 
 It ships in the package (`node_modules/copilotz/AGENTS.md`, and `@copilotz/copilotz` on JSR) and
-goes with `copilotz@1.0.0-rc.55`. Every docs page is Markdown at
+goes with `copilotz@1.0.0-rc.56`. Every docs page is Markdown at
 `https://copilotz.com/docs/<slug>.md`, and https://copilotz.com/llms.txt lists them all. When you're
 unsure of a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`).
 Don't guess.
@@ -64,12 +64,12 @@ There's no project generator. Set a project up as the docs' courses do, on Node 
 ```sh
 mkdir my-app && cd my-app
 npm init -y && npm pkg set type=module
-npm install copilotz@1.0.0-rc.55 react@19 react-dom@19
+npm install copilotz@1.0.0-rc.56 react@19 react-dom@19
 npm install -D typescript @types/node @types/react @types/react-dom esbuild
 ```
 
 Pin the version: npm's `latest` tag still points at an early release candidate. On Deno, run
-`deno add jsr:@copilotz/copilotz` and map `"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.55"` in
+`deno add jsr:@copilotz/copilotz` and map `"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.56"` in
 `deno.json`, so imports read the same.
 
 Node runs `.ts` files as they are, so there's no build step. It doesn't run `.tsx`: tests that load
@@ -110,7 +110,7 @@ line `@AGENTS.md` (Claude Code reads `CLAUDE.md`, and follows the import). Keep 
 ```markdown
 # AGENTS.md
 
-This app runs on Copilotz (copilotz@1.0.0-rc.55). Read node_modules/copilotz/AGENTS.md first;
+This app runs on Copilotz (copilotz@1.0.0-rc.56). Read node_modules/copilotz/AGENTS.md first;
 https://copilotz.com/llms.txt lists the docs, as Markdown.
 
 - `npm test` runs every test offline, with a scripted model: run it after each change.
@@ -329,6 +329,61 @@ Test what callers may not do as well: call as someone else, and `assert.rejects`
 - **Online:** `devSignIn` is for this machine only; Copilotz won't start it with a public origin.
   Keep the `links` secret (32 bytes or more) across restarts, or MCP conversations start over.
 
+## The record and bytes
+
+**The record lasts as the store does.** Each commit appends its events to the `events` table, and
+the runtime never changes or deletes one. An event is `{ seq, id, type, data, cause, actor, at }`:
+`cause` is the event behind it, `actor` the whole actor (`for`, `in`, `via`), `at` its commit's
+time. `action.started` holds `{ action, input, inputHash, startedAt, attempt }`, `action.completed`
+the `result`, a collection's event `{ _id, doc }`. Read it with `store.events(afterSeq, limit)` in a
+test or script, `runtime.subscribe` live, or SQL (`sqlite3`, `psql`,
+[maintenance](https://copilotz.com/docs/operations/maintenance.md)). Plugin code reads no log.
+
+**Kept out:** a collection's `private` fields (keys, tokens), an Action's `private` fields, an
+unrecorded Action's call (`record: false`; not its writes), and collections with `events: false` or
+`durable: false`. All else an Action is given stays for good.
+
+**Large values.** A string over 16 KiB is a blob, stored once by its hash: documents and events keep
+a reference, and reads load it whole unless a `projection` leaves the field out. Blobs live in the
+store, or in files or a bucket (`createRuntime({ blobs })`), chosen before it fills. A file is a
+string (a `data:` address, base64). Nothing deletes a blob: a value deleted or replaced stays on the
+record. [Stores](https://copilotz.com/docs/operations/stores.md) and
+[BC 36](https://copilotz.com/docs/build-compass/part-12-shipping/36-postgresql-and-blobs.md) have
+the rest.
+
+**A list reads names, not pictures:** its query leaves them out (`projection: { picture: 0 }`), and
+each row shows `/pictures/<id>`, a route that checks who asks before it reads. With `{ actor }`,
+`runtime.bytes` reads only where a rule speaks for the collection (else it's refused); `service` has
+none, so it's read as the system:
+
+```ts
+import { definePlugin, people } from "copilotz";
+
+const PICTURE = /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/;
+
+export const pictures = definePlugin({
+  name: "pictures",
+  routes: {
+    "/pictures/:id": async (_request, { runtime, actor, params }) => {
+      const none = new Response("Not found", { status: 404 });
+      if (!people(actor)) return none;
+      const kept = await runtime.bytes("service", { _id: params.id }, "picture");
+      if (!kept) return none;
+      const text = new TextDecoder().decode(await kept.read(0, kept.size));
+      const [, type, base64] = PICTURE.exec(text) ?? [];
+      if (!base64) return none;
+      const body = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      return new Response(body, {
+        headers: { "content-type": type, "x-content-type-options": "nosniff" },
+      });
+    },
+  },
+});
+```
+
+**Common mistakes:** a list reading pictures whole; a key in an Action's input or in a field that
+isn't `private`; a route reading before it checks who asks; counting on a delete to erase a file.
+
 ## A business app's web front end
 
 Screens for people at work: lists, forms in dialogs, dates, a home, printed documents.
@@ -455,8 +510,8 @@ The pieces, by job:
 - **File and image inputs:** `FileInput` (`accept`; `chooseLabel`, `changeLabel`, `removeLabel`;
   `current` and `onRemove` for a stored file). A picture chosen shows in an `Avatar`
   (`picture={URL.createObjectURL(file)}`, `initial={false}`). The form sends it to an Action as a
-  `data:` address, the Action `private: ["picture"]` so its record doesn't keep it twice; big files
-  are served by a route with `runtime.bytes`.
+  `data:` address; `private: ["picture"]` keeps it out of the call's record, and a list shows it
+  from a route (The record and bytes).
 
 **Common mistakes:**
 

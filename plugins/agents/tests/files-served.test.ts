@@ -213,6 +213,10 @@ test("a file is theirs who may read it, and a link's signed for it; nobody else'
     for (const path of forged) assertEquals((await get(path)).status, 404, path);
     // Nor does a link make someone who can't read it able to.
     assertEquals((await get(large + other.search, bob)).status, 404);
+    // A key fetches one only when its scope lists the query and the collection's reads.
+    const key = (scope: Record<string, string[]>): Actor => ({ ...ana, scope });
+    assertEquals((await get(small, key({ query: ["file.about"] }))).status, 404);
+    assertEquals((await get(small, key({ query: ["file.about"], read: ["file"] }))).status, 200);
   } finally {
     await rt.close();
   }

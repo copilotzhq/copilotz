@@ -297,16 +297,17 @@ replaces). A later View, adapter or route replaces an earlier one of its name. E
 Documents with a JSON Schema, read and written with MongoDB's collection API. `defineCollection`
 types its documents and queries from the schema.
 
-| Field     | What it does                                                                                |
-| --------- | ------------------------------------------------------------------------------------------- |
-| `schema`  | the JSON Schema every write keeps to: inserts, replaces, and what updates set and leave     |
-| `queries` | named reads: a function, or `{ allow, run }` to let actors run it from outside              |
-| `vectors` | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
-| `indexes` | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
-| `private` | fields only trusted code reads: an actor's queries and Views get the documents without them |
-| `records` | `true`: a ledger, appended to and never changed, whose documents are their own record       |
-| `durable` | `false`: kept in the owner's memory, never in the store, with no events                     |
-| `events`  | `false`: its writes record no events                                                        |
+| Field        | What it does                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------- |
+| `schema`     | the JSON Schema every write keeps to: inserts, replaces, and what updates set and leave     |
+| `queries`    | named reads: a function, or `{ allow, run }` to let actors run it from outside              |
+| `vectors`    | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
+| `indexes`    | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
+| `private`    | fields only trusted code reads: an actor's queries and Views get the documents without them |
+| `records`    | `true`: a ledger, appended to and never changed, whose documents are their own record       |
+| `durable`    | `false`: kept in the owner's memory, never in the store, with no events                     |
+| `events`     | `false`: its writes record no events                                                        |
+| `validation` | `"moderate"`: updates are checked only on documents that were valid (see Updates)           |
 
 `ctx.db.collection(name)` has `insertOne`, `insertMany`, `find` (a cursor), `findOne`,
 `countDocuments`, `updateOne`, `updateMany`, `replaceOne`, `deleteOne`, `deleteMany`, `aggregate`,
@@ -325,6 +326,18 @@ types its documents and queries from the schema.
   validator checks with `validationLevel: "strict"`: what it sets must fit each field, it can't set
   a field the schema doesn't allow or unset a required one, and the documents it leaves (an upsert's
   new one too) must be valid. What fails changes nothing (`invalid`, naming the field).
+  - **Where it differs from MongoDB's `"strict"`:** a document that wasn't valid before (stored
+    before its schema said what it says now) may still be updated, as long as the update adds
+    nothing wrong to it; MongoDB would refuse until the update made it valid. Every store can tell
+    that alike, PostgreSQL's single-statement updates included, which never see the document.
+    `validation: "moderate"` on the collection lets any update to such a document be, as MongoDB's
+    `"moderate"` does.
+  - **A schema failure names its field:** `detail.field`, a dot path (`price`, `meta.a`, or the
+    required field that's missing). A write from outside (REST, the socket, a View's handler) says
+    it to its caller, as a public failure, so a form shows it by its field; plugin code's is its own
+    to say.
+  - **`$push` and `$addToSet` take `$each`;** other modifiers (`$slice`, `$sort`, `$position`) are
+    refused, not ignored.
 - **Finds:** `sort`, `limit`, `skip`, and `projection` (`{ name: 1 }` keeps fields, `{ data: 0 }`
   leaves them out), applied before any large value is loaded.
 - **Aggregates:** `$match`, `$group` (with `$sum`, `$count`, `$avg`, `$min`, `$max`), `$sort`,
@@ -399,6 +412,11 @@ elements in the terminal, React in the browser. A name says what it shows (`book
   `{ status: "ready", value }`. The runtime runs the View again until a pass reads nothing new.
 - **`ctx.show(name, item, hints?)`** shows exactly the View it names. Observed, the shown View is a
   part that runs again on its own.
+- **A handler writes with the View's collections:** `ctx.db.collection(name)` has `insertOne`,
+  `updateOne` (an update document, or the fields to set), `replaceOne` and `deleteOne`, each a write
+  of the viewer's own, as REST and the socket write it: a rule must speak for the collection's
+  writes, the schema checks it, and it's recorded as theirs. A View writes nothing while it renders,
+  nor when it's rendered once.
 - **`ctx.call`** and **`ctx.emit`** act from a handler, as the actor looking. A handler that needs
   what the View didn't read (suggestions as someone types) calls an unrecorded Action
   (`record: false`, with an `allow`) that runs the query and returns it: nothing goes on record. It

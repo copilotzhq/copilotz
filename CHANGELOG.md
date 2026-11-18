@@ -43,6 +43,19 @@ Updates keep to the schema on every store, as MongoDB's do.
   only on documents that were valid, for a collection whose older documents predate its schema.
   Inserts and replaces are always checked.
 
+**Docs:**
+
+- **AGENTS.md and the copilotz skill teach apps as Copilotz's own plugins are made:** a folder per
+  primitive, one declaration per file (`collections/` with each schema, its type and its named
+  queries; `actions/`; `views/web/`; `resources/`; `lib/`), an optional `plugin.ts` for a plugin's
+  single fields, `mod.ts` only assembling them. Plain saves are collection writes (a screen's
+  handler, a tool, a script, REST); Actions are for business logic. The `shared` rules first, then
+  the plugin's `guard`. Types from schemas (`Infer`), a Processor for what follows a commit, Node's
+  TSX loader for `dev`, `start` and tests, and a test that fails on `describe()`'s problems.
+- **A business app's screens** save customers to the collection, with the schema refusing by field;
+  the reference says how updates are checked, where that differs from MongoDB's `"strict"`, and how
+  a View's handlers write.
+
 **Upgrading:** check what queries and Views return where they call an unrecorded Action that acts as
 someone else (`ctx.as()`, `ctx.as(grant(…))`): it reads as that now, so it may return more than the
 reader reaches. Keep to what the reader may see in what the Action returns.

@@ -91,28 +91,32 @@ test("the agent adds a task for Ana, through the same Action", async () => {
 ## What callers may not do
 
 Call as someone else, and expect the refusal by its code. The rules answer for the data, so another
-person's task isn't "forbidden" to them: it isn't there.
+person's task isn't "forbidden" to them: it isn't there. (The task comes from the agent's tool, a
+plain save; `start` takes the script's moves.)
 
 ```ts
-test("a contact can't add tasks, and Bo can't finish Ana's", async () => {
-  const { runtime } = await start();
+test("a contact can't complete tasks, and Bo can't reach Ana's", async () => {
+  const { runtime, store } = await start([
+    { tool: "add_task", input: { title: "Pay rent" } },
+    "Added.",
+  ]);
   try {
     const ana: Actor = { kind: "person", id: "ana" };
     const { space } = await runtime.call<{ space: string }>("space.personal", {}, { actor: ana });
-    const { task } = await runtime.call<{ task: string }>("task.add", { title: "Pay rent" }, {
+    await runtime.call("chat.send", { in: space, text: "Add it." }, {
       actor: { ...ana, in: space },
     });
+    await runtime.idle();
+    const [{ _id: task }] = await store.find("task", {});
     const visitor: Actor = { kind: "contact", id: "c-1", in: space };
-    await assert.rejects(runtime.call("task.add", { title: "Hi" }, { actor: visitor }), {
+    await assert.rejects(runtime.call("task.complete", { task }, { actor: visitor }), {
       code: "forbidden", // `allow: people`
     });
     const bo: Actor = { kind: "person", id: "bo" };
     const mine = await runtime.call<{ space: string }>("space.personal", {}, { actor: bo });
     await assert.rejects(
-      runtime.call("task.done", { task }, { actor: { ...bo, in: mine.space } }),
-      {
-        code: "not_found", // the rules filtered it out
-      },
+      runtime.call("task.complete", { task }, { actor: { ...bo, in: mine.space } }),
+      { code: "not_found" }, // the rules filtered it out
     );
   } finally {
     await runtime.close();

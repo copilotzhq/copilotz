@@ -4,30 +4,35 @@
 like in code. The installed version's AGENTS.md ("Rules: do this, not that", in
 `node_modules/copilotz/AGENTS.md`) is the source of truth: where this file differs, follow it.
 
-## One Action per change, called from every way in
+## Plain saves are collection writes; Actions are for business logic
 
-An Action is where a change gets its input schema, its `allow`, its record (`action.started`, then
-`action.completed` or `action.failed`) and its retry by id. A page's button, the app's agent, an
-assistant over MCP and a script all call the same one, so they all get the same checks and the same
-history.
+A collection write already has everything a plain save needs: the rules (a rule must speak for the
+collection's writes, and what's written stays in the caller's reach), the schema (inserts, replaces
+and updates are checked, and a refusal names its field), and the record (`task.created`, `.updated`,
+`.deleted`, naming who wrote it). So a screen's handler, a tool, a script and REST write the
+collection themselves:
 
 ```ts
-// The tool: a thin caller, as the agent, for its person, where its chat is.
-run: ({ title }, ctx) => ctx.call("task.add", { title }),
-  // A script or a host: the same Action, as whoever it acts for.
-  await runtime.call("task.add", { title: "Bo" }, { actor: { ...ana, in: space } });
+// A tool: as its agent, for the chat's person, where its chat is.
+run: async ({ title }, ctx) => ctx.db.collection("task").insertOne({ title, in: ctx.in }),
+// A screen's handler: as the person looking.
+add: (title) => ctx.db.collection("task").insertOne({ title, in: space }),
 ```
 
-Don't give a tool its own `insertOne`, or a route that writes a collection itself: that's a second,
-looser path, with none of the Action's validation, failures or record.
+An Action is for what's more than a save: a rule the schema can't say (done once; a stock that can't
+go below zero), writes that must agree (one `ctx.transaction`), an effect outside (a message, a
+payment). Then every way in calls it, and nothing writes beside it: refuse `direct` writes to a
+collection that changes only by its Actions, in the guard. Don't write an Action that only saves
+what it's given.
 
 ## Rules at the data, not in handlers
 
-Name a collection in the `shared` resource and the access plugin's rules cover it: each document
-lives `in` a space, and reads and writes reach only what the actor reaches. `part` ties a document
-to another one, as a booking to the chat it was made in (`shared: { booking: { part: "thread" } }`).
-For anything else, a plugin declares a `guard`, which returns the filter an actor's documents must
-match.
+Name a collection in the `shared` resource first, and the access plugin's rules cover it: each
+document lives `in` a space, and reads and writes reach only what the actor reaches. `part` ties a
+document to another one, as a booking to the chat it was made in
+(`shared: { booking: { part: "thread" } }`). For anything else, a plugin declares a `guard` (in its
+`plugin.ts`), which returns the filter an actor's documents must match: one function answering for
+each collection it rules, its larger parts in `lib/guards/<collection>.ts`.
 
 Don't write `find({ owner: ctx.actor.id })` as access control in an Action or a View. It holds only
 on that one path. The REST API, the socket, a View or another plugin's Action reads the collection
@@ -62,8 +67,9 @@ with the ids the model needs next. A failed call's output is its error's words: 
 throw. An MCP server that offers a tool without its View doesn't start.
 
 A View reads in its own body. A React View reads with `ctx.db` and hands the result to its
-component, so it stays live when a commit changes what it read. Views never write: a button in one
-calls an Action.
+component, so it stays live when a commit changes what it read. A View writes only from its handlers
+(`ctx.db.collection(name).insertOne(…)` for a plain save, `ctx.call` for an Action), never while it
+renders.
 
 ## Errors for callers are public failures
 

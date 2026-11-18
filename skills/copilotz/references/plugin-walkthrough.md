@@ -33,35 +33,70 @@ are, so there's no build step, but `tsc` and the editor need to know imports end
 }
 ```
 
-The scripts, in `package.json`. Add `dev` and `terminal` once there's a server and a terminal.
+Node doesn't run `.tsx`, which web Views are, so every script loads a loader hook first: `tsx.ts`,
+which registers `tsx-hooks.ts`, at the project's root.
 
-```json
-"scripts": {
-  "test": "node --disable-warning=ExperimentalWarning --test --test-timeout=60000 --test-concurrency=1 \"tests/*.test.ts\"",
-  "check": "tsc --noEmit -p ."
+```ts
+// tsx.ts
+import { register } from "node:module";
+
+register("./tsx-hooks.ts", import.meta.url);
+```
+
+```ts
+// tsx-hooks.ts: a .tsx module, made JavaScript by esbuild as it loads.
+import { readFile } from "node:fs/promises";
+import { transform } from "esbuild";
+
+type Loaded = { format?: string; source?: string; shortCircuit?: boolean };
+type Next = (url: string, context: unknown) => Promise<Loaded>;
+
+export async function load(url: string, context: unknown, next: Next): Promise<Loaded> {
+  if (!url.startsWith("file:") || !url.endsWith(".tsx")) return next(url, context);
+  const { code } = await transform(await readFile(new URL(url), "utf8"), {
+    loader: "tsx",
+    jsx: "automatic",
+    format: "esm",
+    target: "es2024",
+    sourcefile: url,
+  });
+  return { format: "module", source: code, shortCircuit: true };
 }
 ```
 
-Node doesn't run `.tsx`. Tests that load a `web.tsx` need a loader hook:
-[Getting Started, chapter 3](https://copilotz.com/docs/getting-started/03-its-own-web-page.md) adds
-a 24-line one, `tsx.ts`, and starts `npm test` with `--import ./tsx.ts`.
+The scripts, in `package.json`, each through the loader (`dev` and `start` once there's a server):
+
+```json
+"scripts": {
+  "test": "node --import ./tsx.ts --disable-warning=ExperimentalWarning --test --test-timeout=60000 --test-concurrency=1 \"tests/*.test.ts\"",
+  "check": "tsc --noEmit -p .",
+  "dev": "node --import ./tsx.ts --env-file-if-exists=.env --watch server.ts",
+  "start": "node --import ./tsx.ts server.ts"
+}
+```
 
 The layout:
 
 ```text
 app.ts            plugins(settings): every plugin, in order. It reads no environment.
 plugins/<name>/
-  mod.ts          assembles the plugin, and nothing else
+  mod.ts          assembles the plugin from its folders, and nothing else
+  plugin.ts       optional: its single fields (requires, guard, who, check)
+  collections/    one file per collection: its schema, its type (Infer), its named queries
+  actions/        one file per Action: business logic, never a plain save
+  processors/ views/ resources/ routes/ …   one file per declaration (views/web/ for the web)
+  lib/            what its files share
   contract.ts     what other plugins may import: shapes and small helpers, never code
-  web.tsx         its web front end (React Views); terminal.ts, its terminal one
+  web.tsx         names its web Views; terminal.ts, its terminal ones
 server.ts         the web host: reads the environment, passes settings to plugins()
+tsx.ts, tsx-hooks.ts   the loader every script imports
 tests/kit.ts      the app as app.ts makes it, in memory, with a scripted model
 tests/*.test.ts
-.env              OPENAI_API_KEY=… (optional; dev and terminal read it)
+.env              OPENAI_API_KEY=… (optional; dev reads it)
 ```
 
-As a plugin grows, give each primitive its own file (`actions.ts`, `views.ts`…) or folder, with one
-file per declaration. `mod.ts` only puts them together.
+It's the layout of Copilotz's own plugins: a folder per primitive, one declaration per file, and
+`mod.ts` only puts them together. Don't invent others.
 
 **Give the project its own guide.** Write a short `AGENTS.md` at its root that says it runs on
 Copilotz, sends agents to `node_modules/copilotz/AGENTS.md` and https://copilotz.com/llms.txt, and
@@ -70,83 +105,86 @@ one line `@AGENTS.md`, since Claude Code reads `CLAUDE.md` and follows the impor
 
 ## 2. The data, under the rules
 
-`plugins/tasks/contract.ts` is what other plugins may import from this one:
+A collection is a JSON Schema, in `plugins/tasks/collections/task.ts`, with its type and its named
+queries beside it. Every write keeps to the schema, updates included:
 
 ```ts
-/** A task, as other plugins may read it. Shapes and small helpers only, never code. */
-export type Task = { _id: string; title: string; in: string; done?: boolean };
+import { defineCollection, type Infer, people } from "copilotz";
+
+const schema = {
+  type: "object",
+  properties: {
+    title: { type: "string", minLength: 1 },
+    done: { type: "boolean" },
+    in: { type: "string" },
+  },
+  required: ["title", "in"],
+  additionalProperties: false,
+} as const;
+
+/** A task, as its schema says it: the type follows the schema. */
+export type Task = Infer<typeof schema>;
+
+export const task = defineCollection({
+  schema,
+  queries: {
+    // What screens and Views list: the open tasks, of what whoever asks reaches.
+    open: { allow: people, run: (tasks) => tasks.find({ done: { $ne: true } }).toArray() },
+  },
+});
 ```
 
-In `plugins/tasks/mod.ts`, a collection is a JSON Schema. Naming it in the `shared` resource puts it
-under the access plugin's rules: each task lives `in` a space, and every read and write of it
-reaches only the spaces the actor reaches.
+`contract.ts` re-exports the type for other plugins
+(`export type { Task } from
+"./collections/task.ts";`). Naming the collection in the `shared`
+resource (`resources/shared.ts`) puts it under the access plugin's rules: each task lives `in` a
+space, and every read and write of it reaches only the spaces the actor reaches.
 
 ```ts
-collections: {
-  task: {
-    schema: {
-      type: "object",
-      properties: { title: { type: "string" }, in: { type: "string" }, done: { type: "boolean" } },
-      required: ["title", "in"],
-    },
-  },
-},
-resources: {
-  shared: { task: {} }, // `{ part: "thread" }` would also tie each task to the chat it came from
-},
+/** The rule, at the data: a task lives in a space (its `in`), and its members reach it. */
+export const shared = { task: {} };
 ```
 
 You write no "where `in` is one of the actor's spaces" filter. Bo asking for Ana's task gets
 nothing, and Bo adding one into Ana's space is refused: "That "task" document would be out of your
 reach."
 
-## 3. The only ways to change it: Actions
+## 3. Changing it: plain saves, and Actions for what's more
 
-Every change is an Action, with an input schema and an `allow` that names kinds of caller. A page's
-button, the agent's tool and a script all call the same one. A refusal meant for the caller is a
-public `failure`.
+A plain save is a collection write, from wherever it's made: a screen's handler
+(`ctx.db.collection("task").insertOne(…)`), a tool (`ctx.db`, section 5), a script (`connect()`'s
+`db`), REST (`POST /api/collections/task`). Each writes as its caller, under the rules, checked
+against the schema, and recorded as theirs: no Action needed.
+
+An Action is for business logic. Completing a task happens once, a rule the schema can't say, so
+it's an Action (`actions/complete.ts`), with an `allow` that names kinds of caller; a refusal meant
+for the caller is a public `failure`:
 
 ```ts
-import { defineAction, definePlugin, failure, people } from "copilotz";
+import { defineAction, failure, people } from "copilotz";
 
-const title = {
-  type: "object",
-  properties: { title: { type: "string" } },
-  required: ["title"],
-} as const;
-const which = {
-  type: "object",
-  properties: { task: { type: "string" } },
-  required: ["task"],
-} as const;
-
-// In definePlugin({ … }):
-actions: {
-  "task.add": defineAction({
-    input: title,
-    allow: people, // a person, their key, or an agent working for one; never a contact
-    run: async (ctx, { title }) => {
-      if (!ctx.in) throw failure("invalid", "Add tasks in a space.", { public: true });
-      const { insertedId } = await ctx.db.collection("task").insertOne({ title, in: ctx.in });
-      return { task: insertedId };
-    },
-  }),
-  "task.done": defineAction({
-    input: which,
-    allow: people,
-    run: async (ctx, { task }) => {
-      // The rules filter the update: a task the caller doesn't reach matches nothing.
-      const { matchedCount } = await ctx.db.collection("task")
-        .updateOne({ _id: task }, { $set: { done: true } });
-      if (!matchedCount) throw failure("not_found", `No task ${task} here.`, { public: true });
-      return { task };
-    },
-  }),
-},
+/** Done once, by whoever reaches the task: a rule the schema can't say, so an Action. */
+export const complete = defineAction({
+  input: { type: "object", properties: { task: { type: "string" } }, required: ["task"] },
+  allow: people,
+  run: async (ctx, { task }) => {
+    const tasks = ctx.db.collection("task");
+    // The filter holds the rule: of two at once, one completes it.
+    const { matchedCount } = await tasks
+      .updateOne({ _id: task, done: { $ne: true } }, { $set: { done: true } });
+    if (matchedCount) return { done: task };
+    // Not one they reach, or done already: say which.
+    if (!await tasks.findOne({ _id: task })) {
+      throw failure("not_found", `No task ${task} here.`, { public: true });
+    }
+    throw failure("invalid", "That task is done already.", { public: true });
+  },
+});
 ```
 
-To keep a collection changing only through its Actions, refuse writes from outside (the REST API, a
-browser's socket) in a `guard`. Copilotz's boards and documents do the same:
+When a collection should change only through its Actions, refuse writes from outside (the REST API,
+a browser's socket, a View's handler) in the `guard`, in `plugin.ts`. Copilotz's boards and
+documents do the same:
 
 ```ts
 guard: (_actor, { collection, access, direct }) => {
@@ -185,11 +223,12 @@ Views for the web read the same way and hand the result to a component:
 
 ## 5. A tool and an agent
 
-A tool is a thin caller of an Action. It works where its chat is (`ctx.in`), as the agent, for the
-chat's person, so `allow` and the rules are asked of both. An agent names a model alias, never a
-model.
+A tool writes as its agent, for the chat's person, where its chat is (`ctx.in`), so the rules are
+asked of both: a plain save writes the collection, and what's more calls the Action. An agent names
+a model alias, never a model.
 
 ```ts
+import { failure } from "copilotz";
 import { tool } from "copilotz/plugins/agents";
 
 resources: {
@@ -197,13 +236,17 @@ resources: {
   tools: {
     add_task: tool({
       description: "Adds a task to this chat's space",
-      input: title,
-      run: ({ title }, ctx) => ctx.call("task.add", { title }),
+      input: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
+      run: async ({ title }, ctx) => {
+        if (!ctx.in) throw failure("invalid", "Add tasks in a space.", { public: true });
+        const { insertedId } = await ctx.db.collection("task").insertOne({ title, in: ctx.in });
+        return { task: insertedId };
+      },
     }),
     finish_task: tool({
       description: "Marks a task done, by its id",
-      input: which,
-      run: ({ task }, ctx) => ctx.call("task.done", { task }),
+      input: { type: "object", properties: { task: { type: "string" } }, required: ["task"] },
+      run: ({ task }, ctx) => ctx.call("task.complete", { task }),
     }),
   },
   agents: {
@@ -217,10 +260,28 @@ resources: {
 },
 ```
 
-The whole plugin is
-`definePlugin({ name: "tasks", requires: ["chat", "spaces"], collections,
-actions, views, resources, guard })`,
-typed `Plugin` and exported as `tasks`.
+`mod.ts` assembles the files, `plugin.ts` holds `requires` (and the guard):
+
+```ts
+import { definePlugin, type Plugin } from "copilotz";
+import plugin from "./plugin.ts";
+import { task } from "./collections/task.ts";
+import { complete } from "./actions/complete.ts";
+import { tasks as tasksView } from "./views/tasks.ts";
+import { addTask } from "./views/tool-add-task.ts";
+import { agents } from "./resources/agents.ts";
+import { shared } from "./resources/shared.ts";
+import { tools } from "./resources/tools.ts";
+
+export const tasks: Plugin = definePlugin({
+  name: "tasks",
+  ...plugin,
+  collections: { task },
+  actions: { "task.complete": complete },
+  views: { tasks: tasksView, "tool:add_task": addTask },
+  resources: { shared, tools, agents },
+});
+```
 
 ## 6. The app
 

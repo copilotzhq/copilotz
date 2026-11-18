@@ -17,7 +17,7 @@
  * fast for plain `$set` and counters.
  */
 import { Validator } from "@cfworker/json-schema";
-import { invalid } from "./registry.ts";
+import { schemaFailure } from "./registry.ts";
 
 type Schema = Record<string, unknown> | boolean | undefined;
 
@@ -126,7 +126,7 @@ export function updateCheck(
     return check(value);
   };
   const refuse = (path: string, why: string) => {
-    throw invalid(`${label}: ${why} (#/${path.replaceAll(".", "/")})`);
+    throw schemaFailure(label, why, `#/${path.replaceAll(".", "/")}`);
   };
   const required = (parent: Schema, key: string) =>
     typeof parent === "object" && Array.isArray(parent.required) && parent.required.includes(key);

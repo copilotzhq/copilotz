@@ -29,6 +29,16 @@ Updates keep to the schema on every store, as MongoDB's do.
 
 **Added:**
 
+- **A View's handlers write collections:** `ctx.db.collection(name)` has `insertOne`, `updateOne`
+  (an update document, or the fields to set), `replaceOne` and `deleteOne`, each the viewer's own
+  write, as REST and the socket make it: a rule must speak for the collection's writes, the schema
+  checks it, it's recorded as theirs. In the owner (a terminal) and in a browser alike. A View
+  writes nothing while it renders, nor when it's rendered once. A screen saves a record without an
+  Action that only saves it.
+- **A schema failure names its field,** in `detail.field` (a dot path; for a missing required field,
+  that field), and the error is about the innermost value that failed. A write from outside (REST,
+  the socket, a View's handler) says it to its caller as a public failure, so a `Form` shows it by
+  its field; REST's error body carries `detail` for a public failure.
 - **`validation: "moderate"` on a collection**, as MongoDB's `validationLevel`: updates are checked
   only on documents that were valid, for a collection whose older documents predate its schema.
   Inserts and replaces are always checked.

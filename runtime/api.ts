@@ -128,9 +128,26 @@ const json = (value: unknown, status = 200, headers: Record<string, string> = {}
     },
   });
 
-/** An error as the API says it. */
-const failed = (status: number, code: string, message: string, headers = {}) =>
-  json({ error: { code, message } }, status, headers);
+/** An error as the API says it; a public one with its `detail` (the field it's about). */
+const failed = (
+  status: number,
+  code: string,
+  message: string,
+  headers = {},
+  detail?: Record<string, string>,
+) => json({ error: { code, message, ...(detail ? { detail } : {}) } }, status, headers);
+
+/** A public failure's `detail`: its strings (`{ field: "price" }`). */
+const detailOf = (error: unknown): Record<string, string> | undefined => {
+  const detail = (error as { detail?: unknown; public?: unknown } | null)?.detail;
+  if (
+    (error as { public?: unknown } | null)?.public !== true || !detail || typeof detail !== "object"
+  ) {
+    return undefined;
+  }
+  const kept = Object.entries(detail).filter(([, value]) => typeof value === "string");
+  return kept.length ? Object.fromEntries(kept) as Record<string, string> : undefined;
+};
 
 /** A refusal, by its code. */
 const fault = (code: string, message: string) =>
@@ -825,5 +842,5 @@ function refusal(error: unknown, actor: Actor): Response {
   return failed(status, code, told.message, {
     ...(allow ? { allow } : {}),
     ...headers,
-  });
+  }, detailOf(error));
 }

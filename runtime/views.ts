@@ -8,6 +8,9 @@
  * changes.
  */
 import type { Pipeline } from "./aggregate.ts";
+import type { DeleteResult, UpdateResult } from "./collection.ts";
+import type { WriteOp } from "./ops.ts";
+import type { Update } from "./store.ts";
 import { canonical, invalid } from "./registry.ts";
 import type {
   Read,
@@ -23,7 +26,11 @@ import type {
 export const PASSES = 25;
 
 /** A run of a View: its reads by what they ask, and those still loading in this pass. */
-export type Pass = { slots: Map<string, Slot>; pending: Promise<void>[] };
+/** One pass of a View over its reads; `passing` while its body runs (it doesn't write then). */
+export type Pass = { slots: Map<string, Slot>; pending: Promise<void>[]; passing?: boolean };
+
+/** How a View's handlers write a collection: as its viewer, from outside (see `ViewCollection`). */
+export type Write = (op: WriteOp) => Promise<unknown>;
 /** A read: how to ask it of a source, and where its answer is. */
 type Slot = { ask: Ask; read: Read<unknown>; error?: unknown };
 type Ask = (source: ReadContext) => Promise<unknown>;
@@ -59,7 +66,18 @@ export const failure = (pass: Pass): { error: unknown } | undefined =>
  * A View's collections over `source`: a read asked before in this run is
  * answered from it; a new one starts loading, and the pass waits for it.
  */
-export function viewCollections(source: ReadContext, pass: Pass): ViewContext["db"] {
+export function viewCollections(
+  source: ReadContext,
+  pass: Pass,
+  write?: Write,
+): ViewContext["db"] {
+  // Handlers write; a View's body, or one rendered once (no handlers run), doesn't.
+  const writing = (op: WriteOp) =>
+    !write
+      ? Promise.reject(invalid("Only a View being observed writes, from its handlers."))
+      : pass.passing
+      ? Promise.reject(invalid("A View writes from its handlers, never while it renders."))
+      : write(op);
   const read = <T>(key: unknown[], ask: Ask): Read<T> => {
     const id = canonical(key);
     return (pass.slots.get(id) ?? load(pass, id, ask, source)).read as Read<T>;
@@ -79,6 +97,30 @@ export function viewCollections(source: ReadContext, pass: Pass): ViewContext["d
         read([name, "nearest", vector, options], (s) => from(s).nearest(vector, options)),
       query: <R>(query: string, params?: unknown) =>
         read([name, "query", query, params ?? null], (s) => from(s).query<R>(query, params)),
+      insertOne: (doc) =>
+        writing({ op: "insert", collection: name, docs: [doc as never] }) as Promise<
+          { acknowledged: true; insertedId: string }
+        >,
+      updateOne: (filter, update, { upsert } = {}) =>
+        writing({
+          op: "update",
+          collection: name,
+          filter,
+          update: update as Update,
+          options: upsert ? { upsert } : {},
+        }) as Promise<UpdateResult>,
+      replaceOne: (filter, doc, { upsert } = {}) =>
+        writing({
+          op: "replace",
+          collection: name,
+          filter,
+          doc: doc as never,
+          options: upsert ? { upsert } : {},
+        }) as Promise<UpdateResult>,
+      deleteOne: (filter) =>
+        writing({ op: "delete", collection: name, filter, options: {} }) as Promise<
+          DeleteResult
+        >,
     };
   };
   return { collection };

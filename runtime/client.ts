@@ -685,6 +685,8 @@ function open(options: ClientOptions): Client {
     call: (action, input, actor) =>
       ask(CALL, { action, input: input ?? {}, ...placeOf(actor) }) as Promise<never>,
     emit: (type, data, actor) => ask(EMIT, { type, data: data ?? {}, ...placeOf(actor) }),
+    // A handler's write is the person's own, as the client's collections write.
+    write: (op) => ask(WRITE, { op }),
     // No part reads it now: the owner stops watching it.
     unread: (watched) => {
       if (!watched.startsWith(WATCHED)) return;

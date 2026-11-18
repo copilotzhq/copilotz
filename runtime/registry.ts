@@ -71,11 +71,49 @@ export function compile(schema: unknown, label: string): (value: unknown) => voi
   return (value: unknown) => {
     const result = validator.validate(value);
     if (!result.valid) {
-      const first = result.errors.at(-1);
-      throw invalid(`${label}: ${first?.error ?? "invalid"} (${first?.instanceLocation ?? "#"})`);
+      const first = deepest(result.errors);
+      throw schemaFailure(
+        label,
+        first?.error ?? "invalid",
+        first?.instanceLocation ?? "#",
+        first?.keyword,
+      );
     }
   };
 }
+
+/** Of a validation's errors, the one about the innermost value: the field itself, not its parent. */
+export const deepest = <E extends { instanceLocation: string }>(errors: E[]): E | undefined =>
+  errors.reduce<E | undefined>(
+    (best, e) =>
+      !best || e.instanceLocation.split("/").length >= best.instanceLocation.split("/").length
+        ? e
+        : best,
+    undefined,
+  );
+
+/**
+ * A document that doesn't fit its schema: `invalid`, saying where (`#/price`),
+ * with the field it's about in `detail.field` (a dot path; for a required
+ * field that's missing, that field), for a form to show it there. Marked
+ * `schema`, so writes from outside can say it to their caller (see owner.ts).
+ */
+export function schemaFailure(
+  label: string,
+  error: string,
+  location: string,
+  rule?: string,
+): Error & { code: string; detail?: { field: string }; schema: true } {
+  const path = location.replace(/^#\/?/, "").split("/").filter(Boolean).map(unescapePointer);
+  const missing = rule === "required" ? /property "([^"]+)"/.exec(error)?.[1] : undefined;
+  const field = [...path, ...(missing ? [missing] : [])].join(".");
+  return Object.assign(invalid(`${label}: ${error} (${location})`), {
+    ...(field ? { detail: { field } } : {}),
+    schema: true as const,
+  });
+}
+
+const unescapePointer = (part: string) => part.replaceAll("~1", "/").replaceAll("~0", "~");
 
 export type Registry = {
   collections: Record<string, CollectionDef>;

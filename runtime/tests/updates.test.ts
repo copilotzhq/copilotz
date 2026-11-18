@@ -22,6 +22,7 @@ import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../stores/sql/postgres/mod.ts";
 import { env, tempFile, temporary, test, TEST_ACTOR, testWho } from "../../testing/mod.ts";
 import { updateCheck } from "../updates.ts";
+import { compile } from "../registry.ts";
 
 const POSTGRES = env("COPILOTZ_TEST_POSTGRES_URL");
 const stores: Record<string, () => Store | Promise<Store>> = {
@@ -210,8 +211,11 @@ each("from outside, a plain PATCH is checked as $set is", async (rt) => {
     );
   const wrong = await patch({ price: "abc" });
   assertEquals(wrong.status, 400);
-  assertEquals((await wrong.json()).error.code, "invalid");
-  assertEquals((await patch({ $unset: { name: "" } })).status, 400);
+  // Said to the caller, with the field it's about, for a form to show it there.
+  const { error } = await wrong.json();
+  assertEquals([error.code, error.detail], ["invalid", { field: "price" }]);
+  const unset = await (await patch({ $unset: { name: "" } })).json();
+  assertEquals(unset.error.detail, { field: "name" });
   assertEquals((await stored(rt))?.price, 5);
   assertEquals((await patch({ price: 8 })).status, 200);
   assertEquals((await stored(rt))?.price, 8);
@@ -330,4 +334,17 @@ test("the check before the store is sure only when a valid document can't come o
   assertEquals(sure({ ...plain, minProperties: 2 }, { $set: { name: "x" } }), false);
   const either = { type: "object", properties: { v: { anyOf: [{ type: "string" }] } } };
   assertEquals(sure(either, { $set: { "v.x": 1 } }), false);
+});
+
+test("a schema failure names its field; a missing required one, that field", () => {
+  const check = (doc: unknown) => {
+    try {
+      compile(customer.schema, "c")(doc);
+    } catch (error) {
+      return (error as { detail?: { field: string } }).detail?.field;
+    }
+  };
+  assertEquals(check({ name: "x", price: "1" }), "price");
+  assertEquals(check({ price: 1 }), "name");
+  assertEquals(check({ name: "x", price: 1, meta: { a: 1 } }), "meta.a");
 });

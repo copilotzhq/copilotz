@@ -78,12 +78,14 @@ import {
   canonical,
   checked,
   compile,
+  deepest,
   described,
   events,
   fingerprint,
   invalid,
   json,
   merge,
+  schemaFailure,
   unprivate,
 } from "./registry.ts";
 import type {
@@ -503,8 +505,8 @@ export async function createOwner(
         : moderate.has(collection)
         ? []
         : now.filter((p) => !known.has(key(p)));
-      const last = added.at(-1);
-      if (last) throw invalid(`collection "${collection}": ${last.error} (${last.at})`);
+      const last = deepest(added.map((p) => ({ ...p, instanceLocation: p.at })));
+      if (last) throw schemaFailure(`collection "${collection}"`, last.error, last.at, last.rule);
     }
   };
   const vectorFields = (collection: string) => registry.collections[collection]?.vectors ?? [];
@@ -970,6 +972,11 @@ export async function createOwner(
     },
     call: (action, input, actor) => api.call(action, input, actor ? { actor } : {}),
     emit: (type, data, actor) => emit(type, data, actor ? { actor } : {}),
+    // A handler's write is its viewer's own, as REST and the socket write.
+    write: (op, actor) =>
+      actor
+        ? writeOutside(actor, op)
+        : Promise.reject(invalid("A View writes as whoever it's observed for: give it an actor.")),
   });
 
   // Every change to a declared collection is an event, committed with it; records are their own.
@@ -1285,6 +1292,17 @@ export async function createOwner(
    * can't write. It answers as MongoDB does (`insertedId`, `matchedCount`…).
    */
   const writeOutside = async (actor: Actor, given: WriteOp): Promise<unknown> => {
+    try {
+      return await writeAs(actor, given);
+    } catch (error) {
+      // What doesn't fit the schema is the caller's to fix: said to them, with its field.
+      if ((error as { schema?: unknown }).schema === true) {
+        throw Object.assign(error as Error, { public: true });
+      }
+      throw error;
+    }
+  };
+  const writeAs = async (actor: Actor, given: WriteOp): Promise<unknown> => {
     const op = outsideWrite(given);
     await admitted(actor, op);
     known(op);

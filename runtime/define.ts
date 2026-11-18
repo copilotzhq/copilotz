@@ -6,8 +6,14 @@ import type { FromSchema, JSONSchema } from "json-schema-to-ts";
 import type { Pipeline } from "./aggregate.ts";
 import type { Metrics } from "./metrics.ts";
 import type { Scheduled, ScheduleDef, ScheduleOptions, SchedulePatch } from "./schedules.ts";
-import type { Collection, NearestOptions, WithId } from "./collection.ts";
-import type { Actor, Edge, Event, Filter, FindOptions } from "./store.ts";
+import type {
+  Collection,
+  DeleteResult,
+  NearestOptions,
+  UpdateResult,
+  WithId,
+} from "./collection.ts";
+import type { Actor, Edge, Event, Filter, FindOptions, Update } from "./store.ts";
 import type { Owner } from "./owner.ts";
 
 /** The TypeScript type a JSON Schema describes. Deferred so generics stay cheap. */
@@ -282,6 +288,21 @@ export type ViewCollection<T> = {
   aggregate<R = Record<string, unknown>>(pipeline: Pipeline): Read<R[]>;
   nearest(vector: number[], options?: NearestOptions): Read<(WithId<T> & { _score: number })[]>;
   query<R = unknown>(name: string, params?: unknown): Read<R>;
+  /**
+   * From a handler (a click, a form's submit), a write of the viewer's own,
+   * as REST and the socket write: under the rules (a rule must speak for the
+   * collection's writes), checked against its schema, recorded as theirs.
+   * `update` is an update document (`$set`, `$inc`…), or the fields to set.
+   * A View never writes while it renders, nor when it's rendered once.
+   */
+  insertOne(doc: T & { _id?: string }): Promise<{ acknowledged: true; insertedId: string }>;
+  updateOne(
+    filter: Filter,
+    update: Update | Partial<T>,
+    options?: { upsert?: boolean },
+  ): Promise<UpdateResult>;
+  replaceOne(filter: Filter, doc: T, options?: { upsert?: boolean }): Promise<UpdateResult>;
+  deleteOne(filter: Filter): Promise<DeleteResult>;
 };
 
 /** What a View gets. `Shown` is what showing another View returns (text, an element). */

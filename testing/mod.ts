@@ -22,6 +22,7 @@ import type { Hypervisor } from "@oxian/oxian-js";
  * it reaches the runtime's in-process topics.
  */
 export { createWorker, type WorkerWorkHandler } from "@oxian/oxian-js";
+export { boundaries } from "./boundaries.ts";
 import { type Actor, definePlugin, type Plugin, type Plugins } from "../runtime/mod.ts";
 import { merge } from "../runtime/registry.ts";
 

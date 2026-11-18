@@ -3,7 +3,8 @@
  * it, as MongoDB's `$jsonSchema` validator does with `validationLevel:
  * "strict"`: what `$set` gives a field must fit the field's schema, and a field
  * the schema doesn't allow can't be set; `$unset` can't remove a required
- * field; `$inc` counts only numbers; `$push` and `$addToSet` add only items the
+ * field; `$inc` and `$mul` count only numbers; `$setOnInsert`, `$min` and `$max`
+ * give only what fits; `$push` and `$addToSet` add only items the
  * list's schema takes. Anything else that fails is refused the same way
  * (`invalid`, naming the field), before anything is written.
  *
@@ -141,14 +142,17 @@ export function updateCheck(
     const each = (operator: string) =>
       Object.entries((update[operator] ?? {}) as Record<string, unknown>)
         .filter(([path]) => !vectors.includes(path));
-    for (const [path, value] of each("$set")) {
-      const found = find(root, path);
-      if ("refused" in found) refuse(path, `"${path}" isn't a field this collection has`);
-      else if ("unsure" in found) sure = false;
-      else {
-        const why = fits(found.schema, value);
-        if (why) refuse(path, why);
-        if (!found.plain) sure = false;
+    // What they give a field must fit it ($min and $max leave it, or give it what fits).
+    for (const operator of ["$set", "$setOnInsert", "$min", "$max"]) {
+      for (const [path, value] of each(operator)) {
+        const found = find(root, path);
+        if ("refused" in found) refuse(path, `"${path}" isn't a field this collection has`);
+        else if ("unsure" in found) sure = false;
+        else {
+          const why = fits(found.schema, value);
+          if (why) refuse(path, why);
+          if (!found.plain) sure = false;
+        }
       }
     }
     for (const [path] of each("$unset")) {
@@ -168,20 +172,24 @@ export function updateCheck(
         ) sure = false;
       }
     }
-    for (const [path, by] of each("$inc")) {
-      if (typeof by !== "number" || !Number.isFinite(by)) refuse(path, "$inc takes a number");
-      const found = find(root, path);
-      if ("refused" in found) refuse(path, `"${path}" isn't a field this collection has`);
-      else if ("unsure" in found) sure = false;
-      else {
-        const types = typesOf(found.schema);
-        if (types.length && !types.includes("number") && !types.includes("integer")) {
-          refuse(path, `$inc counts numbers, and "${path}" isn't one`);
+    for (const operator of ["$inc", "$mul"]) {
+      for (const [path, by] of each(operator)) {
+        if (typeof by !== "number" || !Number.isFinite(by)) {
+          refuse(path, `${operator} takes a number`);
         }
-        if (types.includes("integer") && !types.includes("number") && !Number.isInteger(by)) {
-          refuse(path, `"${path}" is an integer: $inc it by one`);
+        const found = find(root, path);
+        if ("refused" in found) refuse(path, `"${path}" isn't a field this collection has`);
+        else if ("unsure" in found) sure = false;
+        else {
+          const types = typesOf(found.schema);
+          if (types.length && !types.includes("number") && !types.includes("integer")) {
+            refuse(path, `${operator} counts numbers, and "${path}" isn't one`);
+          }
+          if (types.includes("integer") && !types.includes("number") && !Number.isInteger(by)) {
+            refuse(path, `"${path}" is an integer: ${operator} it by a whole number`);
+          }
+          if (rules(found.schema) || !found.plain) sure = false;
         }
-        if (rules(found.schema) || !found.plain) sure = false;
       }
     }
     for (const operator of ["$push", "$addToSet"]) {

@@ -658,7 +658,7 @@ export async function postgresStore(options: {
         };
       },
       async update(collection, filter, update, options = {}) {
-        const seed = options.upsert ? applyUpdate(seedOf(filter), update) : undefined;
+        const seed = options.upsert ? applyUpdate(seedOf(filter), update, true) : undefined;
         const fast = expression(update);
         if (fast) return await modify(collection, filter, fast, seed, options.many ?? false);
         await flush();
@@ -1109,7 +1109,7 @@ export async function postgresStore(options: {
               : `jsonb_set(${bind(JSON.stringify(op.doc))}::jsonb, '{_id}', to_jsonb(t.id))`;
             if (op.options.upsert) {
               seed = op.op === "update"
-                ? applyUpdate(seedOf(op.filter), op.update)
+                ? applyUpdate(seedOf(op.filter), op.update, true)
                 : { ...op.doc, _id: seedOf(op.filter)._id };
               inserted.push([op.collection, seed]);
             }

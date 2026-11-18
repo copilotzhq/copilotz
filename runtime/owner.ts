@@ -486,7 +486,7 @@ export async function createOwner(
   const seeds = (collection: string, op: { filter: Filter; update: Update }): boolean => {
     if (collection.startsWith(SYSTEM)) return true;
     try {
-      const { _id: _, ...fields } = applyUpdate(seedOf(op.filter), op.update);
+      const { _id: _, ...fields } = applyUpdate(seedOf(op.filter), op.update, true);
       return valid(collection, fields);
     } catch {
       return false;

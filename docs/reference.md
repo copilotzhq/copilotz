@@ -320,12 +320,13 @@ types its documents and queries from the schema.
   case, not accents: search a folded copy of the field for that. The
   [stores' README](../stores/README.md#text-patterns) has what's in the subset, its limits, and the
   folded copy.
-- **Updates:** `$set`, `$unset`, `$inc`, `$push` and `$addToSet` (each with `$each`), `$pull`;
-  `upsert`. An update needs its operators: one with none is refused, as MongoDB refuses it
-  (`replaceOne` replaces a document). It's checked against the schema as MongoDB's `$jsonSchema`
-  validator checks with `validationLevel: "strict"`: what it sets must fit each field, it can't set
-  a field the schema doesn't allow or unset a required one, and the documents it leaves (an upsert's
-  new one too) must be valid. What fails changes nothing (`invalid`, naming the field).
+- **Updates:** `$set`, `$setOnInsert` (only when an upsert makes the document), `$unset`, `$inc`,
+  `$mul`, `$min`, `$max`, `$push` and `$addToSet` (each with `$each`), `$pull`; `upsert`. An update
+  needs its operators: one with none is refused, as MongoDB refuses it (`replaceOne` replaces a
+  document). It's checked against the schema as MongoDB's `$jsonSchema` validator checks with
+  `validationLevel: "strict"`: what it sets must fit each field, it can't set a field the schema
+  doesn't allow or unset a required one, and the documents it leaves (an upsert's new one too) must
+  be valid. What fails changes nothing (`invalid`, naming the field).
   - **Where it differs from MongoDB's `"strict"`:** a document that wasn't valid before (stored
     before its schema said what it says now) may still be updated, as long as the update adds
     nothing wrong to it; MongoDB would refuse until the update made it valid. Every store can tell

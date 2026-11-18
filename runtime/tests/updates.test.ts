@@ -348,3 +348,31 @@ test("a schema failure names its field; a missing required one, that field", () 
   assertEquals(check({ price: 1 }), "name");
   assertEquals(check({ name: "x", price: 1, meta: { a: 1 } }), "meta.a");
 });
+
+each("$setOnInsert, $min, $max and $mul, as MongoDB applies them", async (rt) => {
+  // $setOnInsert: only when an upsert makes the document.
+  const upsert = (update: unknown) =>
+    rt.call("customer.update", { filter: { _id: "c9" }, update, options: { upsert: true } });
+  await upsert({ $set: { price: 3 }, $setOnInsert: { name: "New" } });
+  assertEquals(await stored(rt, "c9"), { _id: "c9", name: "New", price: 3 });
+  await upsert({ $set: { price: 4 }, $setOnInsert: { name: "Other" } });
+  assertEquals(await stored(rt, "c9"), { _id: "c9", name: "New", price: 4 });
+  // $min and $max: the lower or higher, a missing field taking the value; strings by their order.
+  await update(rt, { $min: { price: 3 } });
+  await update(rt, { $min: { price: 4 } });
+  await update(rt, { $max: { name: "Zed" } });
+  assertEquals([(await stored(rt))?.price, (await stored(rt))?.name], [3, "Zed"]);
+  await update(rt, { $max: { price: 9 }, $min: { name: "Al" } });
+  assertEquals([(await stored(rt))?.price, (await stored(rt))?.name], [9, "Al"]);
+  await rt.call("customer.update", { filter: { _id: "c2" }, update: { $max: { n: 4 } } });
+  assertEquals((await stored(rt, "c2"))?.n, 4);
+  // $mul: a number times; a missing field becomes 0; only numbers.
+  await update(rt, { $mul: { n: 3 } });
+  assertEquals((await stored(rt))?.n, 3);
+  await rt.call("customer.update", { filter: { _id: "c9" }, update: { $mul: { n: 2 } } });
+  assertEquals((await stored(rt, "c9"))?.n, 0);
+  await refused(() => update(rt, { $mul: { name: 2 } }), "name");
+  await refused(() => update(rt, { $min: { price: "1" } }), "price");
+  // What they leave keeps to the schema: a price below its minimum.
+  await refused(() => update(rt, { $mul: { price: -1 } }), "price");
+});

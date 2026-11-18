@@ -18,6 +18,10 @@ Updates keep to the schema on every store, as MongoDB's do.
 - **`$push` refuses modifiers it doesn't support** (`$slice`, `$sort`, `$position`), which it
   ignored.
 
+**Added, MongoDB's update operators:** `$setOnInsert` (only when an upsert makes the document),
+`$min`, `$max` and `$mul`, on every store, checked against the schema as the others are. They were
+refused.
+
 **Fixed:**
 
 - **`$addToSet` with `$each`** adds each item not there yet; it stored `{ $each: […] }` itself.

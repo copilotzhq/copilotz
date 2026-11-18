@@ -414,8 +414,30 @@ function added(value: unknown): unknown[] {
   return (value as { $each: unknown[] }).$each;
 }
 
-/** Applies a MongoDB update. A document without `$` operators replaces the fields. */
-export function applyUpdate(doc: Doc, update: Update | Record<string, unknown>): Doc {
+/** The update operators every store applies. */
+export const UPDATES = [
+  "$set",
+  "$setOnInsert",
+  "$unset",
+  "$inc",
+  "$mul",
+  "$min",
+  "$max",
+  "$push",
+  "$pull",
+  "$addToSet",
+];
+
+/**
+ * Applies a MongoDB update. A document without `$` operators replaces the
+ * fields. `inserting`: the update makes an upsert's new document, where
+ * `$setOnInsert` applies too (and nowhere else).
+ */
+export function applyUpdate(
+  doc: Doc,
+  update: Update | Record<string, unknown>,
+  inserting = false,
+): Doc {
   const next = structuredClone(doc) as Doc;
   const keys = Object.keys(update);
   if (!keys.some((key) => key.startsWith("$"))) {
@@ -423,14 +445,35 @@ export function applyUpdate(doc: Doc, update: Update | Record<string, unknown>):
   }
   const u = update as Update;
   for (const op of keys) {
-    if (!["$set", "$unset", "$inc", "$push", "$pull", "$addToSet"].includes(op)) {
+    if (!UPDATES.includes(op)) {
       throw new Error(`Unsupported update operator ${op}`);
     }
   }
   for (const [path, value] of Object.entries(u.$set ?? {})) set(next, path, value);
+  if (inserting) {
+    for (const [path, value] of Object.entries(u.$setOnInsert ?? {})) set(next, path, value);
+  }
   for (const path of Object.keys(u.$unset ?? {})) unset(next, path);
   for (const [path, by] of Object.entries(u.$inc ?? {})) {
     set(next, path, (Number(get(next, path)) || 0) + Number(by));
+  }
+  for (const [path, by] of Object.entries(u.$mul ?? {})) {
+    if (typeof by !== "number") throw new Error(`$mul takes a number (${path})`);
+    const was = get(next, path);
+    if (was !== undefined && typeof was !== "number") {
+      throw new Error(`Cannot apply $mul to a value that isn't a number (${path})`);
+    }
+    // As in MongoDB, a missing field becomes 0.
+    set(next, path, was === undefined ? 0 : was * by);
+  }
+  // A missing field takes the value; one there, the lower ($min) or higher ($max), in sort order.
+  for (const [path, value] of Object.entries(u.$min ?? {})) {
+    const was = get(next, path);
+    if (was === undefined || compare(value, was) < 0) set(next, path, value);
+  }
+  for (const [path, value] of Object.entries(u.$max ?? {})) {
+    const was = get(next, path);
+    if (was === undefined || compare(value, was) > 0) set(next, path, value);
   }
   for (const [path, value] of Object.entries(u.$push ?? {})) {
     const list = Array.isArray(get(next, path)) ? [...(get(next, path) as unknown[])] : [];

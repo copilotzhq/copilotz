@@ -61,6 +61,11 @@ toolchain, and `tsconfig.json`. Node runs TypeScript files as they are, so there
 Each chapter says which scripts it adds: `npm run hello`, `dev`, `terminal`, `tour`, and always
 `npm test` and `npm run check`. A `.env` beside them may hold your `OPENAI_API_KEY`.
 
+The course keeps each plugin's primitives in a file each (`actions.ts`, `queries.ts`, `views.ts`),
+and saves bookings through Actions. That still works. An app of your own follows the convention in
+[AGENTS.md](https://github.com/copilotzhq/copilotz/blob/main/AGENTS.md): a folder per primitive, one
+declaration per file, and plain saves written to the collection, with Actions for business logic.
+
 ## The chapters
 
 **Part 1: one app**

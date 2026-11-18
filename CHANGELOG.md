@@ -1,3 +1,41 @@
+## Unreleased
+
+Updates keep to the schema on every store, as MongoDB's do.
+
+**Breaking:**
+
+- **Updates are checked against the collection's schema** (they weren't: only inserts and replaces
+  were), as MongoDB's `$jsonSchema` validator checks them with `validationLevel: "strict"`. What
+  `$set` gives a field must fit it; a field the schema doesn't allow can't be set, nor a required
+  one unset; `$inc` counts numbers; `$push` and `$addToSet` add items the list takes; and a document
+  that was valid stays valid (an upsert's new one too). From plugin code, REST and the socket alike:
+  what fails changes nothing (`invalid`, naming the field), so the stores agree on what they hold. A
+  document older than its schema may still be updated: strict refuses only what an update adds to
+  what was wrong with it, which every store tells alike.
+- **An update needs operators.** One with none (`updateOne(filter, { name: "x" })`, or `{}`)
+  replaced the whole document, unchecked; it's refused now, as MongoDB refuses it. Use `$set`, or
+  `replaceOne` to replace. REST's `PATCH` and the socket still read plain fields as `$set`.
+- **`$push` refuses modifiers it doesn't support** (`$slice`, `$sort`, `$position`), which it
+  ignored.
+
+**Fixed:**
+
+- **`$addToSet` with `$each`** adds each item not there yet; it stored `{ $each: […] }` itself.
+- **An unrecorded Action a query or a View calls acts as someone else (`ctx.as`)** as it does when
+  an Action calls it, read-only. It was quietly left as the reader, and read less than it asked for.
+
+**Added:**
+
+- **`validation: "moderate"` on a collection**, as MongoDB's `validationLevel`: updates are checked
+  only on documents that were valid, for a collection whose older documents predate its schema.
+  Inserts and replaces are always checked.
+
+**Upgrading:** an app whose code writes what its schemas don't allow now gets `invalid` where it
+didn't. Run its tests first. A collection holding documents from before its schema said what it says
+now: set `validation: "moderate"` on it until they're fixed. PostgreSQL still runs plain `$set`,
+`$unset` and counters in one statement; an update whose check needs the documents it leaves (a
+`minimum` after `$inc`, an object a nested `$set` may create) runs in a transaction.
+
 ## 1.0.0-rc.61 — 2026-11-24
 
 **Fixed:**

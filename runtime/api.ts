@@ -33,8 +33,9 @@
  * collection reaches an outsider only where a rule speaks for it (for
  * writes, a rule asked about writes), never `sys.*`; private fields are
  * never returned, never filtered by, never written; the owner's guard keeps
- * every write within their reach; the schema checks it; and every write
- * records its events, as theirs.
+ * every write within their reach; the schema checks it (an update's values
+ * and the document it leaves, see updates.ts); and every write records its
+ * events, as theirs.
  *
  * Errors are JSON, `{ error: { code, message } }`. A refusal (an error with
  * a code, as `failure` makes them) answers a 4xx: its code's status, 422 for

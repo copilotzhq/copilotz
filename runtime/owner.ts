@@ -24,6 +24,10 @@ import type {
   WorkerJob,
 } from "./define.ts";
 import { type Blobs, hydrate, isBlobRef, offload, refuseBlobKeys } from "./blobs.ts";
+import { type Problem, problemsOf, updateCheck } from "./updates.ts";
+
+/** A document's fields, as its schema sees them: without its `_id`. */
+const withoutId = ({ _id: _, ...fields }: Doc) => fields;
 import { createCache } from "./cache.ts";
 import { createMaintenance, type Maintenance } from "./maintain.ts";
 import {
@@ -60,7 +64,16 @@ import {
   type StoreOp,
   type WriteOp,
 } from "./ops.ts";
-import { check, checkPath, checkProjection, get, matches, project } from "./mongo.ts";
+import {
+  applyUpdate,
+  check,
+  checkPath,
+  checkProjection,
+  get,
+  matches,
+  project,
+  seedOf,
+} from "./mongo.ts";
 import {
   canonical,
   checked,
@@ -429,6 +442,71 @@ export async function createOwner(
       compile(def.schema, `collection "${name}"`),
     ]),
   );
+  // Updates, checked against the schema before any store applies them (updates.ts).
+  const updateChecks = Object.fromEntries(
+    Object.entries(registry.collections).map(([name, def]) => [
+      name,
+      updateCheck(def.schema, `collection "${name}"`, def.vectors ?? []),
+    ]),
+  );
+  // Collections whose updates are checked only on documents that were valid (`validation`).
+  const moderate = new Set(
+    Object.entries(registry.collections).flatMap(([name, def]) =>
+      def.validation === "moderate" ? [name] : []
+    ),
+  );
+  /** Refuses an update that can't fit; whether it's sure what the update leaves is valid. */
+  const checkUpdate = (collection: string, update: Update): boolean =>
+    collection.startsWith(SYSTEM) ||
+    // Moderate: whether it may change a document depends on the document; its result decides.
+    (!moderate.has(collection) && updateChecks[collection](update));
+  const valid = (collection: string, doc: Record<string, unknown>) => {
+    try {
+      validators[collection](doc);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /** Whether the document an upsert would make, if nothing matches, is valid. */
+  const seeds = (collection: string, op: { filter: Filter; update: Update }): boolean => {
+    if (collection.startsWith(SYSTEM)) return true;
+    try {
+      const { _id: _, ...fields } = applyUpdate(seedOf(op.filter), op.update);
+      return valid(collection, fields);
+    } catch {
+      return false;
+    }
+  };
+  // What's wrong with a document, for the update checks below.
+  const problems = Object.fromEntries(
+    Object.entries(registry.collections).map(([name, def]) => [name, problemsOf(def.schema)]),
+  );
+  /**
+   * Checks what an update left (large values back in place) against the schema: a document
+   * that was valid stays valid. One that wasn't (older than its schema) may still be updated:
+   * strict refuses only what the update adds to what was wrong with it, which every store tells
+   * alike (see updates.ts); moderate lets it be, as MongoDB's `validationLevel` does.
+   */
+  const checkResult = async (reader: Reader, collection: string, changes: Change[]) => {
+    if (collection.startsWith(SYSTEM)) return;
+    const of = (doc: Doc) => problems[collection](withoutId(doc));
+    const key = (p: Problem) => `${p.at} ${p.rule}`;
+    for (const { before, after } of changes) {
+      if (!after) continue;
+      const now = of(await hydrate(after, blobsOf(reader)));
+      if (!now.length) continue;
+      const had = before ? of(await hydrate(before, blobsOf(reader))) : [];
+      const known = new Set(had.map(key));
+      const added = !had.length
+        ? now
+        : moderate.has(collection)
+        ? []
+        : now.filter((p) => !known.has(key(p)));
+      const last = added.at(-1);
+      if (last) throw invalid(`collection "${collection}": ${last.error} (${last.at})`);
+    }
+  };
   const vectorFields = (collection: string) => registry.collections[collection]?.vectors ?? [];
   // Collections kept in memory only (`durable: false`): not in the store, no events.
   const fleeting = new Set(
@@ -454,6 +532,14 @@ export async function createOwner(
     if (inMemory(op) && !isRead(op)) refuseBlobKeys(op);
     if (!("collection" in op) || op.collection.startsWith(SYSTEM)) return;
     if (!validators[op.collection]) throw invalid(`Unknown collection "${op.collection}"`);
+    // An update says what changes, with operators: one with none would replace the whole
+    // document unchecked. MongoDB refuses it too; replaceOne replaces.
+    if (op.op === "update" && !Object.keys(op.update).some((key) => key.startsWith("$"))) {
+      throw invalid(
+        `An update of "${op.collection}" needs operators ($set, $unset, $inc…): ` +
+          "replaceOne replaces a whole document",
+      );
+    }
     // A pipeline the stores can't run fails here, before any store sees it.
     if (op.op === "aggregate") plan(op.pipeline);
     // Records are appended, once: the same record sent again is the one already kept.
@@ -577,6 +663,8 @@ export async function createOwner(
     const { result } = await memory!.transaction(memoryEpoch, async (tx) => {
       const hooks: Hooks = {
         validate,
+        checkUpdate: (collection, update) => void checkUpdate(collection, update),
+        checkResult: (collection, changes) => checkResult(tx, collection, changes),
         offload: (value) => Promise.resolve(value),
         changed: (collection, changes) => void seen.push([collection, changes]),
         vectors: vectorFields,
@@ -667,7 +755,14 @@ export async function createOwner(
     // what writes leave may have to keep to a rule: a transaction.
     const plain = writes.every((o) => !("collection" in o) || !vectorFields(o.collection).length) &&
       !by.keep?.size;
-    if (store.command && writes.length && plain && ops.every((o) => !isRead(o))) {
+    // In one statement, the store applies updates out of sight: only those checked in full
+    // beforehand go that way, an upsert only when the document it would make is valid too.
+    const checked = () =>
+      writes.every((o) =>
+        o.op !== "update" ||
+        (checkUpdate(o.collection, o.update) && (!o.options.upsert || seeds(o.collection, o)))
+      );
+    if (store.command && writes.length && plain && ops.every((o) => !isRead(o)) && checked()) {
       for (const op of writes) {
         if (op.op === "insert") {
           for (const { _id: _, ...fields } of op.docs) validate(op.collection, fields);
@@ -942,6 +1037,8 @@ export async function createOwner(
   ) => {
     const hooks: Hooks = {
       validate,
+      checkUpdate: (collection, update) => void checkUpdate(collection, update),
+      checkResult: (collection, changes) => checkResult(tx, collection, changes),
       offload: (value) =>
         offload(
           value,

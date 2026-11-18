@@ -341,6 +341,11 @@ export type QueryDef<T = any> = QueryFn<T> | {
 };
 
 export type CollectionDef = {
+  /**
+   * What every document keeps to: inserts and replaces are checked against it, and so are
+   * updates, as MongoDB's `$jsonSchema` validator checks them (`validationLevel: "strict"`):
+   * what they set, unset, count and add, and the documents they leave.
+   */
   schema: JSONSchema;
   /** Record `<name>.created/updated/deleted` events for its writes (default true). */
   events?: boolean;
@@ -358,10 +363,19 @@ export type CollectionDef = {
    */
   durable?: false;
   /**
+   * How updates keep to the schema, as MongoDB's `validationLevel`: `"strict"`
+   * (the default) checks every update; `"moderate"` checks only updates to
+   * documents that were valid before, for a collection whose older documents
+   * predate its schema (they're left as they are until fixed). Inserts and
+   * replaces are always checked.
+   */
+  validation?: "strict" | "moderate";
+  /**
    * Indexes, each a list of fields (`[["at"], ["tags.tenant", "at"]]`), for
    * the stores to serve filters on them without reading every document. A
    * field must be a scalar its schema types (string, number, integer or
-   * boolean): every write is checked against it, so it never holds an array.
+   * boolean): every write, an update's result too, is checked against it, so
+   * it never holds an array.
    */
   indexes?: string[][];
   /**
@@ -694,6 +708,7 @@ export const defineCollection = <const S extends JSONSchema>(
     events?: boolean;
     records?: boolean;
     durable?: false;
+    validation?: "strict" | "moderate";
     indexes?: string[][];
     private?: string[];
     queries?: Record<string, QueryDef<Infer<S> & { _id: string }>>;

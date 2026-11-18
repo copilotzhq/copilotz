@@ -299,7 +299,7 @@ types its documents and queries from the schema.
 
 | Field     | What it does                                                                                |
 | --------- | ------------------------------------------------------------------------------------------- |
-| `schema`  | the JSON Schema every write is checked against                                              |
+| `schema`  | the JSON Schema every write keeps to: inserts, replaces, and what updates set and leave     |
 | `queries` | named reads: a function, or `{ allow, run }` to let actors run it from outside              |
 | `vectors` | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
 | `indexes` | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
@@ -319,7 +319,12 @@ types its documents and queries from the schema.
   case, not accents: search a folded copy of the field for that. The
   [stores' README](../stores/README.md#text-patterns) has what's in the subset, its limits, and the
   folded copy.
-- **Updates:** `$set`, `$unset`, `$inc`, `$push` (with `$each`), `$addToSet`, `$pull`; `upsert`.
+- **Updates:** `$set`, `$unset`, `$inc`, `$push` and `$addToSet` (each with `$each`), `$pull`;
+  `upsert`. An update needs its operators: one with none is refused, as MongoDB refuses it
+  (`replaceOne` replaces a document). It's checked against the schema as MongoDB's `$jsonSchema`
+  validator checks with `validationLevel: "strict"`: what it sets must fit each field, it can't set
+  a field the schema doesn't allow or unset a required one, and the documents it leaves (an upsert's
+  new one too) must be valid. What fails changes nothing (`invalid`, naming the field).
 - **Finds:** `sort`, `limit`, `skip`, and `projection` (`{ name: 1 }` keeps fields, `{ data: 0 }`
   leaves them out), applied before any large value is loaded.
 - **Aggregates:** `$match`, `$group` (with `$sum`, `$count`, `$avg`, `$min`, `$max`), `$sort`,
@@ -360,7 +365,8 @@ What can be done, by name. `defineAction` types `run`'s input from the schema.
 
 Every recorded call is on the record (`action.started`, then `action.completed` or `action.failed`),
 retryable by id, and everything it causes is its caller's, where its caller is. Queries, Views and
-startup checks may call unrecorded Actions, read-only.
+startup checks may call unrecorded Actions, read-only. One that acts as someone else (`ctx.as`)
+reads as them there too, as when an Action calls it; a startup check, which reads nothing, refuses.
 
 ### Processors
 

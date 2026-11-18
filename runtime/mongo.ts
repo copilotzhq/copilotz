@@ -395,6 +395,25 @@ export function seedOf(filter: Filter): Doc {
   return { ...seed, _id: String(seed._id ?? crypto.randomUUID()) } as Doc;
 }
 
+/**
+ * What `$push` or `$addToSet` adds: the value, or each of `$each`'s. An object
+ * of `$` keys is a modifier: one other than `$each` (`$slice`, `$sort`,
+ * `$position`) isn't supported, and is refused rather than stored.
+ */
+function added(value: unknown): unknown[] {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return [value];
+  const keys = Object.keys(value);
+  if (!keys.some((key) => key.startsWith("$"))) return [value];
+  if (
+    keys.length !== 1 || keys[0] !== "$each" || !Array.isArray((value as { $each: unknown }).$each)
+  ) {
+    throw new Error(
+      `Unsupported modifier: only $each, with a list, is supported (${keys.join(", ")})`,
+    );
+  }
+  return (value as { $each: unknown[] }).$each;
+}
+
 /** Applies a MongoDB update. A document without `$` operators replaces the fields. */
 export function applyUpdate(doc: Doc, update: Update | Record<string, unknown>): Doc {
   const next = structuredClone(doc) as Doc;
@@ -415,14 +434,11 @@ export function applyUpdate(doc: Doc, update: Update | Record<string, unknown>):
   }
   for (const [path, value] of Object.entries(u.$push ?? {})) {
     const list = Array.isArray(get(next, path)) ? [...(get(next, path) as unknown[])] : [];
-    const each = value && typeof value === "object" && "$each" in value
-      ? (value as { $each: unknown[] }).$each
-      : [value];
-    set(next, path, [...list, ...each]);
+    set(next, path, [...list, ...added(value)]);
   }
   for (const [path, value] of Object.entries(u.$addToSet ?? {})) {
     const list = Array.isArray(get(next, path)) ? [...(get(next, path) as unknown[])] : [];
-    if (!list.some((item) => same(item, value))) list.push(value);
+    for (const item of added(value)) if (!list.some((had) => same(had, item))) list.push(item);
     set(next, path, list);
   }
   for (const [path, condition] of Object.entries(u.$pull ?? {})) {

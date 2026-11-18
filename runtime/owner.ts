@@ -844,15 +844,20 @@ export async function createOwner(
       // An actor's Views see what they reach, and what the rules read to
       // know it (memberships) is what they read too, kept or not: they follow its changes.
       const rules = actor ? ruling(track) : ruleReads;
+      // Reads as `who`, within their reach; `hide`: without private fields.
+      const runFor = (who: Actor | undefined, hide: boolean) => async (op: Op) => {
+        known(op);
+        track(op);
+        const [read] = (await guard([op as ReadOp], who, rules)).ops;
+        const value = await answer(store, read as ReadOp);
+        return hide ? hidden(read as ReadOp, value) : value;
+      };
+      // An unrecorded Action the View calls may act as someone else, as from an Action: the
+      // system (or a grant) reads private fields there, as Actions do.
+      const runAs = (who: Actor | undefined) => runFor(who, !!who && who.kind !== "system");
       return reading(
         registry,
-        async (op) => {
-          known(op);
-          track(op);
-          const [read] = (await guard([op as ReadOp], actor, rules)).ops;
-          const value = await answer(store, read as ReadOp);
-          return actor ? hidden(read as ReadOp, value) : value;
-        },
+        runFor(actor, !!actor),
         (collection, doc) => {
           // What a read used (an embedding's tokens): recorded on its own.
           const _id = typeof doc._id === "string" ? doc._id : crypto.randomUUID();
@@ -864,6 +869,8 @@ export async function createOwner(
         metrics,
         outside,
         actor,
+        undefined,
+        runAs,
       );
     },
     call: (action, input, actor) => api.call(action, input, actor ? { actor } : {}),

@@ -24,6 +24,7 @@ import type {
   WorkerKind,
 } from "./define.ts";
 import type { ScheduleDef } from "./schedules.ts";
+import type { Actor } from "./store.ts";
 import { allows } from "./actor.ts";
 
 /** Everything crossing the runtime boundary is JSON: undefined fields disappear. */
@@ -298,6 +299,7 @@ export async function readCall<R>(
   call: ReadContext["call"],
   name: string,
   input: unknown = {},
+  actingAs?: (other?: Actor) => ReadContext,
 ): Promise<R> {
   const def = registry.actions[name];
   if (!def) throw invalid(`Unknown action "${name}"`);
@@ -320,22 +322,49 @@ export async function readCall<R>(
   const refuse = () => {
     throw invalid(`"${name}" was called from a read: it can't write`);
   };
-  const ctx = {
-    ...reads,
-    call,
-    describe: () => described(registry),
-    signal: reads.signal ?? new AbortController().signal,
-    retry: false,
-    emit: refuse,
-    transaction: refuse,
-    schedule: refuse,
-    unschedule: refuse,
-    cancel: refuse,
-    disconnect: refuse,
-    stream: refuse,
-    graph: { ...reads.graph, link: refuse, unlink: refuse },
-  } as unknown as Context;
-  return await def.run({ ...ctx, as: () => ctx, branch: () => ctx } as Context, normalized) as R;
+  /** A read-only Context over what a reader reaches: reads and records; anything else fails. */
+  const contextOf = (
+    over: Omit<ReadContext, "call"> & { signal?: AbortSignal },
+    calls: ReadContext["call"],
+  ): Context => {
+    const ctx = {
+      ...over,
+      call: calls,
+      describe: () => described(registry),
+      signal: reads.signal ?? new AbortController().signal,
+      retry: false,
+      emit: refuse,
+      transaction: refuse,
+      schedule: refuse,
+      unschedule: refuse,
+      cancel: refuse,
+      disconnect: refuse,
+      stream: refuse,
+      graph: { ...over.graph, link: refuse, unlink: refuse },
+    } as unknown as Context;
+    // Acting as someone else (the system, a grant) reads as them, as from an Action; where
+    // the read can't (a startup check), it fails rather than read less than asked.
+    const as = (other?: Actor): Context => {
+      // Already who it would act as: the same actor, or the system for the system.
+      const self = over.actor;
+      if (
+        other
+          ? self && other.kind === self.kind && other.id === self.id
+          : !self || self.kind === "system" && self.id === "system" && !self.via
+      ) return whole;
+      if (!actingAs) {
+        throw invalid(
+          `"${name}" was called from a read: it can't act as ` +
+            `${other ? `${other.kind} ${other.id}` : "the system"} there. Call it from an Action`,
+        );
+      }
+      const them = actingAs(other);
+      return contextOf(them, them.call);
+    };
+    const whole = { ...ctx, as, branch: () => whole } as Context;
+    return whole;
+  };
+  return await def.run(contextOf(reads, call), normalized) as R;
 }
 
 /**

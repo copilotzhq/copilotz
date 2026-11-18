@@ -2,8 +2,14 @@
  * An org's own keys for model providers (see collections/model-key.ts), as the
  * models plugin's `modelKeys` resource names them. Its owners and admins change
  * them, in person: `modelKey.set` `{ provider, key }` and `modelKey.remove`
- * `{ provider }`; `modelKey.may` says whether the person asking can. For
- * trusted code only: `modelKey.list` (nothing secret) and `modelKey.open`.
+ * `{ provider }`; `modelKey.may` says whether the person asking can.
+ *
+ * A person's own (`mine`): any person keeps keys of their own the same way
+ * (`modelKey.set { provider, key, mine: true }`, `modelKey.remove { …, mine }`),
+ * listed to them alone (`modelKey.mine`); a model call for them (made by them,
+ * or an agent working for them) uses theirs first, then the org's, then the
+ * app's. For trusted code only: `modelKey.list` (the org's, nothing secret)
+ * and `modelKey.open` `{ provider, person? }`.
  *
  * All unrecorded: a key is in no event, as its input or its answer.
  */
@@ -22,9 +28,14 @@ import { settingsOf } from "../shared/settings.ts";
 
 const keysOf = (ctx: Context) => ctx.as().db.collection<ModelKeyDoc>("modelKey");
 
-/** What a sealed key is bound to, so it can't be moved to another provider or org. */
-const boundTo = (ctx: Context, provider: string) =>
-  `modelKey:${(ctx.resources.org as { id?: string } | undefined)?.id ?? ""}:${provider}`;
+/** What a sealed key is bound to, so it can't be moved to another provider, org or person. */
+const boundTo = (ctx: Context, provider: string, person?: string) =>
+  `modelKey:${(ctx.resources.org as { id?: string } | undefined)?.id ?? ""}:${
+    person ? `person:${person}:` : ""
+  }${provider}`;
+
+/** Where a person's own key for a provider is kept. */
+const ownId = (person: string, provider: string) => `person:${person}:${provider}`;
 
 /** Whether whoever asks runs the org: only they change its keys. */
 const runs = (ctx: Context) =>
@@ -36,33 +47,46 @@ const SHOW = 4;
 const hintOf = (key: string) => key.length >= 16 ? `••••${key.slice(-SHOW)}` : "••••";
 
 export const modelKeySet = defineAction({
-  description: "Adds or replaces the org's own key for a model provider",
+  description: "Adds or replaces a key for a model provider: the org's, or your own (mine)",
   record: false,
   input: {
     type: "object",
     properties: {
       provider: { type: "string" },
       key: { type: "string", minLength: 1, maxLength: 4096 },
+      /** Your own, used when agents work for you; else the org's. */
+      mine: { type: "boolean" },
     },
     required: ["provider", "key"],
     additionalProperties: false,
   },
   allow: inPerson,
   run: async (ctx, input) => {
-    if (!await runs(ctx)) throw forbidden("Only the org's owners and admins change its keys.");
+    const person = input.mine ? ctx.actor!.id : undefined;
+    if (!person && !await runs(ctx)) {
+      throw forbidden("Only the org's owners and admins change its keys.");
+    }
     if (!await ctx.call<boolean>("models.keyable", { provider: input.provider })) {
       throw invalid(`A key can't be added for "${input.provider}".`);
     }
     const key = input.key.trim();
     if (!key || /\s/.test(key)) throw invalid("That doesn't look like a key.");
-    const sealed = await seal(settingsOf(ctx).key, boundTo(ctx, input.provider), {
+    const sealed = await seal(settingsOf(ctx).key, boundTo(ctx, input.provider, person), {
       access: key,
       account: input.provider,
     });
     const hint = hintOf(key);
     await keysOf(ctx).updateOne(
-      { _id: input.provider },
-      { $set: { sealed, hint, by: ctx.actor!.id, at: new Date().toISOString() } },
+      { _id: person ? ownId(person, input.provider) : input.provider },
+      {
+        $set: {
+          sealed,
+          hint,
+          by: ctx.actor!.id,
+          ...(person ? { person, provider: input.provider } : {}),
+          at: new Date().toISOString(),
+        },
+      },
       { upsert: true },
     );
     return { provider: input.provider, hint };
@@ -74,12 +98,16 @@ export const modelKeyRemove = defineAction({
   record: false,
   input: {
     type: "object",
-    properties: { provider: { type: "string" } },
+    properties: { provider: { type: "string" }, mine: { type: "boolean" } },
     required: ["provider"],
     additionalProperties: false,
   },
   allow: inPerson,
   run: async (ctx, input) => {
+    if (input.mine) {
+      await keysOf(ctx).deleteOne({ _id: ownId(ctx.actor!.id, input.provider) });
+      return { removed: true };
+    }
     if (!await runs(ctx)) throw forbidden("Only the org's owners and admins change its keys.");
     await keysOf(ctx).deleteOne({ _id: input.provider });
     return { removed: true };
@@ -99,7 +127,7 @@ export const modelKeyList = defineAction({
   record: false,
   input: { type: "object", additionalProperties: false },
   run: async (ctx) =>
-    (await keysOf(ctx).find({})).map((k) => ({
+    (await keysOf(ctx).find({ person: { $exists: false } })).map((k) => ({
       provider: k._id,
       ...(k.hint ? { hint: k.hint } : {}),
     })),
@@ -109,16 +137,20 @@ export const modelKeyOpen = defineAction({
   record: false,
   input: {
     type: "object",
-    properties: { provider: { type: "string" } },
+    properties: { provider: { type: "string" }, person: { type: "string" } },
     required: ["provider"],
     additionalProperties: false,
   },
   run: async (ctx, input) => {
-    const found = await keysOf(ctx).findOne({ _id: input.provider });
+    // The person's own first, then the org's.
+    const own = input.person
+      ? await keysOf(ctx).findOne({ _id: ownId(input.person, input.provider) })
+      : null;
+    const found = own ?? await keysOf(ctx).findOne({ _id: input.provider });
     if (!found) return null;
     const { access } = await unseal(
       settingsOf(ctx).key,
-      boundTo(ctx, input.provider),
+      boundTo(ctx, input.provider, own ? input.person : undefined),
       found.sealed,
     );
     return access;

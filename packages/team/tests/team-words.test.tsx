@@ -251,7 +251,14 @@ test("with none replaced, the English reads as before", () => {
   assertStringIncludes(page, "Model and tools");
   assertStringIncludes(page, "Show all 10");
   assertStringIncludes(page, "Ask Nora");
-  const form = html(<NewAgent space={home} known={known} options={options} call={call} />);
+  // It asks what it should do first; starting from one of the app's, the form at once.
+  assertStringIncludes(
+    html(<NewAgent space={home} known={known} options={options} call={call} />),
+    "Draft it",
+  );
+  const form = html(
+    <NewAgent space={home} known={known} options={options} call={call} from="helper" />,
+  );
   assertStringIncludes(form, "What should it do?");
   assertStringIncludes(form, "Works in Acme as");
   assertStringIncludes(form, "Create agent");

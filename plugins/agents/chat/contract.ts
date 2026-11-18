@@ -36,6 +36,7 @@ export type {
   Agent,
   AskView,
   ChatSettings,
+  ComposerControl,
   ComposerNote,
   ContextEntry,
   ConversationView,
@@ -51,6 +52,7 @@ export type {
   ToolContext,
   ToolViews,
   Turn,
+  WelcomeStep,
 } from "./shared/types.ts";
 export { tool } from "./shared/types.ts";
 /**

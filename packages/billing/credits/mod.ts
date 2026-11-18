@@ -20,7 +20,9 @@
  * - **Who a plan is for** (`for`: personal or team orgs): an org of the other
  *   kind isn't offered it and can't be moved to it, by anyone. A plan can name
  *   the model tier its agents use while the org hasn't chosen one (`models`,
- *   read through `billing.tier`, the `planTier` resource).
+ *   read through `billing.tier`, the `planTier` resource); what credits it
+ *   gives, through `billing.credits` (`planCredits`), for pages that say how
+ *   far they go.
  *
  *   plugins: [models, usage, credits, …]
  *   resources: {
@@ -32,6 +34,7 @@
 import { definePlugin, type Plugin } from "copilotz";
 import {
   checkAction,
+  creditsAction,
   mayAction,
   priceListAction,
   spentAction,
@@ -70,6 +73,7 @@ export const credits: Plugin = definePlugin({
     "billing.spent": spentAction,
     "billing.priceList": priceListAction,
     "billing.tier": tierAction,
+    "billing.credits": creditsAction,
     "billing.state": stateAction,
     "billing.notice": noticeAction,
     "billing.setPlan": setPlanAction,
@@ -89,6 +93,7 @@ export const credits: Plugin = definePlugin({
     spending: { check: "billing.check", may: "billing.may" },
     // Which model tier the org's plan gives its agents, for the tiers plugin.
     planTier: { action: "billing.tier" },
+    planCredits: { action: "billing.credits" },
   },
 });
 

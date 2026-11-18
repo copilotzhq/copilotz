@@ -11,6 +11,7 @@ import { AGENT_ROLES } from "copilotz/plugins/access/contract";
 import type { Agent } from "copilotz/plugins/agents/contract";
 import { found, listed, shownAs } from "./agents.ts";
 import { type Place, placeName } from "./places.ts";
+import { sayText } from "copilotz/web/words";
 import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
@@ -109,7 +110,7 @@ export function KnownAgents(
                 <span className="agent-known-from">{belongs(a.agent, places)}</span>
               </span>
               {a.agent.description
-                ? <span className="agent-known-what">{a.agent.description}</span>
+                ? <span className="agent-known-what">{sayText(a.agent.description)}</span>
                 : null}
             </span>
             <Button

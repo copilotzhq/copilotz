@@ -52,7 +52,7 @@ import {
   Spinner,
   Textarea,
 } from "../../../../../hosts/web/mod.ts";
-import type { ComposerNote, RefusalView } from "../../shared/types.ts";
+import type { ComposerControl, ComposerNote, RefusalView } from "../../shared/types.ts";
 import { matching, mention, type Mentionable, mentions, typingAt, unanswered } from "./agents.ts";
 import { type Attached, chosen, FILES, read, size } from "./attach.ts";
 import { handedTo, onHanded, takeDraft } from "./handed.ts";
@@ -144,6 +144,8 @@ export function Composer(props: {
   refusals?: Record<string, RefusalView | null>;
   /** What to know before sending, each a View over the box (`composerNotes`), with `place`. */
   notes?: Record<string, ComposerNote | null>;
+  /** Small controls beside the send button, each a View (`composerControls`), with `place`. */
+  controls?: Record<string, ComposerControl | null>;
   /** Where it sends, for those Views: the chat (none from home) and its space. */
   place?: { thread?: string; in?: string };
   /**
@@ -194,6 +196,9 @@ export function Composer(props: {
   const take = phase === "review" ? recording?.take : undefined;
   const notes = Object.values(props.notes ?? {})
     .filter((note): note is ComposerNote => !!note?.view)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const controls = Object.values(props.controls ?? {})
+    .filter((control): control is ComposerControl => !!control?.view)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const fine = useSyncExternalStore(pointer.subscribe, pointer.fine, () => true);
 
@@ -684,6 +689,15 @@ export function Composer(props: {
                 }}
               />
               <div className="chat-box-end" ref={mic}>
+                {controls.map((control) => (
+                  <LazyView
+                    key={control.view}
+                    kind={control.view}
+                    item={{}}
+                    hints={{ ...props.place }}
+                    fallback={null}
+                  />
+                ))}
                 {recording ? null : (
                   <IconButton
                     icon="mic"

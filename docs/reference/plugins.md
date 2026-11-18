@@ -133,6 +133,6 @@ same, as data.
   `@copilotz/team`.
 - [`team-web`](plugins/team-web.md): Team's web front end, for the browser: making and changing
   agents. In `@copilotz/team`.
-- [`tiers`](plugins/tiers.md): Tiers: which models the app's agents think with, chosen by what the
-  work needs rather than model by model. In `@copilotz/team`.
+- [`tiers`](plugins/tiers.md): Tiers: how hard an app's agents think, chosen by budget rather than
+  model by model. In `@copilotz/team`.
 - [`tiers-web`](plugins/tiers-web.md): Tiers' web front end, for the browser. In `@copilotz/team`.

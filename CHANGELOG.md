@@ -1,3 +1,71 @@
+## 1.0.0-rc.55 — 2026-11-18
+
+What an app's first minutes ask of Copilotz: a welcome, a team people can shape, models chosen by
+budget rather than agent by agent, and keys of a person's own.
+
+**Breaking, in small ways:**
+
+- **Tiers are templates; agents hold no model where tiers apply.** Each agent does a kind of work
+  (one of the app's: a tier's keys, titled by the new `tierKinds` resource; or the org's own), and
+  the tier in force gives that kind its model chain. Agents people make do a kind too (`like`), no
+  longer keeping a model of their own. `tiers.pick` and per-agent picks (`modelChoice.custom`) are
+  gone: an org changes a tier's chain for a kind (`tiers.save`), for every agent of that kind. With
+  no tier chosen anywhere, the app's first applies.
+- **`modelChoice.offered` answers by kind of work**: each tier's `kinds` (in place of `agents`),
+  `kinds` with the app's agents of each, `removed`, and `now` as `{ tier, by }`. `modelChoice.agent`
+  answers an agent's kind, the tier in force and its chain. The page prices a typical **message**
+  where the app measured one (`typicalMessage`), else a reply.
+- **`agentsNamed` asks `agentSources` first**: a source's answer for one of the app's agents is an
+  org's own version of it, over the app's.
+
+**Which tier, and an org's own tiers:**
+
+- **Every conversation runs on a tier**, the first that applies: the conversation's, the person's
+  own default for new chats, the space's, the org's, the plan's (`tiers.choose { thread }`,
+  `{ mine }`, `{ space }`, `{}`). Chat passes the conversation to `agentModel`.
+- **An org's tiers:** its version of one of the app's (a kind's chain, its name), new ones made from
+  another (`tiers.save`), the app's taken away and put back (`tiers.remove`, `tiers.restore`), kinds
+  of work of its own based on the app's (`tiers.kind`), and a cap on what its members choose
+  (`tiers.cap`). A chain set by hand keeps the `maxTokens` and `effort` of the one it replaces.
+- **A typical message, measured** (`typicalMessage`: each agent's calls and tokens per message) and
+  **what the plan gives** (`planCredits`, credits' new `billing.credits`): the tiers say what a
+  message comes to, and how far the credits go. A ChatGPT-plan entry is priced at the next that
+  costs something.
+- **On the web:** the org's Agents page (tier cards with each kind's model and fallbacks, Customize,
+  New tier, the members' cap, and on Free how much faster a heavier tier spends), a tier picker
+  beside the send button (chat's new `composerControls`), a space's default tier, and `tiers.setup`,
+  a short choice for a new org. Every word is the app's (`tiers.<key>`).
+
+**The org's team** (`@copilotz/team`):
+
+- **Every org starts with the app's agents; its owners and admins shape them.** Changing one keeps
+  the org's version under its name (`agent.update`); `agent.delete` takes it off the team (it leaves
+  every space, joins no new one), `agent.restore` puts it back, `agent.reset` drops the org's
+  changes. An agent made for the org (`in: "*"`) works in every space and joins new ones. Spaces
+  seat the org's team as they're made.
+- **Making an agent starts from what it should do:** `agent.sketch` drafts its name, emoji,
+  description, instructions and kind of work in one quick call (the app's `cheap` model), for the
+  person to check; the form asks for a kind of work instead of a model where tiers apply.
+- **An agent proposes one** (`propose_agent`): its person is asked as chat asks for everything, and
+  it's made only on their yes, where they could have made it themselves.
+
+**A welcome, and keys of one's own:**
+
+- **Chat's `welcome`:** steps an app and its front ends add (a View each, with roles and kinds of
+  org), shown once per person per org over home, in a dialog; `/?welcome=1` shows it again
+  (`chat.welcomed`, `welcome.seen`). Credits adds a plan step for a new team org (`billing.setup`),
+  whose payment page comes back to the welcome (`billing.checkout`'s new `back`).
+- **A person's own API keys** (`modelKey.set { mine }`): any provider a key can be brought for; a
+  model call for them uses theirs, then the org's, then the app's. The Connected accounts page lists
+  them, and says where the org's tiers use each provider's models.
+
+**Words:**
+
+- **`sayText`** (`copilotz/web/words`): text the app's data holds, in the app's words where it gives
+  them under `text.` and the English (a tier's description, a kind of work, an agent's description);
+  else as it is. The tiers' and team's pages say them so.
+- **The tiers' prices follow the page's language** ("2,3¢" in Portuguese).
+
 ## 1.0.0-rc.54 — 2026-11-17
 
 What a business app's screens still asked of the toolkit and of e-mail, and the docs that show a

@@ -1,102 +1,292 @@
 /**
- * Choosing the app's agents' models, for the org or for one space, in person.
- * The org's are changed by its owners and admins, a space's by its managers;
- * which tier a space takes isn't limited: the org's budget bounds what it
- * spends. A change applies from each conversation's next reply.
+ * Choosing tiers, and the org's own: all in person.
  *
- * - `tiers.choose` `{ space?, tier, picks? }`: the tier by its name (null:
- *   the one above, the org's or the plan's), and `picks: null` to drop every
- *   agent's own pick there too (back to the tier as it is).
- * - `tiers.pick` `{ space?, agent, model }`: a model for one of the app's
- *   agents there, as an agent's `model` takes one (null: back to the tier's).
- *   It's checked as an agent's would be, and keeps the tier's list behind it;
- *   as it runs, it gets the `maxTokens` of the entry it replaces, and its
- *   `effort` when the picked model takes it.
+ * - `tiers.choose` `{ tier, space?, thread?, mine? }`: the tier for the org
+ *   (its owners and admins), a space (its managers), a conversation (anyone
+ *   in it) or the person's own default for new chats (`mine`); null: the one
+ *   above. Those who don't run the org can't choose a tier over its `cap`.
+ * - `tiers.cap` `{ tier }`: the highest tier the org's members may choose
+ *   (null: any), by its owners and admins.
+ * - `tiers.save` `{ tier, title?, description?, kinds?, from? }`: an org's
+ *   tier, by its owners and admins: its version of one of the app's, or a
+ *   new one (`title`, its chains copied from `from`, else the tier in force).
+ *   `kinds`: chains by kind of work (a list of models, tried in order; null:
+ *   back to the app's there), each checked as an agent's model is, and each
+ *   given the `maxTokens` and `effort` of the chain it replaces, where it
+ *   takes it.
+ * - `tiers.remove` `{ tier }`: takes one of the app's away, or deletes one
+ *   the org made; not the last. Wherever it was chosen, what's above applies.
+ * - `tiers.restore` `{ tier }`: one of the app's back as the app has it.
+ * - `tiers.kind` `{ kind?, title, base }`: a kind of work of the org's own,
+ *   starting from one of the app's (its chain in every tier, until changed).
+ *
+ * A change applies from each conversation's next reply.
  */
-import { type Context, defineAction, inPerson, invalid } from "copilotz";
+import { type Context, defineAction, failure, inPerson, invalid } from "copilotz";
 import { must, ORG } from "copilotz/plugins/access/contract";
 import type { ModelRef } from "copilotz/plugins/models/contract";
-import { agentsOf } from "copilotz/plugins/agents/contract";
 import type { ModelChoice } from "../collections/choice.ts";
-import { type Choice, ORG_CHOICE, spaceChoice, tiersOf } from "../shared/tiers.ts";
+import { orgTiersOf } from "../shared/shown.ts";
+import {
+  aboveCap,
+  appKindsOf,
+  appTiersOf,
+  entryOf,
+  ORG_CHOICE,
+  personChoice,
+  settled,
+  spaceChoice,
+  type Template,
+  threadChoice,
+} from "../shared/tiers.ts";
 
-/** Where a choice is kept, once the caller may change it. */
-async function choiceFor(ctx: Context, space?: string): Promise<string> {
-  if (!space) {
-    await must(ctx, "manage", ORG, "Only the org's owners and admins change its agents' models.");
-    return ORG_CHOICE;
-  }
-  await must(ctx, "manage", space, "Only this space's managers change its agents' models.");
-  return spaceChoice(space);
-}
+/** Throws unless the caller runs the org. */
+const runsOrg = (ctx: Context, what: string) =>
+  must(ctx, "manage", ORG, `Only the org's owners and admins ${what}.`);
 
-/** Changes a choice; one left with nothing in it is gone, so what's above applies. */
-async function change(ctx: Context, space: string | undefined, to: (had: Choice) => Choice) {
-  const id = await choiceFor(ctx, space);
-  const docs = ctx.as().db.collection<ModelChoice>("modelChoice");
-  const had = await docs.findOne({ _id: id });
-  const next = to({ ...(had?.tier ? { tier: had.tier } : {}), custom: { ...had?.custom } });
-  const custom = next.custom && Object.keys(next.custom).length ? next.custom : undefined;
-  if (!next.tier && !custom) {
-    if (had) await docs.deleteOne({ _id: id });
-    return { tier: null, custom: {} };
+/** Whether the caller runs the org, without throwing. */
+const running = (ctx: Context) => runsOrg(ctx, "do that").then(() => true, () => false);
+
+const choices = (ctx: Context) => ctx.as().db.collection<ModelChoice>("modelChoice");
+const templates = (ctx: Context) => ctx.as().db.collection<Template>("tierTemplate");
+
+/** Sets or clears one level's tier, keeping what else it holds (the org's cap). */
+async function setTier(ctx: Context, id: string, tier: string | null, more: Partial<ModelChoice>) {
+  const had = await choices(ctx).findOne({ _id: id });
+  const next = { ...had, ...more, _id: id, at: new Date().toISOString() } as ModelChoice;
+  if (tier) next.tier = tier;
+  else delete next.tier;
+  if (!next.tier && !next.cap) {
+    if (had) await choices(ctx).deleteOne({ _id: id });
+    return;
   }
-  await docs.replaceOne({ _id: id }, {
-    _id: id,
-    ...(space ? { space } : {}),
-    ...(next.tier ? { tier: next.tier } : {}),
-    ...(custom ? { custom } : {}),
-    at: new Date().toISOString(),
-  }, { upsert: true });
-  return { tier: next.tier ?? null, custom: custom ?? {} };
+  await choices(ctx).replaceOne({ _id: id }, next, { upsert: true });
 }
 
 export const chooseAction = defineAction({
-  description: "Chooses the tier of models the app's agents use, in the org or a space",
+  description: "Chooses the tier for the org, a space, a conversation or your new chats",
   input: {
     type: "object",
     properties: {
-      space: { type: "string" },
       tier: { type: ["string", "null"] },
-      picks: { type: "null" },
+      space: { type: "string" },
+      thread: { type: "string" },
+      mine: { type: "boolean" },
     },
     required: ["tier"],
     additionalProperties: false,
   },
   allow: inPerson,
-  run: (ctx, input) => {
-    if (input.tier !== null && !Object.hasOwn(tiersOf(ctx), input.tier)) {
+  run: async (ctx, input) => {
+    const { tiers } = await orgTiersOf(ctx.as());
+    if (input.tier !== null && !tiers[input.tier]) {
       throw invalid(`There's no tier "${input.tier}".`);
     }
-    return change(ctx, input.space, (had) => ({
-      ...(input.tier ? { tier: input.tier } : {}),
-      ...(input.picks === null ? {} : { custom: had.custom }),
-    }));
+    const where = [input.space, input.thread, input.mine].filter(Boolean).length;
+    if (where > 1) throw invalid("Choose for one place at a time.");
+    // Over the cap: only who runs the org.
+    if (input.tier) {
+      const cap = (await choices(ctx).findOne({ _id: ORG_CHOICE }))?.cap;
+      if (aboveCap(tiers, input.tier, cap) && !await running(ctx)) {
+        throw failure(
+          "forbidden",
+          `Your org's owners and admins let members use tiers up to ${tiers[cap!].title}.`,
+          { public: true },
+        );
+      }
+    }
+    if (input.thread) {
+      if (!await ctx.db.collection("thread").findOne({ _id: input.thread })) {
+        throw failure("forbidden", "You can't change that conversation.", { public: true });
+      }
+      await setTier(ctx, threadChoice(input.thread), input.tier, { thread: input.thread });
+    } else if (input.mine) {
+      const person = ctx.actor!.id;
+      await setTier(ctx, personChoice(person), input.tier, { person });
+    } else if (input.space) {
+      await must(ctx, "manage", input.space, "Only this space's managers choose its tier.");
+      await setTier(ctx, spaceChoice(input.space), input.tier, { space: input.space });
+    } else {
+      await runsOrg(ctx, "choose its default tier");
+      await setTier(ctx, ORG_CHOICE, input.tier, {});
+    }
+    return { tier: input.tier };
   },
 });
 
-export const pickAction = defineAction({
-  description: "Picks the model one of the app's agents uses, in the org or a space",
+export const capAction = defineAction({
+  description: "Sets the highest tier the org's members may choose",
   input: {
     type: "object",
-    properties: {
-      space: { type: "string" },
-      agent: { type: "string", minLength: 1 },
-      model: {},
-    },
-    required: ["agent", "model"],
+    properties: { tier: { type: ["string", "null"] } },
+    required: ["tier"],
     additionalProperties: false,
   },
   allow: inPerson,
   run: async (ctx, input) => {
-    if (!agentsOf(ctx)[input.agent]) {
-      throw invalid(`"${input.agent}" isn't one of the app's agents: it keeps its own model.`);
+    await runsOrg(ctx, "set what members may use");
+    const { tiers } = await orgTiersOf(ctx.as());
+    if (input.tier !== null && !tiers[input.tier]) {
+      throw invalid(`There's no tier "${input.tier}".`);
     }
-    const model = input.model as ModelRef | null;
-    if (model !== null) await ctx.call("models.check", { model, port: "llm" });
-    return change(ctx, input.space, (had) => {
-      const { [input.agent]: _, ...rest } = had.custom ?? {};
-      return { ...had, custom: model === null ? rest : { ...rest, [input.agent]: model } };
-    });
+    const had = await choices(ctx).findOne({ _id: ORG_CHOICE });
+    const next = { ...had, _id: ORG_CHOICE, at: new Date().toISOString() } as ModelChoice;
+    if (input.tier) next.cap = input.tier;
+    else delete next.cap;
+    if (!next.tier && !next.cap) await choices(ctx).deleteOne({ _id: ORG_CHOICE });
+    else await choices(ctx).replaceOne({ _id: ORG_CHOICE }, next, { upsert: true });
+    return { cap: input.tier };
+  },
+});
+
+/** A name for a new tier from its title: `balanced`, `balanced-2`. */
+function nameFor(title: string, taken: (name: string) => boolean): string {
+  const base = title.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "tier";
+  for (let n = 1;; n++) {
+    const name = n === 1 ? base : `${base}-${n}`;
+    if (!taken(name)) return name;
+  }
+}
+
+export const saveAction = defineAction({
+  description: "Saves one of the org's tiers: its version of the app's, or a new one",
+  input: {
+    type: "object",
+    properties: {
+      tier: { type: "string" },
+      title: { type: "string", minLength: 1, maxLength: 40 },
+      description: { type: "string", maxLength: 200 },
+      /** Chains by kind of work: models in order; null, back to the app's. */
+      kinds: { type: "object", additionalProperties: { type: ["array", "null"], maxItems: 8 } },
+      /** A new tier's chains, copied from this one. */
+      from: { type: "string" },
+    },
+    additionalProperties: false,
+  },
+  allow: inPerson,
+  run: async (ctx, input) => {
+    await runsOrg(ctx, "change its tiers");
+    const { tiers, kinds, templates: kept } = await orgTiersOf(ctx.as());
+    const app = appTiersOf(ctx);
+    const known = (name: string) =>
+      !!tiers[name] || !!app[name] || kept.some((t) => t._id === name);
+    // A new one: named from its title, its chains from another.
+    const making = !input.tier || (!tiers[input.tier] && !app[input.tier]);
+    if (making && !input.title) throw invalid("Give the new tier a name.");
+    const name = input.tier && !known(input.tier)
+      ? input.tier
+      : making
+      ? nameFor(input.title!, known)
+      : input.tier!;
+    const had = kept.find((t) => t._id === name);
+    const source = input.from ? tiers[input.from] : undefined;
+    if (input.from && !source) throw invalid(`There's no tier "${input.from}".`);
+    const base = tiers[name] ?? source ?? Object.values(tiers)[0];
+    const chains: Record<string, ModelRef> = making ? { ...base?.agents } : { ...had?.agents };
+    for (const [kind, chain] of Object.entries(input.kinds ?? {})) {
+      if (!kinds[kind]) throw invalid(`There's no kind of work "${kind}".`);
+      if (chain === null) {
+        delete chains[kind];
+        continue;
+      }
+      const list = chain as ModelRef[];
+      if (!list.length) throw invalid("A kind of work needs at least one model.");
+      for (const model of list) await ctx.call("models.check", { model, port: "llm" });
+      chains[kind] = await settled(ctx, list, entryOf(base, kind, kinds) ?? undefined);
+    }
+    const order = making
+      ? Math.max(0, ...Object.values(tiers).map((t) => t.order ?? 0)) + 1
+      : had?.order;
+    await templates(ctx).replaceOne({ _id: name }, {
+      _id: name,
+      ...(input.title ?? had?.title ? { title: input.title ?? had?.title } : {}),
+      ...(input.description ?? had?.description
+        ? { description: input.description ?? had?.description }
+        : {}),
+      ...(order !== undefined ? { order } : {}),
+      ...(Object.keys(chains).length ? { agents: chains } : {}),
+      ...(making || had?.made ? { made: true } : {}),
+      at: new Date().toISOString(),
+    }, { upsert: true });
+    return { tier: name };
+  },
+});
+
+export const removeAction = defineAction({
+  description: "Takes one of the app's tiers away from the org, or deletes one it made",
+  input: {
+    type: "object",
+    properties: { tier: { type: "string" } },
+    required: ["tier"],
+    additionalProperties: false,
+  },
+  allow: inPerson,
+  run: async (ctx, input) => {
+    await runsOrg(ctx, "change its tiers");
+    const { tiers } = await orgTiersOf(ctx.as());
+    if (!tiers[input.tier]) throw invalid(`There's no tier "${input.tier}".`);
+    if (Object.keys(tiers).length === 1) throw invalid("Keep at least one tier.");
+    if (tiers[input.tier].made) await templates(ctx).deleteOne({ _id: input.tier });
+    else {
+      await templates(ctx).updateOne(
+        { _id: input.tier },
+        { $set: { off: true, at: new Date().toISOString() } },
+        { upsert: true },
+      );
+    }
+    return { removed: input.tier };
+  },
+});
+
+export const restoreAction = defineAction({
+  description: "Puts one of the app's tiers back as the app has it",
+  input: {
+    type: "object",
+    properties: { tier: { type: "string" } },
+    required: ["tier"],
+    additionalProperties: false,
+  },
+  allow: inPerson,
+  run: async (ctx, input) => {
+    await runsOrg(ctx, "change its tiers");
+    if (!appTiersOf(ctx)[input.tier]) {
+      throw invalid(`"${input.tier}" isn't one of the app's tiers.`);
+    }
+    await templates(ctx).deleteOne({ _id: input.tier });
+    return { tier: input.tier };
+  },
+});
+
+export const kindAction = defineAction({
+  description: "Adds or renames a kind of work of the org's own",
+  input: {
+    type: "object",
+    properties: {
+      kind: { type: "string" },
+      title: { type: "string", minLength: 1, maxLength: 40 },
+      description: { type: "string", maxLength: 200 },
+      base: { type: "string" },
+    },
+    required: ["title", "base"],
+    additionalProperties: false,
+  },
+  allow: inPerson,
+  run: async (ctx, input) => {
+    await runsOrg(ctx, "change its kinds of work");
+    const app = appKindsOf(ctx);
+    if (!app[input.base]) throw invalid(`"${input.base}" isn't one of the app's kinds of work.`);
+    const { kinds } = await orgTiersOf(ctx.as());
+    const kind = input.kind && !app[input.kind]
+      ? input.kind
+      : nameFor(input.title, (name) => !!kinds[name]);
+    await ctx.as().db.collection("tierKind").replaceOne({ _id: kind }, {
+      _id: kind,
+      title: input.title,
+      ...(input.description ? { description: input.description } : {}),
+      base: input.base,
+      at: new Date().toISOString(),
+    }, { upsert: true });
+    return { kind };
   },
 });

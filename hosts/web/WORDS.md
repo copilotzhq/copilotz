@@ -235,6 +235,10 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.waitingOnAnswer` | Waiting on your answer: your next message replies. |
 | `chat.waitingOnYou` | Waiting on you |
 | `chat.wantsTo` | {agent} wants to {doing} |
+| `chat.welcomeBack` | Back |
+| `chat.welcomeDone` | Get started |
+| `chat.welcomeNext` | Next |
+| `chat.welcomeStep` | {at} of {count} |
 | `chat.why` | Why: {reason} |
 | `chat.working` | working |
 | `chat.workingIn` | What are we working on in {space}? |

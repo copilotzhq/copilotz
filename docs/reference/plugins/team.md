@@ -19,9 +19,9 @@ import { team } from "@copilotz/team";
 
 It keeps 1 collection, on the record: every change to it is an event.
 
-| Collection | Kept as   | Fields                                                                                      |
-| ---------- | --------- | ------------------------------------------------------------------------------------------- |
-| `agent`    | documents | `name`, `description`, `instructions`, `model`, `effort`, `tools`, `icon`, `in`, `by`, `at` |
+| Collection | Kept as   | Fields                                                                                                     |
+| ---------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `agent`    | documents | `name`, `description`, `instructions`, `model`, `effort`, `tools`, `icon`, `in`, `off`, `like`, `by`, `at` |
 
 The access rules cover `agent`: each document is in a space, and only those who reach the space
 reach it.
@@ -32,36 +32,48 @@ Its named queries read for callers, as the rules let them:
 | --------------- | ---------------------------------------------- |
 | `agent.known`   | people, agents for a person, keys and routines |
 | `agent.options` | people, agents for a person, keys and routines |
+| `agent.team`    | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
-Of its 5 Actions, people may call 4; agents may call 1; contacts and someone signed out may call
+Of its 8 Actions, people may call 7; agents may call 2; contacts and someone signed out may call
 none.
 
-| Action         | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                       |
-| -------------- | ------ | ----- | ------- | ------ | --- | ------- | ---------------------------------------------------------------------------------- |
-| `agent.create` | yes    | no    | no      | no     | no  | no      | Makes an agent, where you say; it's called by a name made from what it's shown as. |
-| `agent.delete` | yes    | no    | no      | no     | no  | no      | Removes an agent people made, from everywhere it works.                            |
-| `agent.draft`  | yes    | yes   | no      | no     | yes | yes     | Writes instructions for an agent from its name and what it should do.              |
-| `agent.update` | yes    | no    | no      | no     | no  | no      | Changes an agent people made: what it's shown as, does, is told, uses.             |
+| Action          | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                        |
+| --------------- | ------ | ----- | ------- | ------ | --- | ------- | ----------------------------------------------------------------------------------- |
+| `agent.create`  | yes    | no    | no      | no     | no  | no      | Makes an agent, where you say; it's called by a name made from what it's shown as.  |
+| `agent.delete`  | yes    | no    | no      | no     | no  | no      | Removes an agent people made, from everywhere it works.                             |
+| `agent.draft`   | yes    | yes   | no      | no     | yes | yes     | Writes instructions for an agent from its name and what it should do.               |
+| `agent.reset`   | yes    | no    | no      | no     | no  | no      | Drops the org's changes to one of the app's agents: back to the app's, on the team. |
+| `agent.restore` | yes    | no    | no      | no     | no  | no      | Puts one of the app's agents the org took off its team back on it.                  |
+| `agent.sketch`  | yes    | yes   | no      | no     | yes | yes     | Drafts a whole agent from what it should do.                                        |
+| `agent.update`  | yes    | no    | no      | no     | no  | no      | Changes an agent people made: what it's shown as, does, is told, uses.              |
 
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.
 
 Only the app's own code calls `agent.define`: its plugins, its schedules and the system.
 
+Agents act through its tool, as whoever they work for:
+
+| Tool            | What it does                                                                                                                                       | Calls          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| `propose_agent` | Propose a new agent for a job that keeps coming back, for the person you work for to approve (they see it and answer Allow or No; the turn waits). | `agent.create` |
+
 It also adds rules every read and write keeps to (`guard`).
 
 ## Where it shows
 
-It has no Views of its own: its front ends show it, [`team-web`](team-web.md).
+It shows to the model through its tools.
 
+- **Agents' tools:** `propose_agent`.
+- **Front ends:** [`team-web`](team-web.md).
 - **What it adds to resources:** `agentSources` (`team`).
 
 ## What it needs
 
-Nothing to set. It reads `agents`, `model` and `tools`, resource kinds the app and other plugins
-fill.
+Nothing to set. It reads `agents`, `model`, `roster` and `tools`, resource kinds the app and other
+plugins fill.
 
 ## What it requires
 

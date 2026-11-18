@@ -5,12 +5,15 @@
  * new chats), and what it's told: its instructions, model and tools. "Ask"
  * starts a chat where it works, `@name` ready. Those who manage where it
  * belongs change it in place (`?edit=1` opens it so) and delete it, after
- * a question that says it leaves every space it works in. The app's own
- * agents are read only; a manager starts a new agent from one. Its menu
- * adds it to another space they manage, and has it answer new chats where
- * the person is.
+ * a question that says it leaves every space it works in. The org's team
+ * (the app's agents, and those the org made, `in: "*"`) is its owners' and
+ * admins': they change one in place (one of the app's becomes the org's
+ * version of it, its model still the tier's) and take it off the team;
+ * anyone else reads it, and a space's manager starts a new agent from one.
+ * Its menu adds it to another space they manage, and has it answer new chats
+ * where the person is.
  */
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { ViewContext } from "copilotz";
 import {
   Avatar,
@@ -34,14 +37,20 @@ import {
   Title,
 } from "copilotz/web";
 import type { Agent, Team } from "copilotz/plugins/agents/contract";
+import { runs, useStanding } from "copilotz/plugins/interfaces/contract";
 import { AgentFields, type Draft } from "./agent-fields.tsx";
+import { KindField, type KindOption } from "./agent-describe.tsx";
 import { spaceStep } from "./agent-steps.tsx";
 import { agentPath, listed, type Options, shownAs } from "./agents.ts";
 import { managed, manages, type Place, placeName, placePath } from "./places.ts";
 import { STYLE } from "./style.ts";
+import { sayText } from "copilotz/web/words";
 import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
+
+/** Where the org's own agents belong, as the access plugin keeps it: the org itself. */
+const ORG = "*";
 
 /** A membership, as the spaces plugin keeps it: the agent works in `space` as `role`. */
 type Seat = { _id: string; space: string; member: string; role: string; on?: string };
@@ -56,8 +65,15 @@ export const agentView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
   const places = ctx.db.collection("space").query<Place[]>("reached", {}).value;
   const options = ctx.db.collection("agent").query<Options>("options", {}).value;
   const seats = ctx.db.collection<Seat>("member").find({ member: `agent:${id}` }).value;
+  // Kinds of work, where tiers give agents their models (their front end says so: `agentKinds`).
+  const kindsAsked = !!(ctx.resources.agentKinds as { query?: string } | undefined)?.query;
+  const tiers = kindsAsked
+    ? ctx.db.collection("modelChoice").query<
+      { kinds: { kind: string; title: string; agents: { name: string }[] }[] }
+    >("offered", {}).value
+    : undefined;
   const style = <style href="team-web" precedence="copilotz">{STYLE}</style>;
-  if (!roster || !places || !options || !seats) {
+  if (!roster || !places || !options || !seats || (kindsAsked && !tiers)) {
     return (
       <Page
         title={<Skeleton width={200} height={30} />}
@@ -101,6 +117,11 @@ export const agentView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
         places={places}
         seats={seats.filter((s) => !s.on)}
         options={options}
+        kinds={tiers?.kinds.map((k) => ({
+          kind: k.kind,
+          title: sayText(k.title),
+          agents: k.agents.map((a) => a.name),
+        }))}
         editing={query.edit === "1"}
         call={ctx.call}
       />
@@ -109,7 +130,7 @@ export const agentView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): 
 };
 
 function AgentPage(
-  { id, agent, here, answers, places, seats, options, editing: asked, call }: {
+  { id, agent, here, answers, places, seats, options, kinds, editing: asked, call }: {
     id: string;
     agent: Agent;
     /** The space the person is in. */
@@ -120,6 +141,8 @@ function AgentPage(
     /** Where it works, among the spaces the person reaches. */
     seats: Seat[];
     options: Options;
+    /** Kinds of work, where tiers give agents their models. */
+    kinds?: KindOption[];
     /** The address asks for it changed (`?edit=1`). */
     editing: boolean;
     call: Call;
@@ -127,11 +150,21 @@ function AgentPage(
 ): ReactNode {
   const { name, icon } = shownAs(id, agent);
   const home = agent.in ? places.find((p) => p._id === agent.in) : undefined;
-  const edits = !!home && manages(home);
+  const app = !agent.in;
+  // The org's team: the app's agents (as they are, or the org's version) and the org's own.
+  const team = app || agent.in === ORG;
+  // One of the app's, as it is or as the org changed it: its model is the tier's.
+  const appBased = app || (agent.in === ORG && agent.default === true);
+  const standing = useStanding(call, team);
+  const runsTeam = !!standing && runs(standing);
+  const edits = team ? runsTeam : !!home && manages(home);
   const [editing, setEditing] = useState(asked && edits);
+  // Asked for in the address (`?edit=1`) before the person's standing was known: open it once it is.
+  useEffect(() => {
+    if (asked && edits) setEditing(true);
+  }, [asked, edits]);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string>();
-  const app = !agent.in;
   const placeOf = (space: string) => places.find((p) => p._id === space);
   const working = seats.flatMap((s) => {
     const place = placeOf(s.space);
@@ -142,6 +175,11 @@ function AgentPage(
   const seatHere = here && seats.find((s) => s.space === here._id);
   // Back to the space the person is in, if it works there; else to where it belongs.
   const back = seatHere ? here : home;
+  const backTo = back
+    ? { href: placePath(back._id, "members"), label: placeName(back) }
+    : team
+    ? { href: "/org?tab=models", label: say("orgsTeam") }
+    : undefined;
   // Where asking it starts a chat: here if it answers chats here, else where it does.
   const ask = seatHere?.role === "editor"
     ? here
@@ -192,14 +230,14 @@ function AgentPage(
     ...(elsewhere.length
       ? [{ label: say("addToSpaceMenu"), icon: "plus" as const, onSelect: addStep }]
       : []),
-    ...(app && mine.length
+    ...(appBased && mine.length
       ? [{ label: say("startFromIt"), icon: "sparkles" as const, onSelect: fromStep }]
       : []),
     ...(edits
       ? [
         "separator" as const,
         {
-          label: say("deleteMenu", { name }),
+          label: team ? say("removeFromTeamMenu") : say("deleteMenu", { name }),
           icon: "trash" as const,
           tone: "destructive" as const,
           onSelect: () => setDeleting(true),
@@ -212,19 +250,25 @@ function AgentPage(
       className="agent-page-frame"
       leading={<Avatar name={name} kind="agent" icon={icon} size={52} className="agent-mark" />}
       title={name}
-      back={back ? { href: placePath(back._id, "members"), label: placeName(back) } : undefined}
+      back={backTo}
       badges={
         <>
           <Badge variant="outline" className="agent-page-handle">@{id}</Badge>
-          {app ? <Badge>{say("partOfApp")}</Badge> : (
-            <Badge tone="primary">
-              {home ? say("madeIn", { place: placeName(home) }) : say("madeElsewhere")}
-            </Badge>
-          )}
+          {app ? <Badge>{say("partOfApp")}</Badge> : agent.in === ORG
+            ? (
+              <Badge tone="primary">
+                {appBased ? say("changedForOrg") : say("orgsTeam")}
+              </Badge>
+            )
+            : (
+              <Badge tone="primary">
+                {home ? say("madeIn", { place: placeName(home) }) : say("madeElsewhere")}
+              </Badge>
+            )}
           {answers && here ? <Badge tone="success">{say("answersNewChatsHere")}</Badge> : null}
         </>
       }
-      description={agent.description}
+      description={agent.description && sayText(agent.description)}
       actions={editing ? null : (
         <>
           {ask
@@ -268,10 +312,20 @@ function AgentPage(
         ? <Notice tone="destructive" role="alert" className="agent-page-error">{error}</Notice>
         : null}
       {editing
-        ? <Edit id={id} agent={agent} options={options} call={call} done={done} />
+        ? (
+          <Edit
+            id={id}
+            agent={agent}
+            options={options}
+            call={call}
+            done={done}
+            tierModel={appBased}
+            kinds={kinds}
+          />
+        )
         : (
           <div className="agent-page">
-            {app
+            {app && !runsTeam
               ? (
                 <Notice
                   tone="neutral"
@@ -383,8 +437,9 @@ function AgentPage(
             id={id}
             name={name}
             spaces={working.map((w) => placeName(w.place))}
-            after={home ? placePath(home._id, "members") : "/"}
+            after={home ? placePath(home._id, "members") : team ? "/org?tab=models" : "/"}
             call={call}
+            {...(team ? { team: appBased ? "back" : "gone" } as const : {})}
           />
         )
         : null}
@@ -438,14 +493,22 @@ const modelName = (model: Agent["model"]): string =>
 
 /** Changing it, in place: its fields, then Save (what changed only) or Cancel. */
 function Edit(
-  { id, agent, options, call, done }: {
+  { id, agent, options, call, done, tierModel, kinds }: {
     id: string;
     agent: Agent;
     options: Options;
     call: Call;
     done(): void;
+    /** One of the app's (or the org's version): its model is the org's tier's, not chosen here. */
+    tierModel?: boolean;
+    /** Kinds of work, where tiers give agents their models: its own in place of a model. */
+    kinds?: KindOption[];
   },
 ): ReactNode {
+  const wasLike = agent.like && kinds?.some((k) => k.kind === agent.like)
+    ? agent.like
+    : kinds?.[0]?.kind ?? "";
+  const [like, setLike] = useState(wasLike);
   const was: Draft = {
     name: shownAs(id, agent).name,
     icon: agent.icon ?? "",
@@ -457,8 +520,13 @@ function Edit(
   const [draft, setDraft] = useState(was);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const changed = changes(was, draft);
-  const ready = !!draft.name.trim() && !!draft.model;
+  const changed: Record<string, unknown> = {
+    ...changes(was, draft),
+    ...(kinds?.length && !tierModel && like !== wasLike ? { like } : {}),
+  };
+  // Where tiers give it its model, nothing's chosen here: the model isn't sent.
+  if (kinds?.length || tierModel) delete changed.model;
+  const ready = !!draft.name.trim() && (!!kinds?.length || !!tierModel || !!draft.model);
   return (
     <form
       className="agent-edit"
@@ -487,6 +555,17 @@ function Edit(
           call={call}
           autoFocus
           disabled={busy}
+          model={tierModel
+            ? (
+              <Notice tone="neutral" icon="sparkles">
+                {say.nodes("tierModel", {
+                  place: <a href="/org?tab=models">{say("tierModelPlace")}</a>,
+                })}
+              </Notice>
+            )
+            : kinds?.length
+            ? <KindField kinds={kinds} value={like} onChange={setLike} disabled={busy} />
+            : undefined}
         />
       </Card>
       <div className="agent-edit-end">
@@ -523,11 +602,13 @@ function changes(was: Draft, now: Draft): Record<string, unknown> {
 
 /** Deleting it, once they've read what it means: it leaves every space it works in. */
 function Delete(
-  { open, onClose, id, name, spaces, after, call }: {
+  { open, onClose, id, name, spaces, after, call, team }: {
     open: boolean;
     onClose(): void;
     id: string;
     name: string;
+    /** Taken off the org's team: one of the app's can come back; the org's own is gone. */
+    team?: "back" | "gone";
     /** Where it works, that the person sees. */
     spaces: string[];
     /** Where to go once it's gone. */
@@ -542,7 +623,7 @@ function Delete(
       open={open}
       onClose={onClose}
       size="sm"
-      title={say("deleteTitle", { name })}
+      title={team ? say("removeTeamTitle", { name }) : say("deleteTitle", { name })}
       footer={
         <>
           <Button onClick={onClose} disabled={busy}>{say("cancel")}</Button>
@@ -563,23 +644,33 @@ function Delete(
               }
             }}
           >
-            {say("deleteButton", { name })}
+            {team ? say("removeButton") : say("deleteButton", { name })}
           </Button>
         </>
       }
     >
-      <ul className="agent-delete-means">
-        <li>
-          {spaces.length
-            ? say.nodes("deleteLeavesNamed", {
-              bold: <b>{say("deleteLeavesBold")}</b>,
-              spaces: listed(spaces),
-            })
-            : say.nodes("deleteLeaves", { bold: <b>{say("deleteLeavesBold")}</b> })}
-        </li>
-        <li>{say.nodes("deleteGone", { bold: <b>{say("deleteGoneBold")}</b> })}</li>
-        <li>{say.nodes("deleteChats", { bold: <b>{say("deleteChatsBold")}</b> })}</li>
-      </ul>
+      {team
+        ? (
+          <ul className="agent-delete-means">
+            <li>{say.nodes("teamLeaves", { bold: <b>{say("teamLeavesBold")}</b> })}</li>
+            <li>{say("teamSaidStays")}</li>
+            <li>{team === "back" ? say("teamAddBack") : say("teamDeleted")}</li>
+          </ul>
+        )
+        : (
+          <ul className="agent-delete-means">
+            <li>
+              {spaces.length
+                ? say.nodes("deleteLeavesNamed", {
+                  bold: <b>{say("deleteLeavesBold")}</b>,
+                  spaces: listed(spaces),
+                })
+                : say.nodes("deleteLeaves", { bold: <b>{say("deleteLeavesBold")}</b> })}
+            </li>
+            <li>{say.nodes("deleteGone", { bold: <b>{say("deleteGoneBold")}</b> })}</li>
+            <li>{say.nodes("deleteChats", { bold: <b>{say("deleteChatsBold")}</b> })}</li>
+          </ul>
+        )}
       {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
     </Dialog>
   );

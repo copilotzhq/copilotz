@@ -1,36 +1,45 @@
 /**
- * `tiers.model` `{ agent, space? }`: the model one of the app's agents thinks
- * with in a space (chat's `agentModel` resource names it): what's picked for it
- * there, the space's tier, the org's pick, the org's tier, the plan's tier
- * (see shared/tiers.ts), or null, its own. Asked on every run of a turn, so it
- * only reads by `_id`, which the owner keeps cached: the space's choice and
- * the org's, and the plan's tier (credits' `billing.tier`, a read by `_id` too).
- * A pick gets the `maxTokens` of the entry it replaces, and its `effort` when
- * the picked model takes it (`models.efforts`, the catalog's: nothing read).
+ * `tiers.model` `{ agent, space?, thread? }`: the model chain an agent thinks
+ * with in a conversation (chat's `agentModel` resource names it, with the
+ * kind the agent works `like`, else its name): the tier in force there (the
+ * conversation's, the person's own default, the space's, the org's, the
+ * plan's), as the org keeps it, and that kind's chain in it; null where no
+ * tier applies (an app without tiers: the agent's own). An agent of no kind
+ * the tiers know works as the app's first. Asked on every run of a turn, so
+ * it only reads by `_id` and the org's few templates, which the owner keeps
+ * cached.
  */
-import { defineAction } from "copilotz";
-import { carried, type Choice, ORG_CHOICE, resolve, spaceChoice } from "../shared/tiers.ts";
-import { agentsOf } from "copilotz/plugins/agents/contract";
+import { defineAction, personOf } from "copilotz";
+import { levelsOf, orgTiersOf } from "../shared/shown.ts";
+import { entryOf, kindOf, tierIn } from "../shared/tiers.ts";
 
 export const modelAction = defineAction({
-  description: "The model one of the app's agents thinks with in a space",
+  description: "The model chain an agent thinks with in a conversation",
   record: false,
   input: {
     type: "object",
-    properties: { agent: { type: "string" }, space: { type: "string" } },
+    properties: {
+      agent: { type: "string" },
+      space: { type: "string" },
+      thread: { type: "string" },
+    },
     required: ["agent"],
     additionalProperties: false,
   },
   run: async (ctx, input) => {
-    // Agents people make keep their own model, and cost nothing to ask about.
-    if (!agentsOf(ctx)[input.agent]) return null;
-    const choices = ctx.as().db.collection<Choice>("modelChoice");
-    const source = ctx.resources.planTier as { action?: string } | undefined;
-    const [space, org, plan] = await Promise.all([
-      input.space ? choices.findOne({ _id: spaceChoice(input.space) }) : null,
-      choices.findOne({ _id: ORG_CHOICE }),
-      source?.action ? ctx.as().call<string | null>(source.action, {}) : null,
+    if (!Object.keys(ctx.resources.tiers ?? {}).length) return null;
+    const person = personOf(ctx.actor);
+    const system = ctx.as();
+    const [{ tiers, kinds }, levels] = await Promise.all([
+      orgTiersOf(system),
+      levelsOf(system, {
+        ...(input.space ? { space: input.space } : {}),
+        ...(input.thread ? { thread: input.thread } : {}),
+        ...(person ? { person } : {}),
+      }),
     ]);
-    return await carried(ctx, resolve(ctx, input.agent, { space, org, plan }));
+    const inForce = tierIn(tiers, levels);
+    const kind = kindOf(ctx, input.agent, undefined, kinds);
+    return entryOf(inForce ? tiers[inForce.tier] : undefined, kind, kinds) ?? null;
   },
 });

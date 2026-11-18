@@ -2,15 +2,17 @@
  * Agents as members (with the chat plugin): each one a member of its own,
  * `agent:<name>`, with a role (never manager): an editor answers there, a
  * viewer only reads it (for chats elsewhere). A new space starts with the
- * app's default agents (its `agents` resource's), the first answering its
- * new chats (the space's `agent`). Agents people make are documents (the
- * `shared` resource marks their collection `member: "agent"`): a manager
- * adds one they've met (where it belongs, or works in a space they reach),
- * or one the app declares.
+ * org's team, the first answering its new chats (the space's `agent`): the
+ * app's default agents (its `agents` resource's), but those the org took off
+ * its team (a document of the agents' collection with that name, the org's
+ * own, `in: "*"`, `off`), then the org's own agents (`in: "*"`). Agents
+ * people make are documents (the `shared` resource marks their collection
+ * `member: "agent"`): a manager adds one they've met (where it belongs, or
+ * works in a space they reach), or one the app declares.
  */
 import type { Context, ReadContext, TransactionScope } from "../../../../runtime/mod.ts";
 import type { Member } from "../collections/member.ts";
-import { rolesOf } from "./reach.ts";
+import { ORG, rolesOf } from "./reach.ts";
 import type { Shared } from "./rules.ts";
 
 type Declared = Record<string, { default?: boolean }>;
@@ -22,9 +24,32 @@ export function startingAgents(ctx: Pick<Context, "resources">): string[] {
   return chosen.length ? chosen : Object.keys(declared).slice(0, 1);
 }
 
+/** An agent document the org keeps for itself (`in: "*"`): one of its own, or its version of the app's. */
+type OrgAgent = { _id: string; in?: string; off?: boolean; at?: string };
+
+/**
+ * The org's team: the agents that join its new spaces. The app's defaults the
+ * org didn't take off, then the org's own, oldest first.
+ */
+export async function teamOf(
+  db: TransactionScope["db"],
+  ctx: Pick<Context, "resources">,
+): Promise<string[]> {
+  const starting = startingAgents(ctx);
+  const collection = backing(ctx, "agent");
+  if (!collection) return starting;
+  const declared = (ctx.resources.agents ?? {}) as Declared;
+  const kept = await db.collection<OrgAgent>(collection).find({ in: ORG });
+  const off = new Set(kept.filter((a) => a.off).map((a) => a._id));
+  const own = kept.filter((a) => !a.off && !declared[a._id])
+    .sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "") || a._id.localeCompare(b._id))
+    .map((a) => a._id);
+  return [...starting.filter((name) => !off.has(name)), ...own];
+}
+
 /** A new space's agents, as members (editors), and its `agent` field: who answers its new chats. */
 export async function seat(tx: TransactionScope, ctx: Pick<Context, "resources">, space: string) {
-  const agents = startingAgents(ctx);
+  const agents = await teamOf(tx.db, ctx);
   for (const agent of agents) {
     await tx.db.collection("member").insertOne({
       _id: `${space}|agent:${agent}`,

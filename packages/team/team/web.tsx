@@ -21,6 +21,7 @@
 import { definePlugin, type Plugin } from "copilotz";
 import { agentView } from "./views/web/agent.tsx";
 import { agentAddView } from "./views/web/agent-add.tsx";
+import { agentOrgView } from "./views/web/agent-org.tsx";
 import { agentPaletteView } from "./views/web/agent-palette.tsx";
 import { modelPickView } from "./views/web/model-pick.tsx";
 
@@ -30,6 +31,7 @@ export const teamWeb: Plugin = definePlugin({
   views: {
     agent: agentView,
     "agent.add": agentAddView,
+    "agent.org": agentOrgView,
     "agent.palette": agentPaletteView,
     "model.pick": modelPickView,
   },

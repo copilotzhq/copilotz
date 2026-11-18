@@ -12,6 +12,7 @@ import {
   formatDate,
   formatNumber,
   knownWords,
+  sayText,
   setWords,
   wordsOf,
 } from "../words.ts";
@@ -42,6 +43,20 @@ test("the app's words replace the English one by one; the rest stays English", (
     restore();
   }
   assertEquals(say("send"), "Send");
+});
+
+test("text the app's data holds says the app's words for it, else shows as it is", () => {
+  const restore = setWords(wordsOf([plugin({ "text.Quick answers.": "Respostas rápidas." })]));
+  try {
+    assertEquals(sayText("Quick answers."), "Respostas rápidas.");
+    assertEquals(
+      sayText("Our own tier, as the org wrote it."),
+      "Our own tier, as the org wrote it.",
+    );
+  } finally {
+    restore();
+  }
+  assertEquals(sayText("Quick answers."), "Quick answers.");
 });
 
 test("a later plugin's words win; null takes an override back out; non-phrases are ignored", () => {

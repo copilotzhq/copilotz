@@ -11,6 +11,13 @@
  * it's a member; adding it to a space is the spaces plugin's (`member.set`,
  * by a manager who has met it). Without it, every agent is everyone's.
  *
+ * The org's team (with the access plugin): the app's default agents, then
+ * those the org made for itself (`in: "*"`), which work in every space. Its
+ * owners and admins change the app's ones (the org's version of each), take
+ * them off the team (`agent.delete`) and back (`agent.restore`), or back to
+ * the app's (`agent.reset`). An agent proposes one (`propose_agent`, the
+ * tool an app gives agents it lets): its person sees it and says yes or no.
+ *
  * ```ts
  * plugins: [models, chat, ...access, team, app]
  * ```
@@ -20,10 +27,14 @@ import {
   createAgentAction,
   deleteAgentAction,
   draftAgentAction,
+  resetAgentAction,
+  restoreAgentAction,
+  sketchAgentAction,
   updateAgentAction,
 } from "./actions/agent.ts";
 import { defineAgentsAction } from "./actions/define.ts";
 import { agent } from "./collections/agent.ts";
+import { proposeAgent } from "./resources/propose.ts";
 
 export * from "./contract.ts";
 
@@ -36,9 +47,14 @@ export const team: Plugin = definePlugin({
     "agent.update": updateAgentAction,
     "agent.delete": deleteAgentAction,
     "agent.draft": draftAgentAction,
+    "agent.sketch": sketchAgentAction,
+    "agent.restore": restoreAgentAction,
+    "agent.reset": resetAgentAction,
     "agent.define": defineAgentsAction,
   },
   resources: {
+    // Agents propose agents, for their person to approve (an app gives it to those it lets).
+    tools: { propose_agent: proposeAgent },
     // Chat asks it what an agent not in the app's code is.
     agentSources: { team: { action: "agent.define" } },
     // With the access plugin: an agent belongs where it was made, its managers change it,

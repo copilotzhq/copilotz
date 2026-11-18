@@ -27,18 +27,18 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `agent`, `agent.add`, `agent.palette`, `model.pick`.
+- **On the web:** `agent`, `agent.add`, `agent.org`, `agent.palette`, `model.pick`.
 - **What it adds to resources:** `palette` (`agents`), `spaceInvite` (`agents`).
 
 ## What it needs
 
-Nothing to set: it works as it comes.
+Nothing to set. It reads `agentKinds`, resource kinds the app and other plugins fill.
 
 ## What it requires
 
 The runtime doesn't start without [`team`](team.md) and [`web-shell`](web-shell.md): add them too.
 
-It ships in a package of its own, `@copilotz/team@1.0.0-rc.54`, for `copilotz` `1.0.0-rc.54`:
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.56`, for `copilotz` `1.0.0-rc.56`:
 install it beside `copilotz`.
 
 ## Listing

@@ -18,7 +18,7 @@
  */
 import { defineAction } from "copilotz";
 import { settingsOf } from "../shared/settings.ts";
-import { planOf, refresh, rooms, type Verdict, verdictOf } from "../shared/standing.ts";
+import { planOf, refresh, rooms, termsFor, type Verdict, verdictOf } from "../shared/standing.ts";
 
 const OK: Verdict = { ok: true };
 
@@ -74,6 +74,34 @@ export const spentAction = defineAction({
       // A use recorded from a read: its record goes, and the next working-out counts it.
       if ((error as Error).message !== "Queries are read-only") throw error;
     });
+  },
+});
+
+/**
+ * `billing.credits` `{}`: what credits the org's plan gives (the `planCredits`
+ * resource), for pages that say how far they go: its name and title, the
+ * amount (USD), once (a trial's) or each month, and whether that's per seat.
+ * A plan that gives none (Free, for a team) says 0, once. Null while limits
+ * are off.
+ */
+export const creditsAction = defineAction({
+  description: "What credits the org's plan gives",
+  record: false,
+  input: { type: "object", additionalProperties: false },
+  run: async (ctx) => {
+    const set = settingsOf(ctx);
+    if (!set.enforce) return null;
+    const plan = await planOf(ctx);
+    const name = plan?.name ?? set.start;
+    const terms = plan?.terms ?? termsFor(ctx, name);
+    if (!terms) return null;
+    const credits = terms.credits ?? {};
+    const said = { plan: name, title: terms.title };
+    if (credits.perSeat) {
+      return { ...said, amount: credits.perSeat, every: "month", perSeat: true };
+    }
+    if (credits.monthly) return { ...said, amount: credits.monthly, every: "month" };
+    return { ...said, amount: credits.once ?? 0, every: "once" };
   },
 });
 

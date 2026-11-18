@@ -174,6 +174,10 @@ export const chat: Words = {
   "chat.notInSpace": "Você não está neste espaço",
   "chat.notInSpaceBody":
     "As conversas daqui são para os membros. Escolha um dos seus espaços para começar uma, ou peça a alguém daqui para convidar você.",
+  "chat.welcomeStep": "{at} de {count}",
+  "chat.welcomeBack": "Voltar",
+  "chat.welcomeNext": "Próximo",
+  "chat.welcomeDone": "Começar",
   "chat.notYourSpaceTitle": "Este espaço não é seu",
   "chat.ofMinutes": {
     one: ", de no máximo {count} minuto",

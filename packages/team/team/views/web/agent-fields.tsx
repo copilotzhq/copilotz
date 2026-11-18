@@ -40,7 +40,7 @@ export type Draft = {
 const LINE = 6;
 
 export function AgentFields(
-  { value, onChange, options, handle, call, autoFocus, disabled }: {
+  { value, onChange, options, handle, call, autoFocus, disabled, model }: {
     value: Draft;
     /** What changed: the form merges it into what's there. */
     onChange(patch: Partial<Draft>): void;
@@ -50,6 +50,8 @@ export function AgentFields(
     call: Call;
     autoFocus?: boolean;
     disabled?: boolean;
+    /** What stands where the model is chosen: another field (an org's agent works like one), or none. */
+    model?: ReactNode;
   },
 ): ReactNode {
   const id = useId();
@@ -146,17 +148,19 @@ export function AgentFields(
         )}
       </Field>
       <Instructions value={value} onChange={onChange} call={call} disabled={disabled} />
-      <Field label={say("model")} hint={say("modelHint")}>
-        {(control) => (
-          <ModelPicker
-            id={control.id}
-            value={value.model}
-            call={call}
-            disabled={disabled}
-            onChange={(model) => onChange({ model })}
-          />
-        )}
-      </Field>
+      {model !== undefined ? model : (
+        <Field label={say("model")} hint={say("modelHint")}>
+          {(control) => (
+            <ModelPicker
+              id={control.id}
+              value={value.model}
+              call={call}
+              disabled={disabled}
+              onChange={(model) => onChange({ model })}
+            />
+          )}
+        </Field>
+      )}
       <Tools value={value.tools} onChange={(tools) => onChange({ tools })} options={options} />
     </div>
   );

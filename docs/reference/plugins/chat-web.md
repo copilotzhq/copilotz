@@ -38,14 +38,15 @@ Its Views show on the web.
 
 ## What it needs
 
-Nothing to set. It reads `agentSources`, `agents`, `askViews`, `composerNotes`, `conversation`,
-`home`, `refusals`, `suggestions` and `toolViews`, resource kinds the app and other plugins fill.
+Nothing to set. It reads `agentSources`, `agents`, `askViews`, `composerControls`, `composerNotes`,
+`conversation`, `home`, `refusals`, `suggestions`, `toolViews` and `welcome`, resource kinds the app
+and other plugins fill.
 
 ## What it requires
 
 The runtime doesn't start without [`chat`](chat.md) and [`web-shell`](web-shell.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.54`.
+It ships with `copilotz@1.0.0-rc.56`.
 
 ## Listing
 

@@ -33,7 +33,13 @@ import type { Message } from "../../collections/message.ts";
 import type { Thread } from "../../collections/thread.ts";
 import type { Team } from "../../shared/agents.ts";
 import { notesOf } from "../../shared/notes.ts";
-import type { ComposerNote, ConversationView, RefusalView, Sending } from "../../shared/types.ts";
+import type {
+  ComposerControl,
+  ComposerNote,
+  ConversationView,
+  RefusalView,
+  Sending,
+} from "../../shared/types.ts";
 import { mentionable, shownAll } from "./agents.ts";
 import { beforeSend } from "./before-send.ts";
 import { Composer, type Mentioned } from "./composer.tsx";
@@ -355,6 +361,9 @@ export function talk(
         where={space ? space.kind === "personal" ? say("personal") : space.name : undefined}
         refusals={ctx.resources.refusals as Record<string, RefusalView | null> | undefined}
         notes={ctx.resources.composerNotes as Record<string, ComposerNote | null> | undefined}
+        controls={ctx.resources.composerControls as
+          | Record<string, ComposerControl | null>
+          | undefined}
         place={{ thread: id, ...(within ? { in: within } : {}) }}
         {...(o.note ? { note: o.note } : {})}
         {...(o.mentionNote ? { mentionNote: o.mentionNote } : {})}

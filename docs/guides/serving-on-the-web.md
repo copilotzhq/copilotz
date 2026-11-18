@@ -356,6 +356,12 @@ their code, never in the server's. In Brazilian Portuguese, they're all said alr
 `copilotz/web/pt-br`, first among the page's plugins, gives every word of the sign-in page,
 Copilotz's pitch, and every word of the front ends (hosts/web/WORDS.md).
 
+What the app's own data says, the server sends as the app declared it: its tiers' descriptions, its
+kinds of work, its agents' descriptions. Front ends show it through `sayText`, so the app gives it
+in another language among its `words`, under `text.` and the English word for word
+(`"text.Quick answers.": "Respostas rápidas."`). Text it gives none for, one an org wrote itself,
+shows as written.
+
 The messages email sign-in sends are the server's `emailSignIn.messages`. Setting a message's `html`
 to `null` sends it as text alone. `page.lang` says the page's language, and Google's button follows
 it.

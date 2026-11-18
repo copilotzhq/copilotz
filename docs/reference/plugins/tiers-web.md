@@ -27,8 +27,9 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `tiers.agent`, `tiers.org`, `tiers.space`.
-- **What it adds to resources:** `orgSettings` (`models`), `spaceAgents` (`tiers`).
+- **On the web:** `tiers.agent`, `tiers.composer`, `tiers.org`, `tiers.setup`, `tiers.space`.
+- **What it adds to resources:** `agentKinds` (`query`), `composerControls` (`tiers`), `orgSettings`
+  (`models`), `spaceAgents` (`tiers`), `welcome` (`tiers`).
 
 ## What it needs
 
@@ -39,7 +40,7 @@ Nothing to set: it works as it comes.
 The runtime doesn't start without [`web-shell`](web-shell.md), [`spaces-web`](spaces-web.md) and
 [`team-web`](team-web.md): add them too.
 
-It ships in a package of its own, `@copilotz/team@1.0.0-rc.54`, for `copilotz` `1.0.0-rc.54`:
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.56`, for `copilotz` `1.0.0-rc.56`:
 install it beside `copilotz`.
 
 ## Listing

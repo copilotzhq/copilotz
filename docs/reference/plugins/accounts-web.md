@@ -27,20 +27,20 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `accounts`, `accounts.palette`, `accounts.uses`.
+- **On the web:** `accounts`, `accounts.keys`, `accounts.palette`, `accounts.uses`.
 - **What it adds to resources:** `conversation` (`accounts`), `palette` (`accounts`), `userMenu`
   (`accounts`).
 
 ## What it needs
 
-Nothing to set: it works as it comes.
+Nothing to set. It reads `agentKinds`, resource kinds the app and other plugins fill.
 
 ## What it requires
 
 The runtime doesn't start without [`accounts`](accounts.md) and [`web-shell`](web-shell.md): add
 them too.
 
-It ships with `copilotz@1.0.0-rc.54`.
+It ships with `copilotz@1.0.0-rc.56`.
 
 ## Listing
 

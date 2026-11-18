@@ -28,7 +28,7 @@ It keeps 4 collections, 1 of them on the record.
 
 ## What it lets callers do
 
-Of its 16 Actions, people may call 8; agents may call 2; contacts and someone signed out may call
+Of its 17 Actions, people may call 8; agents may call 2; contacts and someone signed out may call
 none.
 
 | Action            | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                      |
@@ -45,16 +45,16 @@ none.
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.
 
-Only the app's own code calls `billing.apply`, `billing.check`, `billing.may`, `billing.plan`,
-`billing.priceList`, `billing.settle`, `billing.spent` and `billing.tier`: its plugins, its
-schedules and the system.
+Only the app's own code calls `billing.apply`, `billing.check`, `billing.credits`, `billing.may`,
+`billing.plan`, `billing.priceList`, `billing.settle`, `billing.spent` and `billing.tier`: its
+plugins, its schedules and the system.
 
 ## Where it shows
 
 It has no Views of its own: its front ends show it, [`credits-web`](credits-web.md).
 
-- **What it adds to resources:** `planTier` (`action`), `spending` (`check`, `may`), `usage`
-  (`priceList`, `spent`).
+- **What it adds to resources:** `planCredits` (`action`), `planTier` (`action`), `spending`
+  (`check`, `may`), `usage` (`priceList`, `spent`).
 
 ## What it needs
 
@@ -80,7 +80,7 @@ It also reads `directory` and `org`, resource kinds the app and other plugins fi
 
 The runtime doesn't start without [`usage`](usage.md): add it too.
 
-It ships in a package of its own, `@copilotz/billing@1.0.0-rc.54`, for `copilotz` `1.0.0-rc.54`:
+It ships in a package of its own, `@copilotz/billing@1.0.0-rc.56`, for `copilotz` `1.0.0-rc.56`:
 install it beside `copilotz`.
 
 ## What it does on its own

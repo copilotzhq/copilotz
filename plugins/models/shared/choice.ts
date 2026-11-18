@@ -174,7 +174,10 @@ type Resources = Record<string, Record<string, unknown> | undefined>;
  * for can be chosen, declared or not, and its key is used on each call.
  */
 export type ModelKeys = {
-  /** `{ provider }` → the org's key, or null. Trusted code only. */
+  /**
+   * `{ provider, person? }` → the person's own key, else the org's, or null.
+   * Trusted code only.
+   */
   open: string;
   /** `{}` → `{ provider, hint }[]`, what's kept, nothing secret. Trusted code only. */
   list: string;

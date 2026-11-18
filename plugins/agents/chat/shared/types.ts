@@ -33,8 +33,15 @@ export type Agent = {
   name?: string;
   /** An emoji it's shown with. */
   icon?: string;
-  /** Where one people made belongs (a space). */
+  /** Where one people made belongs: a space, or the org itself (`*`, one of the org's own). */
   in?: string;
+  /**
+   * One of the app's agents whose model it takes where the app chooses its
+   * agents' models (the `agentModel` resource: the tier's, as that agent's),
+   * keeping `model` where nothing chooses: one an org made that works like
+   * one of the app's.
+   */
+  like?: string;
   /**
    * How much of a conversation it's sent. `maxAge` (ms): what's older, back
    * from the newest message it sees, stays out of its prompt (summaries of
@@ -227,6 +234,24 @@ export type Sending = {
 export type HomeView = { view: string; order?: number };
 
 /**
+ * A `welcome` resource: a step of the app's welcome, which home shows each
+ * person once in a dialog, the first time they come to it (and again at
+ * `/?welcome=1`): its title and a line under it, and a View (hints `{ in }`)
+ * for what it says or asks. Lowest `order` first. `roles`: only those in the
+ * org with one of them see it (`owner`, `admin`, `member`, `guest`; staff
+ * see every step), as for the org's settings. `orgs`: only in orgs of those
+ * kinds (`personal`, `team`), where the app serves many.
+ */
+export type WelcomeStep = {
+  title: string;
+  description?: string;
+  view: string;
+  order?: number;
+  roles?: string[];
+  orgs?: string[];
+};
+
+/**
  * A `refusals` resource: by a code `chat.send` can refuse a message with
  * (`not_here`), the View shown over where you type in its place, the
  * message kept there: what to do about it. Its hints: `{ thread?, in,
@@ -246,6 +271,14 @@ export type RefusalView = { view: string };
  * returns null, and takes no room.
  */
 export type ComposerNote = { view: string; order?: number };
+
+/**
+ * A `composerControls` resource: a View beside the send button, on home and
+ * in a conversation, with hints `{ thread?, in? }` (none from home): a small
+ * control for how what's sent goes (the tier it runs on). Lowest `order`
+ * first; one with nothing to offer returns null.
+ */
+export type ComposerControl = { view: string; order?: number };
 
 /**
  * A `toolViews` resource: by a tool's name, the View kind that shows a call

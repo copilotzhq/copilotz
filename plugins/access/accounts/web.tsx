@@ -2,7 +2,8 @@
  * Connected accounts' web front end, for the browser: the Connected
  * accounts page (`/accounts`: each provider the app offers, connecting it
  * in a dialog, the person's account there, reconnecting and disconnecting
- * it), its entries in the command palette (going there, connecting,
+ * it, and the person's own API keys for model providers: `accounts.keys`),
+ * its entries in the command palette (going there, connecting,
  * reconnecting or disconnecting each provider), and in a chat, over where
  * you type, a quiet word when its agents run on your plan (chat's
  * `conversation` resource) or would, if you reconnected it.
@@ -17,6 +18,7 @@
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { accountsView } from "./views/web/accounts.tsx";
+import { ownKeysView } from "./views/web/own-keys.tsx";
 import { accountsPaletteView } from "./views/web/palette.ts";
 import { accountsUsesView } from "./views/web/uses.tsx";
 
@@ -25,6 +27,7 @@ export const accountsWeb: Plugin = definePlugin({
   requires: ["accounts", "web-shell"],
   views: {
     accounts: accountsView,
+    "accounts.keys": ownKeysView,
     "accounts.palette": accountsPaletteView,
     "accounts.uses": accountsUsesView,
   },

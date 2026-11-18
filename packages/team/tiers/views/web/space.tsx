@@ -2,24 +2,23 @@
  * A space's agents' models, on its Members tab (spaces' `spaceAgents`).
  *
  * - Above its agents (kind `tiers.space`, item `{ _id }`, the space): the
- *   tier its agents use and where it comes from ("Expert, as the org chose"),
- *   and for its managers a choice of every tier, each with what a typical
- *   reply comes to, or the org's again. Any tier: the org's budget bounds it.
- * - On each of the app's agents (kind `tiers.agent`, item `{ _id }`, the
- *   agent): the model it uses here and where that comes from ("Claude Haiku
- *   5.5 · the org's Everyday"); for managers, Change (the picker an agent's
- *   model is chosen with, team's `model.pick`) and, once picked, the way back
- *   to what it had. Agents people make say nothing here: their model is theirs.
+ *   tier new chats here start on, and for its managers a choice of every
+ *   tier, each with what a typical message comes to, or the org's default
+ *   again. Anyone still switches a chat's own as they write.
+ * - On each agent (kind `tiers.agent`, item `{ _id }`, the agent): its model
+ *   here, its kind of work and the tier ("Claude Haiku 5.5 · Checks · on
+ *   Everyday"). Models are the tiers', by kind of work: none is picked here.
  *
  * Both are watched reads, so a change shows at once, wherever it was made.
  */
 import { type ReactNode, useState } from "react";
 import type { ViewContext } from "copilotz";
-import { Button, Icon, LazyView, message, Select } from "copilotz/web";
-import type { ModelPick } from "../../../team/contract.ts";
+import { Icon, message, Select } from "copilotz/web";
 import type { AgentNow, Shown } from "../../contract.ts";
 import { STYLE } from "./style.ts";
-import { effortSaid, perReply, spaceFromSaid } from "./words.ts";
+import { say } from "./say.ts";
+import { sayText } from "copilotz/web/words";
+import { bySaid, modelSaid, perReply, shownSaid, unitSaid } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -27,7 +26,9 @@ const style = <style href="tiers-web" precedence="copilotz">{STYLE}</style>;
 
 export const tiersSpaceView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
   const space = item._id ?? String(ctx.hints.in ?? "");
-  const shown = ctx.db.collection("modelChoice").query<Shown>("offered", { space }).value;
+  const shown = shownSaid(
+    ctx.db.collection("modelChoice").query<Shown>("offered", { space }).value,
+  );
   if (!shown?.tiers.length) return null;
   return (
     <>
@@ -37,22 +38,18 @@ export const tiersSpaceView = (item: { _id?: string }, ctx: ViewContext<ReactNod
   );
 };
 
-/** The space's tier: what applies, who chose it, and choosing another. */
+/** The space's tier: what new chats here start on, who chose it, and choosing another. */
 export function SpaceTier(
   { shown, space, manage, call }: { shown: Shown; space: string; manage: boolean; call: Call },
 ): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const title = (name?: string | null) => shown.tiers.find((t) => t.name === name)?.title;
-  const now = shown.now.tier;
-  const above = shown.org.tier ?? shown.plan;
-  const said = now
-    ? now.by === "space"
-      ? `Chosen for this space.${above ? ` The org's is ${title(above)}.` : ""}`
-      : now.by === "org"
-      ? "As the org chose."
-      : "Your plan's default, as the org hasn't chosen."
-    : "Each agent uses its own.";
+  const above = shown.org.tier ?? shown.plan ?? shown.tiers[0]?.name;
+  const here = shown.space?.tier ?? above;
+  const said = shown.space?.tier
+    ? say("spaceChosen", { tier: title(above) ?? "" })
+    : say("spaceAsOrg");
   const choose = async (tier: string) => {
     setBusy(true);
     setError(undefined);
@@ -70,31 +67,27 @@ export function SpaceTier(
         <Icon name="sparkles" size={16} />
       </span>
       <div className="tiers-space-text">
-        <b>Models: {now ? title(now.name) : "the agents' own"}</b>
+        <b>{say("spaceStartsOn", { tier: title(here) ?? "" })}</b>
         <span>
-          {said} {manage
-            ? "A change applies from each chat's next reply."
-            : "This space's managers can change it."}
+          {said} {say("spaceSwitch")} {manage ? "" : say("spaceManagers")}
         </span>
       </div>
       {manage
         ? (
           <Select
             size="sm"
-            aria-label="This space's models"
+            aria-label={say("spaceSelect")}
             value={shown.space?.tier ?? ""}
             disabled={busy}
             onChange={(event) => void choose(event.target.value)}
           >
-            <option value="">
-              {above ? `As the org: ${title(above)}` : "As the org: the agents' own"}
-            </option>
+            <option value="">{say("asOrg", { tier: title(above) ?? "" })}</option>
             {shown.tiers.map((tier) => {
               const price = perReply(tier.price);
               return (
                 <option key={tier.name} value={tier.name}>
                   {tier.title}
-                  {price ? ` · ${price} a reply` : ""}
+                  {price ? ` · ${price} ${unitSaid(shown.per)}` : ""}
                 </option>
               );
             })}
@@ -109,83 +102,22 @@ export function SpaceTier(
 export const tiersAgentView = (item: { _id?: string }, ctx: ViewContext<ReactNode>): ReactNode => {
   const agent = item._id ?? "";
   const space = String(ctx.hints.in ?? "");
-  const now = ctx.db.collection("modelChoice").query<AgentNow & { without?: AgentNow } | null>(
-    "agent",
-    { agent, space },
-  ).value;
-  // Not one of the app's (or still reading): nothing to say.
+  const now = ctx.db.collection("modelChoice").query<AgentNow | null>("agent", {
+    agent,
+    ...(space ? { space } : {}),
+  }).value;
+  // No tier applies (or still reading): nothing to say.
   if (!now) return null;
   return (
     <>
       {style}
-      <AgentLine
-        now={now}
-        agent={agent}
-        space={space}
-        manage={ctx.hints.manage === true}
-        call={ctx.call}
-      />
+      <span className="tiers-line" title={`${modelSaid(now.model)}, ${bySaid(now.by)}`}>
+        {say.nodes("agentLine", {
+          model: <b>{now.model.name}</b>,
+          kind: sayText(now.kindTitle),
+          tier: sayText(now.tierTitle),
+        })}
+      </span>
     </>
   );
 };
-
-/** What an agent thinks with here, where that comes from, and changing it. */
-export function AgentLine(
-  { now, agent, space, manage, call }: {
-    now: AgentNow & { without?: AgentNow };
-    agent: string;
-    space: string;
-    manage: boolean;
-    call: Call;
-  },
-): ReactNode {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const effort = effortSaid(now.model.effort);
-  const pick: ModelPick = {
-    action: "tiers.pick",
-    input: { space, agent },
-    look: "link",
-    label: "Change",
-  };
-  const back = async () => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await call("tiers.pick", { space, agent, model: null });
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <>
-      <span
-        className="tiers-line"
-        data-picked={now.without ? true : undefined}
-        title={effort ? `${now.model.name}, ${effort}` : undefined}
-      >
-        <b>{now.model.name}</b> · <span className="tiers-line-from">{spaceFromSaid(now.from)}</span>
-      </span>
-      {manage
-        ? <LazyView kind="model.pick" item={{ value: now.model.id }} hints={pick} fallback={null} />
-        : null}
-      {manage && now.without
-        ? (
-          <Button
-            variant="link"
-            size="sm"
-            className="tiers-back"
-            disabled={busy}
-            onClick={() => void back()}
-            title={`Back to ${now.without.model.name}, ${spaceFromSaid(now.without.from)}`}
-          >
-            Back to {now.without.model.name}
-          </Button>
-        )
-        : null}
-      {error ? <span className="tiers-line" role="alert">{error}</span> : null}
-    </>
-  );
-}

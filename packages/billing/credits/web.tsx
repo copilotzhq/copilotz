@@ -5,11 +5,13 @@
  * platform staff, setting all of that by hand. And a short note above where
  * you type (chat's `composerNotes`), so people know before they send that the
  * org is out, or running low. Add it beside the web shell, where the browser
- * draws.
+ * draws. As a team org starts (chat's `welcome`), choosing its plan
+ * (`billing.setup`).
  */
 import { definePlugin, type Plugin } from "copilotz";
 import { composerNoteView } from "./views/web/composer.tsx";
 import { orgBillingView } from "./views/web/org.tsx";
+import { billingSetupView } from "./views/web/setup.tsx";
 
 export const creditsWeb: Plugin = definePlugin({
   name: "credits-web",
@@ -17,6 +19,7 @@ export const creditsWeb: Plugin = definePlugin({
   views: {
     "billing.org": orgBillingView,
     "billing.composer": composerNoteView,
+    "billing.setup": billingSetupView,
   },
   resources: {
     orgSettings: {
@@ -29,6 +32,17 @@ export const creditsWeb: Plugin = definePlugin({
       },
     },
     composerNotes: { billing: { view: "billing.composer" } },
+    // Chat's welcome, for who runs a team org: it comes with no credits, so a plan first.
+    welcome: {
+      plan: {
+        title: "Choose a plan",
+        description: "Your agents start working once the org has credits.",
+        view: "billing.setup",
+        order: 5,
+        roles: ["owner", "admin"],
+        orgs: ["team"],
+      },
+    },
   },
 });
 

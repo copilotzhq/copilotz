@@ -8,6 +8,7 @@
  * fails. Models' own metrics (tokens, time) are its telemetry.
  */
 import type { Actor, Context, ReadContext } from "../../../runtime/mod.ts";
+import { personOf } from "../../../runtime/mod.ts";
 import { failure } from "../../../runtime/mod.ts";
 import { keyable, type ModelKeys, type Resolved } from "./choice.ts";
 
@@ -93,15 +94,20 @@ export async function used(ctx: UseContext, use: ModelUse): Promise<void> {
 }
 
 /**
- * A model with its org's own key for its provider, which goes before the
- * app's. A provider only an org's key reaches, without one, is told so.
+ * A model with a key of its own for its provider, which goes before the
+ * app's: the person's it's for (who calls, or whom an agent works for), else
+ * its org's. A provider only such a key reaches, without one, is told so.
  */
 export async function keyed(ctx: UseContext, m: Resolved): Promise<Resolved> {
   const keys = ctx.resources.modelKeys as ModelKeys | undefined;
   if (!keys || !keyable(m.provider)) return m;
+  const person = personOf(ctx.actor);
   // From a read there's no system to ask as, and so no key: only the app's.
   const key = ctx.as
-    ? await ctx.as().call<string | null>(keys.open, { provider: m.provider })
+    ? await ctx.as().call<string | null>(keys.open, {
+      provider: m.provider,
+      ...(person ? { person } : {}),
+    })
     : null;
   if (key) {
     return {

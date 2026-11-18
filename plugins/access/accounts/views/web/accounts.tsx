@@ -49,11 +49,14 @@ export const accountsView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode
       </Page>
     );
   }
+  // The person's own API keys, below their accounts (`accounts.keys`).
+  const keys = ctx.show("accounts.keys", {});
   return (
     <Page title={TITLE} description={ABOUT} icon="lock" density={density}>
       <Title text={TITLE} />
       {style}
       <AccountsBody providers={providers} accounts={accounts} query={query} call={ctx.call} />
+      {keys}
     </Page>
   );
 };

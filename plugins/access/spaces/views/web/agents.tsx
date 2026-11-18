@@ -22,6 +22,7 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import type { Member, Reached } from "../../contract.ts";
 import { AGENT_ROLES, roleName, spaceName, whoOf } from "./who.ts";
+import { sayText } from "../../../../../hosts/web/words.ts";
 import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
@@ -156,7 +157,7 @@ function AgentRow(
     }
   };
   const member = { space: space._id, member: { kind: "agent", id } };
-  const what = agent?.description ||
+  const what = (agent?.description && sayText(agent.description)) ||
     (agent?.in
       ? home ? say("madeIn", { space: spaceName(home) }) : say("madeElsewhere")
       : agent

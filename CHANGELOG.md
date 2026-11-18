@@ -23,6 +23,9 @@ Updates keep to the schema on every store, as MongoDB's do.
 - **`$addToSet` with `$each`** adds each item not there yet; it stored `{ $each: […] }` itself.
 - **An unrecorded Action a query or a View calls acts as someone else (`ctx.as`)** as it does when
   an Action calls it, read-only. It was quietly left as the reader, and read less than it asked for.
+  **This widens what such reads return:** an Action acting as the system or a grant now reads as
+  that, beyond the reader's reach, as it always did when an Action called it. Copilotz's own
+  `person.email` is one: a View or query that calls it now gets the address.
 
 **Added:**
 
@@ -30,11 +33,15 @@ Updates keep to the schema on every store, as MongoDB's do.
   only on documents that were valid, for a collection whose older documents predate its schema.
   Inserts and replaces are always checked.
 
-**Upgrading:** an app whose code writes what its schemas don't allow now gets `invalid` where it
-didn't. Run its tests first. A collection holding documents from before its schema said what it says
-now: set `validation: "moderate"` on it until they're fixed. PostgreSQL still runs plain `$set`,
-`$unset` and counters in one statement; an update whose check needs the documents it leaves (a
-`minimum` after `$inc`, an object a nested `$set` may create) runs in a transaction.
+**Upgrading:** check what queries and Views return where they call an unrecorded Action that acts as
+someone else (`ctx.as()`, `ctx.as(grant(…))`): it reads as that now, so it may return more than the
+reader reaches. Keep to what the reader may see in what the Action returns.
+
+An app whose code writes what its schemas don't allow now gets `invalid` where it didn't. Run its
+tests first. A collection holding documents from before its schema said what it says now: set
+`validation: "moderate"` on it until they're fixed. PostgreSQL still runs plain `$set`, `$unset` and
+counters in one statement; an update whose check needs the documents it leaves (a `minimum` after
+`$inc`, an object a nested `$set` may create) runs in a transaction.
 
 ## 1.0.0-rc.61 — 2026-11-24
 

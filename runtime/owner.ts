@@ -393,9 +393,9 @@ export async function createOwner(
   if (limited) throw invalid(limited);
   const registry = merge(options.plugins);
   checkHttp(registry);
-  if (options.warn !== false) {
-    for (const message of registry.warnings) (options.warn ?? warnOnce)(message);
-  }
+  // What looks wrong: told through `warn` (the console, once a message, by default).
+  const warn = options.warn === false ? () => {} : options.warn ?? warnOnce;
+  for (const message of registry.warnings) warn(message);
   // What browsers connect with: a one-time ticket, from `POST /connect` (see fetch.ts).
   const tickets = createTickets(
     options.browsers?.tickets !== undefined ? { perMinute: options.browsers.tickets } : {},
@@ -1156,7 +1156,8 @@ export async function createOwner(
       );
     }
     let found = false;
-    for (const guard of registry.guards as Guard[]) {
+    const speaking: string[] = [];
+    for (const [i, guard] of (registry.guards as Guard[]).entries()) {
       const said = await guard(
         actor,
         {
@@ -1168,9 +1169,31 @@ export async function createOwner(
         },
         ruleReads,
       );
-      if (said !== undefined) found = true;
+      if (said !== undefined) {
+        found = true;
+        speaking.push(registry.guardPlugins[i]);
+      }
     }
+    if (found) foreignRule(collection, speaking);
     return found;
+  };
+  /**
+   * Said once a collection: an outsider let in by another plugin's guard alone, where the
+   * collection's own plugin says nothing of who reaches it (no guard, no `shared` entry of its own).
+   */
+  const foreignRuled = new Set<string>();
+  const foreignRule = (collection: string, speaking: string[]) => {
+    const ruled = registry.ruledBy[collection];
+    if (!ruled || ruled.own || speaking.includes(ruled.plugin) || foreignRuled.has(collection)) {
+      return;
+    }
+    foreignRuled.add(collection);
+    warn(
+      `Collection "${collection}" (${ruled.plugin}) was opened to an outsider by ` +
+        `${
+          [...new Set(speaking)].join(", ")
+        }'s guard alone: say who reaches it in ${ruled.plugin}.`,
+    );
   };
   /**
    * Whether an actor may run a query from outside: one that lets them, as

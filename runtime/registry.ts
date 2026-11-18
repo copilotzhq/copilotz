@@ -128,6 +128,14 @@ export type Registry = {
   checks: { name: string; check: NonNullable<Plugin["check"]> }[];
   /** Who reaches what: every plugin's rules, which restrict together. */
   guards: Guard[];
+  /** Which plugin each guard is (by position in `guards`). */
+  guardPlugins: string[];
+  /**
+   * Each collection's plugin, and whether it says who reaches it (its own
+   * guard, or its own `shared` entry): a rule of another's alone opening it
+   * is warned of (owner.ts).
+   */
+  ruledBy: Record<string, { plugin: string; own: boolean }>;
   /** What looks wrong at startup, though the app runs (see `warningsOf`): logged once. */
   warnings: string[];
   /** What reads reveal to writes: the last plugin's. */
@@ -264,6 +272,8 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     schedules: {},
     checks: [],
     guards: [],
+    guardPlugins: [],
+    ruledBy: {},
     warnings: [],
     workers: {},
     routes: {},
@@ -319,7 +329,10 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
       replace(registry.adapters[port] ??= {}, entries);
     }
     into(registry.workers, plugin.workers, "worker kind");
-    if (plugin.guard) registry.guards.push(plugin.guard);
+    if (plugin.guard) {
+      registry.guards.push(plugin.guard);
+      registry.guardPlugins.push(plugin.name);
+    }
     if (plugin.who) registry.whos.push({ plugin: plugin.name, who: plugin.who });
     for (const [key, route] of Object.entries(plugin.routes ?? {})) {
       if (route === null) delete registry.routes[key];
@@ -361,6 +374,13 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
   }
   registry.checks = plugins.flatMap((p) => p.check ? [{ name: p.name, check: p.check }] : []);
   if (!options.elsewhere) registry.warnings = warningsOf(plugins, registry, declaredBy);
+  for (const [name, plugin] of declaredBy) {
+    const shared = plugin.resources?.shared;
+    registry.ruledBy[name] = {
+      plugin: plugin.name,
+      own: !!plugin.guard || (plain(shared) && Object.hasOwn(shared, name)),
+    };
+  }
   registry.requires = Object.fromEntries(plugins.map((p) => [p.name, p.requires ?? []]));
   return registry;
 }

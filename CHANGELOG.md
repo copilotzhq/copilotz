@@ -51,8 +51,9 @@ Updates keep to the schema on every store, as MongoDB's do.
   and input, called as the agent. Read contexts and Views can `describe()` the app, as Actions do.
 - **Startup says what looks wrong** (`warn`: the console by default, once a message; `false` for
   none): a collection whose schema names no fields, and one another plugin's `shared` rule alone
-  opens to outsiders. An unknown Action, collection or query is refused naming the closest known
-  one.
+  opens to outsiders. And, the first time it happens, an outsider let in by another plugin's guard
+  alone, where the collection's own plugin says nothing of who reaches it. An unknown Action,
+  collection or query is refused naming the closest known one.
 - **`boundaries({ root, plugins })`** (`copilotz/testing`): what breaks an app's plugin boundaries
   (another plugin's code imported, or a contract of one not required), for an app's test.
 - **`validation: "moderate"` on a collection**, as MongoDB's `validationLevel`: updates are checked

@@ -7,7 +7,7 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createRuntime, defineAction, defineCollection, definePlugin } from "../mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
-import { test } from "../../testing/mod.ts";
+import { test, TEST_ACTOR, testWho } from "../../testing/mod.ts";
 
 const tasks = definePlugin({
   name: "tasks",
@@ -58,5 +58,52 @@ test("an unknown name is refused with the closest known one", async () => {
     assertEquals((far as Error).message, `Unknown action "billing.charge"`);
   } finally {
     await rt.close();
+  }
+});
+
+test("an outsider let in by another plugin's guard alone is said, once a collection", async () => {
+  const told: string[] = [];
+  const docs = definePlugin({
+    name: "docs",
+    collections: {
+      doc: defineCollection({ schema: { type: "object", properties: { t: { type: "string" } } } }),
+    },
+  });
+  const opener = definePlugin({
+    name: "opener",
+    guard: (actor, { collection }) =>
+      collection === "doc" && actor.kind === "person" ? true : undefined,
+  });
+  const read = (rt: Awaited<ReturnType<typeof createRuntime>>) =>
+    rt.fetch(
+      new Request("http://localhost/api/collections/doc", {
+        headers: { [TEST_ACTOR]: JSON.stringify({ kind: "person", id: "ana" }) },
+      }),
+    );
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [docs, opener, testWho],
+    warn: (message) => told.push(message),
+  });
+  try {
+    assertEquals((await read(rt)).status, 200);
+    assertEquals((await read(rt)).status, 200);
+    assertEquals(told.filter((m) => m.includes("opener's guard alone")).length, 1, told.join("\n"));
+  } finally {
+    await rt.close();
+  }
+  // The collection's own plugin ruling it: nothing to say.
+  const own = definePlugin({ ...docs, guard: opener.guard });
+  const quiet: string[] = [];
+  const rt2 = await createRuntime({
+    store: memoryStore(),
+    plugins: [own, testWho],
+    warn: (message) => quiet.push(message),
+  });
+  try {
+    assertEquals((await read(rt2)).status, 200);
+    assertEquals(quiet.filter((m) => m.includes("guard alone")), []);
+  } finally {
+    await rt2.close();
   }
 });

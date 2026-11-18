@@ -67,7 +67,7 @@ import { restLink } from "./rest.ts";
 import { noMetrics } from "./metrics.ts";
 import { createObservers, type Observers } from "./observe.ts";
 import { isRead, type Op, type WriteOp } from "./ops.ts";
-import { canonical, invalid, merge } from "./registry.ts";
+import { canonical, described, invalid, merge } from "./registry.ts";
 import { decode, encode, lines } from "./wire.ts";
 
 /** Where an observing actor is, as a call from its View says it (`in`). */
@@ -666,6 +666,8 @@ function open(options: ClientOptions): Client {
         value({ collection: name, query: queryName, params: params ?? null }, track);
       const reads: ReadContext = {
         db: { collection: (name) => collection(name, run, query) as never },
+        // What the page's own plugins declare: its front ends.
+        describe: () => described(registry),
         graph: { edges: refuse("reading edges") as never },
         render: refuse("rendering") as never,
         record: () => {

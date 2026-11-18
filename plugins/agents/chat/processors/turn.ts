@@ -37,7 +37,7 @@ import { prepare, type Send } from "../shared/send.ts";
 import { previewOf, type Refused, refusedShare, shareAsk } from "../shared/share.ts";
 import { audience } from "../../../access/spaces/contract.ts";
 import { noted, startedWith } from "../shared/summary.ts";
-import { runTool, type ToolAt, toolText } from "../shared/tools.ts";
+import { runTool, type ToolAt, toolsOf, toolText } from "../shared/tools.ts";
 import {
   type Agent,
   type Prompt,
@@ -260,7 +260,7 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
   // What it writes shows as it comes: the turn's live document. Offered no tools (or only those
   // called beside an answer, `aside`), every step is an answer: a contact may read its words as
   // they come too.
-  const tools = (ctx.resources.tools ?? {}) as Record<string, Tool>;
+  const tools = toolsOf(ctx);
   const live = liveWriter(
     ctx,
     t,

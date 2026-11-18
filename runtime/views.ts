@@ -142,6 +142,7 @@ export function presenter(views: Views, reads: () => ReadContext): Render {
     const context = (name: string, hints: Record<string, unknown>): ViewContext => ({
       db,
       resources: source.resources,
+      describe: source.describe,
       name,
       ...(options.viewer ? { viewer: options.viewer } : {}),
       ...(source.actor ? { actor: source.actor } : {}),

@@ -51,6 +51,20 @@ export type Agent = {
   history?: { maxAge?: number };
 };
 
+/**
+ * A tool that is an Action, by name, in the `tools` resource: its input and
+ * description are the Action's (a `description` here says it for the model
+ * instead), and calling it calls the Action, as the agent, for its person.
+ * MCP's servers list Actions the same way.
+ */
+export type ActionTool = {
+  action: string;
+  description?: string;
+  title?: string;
+  offer?: Offer;
+  annotations?: ToolAnnotations;
+};
+
 export type Tool<I = Record<string, unknown>> = {
   description: string;
   input?: JSONSchema;

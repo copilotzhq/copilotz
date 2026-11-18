@@ -12,6 +12,7 @@ import type { Thread } from "../collections/thread.ts";
 import { peopleIn, SEND, type Team } from "../shared/agents.ts";
 import { ageStart } from "../shared/lineage.ts";
 import { sendTool } from "../shared/send.ts";
+import { toolsOf } from "../shared/tools.ts";
 import { trusted } from "./context.ts";
 import type { Agent, ContextEntry, Prompt, Told, Tool } from "../shared/types.ts";
 
@@ -82,7 +83,7 @@ export function prompt(thread: Thread, ctx: ViewContext): Prompt {
   for (const m of history) {
     if (m.from === name) { for (const c of (m.told ?? []) as Told[]) last.set(c.name, c.text); }
   }
-  const resources = (ctx.resources.tools ?? {}) as Record<string, Tool>;
+  const resources = toolsOf(ctx);
   const says = (tool: string) => {
     const offer = resources[tool]?.offer;
     return typeof offer === "function" ? offer(name, thread, ctx) : undefined;

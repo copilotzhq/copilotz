@@ -615,12 +615,18 @@ function toolsOf(plugin: Plugin, actions: string[]) {
   const calls = new Map<string, string>();
   for (const [name, tool] of Object.entries(plugin.resources?.tools ?? {})) {
     if (!plain(tool)) continue;
+    // A tool that is an Action (`{ action }`): its words and input are the Action's.
+    const action = typeof tool.action === "string" && typeof tool.run !== "function"
+      ? plugin.actions?.[tool.action]
+      : undefined;
+    const input = action ? action.input : tool.input;
     tools.push({
       name,
-      summary: words(tool.description),
+      summary: words(tool.description ?? action?.description),
       ...(typeof tool.title === "string" ? { title: tool.title } : {}),
-      ...(plain(tool.input) ? { input: json(tool.input) as JSONSchema } : {}),
+      ...(plain(input) ? { input: json(input) as JSONSchema } : {}),
     });
+    if (action && !calls.has(tool.action as string)) calls.set(tool.action as string, name);
     const source = typeof tool.run === "function" ? String(tool.run) : "";
     for (const [, called] of source.matchAll(/["'`]([\w.:-]+)["'`]/g)) {
       if (actions.includes(called) && !calls.has(called)) calls.set(called, name);

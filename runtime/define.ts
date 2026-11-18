@@ -183,6 +183,8 @@ export type Context = {
 /** What a query (and, read-only, anything rendering) can reach: reads, never writes. */
 export type ReadContext = {
   db: { collection<T = Record<string, unknown>>(name: string): ReadCollection<T> };
+  /** What the app's plugins declare (as `Context.describe`): its Actions' inputs, its Views. */
+  describe(): Description;
   graph: Pick<Graph, "edges">;
   render: Render;
   /** Records what a read used (an embedding's tokens…): the only write a read makes. */
@@ -309,6 +311,8 @@ export type ViewCollection<T> = {
 export type ViewContext<Shown = unknown> = {
   db: { collection<T = Record<string, unknown>>(name: string): ViewCollection<T> };
   resources: Resources;
+  /** What the app's plugins declare (as `Context.describe`); a View the runtime runs has it. */
+  describe?(): Description;
   /** The name of the View being rendered. */
   name: string;
   viewer?: Viewer;

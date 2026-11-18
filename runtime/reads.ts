@@ -7,7 +7,15 @@ import { collection, type Query, type Run } from "./collection.ts";
 import type { Context, ReadContext } from "./define.ts";
 import type { Metrics } from "./metrics.ts";
 import { isRead } from "./ops.ts";
-import { invalid, json, queriesOf, readCall, type Registry, unknown } from "./registry.ts";
+import {
+  described,
+  invalid,
+  json,
+  queriesOf,
+  readCall,
+  type Registry,
+  unknown,
+} from "./registry.ts";
 import type { Actor, Edge } from "./store.ts";
 import { presenter } from "./views.ts";
 import { acting, whereOf } from "./actor.ts";
@@ -51,6 +59,7 @@ export function reading(
   const where = whereOf(actor);
   const ctx: ReadContext = {
     db: { collection: (name) => collection(name, reads, query) },
+    describe: () => described(registry),
     graph: { edges: (query) => reads({ op: "edges", query }) as Promise<Edge[]> },
     render: presenter(
       registry.views,
@@ -107,6 +116,7 @@ export function startup(
   };
   const reads: Omit<ReadContext, "call"> = {
     db: { collection: none },
+    describe: () => described(registry),
     graph: { edges: none },
     render: none,
     record: none,

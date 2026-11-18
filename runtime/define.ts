@@ -704,12 +704,20 @@ export type Labels = {
  * every change to the collection), or a write that only an Action's logic
  * may make (who's in a space, a session, a key).
  */
+/** A write, as a guard is told it. */
+export type WriteKind = "insert" | "update" | "replace" | "delete";
+
 export type Guard = (
   actor: Actor,
   operation: {
     collection: string;
     /** Reads, or writes (inserts, updates, replaces and deletes). */
     access: "read" | "write";
+    /**
+     * For a write, which it is: a rule can let someone create but not delete
+     * (`write === "delete" ? refuse : …`).
+     */
+    write?: WriteKind;
     filter?: Filter;
     /** An outsider's own read or write (REST, the socket), asked before it runs. */
     direct?: true;

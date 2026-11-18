@@ -22,6 +22,7 @@ import type {
   RenderOptions,
   ViewDef,
   WorkerJob,
+  WriteKind,
 } from "./define.ts";
 import { type Blobs, hydrate, isBlobRef, offload, refuseBlobKeys } from "./blobs.ts";
 import { type Problem, problemsOf, updateCheck } from "./updates.ts";
@@ -1106,13 +1107,14 @@ export async function createOwner(
     collection: string,
     filter?: Filter,
     reads = ruleReads,
+    write?: WriteKind,
   ): Promise<Filter | undefined> => {
     if (actor.kind === "system" || collection.startsWith(SYSTEM)) return undefined;
     const rules: Filter[] = [];
     for (const guard of registry.guards as Guard[]) {
       const found = await guard(
         actor,
-        { collection, access, ...(filter ? { filter } : {}) },
+        { collection, access, ...(write ? { write } : {}), ...(filter ? { filter } : {}) },
         reads,
       );
       if (found !== undefined && found !== true) rules.push(found);
@@ -1133,6 +1135,7 @@ export async function createOwner(
     filter?: Filter,
     access: "read" | "write" = "read",
     direct = true,
+    write?: WriteKind,
   ) => {
     if (!inScope(actor, access, collection)) {
       throw forbidden(
@@ -1143,7 +1146,13 @@ export async function createOwner(
     for (const guard of registry.guards as Guard[]) {
       const said = await guard(
         actor,
-        { collection, access, ...(filter ? { filter } : {}), ...(direct ? { direct: true } : {}) },
+        {
+          collection,
+          access,
+          ...(write ? { write } : {}),
+          ...(filter ? { filter } : {}),
+          ...(direct ? { direct: true } : {}),
+        },
         ruleReads,
       );
       if (said !== undefined) found = true;
@@ -1184,7 +1193,14 @@ export async function createOwner(
         case "count":
         case "delete": {
           const access = op.op === "delete" ? "write" : "read";
-          const found = await rule(actor, access, op.collection, op.filter, reads);
+          const found = await rule(
+            actor,
+            access,
+            op.collection,
+            op.filter,
+            reads,
+            op.op === "delete" ? "delete" : undefined,
+          );
           return found ? { ...op, filter: both(op.filter, found) } : op;
         }
         case "aggregate": {
@@ -1209,7 +1225,7 @@ export async function createOwner(
             : op;
         }
         case "insert": {
-          const found = await rule(actor, "write", op.collection, undefined, reads);
+          const found = await rule(actor, "write", op.collection, undefined, reads, "insert");
           if (found && op.docs.some((doc) => !matches(doc, found))) {
             throw forbidden(`That "${op.collection}" document would be out of your reach.`);
           }
@@ -1218,8 +1234,8 @@ export async function createOwner(
         case "update":
         case "replace": {
           const [found, all] = await Promise.all([
-            rule(actor, "write", op.collection, op.filter, reads),
-            rule(actor, "write", op.collection, undefined, reads),
+            rule(actor, "write", op.collection, op.filter, reads, op.op),
+            rule(actor, "write", op.collection, undefined, reads, op.op),
           ]);
           if (all) keep.set(op.collection, all);
           return found ? { ...op, filter: both(op.filter, found) } : op;
@@ -1264,7 +1280,8 @@ export async function createOwner(
       throw forbidden(`"${collection}.${named}" is private: nobody outside reads or writes it.`);
     }
     const filter = "filter" in op ? op.filter : undefined;
-    if (!await ruled(actor, collection, filter, access)) {
+    const write = isRead(op) ? undefined : op.op as WriteKind;
+    if (!await ruled(actor, collection, filter, access, true, write)) {
       throw forbidden(
         `No rule lets ${actor.kind} ${actor.id} ${access} "${collection}" directly: ` +
           (access === "read"

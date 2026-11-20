@@ -31,7 +31,7 @@ import { nameOf } from "./names.ts";
 import { PlanCard } from "./plan-card.tsx";
 import { SharedDialog } from "./plan-shared.tsx";
 import { SignInDialog } from "./plan-sign-in.tsx";
-import { isShared, listed, type Machine, planOf, plans, sharedIn } from "./plans.ts";
+import { isShared, listed, type Machine, planOf, plans, sharedIn } from "./plan-states.ts";
 import { STYLE } from "./style.ts";
 import { say } from "./words.ts";
 

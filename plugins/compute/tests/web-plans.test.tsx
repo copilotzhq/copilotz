@@ -32,7 +32,7 @@ import {
   signingIn,
   standingOf,
   straightTo,
-} from "../computers/views/web/plans.ts";
+} from "../computers/views/web/plan-states.ts";
 import { computersWeb } from "../computers/web.tsx";
 import { test } from "../../../testing/mod.ts";
 

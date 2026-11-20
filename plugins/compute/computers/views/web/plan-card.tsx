@@ -32,7 +32,7 @@ import {
   standingOf,
   startable,
   straightTo,
-} from "./plans.ts";
+} from "./plan-states.ts";
 import { say } from "./words.ts";
 
 export function PlanCard(

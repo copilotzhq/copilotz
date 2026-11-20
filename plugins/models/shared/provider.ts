@@ -8,6 +8,9 @@
  *   `api-key`, a proxy's routing header…). They are applied last. A function
  *   computes them for each request, hearing whom the call is for: an OAuth
  *   token that refreshes, the token of the person an agent works for.
+ * - `call` is set for each call, never by a provider: Actions to ask as whom
+ *   the call is for, for an adapter whose model runs somewhere of theirs (a
+ *   plan's CLI on the person's own computer).
  */
 import type { Actor, ReadContext } from "../../../runtime/mod.ts";
 
@@ -17,6 +20,7 @@ export type Endpoint = {
   headers?:
     | Record<string, string>
     | ((caller: Caller) => Record<string, string> | Promise<Record<string, string>>);
+  call?: Caller["call"];
 };
 
 /**
@@ -26,10 +30,17 @@ export type Endpoint = {
  */
 export type Caller = { actor?: Actor; call?: ReadContext["call"] };
 
-/** The endpoint for one call: its `headers` function, if it has one, hears whom it's for. */
+/**
+ * The endpoint for one call: its `headers` function, if it has one, hears
+ * whom it's for, and its adapter can ask Actions as them (`call`).
+ */
 export const calledBy = (endpoint: Endpoint, caller: Caller): Endpoint => {
   const { headers } = endpoint;
-  return typeof headers === "function" ? { ...endpoint, headers: () => headers(caller) } : endpoint;
+  return {
+    ...endpoint,
+    ...(typeof headers === "function" ? { headers: () => headers(caller) } : {}),
+    ...(caller.call ? { call: caller.call } : {}),
+  };
 };
 
 /**

@@ -1,3 +1,34 @@
+## 1.0.0-rc.57 — 2026-11-20
+
+Agents can run on the plan of the person they work for: Claude, ChatGPT through Codex, or Google AI
+through Antigravity, through the plan's CLI on a computer of theirs, signed in once.
+
+**New:**
+
+- **Agents on people's own plans** (the computers plugin). Three model providers run a model call on
+  the plan's CLI on the person's own computer instead of an API key: `claude-plan/<model>` (Claude
+  Code), `codex-plan/<model>` (Codex, on a ChatGPT plan) and `gemini-plan/<model>` (Antigravity, on
+  a Google AI plan). An agent names one first and an API model next
+  (`["claude-plan/claude-opus-5-5", "anthropic/claude-opus-5-5"]`): with nobody there (a routine),
+  no plan signed in, the computer off or the plan's limit reached, the list moves on at once. The
+  CLI is only the engine: the agent's instructions replace its own, its built-in tools are off, and
+  the agent's tools reach it as MCP tools from the computer program, running where every tool runs.
+  A tool call ends a step while the CLI waits; the next step answers it and goes on. A session per
+  conversation saves time, and the conversation stays the truth: edited or summarized, a fresh
+  session is given it all. Uses are metered as `paid: "subscription"`, at no cost to the app. See
+  [Agents on people's own plans](docs/guides/agents-on-peoples-plans.md).
+- **Signing a plan in, once** (`computer.engines`, `computer.engine.login`): a person's computers
+  and the CLIs each has, signed in or not, and the CLI's own sign-in, run there from the app. It
+  stays on the computer, in a home the program keeps for each CLI, apart from the person's own use
+  of it. A plan runs only on its person's own computer, never on one shared where others' agents
+  work as them. Connected accounts shows them beside the ChatGPT plan, through a new
+  `accountSections` resource other plugins can add to.
+- **The computer program speaks the Agent Client Protocol** to the CLIs (the `computer.agents.*`
+  workloads): Antigravity natively, Claude Code and Codex through its own adapters. No CLI is
+  shipped with it.
+- **A provider's adapter can ask Actions as whom a call is for** (`connection.call`), beside the
+  `headers` function that already heard it.
+
 ## 1.0.0-rc.56 — 2026-11-18
 
 A security fix: `runtime.bytes` no longer serves an outside actor what no rule speaks for. And the

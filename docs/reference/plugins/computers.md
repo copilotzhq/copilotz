@@ -20,13 +20,13 @@ import { computers } from "copilotz/plugins/compute";
 
 It keeps 5 collections, each on the record: every change to one is an event.
 
-| Collection   | Kept as   | Fields                                                                                                                  |
-| ------------ | --------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `computer`   | documents | `owner`, `name`, `secret`, `pending`, `online`, `seen`, `info`, `approve`, `status`, `at`; private: `pending`, `secret` |
-| `desk`       | documents | `in`, `computer`, `owner`, `name`, `online`, `seen`, `info`, `folder`, `approve`, `status`, `answers`, `default`, `at`  |
-| `enrollment` | documents | `owner`, `expires`, `in`, `computer`                                                                                    |
-| `envVar`     | documents | `space`, `app`, `name`, `value`, `sealed`, `secret`, `computers`, `hint`, `by`, `at`; private: `sealed`                 |
-| `preview`    | documents | `computer`, `space`, `folder`, `who`, `port`, `job`, `by`, `visibility`, `at`                                           |
+| Collection   | Kept as   | Fields                                                                                                                             |
+| ------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `computer`   | documents | `owner`, `name`, `secret`, `pending`, `online`, `seen`, `info`, `approve`, `status`, `engines`, `at`; private: `pending`, `secret` |
+| `desk`       | documents | `in`, `computer`, `owner`, `name`, `online`, `seen`, `info`, `folder`, `approve`, `status`, `answers`, `default`, `at`             |
+| `enrollment` | documents | `owner`, `expires`, `in`, `computer`                                                                                               |
+| `envVar`     | documents | `space`, `app`, `name`, `value`, `sealed`, `secret`, `computers`, `hint`, `by`, `at`; private: `sealed`                            |
+| `preview`    | documents | `computer`, `space`, `folder`, `who`, `port`, `job`, `by`, `visibility`, `at`                                                      |
 
 The access rules cover `desk`, `envVar` and `preview`: each document is in a space, and only those
 who reach the space reach it.
@@ -45,27 +45,31 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 26 Actions, people may call 15; agents may call 12; contacts and someone signed out may call
+Of its 30 Actions, people may call 19; agents may call 14; contacts and someone signed out may call
 none.
 
-| Action                 | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                        |
-| ---------------------- | ------ | ----- | ------- | ------ | --- | ------- | ----------- | ----------------------------------------------------------------------------------- |
-| `computer.allowOrigin` | yes    | no    | no      | no     | no  | no      | no          | Lets an agent do a kind of work at a desk when a routine runs, or stops letting it. |
-| `computer.code`        | yes    | no    | no      | no     | no  | no      | no          | A one-time code to connect a computer to a space.                                   |
-| `computer.default`     | yes    | yes   | no      | no     | yes | yes     | no          | Makes a computer the one a space's agents use.                                      |
-| `computer.forget`      | yes    | yes   | no      | no     | yes | yes     | no          | Forgets one of your computers.                                                      |
-| `computer.move`        | yes    | yes   | no      | no     | yes | yes     | no          | Moves one of your computers to another space.                                       |
-| `computer.preview`     | yes    | yes   | no      | no     | yes | yes     | no          | Makes an address for what a job on a space's computer serves.                       |
-| `computer.previews`    | yes    | yes   | no      | no     | yes | yes     | no          | A space's previews: what its computers serve, at addresses of their own.            |
-| `computer.rename`      | yes    | yes   | no      | no     | yes | yes     | no          | Names one of your computers.                                                        |
-| `computer.share`       | yes    | yes   | no      | no     | yes | yes     | no          | Puts one of your computers in a space, for its members and their agents.            |
-| `computer.unpreview`   | yes    | yes   | no      | no     | yes | yes     | no          | Takes a preview away: its address no longer opens.                                  |
-| `computer.unshare`     | yes    | yes   | no      | no     | yes | yes     | no          | Takes a computer out of a space.                                                    |
-| `computer.upgradeAsks` | no     | no    | no      | no     | no  | no      | yes         | Keeps computers' old asks and yeses as chat keeps them.                             |
-| `computer.view`        | yes    | yes   | no      | no     | yes | yes     | no          | Says you have a space's computer open, so it stays awake while you do.              |
-| `computer.work`        | yes    | no    | no      | no     | no  | no      | no          | Works on a space's computer, in its folder there.                                   |
-| `env.set`              | yes    | yes   | no      | no     | yes | yes     | no          | Sets a variable or secret of a space's environment (or an app's own).               |
-| `env.unset`            | yes    | yes   | no      | no     | yes | yes     | no          | Takes a variable or secret away from a space's environment (or an app's own).       |
+| Action                   | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                        |
+| ------------------------ | ------ | ----- | ------- | ------ | --- | ------- | ----------- | ----------------------------------------------------------------------------------- |
+| `computer.allowOrigin`   | yes    | no    | no      | no     | no  | no      | no          | Lets an agent do a kind of work at a desk when a routine runs, or stops letting it. |
+| `computer.code`          | yes    | no    | no      | no     | no  | no      | no          | A one-time code to connect a computer to a space.                                   |
+| `computer.default`       | yes    | yes   | no      | no     | yes | yes     | no          | Makes a computer the one a space's agents use.                                      |
+| `computer.engine`        | yes    | yes   | no      | no     | yes | yes     | no          | Runs one step of an agent's model call on its person's plan, on their computer.     |
+| `computer.engine.cancel` | yes    | yes   | no      | no     | yes | yes     | no          | Stops what an agent's model call is doing on its person's plan.                     |
+| `computer.engine.login`  | yes    | no    | no      | no     | no  | no      | no          | Signs a plan's CLI in on one of your computers, step by step.                       |
+| `computer.engines`       | yes    | no    | no      | no     | no  | no      | no          | Your computers, and which plans' CLIs each runs, signed in or not.                  |
+| `computer.forget`        | yes    | yes   | no      | no     | yes | yes     | no          | Forgets one of your computers.                                                      |
+| `computer.move`          | yes    | yes   | no      | no     | yes | yes     | no          | Moves one of your computers to another space.                                       |
+| `computer.preview`       | yes    | yes   | no      | no     | yes | yes     | no          | Makes an address for what a job on a space's computer serves.                       |
+| `computer.previews`      | yes    | yes   | no      | no     | yes | yes     | no          | A space's previews: what its computers serve, at addresses of their own.            |
+| `computer.rename`        | yes    | yes   | no      | no     | yes | yes     | no          | Names one of your computers.                                                        |
+| `computer.share`         | yes    | yes   | no      | no     | yes | yes     | no          | Puts one of your computers in a space, for its members and their agents.            |
+| `computer.unpreview`     | yes    | yes   | no      | no     | yes | yes     | no          | Takes a preview away: its address no longer opens.                                  |
+| `computer.unshare`       | yes    | yes   | no      | no     | yes | yes     | no          | Takes a computer out of a space.                                                    |
+| `computer.upgradeAsks`   | no     | no    | no      | no     | no  | no      | yes         | Keeps computers' old asks and yeses as chat keeps them.                             |
+| `computer.view`          | yes    | yes   | no      | no     | yes | yes     | no          | Says you have a space's computer open, so it stays awake while you do.              |
+| `computer.work`          | yes    | no    | no      | no     | no  | no      | no          | Works on a space's computer, in its folder there.                                   |
+| `env.set`                | yes    | yes   | no      | no     | yes | yes     | no          | Sets a variable or secret of a space's environment (or an app's own).               |
+| `env.unset`              | yes    | yes   | no      | no     | yes | yes     | no          | Takes a variable or secret away from a space's environment (or an app's own).       |
 
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.
@@ -101,6 +105,8 @@ It answers 2 routes over HTTP:
 It also adds rules every read and write keeps to (`guard`) and lets programs outside the app connect
 as workers.
 
+Other plugins call it through its adapters: `llm` (`engine`).
+
 ## Where it shows
 
 Its Views show to the model.
@@ -110,28 +116,20 @@ Its Views show to the model.
   `read_file`, `start_job`, `stop_job`, `terminal`, `web_search`, `write_file`.
 - **Front ends:** [`computers-terminal`](computers-terminal.md) and
   [`computers-web`](computers-web.md).
-- **What it adds to resources:** `context` (`computer`), `usageNames` (`computer`).
+- **What it adds to resources:** `context` (`computer`), `cost` (`claude-plan/*`, `codex-plan/*`,
+  `gemini-plan/*`), `provider` (`claude-plan`, `codex-plan`, `gemini-plan`), `usageNames`
+  (`computer`).
 
 ## What it needs
 
-You set it in `resources.computers`, and 1 is a secret, kept out of your code.
-
-| Setting                 | Type                                       | Required | What it is                                                                                      |
-| ----------------------- | ------------------------------------------ | -------- | ----------------------------------------------------------------------------------------------- |
-| `computers.approve`     | `Exclude<Asked, "publish" \| "destroy">[]` | no       |                                                                                                 |
-| `computers.key`         | `string`                                   | no       | Secret. Seals spaces' secrets at rest (their environment): any long secret, from the app's own. |
-| `computers.codeMinutes` | `number`                                   | no       | Seals spaces' secrets at rest (their environment): any long secret, from the app's own.         |
-| `computers.url`         | `string`                                   | no       | Seals spaces' secrets at rest (their environment): any long secret, from the app's own.         |
-| `computers.previews`    | `PreviewsSettings`                         | no       | Seals spaces' secrets at rest (their environment): any long secret, from the app's own.         |
-
-It also reads `computerWake`, `directory`, `downloads`, `org` and `origins`, resource kinds the app
-and other plugins fill.
+Nothing to set. It reads `computerWake`, `directory`, `downloads`, `org` and `origins`, resource
+kinds the app and other plugins fill.
 
 ## What it requires
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.56`.
+It ships with `copilotz@1.0.0-rc.57`.
 
 ## What it does on its own
 

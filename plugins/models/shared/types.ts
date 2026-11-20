@@ -89,6 +89,8 @@ export type LlmSettings = {
 export type LlmRequest = LlmSettings & {
   connection: Endpoint & { model: string };
   info?: ModelInfo;
+  /** What the call is for (thread, agent, turn…), as its use is tagged. */
+  tags?: Record<string, string>;
   instructions?: string;
   messages: LlmMessage[];
   tools?: LlmTool[];

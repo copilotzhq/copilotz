@@ -33,14 +33,15 @@ Its Views show on the web.
 
 ## What it needs
 
-Nothing to set. It reads `agentKinds`, resource kinds the app and other plugins fill.
+Nothing to set. It reads `accountSections` and `agentKinds`, resource kinds the app and other
+plugins fill.
 
 ## What it requires
 
 The runtime doesn't start without [`accounts`](accounts.md) and [`web-shell`](web-shell.md): add
 them too.
 
-It ships with `copilotz@1.0.0-rc.56`.
+It ships with `copilotz@1.0.0-rc.57`.
 
 ## Listing
 

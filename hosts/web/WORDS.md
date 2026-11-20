@@ -257,6 +257,116 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.yourPersonalSpace` | your Personal space |
 | `chat.yourRecording` | Your recording |
 
+## computers
+
+| Key | English |
+|---|---|
+| `computers.anotherComputer` | Another computer |
+| `computers.antigravityAbout` | Your agents run on your Google AI plan, through Antigravity on your computer. |
+| `computers.antigravityCli` | Antigravity |
+| `computers.antigravityPlan` | Google AI plan |
+| `computers.antigravityTitle` | Google AI plan, through Antigravity |
+| `computers.askMeFirst` | Ask me first in {spaces} |
+| `computers.cancel` | Cancel |
+| `computers.checkAgain` | Check again |
+| `computers.checkedAt` | last checked {time} |
+| `computers.checkFailed` | Couldn't check your computers: {why} |
+| `computers.checking` | Checking your computers… |
+| `computers.claudeAbout` | Your agents run on your Claude plan, through Claude Code on your computer. |
+| `computers.claudeCli` | Claude Code |
+| `computers.claudePlan` | Claude plan |
+| `computers.claudeTitle` | Claude plan |
+| `computers.close` | Close |
+| `computers.codeHint` | If the page shows a code once you've signed in, paste it here. |
+| `computers.codeLabel` | The code from the sign-in page |
+| `computers.codePlaceholder` | Paste the code |
+| `computers.codeSent` | Code sent: finishing… |
+| `computers.codexAbout` | Your agents run on your ChatGPT plan, through Codex on your computer. |
+| `computers.codexCli` | Codex |
+| `computers.codexPlan` | ChatGPT plan |
+| `computers.codexTitle` | ChatGPT plan, through Codex |
+| `computers.connectComputer` | Connect a computer |
+| `computers.copyCode` | Copy the code |
+| `computers.done` | Done |
+| `computers.doneAs` | Signed in as {account} |
+| `computers.doneNext` | Your agents run on it from now on, in every conversation and space here. |
+| `computers.doneOn` | On {computer}, through {cli} |
+| `computers.doneTitle` | Your {plan} is signed in |
+| `computers.failedEnded` | It stopped without signing in. Try again, or read what it said below. |
+| `computers.failedStart` | Couldn't sign in: {why} |
+| `computers.failedTitle` | {cli} didn't sign in |
+| `computers.gotCode` | The page gave you a code? |
+| `computers.hideInstall` | Hide |
+| `computers.howToFix` | How to use it |
+| `computers.howToInstall` | How to install |
+| `computers.installAnywhere` | In a terminal on that computer, run: |
+| `computers.installCommand` | The command that installs {cli} |
+| `computers.installIn` | In a terminal on {computer}, run: |
+| `computers.installMissing` | {cli} isn't installed on {computer} yet. In a terminal there, run: |
+| `computers.installThen` | Then check again here. It's {cli}'s official install. |
+| `computers.keepAsIs` | Keep it as it is |
+| `computers.listMore` | {rest} and {last} |
+| `computers.listPair` | {first} and {second} |
+| `computers.moreOn` | More for {computer} |
+| `computers.noComputerText` | Plans run through their apps on a computer of yours, a Mac, a Linux or Windows PC, while it's on. Connect one, then sign in here. |
+| `computers.noComputerTitle` | Connect a computer of yours first |
+| `computers.notOpened` | Not on that screen? Open it here |
+| `computers.offline` | Offline |
+| `computers.offlineNote` | {computer} is offline. Turn it on, or start its computer program, then try again. |
+| `computers.openSignIn` | Open the sign-in page |
+| `computers.openSpace` | Open {space} |
+| `computers.optionAsleep` | Asleep: it wakes up first |
+| `computers.optionReady` | Ready to sign in |
+| `computers.output` | What {cli} says |
+| `computers.ownSignIn` | It's your agents' own sign-in: your own use of {cli} on that computer stays as it is. |
+| `computers.paletteGroup` | General |
+| `computers.paletteKeywords` | plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google |
+| `computers.palettePlans` | Plans on your computers |
+| `computers.paletteSignedIn` | Signed in on {computer} |
+| `computers.paletteSignedInMany` | one: Signed in on {count} computer / other: Signed in on {count} computers |
+| `computers.paletteSignIn` | Sign in to your {plan} |
+| `computers.personal` | your Personal space |
+| `computers.plansAbout` | Your agents can run on a plan you already pay for, instead of an API key. Sign in once, through its app on a computer of yours, and it works in every conversation and space here. |
+| `computers.plansPrivate` | Nothing is charged here for those calls. The sign-in stays on your computer: this app never sees it. |
+| `computers.plansTitle` | Plans on your computers |
+| `computers.rowInstalled` | Installed, not signed in |
+| `computers.rowMissing` | {cli} isn't installed |
+| `computers.rowOld` | Didn't say: its computer program may need an update |
+| `computers.rowSharedSomewhere` | Shared with others' agents |
+| `computers.rowSignedIn` | Signed in |
+| `computers.rowSignedInAs` | Signed in as {account} |
+| `computers.rowUnchecked` | Not checked yet |
+| `computers.runsWhileOn` | Your agents use it while {computer} is on; until then, they use the app's models. |
+| `computers.send` | Send |
+| `computers.sharedFix` | To use it for your plan, have their agents ask you first there: then nothing runs on it without your yes. Or take it out of {spaces}, from its menu there. |
+| `computers.sharedNotice` | {computer} is shared with others' agents in {spaces}, so your plans can't run on it. |
+| `computers.sharedNoticeSomewhere` | {computer} is shared with others' agents, so your plans can't run on it. |
+| `computers.sharedTitle` | {computer} is shared with others' agents |
+| `computers.sharedWhy` | In {spaces}, each person's agents work on {computer} as you. Signed in there, your plan would be theirs to use too, so it can't run on it. |
+| `computers.sharedWhySomewhere` | Others' agents work on {computer} as you, where it's shared. Signed in there, your plan would be theirs to use too, so it can't run on it. |
+| `computers.signedIn` | Signed in |
+| `computers.signIn` | Sign in |
+| `computers.signInAgain` | Sign in again |
+| `computers.signInOn` | Through {cli}, on {computer}. |
+| `computers.signInOther` | Sign in on another computer |
+| `computers.signInThrough` | Through {cli}, on a computer of yours. |
+| `computers.signInTitle` | Sign in to your {plan} |
+| `computers.start` | Start signing in |
+| `computers.stepCode` | Paste the code it gives you |
+| `computers.stepEnterCode` | Open the sign-in page, sign in with the account that has your plan, and enter this code there: |
+| `computers.stepSignIn` | Sign in to your {plan} |
+| `computers.stepSignInHere` | Open the sign-in page, and sign in with the account that has your plan. |
+| `computers.stepSignInThere` | A sign-in page opens in the browser on {computer}. Sign in there, with the account that has your plan. |
+| `computers.stepSignInWait` | The sign-in page shows here as soon as {cli} gives it. |
+| `computers.stepStart` | Starting {cli} on {computer} |
+| `computers.stepWake` | Waking {computer} |
+| `computers.tryAgain` | Try again |
+| `computers.version` | version {version} |
+| `computers.waiting` | Waiting for the sign-in to finish… |
+| `computers.wakeNote` | {computer} wakes up first: it takes a moment. |
+| `computers.whichComputer` | On which computer? |
+| `computers.whichHint` | Your agents' calls run there, so it needs to be on while they work. |
+
 ## host
 
 | Key | English |

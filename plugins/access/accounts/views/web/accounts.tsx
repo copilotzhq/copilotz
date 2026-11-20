@@ -5,9 +5,11 @@
  * tokens), live: renewed, lost or disconnected, it shows at once.
  * Connecting opens its dialog; the address opens one too
  * (`?connect=chatgpt`: the command palette's), and says how a connection
- * that came back to the app went (`?connected=`, `?failed=…&why=`).
+ * that came back to the app went (`?connected=`, `?failed=…&why=`). Below
+ * the providers, the sections other front ends add (`accountSections`, each
+ * shown with the address's query), then the person's own API keys.
  */
-import { type ReactNode, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
   Button,
@@ -19,7 +21,7 @@ import {
   Skeleton,
   Title,
 } from "../../../../../hosts/web/mod.ts";
-import type { Account, ProviderShown } from "../../contract.ts";
+import type { Account, AccountSection, ProviderShown } from "../../contract.ts";
 import { ProviderCard } from "./card.tsx";
 import { ConnectDialog } from "./connect.tsx";
 import { DisconnectDialog } from "./disconnect.tsx";
@@ -49,24 +51,44 @@ export const accountsView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode
       </Page>
     );
   }
+  // Other front ends' sections, below the providers (`accountSections`), as the address asks.
+  const sections = sectionsOf(ctx.resources.accountSections).map((section) => (
+    <Fragment key={section.key}>
+      {ctx.show(section.view, {}, { query, mode: density })}
+    </Fragment>
+  ));
   // The person's own API keys, below their accounts (`accounts.keys`).
   const keys = ctx.show("accounts.keys", {});
   return (
     <Page title={TITLE} description={ABOUT} icon="lock" density={density}>
       <Title text={TITLE} />
       {style}
-      <AccountsBody providers={providers} accounts={accounts} query={query} call={ctx.call} />
+      <AccountsBody
+        providers={providers}
+        accounts={accounts}
+        query={query}
+        call={ctx.call}
+        sections={sections}
+      />
       {keys}
     </Page>
   );
 };
 
+/** The sections an `accountSections` resource adds, lowest `order` first (by key when they tie). */
+export const sectionsOf = (given: unknown): (AccountSection & { key: string })[] =>
+  Object.entries((given ?? {}) as Record<string, AccountSection | null>)
+    .flatMap(([key, section]) => section?.view ? [{ ...section, key }] : [])
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.key.localeCompare(b.key));
+
 function AccountsBody(
-  { providers, accounts, query, call }: {
+  { providers, accounts, query, call, sections }: {
     providers: ProviderShown[];
     accounts: Account[];
     query: Record<string, string>;
     call: Call;
+    /** Other front ends' sections, shown below the providers. */
+    sections: ReactNode[];
   },
 ): ReactNode {
   const asked = providers.some((p) => p.name === query.connect) ? query.connect : undefined;
@@ -89,11 +111,13 @@ function AccountsBody(
   const leavingAccount = accountOf(leaving);
 
   if (!providers.length) {
-    return (
-      <EmptyState icon="lock" title="Nothing to connect yet">
-        This app doesn't offer accounts to connect.
-      </EmptyState>
-    );
+    return sections.length
+      ? <div className="accounts">{sections}</div>
+      : (
+        <EmptyState icon="lock" title="Nothing to connect yet">
+          This app doesn't offer accounts to connect.
+        </EmptyState>
+      );
   }
   return (
     <div className="accounts">
@@ -145,6 +169,7 @@ function AccountsBody(
           ends them at the provider too.
         </span>
       </p>
+      {sections}
       {connectingTo
         ? (
           <ConnectDialog

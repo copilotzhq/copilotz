@@ -9,6 +9,7 @@ import { assert, assertEquals, assertNotEquals } from "@std/assert";
 import "../../../plugins/agents/web.tsx";
 import "../../../plugins/access/web.tsx";
 import "../../../plugins/billing/web.tsx";
+import "../../../plugins/compute/web.tsx";
 import "../../../plugins/interfaces/web.tsx";
 import "../mod.ts";
 import { definePlugin } from "../../../runtime/mod.ts";

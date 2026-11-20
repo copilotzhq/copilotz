@@ -37,6 +37,12 @@ const computerSchema = {
       properties: { kind: { type: "string" }, state: { type: "string" }, size: { type: "string" } },
       required: ["kind"],
     },
+    /**
+     * The plans' CLIs it runs agents' model calls on, by engine (`claude`,
+     * `codex`, `antigravity`), as it last said (see shared/engines.ts):
+     * installed, signed in, as whom, and when.
+     */
+    engines: { type: "object" },
     at: { type: "string" },
   },
   required: ["owner", "secret", "online", "at"],

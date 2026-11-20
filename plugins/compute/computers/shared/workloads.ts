@@ -57,6 +57,14 @@ export const WORK = {
   http: "computer.http",
   /** A folder of a space, as a gzipped tar, streamed: `ArchiveInput`. */
   archive: "computer.archive",
+  /** Which plans' CLIs (engines) the computer has, and whether each is signed in: `EngineStatus[]`. */
+  agentsStatus: "computer.agents.status",
+  /** Signing an engine in, polled like the terminal: `LoginInput` → `LoginState`. */
+  agentsLogin: "computer.agents.login",
+  /** One step of a model call on an engine: `PromptInput`, its `PromptEvent`s streamed as JSON lines. */
+  agentsPrompt: "computer.agents.prompt",
+  /** Stops what an engine's session is doing: `{ session }` → `{ ok: true }`. */
+  agentsCancel: "computer.agents.cancel",
 } as const;
 
 export type Enrolled = { id: string; secret: string };
@@ -252,3 +260,96 @@ export type HttpResponseHead = { status: number; headers: [string, string][] };
  */
 export type ArchiveInput = { scope: Scope; path?: string; all?: boolean; maxBytes?: number };
 export type SearchResult = { title: string; url: string; snippet: string };
+
+/**
+ * An engine: a plan's CLI on this computer (`claude`, `codex`,
+ * `antigravity`), which an agent's model calls can run on. Each has a home of
+ * its own on the computer (its sign-in, its sessions), apart from the
+ * person's own use of it.
+ */
+export type EngineStatus = {
+  engine: string;
+  installed: boolean;
+  version?: string;
+  signedIn: boolean;
+  /** Who it's signed in as, when it says. */
+  account?: string;
+};
+
+/** `computer.agents.status`: these engines (every one unless given). */
+export type StatusInput = { engines?: string[] };
+
+/**
+ * `computer.agents.login`: signs an engine in, polled like the terminal. The
+ * first call starts its CLI's sign-in; `input` goes to it (a code pasted
+ * after signing in elsewhere); an empty call polls; `stop` ends it.
+ */
+export type LoginInput = { engine: string; input?: string; stop?: boolean };
+
+export type LoginState = {
+  state: "running" | "done";
+  /** What it wrote since the last answer. */
+  output: string;
+  signedIn: boolean;
+  /** The sign-in link, once it's shown one. */
+  url?: string;
+};
+
+/** A tool an engine's model may call, as MCP has it. */
+export type EngineTool = { name: string; description?: string; inputSchema: unknown };
+
+/** The answer to a call the model made (a `call` event's `id`): text, or an error's words. */
+export type CallResult = { id: string; content: string; isError?: boolean };
+
+/**
+ * `computer.agents.prompt`: one step of a model call on an engine. Its
+ * input is one JSON value; its output, `PromptEvent`s as JSON lines.
+ *
+ * A session is fixed to its engine, model, instructions and tools. A prompt
+ * runs on until the engine's turn ends; a step's stream ends after the calls
+ * the model makes (`call`), which the prompt waits on, held, and the next
+ * step, the same `id` again, answers (`results`) and goes on from (`from`).
+ * Cancelling a step's stream only leaves it: the prompt goes on.
+ */
+export type PromptInput = {
+  engine: string;
+  model: string;
+  /** The engine's session to continue (from an earlier `session` event); a fresh one when absent. */
+  session?: string;
+  instructions: string;
+  /** The agent's tools for this step, as MCP tools. */
+  tools: EngineTool[];
+  /** New input (ACP content blocks); empty when only answering held calls. */
+  prompt: unknown[];
+  /** The prompt's id: the same id again reattaches to it instead of prompting again. */
+  id: string;
+  /** Reattaching: the first event index to send (events before it were already received). */
+  from?: number;
+  /** Answers to held tool calls, settled before reattaching. */
+  results?: CallResult[];
+};
+
+/** What a prompt's token use was, as its engine said. */
+export type EngineUsage = { input: number; output: number; cached?: number; cacheWrite?: number };
+
+/**
+ * What a prompt streams, numbered (`i`) from 0 within it. A fresh session's
+ * first event is `session`; a step ends with `call`s, `done` or `failed`.
+ * `failed`'s `code`: `missing` (no CLI), `signed_out`, `limit` (the plan's
+ * usage or rate limit), `model` (one the plan doesn't have), `stale` (the
+ * session isn't this one anymore: start a fresh one), `lost` (its events
+ * were dropped), `busy` (another prompt runs in it), or `failed`.
+ */
+export type PromptEvent =
+  & { i: number }
+  & (
+    | { type: "session"; session: string }
+    /** An ACP `SessionUpdate`: text, thinking, a tool call's progress. */
+    | { type: "update"; update: unknown }
+    | { type: "call"; call: { id: string; name: string; arguments: unknown } }
+    | { type: "done"; stopReason: string; usage?: EngineUsage }
+    | { type: "failed"; code: string; message: string }
+  );
+
+/** `computer.agents.cancel`: stops what the session is doing, and fails its held calls. */
+export type CancelInput = { session: string };

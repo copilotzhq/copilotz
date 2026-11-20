@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.57 — 2026-11-20
 
 Agents can run on the plan of the person they work for: Claude, ChatGPT through Codex, or Google AI
 through Antigravity, through the plan's CLI on a computer of theirs, signed in once.

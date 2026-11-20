@@ -79,7 +79,7 @@ plugins fill.
 
 The runtime doesn't start without [`chat`](chat.md): add it too.
 
-It ships in a package of its own, `@copilotz/team@1.0.0-rc.56`, for `copilotz` `1.0.0-rc.56`:
+It ships in a package of its own, `@copilotz/team@1.0.0-rc.57`, for `copilotz` `1.0.0-rc.57`:
 install it beside `copilotz`.
 
 ## Listing

@@ -293,3 +293,13 @@ test({
     }
   },
 });
+
+test("two conversations that start alike are two answers: their prompts' ids differ", async () => {
+  await setup(async (s) => {
+    await s.send("who's on call?", ana);
+    await s.send("who's on call?", ana);
+    const fresh = s.asked.filter((input) => !input.session);
+    assertEquals(fresh.length, 2);
+    assert(fresh[0].id !== fresh[1].id, "each conversation's own");
+  });
+});

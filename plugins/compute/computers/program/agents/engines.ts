@@ -34,12 +34,22 @@ import { agentError, spawnPeer } from "./rpc.ts";
 import type { Engine, Peer, Ran } from "./types.ts";
 import { writeWhole } from "./write.ts";
 
-/** Providers' credentials: never in an engine's environment. */
+/**
+ * Never in an engine's environment: providers' credentials, and what would
+ * send its calls elsewhere (another cloud's bill, another host given the
+ * plan's token) than the plan it's signed in to.
+ */
 const CREDENTIALS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
   "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "AWS_BEARER_TOKEN_BEDROCK",
   "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
   "GOOGLE_APPLICATION_CREDENTIALS",

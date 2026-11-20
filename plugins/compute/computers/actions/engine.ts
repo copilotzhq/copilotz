@@ -89,6 +89,17 @@ export const engineAction = defineAction({
     }
     const touched = touch(ctx, computer._id);
     yield { type: "computer", computer: computer._id };
+    // Its session, or the answer it was in, is on another computer: a fresh one, given it all.
+    if (!same && (input.session || input.from !== undefined || input.results)) {
+      await touched;
+      yield {
+        i: 0,
+        type: "failed",
+        code: "stale",
+        message: "The session is on another computer: start afresh here",
+      };
+      return;
+    }
     const job = await ctx.workers.dispatch("computer", computer._id, WORK.agentsPrompt, {
       engine: input.engine,
       model: input.model,

@@ -51,8 +51,9 @@ export async function sharedWithOthers(ctx: Context, computer: string): Promise<
 
 /**
  * The computer `person`'s calls on `engine` run on: theirs, signed in to it
- * when it last said, and not shared with others' agents; `wanted` (where
- * their session is) first, then one online, then the most recently seen.
+ * when it last said, and not shared with others' agents; one online first
+ * (`wanted`, where their session is, before others), then the most recently
+ * seen.
  * With none it fails at once, without asking any computer, so a model list
  * moves on to its next without a wait.
  */
@@ -74,7 +75,7 @@ export async function engineComputer(
     );
   }
   const ranked = signed.sort((a, b) =>
-    Number(b._id === wanted) - Number(a._id === wanted) || Number(b.online) - Number(a.online)
+    Number(b.online) - Number(a.online) || Number(b._id === wanted) - Number(a._id === wanted)
   );
   for (const computer of ranked) {
     if (!await sharedWithOthers(ctx, computer._id)) return computer;

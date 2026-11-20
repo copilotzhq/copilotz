@@ -184,6 +184,7 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
               temperature,
               options,
               info: m.info,
+              ...(request.tags ? { tags: request.tags } : {}),
               instructions: request.instructions,
               messages: filesFor(media, request.messages.map(stateFor(m.id, same))),
               tools: request.tools ?? [],

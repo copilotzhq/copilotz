@@ -42,7 +42,7 @@ export type SessionsOptions = {
   idleMs?: number;
   /** A prompt nobody came back to this long goes, with its session (a day unless given). */
   heldMs?: number;
-  /** The most a prompt's events not yet received may be (4 MiB unless given). */
+  /** The most a prompt's events not yet received may be (16 MiB unless given). */
   maxBuffer?: number;
   /** How long after a step's first call others still join it (150 ms unless given). */
   stepMs?: number;
@@ -70,13 +70,13 @@ const CODES = new Set([
 ]);
 
 /** The updates a prompt passes on: what the model says and thinks, and its calls' progress. */
-const PASSED = new Set([
-  "agent_message_chunk",
-  "agent_thought_chunk",
-  "tool_call",
-  "tool_call_update",
-  "plan",
-]);
+/**
+ * What a prompt's events carry of an agent's updates: its text, and that it
+ * thinks (without the thought: the plugin only hears that it's at work), so
+ * a long answer fits its buffer. A tool's progress isn't passed: its call
+ * comes to the MCP server.
+ */
+const PASSED = new Set(["agent_message_chunk", "agent_thought_chunk"]);
 
 /** How long a cancelled prompt gets to end before its session goes. */
 const CANCELLING = 10_000;
@@ -170,7 +170,7 @@ export function createSessions(options: SessionsOptions): Sessions {
   const { engines, log } = options;
   const idleMs = options.idleMs ?? 30 * 60_000;
   const heldMs = options.heldMs ?? 24 * 60 * 60_000;
-  const maxBuffer = options.maxBuffer ?? 4 * 1024 * 1024;
+  const maxBuffer = options.maxBuffer ?? 16 * 1024 * 1024;
   const stepMs = options.stepMs ?? 150;
   const mcp = createMcp(log);
   const sessions = new Map<string, Session>();
@@ -271,7 +271,12 @@ export function createSessions(options: SessionsOptions): Sessions {
         method !== "session/update" || !session?.prompting || params?.sessionId !== session.id ||
         !session.prompt || !PASSED.has(update?.sessionUpdate as string)
       ) return;
-      emit(session.prompt, { type: "update", update });
+      emit(session.prompt, {
+        type: "update",
+        update: update?.sessionUpdate === "agent_thought_chunk"
+          ? { sessionUpdate: "agent_thought_chunk" }
+          : update,
+      });
     });
     try {
       // deno-lint-ignore no-explicit-any
@@ -342,10 +347,26 @@ export function createSessions(options: SessionsOptions): Sessions {
     if (claimed) {
       const running = busy.get(claimed);
       if (running && running !== prompt.id) {
+        // The conversation went on without that answer (its turn was stopped, or went on
+        // elsewhere): it's left, and the session, which has it, isn't the conversation's anymore.
+        const left = sessions.get(claimed);
+        if (left) {
+          left.peer.notify("session/cancel", { sessionId: left.id });
+          if (left.prompt && !left.prompt.ended) {
+            failHeld(left.prompt, "The conversation went on without this answer");
+            emit(left.prompt, {
+              type: "failed",
+              code: "stale",
+              message: "Left for a newer prompt",
+            });
+          }
+          drop(left);
+        }
+        busy.delete(claimed);
         return emit(prompt, {
           type: "failed",
-          code: "busy",
-          message: "Another prompt is running in this session",
+          code: "stale",
+          message: "That session's last answer was left unfinished: start afresh",
         });
       }
       busy.set(claimed, prompt.id);
@@ -375,7 +396,10 @@ export function createSessions(options: SessionsOptions): Sessions {
       session.prompt = prompt;
       prompt.session = session;
       session.used = Date.now();
-      if (session.closed || prompt.ended) return;
+      if (prompt.ended) return;
+      if (session.closed) {
+        return emit(prompt, { type: "failed", code: "lost", message: "The session closed" });
+      }
       session.prompting = true;
       try {
         const answer = await session.peer.request<PromptResponse>("session/prompt", {

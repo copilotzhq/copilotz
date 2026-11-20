@@ -52,8 +52,19 @@ type Ask = {
   prompt: unknown[];
 };
 
-/** A step's ask, and what the session will have been given (`given` messages, their `hash`). */
-type Plan = { ask: Ask; given: number; hash: string };
+/**
+ * A step's ask, and what the session will have been given (`given` messages,
+ * their `hash`); `left`: an answer the conversation went on without (its
+ * turn stopped, or waiting), to stop first.
+ */
+type Plan = { ask: Ask; given: number; hash: string; left?: { computer: string; session: string } };
+
+/**
+ * A prompt's id: the same for a step tried again (the same turn, the same
+ * conversation, what it's given), and no other conversation's.
+ */
+const idOf = async (request: LlmRequest, of: string) =>
+  (await sha256(`${request.tags?.thread ?? ""}:${request.tags?.turn ?? ""}:${of}`)).slice(0, 32);
 
 const encoder = new TextEncoder();
 
@@ -159,7 +170,7 @@ async function planOf(request: LlmRequest): Promise<Plan> {
         ask: {
           computer: state.computer,
           session: state.session,
-          id: (await sha256(`${state.session}:${hash}`)).slice(0, 32),
+          id: await idOf(request, `${state.session}:${hash}`),
           prompt: input(after, false),
         },
         given,
@@ -167,7 +178,10 @@ async function planOf(request: LlmRequest): Promise<Plan> {
       };
     }
   }
-  return fresh(request, state?.computer);
+  const plan = await fresh(request, state?.computer);
+  return state?.prompt
+    ? { ...plan, left: { computer: state.computer, session: state.session } }
+    : plan;
 }
 
 /** A session that starts afresh, given the whole history. */
@@ -177,7 +191,7 @@ async function fresh(request: LlmRequest, computer?: string): Promise<Plan> {
   return {
     ask: {
       ...(computer ? { computer } : {}),
-      id: (await sha256(`new:${hash}`)).slice(0, 32),
+      id: await idOf(request, `new:${hash}`),
       prompt: input(messages, true),
     },
     given: messages.length,
@@ -195,6 +209,10 @@ export const engineAdapter: LlmAdapter = {
       throw engineFailure("engine_missing", "This call isn't for anyone: no plan to run it on.");
     }
     let plan = await planOf(request);
+    // The answer it left stops now, while this job can still ask (its CLI waits on nobody).
+    if (plan.left) {
+      await call("computer.engine.cancel", plan.left).catch(() => {});
+    }
     for (let tries = 0;; tries++) {
       let computer = plan.ask.computer;
       let session = plan.ask.session;
@@ -239,10 +257,17 @@ export const engineAdapter: LlmAdapter = {
               input: (event.call.arguments ?? {}) as Record<string, unknown>,
             });
           } else if (event.type === "done") {
+            // Refused with nothing said (a provider's policy): the next model, not an empty answer.
+            if (event.stopReason === "refusal" && !wrote && !calls.length) {
+              throw engineFailure("engine_refusal", "The plan's model declined to answer.");
+            }
             if (event.usage) yield { type: "usage", ...event.usage };
           } else if (event.type === "failed") {
-            // A session that can't go on (gone, or given other tools): once, afresh.
-            if ((event.code === "stale" || event.code === "lost") && !wrote && !tries) {
+            // A session that can't go on (gone, given other tools, left busy elsewhere): once, afresh.
+            if (
+              (event.code === "stale" || event.code === "lost" || event.code === "busy") &&
+              !wrote && !tries
+            ) {
               stale = event.code;
               break;
             }

@@ -202,11 +202,12 @@ posix(
     assert(call.type === "call");
     assertEquals([call.call.name, call.call.arguments], ["lookup", { q: "on call" }]);
     assertEquals(said(one), "calling ");
+    // A tool's progress isn't passed on: the call itself is.
     assert(
-      one.some((e) =>
+      !one.some((e) =>
         e.type === "update" && (e.update as { sessionUpdate: string }).sessionUpdate === "tool_call"
       ),
-      "the call shows",
+      "only the call",
     );
     const two = await step({
       ...first,
@@ -247,7 +248,7 @@ posix(
 );
 
 posix(
-  "a session goes on in the same process; another prompt while one runs is busy; another agent is stale",
+  "a session goes on in the same process; another agent's is stale; a new prompt leaves one still running, and cancel ends one",
   engines(async ({ step, open, signIn, work }) => {
     signIn("claude");
     const first = await step(ask("pid"));
@@ -256,31 +257,35 @@ posix(
     assertEquals(again.some((e) => e.type === "session"), false);
     assertEquals(said(again), said(first));
     assertEquals(said(await step(ask("history", { session }))), "3");
-
-    const waiting = ask("wait", { session });
-    const reader = await open(waiting);
-    await until(async () => {
-      const busy = last(await step(ask("say hi", { session })));
-      return busy.type === "failed" && busy.code === "busy";
-    }, "a second prompt is busy");
-    const stale = last(
-      await step(ask("say hi", { session, instructions: "You are someone else." })),
-    );
-    assertEquals(stale.type === "failed" && stale.code, "busy");
-    assertEquals(await work(WORK.agentsCancel, { session }), { ok: true });
-    const ended = await events(reader);
-    assertEquals(last(ended).type === "done" && last(ended), {
-      i: last(ended).i,
-      type: "done",
-      stopReason: "cancelled",
-      usage: { input: 10, output: 5, cached: 3, cacheWrite: 2 },
-    });
     for (
       const other of [{ instructions: "You are someone else." }, { model: "opus" }, { tools: [] }]
     ) {
       const failed = last(await step(ask("say hi", { session, ...other })));
       assertEquals(failed.type === "failed" && failed.code, "stale");
     }
+
+    // The conversation went on without an answer still running (its turn stopped): that answer is
+    // left, and its session, which has it, with it; the new prompt starts afresh.
+    const reader = await open(ask("wait", { session }));
+    await until(async () => {
+      const left = last(await step(ask("say hi", { session })));
+      return left.type === "failed" && left.code === "stale";
+    }, "a new prompt leaves the running one");
+    const ended = last(await events(reader));
+    assertEquals(ended.type === "failed" && ended.code, "stale");
+
+    // Cancelled, a running prompt ends as cancelled, with what it used.
+    const other = sessionOf(await step(ask("pid")))!;
+    const waiting = await open(ask("wait", { session: other }));
+    await new Promise((r) => setTimeout(r, 1000));
+    assertEquals(await work(WORK.agentsCancel, { session: other }), { ok: true });
+    const cancelled = last(await events(waiting));
+    assertEquals(cancelled.type === "done" && cancelled, {
+      i: cancelled.i,
+      type: "done",
+      stopReason: "cancelled",
+      usage: { input: 10, output: 5, cached: 3, cacheWrite: 2 },
+    });
   }),
 );
 

@@ -2,7 +2,7 @@
 title: "A public MCP server: docs and data for anyone"
 description: "A read-only MCP server anyone can call, that keeps nothing: what runs as the public, what it may read, what it lists, its limits, and the one rule for its tools."
 section: Guides
-order: 6
+order: 7
 ---
 
 # A public MCP server: docs and data for anyone

@@ -40,7 +40,10 @@
  *   disconnected: the audit trail, with nothing secret in it.
  *
  * Its web front end is `accountsWeb` (web.tsx): the Connected accounts page,
- * and in a chat, a quiet word when its agents run on your plan.
+ * and in a chat, a quiet word when its agents run on your plan. Other front
+ * ends add sections to that page, below the providers, with an
+ * `accountSections` resource (`{ <key>: { view, order } }`, see contract.ts):
+ * computers' plans, signed in on the person's own computers, are one.
  *
  * ```ts
  * plugins: [...access, accounts, definePlugin({ name: "app", resources: {

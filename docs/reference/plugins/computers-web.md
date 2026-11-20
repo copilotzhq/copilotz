@@ -27,12 +27,12 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `computer`, `computer.ask`, `computer.palette`, `computer.routine`,
-  `computer.space`, `computer.step`, `env.space`.
-- **What it adds to resources:** `askViews` (`destroy`, `jobs`, `publish`, `terminal`, `writes`),
-  `palette` (`computers`), `routinePanels` (`computers`), `spaceTabs` (`computer`, `env`),
-  `toolViews` (`browser`, `edit_file`, `job_logs`, `list_files`, `list_jobs`, `read_file`,
-  `start_job`, `stop_job`, `terminal`, `web_search`, `write_file`).
+- **On the web:** `computer`, `computer.ask`, `computer.palette`, `computer.plans`,
+  `computer.plans.palette`, `computer.routine`, `computer.space`, `computer.step`, `env.space`.
+- **What it adds to resources:** `accountSections` (`plans`), `askViews` (`destroy`, `jobs`,
+  `publish`, `terminal`, `writes`), `palette` (`computers`, `plans`), `routinePanels` (`computers`),
+  `spaceTabs` (`computer`, `env`), `toolViews` (`browser`, `edit_file`, `job_logs`, `list_files`,
+  `list_jobs`, `read_file`, `start_job`, `stop_job`, `terminal`, `web_search`, `write_file`).
 
 ## What it needs
 

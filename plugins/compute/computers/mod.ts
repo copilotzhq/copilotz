@@ -16,6 +16,14 @@
  * managers' `env.set`) is what its jobs and shells run with, and its apps
  * (see collections/env-var.ts); secrets are sealed with `computers: { key }`.
  *
+ * A computer also runs its owner's plans: Claude Code, Codex or Antigravity,
+ * signed in there once (`computer.engines`, `computer.engine.login`), so an
+ * agent's model calls for them run on their plan, through the CLI, instead
+ * of on an API key (the `claude-plan`, `codex-plan` and `gemini-plan`
+ * providers, see resources/engines.ts and shared/engines.ts). The CLI is
+ * only the engine: the agent's instructions replace its own, its built-in
+ * tools are off, and the agent's tools reach it from the computer program.
+ *
  * ```ts
  * plugins: [models, chat, ...access, computers],
  * resources: { agents: { assistant: { tools: ["terminal", "read_file", "web_search"] } } }
@@ -59,6 +67,10 @@ import { contextViews } from "./views/context.ts";
 import { UPDATE } from "./program/release.ts";
 import { leftProcessor } from "./processors/left.ts";
 import { WORK } from "./shared/workloads.ts";
+import { engineAdapter } from "./adapters/engine.ts";
+import { engineAction, engineCancelAction } from "./actions/engine.ts";
+import { engineLoginAction, enginesAction } from "./actions/engines.ts";
+import { engineCost, engineProviders } from "./resources/engines.ts";
 
 export type { Computer } from "./collections/computer.ts";
 export type { Desk } from "./collections/desk.ts";
@@ -118,7 +130,14 @@ export const computers: Plugin = definePlugin({
     "computer.mark": markAction,
     // Asks and yeses kept the old way, kept as chat keeps them (code's, on a deploy).
     "computer.upgradeAsks": upgradeAsksAction,
+    // Agents' model calls on their person's plan, through its CLI on a computer of theirs.
+    "computer.engine": engineAction,
+    "computer.engine.cancel": engineCancelAction,
+    "computer.engines": enginesAction,
+    "computer.engine.login": engineLoginAction,
   },
+  // A model call on a plan's CLI (the providers below name it).
+  adapters: { llm: { engine: engineAdapter } },
   processors: { "computers.left": leftProcessor },
   // Asks and yeses kept the old way are kept as chat keeps them, once, as a deploy first starts.
   schedules: {
@@ -138,6 +157,9 @@ export const computers: Plugin = definePlugin({
     usageNames: {
       computer: { tag: "tags.computer", collection: "desk", key: "computer", field: "name" },
     },
+    // People's plans, through their CLIs on their own computers: `claude-plan/…`, `codex-plan/…`.
+    provider: engineProviders,
+    cost: engineCost,
   },
   // Each person reaches their own computers and codes. None of the plugin's records is written
   // directly from outside: which computer a desk or a preview is on is its Actions' to check.

@@ -2,7 +2,7 @@
 title: "A business app's screens"
 description: "The screens back-office apps are made of, the Copilotz way: one View per file, Views that read and Actions that write, an app's own frame and home, lists with search, filters, paging and exports, forms in dialogs, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
 section: Guides
-order: 8
+order: 9
 ---
 
 # A business app's screens

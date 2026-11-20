@@ -747,6 +747,12 @@
         },
         "reads": [
           {
+            "kind": "accountSections",
+            "found": [
+              "source"
+            ]
+          },
+          {
             "kind": "agentKinds",
             "found": [
               "source"
@@ -4961,6 +4967,7 @@
             "info",
             "approve",
             "status",
+            "engines",
             "at"
           ],
           "schema": {
@@ -5013,6 +5020,9 @@
                 "required": [
                   "kind"
                 ]
+              },
+              "engines": {
+                "type": "object"
               },
               "at": {
                 "type": "string"
@@ -5614,6 +5624,167 @@
             "maintenance": "no"
           },
           "helper": "people"
+        },
+        {
+          "name": "computer.engine",
+          "summary": "Runs one step of an agent's model call on its person's plan, on their computer",
+          "input": {
+            "type": "object",
+            "properties": {
+              "engine": {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "antigravity"
+                ]
+              },
+              "model": {
+                "type": "string"
+              },
+              "computer": {
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              },
+              "instructions": {
+                "type": "string"
+              },
+              "tools": {
+                "type": "array"
+              },
+              "prompt": {
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "from": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "results": {
+                "type": "array"
+              }
+            },
+            "required": [
+              "engine",
+              "model",
+              "instructions",
+              "tools",
+              "prompt",
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.engine.cancel",
+          "summary": "Stops what an agent's model call is doing on its person's plan",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "computer",
+              "session"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "yes",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "yes",
+            "routine": "yes",
+            "maintenance": "no"
+          },
+          "helper": "people"
+        },
+        {
+          "name": "computer.engine.login",
+          "summary": "Signs a plan's CLI in on one of your computers, step by step",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              },
+              "engine": {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "antigravity"
+                ]
+              },
+              "input": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "stop": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "computer",
+              "engine"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "computer.engines",
+          "summary": "Your computers, and which plans' CLIs each runs, signed in or not",
+          "input": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
         },
         {
           "name": "computer.enrollment",
@@ -6732,43 +6903,7 @@
           "underName": false
         }
       ],
-      "needs": [
-        {
-          "kind": "setting",
-          "path": "computers.approve",
-          "summary": "",
-          "required": false,
-          "type": "Exclude<Asked, \"publish\" | \"destroy\">[]"
-        },
-        {
-          "kind": "secret",
-          "path": "computers.key",
-          "summary": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "kind": "setting",
-          "path": "computers.codeMinutes",
-          "summary": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
-          "required": false,
-          "type": "number"
-        },
-        {
-          "kind": "setting",
-          "path": "computers.url",
-          "summary": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
-          "required": false,
-          "type": "string"
-        },
-        {
-          "kind": "setting",
-          "path": "computers.previews",
-          "summary": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
-          "required": false,
-          "type": "PreviewsSettings"
-        }
-      ],
+      "needs": [],
       "emits": [],
       "changes": [
         "computer.created",
@@ -6817,6 +6952,22 @@
           "computers": {},
           "context": {
             "computer": {}
+          },
+          "cost": {
+            "claude-plan/*": {},
+            "codex-plan/*": {},
+            "gemini-plan/*": {}
+          },
+          "provider": {
+            "claude-plan": {
+              "title": "Claude plan"
+            },
+            "codex-plan": {
+              "title": "ChatGPT plan, through Codex"
+            },
+            "gemini-plan": {
+              "title": "Google AI plan, through Antigravity"
+            }
           },
           "shared": {
             "desk": {},
@@ -6873,12 +7024,6 @@
             ]
           },
           {
-            "kind": "computers",
-            "found": [
-              "source"
-            ]
-          },
-          {
             "kind": "directory",
             "found": [
               "source"
@@ -6904,7 +7049,11 @@
           }
         ]
       },
-      "adapters": {},
+      "adapters": {
+        "llm": [
+          "engine"
+        ]
+      },
       "workers": [
         {
           "kind": "computer",
@@ -6927,54 +7076,16 @@
             "computer.search",
             "computer.http",
             "computer.archive",
+            "computer.agents.status",
+            "computer.agents.login",
+            "computer.agents.prompt",
+            "computer.agents.cancel",
             "computer.update"
           ]
         }
       ],
       "check": null,
-      "settings": [
-        {
-          "kind": "computers",
-          "type": "ComputersSettings",
-          "inContract": true,
-          "fields": [
-            {
-              "name": "approve",
-              "type": "Exclude<Asked, \"publish\" | \"destroy\">[]",
-              "optional": true,
-              "secret": false
-            },
-            {
-              "name": "key",
-              "type": "string",
-              "optional": true,
-              "doc": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
-              "secret": true
-            },
-            {
-              "name": "codeMinutes",
-              "type": "number",
-              "optional": true,
-              "doc": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
-              "secret": false
-            },
-            {
-              "name": "url",
-              "type": "string",
-              "optional": true,
-              "doc": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
-              "secret": false
-            },
-            {
-              "name": "previews",
-              "type": "PreviewsSettings",
-              "optional": true,
-              "doc": "Seals spaces' secrets at rest (their environment): any long secret, from the app's own.",
-              "secret": false
-            }
-          ]
-        }
-      ],
+      "settings": [],
       "listing": {
         "listable": false,
         "problems": [
@@ -7068,6 +7179,14 @@
           "place": "web"
         },
         {
+          "name": "computer.plans",
+          "place": "web"
+        },
+        {
+          "name": "computer.plans.palette",
+          "place": "web"
+        },
+        {
           "name": "computer.routine",
           "place": "web"
         },
@@ -7094,6 +7213,11 @@
       "powers": [],
       "resources": {
         "provides": {
+          "accountSections": {
+            "plans": {
+              "view": "computer.plans"
+            }
+          },
           "askViews": {
             "destroy": {
               "view": "computer.ask"
@@ -7114,6 +7238,9 @@
           "palette": {
             "computers": {
               "view": "computer.palette"
+            },
+            "plans": {
+              "view": "computer.plans.palette"
             }
           },
           "routinePanels": {

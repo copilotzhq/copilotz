@@ -3,7 +3,11 @@
  * computers: connecting one, adding one of yours, which one agents use, who
  * answers what they ask; then the terminal, jobs and files in the space's
  * folder), on its page and in the panel beside a chat; a computer's own page
- * at `/computer/<id>`, for its owner; in chats, what an agent asks to do on
+ * at `/computer/<id>`, for its owner; the person's plans on their own
+ * computers (Claude, ChatGPT through Codex, Google AI through Antigravity:
+ * signing each CLI in once, so their agents' model calls run on their plan),
+ * a section of Connected accounts (the accounts plugin's `accountSections`),
+ * with the palette's commands to sign each in; in chats, what an agent asks to do on
  * one (the command, what a write will write, an app it would publish: chat's
  * card for it, with its answers, through chat's `askViews`) and their calls
  * to computer tools, shown as commands and output, files and changes, links.
@@ -14,9 +18,10 @@
  * ```
  *
  * It fills chat's `askViews` and `toolViews` resources, spaces'
- * `spaceTabs`, routines' `routinePanels` (what a routine may do on its own)
- * and the web shell's `palette` (moving one of yours to another
- * space, through spaces' picker, as each computer's menu does), and reads
+ * `spaceTabs`, routines' `routinePanels` (what a routine may do on its own),
+ * accounts' `accountSections` (the plans) and the web shell's `palette`
+ * (moving one of yours to another space, through spaces' picker, as each
+ * computer's menu does; signing a plan in), and reads
  * the spaces the person reaches (`space.reached`). A job that
  * serves a port gets a preview (`computer.preview`), opened in a tab, its
  * link copied, for the space's members or anyone with the link; the
@@ -39,6 +44,8 @@ import { computerPaletteView } from "./views/web/palette.tsx";
 import { spaceComputersView } from "./views/web/space-tab.tsx";
 import { stepView } from "./views/web/step.tsx";
 import { routinePanelView } from "./views/web/routine-panel.tsx";
+import { plansView } from "./views/web/plans.tsx";
+import { plansPaletteView } from "./views/web/plans-palette.ts";
 
 /** The computer tools (resources/tools.ts), by name: the browser loads front-end code only. */
 const TOOLS = [
@@ -65,6 +72,8 @@ export const computersWeb: Plugin = definePlugin({
     "computer.step": stepView,
     "computer.palette": computerPaletteView,
     "computer.routine": routinePanelView,
+    "computer.plans": plansView,
+    "computer.plans.palette": plansPaletteView,
     "env.space": envSpaceView,
   },
   resources: {
@@ -87,7 +96,12 @@ export const computersWeb: Plugin = definePlugin({
       publish: { view: "computer.ask", icon: "globe" },
       destroy: { view: "computer.ask", icon: "trash" },
     },
-    palette: { computers: { view: "computer.palette", order: 30 } },
+    palette: {
+      computers: { view: "computer.palette", order: 30 },
+      plans: { view: "computer.plans.palette", order: 91 },
+    },
+    // A person's plans on their own computers, on Connected accounts, below its providers.
+    accountSections: { plans: { view: "computer.plans", order: 10 } },
     // What a routine's agent may do on its own (routines' page).
     routinePanels: { computers: { view: "computer.routine", order: 10 } },
     // Every computer tool's calls show as one View: commands, jobs, files, search, the browser.

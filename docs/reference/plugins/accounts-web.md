@@ -33,7 +33,8 @@ Its Views show on the web.
 
 ## What it needs
 
-Nothing to set. It reads `agentKinds`, resource kinds the app and other plugins fill.
+Nothing to set. It reads `accountSections` and `agentKinds`, resource kinds the app and other
+plugins fill.
 
 ## What it requires
 

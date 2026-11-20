@@ -1,7 +1,8 @@
 /**
  * A computer: this machine, connected to an app as an Oxian worker of the
  * `computer` kind, serving its work (shells, jobs, files, a browser, a web
- * search) in a folder per space under its root, apart per who.
+ * search) in a folder per space under its root, apart per who; and its
+ * engines: plans' CLIs agents' model calls run on (agents/).
  *
  * It enrolls with a one-time code (`computer:code:<CODE>`); the app answers
  * with `computer.enrolled`, its id and secret, which it keeps; from then on
@@ -31,6 +32,7 @@ import {
 } from "./state.ts";
 import { checkOffer, PROGRAM, updateProgram } from "./update.ts";
 import { VERSION } from "./version.ts";
+import { type AgentsOptions, createAgents } from "./workloads/agents.ts";
 import { answer, fail } from "./workloads/answer.ts";
 import { createArchive } from "./workloads/archive.ts";
 import { createBrowserWork } from "./workloads/browser.ts";
@@ -75,6 +77,8 @@ export type ComputerOptions = {
   resume?: boolean;
   /** Who's browser, unused this long, stops (its profile stays). */
   browserIdleMs?: number;
+  /** Its engines (plans' CLIs agents' model calls run on): their CLIs, found unless given; limits. */
+  agents?: AgentsOptions;
   /** Where its concise log lines go (never a secret). */
   log?: (line: string) => void;
 };
@@ -90,7 +94,7 @@ export type Computer = {
    */
   closed: Promise<"stopped" | "updated">;
   info: Info;
-  /** Disconnects, and stops every shell, job and browser it started. */
+  /** Disconnects, and stops every shell, job, browser and engine session it started. */
   stop(): Promise<void>;
 };
 
@@ -135,6 +139,7 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     idleMs: options.browserIdleMs,
   });
   const browser = createBrowserWork(browsers, spaces);
+  const agents = createAgents(root, log, options.agents);
   const info = machineInfo(root, shell, chromium, options.name, options.windows);
   const halt = new AbortController();
   let reason: "stopped" | "updated" = "stopped";
@@ -211,6 +216,11 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     // Streamed both ways, not one JSON value.
     [WORK.http]: createHttp(spaces),
     [WORK.archive]: createArchive(spaces),
+    [WORK.agentsStatus]: agents.status,
+    [WORK.agentsLogin]: agents.login,
+    [WORK.agentsCancel]: agents.cancel,
+    // Its events, as JSON lines.
+    [WORK.agentsPrompt]: agents.prompt,
   };
   if (options.resume !== false) await jobs.resume();
 
@@ -342,7 +352,12 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
         unenrolled(new Error("The computer stopped"));
         await current?.stop().catch(() => {});
         await closed.catch(() => {});
-        await Promise.allSettled([shells.stopAll(), jobs.stopAll(), browsers.close()]);
+        await Promise.allSettled([
+          shells.stopAll(),
+          jobs.stopAll(),
+          browsers.close(),
+          agents.stop(),
+        ]);
       })();
     },
   };

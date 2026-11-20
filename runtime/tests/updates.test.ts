@@ -127,7 +127,7 @@ const each = (name: string, fn: (rt: Runtime) => Promise<void>) => {
 
 const update = (rt: Runtime, update: unknown, more: Record<string, unknown> = {}) =>
   rt.call("customer.update", { filter: { _id: "c1" }, update, ...more });
-const stored = async (rt: Runtime, id = "c1") =>
+const stored = async (_rt: Runtime, id = "c1") =>
   (await store.find("customer", { _id: id }))[0] as Customer | undefined;
 
 /** Refused as invalid, with a message naming the field. */

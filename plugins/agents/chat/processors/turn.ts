@@ -43,7 +43,6 @@ import {
   type Prompt,
   settingsOf,
   type Step,
-  type Tool,
   type ToolContext,
   type Turn,
 } from "../shared/types.ts";

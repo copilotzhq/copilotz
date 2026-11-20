@@ -11,7 +11,7 @@ import type { PaletteGroup, PaletteItem } from "../../../../../hosts/web/mod.ts"
 import type { Computer } from "../../collections/computer.ts";
 import type { EngineName, EngineSeen } from "../../shared/engines.ts";
 import { nameOf } from "./names.ts";
-import { plans } from "./plans.ts";
+import { plans } from "./plan-states.ts";
 import { say } from "./words.ts";
 
 export const plansPaletteView = (

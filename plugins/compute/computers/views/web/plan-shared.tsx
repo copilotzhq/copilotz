@@ -8,7 +8,7 @@
  */
 import { type ReactNode, useState } from "react";
 import { Button, Dialog, Icon, message, Notice } from "../../../../../hosts/web/mod.ts";
-import { listed, type Machine } from "./plans.ts";
+import { listed, type Machine } from "./plan-states.ts";
 import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;

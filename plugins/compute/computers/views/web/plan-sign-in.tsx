@@ -40,7 +40,7 @@ import {
   standingOf,
   startable,
   straightTo,
-} from "./plans.ts";
+} from "./plan-states.ts";
 import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;

@@ -4,10 +4,12 @@
  * what its person called it, here or on it (`connect --name`), else after
  * the machine. When the app's release (`downloads`) is newer than its
  * program, and has its platform's binary, it's offered that: it updates
- * itself, and comes again as it.
+ * itself, and comes again as it. The jobs watched on it are waited on again
+ * (`computer.watch`): a wait it went offline during, or a deploy cut, goes on.
  */
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
+import { type JobWatch, watchTimer } from "../collections/job-watch.ts";
 import { binaryFor, newer, type Offer, UPDATE } from "../program/release.ts";
 import type { Downloads } from "../resources/downloads.ts";
 import { mirror } from "../shared/desks.ts";
@@ -43,6 +45,14 @@ export const readyAction = defineAction({
     await computers.updateOne({ _id: input.id }, { $set: now });
     // Every space it's in shows it.
     await mirror(ctx, input.id, now);
+    for (
+      const watch of await ctx.db.collection<JobWatch>("jobWatch").find({ computer: input.id })
+    ) {
+      await ctx.schedule("computer.watch", { id: watch._id }, {
+        at: Date.now(),
+        id: watchTimer(watch._id),
+      });
+    }
     const release = ctx.resources.downloads as Downloads | undefined;
     const binary = said && release && newer(release.manifest.version, said.version) &&
       binaryFor(release.manifest, said);

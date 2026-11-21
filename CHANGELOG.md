@@ -1,3 +1,23 @@
+## Unreleased
+
+**New:**
+
+- **An agent is told in its chat when a job it started ends** (the computers plugin): as the person
+  it worked for, in their name (`via` the job, as a routine's message is theirs), with how it ended
+  (its exit code, or that someone stopped it), how long it ran, and the end of what it wrote; and it
+  takes a turn then, on their plan, within their reach. So it needn't look at a long build or test
+  run again and again: `start_job` says so, and so does its answer ("You'll be told in this chat
+  when it ends"). One it stops itself (`stop_job`) tells it nothing; `notify: false` starts one that
+  doesn't. Only in a chat, for a person: a model outside (over MCP) and a contact's chat aren't
+  told.
+  - The app waits on the job (`computer.watch`, its watches kept in `jobWatch`): it asks the
+    computer to answer once the job ends (`computer.jobs.wait`, up to 10 minutes, then again), as it
+    asks a computer for everything; a computer still asks the app for nothing. A wait its computer
+    went offline during, or a deploy cut, is taken up again when the computer comes back
+    (`computer.ready`); a job the computer no longer has (it stopped with it) is told as that.
+  - A computer whose program is older than this is asked how the job is each minute instead.
+  - A job stopped by `computer.jobs.stop` says so (`stopped: true`).
+
 ## 1.0.0-rc.59 — 2026-11-21
 
 A person's plan answers its agents' steps however long its model thinks, and an agent waiting on

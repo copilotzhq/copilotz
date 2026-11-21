@@ -45,6 +45,8 @@ export const WORK = {
   jobsList: "computer.jobs.list",
   jobsLogs: "computer.jobs.logs",
   jobsStop: "computer.jobs.stop",
+  /** Answers once a job ends, or after a while still running: `JobsWaitInput`. */
+  jobsWait: "computer.jobs.wait",
   filesList: "computer.files.list",
   filesRead: "computer.files.read",
   filesWrite: "computer.files.write",
@@ -141,6 +143,8 @@ export type Job = {
   ports?: number[];
   /** Started again whenever the computer starts (a cloud computer's wake): a server, say. */
   keep?: boolean;
+  /** It ended because it was stopped (`jobs.stop`), not on its own. */
+  stopped?: true;
 };
 
 export type JobsStartInput = {
@@ -164,6 +168,15 @@ export type JobsLogsInput = {
 };
 export type JobsLogs = { job: Job; stdout: string; stderr: string; truncated: boolean };
 export type JobsStopInput = { scope: Scope; id: string };
+/**
+ * Waits for a job of whose's to end, for `ms` at most (default and most: `WAIT_MS`); answers it,
+ * with the end of what it wrote (`tail` characters of each stream, default 2,000) once it's ended.
+ */
+export type JobsWaitInput = { scope: Scope; id: string; ms?: number; tail?: number };
+/** A job waited on: still running (after the wait), or ended, with the end of its output. */
+export type JobsWaited = { job: Job; stdout?: string; stderr?: string };
+/** The longest a wait for a job lasts before it answers that it's still running. */
+export const WAIT_MS = 10 * 60_000;
 
 /** A path under the space's folder: relative, never escaping it (`..`, absolute, symlinks out). */
 export type Entry = {

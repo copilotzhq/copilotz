@@ -5340,6 +5340,96 @@
           ]
         },
         {
+          "name": "jobWatch",
+          "summary": "",
+          "kind": "documents",
+          "fields": [
+            "computer",
+            "job",
+            "name",
+            "scope",
+            "thread",
+            "in",
+            "agent",
+            "person",
+            "origin",
+            "at"
+          ],
+          "schema": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              },
+              "job": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "object",
+                "properties": {
+                  "space": {
+                    "type": "string"
+                  },
+                  "folder": {
+                    "type": "string"
+                  },
+                  "who": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "space",
+                  "folder",
+                  "who"
+                ]
+              },
+              "thread": {
+                "type": "string"
+              },
+              "in": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "person": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "object"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "computer",
+              "job",
+              "name",
+              "scope",
+              "thread",
+              "in",
+              "agent",
+              "person",
+              "at"
+            ]
+          },
+          "durable": true,
+          "recorded": true,
+          "private": [],
+          "shared": false,
+          "vectors": [],
+          "indexes": [
+            [
+              "computer"
+            ]
+          ],
+          "queries": []
+        },
+        {
           "name": "preview",
           "summary": "",
           "kind": "documents",
@@ -6317,6 +6407,25 @@
           "helper": "people"
         },
         {
+          "name": "computer.watch",
+          "summary": "",
+          "input": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "internal": true
+        },
+        {
           "name": "computer.work",
           "summary": "Works on a space's computer, in its folder there",
           "input": {
@@ -6678,7 +6787,7 @@
         },
         {
           "name": "job_logs",
-          "summary": "What one of your background jobs wrote (the end of it, with tail: characters).",
+          "summary": "What one of your background jobs wrote (the end of it, with tail: characters). You're told in the chat when one you started ends, with the end of its output.",
           "input": {
             "type": "object",
             "properties": {
@@ -6717,7 +6826,7 @@
         },
         {
           "name": "list_jobs",
-          "summary": "Your background jobs in this space, on one of its computers: running and finished.",
+          "summary": "Your background jobs in this space, on one of its computers: running and finished. You're told in the chat when one you started ends: there's no need to look here to see whether it's done.",
           "input": {
             "type": "object",
             "properties": {
@@ -6829,7 +6938,7 @@
         },
         {
           "name": "start_job",
-          "summary": "Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it). Read its output with job_logs; stop it with stop_job.",
+          "summary": "Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it). Read its output with job_logs; stop it with stop_job. When it ends (or someone else stops it), you're told in this chat, with how it ended and the end of its output, and you take a turn then: don't check on it with list_jobs or job_logs to see whether it's done. Say what you're waiting for and end your turn. notify false: you aren't told (a server you'll stop yourself).",
           "input": {
             "type": "object",
             "properties": {
@@ -6847,6 +6956,10 @@
                 },
                 "description": "Environment variables for this job, over the space's (names to values)."
               },
+              "notify": {
+                "type": "boolean",
+                "description": "False: you aren't told in this chat when it ends."
+              },
               "computer": {
                 "type": "string",
                 "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
@@ -6859,7 +6972,7 @@
         },
         {
           "name": "stop_job",
-          "summary": "Stops one of your background jobs.",
+          "summary": "Stops one of your background jobs (you aren't told it ended: you stopped it).",
           "input": {
             "type": "object",
             "properties": {
@@ -6878,7 +6991,7 @@
         },
         {
           "name": "terminal",
-          "summary": "Runs a command in your own shell on your person's computer, in this space's folder: bash on macOS and Linux, PowerShell on Windows (your context says which this computer has). Give it in command. Your working directory and environment persist between calls. It answers within about a second: if the command is still \"running\", call again with its commandId to see more, with its commandId and stdin to answer a prompt, or with its commandId and operation interrupt to stop it. For servers and other long-running commands, use start_job instead.",
+          "summary": "Runs a command in your own shell on your person's computer, in this space's folder: bash on macOS and Linux, PowerShell on Windows (your context says which this computer has). Give it in command. Your working directory and environment persist between calls. It answers within about a second: if the command is still \"running\", call again with its commandId to see more, with its commandId and stdin to answer a prompt, or with its commandId and operation interrupt to stop it. For servers and other long-running commands (a long build, a test suite), use start_job instead: you're told in the chat when it ends.",
           "input": {
             "type": "object",
             "properties": {
@@ -7011,6 +7124,9 @@
         "envVar.created",
         "envVar.updated",
         "envVar.deleted",
+        "jobWatch.created",
+        "jobWatch.updated",
+        "jobWatch.deleted",
         "preview.created",
         "preview.updated",
         "preview.deleted"
@@ -7075,13 +7191,13 @@
               "description": "Changes a file in this space's folder: replaces text that occurs exactly once in it (old) with new text."
             },
             "job_logs": {
-              "description": "What one of your background jobs wrote (the end of it, with tail: characters)."
+              "description": "What one of your background jobs wrote (the end of it, with tail: characters). You're told in the chat when one you started ends, with the end of its output."
             },
             "list_files": {
               "description": "Lists a directory in this space's folder (path relative to it; default: the folder)."
             },
             "list_jobs": {
-              "description": "Your background jobs in this space, on one of its computers: running and finished."
+              "description": "Your background jobs in this space, on one of its computers: running and finished. You're told in the chat when one you started ends: there's no need to look here to see whether it's done."
             },
             "preview": {
               "description": "Makes a link to what one of your background jobs serves (a dev server, a site), for the people of this space to open in their browser: give the job (its id or name; it's found on whichever computer runs it) or the port it serves (and the computer, when not the default). Start the server with start_job first."
@@ -7096,13 +7212,13 @@
               "description": "Sends a file from this space's folder on a computer into this chat, for its people to open or download (a report, a chart, a zip you made): up to about 10 MB. text: what you say with it, if anything."
             },
             "start_job": {
-              "description": "Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it). Read its output with job_logs; stop it with stop_job."
+              "description": "Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it). Read its output with job_logs; stop it with stop_job. When it ends (or someone else stops it), you're told in this chat, with how it ended and the end of its output, and you take a turn then: don't check on it with list_jobs or job_logs to see whether it's done. Say what you're waiting for and end your turn. notify false: you aren't told (a server you'll stop yourself)."
             },
             "stop_job": {
-              "description": "Stops one of your background jobs."
+              "description": "Stops one of your background jobs (you aren't told it ended: you stopped it)."
             },
             "terminal": {
-              "description": "Runs a command in your own shell on your person's computer, in this space's folder: bash on macOS and Linux, PowerShell on Windows (your context says which this computer has). Give it in command. Your working directory and environment persist between calls. It answers within about a second: if the command is still \"running\", call again with its commandId to see more, with its commandId and stdin to answer a prompt, or with its commandId and operation interrupt to stop it. For servers and other long-running commands, use start_job instead."
+              "description": "Runs a command in your own shell on your person's computer, in this space's folder: bash on macOS and Linux, PowerShell on Windows (your context says which this computer has). Give it in command. Your working directory and environment persist between calls. It answers within about a second: if the command is still \"running\", call again with its commandId to see more, with its commandId and stdin to answer a prompt, or with its commandId and operation interrupt to stop it. For servers and other long-running commands (a long build, a test suite), use start_job instead: you're told in the chat when it ends."
             },
             "web_search": {
               "description": "Searches the web: the top results, each a title, link and snippet. Open one with the browser to read it."
@@ -7167,6 +7283,7 @@
             "computer.jobs.list",
             "computer.jobs.logs",
             "computer.jobs.stop",
+            "computer.jobs.wait",
             "computer.files.list",
             "computer.files.read",
             "computer.files.write",

@@ -18,7 +18,7 @@ import { computers } from "copilotz/plugins/compute";
 
 ## What it keeps
 
-It keeps 5 collections, each on the record: every change to one is an event.
+It keeps 6 collections, each on the record: every change to one is an event.
 
 | Collection   | Kept as   | Fields                                                                                                                             |
 | ------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -26,6 +26,7 @@ It keeps 5 collections, each on the record: every change to one is an event.
 | `desk`       | documents | `in`, `computer`, `owner`, `name`, `online`, `seen`, `info`, `folder`, `approve`, `status`, `answers`, `default`, `at`             |
 | `enrollment` | documents | `owner`, `expires`, `in`, `computer`                                                                                               |
 | `envVar`     | documents | `space`, `app`, `name`, `value`, `sealed`, `secret`, `computers`, `hint`, `by`, `at`; private: `sealed`                            |
+| `jobWatch`   | documents | `computer`, `job`, `name`, `scope`, `thread`, `in`, `agent`, `person`, `origin`, `at`                                              |
 | `preview`    | documents | `computer`, `space`, `folder`, `who`, `port`, `job`, `by`, `visibility`, `at`                                                      |
 
 The access rules cover `desk`, `envVar` and `preview`: each document is in a space, and only those
@@ -45,7 +46,7 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 31 Actions, people may call 20; agents may call 14; contacts and someone signed out may call
+Of its 32 Actions, people may call 20; agents may call 14; contacts and someone signed out may call
 none.
 
 | Action                   | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                        |
@@ -77,7 +78,7 @@ routine is work done for a person, which they set going.
 
 Only the app's own code calls `computer.admit`, `computer.allowed`, `computer.enrollment`,
 `computer.gone`, `computer.mark`, `computer.provision`, `computer.ready`, `computer.running`,
-`computer.scope` and `env.values`: its plugins, its schedules and the system.
+`computer.scope`, `computer.watch` and `env.values`: its plugins, its schedules and the system.
 
 Agents act through its 14 tools, as whoever they work for:
 
@@ -93,7 +94,7 @@ Agents act through its 14 tools, as whoever they work for:
 | `save_file`  | Saves a file sent in this chat into this space's folder on a computer, where commands and the other tools reach it (a zip to unpack, data to work on, an image to edit). file: its id, as its message shows it ([file … id file-…]). path: where in the folder (default: its name, at the top); a file there is replaced. |                    |
 | `send_file`  | Sends a file from this space's folder on a computer into this chat, for its people to open or download (a report, a chart, a zip you made): up to about 10 MB. text: what you say with it, if anything.                                                                                                                   |                    |
 | `start_job`  | Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it).                                                                                    |                    |
-| `stop_job`   | Stops one of your background jobs.                                                                                                                                                                                                                                                                                        |                    |
+| `stop_job`   | Stops one of your background jobs (you aren't told it ended: you stopped it).                                                                                                                                                                                                                                             |                    |
 | `terminal`   | Runs a command in your own shell on your person's computer, in this space's folder: bash on macOS and Linux, PowerShell on Windows (your context says which this computer has).                                                                                                                                           |                    |
 | `web_search` | Searches the web: the top results, each a title, link and snippet.                                                                                                                                                                                                                                                        |                    |
 | `write_file` | Writes a whole file in this space's folder, making its directories.                                                                                                                                                                                                                                                       |                    |

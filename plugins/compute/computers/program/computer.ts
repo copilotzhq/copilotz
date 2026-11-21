@@ -205,6 +205,7 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     [WORK.jobsList]: answer(jobs.list),
     [WORK.jobsLogs]: answer(jobs.logs),
     [WORK.jobsStop]: answer(jobs.stop),
+    [WORK.jobsWait]: answer(jobs.wait),
     [WORK.filesList]: answer(files.list),
     [WORK.filesRead]: answer(files.read),
     [WORK.filesWrite]: answer(files.write),

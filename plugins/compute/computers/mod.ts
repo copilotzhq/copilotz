@@ -60,12 +60,14 @@ import { scopeAction } from "./actions/scope.ts";
 import { shareAction } from "./actions/share.ts";
 import { unshareAction } from "./actions/unshare.ts";
 import { viewAction } from "./actions/view.ts";
+import { watchAction } from "./actions/watch.ts";
 import { workAction } from "./actions/work.ts";
 import { uploadAction } from "./actions/upload.ts";
 import { computer } from "./collections/computer.ts";
 import { desk } from "./collections/desk.ts";
 import { enrollment } from "./collections/enrollment.ts";
 import { envVar } from "./collections/env-var.ts";
+import { jobWatch } from "./collections/job-watch.ts";
 import { preview } from "./collections/preview.ts";
 import { previewRoutes } from "./resources/previews.ts";
 import { UPLOAD, uploadRoute } from "./routes/upload.ts";
@@ -97,7 +99,7 @@ const PLACED = new Set(["desk", "preview", "envVar"]);
 export const computers: Plugin = definePlugin({
   name: "computers",
   requires: ["chat", "spaces"],
-  collections: { computer, desk, enrollment, preview, envVar },
+  collections: { computer, desk, enrollment, preview, envVar, jobWatch },
   workers: {
     computer: {
       admit: "computer.admit",
@@ -120,6 +122,7 @@ export const computers: Plugin = definePlugin({
     "computer.move": moveAction,
     "computer.allowOrigin": allowOriginAction,
     "computer.work": workAction,
+    "computer.watch": watchAction,
     "computer.upload": uploadAction,
     // A space's environment: its managers' (env.values: the system's, an app's deploy).
     "env.set": envSetAction,

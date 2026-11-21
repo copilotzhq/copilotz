@@ -1,4 +1,7 @@
-## Unreleased
+## 1.0.0-rc.59 — 2026-11-21
+
+A person's plan answers its agents' steps however long its model thinks, and an agent waiting on
+another goes on for the same person when that one fails: two reasons plan steps went to an API key.
 
 **Fixed:**
 

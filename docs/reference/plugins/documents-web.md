@@ -40,7 +40,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`web-shell`](web-shell.md): add it too.
 
-It ships in a package of its own, `@copilotz/work@1.0.0-rc.58`, for `copilotz` `1.0.0-rc.58`:
+It ships in a package of its own, `@copilotz/work@1.0.0-rc.59`, for `copilotz` `1.0.0-rc.59`:
 install it beside `copilotz`.
 
 ## Listing

@@ -62,7 +62,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`spaces`](spaces.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.58`.
+It ships with `copilotz@1.0.0-rc.59`.
 
 ## What it does on its own
 

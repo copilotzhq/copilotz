@@ -28,8 +28,11 @@ import type {
   JobsLogsInput,
   JobsStartInput,
   JobsStopInput,
+  JobsWaited,
+  JobsWaitInput,
   Scope,
 } from "../../shared/workloads.ts";
+import { WAIT_MS } from "../../shared/workloads.ts";
 import { fail } from "./answer.ts";
 import { portsOf } from "./ports.ts";
 import { checkScope, type Spaces } from "./spaces.ts";
@@ -323,10 +326,43 @@ export function createJobs(spaces: Spaces, shell: Shell, options: JobsOptions = 
       };
     },
 
+    /**
+     * Answers once a job ends (with the end of what it wrote), or after `ms` with it still
+     * running: who waits on a job asks again, rather than looking at it again and again.
+     */
+    async wait(input: JobsWaitInput, signal?: AbortSignal): Promise<JobsWaited> {
+      const entry = mine(input.scope, input.id);
+      const ms = typeof input.ms === "number" && input.ms >= 0
+        ? Math.min(input.ms, WAIT_MS)
+        : WAIT_MS;
+      if (entry.job.running && ms > 0) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let quit: (() => void) | undefined;
+        await Promise.race([
+          entry.exited,
+          new Promise<void>((resolve) => (timer = setTimeout(resolve, ms))),
+          // Its caller gone (the call cut short), it answers at once.
+          new Promise<void>((resolve) => {
+            quit = () => resolve();
+            signal?.addEventListener("abort", quit, { once: true });
+          }),
+        ]).finally(() => {
+          clearTimeout(timer);
+          if (quit) signal?.removeEventListener("abort", quit);
+        });
+      }
+      if (entry.job.running) return { job: entry.job };
+      const tail = typeof input.tail === "number" && input.tail >= 0 ? input.tail : 2_000;
+      const end = (text: string) => tail === 0 ? "" : text.slice(-tail);
+      return { job: entry.job, stdout: end(entry.stdout), stderr: end(entry.stderr) };
+    },
+
     /** SIGTERM to its group, then SIGKILL after the grace; answers once it's ended (and unkept). */
     async stop(input: JobsStopInput): Promise<Job> {
       const entry = mine(input.scope, input.id);
       if (!entry.job.running) return entry.job;
+      // Ended by this, not on its own: who waits on it hears so.
+      entry.job = { ...entry.job, stopped: true };
       signalGroup(entry.child.pid, "SIGTERM");
       const timer = setTimeout(() => signalGroup(entry.child.pid, "SIGKILL"), stopGraceMs);
       await entry.exited;

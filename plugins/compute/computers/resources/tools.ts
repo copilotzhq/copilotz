@@ -10,15 +10,23 @@
  * a file sent in a chat (by the id its message shows the agent) in the
  * folder, a write like any other; `send_file` sends one from the folder into
  * the chat (`chat.say`), for its people to open, up to a chat file's size.
+ *
+ * A job an agent starts in a chat, for a person, is watched (`jobWatch`,
+ * `computer.watch`): when it ends, the agent is told there and takes a turn,
+ * so it needn't look at it again and again (its tools say so). One it stops
+ * itself (`stop_job`) isn't told; `notify: false` starts one nobody's told of.
  */
+import { principalOf } from "../../../../runtime/mod.ts";
 import type { File, Tool, ToolContext } from "../../../agents/chat/contract.ts";
 import { FILE_DATA, tool } from "../../../agents/chat/contract.ts";
+import { type JobWatch, watchOf, watchTimer } from "../collections/job-watch.ts";
 import { allowed } from "../shared/ask.ts";
 import { jobEnv } from "../shared/env.ts";
 import type { Asked } from "../shared/settings.ts";
 import { touch, whereAwake } from "../shared/wake.ts";
 import { browserActionSchema, browserDescription } from "../shared/browser.ts";
-import { type FilesRead, WORK, type Written } from "../shared/workloads.ts";
+import type { Where } from "../shared/where.ts";
+import { type FilesRead, type Job, WORK, type Written } from "../shared/workloads.ts";
 
 /** Every tool's choice of computer, when the space has more than one. */
 export const computerChoice = {
@@ -33,16 +41,23 @@ const preview = (text: string, lines = 12, chars = 1200) => {
   return kept.length < text.length ? `${kept}\n…` : kept;
 };
 
+/** What a tool does around its work: before it's sent, and with its answer. */
+type Around = {
+  before?: (where: Where) => Promise<void>;
+  after?: (answer: unknown, where: Where) => Promise<unknown>;
+};
+
 /**
  * Does `work` on a computer of the conversation's space (the one `computer`
  * names, else the default): where it goes, whether it may (`asked`: what
- * kind, and what exactly), then the computer's answer.
+ * kind, and what exactly), then the computer's answer (through `around`).
  */
 async function on(
   ctx: ToolContext,
   work: string,
   given: Record<string, unknown>,
   asked?: { kind: Asked; detail: string; preview?: string },
+  around: Around = {},
 ): Promise<unknown> {
   const { computer, ...input } = given;
   // A computer that sleeps (a cloud computer) is woken first.
@@ -76,11 +91,13 @@ async function on(
     const env = work === WORK.jobsStart || work === WORK.terminal
       ? await jobEnv(ctx, where.scope.space, input.env)
       : undefined;
-    const answer = await ctx.workers.call("computer", where.desk.computer, work, {
+    await around.before?.(where);
+    const sent = await ctx.workers.call("computer", where.desk.computer, work, {
       ...input,
       ...(env ? { env } : {}),
       scope: where.scope,
     });
+    const answer = around.after ? await around.after(sent, where) : sent;
     // Where the space has several, an answer says which computer it came from.
     return (where.computers ?? 1) > 1 && answer && typeof answer === "object" &&
         !Array.isArray(answer)
@@ -100,7 +117,8 @@ const terminal = tool({
     'between calls. It answers within about a second: if the command is still "running", ' +
     "call again with its commandId to see more, with its commandId and stdin to answer a " +
     "prompt, or with its commandId and operation interrupt to stop it. For servers and other " +
-    "long-running commands, use start_job instead.",
+    "long-running commands (a long build, a test suite), use start_job instead: you're told in " +
+    "the chat when it ends.",
   input: {
     type: "object",
     properties: {
@@ -165,7 +183,10 @@ const startJob = tool({
     "Starts a command that keeps running in the background (a dev server, a watcher, a " +
     "long build), in this space's folder, in the terminal's shell (bash, or PowerShell on " +
     "Windows), with the space's environment (your context names it). Read its output with " +
-    "job_logs; stop it with stop_job.",
+    "job_logs; stop it with stop_job. When it ends (or someone else stops it), you're told in " +
+    "this chat, with how it ended and the end of its output, and you take a turn then: don't " +
+    "check on it with list_jobs or job_logs to see whether it's done. Say what you're waiting " +
+    "for and end your turn. notify false: you aren't told (a server you'll stop yourself).",
   input: {
     type: "object",
     properties: {
@@ -176,22 +197,71 @@ const startJob = tool({
         additionalProperties: { type: "string" },
         description: "Environment variables for this job, over the space's (names to values).",
       },
+      notify: {
+        type: "boolean",
+        description: "False: you aren't told in this chat when it ends.",
+      },
       computer: computerChoice,
     },
     required: ["command"],
   },
-  run: (input, ctx) => on(ctx, WORK.jobsStart, input, { kind: "jobs", detail: input.command }),
+  run: (input, ctx) => {
+    const { notify, ...rest } = input;
+    return on(ctx, WORK.jobsStart, rest, { kind: "jobs", detail: input.command }, {
+      after: (answer, where) =>
+        notify === false ? Promise.resolve(answer) : watch(ctx, answer, where),
+    });
+  },
 });
+
+/**
+ * A job an agent started (the computer's answer) is watched, when there's a
+ * turn to tell it in (a chat, not a model outside) for a person: its answer
+ * says it'll be told. Anything else (a refusal, a failure) answers as it is.
+ */
+async function watch(ctx: ToolContext, answer: unknown, where: Where): Promise<unknown> {
+  const job = answer as Partial<Job> | null;
+  const person = principalOf(ctx.actor);
+  if (
+    !ctx.ask || person?.kind !== "person" || !job || typeof job.id !== "string" || !job.running
+  ) {
+    return answer;
+  }
+  const computer = where.desk.computer;
+  const id = watchOf(computer, job.id);
+  const origin = person.origin && typeof person.origin === "object" ? person.origin : undefined;
+  const system = ctx.as();
+  const watch: Omit<JobWatch, "_id"> = {
+    computer,
+    job: job.id,
+    name: (job.name && job.name !== job.id ? job.name : job.command ?? job.id).slice(0, 200),
+    scope: where.scope,
+    thread: ctx.thread,
+    in: ctx.in ?? where.scope.space,
+    agent: ctx.agent,
+    person: person.id,
+    ...(origin ? { origin: origin as Record<string, unknown> } : {}),
+    at: new Date().toISOString(),
+  };
+  await system.db.collection("jobWatch").replaceOne({ _id: id }, watch, { upsert: true });
+  await system.schedule("computer.watch", { id }, { at: Date.now(), id: watchTimer(id) });
+  return {
+    ...job,
+    note: "You'll be told in this chat when it ends: end your turn rather than check on it.",
+  };
+}
 
 const listJobs = tool({
   description: "Your background jobs in this space, on one of its computers: running and " +
-    "finished.",
+    "finished. You're told in the chat when one you started ends: there's no need to look " +
+    "here to see whether it's done.",
   input: { type: "object", properties: { computer: computerChoice } },
   run: (input, ctx) => on(ctx, WORK.jobsList, input),
 });
 
 const jobLogs = tool({
-  description: "What one of your background jobs wrote (the end of it, with tail: characters).",
+  description: "What one of your background jobs wrote (the end of it, with tail: characters). " +
+    "You're told in the chat when one you started ends, with the end of its output.",
   input: {
     type: "object",
     properties: {
@@ -205,13 +275,27 @@ const jobLogs = tool({
 });
 
 const stopJob = tool({
-  description: "Stops one of your background jobs.",
+  description: "Stops one of your background jobs (you aren't told it ended: you stopped it).",
   input: {
     type: "object",
     properties: { id: { type: "string" }, computer: computerChoice },
     required: ["id"],
   },
-  run: (input, ctx) => on(ctx, WORK.jobsStop, input),
+  run: (input, ctx) =>
+    on(ctx, WORK.jobsStop, input, undefined, {
+      // Stopped by its agent, it isn't told: its watch goes first (only its own: another's job
+      // isn't there to stop).
+      before: async (where) => {
+        const id = watchOf(where.desk.computer, String(input.id));
+        const system = ctx.as();
+        const gone = await system.db.collection("jobWatch").deleteOne({
+          _id: id,
+          agent: ctx.agent,
+          "scope.who": where.scope.who,
+        });
+        if (gone.deletedCount) await system.unschedule(watchTimer(id));
+      },
+    }),
 });
 
 const listFiles = tool({

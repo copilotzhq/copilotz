@@ -53,7 +53,7 @@ It also reads `links`, resource kinds the app and other plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.58`.
+It ships with `copilotz@1.0.0-rc.59`.
 
 ## Listing
 

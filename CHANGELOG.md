@@ -1,3 +1,20 @@
+## Unreleased
+
+**Fixed:**
+
+- **Work streamed from a plugin's worker isn't cut at 30 seconds.** A job's call to the owner ended
+  30 seconds after it opened, however much it had streamed (Oxian's default for host calls). So a
+  model's step on a person's plan whose model thought longer than that before its first word (Claude
+  Fable, Opus) was cut, and handed over to the next model of its list, an API key, while the plan's
+  CLI went on with it; and a browser's actions past 30 seconds failed. Work sent on to a worker now
+  lasts up to an hour (`WORK_MS`, the most a request lasts on Cloud Run), on both ends; a storage op
+  keeps its 30 seconds (`OP_MS`).
+- **An agent waiting on another goes on for the same person when that one fails.** A turn that
+  failed for good answered as the system, so the agent waiting on it went on as the system: on no
+  one's plan (a person's plan runs only for a person, so it went to an API key), past anyone's
+  reach. Its answer is now its agent's, for whom its turn worked, as an answer that came is; a final
+  `processor.failed` carries the failed event's `actor` for that.
+
 ## 1.0.0-rc.58 — 2026-11-21
 
 Files go between a chat and a computer both ways, and people put files on a computer from its page.

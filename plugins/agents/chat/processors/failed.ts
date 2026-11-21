@@ -1,10 +1,17 @@
 /** A turn that failed for good, or was stopped, still answers, so whoever waits on it resumes. */
-import type { Context, Event, ProcessorDef } from "../../../../runtime/mod.ts";
+import {
+  type Actor,
+  type Context,
+  type Event,
+  principalOf,
+  type ProcessorDef,
+} from "../../../../runtime/mod.ts";
 import type { Intent } from "../collections/intent.ts";
 import type { Live } from "../collections/live.ts";
 import type { Message } from "../collections/message.ts";
 import { turnOf } from "../shared/agents.ts";
 import { answer } from "../shared/delivery.ts";
+import { asAgent, spaceOf } from "./turn.ts";
 
 export const failedProcessor: ProcessorDef = {
   on: "processor.failed",
@@ -18,15 +25,23 @@ export const failedProcessor: ProcessorDef = {
  * when that was surely an answer (its turn offered no tools). A refusal
  * written for people (a failure made public: the org's spending check, a
  * web line's budget) answers in its own words.
+ *
+ * Its answer is its agent's, working for whom its turn did (the failed
+ * event's actor), as an answer that came is: an agent waiting on it goes on
+ * for that person, with what's theirs (their plan, their reach), never as
+ * the system.
  */
-const failed = async (ctx: Context, event: Event) => {
-  const { event: run, type, data, error } = event.data as {
+const failed = async (system: Context, event: Event) => {
+  const { event: run, type, data, error, actor } = event.data as {
     event: string;
     type: string;
     data: Record<string, unknown>;
     error: { message?: string; code?: string; public?: true };
+    actor?: Actor;
   };
   const t = turnOf({ type, data });
+  const where = principalOf(actor) ? await spaceOf(system, t.thread) : undefined;
+  const ctx = asAgent(system, t.agent, t.thread, where, [], actor);
   const messages = ctx.db.collection<Message>("message");
   if (await messages.findOne({ _id: `${run}:reply` })) return;
   if (error.code === "cancelled") {

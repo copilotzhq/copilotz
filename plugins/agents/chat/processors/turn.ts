@@ -57,14 +57,16 @@ import {
  * (`ctx.in`). The places its person said yes to sharing into, for one call,
  * it carries (`approved`). Without anyone, it runs as the system.
  */
-const asAgent = (
+export const asAgent = (
   ctx: Context,
   agent: string,
   thread: string,
   where?: string,
   approved: string[] = [],
+  /** Whose writing set the turn going: by default, the event's (`ctx.actor`). */
+  by = ctx.actor,
 ): Context => {
-  const principal = principalOf(ctx.actor);
+  const principal = principalOf(by);
   return principal
     ? ctx.as({
       kind: "agent",
@@ -81,7 +83,7 @@ const asAgent = (
 type Acting = (approved?: string[]) => Context;
 
 /** The space a thread is in, where its turns work: what they write elsewhere needs a person. */
-const spaceOf = async (ctx: Context, thread: string) =>
+export const spaceOf = async (ctx: Context, thread: string) =>
   (await ctx.as().db.collection<Thread>("thread").findOne({ _id: thread }))?.in;
 
 /**

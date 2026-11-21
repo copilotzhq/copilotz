@@ -34,11 +34,13 @@ import {
   failure,
   type Job,
   OP,
+  OP_MS,
   type OpReply,
   type OpRequest,
   output,
   raise,
   RUN,
+  WORK_MS,
 } from "./wire.ts";
 
 export type Executor = { ready: Promise<void>; stop(): Promise<void> };
@@ -136,7 +138,11 @@ const acting = (actor: Actor | undefined, other?: Actor): Actor | undefined =>
     : undefined;
 
 const reply = async (callHost: HostCaller, request: OpRequest) => {
-  const call = await callHost({ workload: OP, body: encode(request) });
+  const call = await callHost({
+    workload: OP,
+    body: encode(request),
+    deadlineAtMs: Date.now() + OP_MS,
+  });
   const answer = await decode<OpReply>(call.output);
   await call.completed;
   if ("error" in answer) throw raise(answer.error);
@@ -903,7 +909,8 @@ export function createExecutor(
     id: options.id ?? `executor-${crypto.randomUUID()}`,
     transport: options.transport,
     capacity: options.capacity ?? 256,
-    hostCalls: { maxConcurrent: 1_024 },
+    // A call may last as long as work sent on to a worker does; a storage op says its own deadline.
+    hostCalls: { maxConcurrent: 1_024, timeoutMs: WORK_MS },
     workloads: {
       [RUN]: async ({ input, callHost, signal }) => {
         const request = await decode<Job>(input);

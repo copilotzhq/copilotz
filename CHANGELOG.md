@@ -1,6 +1,9 @@
-## Unreleased
+## 1.0.0-rc.58 — 2026-11-21
 
 Files go between a chat and a computer both ways, and people put files on a computer from its page.
+When a model hands over to the next in its list (a person's plan to an API key), the log and the
+usage say why. A tool call held for a person's plan waits past Claude Code's 5-minute idle limit,
+and the models catalog is refreshed.
 
 **New:**
 

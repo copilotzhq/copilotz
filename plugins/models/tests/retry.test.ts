@@ -115,6 +115,53 @@ test("a model that thinks, then goes silent, hands over: thinking isn't writing"
   assertEquals(chunks.at(-1), { type: "text", text: "the next one's answer" });
 });
 
+test("a hand-over is logged, and the model answering instead says on its usage which didn't, and why", async () => {
+  const plan: LlmAdapter = {
+    async *generate() {
+      yield { type: "thinking" };
+      throw Object.assign(new Error("The session closed"), { code: "engine_lost" });
+    },
+  };
+  const key: LlmAdapter = {
+    async *generate() {
+      yield { type: "text", text: "on the key" };
+      yield { type: "usage", input: 10, output: 2 };
+    },
+  };
+  const uses: { subject: string; tags?: Record<string, string> }[] = [];
+  const both = {
+    resources: {
+      provider: {
+        plan: { adapter: "plan", catalog: false },
+        key: { adapter: "key", catalog: false },
+      },
+      modelUse: { kept: { used: (_: unknown, use: (typeof uses)[number]) => void uses.push(use) } },
+    },
+    adapters: { llm: { plan, key } },
+    signal: new AbortController().signal,
+  };
+  const said: string[] = [];
+  const warn = console.warn;
+  console.warn = (line: string) => void said.push(line);
+  try {
+    const answer = await complete(both, {
+      ...ask,
+      model: ["plan/m", "key/m"],
+      tags: { thread: "t1", agent: "north", turn: "r1", secret: "never logged" },
+    });
+    assertEquals(answer.text, "on the key");
+  } finally {
+    console.warn = warn;
+  }
+  assertEquals(said.length, 1);
+  assert(said[0].startsWith("models: plan/m didn't answer after "), said[0]);
+  assert(said[0].includes(", thinking (engine_lost: The session closed); key/m answers instead"));
+  assert(said[0].endsWith("[thread=t1 agent=north turn=r1]"), said[0]);
+  assertEquals(uses.map((u) => [u.subject, u.tags?.fallback, u.tags?.fallbackWhy]), [
+    ["key/m", "plan/m", "engine_lost"],
+  ]);
+});
+
 test("a refusal isn't tried again; with retry: 0, nothing is", async () => {
   const refusal = scripted(async function* () {
     throw Object.assign(new Error("p 401: no key"), { status: 401 });

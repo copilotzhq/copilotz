@@ -20,6 +20,14 @@ export type Said = PromptEvent extends infer E ? E extends unknown ? Omit<E, "i"
 
 type Event = { i: number; line: string; at: number; type: PromptEvent["type"] };
 
+/**
+ * Why a step ended: the prompt did (`ended`), its calls are in (`calls`), or
+ * it was left before either: its reader cancelled it (`cancelled`), its
+ * signal stopped it (`aborted`), a newer step took over (`superseded`), or
+ * its events were dropped (`lost`).
+ */
+export type StepEnd = "ended" | "calls" | "cancelled" | "aborted" | "superseded" | "lost";
+
 export type Prompt = {
   id: string;
   /** Its events not yet received, from `events[0].i` on. */
@@ -110,12 +118,12 @@ const nap = (prompt: Prompt, ms: number, signal: AbortSignal) =>
 /**
  * A step: the prompt's events from `from`, as JSON lines, until it ends,
  * its calls are in, a newer step takes over, or it's left (`signal`, or
- * its stream cancelled). `left` hears when it's over.
+ * its stream cancelled). `left` hears when it's over, and why.
  */
 export function step(
   prompt: Prompt,
   from: number,
-  options: { signal: AbortSignal; stepMs: number; left?: () => void },
+  options: { signal: AbortSignal; stepMs: number; left?: (why: StepEnd) => void },
 ): ReadableStream<Uint8Array> {
   const { signal, stepMs } = options;
   const me = Symbol("step");
@@ -125,18 +133,18 @@ export function step(
   let cursor = from;
   let callAt: number | undefined;
   let over = false;
-  const leave = () => {
+  const leave = (why: StepEnd) => {
     if (over) return;
     over = true;
     if (prompt.reader === me) prompt.reader = undefined;
     prompt.used = Date.now();
-    options.left?.();
+    options.left?.(why);
   };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       for (;;) {
         if (prompt.reader !== me || signal.aborted) {
-          leave();
+          leave(signal.aborted ? "aborted" : "superseded");
           return controller.close();
         }
         if (prompt.lost) {
@@ -144,7 +152,7 @@ export function step(
           controller.enqueue(encoder.encode(
             JSON.stringify({ i, type: "failed", code: "lost", message: LOST }) + "\n",
           ));
-          leave();
+          leave("lost");
           return controller.close();
         }
         let text = "";
@@ -173,18 +181,18 @@ export function step(
           }
         }
         if (end || (prompt.ended && cursor >= prompt.next)) {
-          leave();
+          leave(callAt !== undefined && !prompt.ended ? "calls" : "ended");
           return controller.close();
         }
         if (text) return;
         const wait = callAt === undefined ? Infinity : callAt + stepMs - Date.now();
         if (wait <= 0) {
-          leave();
+          leave("calls");
           return controller.close();
         }
         await nap(prompt, wait, signal);
       }
     },
-    cancel: leave,
+    cancel: () => leave("cancelled"),
   }, { highWaterMark: 0 });
 }

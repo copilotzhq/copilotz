@@ -45,7 +45,7 @@ plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.57`.
+It ships with `copilotz@1.0.0-rc.58`.
 
 ## Listing
 

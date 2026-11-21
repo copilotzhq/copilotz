@@ -18,6 +18,18 @@ export const OP = "core.op";
  */
 export const DISPATCH = "core.dispatch";
 
+/**
+ * How long a job's call to the owner may last, from when it opens (Oxian's
+ * host calls end there, however much they've streamed): a storage op, 30
+ * seconds; work sent on to a worker, an hour, the most a request lasts on
+ * Cloud Run. Work streams for as long as it's done: a model's step on a
+ * plan's CLI thinks a while before it says anything, and a browser's actions
+ * take minutes. Cut at 30 seconds, such a step handed over to the next model
+ * of its list while the CLI went on with it.
+ */
+export const OP_MS = 30_000;
+export const WORK_MS = 60 * 60_000;
+
 export type Job =
   /** `id` is the call's id; a retried call says why its previous attempt ended. */
   | {

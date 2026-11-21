@@ -567,14 +567,14 @@ The rest of `copilotz`:
 The log records what happened, with no bookkeeping tables beside it. Every event has its `type`,
 `data`, `cause`, commit time (`at`) and actor, with `for` and `in`.
 
-| Event                                          | When                                               | Its data                                          |
-| ---------------------------------------------- | -------------------------------------------------- | ------------------------------------------------- |
-| `<collection>.created`, `.updated`, `.deleted` | a write changes a document, in its commit          | `_id`, `doc`; an update also `changed`, `removed` |
-| `action.started`                               | a recorded call starts                             | `action`, `input`, `startedAt`, `attempt`         |
-| `action.completed`, `action.failed`            | it ends                                            | `action`, `result` or `error`, `ms`, `attempt`    |
-| `action.retried`                               | a call runs again                                  | `attempt`, `after`: `failed` or `lost`            |
-| `processor.retried`, `processor.failed`        | a delivery failed; the last one is the dead letter | `attempt` or `attempts`, `error`                  |
-| a declared event                               | code emits it                                      | what its schema says                              |
+| Event                                          | When                                               | Its data                                              |
+| ---------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
+| `<collection>.created`, `.updated`, `.deleted` | a write changes a document, in its commit          | `_id`, `doc`; an update also `changed`, `removed`     |
+| `action.started`                               | a recorded call starts                             | `action`, `input`, `startedAt`, `attempt`             |
+| `action.completed`, `action.failed`            | it ends                                            | `action`, `result` or `error`, `ms`, `attempt`        |
+| `action.retried`                               | a call runs again                                  | `attempt`, `after`: `failed` or `lost`                |
+| `processor.retried`, `processor.failed`        | a delivery failed; the last one is the dead letter | `attempt` or `attempts`, `error`; `actor` on the last |
+| a declared event                               | code emits it                                      | what its schema says                                  |
 
 - **Collection writes:** the document after the write, the last version for a delete, without
   private fields. A write that changes nothing records nothing. `sys.` collections never record.

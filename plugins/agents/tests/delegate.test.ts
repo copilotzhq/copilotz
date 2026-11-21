@@ -4,7 +4,13 @@
  * comes back to the chat it came from, and the agent carries on from it.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { type Actor, createRuntime, definePlugin, type Event } from "../../../runtime/mod.ts";
+import {
+  type Actor,
+  createRuntime,
+  definePlugin,
+  type Event,
+  principalOf,
+} from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models, { type LlmAdapter, type LlmMessage } from "../../models/mod.ts";
 import { type Approval, chat, type Message, tool } from "../chat/mod.ts";
@@ -42,6 +48,10 @@ const script: LlmAdapter = {
     }
     const heard = text(messages.filter((m) => !text(m).startsWith("<context")).at(-1)!);
     if (agent === "lead" && heard.includes("hold")) await held;
+    // Told to break, it fails for good: its turn answers that it failed.
+    if (agent === "dev" && heard.endsWith(": break")) {
+      throw Object.assign(new Error("it broke"), { final: true });
+    }
     const hand = heard.match(/hand (\S+) ?(\w*): (.+)$/s);
     if (hand) {
       yield {
@@ -52,7 +62,7 @@ const script: LlmAdapter = {
           input: { space: hand[1], ...(hand[2] ? { to: hand[2] } : {}), text: hand[3] },
         },
       };
-    } else if (heard.includes("whoami")) {
+    } else if (heard.includes("whoami") || heard.includes(" failed: ")) {
       yield { type: "tool_call", call: { id: crypto.randomUUID(), name: "whoami", input: {} } };
     } else yield { type: "text", text: `${agent} heard: ${heard.slice(-60)}` };
   },
@@ -404,5 +414,23 @@ test("whoever the space says answers takes it, even the agent that sent it", asy
     await rt.idle();
     await yesToShares(rt, ana);
     assertEquals(seen.lead?.in, space);
+  });
+});
+
+test("an agent waiting on another goes on, for the same person, when that one fails", async () => {
+  await setup(async (rt) => {
+    const { space } = await rt.call<{ space: string }>("space.create", { name: "Lab" }, {
+      actor: ana,
+    });
+    await rt.call("member.set", { space, member: { kind: "agent", id: "dev" }, role: "editor" }, {
+      actor: ana,
+    });
+    await rt.call("chat.send", { in: space, text: `hand ${space} dev: break` }, { actor: ana });
+    await rt.idle();
+    // Dev failed; North, waiting on it, read that and went on: working for Ana still, so what
+    // runs only for a person (a model on her own plan) runs for it.
+    assert(told.north?.some((t) => t.includes("dev failed: ")), "North heard Dev failed");
+    assertEquals(seen.north?.kind, "agent");
+    assertEquals(principalOf(seen.north)?.id, "ana");
   });
 });

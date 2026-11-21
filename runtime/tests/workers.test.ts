@@ -2,7 +2,8 @@
  * Workers of a plugin's kind (a computer, say): a program that isn't plugin
  * code but does its work. It connects with `<kind>:<secret>`, which its
  * kind's Action admits; its kind hears it come and go; plugin code sends it
- * jobs by id, and reads its output as it comes. It asks the owner for
+ * jobs by id, and reads its output as it comes, for as long as it's done (a
+ * step that thinks past 30 seconds isn't cut). It asks the owner for
  * nothing: no storage, no work of its own.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
@@ -29,7 +30,7 @@ const echoes = definePlugin({
       admit: "echoer.admit",
       ready: "echoer.ready",
       gone: "echoer.gone",
-      workloads: ["echo", "count", "sneak"],
+      workloads: ["echo", "count", "sneak", "slow"],
     },
   },
   actions: {
@@ -57,6 +58,17 @@ const echoes = definePlugin({
       input: { type: "object", properties: { id: { type: "string" }, text: { type: "string" } } },
       run: (ctx, input) =>
         ctx.workers.call("echoer", input.id ?? "e1", "echo", { text: input.text }),
+    }),
+    // Work that streams a while: a line now, another after `ms`.
+    "echo.slow": defineAction({
+      input: object,
+      run: async (ctx, input) => {
+        const { output, done } = await ctx.workers.dispatch("echoer", "e1", "slow", input);
+        const heard: unknown[] = [];
+        for await (const line of lines(output)) heard.push(line);
+        await done;
+        return heard;
+      },
     }),
     "echo.count": defineAction({
       input: object,
@@ -106,6 +118,18 @@ function echoer(topic: string, secret: string, id = `echoer-${crypto.randomUUID(
                 out.enqueue(new Uint8Array([...chunk, ...new TextEncoder().encode("\n")])),
             }),
           );
+      },
+      slow: async ({ input }) => {
+        const { ms } = await decode<{ ms: number }>(input);
+        const line = (value: unknown) => new TextEncoder().encode(`${JSON.stringify(value)}\n`);
+        return new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(line({ at: "start" }));
+            await new Promise((resolve) => setTimeout(resolve, ms));
+            controller.enqueue(line({ at: "end" }));
+            controller.close();
+          },
+        });
       },
       // A worker trying to reach storage: refused.
       sneak: async ({ callHost }) => {
@@ -219,5 +243,16 @@ test("a worker back on a new connection before its old one closes is still there
     assertEquals(await rt.call("echo.ask", { text: "still here" }), { said: "still here" });
     await second.stop();
     await until(async () => await online() === false, "gone was told once it really left");
+  });
+});
+
+test("work streams to its job for as long as it's done: past the 30 seconds a storage op gets", async () => {
+  await setup(async (rt, topic) => {
+    const worker = echoer(topic, "s3cret");
+    await worker.ready;
+    await until(async () => !!(await rt.query<{ online?: boolean }>("echoer.state")), "it came");
+    // A plan's model thinking before its first word: cut at 30 s, its step went to the next model.
+    assertEquals(await rt.call("echo.slow", { ms: 31_000 }), [{ at: "start" }, { at: "end" }]);
+    await worker.stop();
   });
 });

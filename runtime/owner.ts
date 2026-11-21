@@ -99,6 +99,7 @@ import {
   type OpRequest,
   raise,
   RUN,
+  WORK_MS,
 } from "./wire.ts";
 
 export type Transport = HypervisorOptions["transports"][number];
@@ -1628,6 +1629,8 @@ export async function createOwner(
     workerCalls: {
       maxConcurrent: 65_536,
       maxPerConnection: 1_024,
+      // As long as work sent on to a worker lasts (see `WORK_MS`); a storage op ends sooner.
+      timeoutMs: WORK_MS,
       admit: (context) => {
         const job = context.parent?.operationId;
         // Only executors, in a job, reach storage or send work on: browsers and plugins'
@@ -2061,13 +2064,14 @@ export async function createOwner(
           Promise.resolve(tx.emit({
             id: `${event.id}:${name}:${last ? "failed" : `retry:${attempt + 1}`}`,
             type: last ? "processor.failed" : "processor.retried",
-            // A final failure carries what failed, so a processor can answer for it.
+            // A final failure carries what failed, and for whom, so a processor can answer for it.
             data: last
               ? {
                 processor: name,
                 event: event.id,
                 type: event.type,
                 data: event.data,
+                ...(event.actor ? { actor: event.actor } : {}),
                 error: failure(error),
                 attempts: attempt,
               }

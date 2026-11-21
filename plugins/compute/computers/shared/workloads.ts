@@ -49,6 +49,8 @@ export const WORK = {
   filesRead: "computer.files.read",
   filesWrite: "computer.files.write",
   filesEdit: "computer.files.edit",
+  /** A file's bytes, streamed in (an upload, of any size): `FilesPutHead`, then the bytes. */
+  filesPut: "computer.files.put",
   /** Actions in whose's browser (its own Chrome and profile in the space), hidden or shown. */
   browser: "computer.browser",
   /** A web search, from the computer. */
@@ -83,6 +85,12 @@ export type Info = {
   name?: string;
   /** Whether its browser may open windows on its screen (`--windows`): allow unless never. */
   windows?: "allow" | "never";
+  /**
+   * The work it serves, by name (`WORK`'s): what the app may ask of it.
+   * Absent from a program older than this list, which serves none of the
+   * work added since (`computer.files.put`).
+   */
+  serves?: string[];
 };
 
 /**
@@ -197,6 +205,39 @@ export type FilesEditInput = {
 
 /** What a write or an edit answers: the file (relative to the space's folder) and its size after. */
 export type Written = { path: string; size: number };
+
+/**
+ * `computer.files.put`: a file written from bytes streamed in, so its size
+ * has no bound but the disk's (up to `MOST_PUT`), and nothing is held whole.
+ * Its input is this head (one JSON line), then exactly `size` bytes; it
+ * answers `Written` (or `Failed`, one JSON value). The bytes go to a
+ * temporary file, renamed over it once all came, so a broken upload leaves
+ * nothing. A file there already is kept unless `replace` (`exists`); a
+ * folder there always is. Codes past `Failed`'s: `exists`, `too_large`,
+ * `full` (no room left on the disk).
+ *
+ * A file too large for one request (a proxy's limit) comes in parts, in
+ * order (`upload`): each its own put of `size` bytes at `offset`, of a file
+ * of `total`, kept apart under the program's own folder until the last,
+ * which puts the file in place. A part before the last answers `PutPart`.
+ * Whether a file is there is asked at the first part and again at the
+ * last; a part out of order fails (`invalid`), and the upload starts again.
+ * Parts nobody finished go after a day.
+ */
+export type FilesPutHead = {
+  scope: Scope;
+  path: string;
+  size: number;
+  replace?: boolean;
+  /** A part of a file sent in parts: the upload's id, where this part starts, and the file's size. */
+  upload?: { id: string; offset: number; total: number };
+};
+
+/** What a part before the last answers: how many of the file's bytes are in. */
+export type PutPart = { received: number };
+
+/** The most a put takes: 2 GiB. */
+export const MOST_PUT = 2 * 1024 ** 3;
 
 /**
  * Browser actions, sandbox-lite's sixteen and those added after (see

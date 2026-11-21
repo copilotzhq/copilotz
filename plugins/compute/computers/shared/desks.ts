@@ -4,10 +4,12 @@
  * from the computer's other folders. And `may`: whether the actor may
  * write in or manage a space, as the spaces plugin says (`space.can`).
  */
-import type { Context } from "../../../../runtime/mod.ts";
+import { type Context, forbidden } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
 import { folderFor } from "./folder.ts";
+import { wake } from "./wake.ts";
+import { must } from "../../../access/spaces/contract.ts";
 
 /** A space's name for its folder: "personal" for someone's own, else its name. */
 async function nameOf(ctx: Context, space: string) {
@@ -68,4 +70,31 @@ export async function removeDesk(ctx: Context, desk: Desk) {
   if (next) {
     await system.collection("desk").updateOne({ _id: next._id }, { $set: { default: true } });
   }
+}
+
+/**
+ * A desk a person works on directly (its panel, an upload), by id: only
+ * where they may write in its space, and where its owner answers for it,
+ * only its owner changes anything (`changes`). What changes something wakes
+ * a computer that sleeps (a cloud computer): `woke` says whether it did
+ * (`false`: nothing wakes it, as a person's own computer that's off); one
+ * that couldn't wake fails (`unavailable`, saying why).
+ */
+export async function personalDesk(
+  ctx: Context,
+  id: string,
+  changes: boolean,
+): Promise<{ desk: Desk; woke?: boolean }> {
+  // The rules reach only the desks of spaces the person is in; working there takes more.
+  const desk = await ctx.db.collection<Desk>("desk").findOne({ _id: id });
+  if (!desk) throw Object.assign(new Error("No such computer here"), { code: "not_found" });
+  await must(ctx, "write", desk.in, "You can't work in this space.");
+  // Where its owner answers for it, nobody else changes anything on it without them.
+  if (desk.answers === "owner" && desk.owner !== ctx.actor!.id && changes) {
+    throw forbidden("Its owner keeps this computer's answers: only they work on it directly.");
+  }
+  if (desk.online || !changes) return { desk };
+  const woke = await wake(ctx, desk.computer);
+  if (typeof woke === "string") throw Object.assign(new Error(woke), { code: "unavailable" });
+  return { desk, woke };
 }

@@ -6,6 +6,8 @@
  * computer since it opened (an agent wrote it), saving says so first and
  * offers to load what's there. A file too big to read whole shows its start,
  * and isn't edited (saving would cut it short). A new file opens to write.
+ * Where the person doesn't change files (`writes`: its owner answers for the
+ * computer), it's only read.
  */
 import { type ReactNode, useEffect, useState } from "react";
 import {
@@ -37,11 +39,13 @@ type Shown =
 const svg = (text: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`;
 
 export function FileView(
-  { work, path, entry, close, saved, download, downloading }: {
+  { work, path, entry, writes = true, close, saved, download, downloading }: {
     work: Work;
     path: string[];
     /** What the folder's listing said of it; a new file has none. */
     entry?: Entry;
+    /** Whether the person changes files here: else it's only read. */
+    writes?: boolean;
     close(): void;
     /** It's written: what the listing says of it now. */
     saved(entry: Entry): Promise<void>;
@@ -182,7 +186,7 @@ export function FileView(
             )
             : (
               <>
-                {shown.kind === "text" && !shown.truncated
+                {writes && shown.kind === "text" && !shown.truncated
                   ? (
                     <Button size="sm" icon="pencil" onClick={() => setDraft(shown.content)}>
                       Edit

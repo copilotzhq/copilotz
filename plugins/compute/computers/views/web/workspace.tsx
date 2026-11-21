@@ -270,7 +270,16 @@ export function Workspace(
               {opened.has("files")
                 ? (
                   <div hidden={tab !== "files"} className="computer-tab">
-                    <FilesTab work={work} folder={folder} computer={nameOf(computer)} />
+                    <FilesTab
+                      work={work}
+                      folder={folder}
+                      computer={nameOf(computer)}
+                      desk={deskId}
+                      // Where its owner answers for it, only they change what's on it (computer.work).
+                      writes={!(desk.answers === "owner" && me !== undefined && desk.owner !== me)}
+                      {...(theirs ? { owner: theirs } : {})}
+                      {...(kind ? { sleeps: true } : {})}
+                    />
                   </div>
                 )
                 : null}

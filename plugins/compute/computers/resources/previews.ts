@@ -23,6 +23,7 @@ import { personOf } from "../../../../runtime/mod.ts";
 import { previewUrl, schemeOf } from "../actions/preview.ts";
 import type { Preview } from "../collections/preview.ts";
 import { type PreviewsSettings, settingsOf } from "../shared/settings.ts";
+import { headed } from "../shared/streams.ts";
 import { type HttpRequestHead, type HttpResponseHead, WORK } from "../shared/workloads.ts";
 
 /** Where the app gives a member a grant for a preview. */
@@ -39,8 +40,6 @@ const GRANT_S = 120;
 const TOUCH_MS = 10_000;
 /** How long a computer woken for a request has to connect. */
 const WAKE_MS = 90_000;
-/** The most a chunk of a request's body is, on its way (under Oxian's 1 MiB). */
-const CHUNK = 256 * 1024;
 
 /** Headers for one connection, not passed on (with the front's secret, and the host). */
 const HOP = new Set([
@@ -212,30 +211,6 @@ function headersFor(request: Request, host: string): [string, string][] {
   return out;
 }
 
-/** What goes to the computer: the head, one JSON line, then the request's body as it comes. */
-function bodyFor(head: HttpRequestHead, request: Request): ReadableStream<Uint8Array> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let headSent = false;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (!headSent) {
-        headSent = true;
-        controller.enqueue(encoder.encode(`${JSON.stringify(head)}\n`));
-        return;
-      }
-      if (!request.body) return controller.close();
-      // Read only once it's asked for: a computer found offline leaves the body for a retry.
-      reader ??= request.body.getReader();
-      const { done, value } = await reader.read();
-      if (done) return controller.close();
-      for (let i = 0; i < value.length; i += CHUNK) {
-        controller.enqueue(value.subarray(i, i + CHUNK));
-      }
-    },
-    cancel: (reason) => reader?.cancel(reason),
-  });
-}
-
 /** The computer's answer: its head (the first line), and the rest, its body, as it comes. */
 async function answerOf(output: ReadableStream<Uint8Array>) {
   const reader = output.getReader();
@@ -290,7 +265,7 @@ async function forward(
     headers: headersFor(request, host),
   };
   const send = () =>
-    runtime.workers.dispatch("computer", preview.computer, WORK.http, bodyFor(head, request), {
+    runtime.workers.dispatch("computer", preview.computer, WORK.http, headed(head, request.body), {
       signal: request.signal,
     });
   const offline = (error: unknown) => (error as { code?: string }).code === "offline";

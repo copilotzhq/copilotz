@@ -65,7 +65,7 @@ export const MEDIA_TYPE_LENGTH = 127;
 /**
  * What a file's media type looks like: `type/subtype`, then parameters
  * (`audio/ogg; codecs=opus`, as WhatsApp sends voice notes), on one line:
- * an agent is told it (`[file a.bin: <type>, …]`).
+ * an agent is told it (`[file a.bin: <type>, …, id …]`).
  */
 export const MEDIA_TYPE =
   /^[A-Za-z0-9][\w!#$&^.+-]*\/[A-Za-z0-9][\w!#$&^.+-]*(?: *; *[\w!#$&^.+-]+=(?:[\w!#$&^.+-]+|"[ !#-\[\]-~]*"))* *$/;

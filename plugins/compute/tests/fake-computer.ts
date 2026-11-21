@@ -28,6 +28,8 @@ export function fakeComputer(
   } = {},
 ) {
   const asked: { work: string; input: Record<string, unknown> }[] = [];
+  /** The work it serves, once its workloads are set. */
+  const served: string[] = [];
   let credential = first;
   const attempt = { attemptId: crypto.randomUUID(), epoch: Date.now() };
   const answer = (work: string, reply: (input: Record<string, unknown>) => unknown) => ({
@@ -37,6 +39,55 @@ export function fakeComputer(
       return json(reply(given));
     },
   });
+  const workloads: Record<string, WorkerWorkHandler> = {
+    ...answer(WORK.enrolled, (input) => {
+      if (options.lose) return { error: { message: "stopped", code: "failed" } };
+      credential = `${input.id}.${input.secret}`;
+      return {};
+    }),
+    ...answer(WORK.info, () => ({
+      os: "testos",
+      arch: "x64",
+      hostname: "testbox",
+      root: "/tmp/root",
+      shell: "bash",
+      browser: null,
+      version: "test",
+      // What it serves, as the program's info says.
+      serves: [...served],
+      ...options.info,
+    })),
+    ...(options.updates ? answer(UPDATE, () => ({ updating: true })) : {}),
+    ...answer(WORK.terminal, (input) => ({
+      state: "idle",
+      commandId: "c1",
+      stdout: `ran ${input.stdin}`,
+      stderr: "",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 1,
+      cwd: ".",
+    })),
+    ...answer(WORK.filesWrite, (input) => ({ size: String(input.content).length })),
+    ...answer(WORK.filesList, () => []),
+    ...answer(WORK.jobsStart, (input) => ({
+      id: "job-1",
+      who: (input.scope as { who: string }).who,
+      name: input.name ?? "job-1",
+      command: input.command,
+      pid: 1,
+      running: true,
+      exitCode: null,
+      startedAt: new Date().toISOString(),
+    })),
+    ...answer(WORK.search, () => [
+      { title: "Deno", url: "https://deno.com", snippet: "A runtime" },
+    ]),
+    ...options.workloads,
+  };
+  served.push(...Object.keys(workloads));
   const worker = createWorker({
     id: `computer-${crypto.randomUUID()}`,
     transport: { type: "in-process", config: { topic } },
@@ -47,52 +98,7 @@ export function fakeComputer(
         expiresAtMs: Date.now() + 60_000,
       }),
     capacity: 8,
-    workloads: {
-      ...answer(WORK.enrolled, (input) => {
-        if (options.lose) return { error: { message: "stopped", code: "failed" } };
-        credential = `${input.id}.${input.secret}`;
-        return {};
-      }),
-      ...answer(WORK.info, () => ({
-        os: "testos",
-        arch: "x64",
-        hostname: "testbox",
-        root: "/tmp/root",
-        shell: "bash",
-        browser: null,
-        version: "test",
-        ...options.info,
-      })),
-      ...(options.updates ? answer(UPDATE, () => ({ updating: true })) : {}),
-      ...answer(WORK.terminal, (input) => ({
-        state: "idle",
-        commandId: "c1",
-        stdout: `ran ${input.stdin}`,
-        stderr: "",
-        stdoutTruncated: false,
-        stderrTruncated: false,
-        exitCode: 0,
-        timedOut: false,
-        durationMs: 1,
-        cwd: ".",
-      })),
-      ...answer(WORK.filesWrite, (input) => ({ size: String(input.content).length })),
-      ...answer(WORK.filesList, () => []),
-      ...answer(WORK.jobsStart, (input) => ({
-        id: "job-1",
-        who: (input.scope as { who: string }).who,
-        name: input.name ?? "job-1",
-        command: input.command,
-        pid: 1,
-        running: true,
-        exitCode: null,
-        startedAt: new Date().toISOString(),
-      })),
-      ...answer(WORK.search, () => [
-        { title: "Deno", url: "https://deno.com", snippet: "A runtime" },
-      ]),
-      ...options.workloads,
-    },
+    workloads,
   });
   return { worker, asked, credential: () => credential };
 }

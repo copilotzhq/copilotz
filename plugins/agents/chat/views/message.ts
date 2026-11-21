@@ -13,9 +13,10 @@ const viewable = (type: string) =>
 /**
  * Its files, as an agent reads them: text files' content, what audio says,
  * images and PDFs as they are (named in the text too), the rest by name.
- * Each file's content is read on its own, all in the same pass: one answer
- * from the owner carries one file, never a message's files together, which
- * could pass the most one answer carries (16 MiB).
+ * Each says its id, which a tool takes to use the file itself (a computer's
+ * `save_file`). Each file's content is read on its own, all in the same
+ * pass: one answer from the owner carries one file, never a message's files
+ * together, which could pass the most one answer carries (16 MiB).
  */
 function attached(m: Message, ctx: ViewContext): { text: string; files: LlmFile[] } {
   if (!m.files?.length) return { text: "", files: [] };
@@ -25,19 +26,19 @@ function attached(m: Message, ctx: ViewContext): { text: string; files: LlmFile[
       ? ctx.db.collection<File>("file").findOne({ _id: f.id }).value?.data
       : undefined;
     if (f.transcript !== undefined) {
-      return `\n[${f.voice ? "voice message" : `audio ${f.name}`}, transcribed]\n${f.transcript}` +
-        `\n[end of ${f.voice ? "voice message" : f.name}]`;
+      return `\n[${f.voice ? "voice message" : `audio ${f.name}`}, transcribed, id ${f.id}]\n` +
+        `${f.transcript}\n[end of ${f.voice ? "voice message" : f.name}]`;
     }
     if (data !== undefined && viewable(f.type)) {
       files.push({ name: f.name, type: f.type, data });
-      return `\n[${f.type === "application/pdf" ? "pdf" : "image"} ${f.name}]`;
+      return `\n[${f.type === "application/pdf" ? "pdf" : "image"} ${f.name}, id ${f.id}]`;
     }
     if (data === undefined || !textual(f.type)) {
-      return `\n[file ${f.name}: ${f.type}, ${f.size} bytes]`;
+      return `\n[file ${f.name}: ${f.type}, ${f.size} bytes, id ${f.id}]`;
     }
     const content = text(data);
     const cut = content.length > FILE_CHARS ? `${content.slice(0, FILE_CHARS)}\n[…cut]` : content;
-    return `\n[file ${f.name}]\n${cut}\n[end of ${f.name}]`;
+    return `\n[file ${f.name}, id ${f.id}]\n${cut}\n[end of ${f.name}]`;
   });
   return { text: lines.join(""), files };
 }

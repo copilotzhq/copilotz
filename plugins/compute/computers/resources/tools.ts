@@ -5,15 +5,20 @@
  * the space's folder. Running commands, starting jobs and writing files wait
  * for a yes, unless it's been given (see shared/ask.ts). Listed in an
  * agent's `tools` by name.
+ *
+ * Files cross between the chat and the computer both ways: `save_file` puts
+ * a file sent in a chat (by the id its message shows the agent) in the
+ * folder, a write like any other; `send_file` sends one from the folder into
+ * the chat (`chat.say`), for its people to open, up to a chat file's size.
  */
-import type { Tool, ToolContext } from "../../../agents/chat/contract.ts";
-import { tool } from "../../../agents/chat/contract.ts";
+import type { File, Tool, ToolContext } from "../../../agents/chat/contract.ts";
+import { FILE_DATA, tool } from "../../../agents/chat/contract.ts";
 import { allowed } from "../shared/ask.ts";
 import { jobEnv } from "../shared/env.ts";
 import type { Asked } from "../shared/settings.ts";
 import { touch, whereAwake } from "../shared/wake.ts";
 import { browserActionSchema, browserDescription } from "../shared/browser.ts";
-import { WORK } from "../shared/workloads.ts";
+import { type FilesRead, WORK, type Written } from "../shared/workloads.ts";
 
 /** Every tool's choice of computer, when the space has more than one. */
 export const computerChoice = {
@@ -309,6 +314,164 @@ const webSearch = tool({
   run: (input, ctx) => on(ctx, WORK.search, input),
 });
 
+/** A file's name as a path in the folder: its last part, never a way out of it. */
+const nameAsPath = (name: string) => {
+  const last = name.split(/[\\/]/).pop()?.trim() ?? "";
+  return last && last !== "." && last !== ".." ? last : "file";
+};
+
+const saveFile = tool({
+  description: "Saves a file sent in this chat into this space's folder on a computer, where " +
+    "commands and the other tools reach it (a zip to unpack, data to work on, an image to edit). " +
+    "file: its id, as its message shows it ([file … id file-…]). path: where in the folder " +
+    "(default: its name, at the top); a file there is replaced.",
+  input: {
+    type: "object",
+    properties: {
+      file: { type: "string", minLength: 1, description: "The file's id, from its message." },
+      path: { type: "string", minLength: 1 },
+      computer: computerChoice,
+    },
+    required: ["file"],
+    additionalProperties: false,
+  },
+  run: async (input, ctx) => {
+    // As the agent reads it: a file of a chat it reaches, sent (a draft is its sender's alone).
+    const found = await ctx.db.collection<File>("file").findOne({ _id: input.file });
+    if (!found) {
+      return `Error: there's no file "${input.file}" here: give the id its message shows ` +
+        "(file-…).";
+    }
+    const path = input.path ?? nameAsPath(found.name);
+    const answer = await on(ctx, WORK.filesWrite, {
+      path,
+      content: found.data,
+      encoding: "base64",
+      ...(input.computer ? { computer: input.computer } : {}),
+    }, { kind: "writes", detail: `save ${found.name} as ${path}` });
+    return answer && typeof answer === "object" && "size" in answer
+      ? { ...(answer as Written), file: found.name }
+      : answer;
+  },
+});
+
+/** Media types by extension, for a file sent into a chat; anything else is bytes. */
+const TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  pdf: "application/pdf",
+  txt: "text/plain",
+  md: "text/markdown",
+  csv: "text/csv",
+  tsv: "text/tab-separated-values",
+  json: "application/json",
+  xml: "application/xml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  html: "text/html",
+  htm: "text/html",
+  css: "text/css",
+  js: "text/javascript",
+  ts: "text/typescript",
+  py: "text/x-python",
+  zip: "application/zip",
+  gz: "application/gzip",
+  tgz: "application/gzip",
+  tar: "application/x-tar",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+};
+const typeOf = (name: string) =>
+  TYPES[name.slice(name.lastIndexOf(".") + 1).toLowerCase()] ?? "application/octet-stream";
+
+/** The most bytes a file sent into a chat holds: a chat file's limit, as base64. */
+const SENDABLE = Math.floor(FILE_DATA / 4) * 3;
+/** What `send_file` reads at a time. */
+const PART = 4 * 1024 * 1024;
+
+const decode = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+const encode = (bytes: Uint8Array) => {
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(text);
+};
+
+const sendFile = tool({
+  description: "Sends a file from this space's folder on a computer into this chat, for its " +
+    "people to open or download (a report, a chart, a zip you made): up to about 10 MB. text: " +
+    "what you say with it, if anything.",
+  input: {
+    type: "object",
+    properties: {
+      path: { type: "string", minLength: 1 },
+      text: { type: "string" },
+      computer: computerChoice,
+    },
+    required: ["path"],
+    additionalProperties: false,
+  },
+  run: async (input, ctx) => {
+    const { path, text, computer } = input;
+    const parts: Uint8Array[] = [];
+    let size = 0;
+    for (let offset = 0;;) {
+      const read = await on(ctx, WORK.filesRead, {
+        path,
+        offset,
+        length: PART,
+        ...(computer ? { computer } : {}),
+      });
+      // What it couldn't read (not there, a folder, offline) says why, as the agent reads it.
+      if (!read || typeof read !== "object" || !("content" in read)) return read;
+      const got = read as FilesRead;
+      if (got.size > SENDABLE) {
+        return `Error: ${path} is ${megabytes(got.size)}: a file sent in a chat may be about ` +
+          `${megabytes(SENDABLE)} at most. Make it smaller (compress it, split it), or share it ` +
+          "another way (a preview link, for what a job serves).";
+      }
+      const bytes = got.encoding === "base64"
+        ? decode(got.content)
+        : new TextEncoder().encode(got.content);
+      parts.push(bytes);
+      size += bytes.length;
+      offset += bytes.length;
+      if (!got.truncated || !bytes.length) break;
+    }
+    const whole = new Uint8Array(size);
+    let at = 0;
+    for (const part of parts) {
+      whole.set(part, at);
+      at += part.length;
+    }
+    const name = nameAsPath(path);
+    // Said once, whatever runs it again: its id is the call's.
+    const said = await ctx.call<{ message: string }>("chat.say", {
+      id: `send_file:${ctx.callId}`,
+      thread: ctx.thread,
+      from: ctx.agent,
+      ...(text?.trim() ? { text } : {}),
+      files: [{ name, type: typeOf(name), data: encode(whole) }],
+    });
+    return { sent: name, path, size, message: said.message };
+  },
+});
+
+/** Bytes as a person reads them: "3.2 MB". */
+const megabytes = (bytes: number) => `${(bytes / 1_000_000).toFixed(1)} MB`;
+
 /** By the names agents list them under. */
 export const tools: Record<string, Tool> = {
   terminal,
@@ -320,6 +483,8 @@ export const tools: Record<string, Tool> = {
   read_file: readFile,
   write_file: writeFile,
   edit_file: editFile,
+  save_file: saveFile,
+  send_file: sendFile,
   browser,
   web_search: webSearch,
 };

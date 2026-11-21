@@ -36,7 +36,7 @@ import { type AgentsOptions, createAgents } from "./workloads/agents.ts";
 import { answer, fail } from "./workloads/answer.ts";
 import { createArchive } from "./workloads/archive.ts";
 import { createBrowserWork } from "./workloads/browser.ts";
-import { createFiles } from "./workloads/files.ts";
+import { createFiles, putting } from "./workloads/files.ts";
 import { createHttp } from "./workloads/http.ts";
 import { machineInfo } from "./workloads/info.ts";
 import { createJobs } from "./workloads/jobs.ts";
@@ -209,6 +209,8 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     [WORK.filesRead]: answer(files.read),
     [WORK.filesWrite]: answer(files.write),
     [WORK.filesEdit]: answer(files.edit),
+    // The bytes streamed in, after a head line: an upload of any size.
+    [WORK.filesPut]: putting(files),
     [WORK.browser]: answer(browser.run),
     [WORK.search]: answer((input: Parameters<typeof search>[0], signal) =>
       search(input, { url: searchUrl, browser: browser.search, signal })
@@ -222,6 +224,8 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     // Its events, as JSON lines.
     [WORK.agentsPrompt]: agents.prompt,
   };
+  // What it serves, as its info says, so the app asks only for work it knows (an upload).
+  info.serves = Object.keys(workloads);
   if (options.resume !== false) await jobs.resume();
 
   // One attempt per process, kept across reconnects, so Oxian can fence a replaced one.

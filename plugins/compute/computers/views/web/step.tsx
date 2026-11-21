@@ -3,14 +3,17 @@
  * `computer.step`, for chat's `toolViews`), as people read it rather than
  * as data: a command and what it printed, how it ended; a job started,
  * listed, read or stopped; a folder's files; a file read, written (its
- * text, as added lines) or edited (what changed, line by line); search
- * results as links; the browser's steps and where it ended up. While the
- * call runs, it says so; one that waits on your OK, or found no computer,
- * or failed, says that instead.
+ * text, as added lines) or edited (what changed, line by line); a file sent
+ * in the chat saved to the folder (with a link to it), or one from the
+ * folder sent into the chat (which shows it, as the agent's message);
+ * search results as links; the browser's steps and where it ended up. While
+ * the call runs, it says so; one that waits on your OK, or found no
+ * computer, or failed, says that instead.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
+  appBase,
   Badge,
   bytes,
   CodeBlock,
@@ -25,6 +28,7 @@ import type { Entry, Job, JobsLogs, SearchResult } from "../../shared/workloads.
 import { listOf, type Outcome, outcome, terminalCall, took } from "./calls.ts";
 import { lineDiff } from "./diff.ts";
 import { STYLE } from "./style.ts";
+import { say } from "./words.ts";
 
 const str = (value: unknown) => typeof value === "string" ? value : "";
 
@@ -366,6 +370,72 @@ function Edit({ call, done }: { call: ShownCall; done: Outcome }): ReactNode {
   );
 }
 
+/** What its person is asked before a save: "…: save data.zip as work/data.zip" (tools.ts). */
+const SAVE_ASKED = /: save (.+) as (.+)$/m;
+
+/** A file sent in the chat, saved to the folder: which, where, and its size there. */
+function SaveFile({ call, done }: { call: ShownCall; done: Outcome }): ReactNode {
+  const saved = done.kind === "done" && record(done.value)
+    ? done.value as { path?: string; size?: number; file?: string }
+    : undefined;
+  const asked = done.kind === "waiting" ? SAVE_ASKED.exec(done.text) : null;
+  const file = saved?.file ?? asked?.[1];
+  const path = saved?.path ?? asked?.[2] ?? str(call.input?.path);
+  const id = str(call.input?.file);
+  // The file as it was sent, where the chat serves it (`/files/<id>`).
+  const sent = file && id
+    ? (
+      <a href={`${appBase()}/files/${encodeURIComponent(id)}`} target="_blank" rel="noopener">
+        {file}
+      </a>
+    )
+    : <b>{file}</b>;
+  return (
+    <div className="step-moved">
+      <Line
+        icon="download"
+        status={saved?.size !== undefined
+          ? <span className="step-status">{bytes(saved.size)}</span>
+          : <Status done={done} />}
+      >
+        {file
+          ? say.nodes(saved ? "stepSaved" : "stepSaves", { file: sent, path: <code>{path}</code> })
+          : path
+          ? say.nodes("stepSavesFile", { path: <code>{path}</code> })
+          : say("stepSavesFolder")}
+      </Line>
+      {done.kind === "failed" || done.kind === "missing"
+        ? <p className="step-why">{done.text}</p>
+        : null}
+    </div>
+  );
+}
+
+/** A file from the folder, sent into the chat: the chat shows it, as the agent's own message. */
+function SendFile({ call, done }: { call: ShownCall; done: Outcome }): ReactNode {
+  const sent = done.kind === "done" && record(done.value)
+    ? done.value as { sent?: string; path?: string; size?: number }
+    : undefined;
+  const path = sent?.path ?? str(call.input?.path);
+  return (
+    <div className="step-moved">
+      <Line
+        icon="send"
+        status={sent?.size !== undefined
+          ? <span className="step-status">{bytes(sent.size)}</span>
+          : <Status done={done} />}
+      >
+        {sent?.sent
+          ? say.nodes("stepSent", { file: <b title={path}>{sent.sent}</b> })
+          : say.nodes("stepSends", { path: <code>{path}</code> })}
+      </Line>
+      {done.kind === "failed" || done.kind === "missing"
+        ? <p className="step-why">{done.text}</p>
+        : null}
+    </div>
+  );
+}
+
 function Search({ call, done }: { call: ShownCall; done: Outcome }): ReactNode {
   const query = str(call.input?.query);
   const results = done.kind === "done" ? listOf<SearchResult>(done.value, "results") : [];
@@ -469,6 +539,8 @@ const VIEWS: Record<string, (props: { call: ShownCall; done: Outcome }) => React
   read_file: Read,
   write_file: Write,
   edit_file: Edit,
+  save_file: SaveFile,
+  send_file: SendFile,
   web_search: Search,
   browser: Browser,
 };

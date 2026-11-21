@@ -16,6 +16,12 @@
  * managers' `env.set`) is what its jobs and shells run with, and its apps
  * (see collections/env-var.ts); secrets are sealed with `computers: { key }`.
  *
+ * Files cross between a chat and its space's computer: an agent saves one
+ * sent in the chat into the folder (`save_file`, a write like any other) and
+ * sends one from the folder into the chat (`send_file`); a person puts files
+ * there from the computer's page (`PUT /computers/upload`, streamed through
+ * to it: routes/upload.ts), where they may change it (`computer.upload`).
+ *
  * A computer also runs its owner's plans: Claude Code, Codex or Antigravity,
  * signed in there once (`computer.engines`, `computer.engine.login`), so an
  * agent's model calls for them run on their plan, through the CLI, instead
@@ -55,12 +61,14 @@ import { shareAction } from "./actions/share.ts";
 import { unshareAction } from "./actions/unshare.ts";
 import { viewAction } from "./actions/view.ts";
 import { workAction } from "./actions/work.ts";
+import { uploadAction } from "./actions/upload.ts";
 import { computer } from "./collections/computer.ts";
 import { desk } from "./collections/desk.ts";
 import { enrollment } from "./collections/enrollment.ts";
 import { envVar } from "./collections/env-var.ts";
 import { preview } from "./collections/preview.ts";
 import { previewRoutes } from "./resources/previews.ts";
+import { UPLOAD, uploadRoute } from "./routes/upload.ts";
 import { tools } from "./resources/tools.ts";
 import { upgradeAsksAction } from "./actions/upgrade-asks.ts";
 import { contextViews } from "./views/context.ts";
@@ -112,6 +120,7 @@ export const computers: Plugin = definePlugin({
     "computer.move": moveAction,
     "computer.allowOrigin": allowOriginAction,
     "computer.work": workAction,
+    "computer.upload": uploadAction,
     // A space's environment: its managers' (env.values: the system's, an app's deploy).
     "env.set": envSetAction,
     "env.unset": envUnsetAction,
@@ -146,7 +155,7 @@ export const computers: Plugin = definePlugin({
   // Agents with computer tools know, each turn, whose computer they work on and what waits for a yes.
   views: contextViews,
   // What jobs serve, at addresses of their own, once the app says where (`previews`).
-  routes: previewRoutes,
+  routes: { ...previewRoutes, [UPLOAD]: uploadRoute },
   resources: {
     tools,
     computers: {},

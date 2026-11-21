@@ -1,3 +1,47 @@
+## Unreleased
+
+Files go between a chat and a computer both ways, and people put files on a computer from its page.
+
+**New:**
+
+- **An agent saves a file sent in its chat on a computer** (`save_file`, the computers plugin): a
+  zip to unpack, a spreadsheet to work on, an image to edit, into the space's folder, where commands
+  and the other tools reach it. It's a write like `write_file`'s, asked first where writes are. Each
+  file a message carries now says its id to the agent
+  (`[file data.zip: application/zip, 3214000
+  bytes, id …]`, and `[image …, id …]`,
+  `[file notes.txt, id …]`), which the tool takes; it reads the file as the agent, so the rules
+  decide which it reaches.
+- **An agent sends a file from a computer into its chat** (`send_file`): a report, a chart, a zip it
+  made, as its own message with the file (`chat.say`), up to a chat file's size (about 10 MB). Run
+  again as itself (a retried turn), it sends nothing more. Chat's contract exports `FILE_DATA`.
+- **Uploads to a computer** (`PUT /computers/upload?desk=&path=[&replace=1]`, the Files view): a
+  person puts files in a space's folder on a computer, of up to 2 GiB each, streamed through to it
+  as they come and put in place once whole, so a broken upload leaves nothing. Past what one request
+  may carry on its way (Cloud Run's 32 MiB, a CDN's 100 MB), a file goes in parts, in order
+  (`&upload=&offset=&total=`), kept apart on the computer until the last; parts nobody finished go
+  after a day. Only where they may change the computer from its panel (`computer.upload`, on the
+  record: who put what where), a computer that sleeps woken first, and one between connections
+  waited for. A file there is kept unless replaced. The Files view takes files picked or dropped,
+  with each one's progress, and asks before replacing one.
+- **The computer program says what it serves** (`Info.serves`), and takes a file streamed in
+  (`computer.files.put`). The app asks a computer what it serves before an upload, so one whose
+  program is older answers at once that it needs updating (501, `outdated`).
+
+- **Why a model handed over, on the record.** A model of a list that doesn't answer and hands over
+  to the next (a person's plan falling back to an API key) is logged by the process
+  (`models: <model> didn't answer after 31.2 s, thinking (<code>: <words>); <next> answers instead
+  [thread=… agent=… turn=…]`),
+  and the model that answers instead says so on its usage (`fallback`, `fallbackWhy` tags). The
+  engine adapter logs a session it starts over. The computer program logs a plan's prompt that
+  failed, and a step the app stopped reading before it ended, with how long it ran (`computer.log`).
+
+**Changed:**
+
+- `computer.work`'s rules for a person working on a computer (in its space, its owner's where they
+  answer for it, a computer that sleeps woken) are `personalDesk`, which uploads share. A desk that
+  isn't there is `not_found` (it was `invalid`).
+
 ## 1.0.0-rc.57 — 2026-11-20
 
 Agents can run on the plan of the person they work for: Claude, ChatGPT through Codex, or Google AI

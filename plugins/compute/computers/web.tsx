@@ -58,6 +58,8 @@ const TOOLS = [
   "read_file",
   "write_file",
   "edit_file",
+  "save_file",
+  "send_file",
   "browser",
   "web_search",
 ];

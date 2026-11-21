@@ -6255,6 +6255,40 @@
           "helper": "isMaintenance"
         },
         {
+          "name": "computer.upload",
+          "summary": "Puts a file on a space's computer, in its folder there: where its bytes go",
+          "input": {
+            "type": "object",
+            "properties": {
+              "desk": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": [
+              "desk",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
           "name": "computer.view",
           "summary": "Says you have a space's computer open, so it stays awake while you do",
           "input": {
@@ -6744,6 +6778,56 @@
           }
         },
         {
+          "name": "save_file",
+          "summary": "Saves a file sent in this chat into this space's folder on a computer, where commands and the other tools reach it (a zip to unpack, data to work on, an image to edit). file: its id, as its message shows it ([file … id file-…]). path: where in the folder (default: its name, at the top); a file there is replaced.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The file's id, from its message."
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "send_file",
+          "summary": "Sends a file from this space's folder on a computer into this chat, for its people to open or download (a report, a chart, a zip you made): up to about 10 MB. text: what you say with it, if anything.",
+          "input": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "text": {
+                "type": "string"
+              },
+              "computer": {
+                "type": "string",
+                "description": "Which of this space's computers to use (its name): the space's default unless you say. Your context lists them."
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
           "name": "start_job",
           "summary": "Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it). Read its output with job_logs; stop it with stop_job.",
           "input": {
@@ -6901,6 +6985,15 @@
           ],
           "host": false,
           "underName": false
+        },
+        {
+          "path": "/computers/upload",
+          "method": "PUT",
+          "methods": [
+            "PUT"
+          ],
+          "host": false,
+          "underName": true
         }
       ],
       "needs": [],
@@ -6996,6 +7089,12 @@
             "read_file": {
               "description": "Reads a file in this space's folder (text; base64 when it isn't). Large files come in parts: offset and length, in bytes."
             },
+            "save_file": {
+              "description": "Saves a file sent in this chat into this space's folder on a computer, where commands and the other tools reach it (a zip to unpack, data to work on, an image to edit). file: its id, as its message shows it ([file … id file-…]). path: where in the folder (default: its name, at the top); a file there is replaced."
+            },
+            "send_file": {
+              "description": "Sends a file from this space's folder on a computer into this chat, for its people to open or download (a report, a chart, a zip you made): up to about 10 MB. text: what you say with it, if anything."
+            },
             "start_job": {
               "description": "Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it). Read its output with job_logs; stop it with stop_job."
             },
@@ -7072,6 +7171,7 @@
             "computer.files.read",
             "computer.files.write",
             "computer.files.edit",
+            "computer.files.put",
             "computer.browser",
             "computer.search",
             "computer.http",
@@ -7265,6 +7365,8 @@
             "list_files": {},
             "list_jobs": {},
             "read_file": {},
+            "save_file": {},
+            "send_file": {},
             "start_job": {},
             "stop_job": {},
             "terminal": {},

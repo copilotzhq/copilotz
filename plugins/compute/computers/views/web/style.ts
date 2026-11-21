@@ -1,10 +1,10 @@
 /**
  * Computers' layout on the web, on the theme's variables: a computer's mark,
  * connecting one, a space's computers (its tab), a computer's page (its
- * header, the space and tabs, the terminal, jobs and files), what an agent
- * asks to do on one (inside chat's card for it), their calls there, and the
- * person's plans on Connected accounts (a card per plan, signing one in).
- * Only layout: the pieces are the toolkit's.
+ * header, the space and tabs, the terminal, jobs and files, and uploading to
+ * them), what an agent asks to do on one (inside chat's card for it), their
+ * calls there, and the person's plans on Connected accounts (a card per
+ * plan, signing one in). Only layout: the pieces are the toolkit's.
  */
 export const STYLE = `
 /* A computer's mark */
@@ -303,10 +303,75 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .files-crumb[aria-current] { color: var(--foreground); font-weight: 650; }
 .files-crumb .copilotz-icon { color: var(--primary-text); }
 .files-crumb-sep { color: var(--muted-foreground); }
-.files-tools { display: flex; align-items: center; gap: 6px; }
+.files-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .files-filter { width: 170px; }
+.files-glyph { flex: none; display: inline-block; vertical-align: middle; }
 .files-new { max-width: 420px; }
-.files-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+.files-view-only { display: flex; align-items: flex-start; gap: 7px; margin: -2px 0 0; color: var(--muted-foreground);
+  font-size: 13px; line-height: 1.45; }
+.files-view-only > .copilotz-icon { margin-top: 2px; }
+.files-body { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+.files[data-over] .files-body { min-height: 190px; }
+
+/* Where files dragged over the tab go: over the listing, only while they're dragged */
+.files-drop { position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; gap: 6px;
+  padding: 24px; border: 2px dashed var(--primary); border-radius: var(--radius-xl);
+  background: color-mix(in oklab, var(--primary-soft) 80%, var(--card)); color: var(--primary-text); text-align: center;
+  pointer-events: none; animation: files-drop-in .14s ease-out; }
+.files-drop strong { font-size: 15px; font-weight: 650; }
+.files-drop-to { max-width: 100%; color: var(--secondary-foreground); font-size: 13px; overflow-wrap: anywhere; }
+.files-drop-mark { display: grid; place-items: center; width: 46px; height: 46px; margin-bottom: 2px;
+  border-radius: var(--radius-full); background: var(--card); color: var(--primary-text); box-shadow: var(--shadow-sm); }
+@keyframes files-drop-in { from { opacity: 0; transform: scale(.985); } }
+
+/* Uploads: the batch's line and progress, then a row a file */
+.uploads { display: grid; border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--card);
+  overflow: hidden; }
+.uploads-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 42px; padding: 5px 6px 5px 12px; }
+.uploads-mark { display: grid; place-items: center; color: var(--success-text); }
+.uploads[data-going] .uploads-mark { color: var(--primary-text); }
+.uploads[data-failed]:not([data-going]) .uploads-mark { color: var(--destructive-text); }
+.uploads-title { margin: 0; font-size: 13.5px; font-weight: 620; }
+.uploads-left { color: var(--muted-foreground); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.uploads-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.uploads-bar { display: block; height: 2px; background: var(--muted); }
+.uploads-bar > span, .upload-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--primary);
+  transition: width .25s ease-out; }
+.uploads-list { list-style: none; display: grid; max-height: 244px; margin: 0; padding: 4px; overflow: auto;
+  border-top: 1px solid var(--border); }
+.upload { position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  min-height: 46px; padding: 5px 6px 7px 8px; border-radius: var(--radius-md); }
+.upload-icon { display: grid; place-items: center; color: var(--muted-foreground); }
+.upload[data-state=sending] .upload-icon { color: var(--primary-text); }
+.upload[data-state=done] .upload-icon { color: var(--success-text); }
+.upload[data-state=failed] .upload-icon { color: var(--destructive-text); }
+.upload[data-state=asking] .upload-icon { color: var(--warning-text); }
+.upload-text { display: grid; min-width: 0; }
+.upload-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 560; }
+.upload-open { justify-self: start; max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit;
+  font-family: inherit; text-align: left; cursor: pointer; }
+.upload-open:hover, .upload-open:focus-visible { color: var(--primary-text); text-decoration: underline; text-underline-offset: 3px; }
+.upload[data-state=cancelled] .upload-name, .upload[data-state=skipped] .upload-name { color: var(--muted-foreground); }
+.upload-meta { color: var(--muted-foreground); font-size: 12.5px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.upload-meta[data-tone=bad] { color: var(--destructive-text); }
+.upload-end { display: flex; align-items: center; }
+.upload-bar { position: absolute; left: 42px; right: 12px; bottom: 4px; height: 3px; border-radius: var(--radius-full);
+  background: var(--muted); overflow: hidden; }
+.upload-bar[data-waiting] > span { width: 34% !important; animation: upload-wait 1.3s ease-in-out infinite alternate; }
+@keyframes upload-wait { from { transform: translateX(-100%); } to { transform: translateX(295%); } }
+@media (prefers-reduced-motion: reduce) {
+  .upload-bar[data-waiting] > span { width: 100% !important; opacity: .45; animation: none; }
+  .files-drop { animation: none; }
+}
+
+/* A name that's taken: the question */
+.upload-ask { display: grid; gap: 12px; font-size: 14px; line-height: 1.5; }
+.upload-ask p { margin: 0; overflow-wrap: anywhere; }
+.upload-ask-sides { list-style: none; display: grid; gap: 6px; margin: 0; padding: 10px 12px; border-radius: var(--radius-lg);
+  background: var(--muted); color: var(--secondary-foreground); font-size: 13px; }
+.upload-ask-sides li { display: flex; align-items: center; gap: 8px; }
+.upload-ask-sides li > :first-child { flex: none; color: var(--muted-foreground); }
+.upload-ask .upload-ask-keep { color: var(--muted-foreground); font-size: 13px; }
 .files[data-open] .files-body { grid-template-columns: minmax(210px, 300px) minmax(0, 1fr); }
 .files-list-box { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--card);
   overflow: hidden; }
@@ -322,7 +387,11 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .file-icon { display: grid; place-items: center; color: var(--muted-foreground); }
 .file-icon[data-type=folder] { color: var(--primary-text); }
 .file-icon[data-type=image] { color: var(--info-text); }
-.file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.file-name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-name > .copilotz-badge { flex: none; }
+.file-row[data-fresh]:not([data-current]) { background: color-mix(in oklab, var(--success-soft) 75%, transparent); }
+.file-row[data-fresh]:not([data-current]):hover { background: var(--success-soft); }
 .file-meta { display: flex; align-items: center; gap: 10px; color: var(--muted-foreground); font-size: 12px;
   font-variant-numeric: tabular-nums; white-space: nowrap; }
 .file-meta .copilotz-time { font-size: 12px; }
@@ -410,7 +479,9 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .step-line { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--secondary-foreground); font-size: 13.5px; }
 .step-line > .copilotz-icon { color: var(--muted-foreground); }
 .step-line-text { flex: 1; min-width: 0; }
-.step-search { display: grid; gap: 8px; }
+.step-search, .step-moved { display: grid; gap: 8px; }
+.step-moved .step-line-text code { font-size: 12.5px; overflow-wrap: anywhere; }
+.step-moved .step-line-text a { color: var(--primary-text); font-weight: 600; text-underline-offset: 3px; }
 .step-results { list-style: none; display: grid; gap: 2px; margin: 0; padding: 0 0 0 22px; }
 .step-results li { display: grid; padding: 6px 10px; border-left: 2px solid var(--border); }
 .step-results a { display: inline-flex; align-items: center; gap: 5px; width: fit-content; color: var(--primary-text);

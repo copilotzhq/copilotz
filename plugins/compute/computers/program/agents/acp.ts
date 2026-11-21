@@ -78,12 +78,17 @@ const CODES = new Set([
  */
 const PASSED = new Set(["agent_message_chunk", "agent_thought_chunk"]);
 
+/** An id as a log says it: its start, enough to tell it apart. */
+const short = (id: string) => id.slice(0, 12);
+
 /** How long a cancelled prompt gets to end before its session goes. */
 const CANCELLING = 10_000;
 
 /** A prompt, as its session runs it. */
 type Prompt = Steps & {
   session?: Session;
+  /** Its engine, as asked: what its log lines say. */
+  engine?: string;
   /** When a cancelled prompt that hasn't ended is ended here. */
   cancelling?: ReturnType<typeof setTimeout>;
 };
@@ -203,6 +208,15 @@ export function createSessions(options: SessionsOptions): Sessions {
   /** Adds an event; past `maxBuffer` unreceived, the prompt is lost, and its session goes. */
   const emit = (prompt: Prompt, event: Said) => {
     if (event.type === "done" || event.type === "failed") clearTimeout(prompt.cancelling);
+    // Why a plan didn't answer, on the computer's log, for whoever looks into it after.
+    if (event.type === "failed") {
+      log(
+        `${prompt.engine ?? prompt.session?.engine ?? "engine"}: prompt ${
+          short(prompt.id)
+        } failed ` +
+          `(${event.code}): ${event.message}`,
+      );
+    }
     if (!add(prompt, event, maxBuffer)) return;
     failHeld(prompt, "The prompt was dropped");
     if (prompt.session) drop(prompt.session);
@@ -343,6 +357,7 @@ export function createSessions(options: SessionsOptions): Sessions {
 
   /** Runs a new prompt to its end. */
   const run = async (prompt: Prompt, input: Checked) => {
+    prompt.engine = input.engine;
     let claimed = input.session;
     if (claimed) {
       const running = busy.get(claimed);
@@ -428,15 +443,33 @@ export function createSessions(options: SessionsOptions): Sessions {
     }
   };
 
-  /** A step of `prompt`, from `from`. */
-  const attach = (prompt: Prompt, from: number, signal: AbortSignal) =>
-    step(prompt, from, {
+  /**
+   * A step of `prompt`, from `from`. One the app stops reading before it
+   * ends (its stream cancelled, or stopped) says so on the computer's log,
+   * with how long it ran and what it had sent: the prompt runs on, its calls
+   * held for an answer that may not come.
+   */
+  const attach = (prompt: Prompt, from: number, signal: AbortSignal) => {
+    const began = Date.now();
+    return step(prompt, from, {
       signal,
       stepMs,
-      left: () => {
+      left: (why) => {
         if (prompt.session) prompt.session.used = Date.now();
+        if (why === "cancelled" || why === "aborted") {
+          log(
+            `${prompt.engine ?? prompt.session?.engine ?? "engine"}: the app left prompt ${
+              short(prompt.id)
+            }'s step ` +
+              `(${why}) after ${
+                ((Date.now() - began) / 1000).toFixed(1)
+              } s, at event ${prompt.next}` +
+              `${prompt.ended ? "" : ", the prompt still running"}`,
+          );
+        }
       },
     });
+  };
 
   // Idle sessions close; prompts nobody came back to go.
   const sweeper = setInterval(() => {

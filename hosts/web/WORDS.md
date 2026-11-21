@@ -292,9 +292,28 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.doneNext` | Your agents run on it from now on, in every conversation and space here. |
 | `computers.doneOn` | On {computer}, through {cli} |
 | `computers.doneTitle` | Your {plan} is signed in |
+| `computers.dropTitle` | Drop to upload |
+| `computers.dropTo` | To {folder} on {computer} |
 | `computers.failedEnded` | It stopped without signing in. Try again, or read what it said below. |
 | `computers.failedStart` | Couldn't sign in: {why} |
 | `computers.failedTitle` | {cli} didn't sign in |
+| `computers.filesDownload` | Download {name} |
+| `computers.filesEmpty` | Nothing here yet |
+| `computers.filesEmptyDrop` | Drop files here to upload them. What you and your agents make in this folder shows up here too. |
+| `computers.filesEmptyText` | What you and your agents make in this folder shows up here. |
+| `computers.filesFilter` | Filter |
+| `computers.filesFilterLabel` | Filter this folder |
+| `computers.filesIn` | In {folder} |
+| `computers.filesItsOwner` | its owner |
+| `computers.filesJustUploaded` | uploaded |
+| `computers.filesNoMatch` | Nothing here matches “{filter}”. |
+| `computers.filesOn` | {folder}, on {computer} |
+| `computers.filesRefresh` | Refresh |
+| `computers.filesUpTo` | Up to {folder} |
+| `computers.filesViewOnly` | Only {owner} changes files on {computer} here. You can open and download them. |
+| `computers.filesWhere` | Where in the folder |
+| `computers.folderDropped` | “{name}” is a folder, and folders can't be uploaded. Drop the files in it, or a zip of it. |
+| `computers.foldersDropped` | one: {count} folder wasn't uploaded: folders can't be. Drop the files in it, or a zip of it. / other: {count} folders weren't uploaded: folders can't be. Drop the files in them, or a zip of each. |
 | `computers.gotCode` | The page gave you a code? |
 | `computers.hideInstall` | Hide |
 | `computers.howToFix` | How to use it |
@@ -305,9 +324,14 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.installMissing` | {cli} isn't installed on {computer} yet. In a terminal there, run: |
 | `computers.installThen` | Then check again here. It's {cli}'s official install. |
 | `computers.keepAsIs` | Keep it as it is |
+| `computers.keepBoth` | Keep both |
 | `computers.listMore` | {rest} and {last} |
 | `computers.listPair` | {first} and {second} |
 | `computers.moreOn` | More for {computer} |
+| `computers.newFile` | New file |
+| `computers.newFileMake` | Make the file |
+| `computers.newFileName` | The new file's name |
+| `computers.newFilePlaceholder` | notes.md, or src/new.ts |
 | `computers.noComputerText` | Plans run through their apps on a computer of yours, a Mac, a Linux or Windows PC, while it's on. Connect one, then sign in here. |
 | `computers.noComputerTitle` | Connect a computer of yours first |
 | `computers.notOpened` | Not on that screen? Open it here |
@@ -329,6 +353,15 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.plansAbout` | Your agents can run on a plan you already pay for, instead of an API key. Sign in once, through its app on a computer of yours, and it works in every conversation and space here. |
 | `computers.plansPrivate` | Nothing is charged here for those calls. The sign-in stays on your computer: this app never sees it. |
 | `computers.plansTitle` | Plans on your computers |
+| `computers.replace` | Replace |
+| `computers.replaceAll` | one: Do the same for the other file that's already there / other: Do the same for the other {count} files that are already there |
+| `computers.replaceFolderText` | A file can't replace a folder. Upload yours beside it under another name, or skip it. |
+| `computers.replaceFolderTitle` | There's a folder named “{name}” |
+| `computers.replaceKeepAs` | Keep both uploads yours as “{name}”. |
+| `computers.replaceText` | {folder} already has a file named “{name}”. Replacing it puts yours in its place. |
+| `computers.replaceThere` | The one there: {size}, changed {time} |
+| `computers.replaceTitle` | Replace “{name}”? |
+| `computers.replaceYours` | Yours: {size}, changed {time} |
 | `computers.rowInstalled` | Installed, not signed in |
 | `computers.rowMissing` | {cli} isn't installed |
 | `computers.rowOld` | Didn't say: its computer program may need an update |
@@ -351,9 +384,16 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.signInOther` | Sign in on another computer |
 | `computers.signInThrough` | Through {cli}, on a computer of yours. |
 | `computers.signInTitle` | Sign in to your {plan} |
+| `computers.skip` | Skip |
 | `computers.start` | Start signing in |
 | `computers.stepCode` | Paste the code it gives you |
 | `computers.stepEnterCode` | Open the sign-in page, sign in with the account that has your plan, and enter this code there: |
+| `computers.stepSaved` | Saved {file} to {path} |
+| `computers.stepSaves` | Saves {file} to {path} |
+| `computers.stepSavesFile` | Saves a file from this chat to {path} |
+| `computers.stepSavesFolder` | Saves a file from this chat in the space's folder |
+| `computers.stepSends` | Sends {path} to this chat |
+| `computers.stepSent` | Sent {file} |
 | `computers.stepSignIn` | Sign in to your {plan} |
 | `computers.stepSignInHere` | Open the sign-in page, and sign in with the account that has your plan. |
 | `computers.stepSignInThere` | A sign-in page opens in the browser on {computer}. Sign in there, with the account that has your plan. |
@@ -361,6 +401,46 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.stepStart` | Starting {cli} on {computer} |
 | `computers.stepWake` | Waking {computer} |
 | `computers.tryAgain` | Try again |
+| `computers.upload` | Upload |
+| `computers.uploadAsking` | There's one by this name already |
+| `computers.uploadCancel` | Cancel uploading {name} |
+| `computers.uploadCancelled` | Cancelled |
+| `computers.uploadDone` | Uploaded |
+| `computers.uploadDoneAs` | Uploaded as {name} |
+| `computers.uploadFailed` | It didn't upload. Try again. |
+| `computers.uploadFinishing` | Saving on {computer}… |
+| `computers.uploadFolderThere` | There's a folder by that name, and a file can't replace it. |
+| `computers.uploadForbidden` | You can't change files on this computer. |
+| `computers.uploadFull` | There's no room left on {computer}'s disk. |
+| `computers.uploadIn` | in {folder} |
+| `computers.uploading` | one: Uploading {count} file / other: Uploading {count} files |
+| `computers.uploadInvalid` | That name can't be used here. |
+| `computers.uploadNetwork` | The connection dropped. Try again. |
+| `computers.uploadNoLength` | The browser didn't say how big it is. Try again. |
+| `computers.uploadNotFound` | This computer isn't in this space anymore. |
+| `computers.uploadNoWake` | {computer} didn't wake up in time. Try again. |
+| `computers.uploadOffline` | {computer} is offline. Try again once it's on. |
+| `computers.uploadOpen` | Open {name} |
+| `computers.uploadOutdated` | {computer}'s computer program is too old to take uploads. It updates itself, or its owner updates it: then try again. |
+| `computers.uploadProgress` | {done} of {total} |
+| `computers.uploadProgressLabel` | Uploading {name} |
+| `computers.uploadQueued` | Waiting to upload |
+| `computers.uploadReplaced` | Uploaded in place of the one there |
+| `computers.uploadRestart` | This upload was interrupted and has to start again. |
+| `computers.uploads` | Uploads |
+| `computers.uploadsAsking` | one: {count} waits for you / other: {count} wait for you |
+| `computers.uploadsCancelAll` | Cancel all |
+| `computers.uploadsDone` | one: {count} file uploaded / other: {count} files uploaded |
+| `computers.uploadsFailed` | one: {count} didn't upload / other: {count} didn't upload |
+| `computers.uploadsHide` | Hide uploads |
+| `computers.uploadSignedOut` | You're signed out. Sign in again, then try again. |
+| `computers.uploadSkipped` | Skipped: the one there stays |
+| `computers.uploadsLeft` | {size} left |
+| `computers.uploadTooLarge` | It's {size}: a file can be {most} at most. |
+| `computers.uploadTooLargeHere` | It's {size}: too large to send through this app. |
+| `computers.uploadUnavailable` | {computer} couldn't wake up. Try again in a moment. |
+| `computers.uploadWaiting` | Waiting for {computer}… |
+| `computers.uploadWaking` | Waking {computer}… |
 | `computers.version` | version {version} |
 | `computers.waiting` | Waiting for the sign-in to finish… |
 | `computers.wakeNote` | {computer} wakes up first: it takes a moment. |

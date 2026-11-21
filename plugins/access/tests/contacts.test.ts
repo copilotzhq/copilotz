@@ -266,10 +266,16 @@ test("a contact reaches its own chat, what's said and filed in it, and nothing e
     }, { actor: carla });
     await runtime.idle();
     // Its message is from it, and the agent's answer goes back to it.
-    assertEquals(await said(runtime, carlas), [
-      ["contact:c-carla-01", "a ticket to Santos"],
-      ["lead", "heard Carla: a ticket to Santos\n[file id.txt]\nRG 12.345\n[end of id.txt]"],
-    ]);
+    // A file says its id, which a tool takes to use it.
+    assertEquals(
+      (await said(runtime, carlas)).map((
+        [from, text],
+      ) => [from, text?.replace(/, id [^\]]+\]/, "]")]),
+      [
+        ["contact:c-carla-01", "a ticket to Santos"],
+        ["lead", "heard Carla: a ticket to Santos\n[file id.txt]\nRG 12.345\n[end of id.txt]"],
+      ],
+    );
     const [, answer] = await runtime.query<Message[]>("message.history", { thread: carlas }, {
       actor: ana,
     });

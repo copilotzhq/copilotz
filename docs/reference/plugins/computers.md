@@ -45,7 +45,7 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 30 Actions, people may call 19; agents may call 14; contacts and someone signed out may call
+Of its 31 Actions, people may call 20; agents may call 14; contacts and someone signed out may call
 none.
 
 | Action                   | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                        |
@@ -66,6 +66,7 @@ none.
 | `computer.unpreview`     | yes    | yes   | no      | no     | yes | yes     | no          | Takes a preview away: its address no longer opens.                                  |
 | `computer.unshare`       | yes    | yes   | no      | no     | yes | yes     | no          | Takes a computer out of a space.                                                    |
 | `computer.upgradeAsks`   | no     | no    | no      | no     | no  | no      | yes         | Keeps computers' old asks and yeses as chat keeps them.                             |
+| `computer.upload`        | yes    | no    | no      | no     | no  | no      | no          | Puts a file on a space's computer, in its folder there: where its bytes go.         |
 | `computer.view`          | yes    | yes   | no      | no     | yes | yes     | no          | Says you have a space's computer open, so it stays awake while you do.              |
 | `computer.work`          | yes    | no    | no      | no     | no  | no      | no          | Works on a space's computer, in its folder there.                                   |
 | `env.set`                | yes    | yes   | no      | no     | yes | yes     | no          | Sets a variable or secret of a space's environment (or an app's own).               |
@@ -78,29 +79,32 @@ Only the app's own code calls `computer.admit`, `computer.allowed`, `computer.en
 `computer.gone`, `computer.mark`, `computer.provision`, `computer.ready`, `computer.running`,
 `computer.scope` and `env.values`: its plugins, its schedules and the system.
 
-Agents act through its 12 tools, as whoever they work for:
+Agents act through its 14 tools, as whoever they work for:
 
-| Tool         | What it does                                                                                                                                                                                                                                                                   | Calls              |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
-| `browser`    | Uses your browser on your person's computer: one of your own for this space, with its own profile (never their personal browser), so sign-ins stay between calls.                                                                                                              |                    |
-| `edit_file`  | Changes a file in this space's folder: replaces text that occurs exactly once in it (old) with new text.                                                                                                                                                                       |                    |
-| `job_logs`   | What one of your background jobs wrote (the end of it, with tail: characters).                                                                                                                                                                                                 |                    |
-| `list_files` | Lists a directory in this space's folder (path relative to it; default: the folder).                                                                                                                                                                                           |                    |
-| `list_jobs`  | Your background jobs in this space, on one of its computers: running and finished.                                                                                                                                                                                             |                    |
-| `preview`    | Makes a link to what one of your background jobs serves (a dev server, a site), for the people of this space to open in their browser: give the job (its id or name; it's found on whichever computer runs it) or the port it serves (and the computer, when not the default). | `computer.preview` |
-| `read_file`  | Reads a file in this space's folder (text; base64 when it isn't).                                                                                                                                                                                                              |                    |
-| `start_job`  | Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it).                                         |                    |
-| `stop_job`   | Stops one of your background jobs.                                                                                                                                                                                                                                             |                    |
-| `terminal`   | Runs a command in your own shell on your person's computer, in this space's folder: bash on macOS and Linux, PowerShell on Windows (your context says which this computer has).                                                                                                |                    |
-| `web_search` | Searches the web: the top results, each a title, link and snippet.                                                                                                                                                                                                             |                    |
-| `write_file` | Writes a whole file in this space's folder, making its directories.                                                                                                                                                                                                            |                    |
+| Tool         | What it does                                                                                                                                                                                                                                                                                                              | Calls              |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `browser`    | Uses your browser on your person's computer: one of your own for this space, with its own profile (never their personal browser), so sign-ins stay between calls.                                                                                                                                                         |                    |
+| `edit_file`  | Changes a file in this space's folder: replaces text that occurs exactly once in it (old) with new text.                                                                                                                                                                                                                  |                    |
+| `job_logs`   | What one of your background jobs wrote (the end of it, with tail: characters).                                                                                                                                                                                                                                            |                    |
+| `list_files` | Lists a directory in this space's folder (path relative to it; default: the folder).                                                                                                                                                                                                                                      |                    |
+| `list_jobs`  | Your background jobs in this space, on one of its computers: running and finished.                                                                                                                                                                                                                                        |                    |
+| `preview`    | Makes a link to what one of your background jobs serves (a dev server, a site), for the people of this space to open in their browser: give the job (its id or name; it's found on whichever computer runs it) or the port it serves (and the computer, when not the default).                                            | `computer.preview` |
+| `read_file`  | Reads a file in this space's folder (text; base64 when it isn't).                                                                                                                                                                                                                                                         |                    |
+| `save_file`  | Saves a file sent in this chat into this space's folder on a computer, where commands and the other tools reach it (a zip to unpack, data to work on, an image to edit). file: its id, as its message shows it ([file … id file-…]). path: where in the folder (default: its name, at the top); a file there is replaced. |                    |
+| `send_file`  | Sends a file from this space's folder on a computer into this chat, for its people to open or download (a report, a chart, a zip you made): up to about 10 MB. text: what you say with it, if anything.                                                                                                                   |                    |
+| `start_job`  | Starts a command that keeps running in the background (a dev server, a watcher, a long build), in this space's folder, in the terminal's shell (bash, or PowerShell on Windows), with the space's environment (your context names it).                                                                                    |                    |
+| `stop_job`   | Stops one of your background jobs.                                                                                                                                                                                                                                                                                        |                    |
+| `terminal`   | Runs a command in your own shell on your person's computer, in this space's folder: bash on macOS and Linux, PowerShell on Windows (your context says which this computer has).                                                                                                                                           |                    |
+| `web_search` | Searches the web: the top results, each a title, link and snippet.                                                                                                                                                                                                                                                        |                    |
+| `write_file` | Writes a whole file in this space's folder, making its directories.                                                                                                                                                                                                                                                       |                    |
 
-It answers 2 routes over HTTP:
+It answers 3 routes over HTTP:
 
 | Method | Path                         |
 | ------ | ---------------------------- |
 | ANY    | `*://*-preview.*:*/*`        |
 | GET    | `/__copilotz/previews/grant` |
+| PUT    | `/computers/upload`          |
 
 It also adds rules every read and write keeps to (`guard`) and lets programs outside the app connect
 as workers.
@@ -113,7 +117,8 @@ Its Views show to the model.
 
 - **To the model:** `context:computer`.
 - **Agents' tools:** `browser`, `edit_file`, `job_logs`, `list_files`, `list_jobs`, `preview`,
-  `read_file`, `start_job`, `stop_job`, `terminal`, `web_search`, `write_file`.
+  `read_file`, `save_file`, `send_file`, `start_job`, `stop_job`, `terminal`, `web_search`,
+  `write_file`.
 - **Front ends:** [`computers-terminal`](computers-terminal.md) and
   [`computers-web`](computers-web.md).
 - **What it adds to resources:** `context` (`computer`), `cost` (`claude-plan/*`, `codex-plan/*`,

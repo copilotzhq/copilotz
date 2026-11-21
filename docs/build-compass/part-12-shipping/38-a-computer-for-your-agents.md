@@ -128,7 +128,10 @@ export function plugins(settings: Settings): Plugin[] {
 
 The computer's tools aren't offered on their own, the way the board's are: an agent lists them in
 its `tools`, by name. Every agent of the team gets them, next to `send_message`, and North keeps the
-web's tools from Chapter 29 (`plugins/compass/resources/agents.ts`):
+web's tools from Chapter 29 (`plugins/compass/resources/agents.ts`). Two of them carry files between
+the chat and the computer: `save_file` puts a file someone sent in the chat into the space's folder
+(a zip to unpack, a spreadsheet to work on), and `send_file` sends one from the folder back into the
+chat, for you to open:
 
 ```ts
 /** What an agent does on the space's computer: its shell, jobs, files and browser. */
@@ -142,6 +145,8 @@ export const COMPUTER = [
   "read_file",
   "write_file",
   "edit_file",
+  "save_file",
+  "send_file",
   "browser",
 ];
 
@@ -254,7 +259,7 @@ north › You said: Ana: Hi North
 ana › /prompt
 ── tools · north
 terminal, start_job, list_jobs, job_logs, stop_job, list_files, read_file,
-write_file, edit_file, browser, web_search, read_page, list_boards, read_board,
+write_file, edit_file, save_file, send_file, browser, web_search, read_page, list_boards, read_board,
 create_board, create_card, update_card, move_card, list_documents,
 read_document, write_document, append_document, edit_document, remember, recall,
  forget, list_conversations, read_conversation, read_skill, schedule_routine,

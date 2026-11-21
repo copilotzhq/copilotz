@@ -32,7 +32,8 @@ Its Views show on the web.
 - **What it adds to resources:** `accountSections` (`plans`), `askViews` (`destroy`, `jobs`,
   `publish`, `terminal`, `writes`), `palette` (`computers`, `plans`), `routinePanels` (`computers`),
   `spaceTabs` (`computer`, `env`), `toolViews` (`browser`, `edit_file`, `job_logs`, `list_files`,
-  `list_jobs`, `read_file`, `start_job`, `stop_job`, `terminal`, `web_search`, `write_file`).
+  `list_jobs`, `read_file`, `save_file`, `send_file`, `start_job`, `stop_job`, `terminal`,
+  `web_search`, `write_file`).
 
 ## What it needs
 

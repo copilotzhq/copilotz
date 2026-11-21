@@ -3,11 +3,13 @@
  * `..`, and what it names (through any symlink) stays inside the folder.
  * Reads take 256 KiB unless asked for more, as UTF-8 text when it is text and
  * base64 when it isn't; writes replace a file whole; an edit replaces text
- * that occurs exactly once.
+ * that occurs exactly once. A put writes a file from bytes streamed in (an
+ * upload), never holding it whole (`putting`).
  */
 import { randomBytes } from "node:crypto";
 import {
   chmod,
+  copyFile,
   lstat,
   mkdir,
   open,
@@ -20,17 +22,29 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { Buffer } from "node:buffer";
-import type {
-  Entry,
-  FilesEditInput,
-  FilesListInput,
-  FilesRead,
-  FilesReadInput,
-  FilesWriteInput,
-  Written,
+import type { WorkerWorkHandler } from "@oxian/oxian-js";
+import {
+  type Entry,
+  type FilesEditInput,
+  type FilesListInput,
+  type FilesPutHead,
+  type FilesRead,
+  type FilesReadInput,
+  type FilesWriteInput,
+  MOST_PUT,
+  type PutPart,
+  type Written,
 } from "../../shared/workloads.ts";
 import { fail } from "./answer.ts";
 import type { Spaces } from "./spaces.ts";
+import { failedLine, jsonLine, splitHead } from "./streams.ts";
+
+/** Where a file sent in parts is kept until its last part: the program's own, under the root. */
+const UPLOADS = [".copilotz", "uploads"];
+/** An upload's id, as a part names it: plain, so it's only ever a file's name. */
+const UPLOAD_ID = /^[A-Za-z0-9_-]{8,64}$/;
+/** How long parts nobody finished are kept. */
+const PARTS_KEPT_MS = 24 * 60 * 60_000;
 
 /** What a read takes unless asked for more, and the most it takes. */
 const READ = 256 * 1024;
@@ -63,6 +77,9 @@ function explain(error: unknown, path: string): never {
   if (code === "ENOTDIR") fail(`Not a folder on the way to ${path}`, "invalid_path");
   if (code === "EISDIR") fail(`${path} is a folder`, "invalid");
   if (code === "EACCES" || code === "EPERM") fail(`Not allowed: ${path}`, "denied");
+  if (code === "ENOSPC" || code === "EDQUOT") {
+    fail(`No room left on the computer for ${path}`, "full");
+  }
   throw error;
 }
 
@@ -103,10 +120,34 @@ async function writable(folder: string, parts: string[], shown: string) {
   return join(parent, basename(target));
 }
 
+/** Where a file is written before it's renamed over `real`: beside it, hidden, never there before. */
+const temporaryFor = (real: string) =>
+  join(dirname(real), `.${basename(real)}.${randomBytes(4).toString("hex")}.tmp`);
+
+/** `from` renamed to `to`; across disks (a folder elsewhere), copied, then removed. */
+async function moved(from: string, to: string) {
+  try {
+    await rename(from, to);
+  } catch (error) {
+    if ((error as { code?: string }).code !== "EXDEV") throw error;
+    await copyFile(from, to);
+    await rm(from, { force: true });
+  }
+}
+
+/** Removes parts kept longer than a day: uploads nobody finished. */
+async function sweep(kept: string) {
+  const now = Date.now();
+  for (const name of await readdir(kept).catch(() => [] as string[])) {
+    const info = await stat(join(kept, name)).catch(() => undefined);
+    if (info && now - info.mtimeMs > PARTS_KEPT_MS) await rm(join(kept, name), { force: true });
+  }
+}
+
 /** Writes a file whole: a temporary file beside it, renamed over it, keeping its mode. */
 async function replace(real: string, bytes: Uint8Array) {
   const mode = await stat(real).then((s) => s.mode & 0o7777, () => undefined);
-  const temporary = join(dirname(real), `.${basename(real)}.${randomBytes(4).toString("hex")}.tmp`);
+  const temporary = temporaryFor(real);
   try {
     await writeFile(temporary, bytes, { flag: "wx" });
     if (mode !== undefined) await chmod(temporary, mode);
@@ -212,6 +253,96 @@ export function createFiles(spaces: Spaces) {
       return { path: inside(folder, real), size: bytes.length };
     },
 
+    /**
+     * A file from `bytes`, exactly `size` of them, written as they come to a
+     * temporary file, renamed over it once all came: a broken or short
+     * upload leaves nothing. A file it replaces keeps its mode. In parts
+     * (`upload`), each part goes on the end of the file kept for it, and the
+     * last puts it in place.
+     */
+    async put(given: unknown, bytes: ReadableStream<Uint8Array>): Promise<Written | PutPart> {
+      const reader = bytes.getReader();
+      let temporary: string | undefined;
+      let file: Awaited<ReturnType<typeof open>> | undefined;
+      let shown = "";
+      try {
+        const head = given as Partial<FilesPutHead> | null;
+        if (!head || typeof head !== "object") fail("The head must be an object");
+        const folder = await spaces.folder(head.scope!);
+        const parts = segments(head.path);
+        shown = parts.join("/");
+        const { size, upload } = head;
+        if (typeof size !== "number" || !Number.isInteger(size) || size < 0) {
+          fail("size must be a whole number of bytes");
+        }
+        if (upload !== undefined) {
+          const { id, offset, total } = upload ?? {};
+          if (typeof id !== "string" || !UPLOAD_ID.test(id)) fail("The upload's id isn't one");
+          if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(total)) {
+            fail("A part's offset and total must be whole numbers of bytes");
+          }
+          if (offset + size > total) fail(`A part past the end of ${shown}`);
+        }
+        const total = upload ? upload.total : size;
+        if (total > MOST_PUT) {
+          fail(`${shown} is larger than a file put on a computer may be (2 GiB)`, "too_large");
+        }
+        const first = !upload || upload.offset === 0;
+        const last = !upload || upload.offset + size === total;
+        const real = await writable(folder, parts, shown);
+        // There already: asked at the first part, and again at the last (it may have come since).
+        const there = first || last ? await stat(real).catch(() => undefined) : undefined;
+        if (there?.isDirectory()) fail(`${shown} is a folder`, "exists");
+        if (there && head.replace !== true) fail(`${shown} is there already`, "exists");
+
+        if (!upload) {
+          temporary = temporaryFor(real);
+          file = await open(temporary, "wx");
+        } else {
+          const kept = join(spaces.root, ...UPLOADS);
+          temporary = join(kept, `${head.scope!.folder}.${upload.id}`);
+          if (first) {
+            await mkdir(kept, { recursive: true });
+            await sweep(kept);
+            file = await open(temporary, "w");
+          } else {
+            const had = await stat(temporary).catch(() => undefined);
+            if (had?.size !== upload.offset) {
+              fail(`The upload of ${shown} lost its earlier parts: start it again`);
+            }
+            file = await open(temporary, "a");
+          }
+        }
+        let written = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          written += value.length;
+          if (written > size) fail(`More than ${size} bytes came for ${shown}`);
+          for (let at = 0; at < value.length;) {
+            at += (await file.write(value, at, value.length - at)).bytesWritten;
+          }
+        }
+        if (written !== size) {
+          fail(`The upload of ${shown} ended after ${written} of its ${size} bytes`);
+        }
+        const finished = file;
+        file = undefined;
+        await finished.close();
+        if (!last) return { received: upload!.offset + size };
+        if (there) await chmod(temporary, there.mode & 0o7777);
+        await moved(temporary, real);
+        temporary = undefined;
+        return { path: inside(folder, real), size: total };
+      } catch (error) {
+        await reader.cancel().catch(() => {});
+        await file?.close().catch(() => {});
+        // A part that failed breaks its upload: what it had goes, and it starts again.
+        if (temporary) await rm(temporary, { force: true }).catch(() => {});
+        explain(error, shown);
+      }
+    },
+
     async edit(input: FilesEditInput): Promise<Written> {
       const folder = await spaces.folder(input.scope);
       const parts = segments(input.path);
@@ -242,5 +373,24 @@ export function createFiles(spaces: Spaces) {
       await replace(real, bytes);
       return { path: inside(folder, real), size: bytes.length };
     },
+  };
+}
+
+/**
+ * `computer.files.put`, for these files: its head (`FilesPutHead`, one JSON
+ * line), then the bytes; it answers `Written` or its failure, one JSON value.
+ * Refused before it reads them, the bytes are cancelled, so the sender stops.
+ */
+export function putting(files: ReturnType<typeof createFiles>): WorkerWorkHandler {
+  return async ({ input }) => {
+    let rest: ReadableStream<Uint8Array> | undefined;
+    try {
+      const split = await splitHead(input);
+      rest = split.rest;
+      return jsonLine(await files.put(split.head, rest));
+    } catch (error) {
+      if (rest && !rest.locked) await rest.cancel().catch(() => {});
+      return failedLine(error);
+    }
   };
 }

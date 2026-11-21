@@ -1,9 +1,12 @@
 /**
  * The words of computers' web front end, in English: so far, a person's
  * plans on their own computers (on Connected accounts, its sign-in dialog,
- * and the palette's). An app gives its own under `computers.<key>`. The
- * plans' names are the providers' (resources/engines.ts): "Claude plan",
- * "ChatGPT plan, through Codex", "Google AI plan, through Antigravity".
+ * and the palette's), a computer's Files tab (its folders, uploading to
+ * them, why an upload didn't go), and an agent's calls that move a file
+ * between a chat and a computer. An app gives its own under
+ * `computers.<key>`. The plans' names are the providers'
+ * (resources/engines.ts): "Claude plan", "ChatGPT plan, through Codex",
+ * "Google AI plan, through Antigravity".
  */
 import { defineWords } from "../../../../../hosts/web/words.ts";
 
@@ -144,4 +147,107 @@ export const say = defineWords("computers", {
     other: "Signed in on {count} computers",
   },
   paletteKeywords: "plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google",
+
+  // A computer's Files tab: a folder at a time
+  filesWhere: "Where in the folder",
+  filesOn: "{folder}, on {computer}",
+  filesIn: "In {folder}",
+  filesFilter: "Filter",
+  filesFilterLabel: "Filter this folder",
+  filesRefresh: "Refresh",
+  filesUpTo: "Up to {folder}",
+  filesEmpty: "Nothing here yet",
+  filesEmptyText: "What you and your agents make in this folder shows up here.",
+  filesEmptyDrop:
+    "Drop files here to upload them. What you and your agents make in this folder shows up here too.",
+  filesNoMatch: "Nothing here matches “{filter}”.",
+  filesDownload: "Download {name}",
+  filesJustUploaded: "uploaded",
+  filesViewOnly: "Only {owner} changes files on {computer} here. You can open and download them.",
+  filesItsOwner: "its owner",
+  newFile: "New file",
+  newFileName: "The new file's name",
+  newFilePlaceholder: "notes.md, or src/new.ts",
+  newFileMake: "Make the file",
+
+  // Uploading to the folder shown
+  upload: "Upload",
+  dropTitle: "Drop to upload",
+  dropTo: "To {folder} on {computer}",
+  uploads: "Uploads",
+  uploading: { one: "Uploading {count} file", other: "Uploading {count} files" },
+  uploadsDone: { one: "{count} file uploaded", other: "{count} files uploaded" },
+  uploadsFailed: { one: "{count} didn't upload", other: "{count} didn't upload" },
+  uploadsAsking: { one: "{count} waits for you", other: "{count} wait for you" },
+  uploadsLeft: "{size} left",
+  uploadsHide: "Hide uploads",
+  uploadsCancelAll: "Cancel all",
+  uploadCancel: "Cancel uploading {name}",
+  uploadOpen: "Open {name}",
+  uploadProgressLabel: "Uploading {name}",
+  uploadQueued: "Waiting to upload",
+  uploadProgress: "{done} of {total}",
+  uploadWaking: "Waking {computer}…",
+  uploadWaiting: "Waiting for {computer}…",
+  uploadFinishing: "Saving on {computer}…",
+  uploadDone: "Uploaded",
+  uploadDoneAs: "Uploaded as {name}",
+  uploadReplaced: "Uploaded in place of the one there",
+  uploadAsking: "There's one by this name already",
+  uploadCancelled: "Cancelled",
+  uploadSkipped: "Skipped: the one there stays",
+  uploadIn: "in {folder}",
+
+  // A name that's taken
+  replaceTitle: "Replace “{name}”?",
+  replaceText: "{folder} already has a file named “{name}”. Replacing it puts yours in its place.",
+  replaceThere: "The one there: {size}, changed {time}",
+  replaceYours: "Yours: {size}, changed {time}",
+  replaceFolderTitle: "There's a folder named “{name}”",
+  replaceFolderText:
+    "A file can't replace a folder. Upload yours beside it under another name, or skip it.",
+  replaceKeepAs: "Keep both uploads yours as “{name}”.",
+  replaceAll: {
+    one: "Do the same for the other file that's already there",
+    other: "Do the same for the other {count} files that are already there",
+  },
+  replace: "Replace",
+  keepBoth: "Keep both",
+  skip: "Skip",
+
+  // Folders dropped
+  folderDropped:
+    "“{name}” is a folder, and folders can't be uploaded. Drop the files in it, or a zip of it.",
+  foldersDropped: {
+    one: "{count} folder wasn't uploaded: folders can't be. Drop the files in it, or a zip of it.",
+    other:
+      "{count} folders weren't uploaded: folders can't be. Drop the files in them, or a zip of each.",
+  },
+
+  // Why an upload didn't go
+  uploadSignedOut: "You're signed out. Sign in again, then try again.",
+  uploadForbidden: "You can't change files on this computer.",
+  uploadNotFound: "This computer isn't in this space anymore.",
+  uploadTooLarge: "It's {size}: a file can be {most} at most.",
+  uploadTooLargeHere: "It's {size}: too large to send through this app.",
+  uploadOutdated:
+    "{computer}'s computer program is too old to take uploads. It updates itself, or its owner updates it: then try again.",
+  uploadOffline: "{computer} is offline. Try again once it's on.",
+  uploadNoWake: "{computer} didn't wake up in time. Try again.",
+  uploadUnavailable: "{computer} couldn't wake up. Try again in a moment.",
+  uploadFull: "There's no room left on {computer}'s disk.",
+  uploadFolderThere: "There's a folder by that name, and a file can't replace it.",
+  uploadInvalid: "That name can't be used here.",
+  uploadRestart: "This upload was interrupted and has to start again.",
+  uploadNoLength: "The browser didn't say how big it is. Try again.",
+  uploadNetwork: "The connection dropped. Try again.",
+  uploadFailed: "It didn't upload. Try again.",
+
+  // An agent's call that moves a file between the chat and the computer
+  stepSaved: "Saved {file} to {path}",
+  stepSaves: "Saves {file} to {path}",
+  stepSavesFile: "Saves a file from this chat to {path}",
+  stepSavesFolder: "Saves a file from this chat in the space's folder",
+  stepSent: "Sent {file}",
+  stepSends: "Sends {path} to this chat",
 });

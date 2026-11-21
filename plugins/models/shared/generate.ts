@@ -122,6 +122,41 @@ const stale = (error: unknown) =>
     String((error as Error).message),
   );
 
+/** The tags a log line names a call by: where and whose, never what was said. */
+const NAMED = ["thread", "agent", "turn", "space", "purpose"];
+
+/**
+ * Says on the process's log that a model of a list didn't answer, and the
+ * next will: why (its error's code and words), how long it had run and
+ * whether it was thinking, and for what (the request's thread, agent,
+ * turn). So a model that keeps handing over (a person's plan falling back
+ * to an API key) can be looked into after.
+ */
+function handedOver(
+  request: Generate,
+  from: string,
+  to: string,
+  error: unknown,
+  ran?: { ms: number; thinking: boolean },
+) {
+  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
+  const words = String((error as Error)?.message ?? error).replace(/\s+/g, " ").slice(0, 300);
+  const where = Object.entries(request.tags ?? {})
+    .filter(([name]) => NAMED.includes(name)).map(([name, value]) => `${name}=${value}`).join(" ");
+  console.warn(
+    `models: ${from} didn't answer` +
+      (ran ? ` after ${(ran.ms / 1000).toFixed(1)} s${ran.thinking ? ", thinking" : ""}` : "") +
+      ` (${String(code ?? status ?? "error")}: ${words}); ${to} answers instead` +
+      (where ? ` [${where}]` : ""),
+  );
+}
+
+/** An error's code as a usage tag says it: its code, else its HTTP status, else "error". */
+const whyOf = (error: unknown) => {
+  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
+  return String(code ?? status ?? "error");
+};
+
 /**
  * Streams a model's answer: text, tool calls, state and usage, as they come.
  * A call that breaks (the network, nothing coming for the provider's
@@ -131,12 +166,17 @@ const stale = (error: unknown) =>
  * anything hands over to the next at once (the last one is tried again). A provider's thinking goes back to any of
  * its models; if one refuses another model's, the call is made again with
  * its own only. A model the org can't spend on hands over too, to one it can
- * (its own key, a person's plan); with none, that's what it's told.
+ * (its own key, a person's plan); with none, that's what it's told. Each
+ * hand-over is logged (`handedOver`), and the model that answers instead
+ * says so on its usage (`fallback`: the first that didn't, `fallbackWhy`:
+ * its error's code).
  */
 export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<LlmChunk> {
   await loadCatalog();
   const choices = chooseModels(ctx, request.model);
   let stopped: unknown;
+  /** The first model that didn't answer, and why: what the one that does says on its usage. */
+  let fallback: { from: string; why: string } | undefined;
   for (const [i, choice] of choices.entries()) {
     let m: Resolved;
     try {
@@ -146,6 +186,8 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
       if ((error as { final?: boolean }).final) stopped ??= error;
       // No key for this one, or no credits: the next, if there is one.
       if (i === choices.length - 1) throw stopped ?? error;
+      handedOver(request, choice.id, choices[i + 1].id, error);
+      fallback ??= { from: choice.id, why: whyOf(error) };
       continue;
     }
     const adapter = adapterFor<LlmAdapter>(ctx.adapters, "llm", m);
@@ -174,6 +216,8 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
       const same = sames[s];
       const call = measure(ctx.metrics, m, "chat");
       const quiet = new AbortController();
+      const began = Date.now();
+      let thinking = false;
       try {
         for await (
           const chunk of quietly(
@@ -204,16 +248,20 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
             const { type: _, model: __, ...quantities } = chunk;
             call.usage(quantities);
             // Every call tells who listens (the usage ledger), wherever it's made.
+            const tags = m.tags ? { ...m.tags, ...request.tags } : request.tags;
             await used(ctx, {
               meter: "llm",
               subject: m.id,
               catalog: m.catalog,
               quantities,
-              tags: m.tags ? { ...m.tags, ...request.tags } : request.tags,
+              tags: fallback
+                ? { ...tags, fallback: fallback.from, fallbackWhy: fallback.why }
+                : tags,
             });
             yield { ...chunk, model: m.id };
           } else if (chunk.type === "thinking") {
             // At work, nothing written yet: the silence it ends isn't a dropped call.
+            thinking = true;
             yield chunk;
           } else {
             wrote = true;
@@ -247,6 +295,11 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
         }
         // The last one failed, having been stopped earlier: that's what to tell them.
         if (i === choices.length - 1) throw stopped ?? out;
+        handedOver(request, m.id, choices[i + 1].id, error, {
+          ms: Date.now() - began,
+          thinking,
+        });
+        fallback ??= { from: m.id, why: whyOf(error) };
         break;
       }
     }

@@ -269,6 +269,12 @@ export const engineAdapter: LlmAdapter = {
               !wrote && !tries
             ) {
               stale = event.code;
+              // On the log, so a plan that keeps starting over (its whole history again) shows.
+              const where = request.tags?.thread ? ` [thread=${request.tags.thread}]` : "";
+              console.warn(
+                `computers: ${engine} session ${session ?? "(new)"} ${event.code} ` +
+                  `(${event.message}): starting afresh${where}`,
+              );
               break;
             }
             throw engineFailure(`engine_${event.code}`, event.message);

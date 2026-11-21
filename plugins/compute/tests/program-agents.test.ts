@@ -47,6 +47,8 @@ type Engines = Setup & {
   step(input: Partial<PromptInput>): Promise<PromptEvent[]>;
   /** A step's stream, read by hand. */
   open(input: Partial<PromptInput>): Promise<ReadableStreamDefaultReader<Uint8Array>>;
+  /** What the computer logged, in order. */
+  logged: string[];
 };
 
 /** Runs `fn` with a computer whose `claude` and `agy` are fakes (and no `codex`). */
@@ -54,6 +56,7 @@ function engines(fn: (e: Engines) => Promise<void>, agents: AgentsOptions = {}) 
   return async () => {
     const dir = tempDir();
     const logs = { claude: join(dir, "claude.log"), agy: join(dir, "agy.log") };
+    const logged: string[] = [];
     const commands = {
       claude: fakeCli(dir, "claude", "./program-agents-claude.ts", logs.claude),
       antigravity: fakeCli(dir, "agy", "./program-agents-acp.ts", logs.agy),
@@ -84,8 +87,9 @@ function engines(fn: (e: Engines) => Promise<void>, agents: AgentsOptions = {}) 
         },
         open,
         step: async (input) => await events(await open(input)),
+        logged,
       });
-    }, { agents: { commands, ...agents } });
+    }, { agents: { commands, ...agents }, log: (line: string) => void logged.push(line) });
   };
 }
 
@@ -249,7 +253,7 @@ posix(
 
 posix(
   "a session goes on in the same process; another agent's is stale; a new prompt leaves one still running, and cancel ends one",
-  engines(async ({ step, open, signIn, work }) => {
+  engines(async ({ step, open, signIn, work, logged }) => {
     signIn("claude");
     const first = await step(ask("pid"));
     const session = sessionOf(first)!;
@@ -263,6 +267,13 @@ posix(
       const failed = last(await step(ask("say hi", { session, ...other })));
       assertEquals(failed.type === "failed" && failed.code, "stale");
     }
+    // Why it didn't answer is on the computer's log, for whoever looks into it after.
+    assert(
+      logged.some((line) =>
+        /^claude: prompt .+ failed \(stale\): That session has another engine/.test(line)
+      ),
+      logged.join("\n"),
+    );
 
     // The conversation went on without an answer still running (its turn stopped): that answer is
     // left, and its session, which has it, with it; the new prompt starts afresh.
@@ -291,11 +302,17 @@ posix(
 
 posix(
   "leaving a step only detaches: the prompt goes on, and the same id comes back for the rest",
-  engines(async ({ open, step, signIn }) => {
+  engines(async ({ open, step, signIn, logged }) => {
     signIn("claude");
     const first = ask('call lookup {"q":"x"}');
     const seen = await events(await open(first), (all) => all.length >= 1);
     assertEquals(seen[0].type, "session");
+    // Left before it ended: the computer's log says so, and that the prompt runs on.
+    await until(
+      () =>
+        logged.some((line) => /^claude: the app left prompt .+ \(cancelled\) after /.test(line)),
+      "the left step logged",
+    );
     const rest = await step({ ...first, session: sessionOf(seen), from: 1 });
     assertEquals(rest[0].i, 1);
     const call = last(rest);

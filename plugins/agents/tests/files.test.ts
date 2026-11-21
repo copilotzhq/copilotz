@@ -59,10 +59,15 @@ for (const [name, make] of Object.entries(stores)) {
       ]);
       const prompt = await runtime.query<Prompt>("thread.prompt", { thread, agent: "lead" });
       const said = JSON.stringify(prompt.history);
-      assertStringIncludes(said, "[file notes.txt]\\nShip on Friday.\\n[end of notes.txt]");
+      // Each file says its id, which a tool takes to use it (a computer's save_file).
+      const ids = Object.fromEntries(sent.files!.map((f) => [f.name, f.id]));
+      assertStringIncludes(
+        said,
+        `[file notes.txt, id ${ids["notes.txt"]}]\\nShip on Friday.\\n[end of notes.txt]`,
+      );
       assertStringIncludes(said, "[…cut]");
       // An image goes as it is, named in the text; the models plugin decides, by model, whether it's shown.
-      assertStringIncludes(said, "[image logo.png]");
+      assertStringIncludes(said, `[image logo.png, id ${ids["logo.png"]}]`);
       assertStringIncludes(said, `"files":[{"name":"logo.png","type":"image/png"`);
       // The large one is kept as a blob; plugin code never sees the reference.
       const stored = await store.find("file", { name: "report.txt" });

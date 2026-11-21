@@ -36,8 +36,18 @@ Files go between a chat and a computer both ways, and people put files on a comp
   engine adapter logs a session it starts over. The computer program logs a plan's prompt that
   failed, and a step the app stopped reading before it ended, with how long it ran (`computer.log`).
 
+**Fixed:**
+
+- **A tool call held for a person's plan no longer fails after 5 minutes.** Claude Code aborts a
+  tool that sends nothing for 5 minutes, and a call held for its answer is silent until it comes (a
+  person's yes, the app's next step). The computer program gives Claude Code's idle limit a day, as
+  its whole limit already was (`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`, and the server's own `timeout`
+  in its MCP config).
+
 **Changed:**
 
+- **The models catalog**, refreshed from models.dev (2026-11-21): Google's Gemini 4 Carbon, Neon and
+  Hydrogen among what's new, with their prices and reasoning.
 - `computer.work`'s rules for a person working on a computer (in its space, its owner's where they
   answer for it, a computer that sleeps woken) are `personalDesk`, which uploads share. A desk that
   isn't there is `not_found` (it was `invalid`).

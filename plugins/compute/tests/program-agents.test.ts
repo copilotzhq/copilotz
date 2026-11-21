@@ -33,6 +33,8 @@ const posix = (name: string, fn: () => Promise<void>) =>
 type Started = {
   pid: number;
   args: string[];
+  /** The MCP servers' timeouts it was given (Claude Code's fake). */
+  timeouts?: Record<string, number | undefined>;
   cwd: string;
   env: Record<string, string>;
   home: string;
@@ -175,7 +177,10 @@ posix(
     const flag = (name: string) => run.args[run.args.indexOf(name) + 1];
     assertMatch(run.env.CLAUDE_CONFIG_DIR, /\.copilotz\/engines\/claude$/);
     assertEquals(run.env.ANTHROPIC_API_KEY, undefined);
+    // A held call waits a day, however long it's silent: Claude Code's idle limit, for its server too.
     assertEquals(run.env.MCP_TOOL_TIMEOUT, "86400000");
+    assertEquals(run.env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT, "86400000");
+    assertEquals(run.timeouts, { copilotz: 86_400_000 });
     assertEquals(run.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS, "1");
     assertEquals([flag("--tools"), flag("--setting-sources")], ["", ""]);
     assertEquals(flag("--allowedTools"), "mcp__copilotz");

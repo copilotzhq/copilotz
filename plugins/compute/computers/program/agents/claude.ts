@@ -36,6 +36,8 @@ import type {
 } from "./types.ts";
 import { writeWhole } from "./write.ts";
 
+/** How long a held tool call may wait, silent, for its answer: a day. */
+const HELD_MS = 24 * 60 * 60_000;
 /** How long an interrupted turn gets to end before its process is stopped. */
 const INTERRUPTING = 5_000;
 /** How long a stopped process gets before SIGKILL. */
@@ -282,6 +284,9 @@ export const claude: Adapter = (options) => {
               type: "http",
               url: server.url,
               headers: Object.fromEntries(server.headers.map((h) => [h.name, h.value])),
+              // A held call is silent until its answer comes (a person's yes, the app's
+              // next step): Claude Code's idle limit for this server, a day as below.
+              timeout: HELD_MS,
             },
           }
           : {},
@@ -312,8 +317,10 @@ export const claude: Adapter = (options) => {
     ];
     const env: Record<string, string> = {
       ...options.env,
-      // A held call waits for its person: a day.
-      MCP_TOOL_TIMEOUT: "86400000",
+      // A held call waits for its person: a day, however long it's silent (Claude Code otherwise
+      // aborts a tool that sends nothing for 5 minutes).
+      MCP_TOOL_TIMEOUT: String(HELD_MS),
+      CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: String(HELD_MS),
       CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     };

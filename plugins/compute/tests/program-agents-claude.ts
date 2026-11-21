@@ -39,10 +39,21 @@ if (process.env.FAKE_LOG) {
     JSON.stringify({
       pid: process.pid,
       args,
+      // The MCP config it was given, its servers' timeouts (its headers hold a token: never logged).
+      timeouts: args.includes("--mcp-config")
+        ? Object.fromEntries(
+          Object.entries(
+            (JSON.parse(readFileSync(args[args.indexOf("--mcp-config") + 1], "utf8")) as {
+              mcpServers: Record<string, { timeout?: number }>;
+            }).mcpServers,
+          ).map(([name, server]) => [name, server.timeout]),
+        )
+        : undefined,
       cwd: process.cwd(),
       env: {
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
         MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT,
+        CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: process.env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT,
         CLAUDE_CODE_DISABLE_CLAUDE_MDS: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS,
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
         OPENAI_API_KEY: process.env.OPENAI_API_KEY,

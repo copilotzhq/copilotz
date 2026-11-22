@@ -64,7 +64,7 @@ history resource's summarizer model."
 
 The runtime doesn't start without [`chat`](chat.md) and [`models`](models.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.59`.
+It ships with `copilotz@1.0.0-rc.60`.
 
 ## What it does on its own
 

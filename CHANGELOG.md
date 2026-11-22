@@ -1,4 +1,7 @@
-## Unreleased
+## 1.0.0-rc.60 — 2026-11-21
+
+An agent is told in its chat when a job it started ends, and takes a turn then: it no longer looks
+at a long build or test run again and again to see whether it's done.
 
 **New:**
 

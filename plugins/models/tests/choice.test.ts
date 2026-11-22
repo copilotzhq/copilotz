@@ -11,7 +11,7 @@ import models, { type LlmAdapter, type LlmChunk, type LlmRequest } from "../mod.
 import { chooseModels, complete } from "../shared/generate.ts";
 import { chat } from "../../agents/chat/mod.ts";
 import { anthropic } from "../adapters/llm/anthropic.ts";
-import { gemini } from "../adapters/llm/gemini.ts";
+import { gemini, UNSIGNED } from "../adapters/llm/gemini.ts";
 import { openaiCompletions } from "../adapters/llm/openai-compatible.ts";
 import { openaiResponses } from "../adapters/llm/openai.ts";
 import { loadCatalog, lookup, resolve } from "../shared/choice.ts";
@@ -225,11 +225,14 @@ test("effort and limits, as each protocol takes them", async () => {
       { type: "enabled", budget_tokens: 4096 },
       4097,
     ]);
+    // A model known to think streams summaries of its thoughts as it has them.
     assertEquals(gemini3.generationConfig, {
-      thinkingConfig: { thinkingLevel: "LOW" },
+      thinkingConfig: { thinkingLevel: "LOW", includeThoughts: true },
       temperature: 0.2,
     });
-    assertEquals(gemini25.generationConfig, { thinkingConfig: { thinkingBudget: 8192 } });
+    assertEquals(gemini25.generationConfig, {
+      thinkingConfig: { thinkingBudget: 8192, includeThoughts: true },
+    });
   } finally {
     await mock.close();
   }
@@ -368,6 +371,78 @@ test("Gemini's thought signatures go back on their parts", async () => {
       functionCall: { name: "roll", args: {} },
       thoughtSignature: "s1",
     }]);
+
+    // Another model's step (a turn handed over, then back): its first call goes with Google's
+    // placeholder, so Gemini takes it; the parallel ones after it go unsigned, as Gemini's do.
+    await call(gemini, {
+      connection,
+      messages: [
+        { role: "user", text: "roll twice" },
+        {
+          role: "assistant",
+          text: "Rolling.",
+          toolCalls: [
+            { id: "c1", name: "roll", input: {} },
+            { id: "c2", name: "roll", input: {} },
+          ],
+        },
+        { role: "tool", toolCallId: "c1", text: "4" },
+        { role: "tool", toolCallId: "c2", text: "2" },
+      ],
+    } as LlmRequest);
+    const foreign = (mock.bodies[2] as { contents: { parts: unknown[] }[] }).contents;
+    assertEquals(foreign[1].parts, [
+      { text: "Rolling." },
+      { functionCall: { name: "roll", args: {} }, thoughtSignature: UNSIGNED },
+      { functionCall: { name: "roll", args: {} } },
+    ]);
+    // Its own step with parallel calls: only the first was signed, and only it goes signed.
+    await call(gemini, {
+      connection,
+      messages: [
+        { role: "user", text: "roll twice" },
+        {
+          role: "assistant",
+          toolCalls: [
+            { id: "f1", name: "roll", input: {} },
+            { id: "f2", name: "roll", input: {} },
+          ],
+          state: { data: { calls: { f1: "s1" } } },
+        },
+        { role: "tool", toolCallId: "f1", text: "4" },
+        { role: "tool", toolCallId: "f2", text: "2" },
+      ],
+    } as LlmRequest);
+    const own = (mock.bodies[3] as { contents: { parts: unknown[] }[] }).contents;
+    assertEquals(own[1].parts, [
+      { functionCall: { name: "roll", args: {} }, thoughtSignature: "s1" },
+      { functionCall: { name: "roll", args: {} } },
+    ]);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("Gemini's thoughts, streamed as it has them, keep its stream alive and aren't its answer", async () => {
+  const mock = await server(() => [
+    {
+      candidates: [{
+        content: { role: "model", parts: [{ text: "Weighing it…", thought: true }] },
+      }],
+    },
+    {
+      candidates: [{
+        content: { role: "model", parts: [{ text: "Four.", thoughtSignature: "t1" }] },
+      }],
+    },
+  ]);
+  try {
+    const chunks = await call(gemini, { connection: { model: "g", baseURL: mock.url } });
+    assertEquals(chunks.filter((c) => c.type !== "usage"), [
+      { type: "thinking" },
+      { type: "text", text: "Four." },
+      { type: "state", state: { data: { text: "t1" } } },
+    ]);
   } finally {
     await mock.close();
   }

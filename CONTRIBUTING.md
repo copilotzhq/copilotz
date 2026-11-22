@@ -32,8 +32,10 @@ PostgreSQL with pgvector, and on Node on Windows. macOS is off there for now: ru
 before tagging. On Deno it also checks the format, the types and the JSR package. On Node it also
 builds the npm package and smoke-tests it.
 
-The workflow runs when the publish workflow calls it, before a release, and on demand. It doesn't
-run on pushes or pull requests. So run what a change touches locally before merging it.
+The workflow runs when the publish workflow calls it, for a release's tag. It doesn't run on pushes
+or pull requests, and a release doesn't run it beforehand: the tag's run is the release's only one.
+Starting it by hand is for one thing, seeing a failure again that only CI shows (Windows, macOS,
+PostgreSQL) while fixing it. So run what a change touches locally before merging it.
 
 `bench/memory/budget.test.ts` holds the docs app's shape (an MCP server on the memory store) to a
 memory budget on Deno and Node: RSS and heap after a full GC, the heap 200 calls keep, and no model
@@ -232,7 +234,11 @@ through GitHub's OIDC, with no token.
 A version with a pre-release part, such as `-rc.32`, goes to npm's `next` tag, so
 `npm install copilotz` keeps the last stable one.
 
-A release whose tests fail publishes nothing. It's fixed forward and tagged again.
+The checks before the tag are the ones under "Checking a change", run here. Don't start the test
+workflow on the release branch first: the tag runs it, and nothing publishes until it passes. A
+release whose tests fail publishes nothing. Fix it on main and move the tag to the fixed commit
+(`git push origin :vX.Y.Z`, then tag and push again): a version is spent only once JSR or npm has
+it.
 
 ## Designs
 

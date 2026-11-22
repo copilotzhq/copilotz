@@ -16,8 +16,20 @@ type Part = Record<string, unknown>;
 type Signatures = { calls?: Record<string, string>; text?: string };
 
 /**
+ * The signature Google says to give a tool call Gemini didn't make (another
+ * model's, or one whose signature wasn't kept): it's taken unchecked, where
+ * none at all is refused (400, "Function call is missing a
+ * thought_signature").
+ */
+export const UNSIGNED = "skip_thought_signature_validator";
+
+/**
  * Gemini answers tool calls by function name: find each call's name by its
  * id. A model turn's thought signatures (its state) go back on their parts.
+ * Gemini signs a step's first call (the parallel ones after it go unsigned);
+ * a step whose calls carry none of its signatures (another model's: a turn
+ * handed over, then back) has `UNSIGNED` on its first, so Gemini can go on
+ * in a conversation another model worked in.
  */
 const contentsOf = (messages: LlmMessage[]) => {
   const names = new Map<string, string>();
@@ -47,11 +59,13 @@ const contentsOf = (messages: LlmMessage[]) => {
       for (const call of message.toolCalls ?? []) names.set(call.id, call.name);
       const signed = (message.state?.data ?? {}) as Signatures;
       const sign = (signature?: string) => signature ? { thoughtSignature: signature } : {};
+      const calls = message.toolCalls ?? [];
+      const unsigned = !calls.some((call) => signed.calls?.[call.id]);
       add("model", [
         ...(message.text ? [{ text: message.text, ...sign(signed.text) }] : []),
-        ...(message.toolCalls ?? []).map((call) => ({
+        ...calls.map((call, i) => ({
           functionCall: { name: call.name, args: call.input },
-          ...sign(signed.calls?.[call.id]),
+          ...sign(signed.calls?.[call.id] ?? (unsigned && i === 0 ? UNSIGNED : undefined)),
         })),
       ]);
     }
@@ -115,9 +129,25 @@ const BUDGETS: Record<Effort, number> = {
   max: -1,
 };
 
-/** How hard to think, as the model takes it: a level (Gemini 3), a budget (2.5), or off. */
+/**
+ * How hard to think, as the model takes it: a level (Gemini 3), a budget
+ * (2.5), or off. A model that thinks says so as it does (`includeThoughts`:
+ * summaries of its thoughts, streamed): a long think is a stream that's
+ * alive, not a silence taken for a dropped call. What it thought isn't its
+ * answer.
+ */
 function thinkingConfig(effort: Effort | undefined, info: ModelInfo | undefined) {
   const reasoning = info?.reasoning;
+  if (reasoning === false) return undefined;
+  const level = levelOf(effort, reasoning);
+  // Known to think, and not told not to: its thoughts come as it has them.
+  return reasoning && level?.thinkingBudget !== 0 ? { ...level, includeThoughts: true } : level;
+}
+
+function levelOf(
+  effort: Effort | undefined,
+  reasoning: ModelInfo["reasoning"],
+): { thinkingBudget: number } | { thinkingLevel: string; thinkingBudget?: never } | undefined {
   if (!effort || reasoning === false) return undefined;
   if (reasoning?.budget && !reasoning.effort) {
     const budget = BUDGETS[effort];
@@ -177,6 +207,7 @@ export const gemini: LlmAdapter = {
         const signature = typeof part.thoughtSignature === "string"
           ? part.thoughtSignature
           : undefined;
+        // A thought (its summary, `includeThoughts`) is the model at work, not what it says.
         if (part.text && !part.thought) yield { type: "text", text: part.text };
         if (part.functionCall) {
           const id = part.functionCall.id ?? crypto.randomUUID();
@@ -185,7 +216,7 @@ export const gemini: LlmAdapter = {
             type: "tool_call",
             call: { id, name: part.functionCall.name, input: part.functionCall.args ?? {} },
           };
-        } else if (signature) signatures.text = signature;
+        } else if (signature && !part.thought) signatures.text = signature;
       }
       if (chunk.usageMetadata) usage = chunk.usageMetadata;
     }

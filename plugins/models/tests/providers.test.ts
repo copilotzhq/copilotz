@@ -14,7 +14,7 @@ import models, {
   type LlmRequest,
 } from "../mod.ts";
 import { anthropic } from "../adapters/llm/anthropic.ts";
-import { gemini, schemaFor } from "../adapters/llm/gemini.ts";
+import { gemini, schemaFor, UNSIGNED } from "../adapters/llm/gemini.ts";
 import { openaiCompletions } from "../adapters/llm/openai-compatible.ts";
 import { openaiResponses } from "../adapters/llm/openai.ts";
 import { serve, test } from "../../../testing/mod.ts";
@@ -862,9 +862,14 @@ test("gemini: request and streamed answer", async () => {
     assertEquals(body.systemInstruction, { parts: [{ text: "Be brief." }] });
     assertEquals(body.contents, [
       { role: "user", parts: [{ text: "roll a die" }] },
+      // A call it didn't sign (this one's written here, as another model's would be): Google's
+      // placeholder, so Gemini takes it.
       {
         role: "model",
-        parts: [{ text: "Rolling." }, { functionCall: { name: "roll", args: { sides: 6 } } }],
+        parts: [{ text: "Rolling." }, {
+          functionCall: { name: "roll", args: { sides: 6 } },
+          thoughtSignature: UNSIGNED,
+        }],
       },
       {
         role: "user",

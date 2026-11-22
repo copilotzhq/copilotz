@@ -1,3 +1,19 @@
+## Unreleased
+
+**Fixed:**
+
+- **Gemini goes on in a conversation another model worked in.** A tool call Gemini didn't make (a
+  step another model took: a turn handed over to Claude, then back) went to it without a thought
+  signature, which Gemini 3 and later refuse (400, "Function call is missing a thought_signature").
+  So once another model had used a tool in a conversation, every later step on Gemini failed at once
+  and went to the next model of its list. Such a call now goes with the signature Google gives for
+  it (`skip_thought_signature_validator`, on a step's first call: `UNSIGNED`, from the Gemini
+  adapter); Gemini's own go back as they came.
+- **A Gemini model that thinks long isn't taken for a dropped call.** It sent nothing while it
+  thought, so a think past 2 minutes was cut as silence and handed over. A model known to think (the
+  catalog's `reasoning`) now streams summaries of its thoughts as it has them (`includeThoughts`),
+  which keep its stream alive; what it thought isn't its answer.
+
 ## 1.0.0-rc.60 — 2026-11-21
 
 An agent is told in its chat when a job it started ends, and takes a turn then: it no longer looks

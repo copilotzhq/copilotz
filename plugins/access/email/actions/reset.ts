@@ -31,7 +31,7 @@ import {
   passwordIn,
 } from "../shared/inputs.ts";
 import { aSend, aTry, byEmail } from "../shared/limits.ts";
-import { mail } from "../shared/mail.ts";
+import { deliver, mustSend } from "../shared/mail.ts";
 import { hashPassword } from "../shared/password.ts";
 import { keepPassword, keepPerson, personFor, sessionFor } from "../shared/people.ts";
 import { linksFor } from "../shared/settings.ts";
@@ -49,18 +49,19 @@ export const forgotAction = defineAction({
   run: async (ctx, input) => {
     const email = emailIn(input.email);
     await aSend(ctx, { account: email, address: input.address });
+    mustSend(ctx);
     const db = ctx.as().db;
     const codes = db.collection<Code>("email_code");
     const known = await db.collection<Login>("email_login").findOne({ _id: email }) ??
       await codes.findOne({ email, purpose: "verify" }) ??
       await db.collection<Person>("person").findOne({ email });
     if (!known) return { email };
-    await codes.deleteMany({ email, purpose: "reset" });
     const now = Date.now();
     const code = newCode();
     const expires = new Date(now + CODE_MINUTES * 60_000).toISOString();
+    const id = newToken(16);
     await codes.insertOne({
-      _id: newToken(16),
+      _id: id,
       email,
       purpose: "reset",
       hash: await seal(linksFor(ctx), codeText("reset", email, code)),
@@ -70,10 +71,12 @@ export const forgotAction = defineAction({
       at: new Date(now).toISOString(),
     });
     try {
-      await mail(ctx, "reset", email, { code }, input.host);
+      await deliver(ctx, "reset", email, { code }, input.host);
     } catch (error) {
-      console.error("email-sign-in: a reset code didn't go:", (error as Error).message);
+      await codes.deleteOne({ _id: id });
+      throw error;
     }
+    await codes.deleteMany({ email, purpose: "reset", _id: { $ne: id } });
     return { email };
   },
 });

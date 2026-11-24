@@ -217,3 +217,54 @@ test("per host: its name, words, sender and links; any other host, the app's", a
     "senders",
   );
 });
+
+test("a code that couldn't go is said, not taken for sent; the one sent before still signs in; meanwhile every address is told alike", async () => {
+  const sent: Sent[] = [];
+  const mailer = { down: false };
+  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (mailer.down) return new Response("unavailable", { status: 503 });
+    sent.push(JSON.parse(await new Request(input, init).text()));
+    return Response.json({ id: `m${sent.length}` });
+  }) as typeof globalThis.fetch;
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      ...access,
+      email,
+      emailSignIn,
+      definePlugin({
+        name: "app",
+        resources: {
+          links: LINKS,
+          email: { adapter: "resend", from: "App <noreply@app.example.com>", apiKey: "k" },
+          emailSignIn: { signInByCode: true, signUp: false },
+        },
+      }),
+    ],
+    fetch,
+  });
+  try {
+    await rt.call("person.set", { person: "ana", email: "ana@example.com" });
+    assertEquals((await ask(rt, "/signin/email/code", { email: "ana@example.com" })).status, 200);
+    const first = codeIn(sent.at(-1));
+    assert(first);
+    // The mail service fails: said, in words the page shows.
+    mailer.down = true;
+    const failed = await ask(rt, "/signin/email/code", { email: "ana@example.com" });
+    assert(failed.status >= 500, String(failed.status));
+    assertEquals(failed.said.code, "unavailable");
+    assertEquals(
+      failed.said.error,
+      "The message couldn't be sent right now. Try again in a few minutes.",
+    );
+    // Meanwhile an address with no account is told the same: nothing said of who has one.
+    mailer.down = false;
+    const stranger = await ask(rt, "/signin/email/code", { email: "nobody@example.com" });
+    assertEquals([stranger.said.code, stranger.said.error], [failed.said.code, failed.said.error]);
+    // The code sent before is still good.
+    const entered = await ask(rt, "/signin/email/enter", { email: "ana@example.com", code: first });
+    assertEquals(entered.status, 200);
+  } finally {
+    await rt.close();
+  }
+});

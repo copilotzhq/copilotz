@@ -72,8 +72,14 @@ It shows to the model through its tools.
 
 ## What it needs
 
-Nothing to set. It reads `agents`, `model`, `roster` and `tools`, resource kinds the app and other
-plugins fill.
+You set it in `resources.team`.
+
+| Setting                  | Type     | Required | What it is                                                        |
+| ------------------------ | -------- | -------- | ----------------------------------------------------------------- |
+| `team.instructionsLimit` | `number` | no       | How long an agent's instructions may be, in characters (100,000). |
+
+It also reads `agents`, `model`, `roster` and `tools`, resource kinds the app and other plugins
+fill.
 
 ## What it requires
 

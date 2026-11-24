@@ -225,7 +225,6 @@ function Instructions(
           rows={6}
           autoGrow
           maxHeight={420}
-          maxLength={20_000}
           value={value.instructions}
           readOnly={drafting}
           disabled={disabled}

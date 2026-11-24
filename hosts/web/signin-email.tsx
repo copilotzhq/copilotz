@@ -105,7 +105,8 @@ type Problem = { field?: "email" | "password" | "code" | "name"; text: string; t
 
 /**
  * What a refusal says, in the app's words, by its code: those a step expects
- * (`expected`), else too many tries, no connection, or that something failed.
+ * (`expected`), else too many tries, no connection, a message that couldn't
+ * go, or that something failed.
  */
 function problemOf(
   error: unknown,
@@ -117,6 +118,8 @@ function problemOf(
   if (known) return known;
   if (code === "too_many") return { text: words.tooMany, tone: "warning" };
   if (code === "offline") return { text: words.offline };
+  // A message that couldn't go (a code, a reset): said, not taken for sent.
+  if (code === "unavailable") return { text: words.notSent };
   return { text: words.failed };
 }
 

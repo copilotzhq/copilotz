@@ -53,6 +53,8 @@ export const team: Plugin = definePlugin({
     "agent.define": defineAgentsAction,
   },
   resources: {
+    // Its settings: how long an agent's instructions may be (shared/limits.ts).
+    team: {},
     // Agents propose agents, for their person to approve (an app gives it to those it lets).
     tools: { propose_agent: proposeAgent },
     // Chat asks it what an agent not in the app's code is.

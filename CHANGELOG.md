@@ -2,6 +2,21 @@
 
 **Fixed:**
 
+- **The org's version of one of the app's agents answers every conversation, a contact's too.**
+  Team's agent source read an org's version of an app's agent as the asker, and a contact (a web
+  visitor, a WhatsApp customer) reaches nothing of the org's; and chat composed a turn's prompt as a
+  read for the agent, which reads only what its person does. So the org's changes reached its own
+  people's conversations and never its customers'. Team now reads the org's versions of the app's
+  agents as the system (who may change one is still the rules': `agent.update`), and a turn gives
+  its prompt the agent it found (the `llm.thread` View's `hints.agent`).
+- **E-mail sign-in says when a message didn't go.** `email.code`, `email.forgot` and `email.sign-up`
+  answered as if a code had gone when the mail service failed, so the page said "sent" and nothing
+  came; and a new code had already replaced the one sent before. Now a message that doesn't go is
+  refused (`unavailable`, which the sign-in page says), and for 5 minutes after, every address is
+  refused alike, with or without an account, so the answer still says nothing of who has one. The
+  code sent before stays good until a new one went.
+- **A filter naming an operator there's none of is the caller's mistake:** `invalid` (a 400 on
+  `GET /api/collections/<name>?filter=…`), not a 500, on every store.
 - **Gemini goes on in a conversation another model worked in.** A tool call Gemini didn't make (a
   step another model took: a turn handed over to Claude, then back) went to it without a thought
   signature, which Gemini 3 and later refuse (400, "Function call is missing a thought_signature").
@@ -13,6 +28,16 @@
   thought, so a think past 2 minutes was cut as silence and handed over. A model known to think (the
   catalog's `reasoning`) now streams summaries of its thoughts as it has them (`includeThoughts`),
   which keep its stream alive; what it thought isn't its answer.
+
+**New:**
+
+- **An agent's instructions are as long as the app lets them be** (team's `instructionsLimit`
+  setting, the `team` resource): 100,000 characters unless it says, up from a fixed 20,000 in
+  `agent.create`, `agent.update`, `propose_agent` and the agent's form.
+- **An MCP server's instructions can be an Action's** (`instructions: { action }`, given
+  `{ server }`), asked as each session starts (`initialize`, `server/discover`): what an app changes
+  reaches new conversations without a restart. An Action no plugin declares stops the app from
+  starting; one that fails leaves the session without instructions.
 
 ## 1.0.0-rc.60 — 2026-11-21
 

@@ -4,7 +4,7 @@
  * its blanks filled, from the app's sender or that host's, through the
  * app's email port (`email.send`, the `email` plugin's).
  */
-import type { Context } from "../../../../runtime/mod.ts";
+import { type Context, failure } from "../../../../runtime/mod.ts";
 import type { EmailSignInHost, EmailSignInMessages, EmailSignInSettings } from "../contract.ts";
 import { MESSAGES } from "../resources/messages.ts";
 import { CODE_MINUTES, LINK_HOURS } from "./codes.ts";
@@ -47,4 +47,42 @@ export async function mail(
     ...blanks,
   });
   await ctx.call("email.send", { to, ...message, ...(here?.from ? { from: here.from } : {}) });
+}
+
+/**
+ * What a message that couldn't go answers, the same words for every address, so the page says it
+ * ("couldn't send it now") instead of "sent".
+ */
+export const NOT_SENT = "The message couldn't be sent right now. Try again in a few minutes.";
+
+/** How long after a message failed to go every send is refused alike. */
+export const FAILING_MS = 5 * 60_000;
+
+/** Until when sends have been failing, by the runtime's resources (one runtime, its memory). */
+const failing = new WeakMap<object, number>();
+
+const unavailable = () => failure("unavailable", NOT_SENT, { public: true });
+
+/**
+ * Throws `unavailable` while messages have been failing to go (`FAILING_MS` after one failed),
+ * before anything about the address is looked up: whether it has an account, it's refused alike.
+ */
+export function mustSend(ctx: Pick<Context, "resources">): void {
+  if (Date.now() < (failing.get(ctx.resources) ?? 0)) throw unavailable();
+}
+
+/**
+ * Sends a message (`mail`); one that doesn't go is logged, remembered (every send is refused
+ * alike for a while: `mustSend`), and refused, `unavailable`, in words the page shows.
+ */
+export async function deliver(...args: Parameters<typeof mail>): Promise<void> {
+  const [ctx, kind] = args;
+  try {
+    await mail(...args);
+    failing.delete(ctx.resources);
+  } catch (error) {
+    failing.set(ctx.resources, Date.now() + FAILING_MS);
+    console.error(`email-sign-in: a ${kind} message didn't go:`, (error as Error).message);
+    throw unavailable();
+  }
 }

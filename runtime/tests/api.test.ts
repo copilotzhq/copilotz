@@ -586,6 +586,13 @@ test("REST: errors are JSON with their code's status; a credential proving nobod
     assertEquals(await said(await as(ana, "/api/elsewhere")), [404, "not_found"]);
     assertEquals(await said(await as(ana, "/api/queries/note.nope")), [404, "not_found"]);
     assertEquals(await said(await as(ana, "/api/views/nope")), [404, "not_found"]);
+    // A filter naming an operator there's none of: the caller's mistake, a 400 that says which.
+    const q = (value: unknown) => encodeURIComponent(JSON.stringify(value));
+    for (const filter of [{ $bad: 1 }, { text: { $nope: "x" } }]) {
+      const refused = await as(ana, `/api/collections/note?filter=${q(filter)}`);
+      assertEquals(refused.status, 400, JSON.stringify(filter));
+      assertMatch((await refused.json()).error.message, /Unsupported filter operator \$(bad|nope)/);
+    }
     // The system's alone: refused; to nobody, a 401 that says how to be someone.
     assertEquals(await said(await as(ana, "/api/actions/note.put", json("POST", {}))), [
       403,

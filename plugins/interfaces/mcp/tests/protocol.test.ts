@@ -507,3 +507,64 @@ test("at start: a line's mistakes stop the app", async () => {
     "handles",
   );
 });
+
+test("instructions an Action says: asked as each session starts, so a change reaches the next without a restart", async () => {
+  let words = "Buy bus tickets.";
+  const asked: unknown[] = [];
+  const says = definePlugin({
+    name: "says",
+    actions: {
+      "app.instructions": {
+        input: { type: "object" },
+        run: (_ctx, input: unknown) => {
+          asked.push(input);
+          return words;
+        },
+      },
+    },
+  });
+  await setup(async (s) => {
+    const start = async () =>
+      (await s.post({
+        jsonrpc: "2.0",
+        id: 0,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "openai-mcp", version: "1.0.0" },
+        },
+      })).body.result?.instructions;
+    assertEquals(await start(), "Buy bus tickets.");
+    words = "Buy bus tickets, and say the fare first.";
+    assertEquals(await start(), "Buy bus tickets, and say the fare first.");
+    assertEquals((await s.modern("server/discover")).body.result?.instructions, words);
+    assertEquals(asked[0], { server: "chatgpt" });
+    // Nothing to say: the session starts without instructions.
+    words = "";
+    assertEquals(await start(), undefined);
+  }, { line: { instructions: { action: "app.instructions" } }, plugins: [says] });
+  // Naming an Action nobody declares: the app doesn't start.
+  await assertRejects(
+    () =>
+      createRuntime({
+        store: memoryStore(),
+        plugins: [
+          models,
+          chat,
+          ...access,
+          mcp,
+          app,
+          definePlugin({
+            name: "settings",
+            resources: {
+              links: { origin: "https://app.example", secret: "s".repeat(32) },
+              mcp: { chatgpt: { ...LINE, instructions: { action: "app.nobody" } } },
+            },
+          }),
+        ],
+      }),
+    Error,
+    `names the Action "app.nobody" for its instructions`,
+  );
+});

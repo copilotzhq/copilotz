@@ -227,7 +227,10 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
     event.type === "turn.requested" && t.hops === 0 && step === 0 && !open &&
     current.latest !== t.trigger && await answered(ctx, t)
   ) return;
-  const composed = await ctx.render("llm.thread", current, { viewer }) as Prompt;
+  // The agent as the turn found it (its sources asked here, as trusted code: the org's version
+  // of one of the app's, whoever it's talking with), so the prompt doesn't work it out again as
+  // a read for the agent, which reads only what its person does.
+  const composed = await ctx.render("llm.thread", current, { viewer, hints: { agent } }) as Prompt;
   const instructions = composed.system.join("\n\n");
   // The conversation up to here repeats in the next calls: a cache point, before what's new each turn.
   const history = composed.history.map((m, i, all) =>

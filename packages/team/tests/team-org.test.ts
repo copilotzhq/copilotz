@@ -191,3 +191,48 @@ test("the app's welcome: each person once, and again when asked", async () => {
     await rt.close();
   }
 });
+
+test("an agent's instructions are as long as the app lets them be: 100,000 characters unless it says", async () => {
+  const rt = await start();
+  try {
+    const long = "Say it well. ".repeat(2_000); // 26,000 characters: past the old 20,000.
+    await rt.call("agent.update", { agent: "north", instructions: long }, { actor: ana });
+    assertEquals((await named(rt, ["north"])).north.instructions, long);
+    const failed = await rt.call("agent.update", {
+      agent: "north",
+      instructions: "x".repeat(100_001),
+    }, { actor: ana }).then(() => undefined, (e) => e as { code?: string; detail?: unknown });
+    assertEquals([failed?.code, failed?.detail], ["invalid", { field: "instructions" }]);
+  } finally {
+    await rt.close();
+  }
+  // An app's own limit.
+  const small = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      models,
+      chat,
+      ...access,
+      team,
+      definePlugin({
+        name: "app",
+        adapters: { llm: { s: script } },
+        resources: {
+          team: { instructionsLimit: 100 },
+          provider: { s: { adapter: "s", apiKey: "k" } },
+          agents: { north: { instructions: "I lead.", model: "s/north", default: true } },
+        },
+      }),
+    ],
+  });
+  try {
+    await small.call("org.join", { person: "ana", role: "owner" });
+    const failed = await small.call("agent.update", {
+      agent: "north",
+      instructions: "x".repeat(101),
+    }, { actor: ana }).then(() => undefined, (e) => e as { code?: string });
+    assertEquals(failed?.code, "invalid");
+  } finally {
+    await small.close();
+  }
+});

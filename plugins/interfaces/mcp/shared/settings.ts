@@ -136,10 +136,16 @@ export type DeclaredServer = {
    * model reads of it: without one, the app doesn't start.
    */
   tools: Record<string, McpTool | null>;
-  /** What it's called, its version, and what the model is told about using it. */
+  /** What it's called, and its version. */
   title?: string;
   version?: string;
-  instructions?: string;
+  /**
+   * What the model is told about using it: the words, or an Action that says them (`{ action }`:
+   * given `{ server }`, its name, answering the words or nothing), asked as each session starts
+   * (`initialize`, `server/discover`), so words the app changes reach new conversations without
+   * a restart.
+   */
+  instructions?: string | { action: string };
   /**
    * Who calls (`ChatGPT`), as its chats show it: the sender of their steps,
    * and their title. The server's name unless said.
@@ -326,6 +332,15 @@ export function problemOf(
   }
   if (line.public !== undefined && typeof line.public !== "boolean") {
     return "public is true or false";
+  }
+  const told = line.instructions;
+  if (told !== undefined && typeof told !== "string") {
+    if (!told || typeof told !== "object" || typeof told.action !== "string") {
+      return "says its instructions as words, or names the Action that says them ({ action })";
+    }
+    if (!actions.includes(told.action)) {
+      return `names the Action "${told.action}" for its instructions, which no plugin declares`;
+    }
   }
   const open = line.public === true;
   if (open && line.handles !== undefined && line.handles !== false) {

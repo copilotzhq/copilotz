@@ -366,15 +366,17 @@ test("who may: owners and admins change the org's tiers and its cap; members cho
   try {
     const launch = await spaceOf(rt, "Launch", ana);
     await join(rt, launch, bob, "editor", ana);
+    // Each call made as it's awaited: one refused while another was still awaited would go
+    // unhandled.
     for (
       const call of [
-        rt.call("tiers.choose", { tier: "expert" }, { actor: bob }),
-        rt.call("tiers.save", { tier: "expert", kinds: { north: ["s/x"] } }, { actor: bob }),
-        rt.call("tiers.remove", { tier: "expert" }, { actor: bob }),
-        rt.call("tiers.cap", { tier: "everyday" }, { actor: bob }),
-        rt.call("tiers.choose", { space: launch, tier: "expert" }, { actor: bob }),
+        () => rt.call("tiers.choose", { tier: "expert" }, { actor: bob }),
+        () => rt.call("tiers.save", { tier: "expert", kinds: { north: ["s/x"] } }, { actor: bob }),
+        () => rt.call("tiers.remove", { tier: "expert" }, { actor: bob }),
+        () => rt.call("tiers.cap", { tier: "everyday" }, { actor: bob }),
+        () => rt.call("tiers.choose", { space: launch, tier: "expert" }, { actor: bob }),
       ]
-    ) assertEquals(await refused(call), "forbidden");
+    ) assertEquals(await refused(call()), "forbidden");
     // An agent working for the owner doesn't choose for them: in person only.
     const north: Actor = { kind: "agent", id: "north", for: ana };
     assertEquals(

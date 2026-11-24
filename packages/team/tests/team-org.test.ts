@@ -117,17 +117,18 @@ test("the org's team: changed, taken off, put back; its own agents work in every
     await rt.call("agent.reset", { agent: "north" }, { actor: ana });
     assertEquals((await named(rt, ["north"])).north, undefined, "nothing of the org's left");
 
-    // Only who runs the org changes its team.
+    // Only who runs the org changes its team. (Each call made as it's awaited: one refused while
+    // another was still awaited would go unhandled.)
     for (
       const call of [
-        rt.call("agent.update", { agent: "north", description: "x" }, { actor: bob }),
-        rt.call("agent.delete", { agent: "north" }, { actor: bob }),
-        rt.call("agent.create", { name: "Mine", in: ORG }, { actor: bob }),
-        rt.call("agent.delete", { agent }, { actor: bob }),
+        () => rt.call("agent.update", { agent: "north", description: "x" }, { actor: bob }),
+        () => rt.call("agent.delete", { agent: "north" }, { actor: bob }),
+        () => rt.call("agent.create", { name: "Mine", in: ORG }, { actor: bob }),
+        () => rt.call("agent.delete", { agent }, { actor: bob }),
       ]
     ) {
       assertEquals(
-        await call.then(() => "done", (e) => (e as { code?: string }).code),
+        await call().then(() => "done", (e) => (e as { code?: string }).code),
         "forbidden",
       );
     }

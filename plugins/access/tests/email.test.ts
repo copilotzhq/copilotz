@@ -830,7 +830,7 @@ test("limits: messages to an address, tries at it, and what one caller asks, the
   }
 });
 
-test("Resend gets each message as its API takes it; one that didn't go says so", async () => {
+test("Resend gets each message as its API takes it; one that didn't go says so, and so does every one for a while", async () => {
   const { rt, resend } = await start();
   try {
     await ask(rt, "/signin/email/sign-up", { email: "ana@example.com", password: "correct horse" });
@@ -846,9 +846,17 @@ test("Resend gets each message as its API takes it; one that didn't go says so",
       password: "correct horse",
     });
     assertEquals([failed.status, failed.said.code], [503, "unavailable"]);
-    // Forgot answers the same, though: it says nothing of who has an account.
+    // Meanwhile every message is refused alike, an address with an account or not: it says
+    // nothing of who has one.
     await rt.call("person.set", { person: "cy", email: "cy@example.com" });
-    assertEquals((await ask(rt, "/signin/email/forgot", { email: "cy@example.com" })).status, 200);
+    const known = await ask(rt, "/signin/email/forgot", { email: "cy@example.com" });
+    const unknown = await ask(rt, "/signin/email/forgot", { email: "zed@example.com" });
+    assertEquals([known.status, known.said.code], [503, "unavailable"]);
+    assertEquals([unknown.status, unknown.said.code, unknown.said.error], [
+      known.status,
+      known.said.code,
+      known.said.error,
+    ]);
     // Other plugins send through the port too.
     resend.state.failing = false;
     await rt.call("email.send", {

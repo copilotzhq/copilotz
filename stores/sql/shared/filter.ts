@@ -12,6 +12,10 @@ import type { Filter, FindOptions, ScalarType } from "../../../runtime/store.ts"
 import { checkOptions } from "../../../runtime/mongo.ts";
 import { type Pattern, pattern } from "../../../runtime/pattern.ts";
 
+/** A filter naming an operator this doesn't have: the caller's mistake (`invalid`), not a fault. */
+const unsupported = (op: string) =>
+  Object.assign(new Error(`Unsupported filter operator ${op}`), { code: "invalid" });
+
 /** Binds a value as a statement parameter and returns its placeholder. */
 export type Bind = (value: unknown) => string;
 
@@ -83,7 +87,7 @@ function compile(filter: Filter, c: Context): string {
       const any = each.length ? each.join(" OR ") : "FALSE";
       return key === "$or" ? `(${any})` : not(`(${any})`);
     }
-    if (key.startsWith("$")) throw new Error(`Unsupported filter operator ${key}`);
+    if (key.startsWith("$")) throw unsupported(key);
     return test(key, condition, c);
   });
   return parts.length ? parts.join(" AND ") : "TRUE";
@@ -149,7 +153,7 @@ function test(field: string, condition: unknown, c: Context): string {
         checkOptions(condition as Record<string, unknown>);
         return "TRUE";
       default:
-        throw new Error(`Unsupported filter operator ${op}`);
+        throw unsupported(op);
     }
   });
   return `(${parts.join(" AND ")})`;

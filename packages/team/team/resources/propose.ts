@@ -12,6 +12,7 @@
 import { type Context, personOf } from "copilotz";
 import { ask, tool, type ToolContext } from "copilotz/plugins/agents/contract";
 import { ORG } from "copilotz/plugins/access/contract";
+import { instructionsLimitOf } from "../shared/limits.ts";
 
 /** Whether the person runs the org, or manages the space: what they could do themselves. */
 async function mayMake(ctx: Context, person: string, where: string): Promise<boolean> {
@@ -40,7 +41,7 @@ export const proposeAgent = tool({
       name: { type: "string", minLength: 1, maxLength: 60 },
       icon: { type: "string", maxLength: 16 },
       description: { type: "string", minLength: 1, maxLength: 500 },
-      instructions: { type: "string", minLength: 1, maxLength: 20_000 },
+      instructions: { type: "string", minLength: 1 },
       kind: { type: "string", maxLength: 40 },
       where: { type: "string", enum: ["space", "org"] },
     },
@@ -52,6 +53,10 @@ export const proposeAgent = tool({
     if (!person) return "Only a person can approve a new agent: there's no one to ask here.";
     const where = input.where === "org" ? ORG : ctx.in;
     if (!where) return "There's no space here to add it to: say where it should work.";
+    const limit = instructionsLimitOf(ctx.resources);
+    if (input.instructions.length > limit) {
+      return `Its instructions are too long: at most ${limit} characters. Make them shorter.`;
+    }
     if (!await mayMake(ctx, person, where)) {
       return where === ORG
         ? "Only the org's owners and admins add agents to its team: suggest it to them."

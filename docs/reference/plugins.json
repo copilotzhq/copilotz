@@ -13709,23 +13709,23 @@
         {
           "kind": "setting",
           "path": "mcp.<name>.title",
-          "summary": "What it's called, its version, and what the model is told about using it.",
+          "summary": "What it's called, and its version.",
           "required": false,
           "type": "string"
         },
         {
           "kind": "setting",
           "path": "mcp.<name>.version",
-          "summary": "What it's called, its version, and what the model is told about using it.",
+          "summary": "What it's called, and its version.",
           "required": false,
           "type": "string"
         },
         {
           "kind": "setting",
           "path": "mcp.<name>.instructions",
-          "summary": "What it's called, its version, and what the model is told about using it.",
+          "summary": "What the model is told about using it: the words, or an Action that says them (`{ action }`: given `{ server }`, its name, answering the words or nothing), asked as each session starts (`initialize`, `server/discover`), so words the app changes reach new conversations without a restart.",
           "required": false,
-          "type": "string"
+          "type": "string | object"
         },
         {
           "kind": "setting",
@@ -13883,21 +13883,21 @@
               "name": "title",
               "type": "string",
               "optional": true,
-              "doc": "What it's called, its version, and what the model is told about using it.",
+              "doc": "What it's called, and its version.",
               "secret": false
             },
             {
               "name": "version",
               "type": "string",
               "optional": true,
-              "doc": "What it's called, its version, and what the model is told about using it.",
+              "doc": "What it's called, and its version.",
               "secret": false
             },
             {
               "name": "instructions",
-              "type": "string",
+              "type": "string | object",
               "optional": true,
-              "doc": "What it's called, its version, and what the model is told about using it.",
+              "doc": "What the model is told about using it: the words, or an Action that says them (`{ action }`: given `{ server }`, its name, answering the words or nothing), asked as each session starts (`initialize`, `server/discover`), so words the app changes reach new conversations without a restart.",
               "secret": false
             },
             {
@@ -19438,8 +19438,7 @@
                 "maxLength": 500
               },
               "instructions": {
-                "type": "string",
-                "maxLength": 20000
+                "type": "string"
               },
               "model": {
                 "type": "string",
@@ -19702,8 +19701,7 @@
                 "maxLength": 500
               },
               "instructions": {
-                "type": "string",
-                "maxLength": 20000
+                "type": "string"
               },
               "model": {
                 "type": "string",
@@ -19770,8 +19768,7 @@
               },
               "instructions": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 20000
+                "minLength": 1
               },
               "kind": {
                 "type": "string",
@@ -19796,7 +19793,15 @@
       ],
       "views": [],
       "routes": [],
-      "needs": [],
+      "needs": [
+        {
+          "kind": "setting",
+          "path": "team.instructionsLimit",
+          "summary": "How long an agent's instructions may be, in characters (100,000).",
+          "required": false,
+          "type": "number"
+        }
+      ],
       "emits": [],
       "changes": [
         "agent.created",
@@ -19819,6 +19824,7 @@
           "shared": {
             "agent": {}
           },
+          "team": {},
           "tools": {
             "propose_agent": {
               "description": "Propose a new agent for a job that keeps coming back, for the person you work for to approve (they see it and answer Allow or No; the turn waits). Give it a short name, an emoji, what it does in a sentence or two, its instructions in the second person (\"You are…\"), the kind of work it does (one your context lists), and where it works: this space, or the whole org's team. Use it when the person asks for one, or when a specialist would clearly do a recurring job better; never for a one-off.",
@@ -19846,6 +19852,12 @@
             ]
           },
           {
+            "kind": "team",
+            "found": [
+              "source"
+            ]
+          },
+          {
             "kind": "tools",
             "found": [
               "source"
@@ -19856,7 +19868,23 @@
       "adapters": {},
       "workers": [],
       "check": null,
-      "settings": [],
+      "settings": [
+        {
+          "kind": "team",
+          "type": "TeamSettings",
+          "inContract": true,
+          "fields": [
+            {
+              "name": "instructionsLimit",
+              "type": "number",
+              "optional": true,
+              "doc": "How long an agent's instructions may be, in characters (100,000).",
+              "secret": false
+            }
+          ],
+          "doc": "The app's settings for team (`resources.team`)."
+        }
+      ],
       "listing": {
         "listable": true,
         "problems": [],

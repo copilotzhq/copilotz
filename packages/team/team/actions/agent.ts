@@ -30,6 +30,7 @@ import {
 import { must, ORG } from "copilotz/plugins/access/contract";
 import type { AgentDoc } from "../collections/agent.ts";
 import { joinEverywhere, leaveEverywhere } from "../shared/everywhere.ts";
+import { checkInstructions } from "../shared/limits.ts";
 
 const forbidden = (agent: string) =>
   Object.assign(new Error(`Only those who manage where "${agent}" belongs change it.`), {
@@ -39,7 +40,8 @@ const forbidden = (agent: string) =>
 const fields = {
   name: { type: "string", minLength: 1, maxLength: 60 },
   description: { type: "string", maxLength: 500 },
-  instructions: { type: "string", maxLength: 20_000 },
+  // As long as the app lets them be (`team.instructionsLimit`: shared/limits.ts).
+  instructions: { type: "string" },
   model: { type: "string", minLength: 1 },
   effort: { type: "string" },
   tools: { type: "array", items: { type: "string" }, maxItems: 64 },
@@ -115,6 +117,7 @@ function likeOf(_ctx: Context, like?: string): string | undefined {
 
 /** Throws unless every tool is the app's (or `send_message`) and the model can be called. */
 async function checked(ctx: Context, given: Fields) {
+  checkInstructions(ctx.resources, given.instructions);
   const tools = (ctx.resources.tools ?? {}) as Record<string, Tool>;
   const unknown = (given.tools ?? []).filter((name) => name !== SEND && !tools[name]);
   if (unknown.length) throw invalid(`No tool ${unknown.map((t) => `"${t}"`).join(", ")}.`);

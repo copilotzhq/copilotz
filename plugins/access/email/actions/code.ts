@@ -6,8 +6,10 @@
  *   has (a login, invited or not, or a person a sign-in verified it for), in
  *   place of one sent before (the `signin` message); with sign-up on, to any
  *   address, whose code then makes an account. The answer is the same
- *   whether or not one went, and so are the limits: a message that didn't go
- *   is logged, not said.
+ *   whether or not the address has one, and so are the limits. A message
+ *   that didn't go is refused (`unavailable`, which the page says), and for a
+ *   while after, every address is refused alike; the code sent before stays
+ *   good until a new one went.
  * - `email.enter` `{ email, code, name? }`: the code proves the address is
  *   theirs: the person (who it already was, or someone new, with the name
  *   given), their address confirmed, and a session. Their password, if they
@@ -25,7 +27,7 @@ import type { Login } from "../collections/login.ts";
 import { CODE_MINUTES, codeText, newCode, newToken, redeem, seal } from "../shared/codes.ts";
 import { ADDRESS, CODE, codeIn, EMAIL, emailIn, HOST, NAME } from "../shared/inputs.ts";
 import { aSend, aTry, byEmail } from "../shared/limits.ts";
-import { mail } from "../shared/mail.ts";
+import { deliver, mustSend } from "../shared/mail.ts";
 import { keepPerson, personFor, sessionFor } from "../shared/people.ts";
 import { linksFor, signInOf } from "../shared/settings.ts";
 import { WRONG_CODE } from "./sign-up.ts";
@@ -51,17 +53,18 @@ export const codeAction = defineAction({
     offered(ctx);
     const email = emailIn(input.email);
     await aSend(ctx, { account: email, address: input.address });
+    mustSend(ctx);
     const db = ctx.as().db;
     const known = await db.collection<Login>("email_login").findOne({ _id: email }) ??
       await db.collection<Person>("person").findOne({ email });
     if (!known && signInOf(ctx).signUp === false) return { email };
     const codes = db.collection<Code>("email_code");
-    await codes.deleteMany({ email, purpose: "signin" });
     const now = Date.now();
     const code = newCode();
     const expires = new Date(now + CODE_MINUTES * 60_000).toISOString();
+    const id = newToken(16);
     await codes.insertOne({
-      _id: newToken(16),
+      _id: id,
       email,
       purpose: "signin",
       hash: await seal(linksFor(ctx), codeText("signin", email, code)),
@@ -70,11 +73,14 @@ export const codeAction = defineAction({
       until: expires,
       at: new Date(now).toISOString(),
     });
+    // The one sent before stays good until this one went.
     try {
-      await mail(ctx, "signin", email, { code }, input.host);
+      await deliver(ctx, "signin", email, { code }, input.host);
     } catch (error) {
-      console.error("email-sign-in: a sign-in code didn't go:", (error as Error).message);
+      await codes.deleteOne({ _id: id });
+      throw error;
     }
+    await codes.deleteMany({ email, purpose: "signin", _id: { $ne: id } });
     return { email };
   },
 });

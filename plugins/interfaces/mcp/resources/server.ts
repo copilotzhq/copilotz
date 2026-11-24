@@ -391,9 +391,9 @@ async function answered(c: Context, raw: unknown, batched: boolean): Promise<Ans
   try {
     switch (method) {
       case "initialize":
-        return ok(initialized(c.line, params, await withWidgets(c)));
+        return ok(initialized(c.line, params, await withWidgets(c), await instructionsOf(c)));
       case "server/discover":
-        return ok(discovered(c.line, await withWidgets(c)));
+        return ok(discovered(c.line, await withWidgets(c), await instructionsOf(c)));
       case "ping":
         return ok({});
       case "tools/list": {
@@ -688,23 +688,40 @@ const serverInfo = (line: Server) => ({
 /** What the server has: tools, and with widgets, their template (a resource). */
 const capabilitiesOf = (widgets: boolean) => widgets ? { tools: {}, resources: {} } : { tools: {} };
 
+/**
+ * What the model is told about using the server, as a session starts: its words, or what the
+ * Action it names says now (`{ server }`, as the app: trusted code). An Action that fails or
+ * says nothing leaves the session without instructions rather than without the server.
+ */
+async function instructionsOf(c: Context): Promise<string | undefined> {
+  const told = c.line.instructions;
+  if (typeof told === "string" || told === undefined) return told || undefined;
+  const said = await c.runtime.call<unknown>(told.action, { server: c.line.name }).catch(
+    (error) => {
+      console.error(`mcp.${c.line.name}: its instructions (${told.action}) failed:`, error);
+      return undefined;
+    },
+  );
+  return typeof said === "string" && said.trim() ? said : undefined;
+}
+
 /** A legacy client's handshake: the version it asked for when taken, else the newest legacy one. */
-function initialized(line: Server, params: Params, widgets: boolean) {
+function initialized(line: Server, params: Params, widgets: boolean, instructions?: string) {
   const asked = params.protocolVersion;
   return {
     protocolVersion: typeof asked === "string" && LEGACY.includes(asked) ? asked : LEGACY[0],
     capabilities: capabilitiesOf(widgets),
     serverInfo: serverInfo(line),
-    ...(line.instructions ? { instructions: line.instructions } : {}),
+    ...(instructions ? { instructions } : {}),
   };
 }
 
 /** What `server/discover` says: versions, what it has, who it is. */
-const discovered = (line: Server, widgets: boolean) => ({
+const discovered = (line: Server, widgets: boolean, instructions?: string) => ({
   supportedVersions: VERSIONS,
   capabilities: capabilitiesOf(widgets),
   _meta: { "io.modelcontextprotocol/serverInfo": serverInfo(line) },
-  ...(line.instructions ? { instructions: line.instructions } : {}),
+  ...(instructions ? { instructions } : {}),
   ttlMs: TTL_MS,
   cacheScope: "public",
 });

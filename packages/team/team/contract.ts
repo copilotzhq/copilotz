@@ -8,3 +8,4 @@
  */
 export type { AgentDoc } from "./collections/agent.ts";
 export type { ModelPick } from "./views/web/model-pick.tsx";
+export { INSTRUCTIONS_LIMIT, type TeamSettings } from "./shared/limits.ts";

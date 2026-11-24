@@ -8,6 +8,10 @@ import type { Doc, Filter, FindOptions, Projection, Update } from "./store.ts";
 import { failure, invalid } from "./errors.ts";
 import { pattern } from "./pattern.ts";
 
+/** A filter naming an operator this doesn't have: the caller's mistake (`invalid`), not a fault. */
+const unsupported = (op: string) =>
+  Object.assign(new Error(`Unsupported filter operator ${op}`), { code: "invalid" });
+
 /**
  * A field name a write may give: not an operator's or a blob reference's
  * (`$…`, as MongoDB refuses them), nor `__proto__`, which reaches the
@@ -252,7 +256,7 @@ function test(value: unknown, condition: unknown): boolean {
       case "$options":
         return checkOptions(condition as Record<string, unknown>), true;
       default:
-        throw new Error(`Unsupported filter operator ${op}`);
+        throw unsupported(op);
     }
   });
 }
@@ -286,20 +290,22 @@ export function check(filter: Filter): void {
   const condition = (value: unknown): void => {
     if (!operatorObject(value)) return;
     for (const [op, arg] of Object.entries(value)) {
-      if (!OPERATORS.has(op)) throw new Error(`Unsupported filter operator ${op}`);
+      if (!OPERATORS.has(op)) throw unsupported(op);
       if (op === "$in" || op === "$nin") (arg as unknown[]).forEach(condition);
       else if (op === "$eq" || op === "$ne" || op === "$not") condition(arg);
       else if (op === "$elemMatch") elementCondition(arg);
       else if (op === "$regex") pattern(arg, value.$options);
       else if (op === "$options") checkOptions(value);
       else if (op !== "$exists" && arg !== null && !["number", "string"].includes(typeof arg)) {
-        throw new Error(`Unsupported comparison with ${JSON.stringify(arg)}`);
+        throw Object.assign(new Error(`Unsupported comparison with ${JSON.stringify(arg)}`), {
+          code: "invalid",
+        });
       }
     }
   };
   for (const [key, value] of Object.entries(filter)) {
     if (key === "$and" || key === "$or" || key === "$nor") (value as Filter[]).forEach(check);
-    else if (key.startsWith("$")) throw new Error(`Unsupported filter operator ${key}`);
+    else if (key.startsWith("$")) throw unsupported(key);
     else condition(value);
   }
 }

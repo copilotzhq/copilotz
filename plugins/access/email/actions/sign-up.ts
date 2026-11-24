@@ -33,7 +33,7 @@ import {
   passwordIn,
 } from "../shared/inputs.ts";
 import { aSend, aTry, byEmail } from "../shared/limits.ts";
-import { mail } from "../shared/mail.ts";
+import { deliver, mustSend } from "../shared/mail.ts";
 import { hashPassword } from "../shared/password.ts";
 import { keepPassword, keepPerson, personFor, sessionFor } from "../shared/people.ts";
 import { linksFor, signInOf } from "../shared/settings.ts";
@@ -62,13 +62,14 @@ export const signUpAction = defineAction({
     const email = emailIn(input.email);
     const password = passwordIn(input.password);
     await aSend(ctx, { account: email, address: input.address });
+    mustSend(ctx);
     const links = linksFor(ctx);
     // Hashed either way, so an address with an account answers as soon as one without.
     const pending = await hashPassword(password);
     const db = ctx.as().db;
     const login = await db.collection<Login>("email_login").findOne({ _id: email });
     if (login?.hash && login.verified) {
-      await mail(ctx, "exists", email, {}, input.host);
+      await deliver(ctx, "exists", email, {}, input.host);
       return { email };
     }
     const codes = db.collection<Code>("email_code");
@@ -89,7 +90,10 @@ export const signUpAction = defineAction({
       until: new Date(now + WAITS).toISOString(),
       at: new Date(now).toISOString(),
     });
-    await mail(ctx, "verify", email, { code }, input.host);
+    await deliver(ctx, "verify", email, { code }, input.host).catch(async (error) => {
+      await codes.deleteOne({ email, purpose: "verify", at: new Date(now).toISOString() });
+      throw error;
+    });
     return { email };
   },
 });

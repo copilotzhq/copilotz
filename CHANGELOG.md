@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.62 — 2026-11-24
 
 Apps are written as Copilotz's own plugins are: updates keep to the schema on every store, as
 MongoDB's do; screens, tools, scripts and REST save to collections, with Actions for business logic;

@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.61 — 2026-11-24
 
 **Fixed:**
 
@@ -38,6 +38,13 @@
   `{ server }`), asked as each session starts (`initialize`, `server/discover`): what an app changes
   reaches new conversations without a restart. An Action no plugin declares stops the app from
   starting; one that fails leaves the session without instructions.
+
+**Breaking, in small ways:**
+
+- **An MCP server's `instructions` is `string | { action }`** in its settings' type, so code that
+  reads a declared server's instructions as text narrows it first.
+- **E-mail sign-in's Actions can fail with `unavailable`** (a 503) where they answered as if a
+  message had gone: a front end of an app's own says it, as the sign-in page does.
 
 ## 1.0.0-rc.60 — 2026-11-21
 

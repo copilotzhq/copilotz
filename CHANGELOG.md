@@ -1,6 +1,8 @@
 ## Unreleased
 
-Updates keep to the schema on every store, as MongoDB's do.
+Apps are written as Copilotz's own plugins are: updates keep to the schema on every store, as
+MongoDB's do; screens, tools, scripts and REST save to collections, with Actions for business logic;
+and the docs teach one layout, a folder per primitive.
 
 **Breaking:**
 
@@ -18,10 +20,6 @@ Updates keep to the schema on every store, as MongoDB's do.
 - **`$push` refuses modifiers it doesn't support** (`$slice`, `$sort`, `$position`), which it
   ignored.
 
-**Added, MongoDB's update operators:** `$setOnInsert` (only when an upsert makes the document),
-`$min`, `$max` and `$mul`, on every store, checked against the schema as the others are. They were
-refused.
-
 **Fixed:**
 
 - **`$addToSet` with `$each`** adds each item not there yet; it stored `{ $each: […] }` itself.
@@ -31,8 +29,11 @@ refused.
   that, beyond the reader's reach, as it always did when an Action called it. Copilotz's own
   `person.email` is one: a View or query that calls it now gets the address.
 
-**Added:**
+**New:**
 
+- **MongoDB's update operators `$setOnInsert`** (only when an upsert makes the document), **`$min`,
+  `$max` and `$mul`,** on every store, checked against the schema as the others are. They were
+  refused.
 - **A View's handlers write collections:** `ctx.db.collection(name)` has `insertOne`, `updateOne`
   (an update document, or the fields to set), `replaceOne` and `deleteOne`, each the viewer's own
   write, as REST and the socket make it: a rule must speak for the collection's writes, the schema

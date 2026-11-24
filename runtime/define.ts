@@ -6,8 +6,14 @@ import type { FromSchema, JSONSchema } from "json-schema-to-ts";
 import type { Pipeline } from "./aggregate.ts";
 import type { Metrics } from "./metrics.ts";
 import type { Scheduled, ScheduleDef, ScheduleOptions, SchedulePatch } from "./schedules.ts";
-import type { Collection, NearestOptions, WithId } from "./collection.ts";
-import type { Actor, Edge, Event, Filter, FindOptions } from "./store.ts";
+import type {
+  Collection,
+  DeleteResult,
+  NearestOptions,
+  UpdateResult,
+  WithId,
+} from "./collection.ts";
+import type { Actor, Edge, Event, Filter, FindOptions, Update } from "./store.ts";
 import type { Owner } from "./owner.ts";
 
 /** The TypeScript type a JSON Schema describes. Deferred so generics stay cheap. */
@@ -177,6 +183,8 @@ export type Context = {
 /** What a query (and, read-only, anything rendering) can reach: reads, never writes. */
 export type ReadContext = {
   db: { collection<T = Record<string, unknown>>(name: string): ReadCollection<T> };
+  /** What the app's plugins declare (as `Context.describe`): its Actions' inputs, its Views. */
+  describe(): Description;
   graph: Pick<Graph, "edges">;
   render: Render;
   /** Records what a read used (an embedding's tokens…): the only write a read makes. */
@@ -282,12 +290,29 @@ export type ViewCollection<T> = {
   aggregate<R = Record<string, unknown>>(pipeline: Pipeline): Read<R[]>;
   nearest(vector: number[], options?: NearestOptions): Read<(WithId<T> & { _score: number })[]>;
   query<R = unknown>(name: string, params?: unknown): Read<R>;
+  /**
+   * From a handler (a click, a form's submit), a write of the viewer's own,
+   * as REST and the socket write: under the rules (a rule must speak for the
+   * collection's writes), checked against its schema, recorded as theirs.
+   * `update` is an update document (`$set`, `$inc`…), or the fields to set.
+   * A View never writes while it renders, nor when it's rendered once.
+   */
+  insertOne(doc: T & { _id?: string }): Promise<{ acknowledged: true; insertedId: string }>;
+  updateOne(
+    filter: Filter,
+    update: Update | Partial<T>,
+    options?: { upsert?: boolean },
+  ): Promise<UpdateResult>;
+  replaceOne(filter: Filter, doc: T, options?: { upsert?: boolean }): Promise<UpdateResult>;
+  deleteOne(filter: Filter): Promise<DeleteResult>;
 };
 
 /** What a View gets. `Shown` is what showing another View returns (text, an element). */
 export type ViewContext<Shown = unknown> = {
   db: { collection<T = Record<string, unknown>>(name: string): ViewCollection<T> };
   resources: Resources;
+  /** What the app's plugins declare (as `Context.describe`); a View the runtime runs has it. */
+  describe?(): Description;
   /** The name of the View being rendered. */
   name: string;
   viewer?: Viewer;
@@ -337,10 +362,19 @@ export type QueryFn<T = any> = (
 export type QueryDef<T = any> = QueryFn<T> | {
   // deno-lint-ignore no-explicit-any
   allow(actor: Actor, params: any): boolean;
+  /** What it answers, in a line: `GET /api/` and `describe()` list it. */
+  description?: string;
+  /** Its params' JSON Schema: checked for callers from outside, and listed with it. */
+  input?: JSONSchema;
   run: QueryFn<T>;
 };
 
 export type CollectionDef = {
+  /**
+   * What every document keeps to: inserts and replaces are checked against it, and so are
+   * updates, as MongoDB's `$jsonSchema` validator checks them (`validationLevel: "strict"`):
+   * what they set, unset, count and add, and the documents they leave.
+   */
   schema: JSONSchema;
   /** Record `<name>.created/updated/deleted` events for its writes (default true). */
   events?: boolean;
@@ -358,10 +392,19 @@ export type CollectionDef = {
    */
   durable?: false;
   /**
+   * How updates keep to the schema, as MongoDB's `validationLevel`: `"strict"`
+   * (the default) checks every update; `"moderate"` checks only updates to
+   * documents that were valid before, for a collection whose older documents
+   * predate its schema (they're left as they are until fixed). Inserts and
+   * replaces are always checked.
+   */
+  validation?: "strict" | "moderate";
+  /**
    * Indexes, each a list of fields (`[["at"], ["tags.tenant", "at"]]`), for
    * the stores to serve filters on them without reading every document. A
    * field must be a scalar its schema types (string, number, integer or
-   * boolean): every write is checked against it, so it never holds an array.
+   * boolean): every write, an update's result too, is checked against it, so
+   * it never holds an array.
    */
   indexes?: string[][];
   /**
@@ -669,12 +712,20 @@ export type Labels = {
  * every change to the collection), or a write that only an Action's logic
  * may make (who's in a space, a session, a key).
  */
+/** A write, as a guard is told it. */
+export type WriteKind = "insert" | "update" | "replace" | "delete";
+
 export type Guard = (
   actor: Actor,
   operation: {
     collection: string;
     /** Reads, or writes (inserts, updates, replaces and deletes). */
     access: "read" | "write";
+    /**
+     * For a write, which it is: a rule can let someone create but not delete
+     * (`write === "delete" ? refuse : …`).
+     */
+    write?: WriteKind;
     filter?: Filter;
     /** An outsider's own read or write (REST, the socket), asked before it runs. */
     direct?: true;
@@ -687,6 +738,16 @@ export type Plugins = (Plugin | Plugins)[];
 
 export const definePlugin = (plugin: Plugin): Plugin => plugin;
 
+/**
+ * A plugin's guard, by collection: each collection's rule (`{ sale: … }`), and no
+ * rule (`undefined`) for any other collection, so other plugins' rules decide
+ * those. A large rule goes in a file of its own (`lib/guards/sale.ts`).
+ */
+export const byCollection = (rules: Record<string, Guard>): Guard => (actor, operation, ctx) =>
+  Object.hasOwn(rules, operation.collection)
+    ? rules[operation.collection](actor, operation, ctx)
+    : undefined;
+
 /** A collection whose documents (and queries' collection) are typed from its JSON Schema. */
 export const defineCollection = <const S extends JSONSchema>(
   def: {
@@ -694,6 +755,7 @@ export const defineCollection = <const S extends JSONSchema>(
     events?: boolean;
     records?: boolean;
     durable?: false;
+    validation?: "strict" | "moderate";
     indexes?: string[][];
     private?: string[];
     queries?: Record<string, QueryDef<Infer<S> & { _id: string }>>;

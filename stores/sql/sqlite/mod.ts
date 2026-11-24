@@ -571,7 +571,7 @@ export async function sqliteStore(options: {
         }
         // Upsert: the filter's equality fields seed the new document.
         const seed = seedOf(filter);
-        const created = applyUpdate(seed, update);
+        const created = applyUpdate(seed, update, true);
         insert(collection, created);
         return {
           matched: 0,

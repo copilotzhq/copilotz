@@ -101,8 +101,8 @@ export const bookingsView = (_: unknown, ctx: ViewContext<unknown>): string => {
 };
 ```
 
-A View never writes. The runtime remembers what it read, which is how a screen stays live. Chapter 3
-puts that to work.
+A View never writes while it renders (its handlers may, when someone clicks). The runtime remembers
+what it read, which is how a screen stays live. Chapter 3 puts that to work.
 
 ### The app
 

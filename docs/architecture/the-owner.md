@@ -174,7 +174,8 @@ Trusted code can act as someone other than its actor, and it's always on the rec
   are `chat.hand-over`, `chat.hand-back` and `web.budget`.
 
 Each of these records `via`, the actor whose work it was, and stays where that work is unless it
-says otherwise. The owner counts every op made as the system on someone's behalf in
+says otherwise. An unrecorded Action a query or a View calls acts as someone else the same way,
+read-only. The owner counts every op made as the system on someone's behalf in
 `copilotz.elevated.ops`, by grant. The model never holds a grant: code decides when to use one, and
 what leaves it.
 

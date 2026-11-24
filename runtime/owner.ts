@@ -22,8 +22,13 @@ import type {
   RenderOptions,
   ViewDef,
   WorkerJob,
+  WriteKind,
 } from "./define.ts";
 import { type Blobs, hydrate, isBlobRef, offload, refuseBlobKeys } from "./blobs.ts";
+import { type Problem, problemsOf, updateCheck } from "./updates.ts";
+
+/** A document's fields, as its schema sees them: without its `_id`. */
+const withoutId = ({ _id: _, ...fields }: Doc) => fields;
 import { createCache } from "./cache.ts";
 import { createMaintenance, type Maintenance } from "./maintain.ts";
 import {
@@ -60,17 +65,30 @@ import {
   type StoreOp,
   type WriteOp,
 } from "./ops.ts";
-import { check, checkPath, checkProjection, get, matches, project } from "./mongo.ts";
+import {
+  applyUpdate,
+  check,
+  checkPath,
+  checkProjection,
+  get,
+  matches,
+  project,
+  seedOf,
+} from "./mongo.ts";
 import {
   canonical,
   checked,
   compile,
+  deepest,
   described,
   events,
   fingerprint,
   invalid,
   json,
   merge,
+  queriesOf,
+  schemaFailure,
+  unknown,
   unprivate,
 } from "./registry.ts";
 import type {
@@ -362,6 +380,12 @@ export async function createOwner(
     clock?: Clock;
     /** How much browsers may hold (see browsers.ts): contacts' caps, a pool shared with others. */
     browsers?: BrowserLimits;
+    /**
+     * What's told of what looks wrong at startup (a schema that names no
+     * fields…): each message, once a process, on the console by default;
+     * `false` tells nothing.
+     */
+    warn?: ((message: string) => void) | false;
   },
 ): Promise<Owner> {
   const { store } = options;
@@ -369,6 +393,9 @@ export async function createOwner(
   if (limited) throw invalid(limited);
   const registry = merge(options.plugins);
   checkHttp(registry);
+  // What looks wrong: told through `warn` (the console, once a message, by default).
+  const warn = options.warn === false ? () => {} : options.warn ?? warnOnce;
+  for (const message of registry.warnings) warn(message);
   // What browsers connect with: a one-time ticket, from `POST /connect` (see fetch.ts).
   const tickets = createTickets(
     options.browsers?.tickets !== undefined ? { perMinute: options.browsers.tickets } : {},
@@ -429,6 +456,71 @@ export async function createOwner(
       compile(def.schema, `collection "${name}"`),
     ]),
   );
+  // Updates, checked against the schema before any store applies them (updates.ts).
+  const updateChecks = Object.fromEntries(
+    Object.entries(registry.collections).map(([name, def]) => [
+      name,
+      updateCheck(def.schema, `collection "${name}"`, def.vectors ?? []),
+    ]),
+  );
+  // Collections whose updates are checked only on documents that were valid (`validation`).
+  const moderate = new Set(
+    Object.entries(registry.collections).flatMap(([name, def]) =>
+      def.validation === "moderate" ? [name] : []
+    ),
+  );
+  /** Refuses an update that can't fit; whether it's sure what the update leaves is valid. */
+  const checkUpdate = (collection: string, update: Update): boolean =>
+    collection.startsWith(SYSTEM) ||
+    // Moderate: whether it may change a document depends on the document; its result decides.
+    (!moderate.has(collection) && updateChecks[collection](update));
+  const valid = (collection: string, doc: Record<string, unknown>) => {
+    try {
+      validators[collection](doc);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /** Whether the document an upsert would make, if nothing matches, is valid. */
+  const seeds = (collection: string, op: { filter: Filter; update: Update }): boolean => {
+    if (collection.startsWith(SYSTEM)) return true;
+    try {
+      const { _id: _, ...fields } = applyUpdate(seedOf(op.filter), op.update, true);
+      return valid(collection, fields);
+    } catch {
+      return false;
+    }
+  };
+  // What's wrong with a document, for the update checks below.
+  const problems = Object.fromEntries(
+    Object.entries(registry.collections).map(([name, def]) => [name, problemsOf(def.schema)]),
+  );
+  /**
+   * Checks what an update left (large values back in place) against the schema: a document
+   * that was valid stays valid. One that wasn't (older than its schema) may still be updated:
+   * strict refuses only what the update adds to what was wrong with it, which every store tells
+   * alike (see updates.ts); moderate lets it be, as MongoDB's `validationLevel` does.
+   */
+  const checkResult = async (reader: Reader, collection: string, changes: Change[]) => {
+    if (collection.startsWith(SYSTEM)) return;
+    const of = (doc: Doc) => problems[collection](withoutId(doc));
+    const key = (p: Problem) => `${p.at} ${p.rule}`;
+    for (const { before, after } of changes) {
+      if (!after) continue;
+      const now = of(await hydrate(after, blobsOf(reader)));
+      if (!now.length) continue;
+      const had = before ? of(await hydrate(before, blobsOf(reader))) : [];
+      const known = new Set(had.map(key));
+      const added = !had.length
+        ? now
+        : moderate.has(collection)
+        ? []
+        : now.filter((p) => !known.has(key(p)));
+      const last = deepest(added.map((p) => ({ ...p, instanceLocation: p.at })));
+      if (last) throw schemaFailure(`collection "${collection}"`, last.error, last.at, last.rule);
+    }
+  };
   const vectorFields = (collection: string) => registry.collections[collection]?.vectors ?? [];
   // Collections kept in memory only (`durable: false`): not in the store, no events.
   const fleeting = new Set(
@@ -453,7 +545,17 @@ export async function createOwner(
     }
     if (inMemory(op) && !isRead(op)) refuseBlobKeys(op);
     if (!("collection" in op) || op.collection.startsWith(SYSTEM)) return;
-    if (!validators[op.collection]) throw invalid(`Unknown collection "${op.collection}"`);
+    if (!validators[op.collection]) {
+      throw unknown("collection", op.collection, Object.keys(registry.collections));
+    }
+    // An update says what changes, with operators: one with none would replace the whole
+    // document unchecked. MongoDB refuses it too; replaceOne replaces.
+    if (op.op === "update" && !Object.keys(op.update).some((key) => key.startsWith("$"))) {
+      throw invalid(
+        `An update of "${op.collection}" needs operators ($set, $unset, $inc…): ` +
+          "replaceOne replaces a whole document",
+      );
+    }
     // A pipeline the stores can't run fails here, before any store sees it.
     if (op.op === "aggregate") plan(op.pipeline);
     // Records are appended, once: the same record sent again is the one already kept.
@@ -577,6 +679,8 @@ export async function createOwner(
     const { result } = await memory!.transaction(memoryEpoch, async (tx) => {
       const hooks: Hooks = {
         validate,
+        checkUpdate: (collection, update) => void checkUpdate(collection, update),
+        checkResult: (collection, changes) => checkResult(tx, collection, changes),
         offload: (value) => Promise.resolve(value),
         changed: (collection, changes) => void seen.push([collection, changes]),
         vectors: vectorFields,
@@ -667,7 +771,14 @@ export async function createOwner(
     // what writes leave may have to keep to a rule: a transaction.
     const plain = writes.every((o) => !("collection" in o) || !vectorFields(o.collection).length) &&
       !by.keep?.size;
-    if (store.command && writes.length && plain && ops.every((o) => !isRead(o))) {
+    // In one statement, the store applies updates out of sight: only those checked in full
+    // beforehand go that way, an upsert only when the document it would make is valid too.
+    const checked = () =>
+      writes.every((o) =>
+        o.op !== "update" ||
+        (checkUpdate(o.collection, o.update) && (!o.options.upsert || seeds(o.collection, o)))
+      );
+    if (store.command && writes.length && plain && ops.every((o) => !isRead(o)) && checked()) {
       for (const op of writes) {
         if (op.op === "insert") {
           for (const { _id: _, ...fields } of op.docs) validate(op.collection, fields);
@@ -844,15 +955,20 @@ export async function createOwner(
       // An actor's Views see what they reach, and what the rules read to
       // know it (memberships) is what they read too, kept or not: they follow its changes.
       const rules = actor ? ruling(track) : ruleReads;
+      // Reads as `who`, within their reach; `hide`: without private fields.
+      const runFor = (who: Actor | undefined, hide: boolean) => async (op: Op) => {
+        known(op);
+        track(op);
+        const [read] = (await guard([op as ReadOp], who, rules)).ops;
+        const value = await answer(store, read as ReadOp);
+        return hide ? hidden(read as ReadOp, value) : value;
+      };
+      // An unrecorded Action the View calls may act as someone else, as from an Action: the
+      // system (or a grant) reads private fields there, as Actions do.
+      const runAs = (who: Actor | undefined) => runFor(who, !!who && who.kind !== "system");
       return reading(
         registry,
-        async (op) => {
-          known(op);
-          track(op);
-          const [read] = (await guard([op as ReadOp], actor, rules)).ops;
-          const value = await answer(store, read as ReadOp);
-          return actor ? hidden(read as ReadOp, value) : value;
-        },
+        runFor(actor, !!actor),
         (collection, doc) => {
           // What a read used (an embedding's tokens): recorded on its own.
           const _id = typeof doc._id === "string" ? doc._id : crypto.randomUUID();
@@ -864,10 +980,17 @@ export async function createOwner(
         metrics,
         outside,
         actor,
+        undefined,
+        runAs,
       );
     },
     call: (action, input, actor) => api.call(action, input, actor ? { actor } : {}),
     emit: (type, data, actor) => emit(type, data, actor ? { actor } : {}),
+    // A handler's write is its viewer's own, as REST and the socket write.
+    write: (op, actor) =>
+      actor
+        ? writeOutside(actor, op)
+        : Promise.reject(invalid("A View writes as whoever it's observed for: give it an actor.")),
   });
 
   // Every change to a declared collection is an event, committed with it; records are their own.
@@ -935,6 +1058,8 @@ export async function createOwner(
   ) => {
     const hooks: Hooks = {
       validate,
+      checkUpdate: (collection, update) => void checkUpdate(collection, update),
+      checkResult: (collection, changes) => checkResult(tx, collection, changes),
       offload: (value) =>
         offload(
           value,
@@ -995,13 +1120,14 @@ export async function createOwner(
     collection: string,
     filter?: Filter,
     reads = ruleReads,
+    write?: WriteKind,
   ): Promise<Filter | undefined> => {
     if (actor.kind === "system" || collection.startsWith(SYSTEM)) return undefined;
     const rules: Filter[] = [];
     for (const guard of registry.guards as Guard[]) {
       const found = await guard(
         actor,
-        { collection, access, ...(filter ? { filter } : {}) },
+        { collection, access, ...(write ? { write } : {}), ...(filter ? { filter } : {}) },
         reads,
       );
       if (found !== undefined && found !== true) rules.push(found);
@@ -1022,6 +1148,7 @@ export async function createOwner(
     filter?: Filter,
     access: "read" | "write" = "read",
     direct = true,
+    write?: WriteKind,
   ) => {
     if (!inScope(actor, access, collection)) {
       throw forbidden(
@@ -1029,15 +1156,44 @@ export async function createOwner(
       );
     }
     let found = false;
-    for (const guard of registry.guards as Guard[]) {
+    const speaking: string[] = [];
+    for (const [i, guard] of (registry.guards as Guard[]).entries()) {
       const said = await guard(
         actor,
-        { collection, access, ...(filter ? { filter } : {}), ...(direct ? { direct: true } : {}) },
+        {
+          collection,
+          access,
+          ...(write ? { write } : {}),
+          ...(filter ? { filter } : {}),
+          ...(direct ? { direct: true } : {}),
+        },
         ruleReads,
       );
-      if (said !== undefined) found = true;
+      if (said !== undefined) {
+        found = true;
+        speaking.push(registry.guardPlugins[i]);
+      }
     }
+    if (found) foreignRule(collection, speaking);
     return found;
+  };
+  /**
+   * Said once a collection: an outsider let in by another plugin's guard alone, where the
+   * collection's own plugin says nothing of who reaches it (no guard, no `shared` entry of its own).
+   */
+  const foreignRuled = new Set<string>();
+  const foreignRule = (collection: string, speaking: string[]) => {
+    const ruled = registry.ruledBy[collection];
+    if (!ruled || ruled.own || speaking.includes(ruled.plugin) || foreignRuled.has(collection)) {
+      return;
+    }
+    foreignRuled.add(collection);
+    warn(
+      `Collection "${collection}" (${ruled.plugin}) was opened to an outsider by ` +
+        `${
+          [...new Set(speaking)].join(", ")
+        }'s guard alone: say who reaches it in ${ruled.plugin}.`,
+    );
   };
   /**
    * Whether an actor may run a query from outside: one that lets them, as
@@ -1053,6 +1209,16 @@ export async function createOwner(
     const def = registry.collections[collection]?.queries?.[query];
     return typeof def === "object" && allows(def.allow, actor, params) &&
       inScope(actor, "query", `${collection}.${query}`);
+  };
+  // Queries' `input`, compiled once each.
+  const paramChecks = new Map<string, (value: unknown) => void>();
+  const paramsCheck = (collection: string, query: string) => {
+    const def = registry.collections[collection]?.queries?.[query];
+    if (typeof def !== "object" || !def.input) return undefined;
+    const key = `${collection}.${query}`;
+    let check = paramChecks.get(key);
+    if (!check) paramChecks.set(key, check = compile(def.input, `query "${key}" params`));
+    return check;
   };
   const both = (filter: Filter | undefined, rule: Filter): Filter =>
     filter && Object.keys(filter).length ? { $and: [filter, rule] } : rule;
@@ -1073,7 +1239,14 @@ export async function createOwner(
         case "count":
         case "delete": {
           const access = op.op === "delete" ? "write" : "read";
-          const found = await rule(actor, access, op.collection, op.filter, reads);
+          const found = await rule(
+            actor,
+            access,
+            op.collection,
+            op.filter,
+            reads,
+            op.op === "delete" ? "delete" : undefined,
+          );
           return found ? { ...op, filter: both(op.filter, found) } : op;
         }
         case "aggregate": {
@@ -1098,7 +1271,7 @@ export async function createOwner(
             : op;
         }
         case "insert": {
-          const found = await rule(actor, "write", op.collection, undefined, reads);
+          const found = await rule(actor, "write", op.collection, undefined, reads, "insert");
           if (found && op.docs.some((doc) => !matches(doc, found))) {
             throw forbidden(`That "${op.collection}" document would be out of your reach.`);
           }
@@ -1107,8 +1280,8 @@ export async function createOwner(
         case "update":
         case "replace": {
           const [found, all] = await Promise.all([
-            rule(actor, "write", op.collection, op.filter, reads),
-            rule(actor, "write", op.collection, undefined, reads),
+            rule(actor, "write", op.collection, op.filter, reads, op.op),
+            rule(actor, "write", op.collection, undefined, reads, op.op),
           ]);
           if (all) keep.set(op.collection, all);
           return found ? { ...op, filter: both(op.filter, found) } : op;
@@ -1153,7 +1326,8 @@ export async function createOwner(
       throw forbidden(`"${collection}.${named}" is private: nobody outside reads or writes it.`);
     }
     const filter = "filter" in op ? op.filter : undefined;
-    if (!await ruled(actor, collection, filter, access)) {
+    const write = isRead(op) ? undefined : op.op as WriteKind;
+    if (!await ruled(actor, collection, filter, access, true, write)) {
       throw forbidden(
         `No rule lets ${actor.kind} ${actor.id} ${access} "${collection}" directly: ` +
           (access === "read"
@@ -1181,6 +1355,17 @@ export async function createOwner(
    * can't write. It answers as MongoDB does (`insertedId`, `matchedCount`…).
    */
   const writeOutside = async (actor: Actor, given: WriteOp): Promise<unknown> => {
+    try {
+      return await writeAs(actor, given);
+    } catch (error) {
+      // What doesn't fit the schema is the caller's to fix: said to them, with its field.
+      if ((error as { schema?: unknown }).schema === true) {
+        throw Object.assign(error as Error, { public: true });
+      }
+      throw error;
+    }
+  };
+  const writeAs = async (actor: Actor, given: WriteOp): Promise<unknown> => {
     const op = outsideWrite(given);
     await admitted(actor, op);
     known(op);
@@ -2197,7 +2382,7 @@ export async function createOwner(
     },
     call(action, input, options = {}) {
       const def = registry.actions[action];
-      if (!def) return Promise.reject(invalid(`Unknown action "${action}"`));
+      if (!def) return Promise.reject(unknown("action", action, Object.keys(registry.actions)));
       const { actor } = options;
       // An actor calls only what lets them (an agent, for whom it works for too), and what their
       // scope lists (a key's).
@@ -2244,13 +2429,14 @@ export async function createOwner(
       const dot = name.lastIndexOf(".");
       const [collection, query] = [name.slice(0, dot), name.slice(dot + 1)];
       if (!registry.collections[collection]?.queries?.[query]) {
-        throw invalid(`Unknown query "${name}"`);
+        throw unknown("query", name, queriesOf(registry));
       }
       const { actor } = options;
-      // An actor runs only what lets them.
+      // An actor runs only what lets them, with params its `input` takes.
       if (actor && !askable(actor, collection, query, params)) {
         throw forbidden(`${actor.kind} ${actor.id} may not run "${name}".`);
       }
+      if (actor && actor.kind !== "system") paramsCheck(collection, query)?.(json(params ?? {}));
       return await run({
         kind: "query",
         collection,
@@ -2421,6 +2607,14 @@ function outsideWrite(given: unknown): Extract<WriteOp, { collection: string }> 
       throw invalid("A write is an insert, an update, a replace or a delete.");
   }
 }
+
+/** Each warning once a process, however many runtimes start (tests start many). */
+const warned = new Set<string>();
+const warnOnce = (message: string) => {
+  if (warned.has(message)) return;
+  warned.add(message);
+  console.warn(`copilotz: ${message}`);
+};
 
 /** An observation that failed before it began: refused. */
 function refusedView<R>(error: Error): Observation<R> {

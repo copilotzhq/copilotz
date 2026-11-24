@@ -33,8 +33,9 @@
  * collection reaches an outsider only where a rule speaks for it (for
  * writes, a rule asked about writes), never `sys.*`; private fields are
  * never returned, never filtered by, never written; the owner's guard keeps
- * every write within their reach; the schema checks it; and every write
- * records its events, as theirs.
+ * every write within their reach; the schema checks it (an update's values
+ * and the document it leaves, see updates.ts); and every write records its
+ * events, as theirs.
  *
  * Errors are JSON, `{ error: { code, message } }`. A refusal (an error with
  * a code, as `failure` makes them) answers a 4xx: its code's status, 422 for
@@ -127,9 +128,26 @@ const json = (value: unknown, status = 200, headers: Record<string, string> = {}
     },
   });
 
-/** An error as the API says it. */
-const failed = (status: number, code: string, message: string, headers = {}) =>
-  json({ error: { code, message } }, status, headers);
+/** An error as the API says it; a public one with its `detail` (the field it's about). */
+const failed = (
+  status: number,
+  code: string,
+  message: string,
+  headers = {},
+  detail?: Record<string, string>,
+) => json({ error: { code, message, ...(detail ? { detail } : {}) } }, status, headers);
+
+/** A public failure's `detail`: its strings (`{ field: "price" }`). */
+const detailOf = (error: unknown): Record<string, string> | undefined => {
+  const detail = (error as { detail?: unknown; public?: unknown } | null)?.detail;
+  if (
+    (error as { public?: unknown } | null)?.public !== true || !detail || typeof detail !== "object"
+  ) {
+    return undefined;
+  }
+  const kept = Object.entries(detail).filter(([, value]) => typeof value === "string");
+  return kept.length ? Object.fromEntries(kept) as Record<string, string> : undefined;
+};
 
 /** A refusal, by its code. */
 const fault = (code: string, message: string) =>
@@ -480,11 +498,18 @@ export function createApi(env: ApiEnv): Api {
         path: `/api/actions/${enc(name)}`,
       };
     };
-    const query = (name: string) => ({
-      name,
-      method: "POST" as const,
-      path: `/api/queries/${enc(name)}`,
-    });
+    const query = (name: string) => {
+      const dot = name.lastIndexOf(".");
+      const def = registry.collections[name.slice(0, dot)]?.queries?.[name.slice(dot + 1)];
+      const about = typeof def === "object" ? def : undefined;
+      return {
+        name,
+        ...(about?.description ? { description: about.description } : {}),
+        ...(about?.input ? { input: about.input } : {}),
+        method: "POST" as const,
+        path: `/api/queries/${enc(name)}`,
+      };
+    };
     const view = (name: string) => ({
       name,
       method: "GET" as const,
@@ -824,5 +849,5 @@ function refusal(error: unknown, actor: Actor): Response {
   return failed(status, code, told.message, {
     ...(allow ? { allow } : {}),
     ...headers,
-  });
+  }, detailOf(error));
 }

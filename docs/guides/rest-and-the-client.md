@@ -56,8 +56,8 @@ about writes. `sys.*` collections never do.
 
 Private fields are never returned, filtered by or written.
 
-Every write is the caller's own. The owner's guard keeps it within their reach, the schema checks
-it, and it's recorded as its events.
+Every write is the caller's own. The owner's guard keeps it within their reach, the schema checks it
+(an update's values, and the document it leaves), and it's recorded as its events.
 
 Plugins' collections that only their Actions may change say so in their rules. Spaces and
 memberships, sessions, keys, messages, routines and computers are some of them.

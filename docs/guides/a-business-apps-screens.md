@@ -17,17 +17,20 @@ guide is how to put them together.
 
 ## The rules every screen keeps
 
-- **Views read, Actions write.** A View reads in its own body, with `ctx.db`, and hands what it read
+- **Views read; handlers save.** A View reads in its own body, with `ctx.db`, and hands what it read
   to React components. When a commit changes what it read, it runs again and the screen redraws: no
-  fetching in effects, no polling, no refresh button. A handler (a click, a submit) calls an Action
-  with `ctx.call`. A View never writes.
+  fetching in effects, no polling, no refresh button. A handler (a click, a submit) saves with the
+  View's collections (`insertOne`, `updateOne`, `deleteOne`), as the person, under the rules and the
+  schema; what's more than a save is an Action, called with `ctx.call`. A View never writes while it
+  renders.
 - **Screens read named queries.** In the browser, a View's own `find` reaches only a collection a
   rule speaks for (the `shared` resource, or a `guard`); any other answers `forbidden`, and the part
   says "You can't see this here". A named query with an `allow` (`people`) runs on the server, as
   whoever asks, and answers just what the screen shows: every read below is one.
-- **One View per file.** A plugin's front end is `plugins/<name>/web/`, a file per View and its
-  components beside them. `plugins/<name>/web.tsx` only names the Views, as `mod.ts` assembles the
-  server side.
+- **One View per file.** A plugin's front end is `plugins/<name>/views/web/`, a file per View and
+  its components beside them. `plugins/<name>/web.tsx` only names the Views, as `mod.ts` assembles
+  the server side. The data's side is a folder per primitive: `collections/` (each with its schema,
+  its type and its named queries), `actions/` for business logic.
 - **The toolkit, and no CSS.** Screens are made of `copilotz/web`'s pieces, layout included (`Page`,
   `Stack`, `Grid`, `Toolbar`, `Split`, `Card`). The look is the app's theme. No stylesheet, no
   `style={{…}}` for looks, no rules on the toolkit's `.copilotz-*` classes. A printed document's
@@ -35,8 +38,9 @@ guide is how to put them together.
   CSS.
 - **Settings are resources.** The time zone, the date formats and the words are the app's, never the
   browser's locale.
-- **The Action checks everything.** A form helps people fill it in. The Action that saves it checks
-  again, for every caller, and its refusal is what the form shows.
+- **The schema checks every save.** A form helps people fill it in (`required`, `type="email"`). The
+  schema checks the save again, for every caller, and names the field it refuses; an Action checks
+  what a schema can't say. Either refusal is what the form shows.
 
 ## Files and names
 
@@ -47,11 +51,12 @@ front.ts                 the browser's plugins, in order
 browser.tsx              the page's code: web({ root, plugins: front })
 plugins/
   look/                  the theme, the words and the formats, for the page and the server
-  frame/web/shell.tsx    the app's frame: the web.shell View
+  frame/views/web/shell.tsx  the app's frame: the web.shell View
   customers/
-    mod.ts actions.ts queries.ts contract.ts
+    mod.ts contract.ts
+    collections/customer.ts  its schema, its type and its named queries
     web.tsx              names the Views, and nothing else
-    web/
+    views/web/
       customers-screen.tsx   screen:customers
       customer-dialog.tsx    dialog:customer
       customer-form.tsx      a React component the dialog draws
@@ -72,10 +77,10 @@ Under Copilotz's own shell (`webShell`), an address `/<kind>/<id>` shows the Vie
 ```tsx
 // plugins/customers/web.tsx
 import { definePlugin, type Plugin } from "copilotz";
-import { customerDialog } from "./web/customer-dialog.tsx";
-import { customersScreen } from "./web/customers-screen.tsx";
+import { customerDialog } from "./views/web/customer-dialog.tsx";
+import { customersScreen } from "./views/web/customers-screen.tsx";
 
-/** Customers' web front end: each View is a file of web/; this only names them. */
+/** Customers' web front end: each View is a file of views/web/; this only names them. */
 export const customersWeb: Plugin = definePlugin({
   name: "customers-web",
   views: {
@@ -130,7 +135,7 @@ export const look: Plugin = definePlugin({
 ```
 
 ```tsx
-// plugins/frame/web/shell.tsx
+// plugins/frame/views/web/shell.tsx
 import type { ViewContext } from "copilotz";
 import {
   AppBar,
@@ -146,7 +151,7 @@ import {
 } from "copilotz/web";
 import type { IconLike, Where } from "copilotz/web";
 import type { ReactNode } from "react";
-import { formatsOf } from "../../look/contract.ts";
+import { formatsOf } from "../../../look/contract.ts";
 
 /** The salon's places, in the bar's order: each is the View `screen:<key>`, at `/<key>`. */
 const PLACES: { key: string; label: string; icon: IconLike; description: string }[] = [
@@ -208,7 +213,7 @@ export const shell = (where: Where, ctx: ViewContext<ReactNode>): ReactNode => {
 ```tsx
 // plugins/frame/web.tsx
 import { definePlugin, type Plugin } from "copilotz";
-import { shell } from "./web/shell.tsx";
+import { shell } from "./views/web/shell.tsx";
 
 /** The app's frame: its `web.shell` replaces the Copilotz shell's, so list it after any other. */
 export const frameWeb: Plugin = definePlugin({ name: "frame-web", views: { "web.shell": shell } });
@@ -294,19 +299,74 @@ state (`search`, `sort`, `order`, `offset`, `limit`) and the screen's filters, a
 and how many match:
 
 ```ts
+// plugins/customers/collections/customer.ts
+import { defineCollection, type Filter, type Infer, people } from "copilotz";
+import type { CustomerPage, PageParams } from "../contract.ts";
+
+const schema = {
+  type: "object",
+  properties: {
+    // Something besides spaces.
+    name: { type: "string", pattern: "\\S" },
+    phone: { type: "string" },
+    // Empty, or an address.
+    email: { type: "string", pattern: "^$|^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$" },
+    /** The salon's day they first came, `YYYY-MM-DD`. */
+    since: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+    archived: { type: "boolean" },
+  },
+  required: ["name", "since"],
+  additionalProperties: false,
+} as const;
+
+/** A customer, as the schema says: the type follows it. */
+export type Customer = Infer<typeof schema> & { _id: string };
+
+/** What someone typed, matched as it is: a search box's text is never a pattern. */
+const literally = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export const customer = defineCollection({
+  schema,
+  queries: {
+    /** `customer.page`: one page of customers, searched, filtered and sorted in the store. */
+    page: {
+      allow: people,
+      run: async (customers, params: PageParams): Promise<CustomerPage> => {
+        const filter: Filter = {
+          ...(params.search ? { name: { $regex: literally(params.search), $options: "i" } } : {}),
+          ...(params.from && params.to ? { since: { $gte: params.from, $lte: params.to } } : {}),
+          ...(params.archived ? {} : { archived: { $ne: true } }),
+        };
+        const sort = { [params.sort ?? "name"]: params.order === "desc" ? -1 : 1 } as const;
+        const [rows, total] = await Promise.all([
+          customers.find(filter, { sort, skip: params.offset, limit: params.limit }),
+          customers.countDocuments(filter),
+        ]);
+        return { rows, total };
+      },
+    },
+    /** `customer.one`: a customer, for their dialog. */
+    one: {
+      allow: people,
+      run: (customers, { _id }: { _id: string }) => customers.findOne({ _id }),
+    },
+    /** `customer.choices`: who can be picked, as a picker's options. */
+    choices: {
+      allow: people,
+      run: async (customers) =>
+        (await customers.find({ archived: { $ne: true } }, { sort: { name: 1 } }))
+          .map((c) => ({ value: c._id, label: c.name })),
+    },
+  },
+});
+```
+
+```ts
 // plugins/customers/contract.ts
 import { failure } from "copilotz";
+import type { Customer } from "./collections/customer.ts";
 
-/** A customer, as the screens show them. */
-export type Customer = {
-  _id: string;
-  name: string;
-  phone?: string;
-  email?: string;
-  /** The salon's day they first came, `YYYY-MM-DD`. */
-  since: string;
-  archived?: boolean;
-};
+export type { Customer };
 
 /** What `customer.page` is asked: the table's state, and the screen's filters. */
 export type PageParams = {
@@ -324,115 +384,23 @@ export type PageParams = {
 /** A page of customers, and how many match. */
 export type CustomerPage = { rows: Customer[]; total: number };
 
-/** A refusal a form shows by one field: words for anyone, and the field in `detail`. */
+/** An Action's refusal a form shows by one field: words for anyone, and the field in `detail`. */
 export const refusal = (field: string, message: string) =>
   Object.assign(failure("invalid", message, { public: true }), { detail: { field } });
 ```
 
-```ts
-// plugins/customers/queries.ts
-import { people } from "copilotz";
-import type { Filter, QueryDef } from "copilotz";
-import type { Customer, CustomerPage, PageParams } from "./contract.ts";
-
-/** What someone typed, matched as it is: a search box's text is never a pattern. */
-const literally = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/** `customer.page`: one page of customers, searched, filtered and sorted in the store. */
-export const page: QueryDef<Customer> = {
-  allow: people,
-  run: async (customers, params: PageParams): Promise<CustomerPage> => {
-    const filter: Filter = {
-      ...(params.search ? { name: { $regex: literally(params.search), $options: "i" } } : {}),
-      ...(params.from && params.to ? { since: { $gte: params.from, $lte: params.to } } : {}),
-      ...(params.archived ? {} : { archived: { $ne: true } }),
-    };
-    const sort = { [params.sort ?? "name"]: params.order === "desc" ? -1 : 1 } as const;
-    const [rows, total] = await Promise.all([
-      customers.find(filter, { sort, skip: params.offset, limit: params.limit }),
-      customers.countDocuments(filter),
-    ]);
-    return { rows, total };
-  },
-};
-
-/** `customer.one`: a customer, for their dialog. */
-export const one: QueryDef<Customer> = {
-  allow: people,
-  run: (customers, { _id }: { _id: string }) => customers.findOne({ _id }),
-};
-
-/** `customer.choices`: who can be picked, as a picker's options. */
-export const choices: QueryDef<Customer> = {
-  allow: people,
-  run: async (customers) =>
-    (await customers.find({ archived: { $ne: true } }, { sort: { name: 1 } }))
-      .map((c) => ({ value: c._id, label: c.name })),
-};
-```
-
-```ts
-// plugins/customers/actions.ts
-import { defineAction, people } from "copilotz";
-import { refusal } from "./contract.ts";
-
-/** The one way to add or change a customer: the dialog, an import and a tool all call it. */
-export const save = defineAction({
-  input: {
-    type: "object",
-    properties: {
-      _id: { type: "string" },
-      name: { type: "string" },
-      phone: { type: "string" },
-      email: { type: "string" },
-      since: { type: "string" },
-    },
-    required: ["name", "since"],
-    additionalProperties: false,
-  },
-  allow: people,
-  run: async (ctx, { _id, name, phone, email, since }) => {
-    if (!name.trim()) throw refusal("name", "Give the customer's name.");
-    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-      throw refusal("email", "That email address isn't complete.");
-    }
-    const customers = ctx.db.collection("customer");
-    const fields = { name: name.trim(), phone, email, since };
-    if (_id) {
-      await customers.updateOne({ _id }, { $set: fields });
-      return { customer: _id };
-    }
-    const { insertedId } = await customers.insertOne(fields);
-    return { customer: insertedId };
-  },
-});
-```
+No Action saves a customer: adding or changing one is a plain save, so the dialog writes the
+collection, as an import script (`connect()`) and REST would. The schema checks every one, and the
+`shared` rule (or the guard) says who may.
 
 ```ts
 // plugins/customers/mod.ts
 import { definePlugin, type Plugin } from "copilotz";
-import { save } from "./actions.ts";
-import { choices, one, page } from "./queries.ts";
+import { customer } from "./collections/customer.ts";
 
 export const customers: Plugin = definePlugin({
   name: "customers",
-  collections: {
-    customer: {
-      schema: {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          phone: { type: "string" },
-          email: { type: "string" },
-          since: { type: "string" },
-          archived: { type: "boolean" },
-        },
-        required: ["name", "since"],
-      },
-      queries: { page, one, choices },
-    },
-  },
-  actions: { "customer.save": save },
+  collections: { customer },
 });
 ```
 
@@ -440,7 +408,7 @@ The screen keeps the table's state and its filters in the page's address, so the
 from `where`, Back undoes a page or a filter, and a dialog over the list returns to the same place:
 
 ```tsx
-// plugins/customers/web/customers-screen.tsx
+// plugins/customers/views/web/customers-screen.tsx
 import type { ViewContext } from "copilotz";
 import {
   Button,
@@ -455,8 +423,8 @@ import {
 import { tableAddress, tableQuery, todayIn, Toolbar } from "copilotz/web";
 import type { Column, Where } from "copilotz/web";
 import type { ReactNode } from "react";
-import { formatsOf } from "../../look/contract.ts";
-import type { Customer, CustomerPage } from "../contract.ts";
+import { formatsOf } from "../../../look/contract.ts";
+import type { Customer, CustomerPage } from "../../contract.ts";
 
 const columns: Column<Customer>[] = [
   { key: "name", title: "Name" },
@@ -559,12 +527,12 @@ The dialog's View reads the record. The form is a React component, so it can kee
 View is a function the runtime runs again, and holds no state or hooks.
 
 ```tsx
-// plugins/customers/web/customer-dialog.tsx
+// plugins/customers/views/web/customer-dialog.tsx
 import type { ViewContext } from "copilotz";
 import { Dialog, go, todayIn } from "copilotz/web";
 import type { ReactNode } from "react";
-import { formatsOf } from "../../look/contract.ts";
-import type { Customer } from "../contract.ts";
+import { formatsOf } from "../../../look/contract.ts";
+import type { Customer } from "../../contract.ts";
 import { CustomerForm } from "./customer-form.tsx";
 
 /** `dialog:customer`: a customer's form over the list (`_id` "new" for a new one). */
@@ -585,7 +553,11 @@ export const customerDialog = (
       customer={found?.value ?? undefined}
       today={todayIn(timeZone)}
       dayFormat={day}
-      save={(input) => ctx.call("customer.save", fresh ? input : { ...input, _id: item._id })}
+      // A plain save: the collection, as whoever's at the screen.
+      save={(input) =>
+        fresh
+          ? ctx.db.collection<Customer>("customer").insertOne(input)
+          : ctx.db.collection<Customer>("customer").updateOne({ _id: item._id }, input)}
       close={close}
       // A View inside this one: its own reads, live on its own.
       visits={fresh ? null : ctx.show("panel:customer_visits", { _id: item._id })}
@@ -595,13 +567,23 @@ export const customerDialog = (
 ```
 
 ```tsx
-// plugins/customers/web/customer-form.tsx
+// plugins/customers/views/web/customer-form.tsx
 import { Button, DatePicker, Dialog, Field, Form, Input, Stack, toast } from "copilotz/web";
 import { type ReactNode, useState } from "react";
-import type { Customer } from "../contract.ts";
+import type { Customer } from "../../contract.ts";
 
-/** A refusal as `ctx.call` rejects with it: its words, and the field it's about, if any. */
+/** A refusal as a save or `ctx.call` rejects with it: its words, and the field it's about, if any. */
 type Refused = { message: string; detail?: { field?: string } };
+
+/**
+ * What the form says of a field the schema refuses: the schema names the field, in words for
+ * developers; these are the words for people.
+ */
+const SAYS: Record<string, string> = {
+  name: "Give the customer's name.",
+  email: "That email address isn't complete.",
+  since: "Give the day they first came.",
+};
 
 /** The customer's form: a React component, so it keeps what's typed (a View can't). */
 export function CustomerForm({ customer, today, dayFormat, save, close, visits }: {
@@ -614,7 +596,8 @@ export function CustomerForm({ customer, today, dayFormat, save, close, visits }
 }): ReactNode {
   const [since, setSince] = useState(customer?.since ?? today);
   const [refused, setRefused] = useState<Refused>();
-  const errorOf = (field: string) => refused?.detail?.field === field ? refused.message : undefined;
+  const errorOf = (field: string) =>
+    refused?.detail?.field === field ? SAYS[field] ?? refused.message : undefined;
   return (
     <Dialog
       open
@@ -708,12 +691,12 @@ plugin's View, shown by name: customers never imports visits' code, and `ctx.sho
 when no plugin has that View.
 
 ```tsx
-// plugins/visits/web/customer-visits-panel.tsx
+// plugins/visits/views/web/customer-visits-panel.tsx
 import type { ViewContext } from "copilotz";
 import { Card, formatDayTime, ListGroup } from "copilotz/web";
 import type { ReactNode } from "react";
-import { formatsOf } from "../../look/contract.ts";
-import type { Visit } from "../contract.ts";
+import { formatsOf } from "../../../look/contract.ts";
+import type { Visit } from "../../contract.ts";
 
 /** `panel:customer_visits`: a customer's last visits, a part of whichever View shows it. */
 export const customerVisitsPanel = (
@@ -741,10 +724,10 @@ export const customerVisitsPanel = (
 ```tsx
 // plugins/visits/web.tsx
 import { definePlugin, type Plugin } from "copilotz";
-import { customerVisitsPanel } from "./web/customer-visits-panel.tsx";
-import { invoiceScreen } from "./web/invoice-screen.tsx";
-import { visitDialog } from "./web/visit-dialog.tsx";
-import { visitsScreen } from "./web/visits-screen.tsx";
+import { customerVisitsPanel } from "./views/web/customer-visits-panel.tsx";
+import { invoiceScreen } from "./views/web/invoice-screen.tsx";
+import { visitDialog } from "./views/web/visit-dialog.tsx";
+import { visitsScreen } from "./views/web/visits-screen.tsx";
 
 /** Visits' web front end: each View is a file of web/; this only names them. */
 export const visitsWeb: Plugin = definePlugin({
@@ -818,13 +801,13 @@ export const one: QueryDef<Visit> = {
 ```
 
 ```tsx
-// plugins/visits/web/visits-screen.tsx
+// plugins/visits/views/web/visits-screen.tsx
 import type { ViewContext } from "copilotz";
 import { addDays, go, Page, todayIn } from "copilotz/web";
 import type { DateRange, Where } from "copilotz/web";
 import type { ReactNode } from "react";
-import { formatsOf } from "../../look/contract.ts";
-import type { Visit } from "../contract.ts";
+import { formatsOf } from "../../../look/contract.ts";
+import type { Visit } from "../../contract.ts";
 import { VisitsBoard } from "./visits-board.tsx";
 
 /** `screen:visits`, at `/visits`: the visits in a range of days, and a visit's dialog over them. */
@@ -861,7 +844,7 @@ export const visitsScreen = (where: Where, ctx: ViewContext<ReactNode>): ReactNo
 ```
 
 ```tsx
-// plugins/visits/web/visits-board.tsx
+// plugins/visits/views/web/visits-board.tsx
 import {
   Button,
   DataTable,
@@ -874,7 +857,7 @@ import {
 import { Toolbar, useShortcuts } from "copilotz/web";
 import type { Column, DateRange } from "copilotz/web";
 import type { ReactNode } from "react";
-import type { Visit } from "../contract.ts";
+import type { Visit } from "../../contract.ts";
 
 /** The visits list: a component, so it can hold the screen's keyboard shortcuts. */
 export function VisitsBoard(
@@ -944,13 +927,13 @@ export function VisitsBoard(
 The visit's form picks a customer from a list it searches, and a day and time:
 
 ```tsx
-// plugins/visits/web/visit-dialog.tsx
+// plugins/visits/views/web/visit-dialog.tsx
 import type { ViewContext } from "copilotz";
 import { go, nowIn } from "copilotz/web";
 import type { PickerOption } from "copilotz/web";
 import type { ReactNode } from "react";
-import { formatsOf } from "../../look/contract.ts";
-import type { Visit } from "../contract.ts";
+import { formatsOf } from "../../../look/contract.ts";
+import type { Visit } from "../../contract.ts";
 import { VisitForm } from "./visit-form.tsx";
 
 /** `dialog:visit`: a visit's form over the list (`_id` "new" for a new one). */
@@ -981,11 +964,11 @@ export const visitDialog = (
 ```
 
 ```tsx
-// plugins/visits/web/visit-form.tsx
+// plugins/visits/views/web/visit-form.tsx
 import { Button, DateTimePicker, Dialog, Field, Form, Input, Picker, toast } from "copilotz/web";
 import type { PickerOption } from "copilotz/web";
 import { type ReactNode, useState } from "react";
-import type { Visit } from "../contract.ts";
+import type { Visit } from "../../contract.ts";
 
 type Draft = { customer?: string; service: string; at: string; price: string };
 
@@ -1070,8 +1053,13 @@ export function VisitForm({ visit, customers, now, timeZone, dayTimeFormat, save
 }
 ```
 
+A visit is more than a save, so it keeps an Action: it checks the customer is there, copies their
+name onto the visit (a field the server sets, which a browser's View can't), and turns the price
+into cents. A record whose fields the server sets (who made it, when, a number in a sequence) keeps
+its Action the same way.
+
 ```ts
-// plugins/visits/actions.ts
+// plugins/visits/actions/save.ts
 import { defineAction, failure, people } from "copilotz";
 
 const refuse = (message: string) => failure("invalid", message, { public: true });
@@ -1183,7 +1171,7 @@ An invoice, a receipt or a ticket is a screen like any other, at its own address
 prints it:
 
 ```tsx
-// plugins/visits/web/invoice-screen.tsx
+// plugins/visits/views/web/invoice-screen.tsx
 import type { ViewContext } from "copilotz";
 import {
   Barcode,
@@ -1198,8 +1186,8 @@ import {
 } from "copilotz/web";
 import type { Where } from "copilotz/web";
 import type { ReactNode } from "react";
-import { formatsOf } from "../../look/contract.ts";
-import type { Visit } from "../contract.ts";
+import { formatsOf } from "../../../look/contract.ts";
+import type { Visit } from "../../contract.ts";
 
 /** A printed invoice's own layout: the one place an app writes CSS, and only for paper. */
 const PAPER = "@media print { @page { size: 80mm auto; margin: 4mm; } }";
@@ -1265,8 +1253,11 @@ Don't add `keydown` listeners to the document.
 `blob:` address (`URL.createObjectURL`), with `initial={false}` for an empty box when there's none.
 Sending it is the Action's: the form reads the file as a `data:` address and passes it in the input.
 
+The picture is private (only trusted code reads or writes it, and no event holds it), so a service
+is saved by an Action, which outsiders' writes, a View's included, can't do.
+
 ```ts
-// plugins/services/actions.ts
+// plugins/services/actions/save.ts
 import { defineAction, failure, people } from "copilotz";
 
 /** A picture as the form sends it: a PNG, JPEG or WebP `data:` address, 1 MB or so at most. */
@@ -1305,7 +1296,7 @@ export const save = defineAction({
 ```
 
 ```tsx
-// plugins/services/web/service-form.tsx
+// plugins/services/views/web/service-form.tsx
 import { Avatar, Button, Dialog, Field, FileInput, Form, Input, Stack, toast } from "copilotz/web";
 import { type ReactNode, useEffect, useState } from "react";
 
@@ -1472,7 +1463,7 @@ export const services: Plugin = definePlugin({
 ```
 
 ```tsx
-// plugins/services/web/services-screen.tsx
+// plugins/services/views/web/services-screen.tsx
 import type { ViewContext } from "copilotz";
 import { Avatar, DataTable, Page } from "copilotz/web";
 import type { Column, Where } from "copilotz/web";

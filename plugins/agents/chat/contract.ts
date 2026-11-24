@@ -31,6 +31,7 @@ export { notesOf } from "./shared/notes.ts";
 export { handDraft } from "./views/web/handed.ts";
 export type { Wait } from "./collections/wait.ts";
 export type {
+  ActionTool,
   Addition,
   AdditionEntry,
   Agent,
@@ -60,7 +61,7 @@ export { tool } from "./shared/types.ts";
  * outside, over MCP): a tool's input checked, run, and its result read as
  * agents read it, exactly as a turn does (`runTool`, `toolText`).
  */
-export { runTool, type ToolAt, type ToolRun, toolText } from "./shared/tools.ts";
+export { runTool, type ToolAt, type ToolRun, toolsOf, toolText } from "./shared/tools.ts";
 export { type Origin, originKey, originOf } from "./shared/origin.ts";
 /**
  * Asking a person before an agent's work goes on, for every plugin that

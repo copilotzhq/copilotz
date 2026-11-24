@@ -17,14 +17,15 @@ import {
   invalid,
   json,
   merge,
+  unknown,
   unprivate,
 } from "./registry.ts";
 import { presenter } from "./views.ts";
 import { refuseBlobKeys } from "./blobs.ts";
-import { querying as queryingOver, reading as readingOver } from "./reads.ts";
+import { querying as queryingOver, reading as readingOver, type RunAs } from "./reads.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import type { Actor, Doc, Edge, Event } from "./store.ts";
-import { allows, whereOf } from "./actor.ts";
+import { acting, allows, whereOf } from "./actor.ts";
 import { forbidden } from "./errors.ts";
 import {
   decode,
@@ -108,34 +109,6 @@ const byWho = (ops: Sent[]): { who: Who; ops: Op[] }[] => {
   }
   return runs;
 };
-
-/**
- * Who code acting as `other` is (see `Context.as`): `other`, `via` `actor`,
- * where the work is unless it says where, and (as someone else) in its
- * conversation, with what its person approved: a tool acting as its agent's
- * person is bound as the agent is. None: the system, via `actor`.
- */
-const acting = (actor: Actor | undefined, other?: Actor): Actor | undefined =>
-  other
-    ? {
-      ...other,
-      ...(actor ? { via: actor } : {}),
-      ...(!("in" in other) && whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
-      ...(!("thread" in other) && typeof actor?.thread === "string"
-        ? { thread: actor.thread }
-        : {}),
-      ...(!("approved" in other) && Array.isArray(actor?.approved)
-        ? { approved: actor.approved }
-        : {}),
-    }
-    : actor
-    ? {
-      kind: "system",
-      id: "system",
-      via: actor,
-      ...(whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
-    }
-    : undefined;
 
 const reply = async (callHost: HostCaller, request: OpRequest) => {
   const call = await callHost({
@@ -306,9 +279,12 @@ export function createExecutor(
     numbering: string | undefined,
   ): TransactionScope => {
     const run: Run = (op, options) => held.run(op, who, options);
+    const runAs: RunAs = (as) => (op, options) => held.run(op, { ...who, actor: as }, options);
     let turn: Promise<unknown> = Promise.resolve();
     return {
-      db: { collection: (name) => collection(name, run, querying(run, job.record, who.actor)) },
+      db: {
+        collection: (name) => collection(name, run, querying(run, job.record, who.actor, runAs)),
+      },
       graph: {
         link: (from, type, to, data) =>
           run({ op: "link", edge: { from, type, to, data } }).then(() => {}),
@@ -350,7 +326,7 @@ export function createExecutor(
    */
   const atomicOf = (name: string, input: unknown, actor: Actor | undefined): Asked => {
     const def = registry.actions[name];
-    if (!def) throw invalid(`Unknown action "${name}"`);
+    if (!def) throw unknown("action", name, Object.keys(registry.actions));
     if (!def.atomic) {
       throw invalid(
         `"${name}" isn't atomic: a transaction calls only Actions declared \`atomic: true\`. ` +
@@ -490,6 +466,8 @@ export function createExecutor(
     const { actor } = who;
     const tx = scoped(job, held, who, numbering);
     const run: Run = (op, options) => held.run(op, who, options);
+    // Reads as someone else, in the transaction, for an unrecorded Action a read calls (`ctx.as`).
+    const runAs: RunAs = (as) => (op, options) => held.run(op, { ...who, actor: as }, options);
     const refused = (what: string) => () => {
       throw invalid(
         `${what} isn't for an atomic Action: it does only what commits with its transaction`,
@@ -514,7 +492,7 @@ export function createExecutor(
       unschedule: async (timer) => Number(await run({ op: "unschedule", timer })) > 0,
       cancel: refused("ctx.cancel"),
       disconnect: refused("ctx.disconnect"),
-      render: presenter(registry.views, () => reading(run, job.record, actor)),
+      render: presenter(registry.views, () => reading(run, job.record, actor, runAs)),
       kept: (_key, work) => work(ctx),
       record: job.record,
       metrics,
@@ -546,8 +524,11 @@ export function createExecutor(
   ): Context => {
     const run: Run = (op) =>
       job.send({ ops: [op], cause, ...(actor ? { actor } : {}), ...(action ? { action } : {}) });
+    // Reads as someone else, for an unrecorded Action a read calls (`ctx.as`).
+    const runAs: RunAs = (as) => (op) =>
+      job.send({ ops: [op], cause, ...(as ? { actor: as } : {}), ...(action ? { action } : {}) });
     const ctx: Context = {
-      db: { collection: (name) => collection(name, run, querying(run, job.record, actor)) },
+      db: { collection: (name) => collection(name, run, querying(run, job.record, actor, runAs)) },
       graph: {
         link: (from, type, to, data) =>
           run({ op: "link", edge: { from, type, to, data } }).then(() => {}),
@@ -592,7 +573,7 @@ export function createExecutor(
             },
           }),
         ),
-      render: presenter(registry.views, () => reading(run, job.record, actor)),
+      render: presenter(registry.views, () => reading(run, job.record, actor, runAs)),
       // Kept only in the owner, for its rules: here it's worked out each time.
       kept: (_key, work) => work(ctx),
       record: job.record,
@@ -646,7 +627,7 @@ export function createExecutor(
     input: unknown,
     when: ScheduleOptions,
   ): Extract<TimerOp, { op: "schedule" }> => {
-    if (!registry.actions[action]) throw invalid(`Unknown action "${action}"`);
+    if (!registry.actions[action]) throw unknown("action", action, Object.keys(registry.actions));
     const normalized = json(input);
     inputs[action]?.(normalized);
     const { id, ...rest } = json(when ?? {}) as ScheduleOptions;
@@ -678,7 +659,7 @@ export function createExecutor(
     actor?: Actor,
   ): Promise<R> => {
     const action = registry.actions[name];
-    if (!action) throw invalid(`Unknown action "${name}"`);
+    if (!action) throw unknown("action", name, Object.keys(registry.actions));
     const normalized = json(input);
     inputs[name]?.(normalized);
     // An Action's input may hold no `$blob` key (see blobs.ts), as the owner checks outside calls'.
@@ -818,10 +799,20 @@ export function createExecutor(
     return result;
   };
 
-  const reading = (run: Run, record: Context["record"], actor?: Actor): ReadContext =>
-    readingOver(registry, run, record, metrics, outside, actor);
-  const querying = (run: Run, record: Context["record"], actor?: Actor): Query =>
-    queryingOver(registry, run, record, metrics, outside, actor);
+  const reading = (
+    run: Run,
+    record: Context["record"],
+    actor?: Actor,
+    runAs?: RunAs,
+  ): ReadContext => readingOver(registry, run, record, metrics, outside, actor, undefined, runAs);
+  const querying = (run: Run, record: Context["record"], actor?: Actor, runAs?: RunAs): Query =>
+    queryingOver(registry, run, record, metrics, outside, actor, runAs);
+  /**
+   * How a job's read reads as someone else, for an unrecorded Action it calls that acts as them
+   * (`ctx.as`): as trusted code does, not as the caller's own read.
+   */
+  const readingAs = (job: Reach): RunAs => (actor) => (op) =>
+    job.send({ ops: [op], ...(actor ? { actor } : {}) });
 
   const execute = (job: Reach, request: Job): unknown => {
     switch (request.kind) {
@@ -866,6 +857,7 @@ export function createExecutor(
             }),
           job.record,
           request.actor,
+          readingAs(job),
         )(
           request.collection,
           request.query,
@@ -883,6 +875,7 @@ export function createExecutor(
                 }),
               job.record,
               request.actor,
+              readingAs(job),
             ),
         )(request.view, request.item, {
           ...(request.viewer ? { viewer: request.viewer } : {}),

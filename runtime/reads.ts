@@ -7,10 +7,18 @@ import { collection, type Query, type Run } from "./collection.ts";
 import type { Context, ReadContext } from "./define.ts";
 import type { Metrics } from "./metrics.ts";
 import { isRead } from "./ops.ts";
-import { invalid, json, readCall, type Registry } from "./registry.ts";
+import {
+  described,
+  invalid,
+  json,
+  queriesOf,
+  readCall,
+  type Registry,
+  unknown,
+} from "./registry.ts";
 import type { Actor, Edge } from "./store.ts";
 import { presenter } from "./views.ts";
-import { whereOf } from "./actor.ts";
+import { acting, whereOf } from "./actor.ts";
 
 /** What keeps what rules work out (`ReadContext.kept`): the owner's, for its rules' reads. */
 export type Keeper = <T>(
@@ -22,6 +30,12 @@ export type Keeper = <T>(
 /** Keeps nothing: what's worked out is worked out each time. */
 const unkept: Keeper = (_key, work, ctx) => work(ctx);
 
+/**
+ * How a reader reads as someone else: for an unrecorded Action it calls,
+ * acting as the system or a grant (`ctx.as`), as it would from an Action.
+ */
+export type RunAs = (actor: Actor | undefined) => Run;
+
 export function reading(
   registry: Registry,
   run: Run,
@@ -30,17 +44,26 @@ export function reading(
   fetch: typeof globalThis.fetch,
   actor?: Actor,
   keeper: Keeper = unkept,
+  runAs?: RunAs,
 ): ReadContext {
   const reads: Run = (op) =>
     isRead(op) ? run(op) : Promise.reject(invalid("Queries are read-only"));
-  const query = querying(registry, reads, record, metrics, fetch, actor);
+  const query = querying(registry, reads, record, metrics, fetch, actor, runAs);
+  // An Action it calls, acting as someone else, reads as them: what that reader can't, fails.
+  const as = runAs
+    ? (other?: Actor) => {
+      const who = acting(actor, other);
+      return reading(registry, runAs(who), record, metrics, fetch, who, unkept, runAs);
+    }
+    : undefined;
   const where = whereOf(actor);
   const ctx: ReadContext = {
     db: { collection: (name) => collection(name, reads, query) },
+    describe: () => described(registry),
     graph: { edges: (query) => reads({ op: "edges", query }) as Promise<Edge[]> },
     render: presenter(
       registry.views,
-      () => reading(registry, reads, record, metrics, fetch, actor),
+      () => reading(registry, reads, record, metrics, fetch, actor, unkept, runAs),
     ),
     record,
     metrics,
@@ -50,7 +73,7 @@ export function reading(
     ...(actor ? { actor } : {}),
     ...(where !== undefined ? { in: where } : {}),
     kept: (key, work) => keeper(key, work, ctx),
-    call: (action, input) => readCall(registry, ctx, ctx.call, action, input),
+    call: (action, input) => readCall(registry, ctx, ctx.call, action, input, as),
   };
   return ctx;
 }
@@ -66,11 +89,12 @@ export const querying = (
   metrics: Metrics,
   fetch: typeof globalThis.fetch,
   actor?: Actor,
+  runAs?: RunAs,
 ): Query =>
 async (name, queryName, params) => {
   const def = registry.collections[name]?.queries?.[queryName];
-  if (!def) throw invalid(`Unknown query "${name}.${queryName}"`);
-  const ctx = reading(registry, run, record, metrics, fetch, actor);
+  if (!def) throw unknown("query", `${name}.${queryName}`, queriesOf(registry));
+  const ctx = reading(registry, run, record, metrics, fetch, actor, unkept, runAs);
   return await (typeof def === "function" ? def : def.run)(
     ctx.db.collection(name),
     json(params),
@@ -92,6 +116,7 @@ export function startup(
   };
   const reads: Omit<ReadContext, "call"> = {
     db: { collection: none },
+    describe: () => described(registry),
     graph: { edges: none },
     render: none,
     record: none,

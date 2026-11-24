@@ -220,7 +220,7 @@ export function memoryStore(): Store {
         // Upsert: a new document, never one the filter didn't match.
         const seed = seedOf(filter);
         if (await exists(collection, seed._id)) throw duplicateKey(collection, seed._id);
-        const created = applyUpdate(seed, update);
+        const created = applyUpdate(seed, update, true);
         staged(collection).set(seed._id, created);
         return {
           matched: 0,

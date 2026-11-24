@@ -20,9 +20,9 @@
 import { matches, namedBy, valuesAt } from "./mongo.ts";
 import { invalid } from "./registry.ts";
 import type { ReadContext, ViewContext, Viewer, Views } from "./define.ts";
-import type { Op } from "./ops.ts";
+import type { Op, WriteOp } from "./ops.ts";
 import type { Actor, Change, Filter } from "./store.ts";
-import { failure, type Pass, PASSES, reread, viewCollections } from "./views.ts";
+import { failure, type Pass, PASSES, reread, viewCollections, type Write } from "./views.ts";
 
 /** A View's output, while it loads, once it's ready, or why it failed. */
 export type Output<R = unknown> =
@@ -182,6 +182,8 @@ export function createObservers(env: {
   reads(track: (read: Op | Dep) => void, actor?: Actor): ReadContext;
   call(action: string, input: unknown, actor?: Actor): Promise<never>;
   emit(type: string, data: Record<string, unknown> | undefined, actor?: Actor): Promise<void>;
+  /** A write from a View's handler, as `actor`'s own (see `ViewCollection`). */
+  write?(op: WriteOp, actor?: Actor): Promise<unknown>;
   /** No part reads `collection` any more (a client stops watching a read). */
   unread?(collection: string): void;
 }): Observers {
@@ -295,6 +297,10 @@ export function createObservers(env: {
     };
   };
 
+  /** How a part's handlers write, as its actor; none where the environment can't. */
+  const writer = (p: Part): Write | undefined =>
+    env.write ? (op) => env.write!(op, p.actor) : undefined;
+
   const context = (
     p: Part,
     run: Run,
@@ -304,6 +310,7 @@ export function createObservers(env: {
   ): ViewContext => ({
     db,
     resources: run.source.resources,
+    describe: run.source.describe,
     name,
     ...(p.viewer ? { viewer: p.viewer } : {}),
     ...(p.actor ? { actor: p.actor } : {}),
@@ -323,7 +330,10 @@ export function createObservers(env: {
     if (!view) return undefined;
     run.passing = true;
     try {
-      return view(item, context(p, run, viewCollections(run.source, run), p.name, hints));
+      return view(
+        item,
+        context(p, run, viewCollections(run.source, run, writer(p)), p.name, hints),
+      );
     } finally {
       run.passing = false;
     }

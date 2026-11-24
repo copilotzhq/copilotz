@@ -76,7 +76,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)                                          |
 | `copilotz/terminal`                    | the terminal host, `terminal({ runtime, me })`, and its toolkit                                                                                           |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                                                                  |
-| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`, `openTo`, `createWorker`…                               |
+| `copilotz/testing`                     | one test API for Deno, Node and Bun: `test`, `tempDir`, `serve`, `spawn`, `testWho`, `ticketFor`, `openTo`, `boundaries`, `createWorker`…                 |
 | `copilotz/testing/words`               | testing a front end's words (`pseudoWords`, `englishLeft`), and listing them (`wordsList`)                                                                |
 | `copilotz/describe`                    | `describe(plugin)`: what a plugin declares, as JSON                                                                                                       |
 
@@ -297,16 +297,17 @@ replaces). A later View, adapter or route replaces an earlier one of its name. E
 Documents with a JSON Schema, read and written with MongoDB's collection API. `defineCollection`
 types its documents and queries from the schema.
 
-| Field     | What it does                                                                                |
-| --------- | ------------------------------------------------------------------------------------------- |
-| `schema`  | the JSON Schema every write is checked against                                              |
-| `queries` | named reads: a function, or `{ allow, run }` to let actors run it from outside              |
-| `vectors` | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
-| `indexes` | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
-| `private` | fields only trusted code reads: an actor's queries and Views get the documents without them |
-| `records` | `true`: a ledger, appended to and never changed, whose documents are their own record       |
-| `durable` | `false`: kept in the owner's memory, never in the store, with no events                     |
-| `events`  | `false`: its writes record no events                                                        |
+| Field        | What it does                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------- |
+| `schema`     | the JSON Schema every write keeps to: inserts, replaces, and what updates set and leave     |
+| `queries`    | named reads: a function, or `{ allow, description?, input?, run }` for actors from outside  |
+| `vectors`    | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
+| `indexes`    | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
+| `private`    | fields only trusted code reads: an actor's queries and Views get the documents without them |
+| `records`    | `true`: a ledger, appended to and never changed, whose documents are their own record       |
+| `durable`    | `false`: kept in the owner's memory, never in the store, with no events                     |
+| `events`     | `false`: its writes record no events                                                        |
+| `validation` | `"moderate"`: updates are checked only on documents that were valid (see Updates)           |
 
 `ctx.db.collection(name)` has `insertOne`, `insertMany`, `find` (a cursor), `findOne`,
 `countDocuments`, `updateOne`, `updateMany`, `replaceOne`, `deleteOne`, `deleteMany`, `aggregate`,
@@ -319,7 +320,25 @@ types its documents and queries from the schema.
   case, not accents: search a folded copy of the field for that. The
   [stores' README](../stores/README.md#text-patterns) has what's in the subset, its limits, and the
   folded copy.
-- **Updates:** `$set`, `$unset`, `$inc`, `$push` (with `$each`), `$addToSet`, `$pull`; `upsert`.
+- **Updates:** `$set`, `$setOnInsert` (only when an upsert makes the document), `$unset`, `$inc`,
+  `$mul`, `$min`, `$max`, `$push` and `$addToSet` (each with `$each`), `$pull`; `upsert`. An update
+  needs its operators: one with none is refused, as MongoDB refuses it (`replaceOne` replaces a
+  document). It's checked against the schema as MongoDB's `$jsonSchema` validator checks with
+  `validationLevel: "strict"`: what it sets must fit each field, it can't set a field the schema
+  doesn't allow or unset a required one, and the documents it leaves (an upsert's new one too) must
+  be valid. What fails changes nothing (`invalid`, naming the field).
+  - **Where it differs from MongoDB's `"strict"`:** a document that wasn't valid before (stored
+    before its schema said what it says now) may still be updated, as long as the update adds
+    nothing wrong to it; MongoDB would refuse until the update made it valid. Every store can tell
+    that alike, PostgreSQL's single-statement updates included, which never see the document.
+    `validation: "moderate"` on the collection lets any update to such a document be, as MongoDB's
+    `"moderate"` does.
+  - **A schema failure names its field:** `detail.field`, a dot path (`price`, `meta.a`, or the
+    required field that's missing). A write from outside (REST, the socket, a View's handler) says
+    it to its caller, as a public failure, so a form shows it by its field; plugin code's is its own
+    to say.
+  - **`$push` and `$addToSet` take `$each`;** other modifiers (`$slice`, `$sort`, `$position`) are
+    refused, not ignored.
 - **Finds:** `sort`, `limit`, `skip`, and `projection` (`{ name: 1 }` keeps fields, `{ data: 0 }`
   leaves them out), applied before any large value is loaded.
 - **Aggregates:** `$match`, `$group` (with `$sum`, `$count`, `$avg`, `$min`, `$max`), `$sort`,
@@ -360,7 +379,8 @@ What can be done, by name. `defineAction` types `run`'s input from the schema.
 
 Every recorded call is on the record (`action.started`, then `action.completed` or `action.failed`),
 retryable by id, and everything it causes is its caller's, where its caller is. Queries, Views and
-startup checks may call unrecorded Actions, read-only.
+startup checks may call unrecorded Actions, read-only. One that acts as someone else (`ctx.as`)
+reads as them there too, as when an Action calls it; a startup check, which reads nothing, refuses.
 
 ### Processors
 
@@ -393,6 +413,11 @@ elements in the terminal, React in the browser. A name says what it shows (`book
   `{ status: "ready", value }`. The runtime runs the View again until a pass reads nothing new.
 - **`ctx.show(name, item, hints?)`** shows exactly the View it names. Observed, the shown View is a
   part that runs again on its own.
+- **A handler writes with the View's collections:** `ctx.db.collection(name)` has `insertOne`,
+  `updateOne` (an update document, or the fields to set), `replaceOne` and `deleteOne`, each a write
+  of the viewer's own, as REST and the socket write it: a rule must speak for the collection's
+  writes, the schema checks it, and it's recorded as theirs. A View writes nothing while it renders,
+  nor when it's rendered once.
 - **`ctx.call`** and **`ctx.emit`** act from a handler, as the actor looking. A handler that needs
   what the View didn't read (suggestions as someone types) calls an unrecorded Action
   (`record: false`, with an `allow`) that runs the query and returns it: nothing goes on record. It
@@ -434,11 +459,15 @@ REST API at `/api/`) and plugins' routes. Hosts only listen: `Deno.serve(runtime
 
 ### Rules: `guard` and `labels`
 
-- **`guard(actor, { collection, access, filter, direct? }, ctx)`** returns the filter an actor's
-  documents must match. Reads and deletes reach only what matches it. Inserts, and what updates
-  leave, must match it. `true` restricts nothing, and `undefined` means the collection has no rule.
-  The owner asks it on every op an actor's work makes. A collection no rule speaks for never reaches
-  an outsider's own reads and writes (REST, the socket).
+- **`guard(actor, { collection, access, write?, filter, direct? }, ctx)`** returns the filter an
+  actor's documents must match. Reads and deletes reach only what matches it. Inserts, and what
+  updates leave, must match it. `true` restricts nothing, and `undefined` means the collection has
+  no rule. `write` says which write it's asked about (`"insert"`, `"update"`, `"replace"`,
+  `"delete"`); a rule may throw to refuse one. The owner asks it on every op an actor's work makes.
+  A collection no rule speaks for never reaches an outsider's own reads and writes (REST, the
+  socket, a View's handler).
+- **`byCollection({ sale: …, item: … })`** makes a plugin's guard of a rule per collection,
+  answering nothing (`undefined`) for any other.
 - **`labels`** carries what a job read (a document's space) to what it then writes, so an answer
   drawn from a space not everyone sees is marked. Work done for someone from their own Personal
   space carries nothing: it's theirs.
@@ -513,17 +542,18 @@ The others are narrower:
 const runtime = await createRuntime({ store, plugins });
 ```
 
-| Option      | What it sets                                                                                   |
-| ----------- | ---------------------------------------------------------------------------------------------- |
-| `store`     | where it keeps everything: memory, SQLite or PostgreSQL                                        |
-| `plugins`   | the app: a list of plugins, which may nest                                                     |
-| `blobs`     | where large values live (the store, by default); `blobThreshold`: past how many bytes (16 KiB) |
-| `cache`     | the owner's read cache (`{ documents, queries }`), or `false`                                  |
-| `executors` | executors in this process (1); `transports` and `key` for others to connect                    |
-| `metrics`   | where it records metrics (`createMetrics`)                                                     |
-| `clock`     | what timers run on: the system's, or `manualClock(start)` in tests                             |
-| `fetch`     | what `ctx.fetch` calls outside services with                                                   |
-| `browsers`  | how much browsers may hold: sockets, tickets a minute, contacts' together                      |
+| Option      | What it sets                                                                                                                      |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `store`     | where it keeps everything: memory, SQLite or PostgreSQL                                                                           |
+| `plugins`   | the app: a list of plugins, which may nest                                                                                        |
+| `blobs`     | where large values live (the store, by default); `blobThreshold`: past how many bytes (16 KiB)                                    |
+| `warn`      | what's told at startup of what looks wrong (a schema naming no fields…): the console by default, once a message; `false`, nothing |
+| `cache`     | the owner's read cache (`{ documents, queries }`), or `false`                                                                     |
+| `executors` | executors in this process (1); `transports` and `key` for others to connect                                                       |
+| `metrics`   | where it records metrics (`createMetrics`)                                                                                        |
+| `clock`     | what timers run on: the system's, or `manualClock(start)` in tests                                                                |
+| `fetch`     | what `ctx.fetch` calls outside services with                                                                                      |
+| `browsers`  | how much browsers may hold: sockets, tickets a minute, contacts' together                                                         |
 
 | Method                                              | What it does                                                                      |
 | --------------------------------------------------- | --------------------------------------------------------------------------------- |

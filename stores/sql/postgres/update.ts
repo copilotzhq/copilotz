@@ -29,6 +29,18 @@ export function expression(
     return undefined;
   }
   if (Object.values(u.$inc ?? {}).some((by) => typeof by !== "number")) return undefined;
+  // A $push modifier other than `$each` alone ($slice, $sort…) goes to the reference, which refuses it.
+  const modifier = (v: unknown) =>
+    v !== null && typeof v === "object" && !Array.isArray(v) &&
+    Object.keys(v).some((key) => key.startsWith("$"));
+  if (
+    Object.values(u.$push ?? {}).some((v) =>
+      modifier(v) &&
+      (Object.keys(v as object).length !== 1 || !Array.isArray((v as { $each?: unknown }).$each))
+    )
+  ) {
+    return undefined;
+  }
   const plain = (v: unknown) => v === null || ["string", "number", "boolean"].includes(typeof v);
   if (
     [...Object.values(u.$addToSet ?? {}), ...Object.values(u.$pull ?? {})].some((v) => !plain(v))

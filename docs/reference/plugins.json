@@ -4548,6 +4548,7 @@
           {
             "kind": "tools",
             "found": [
+              "check",
               "source"
             ]
           }
@@ -4557,7 +4558,8 @@
       "workers": [],
       "check": {
         "reads": [
-          "agents"
+          "agents",
+          "tools"
         ],
         "asks": []
       },

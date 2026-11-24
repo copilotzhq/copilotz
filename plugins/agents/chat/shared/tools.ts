@@ -12,9 +12,45 @@
  * - `toolText`: what a call's result reads as to a model: its tool's
  *   `tool:<name>` View (`llm`), else the result's own text.
  */
-import type { Context, Viewer } from "../../../../runtime/mod.ts";
+import type { Context, Description, Resources, Viewer } from "../../../../runtime/mod.ts";
 import { check } from "./agents.ts";
-import type { Step, Tool, ToolContext } from "./types.ts";
+import type { ActionTool, Step, Tool, ToolContext } from "./types.ts";
+
+/** Each `tools` resource's tools, made once: an Action's entry as the tool it is. */
+const made = new WeakMap<object, Record<string, Tool>>();
+
+/**
+ * The app's tools: the `tools` resource, each entry that names an Action
+ * (`{ action }`) made the tool it is, its input and description the Action's
+ * (`describe()`), its run a call of the Action.
+ */
+export function toolsOf(ctx: { resources: Resources; describe?(): Description }): Record<
+  string,
+  Tool
+> {
+  const entries = (ctx.resources.tools ?? {}) as Record<string, Tool | ActionTool>;
+  const kept = made.get(entries);
+  if (kept) return kept;
+  const actions = ctx.describe?.().actions ?? {};
+  const tools: Record<string, Tool> = {};
+  for (const [name, entry] of Object.entries(entries)) {
+    if (!("action" in entry) || typeof (entry as { run?: unknown }).run === "function") {
+      tools[name] = entry as Tool;
+      continue;
+    }
+    const { action, description, ...rest } = entry;
+    const def = actions[action];
+    if (!def) throw new Error(`Tool "${name}" is the Action "${action}", which no plugin declares`);
+    tools[name] = {
+      ...rest,
+      description: description ?? def.description ?? action,
+      ...(def.input ? { input: def.input as Tool["input"] } : {}),
+      run: (input, ctx) => ctx.call(action, input),
+    };
+  }
+  made.set(entries, tools);
+  return tools;
+}
 
 /**
  * What a call ran into: its output as the agent's step keeps it, what was
@@ -32,7 +68,7 @@ export async function runTool(
   input: unknown,
   at: ToolAt,
 ): Promise<ToolRun> {
-  const tools = (ctx.resources.tools ?? {}) as Record<string, Tool>;
+  const tools = toolsOf(ctx);
   const tool = Object.hasOwn(tools, name) ? tools[name] : undefined;
   const failed = (error: unknown) =>
     `Error: ${error instanceof Error ? error.message : String(error)}`;

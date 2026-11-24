@@ -267,20 +267,24 @@ says about case or letters never comes into it, so PGlite and a server answer al
 
 All stores support:
 
-- `$set`, `$unset`, `$inc`, `$push` (with `$each`), `$addToSet`, `$pull` (with a value or a
-  condition);
+- `$set`, `$unset`, `$inc`, `$mul`, `$min`, `$max`, `$push` and `$addToSet` (each with `$each`),
+  `$pull` (with a value or a condition);
+- `$setOnInsert`, applied only when an upsert makes the document;
 - replacement documents;
 - upserts, which start from the filter's equality fields.
 
+`$min` and `$max` compare as sorting does (numbers with numbers, strings by their order, across
+types by type). `$mul` turns a missing field into 0, and refuses one that isn't a number.
+
 How each store runs them:
 
-|                                                                                                 | memory     | sqlite                                               | postgres                                             |
-| ----------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| Top-level fields: `$set`, `$unset`, `$inc`, `$push`; `$addToSet` and `$pull` with a plain value | JavaScript | Read, apply in JavaScript, write, in its transaction | One SQL statement                                    |
-| Nested paths; `$pull` with a condition; `$addToSet` with an object                              | JavaScript | Same                                                 | Read, apply in JavaScript, write, in its transaction |
+|                                                                                                                       | memory     | sqlite                                               | postgres                                             |
+| --------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| Top-level fields: `$set`, `$unset`, `$inc`, `$push`; `$addToSet` and `$pull` with a plain value                       | JavaScript | Read, apply in JavaScript, write, in its transaction | One SQL statement                                    |
+| Nested paths; `$pull` with a condition; `$addToSet` with an object or `$each`; `$mul`, `$min`, `$max`, `$setOnInsert` | JavaScript | Same                                                 | Read, apply in JavaScript, write, in its transaction |
 
-Not supported: `$min`, `$max`, `$mul`, `$rename`, `$currentDate`, `$setOnInsert`, `$pop`,
-`$pullAll`, the `$push` modifiers other than `$each`, the positional `$`, `arrayFilters`.
+Not supported, and refused: `$rename`, `$currentDate`, `$pop`, `$pullAll`, the `$push` modifiers
+other than `$each`, the positional `$`, `arrayFilters`.
 
 ### Known differences
 

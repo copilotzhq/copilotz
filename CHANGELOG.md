@@ -1,3 +1,93 @@
+## Unreleased
+
+Apps are written as Copilotz's own plugins are: updates keep to the schema on every store, as
+MongoDB's do; screens, tools, scripts and REST save to collections, with Actions for business logic;
+and the docs teach one layout, a folder per primitive.
+
+**Breaking:**
+
+- **Updates are checked against the collection's schema** (they weren't: only inserts and replaces
+  were), as MongoDB's `$jsonSchema` validator checks them with `validationLevel: "strict"`. What
+  `$set` gives a field must fit it; a field the schema doesn't allow can't be set, nor a required
+  one unset; `$inc` counts numbers; `$push` and `$addToSet` add items the list takes; and a document
+  that was valid stays valid (an upsert's new one too). From plugin code, REST and the socket alike:
+  what fails changes nothing (`invalid`, naming the field), so the stores agree on what they hold. A
+  document older than its schema may still be updated: strict refuses only what an update adds to
+  what was wrong with it, which every store tells alike.
+- **An update needs operators.** One with none (`updateOne(filter, { name: "x" })`, or `{}`)
+  replaced the whole document, unchecked; it's refused now, as MongoDB refuses it. Use `$set`, or
+  `replaceOne` to replace. REST's `PATCH` and the socket still read plain fields as `$set`.
+- **`$push` refuses modifiers it doesn't support** (`$slice`, `$sort`, `$position`), which it
+  ignored.
+
+**Fixed:**
+
+- **`$addToSet` with `$each`** adds each item not there yet; it stored `{ $each: […] }` itself.
+- **An unrecorded Action a query or a View calls acts as someone else (`ctx.as`)** as it does when
+  an Action calls it, read-only. It was quietly left as the reader, and read less than it asked for.
+  **This widens what such reads return:** an Action acting as the system or a grant now reads as
+  that, beyond the reader's reach, as it always did when an Action called it. Copilotz's own
+  `person.email` is one: a View or query that calls it now gets the address.
+
+**New:**
+
+- **MongoDB's update operators `$setOnInsert`** (only when an upsert makes the document), **`$min`,
+  `$max` and `$mul`,** on every store, checked against the schema as the others are. They were
+  refused.
+- **A View's handlers write collections:** `ctx.db.collection(name)` has `insertOne`, `updateOne`
+  (an update document, or the fields to set), `replaceOne` and `deleteOne`, each the viewer's own
+  write, as REST and the socket make it: a rule must speak for the collection's writes, the schema
+  checks it, it's recorded as theirs. In the owner (a terminal) and in a browser alike. A View
+  writes nothing while it renders, nor when it's rendered once. A screen saves a record without an
+  Action that only saves it.
+- **A schema failure names its field,** in `detail.field` (a dot path; for a missing required field,
+  that field), and the error is about the innermost value that failed. A write from outside (REST,
+  the socket, a View's handler) says it to its caller as a public failure, so a `Form` shows it by
+  its field; REST's error body carries `detail` for a public failure.
+- **A guard knows which write it's asked about** (`write`: `"insert"`, `"update"`, `"replace"`,
+  `"delete"`), so a rule can let people add and change documents but not delete them.
+  `byCollection({ sale: …, item: … })` makes a plugin's guard of a rule per collection.
+- **A query says what it answers and what its params are** (`description`, `input`): callers from
+  outside are held to its input, as an Action's are, and `GET /api/` and `describe()` list both.
+  `describe()` lists a collection's `validation` too (the format is the same).
+- **A chat tool can be an Action, by name**
+  (`tools: { complete_task: { action: "task.complete" }
+  }`): offered with the Action's description
+  and input, called as the agent. Read contexts and Views can `describe()` the app, as Actions do.
+- **Startup says what looks wrong** (`warn`: the console by default, once a message; `false` for
+  none): a collection whose schema names no fields, and one another plugin's `shared` rule alone
+  opens to outsiders. And, the first time it happens, an outsider let in by another plugin's guard
+  alone, where the collection's own plugin says nothing of who reaches it. An unknown Action,
+  collection or query is refused naming the closest known one.
+- **`boundaries({ root, plugins })`** (`copilotz/testing`): what breaks an app's plugin boundaries
+  (another plugin's code imported, or a contract of one not required), for an app's test.
+- **`validation: "moderate"` on a collection**, as MongoDB's `validationLevel`: updates are checked
+  only on documents that were valid, for a collection whose older documents predate its schema.
+  Inserts and replaces are always checked.
+
+**Docs:**
+
+- **AGENTS.md and the copilotz skill teach apps as Copilotz's own plugins are made:** a folder per
+  primitive, one declaration per file (`collections/` with each schema, its type and its named
+  queries; `actions/`; `views/web/`; `resources/`; `lib/`), an optional `plugin.ts` for a plugin's
+  single fields, `mod.ts` only assembling them. Plain saves are collection writes (a screen's
+  handler, a tool, a script, REST); Actions are for business logic. The `shared` rules first, then
+  the plugin's `guard`. Types from schemas (`Infer`), a Processor for what follows a commit, Node's
+  TSX loader for `dev`, `start` and tests, and a test that fails on `describe()`'s problems.
+- **A business app's screens** save customers to the collection, with the schema refusing by field;
+  the reference says how updates are checked, where that differs from MongoDB's `"strict"`, and how
+  a View's handlers write.
+
+**Upgrading:** check what queries and Views return where they call an unrecorded Action that acts as
+someone else (`ctx.as()`, `ctx.as(grant(…))`): it reads as that now, so it may return more than the
+reader reaches. Keep to what the reader may see in what the Action returns.
+
+An app whose code writes what its schemas don't allow now gets `invalid` where it didn't. Run its
+tests first. A collection holding documents from before its schema said what it says now: set
+`validation: "moderate"` on it until they're fixed. PostgreSQL still runs plain `$set`, `$unset` and
+counters in one statement; an update whose check needs the documents it leaves (a `minimum` after
+`$inc`, an object a nested `$set` may create) runs in a transaction.
+
 ## 1.0.0-rc.61 — 2026-11-24
 
 **Fixed:**

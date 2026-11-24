@@ -182,6 +182,15 @@ export const chat: Plugin = definePlugin({
   // Every agent's model can be called as configured (the models plugin says); a window by age
   // is in ms.
   async check(merged) {
+    // A tool that is an Action names one that's there.
+    for (const [name, entry] of Object.entries(merged.resources.tools ?? {})) {
+      const action = (entry as { action?: unknown; run?: unknown }).action;
+      if (typeof action === "string" && typeof (entry as { run?: unknown }).run !== "function") {
+        if (!merged.actions[action]) {
+          throw new Error(`Tool "${name}" is the Action "${action}", which no plugin declares`);
+        }
+      }
+    }
     for (const [name, agent] of Object.entries(agentsOf(merged))) {
       if (agent.model === undefined) throw new Error(`Agent "${name}" has no model`);
       const maxAge = agent.history?.maxAge;

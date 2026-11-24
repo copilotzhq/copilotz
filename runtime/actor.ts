@@ -159,3 +159,31 @@ export function callIdOf(actor: Actor, given: string): string {
   }
   return `call:${encodeURIComponent(holderOf(actor))}:${given}`;
 }
+
+/**
+ * Who code acting as `other` is (see `Context.as`): `other`, `via` `actor`,
+ * where the work is unless it says where, and (as someone else) in its
+ * conversation, with what its person approved: a tool acting as its agent's
+ * person is bound as the agent is. None: the system, via `actor`.
+ */
+export const acting = (actor: Actor | undefined, other?: Actor): Actor | undefined =>
+  other
+    ? {
+      ...other,
+      ...(actor ? { via: actor } : {}),
+      ...(!("in" in other) && whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
+      ...(!("thread" in other) && typeof actor?.thread === "string"
+        ? { thread: actor.thread }
+        : {}),
+      ...(!("approved" in other) && Array.isArray(actor?.approved)
+        ? { approved: actor.approved }
+        : {}),
+    }
+    : actor
+    ? {
+      kind: "system",
+      id: "system",
+      via: actor,
+      ...(whereOf(actor) !== undefined ? { in: whereOf(actor) } : {}),
+    }
+    : undefined;

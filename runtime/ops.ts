@@ -270,6 +270,13 @@ export function privateIn(op: StoreOp, fields: string[]): string | undefined {
 export type Hooks = {
   /** Checks a document against its collection's schema. */
   validate(collection: string, doc: Record<string, unknown>): void;
+  /**
+   * Checks an update against its collection's schema before the store applies it (see
+   * updates.ts), refusing what can't fit.
+   */
+  checkUpdate(collection: string, update: Update): void;
+  /** Checks the documents an update left (an upsert's new one too) against the schema. */
+  checkResult(collection: string, changes: Change[]): Promise<void>;
   /** Moves large values out to blobs, within the same transaction. */
   offload<T>(value: T): Promise<T>;
   /** Hears which documents a write changed, to record them as events. */
@@ -335,6 +342,12 @@ export async function perform(tx: Transaction, op: StoreOp, hooks: Hooks): Promi
       return undefined;
     }
     case "update": {
+      hooks.checkUpdate(op.collection, op.update);
+      // What the update left is checked before it's heard of, so a refusal undoes it all.
+      const updated = async (changes: Change[]) => {
+        await hooks.checkResult(op.collection, changes);
+        hooks.changed(op.collection, changes);
+      };
       const fields = hooks.vectors(op.collection);
       const replacing = !Object.keys(op.update).some((key) => key.startsWith("$"));
       const set = replacing ? op.update : op.update.$set ?? {};
@@ -347,7 +360,7 @@ export async function perform(tx: Transaction, op: StoreOp, hooks: Hooks): Promi
           await hooks.offload(op.update),
           op.options,
         );
-        hooks.changed(op.collection, changes);
+        await updated(changes);
         return result;
       }
       // The documents to give vectors: those matching before the update changes them.
@@ -376,11 +389,11 @@ export async function perform(tx: Transaction, op: StoreOp, hooks: Hooks): Promi
           await hooks.offload(update as Update),
           op.options,
         );
-        hooks.changed(op.collection, changes);
+        await updated(changes);
         result = { ...done, modified: Math.max(done.modified, targets.length) };
       } else if (!targets.length && op.options.upsert) {
         const { changes, ...done } = await tx.update(op.collection, op.filter, {}, op.options);
-        hooks.changed(op.collection, changes);
+        await updated(changes);
         result = done;
       }
       for (const doc of result.upsertedId ? [result.upsertedId] : targets) {

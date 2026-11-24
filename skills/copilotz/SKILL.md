@@ -94,15 +94,18 @@ and the scripted model) and the patterns for time, outside calls and HTTP are in
 
 Each one, with why and code: [rules](references/rules.md).
 
-1. **One Action per change, called from every way in.** A button and a tool call it with `ctx.call`,
-   a script with `runtime.call`. A tool is a thin caller of Actions.
-2. **Rules at the data, not in handlers.** Name the collection in the `shared` resource, or write a
-   `guard`. Don't filter by who's asking inside an Action.
+1. **Plain saves are collection writes; Actions are for business logic.** A screen's handler, a
+   tool, a script and REST insert, update and delete documents directly, as their caller, under the
+   rules and the schema. An Action holds what a schema can't say, writes that must agree, effects
+   outside; every way in calls it.
+2. **Rules at the data, `shared` first.** Name the collection in the `shared` resource; what it
+   can't say goes in the plugin's `guard`. Don't filter by who's asking inside an Action. Every
+   write keeps to the collection's schema, updates included.
 3. **Say `allow` on every Action outsiders call,** by kind: `people`, `contacts`,
    `peopleOrContacts`, `publicCallers`, or `inPerson` for what only the person decides. An Action
    without `allow` is internal.
 4. **A View for whatever anyone reads, a model included.** Each tool gets a `tool:<name>` View:
-   short text, with ids the model can act on. Views never write.
+   short text, with ids the model can act on. Views write only from their handlers.
 5. **Errors for callers are `failure(code, message, { public: true })`.** Only a public failure's
    words reach a caller outside, or a model.
 6. **Settings are resources, not code.** `app.ts` reads no environment, and agents name a model

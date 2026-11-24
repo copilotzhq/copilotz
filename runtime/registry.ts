@@ -24,6 +24,7 @@ import type {
   WorkerKind,
 } from "./define.ts";
 import type { ScheduleDef } from "./schedules.ts";
+import type { Actor } from "./store.ts";
 import { allows } from "./actor.ts";
 
 /** Everything crossing the runtime boundary is JSON: undefined fields disappear. */
@@ -70,11 +71,49 @@ export function compile(schema: unknown, label: string): (value: unknown) => voi
   return (value: unknown) => {
     const result = validator.validate(value);
     if (!result.valid) {
-      const first = result.errors.at(-1);
-      throw invalid(`${label}: ${first?.error ?? "invalid"} (${first?.instanceLocation ?? "#"})`);
+      const first = deepest(result.errors);
+      throw schemaFailure(
+        label,
+        first?.error ?? "invalid",
+        first?.instanceLocation ?? "#",
+        first?.keyword,
+      );
     }
   };
 }
+
+/** Of a validation's errors, the one about the innermost value: the field itself, not its parent. */
+export const deepest = <E extends { instanceLocation: string }>(errors: E[]): E | undefined =>
+  errors.reduce<E | undefined>(
+    (best, e) =>
+      !best || e.instanceLocation.split("/").length >= best.instanceLocation.split("/").length
+        ? e
+        : best,
+    undefined,
+  );
+
+/**
+ * A document that doesn't fit its schema: `invalid`, saying where (`#/price`),
+ * with the field it's about in `detail.field` (a dot path; for a required
+ * field that's missing, that field), for a form to show it there. Marked
+ * `schema`, so writes from outside can say it to their caller (see owner.ts).
+ */
+export function schemaFailure(
+  label: string,
+  error: string,
+  location: string,
+  rule?: string,
+): Error & { code: string; detail?: { field: string }; schema: true } {
+  const path = location.replace(/^#\/?/, "").split("/").filter(Boolean).map(unescapePointer);
+  const missing = rule === "required" ? /property "([^"]+)"/.exec(error)?.[1] : undefined;
+  const field = [...path, ...(missing ? [missing] : [])].join(".");
+  return Object.assign(invalid(`${label}: ${error} (${location})`), {
+    ...(field ? { detail: { field } } : {}),
+    schema: true as const,
+  });
+}
+
+const unescapePointer = (part: string) => part.replaceAll("~1", "/").replaceAll("~0", "~");
 
 export type Registry = {
   collections: Record<string, CollectionDef>;
@@ -89,6 +128,16 @@ export type Registry = {
   checks: { name: string; check: NonNullable<Plugin["check"]> }[];
   /** Who reaches what: every plugin's rules, which restrict together. */
   guards: Guard[];
+  /** Which plugin each guard is (by position in `guards`). */
+  guardPlugins: string[];
+  /**
+   * Each collection's plugin, and whether it says who reaches it (its own
+   * guard, or its own `shared` entry): a rule of another's alone opening it
+   * is warned of (owner.ts).
+   */
+  ruledBy: Record<string, { plugin: string; own: boolean }>;
+  /** What looks wrong at startup, though the app runs (see `warningsOf`): logged once. */
+  warnings: string[];
   /** What reads reveal to writes: the last plugin's. */
   labels?: Labels;
   /** Kinds of worker, by name. */
@@ -120,6 +169,87 @@ export function patch(target: unknown, value: unknown): unknown {
   return out;
 }
 
+/** Whether a schema says what its documents hold: fields, or the shapes they may take. */
+export const says = (schema: unknown): boolean =>
+  plain(schema) &&
+  (plain(schema.properties) && Object.keys(schema.properties).length > 0 ||
+    ["anyOf", "oneOf", "allOf"].some((key) => Array.isArray(schema[key])) ||
+    plain(schema.additionalProperties) || plain(schema.patternProperties));
+
+/**
+ * What looks wrong, though the app runs: a collection whose schema names no
+ * fields (its documents may hold anything, and writes check nothing); one
+ * that another plugin's `shared` rule alone opens to outsiders (its own
+ * plugin says nothing of who may reach it). A guard can't be read without
+ * running it, so only `shared` entries are looked at.
+ */
+function warningsOf(
+  plugins: Plugin[],
+  registry: Registry,
+  declaredBy: Map<string, Plugin>,
+): string[] {
+  const out: string[] = [];
+  for (const [name, def] of Object.entries(registry.collections)) {
+    if (!says(def.schema)) {
+      out.push(
+        `Collection "${name}" (${declaredBy.get(name)?.name}) has a schema that names no fields: ` +
+          "its documents may hold anything, and writes check nothing. Name its fields.",
+      );
+    }
+  }
+  const sharedOf = (p: Plugin) =>
+    plain(p.resources?.shared) ? Object.keys(p.resources.shared as object) : [];
+  for (const other of plugins) {
+    for (const name of sharedOf(other)) {
+      const own = declaredBy.get(name);
+      if (!own || own === other || own.guard || sharedOf(own).includes(name)) continue;
+      out.push(
+        `Collection "${name}" (${own.name}) is opened to outsiders by ${other.name}'s ` +
+          `"shared" rule alone: say who reaches it in ${own.name}.`,
+      );
+    }
+  }
+  return out;
+}
+
+/** Every named query, as `collection.query`. */
+export const queriesOf = (registry: Pick<Registry, "collections">): string[] =>
+  Object.entries(registry.collections).flatMap(([name, def]) =>
+    Object.keys(def.queries ?? {}).map((query) => `${name}.${query}`)
+  );
+
+/** An unknown name refused, with the closest known one when there's one near it. */
+export function unknown(kind: string, name: string, known: Iterable<string>): Error {
+  const near = closest(name, known);
+  return invalid(`Unknown ${kind} "${name}"${near ? ` (did you mean "${near}"?)` : ""}`);
+}
+
+/** The known name nearest `name`, within two edits (a quarter of a long name's letters). */
+export function closest(name: string, known: Iterable<string>): string | undefined {
+  let best: string | undefined;
+  let score = Infinity;
+  for (const candidate of known) {
+    const d = distance(name, candidate);
+    if (d < score) [best, score] = [candidate, d];
+  }
+  return best !== undefined && score <= Math.max(2, Math.floor(name.length / 4)) ? best : undefined;
+}
+
+/** Levenshtein distance. */
+function distance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const was = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = was;
+    }
+  }
+  return row[b.length];
+}
+
 /**
  * Plugins merge in order. Collections, Actions and Processors are unique: two
  * of one name are a mistake. Everything else is configuration a later plugin
@@ -142,6 +272,9 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     schedules: {},
     checks: [],
     guards: [],
+    guardPlugins: [],
+    ruledBy: {},
+    warnings: [],
     workers: {},
     routes: {},
     whos: [],
@@ -163,10 +296,13 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
       else target[name] = value;
     }
   };
+  // Which plugin declared each collection, for the warnings below.
+  const declaredBy = new Map<string, Plugin>();
   for (const plugin of plugins) {
     for (const [name, def] of Object.entries(plugin.collections ?? {})) {
       if ("schema" in def) {
         into(registry.collections, { [name]: def }, "collection");
+        declaredBy.set(name, plugin);
         continue;
       }
       // A patch: indexes on a collection an earlier plugin declared (its definition stays as it is).
@@ -193,7 +329,10 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
       replace(registry.adapters[port] ??= {}, entries);
     }
     into(registry.workers, plugin.workers, "worker kind");
-    if (plugin.guard) registry.guards.push(plugin.guard);
+    if (plugin.guard) {
+      registry.guards.push(plugin.guard);
+      registry.guardPlugins.push(plugin.name);
+    }
     if (plugin.who) registry.whos.push({ plugin: plugin.name, who: plugin.who });
     for (const [key, route] of Object.entries(plugin.routes ?? {})) {
       if (route === null) delete registry.routes[key];
@@ -234,6 +373,14 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
     if (missing.length) throw invalid(`${plugin.name} needs ${missing.join(", ")}: add it too`);
   }
   registry.checks = plugins.flatMap((p) => p.check ? [{ name: p.name, check: p.check }] : []);
+  if (!options.elsewhere) registry.warnings = warningsOf(plugins, registry, declaredBy);
+  for (const [name, plugin] of declaredBy) {
+    const shared = plugin.resources?.shared;
+    registry.ruledBy[name] = {
+      plugin: plugin.name,
+      own: !!plugin.guard || (plain(shared) && Object.hasOwn(shared, name)),
+    };
+  }
   registry.requires = Object.fromEntries(plugins.map((p) => [p.name, p.requires ?? []]));
   return registry;
 }
@@ -298,9 +445,10 @@ export async function readCall<R>(
   call: ReadContext["call"],
   name: string,
   input: unknown = {},
+  actingAs?: (other?: Actor) => ReadContext,
 ): Promise<R> {
   const def = registry.actions[name];
-  if (!def) throw invalid(`Unknown action "${name}"`);
+  if (!def) throw unknown("action", name, Object.keys(registry.actions));
   if (def.record !== false) {
     throw invalid(`"${name}" is recorded: a read calls only unrecorded Actions`);
   }
@@ -320,22 +468,49 @@ export async function readCall<R>(
   const refuse = () => {
     throw invalid(`"${name}" was called from a read: it can't write`);
   };
-  const ctx = {
-    ...reads,
-    call,
-    describe: () => described(registry),
-    signal: reads.signal ?? new AbortController().signal,
-    retry: false,
-    emit: refuse,
-    transaction: refuse,
-    schedule: refuse,
-    unschedule: refuse,
-    cancel: refuse,
-    disconnect: refuse,
-    stream: refuse,
-    graph: { ...reads.graph, link: refuse, unlink: refuse },
-  } as unknown as Context;
-  return await def.run({ ...ctx, as: () => ctx, branch: () => ctx } as Context, normalized) as R;
+  /** A read-only Context over what a reader reaches: reads and records; anything else fails. */
+  const contextOf = (
+    over: Omit<ReadContext, "call"> & { signal?: AbortSignal },
+    calls: ReadContext["call"],
+  ): Context => {
+    const ctx = {
+      ...over,
+      call: calls,
+      describe: () => described(registry),
+      signal: reads.signal ?? new AbortController().signal,
+      retry: false,
+      emit: refuse,
+      transaction: refuse,
+      schedule: refuse,
+      unschedule: refuse,
+      cancel: refuse,
+      disconnect: refuse,
+      stream: refuse,
+      graph: { ...over.graph, link: refuse, unlink: refuse },
+    } as unknown as Context;
+    // Acting as someone else (the system, a grant) reads as them, as from an Action; where
+    // the read can't (a startup check), it fails rather than read less than asked.
+    const as = (other?: Actor): Context => {
+      // Already who it would act as: the same actor, or the system for the system.
+      const self = over.actor;
+      if (
+        other
+          ? self && other.kind === self.kind && other.id === self.id
+          : !self || self.kind === "system" && self.id === "system" && !self.via
+      ) return whole;
+      if (!actingAs) {
+        throw invalid(
+          `"${name}" was called from a read: it can't act as ` +
+            `${other ? `${other.kind} ${other.id}` : "the system"} there. Call it from an Action`,
+        );
+      }
+      const them = actingAs(other);
+      return contextOf(them, them.call);
+    };
+    const whole = { ...ctx, as, branch: () => whole } as Context;
+    return whole;
+  };
+  return await def.run(contextOf(reads, call), normalized) as R;
 }
 
 /**

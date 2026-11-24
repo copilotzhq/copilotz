@@ -44,7 +44,7 @@ import type {
   ViewDef,
 } from "./define.ts";
 import { contacts, inPerson, people, peopleOrContacts } from "./errors.ts";
-import { merge, patch } from "./registry.ts";
+import { merge, patch, says } from "./registry.ts";
 import type { ScheduleDef, SchedulePatch } from "./schedules.ts";
 import type { Actor, Filter } from "./store.ts";
 
@@ -115,6 +115,10 @@ export type Helper =
 /** Who outside reaches a named query (`internal`: plugin code alone, a bare function). */
 export type QueryDeclaration = {
   name: string;
+  /** What it answers (its `description`). */
+  summary?: string;
+  /** Its params' JSON Schema (its `input`). */
+  input?: JSONSchema;
   internal?: true;
   callers?: Callers;
   helper?: Helper;
@@ -140,6 +144,8 @@ export type CollectionDeclaration = {
   shared: boolean;
   /** Fields holding vectors (embeddings). */
   vectors: string[];
+  /** `moderate`: updates are checked only on documents that were valid (`validation`). */
+  validation?: "moderate";
   indexes: string[][];
   queries: QueryDeclaration[];
 };
@@ -593,8 +599,11 @@ function keepsOf(plugin: Plugin, shared: Set<string>) {
       indexes: json(def.indexes ?? []),
       queries: Object.entries(def.queries ?? {}).map(([query, q]: [string, QueryDef]) => ({
         name: query,
+        ...(typeof q === "object" && q.description ? { summary: words(q.description) } : {}),
+        ...(typeof q === "object" && q.input ? { input: json(q.input) as JSONSchema } : {}),
         ...(typeof q === "function" ? { internal: true as const } : accessOf(q.allow, {})),
       })).sort(byName),
+      ...(def.validation === "moderate" ? { validation: "moderate" as const } : {}),
     });
   }
   return { keeps: keeps.sort(byName), indexes: indexes.sort(by((i) => i.collection)) };
@@ -606,12 +615,18 @@ function toolsOf(plugin: Plugin, actions: string[]) {
   const calls = new Map<string, string>();
   for (const [name, tool] of Object.entries(plugin.resources?.tools ?? {})) {
     if (!plain(tool)) continue;
+    // A tool that is an Action (`{ action }`): its words and input are the Action's.
+    const action = typeof tool.action === "string" && typeof tool.run !== "function"
+      ? plugin.actions?.[tool.action]
+      : undefined;
+    const input = action ? action.input : tool.input;
     tools.push({
       name,
-      summary: words(tool.description),
+      summary: words(tool.description ?? action?.description),
       ...(typeof tool.title === "string" ? { title: tool.title } : {}),
-      ...(plain(tool.input) ? { input: json(tool.input) as JSONSchema } : {}),
+      ...(plain(input) ? { input: json(input) as JSONSchema } : {}),
     });
+    if (action && !calls.has(tool.action as string)) calls.set(tool.action as string, name);
     const source = typeof tool.run === "function" ? String(tool.run) : "";
     for (const [, called] of source.matchAll(/["'`]([\w.:-]+)["'`]/g)) {
       if (actions.includes(called) && !calls.has(called)) calls.set(called, name);
@@ -818,12 +833,6 @@ function needsOf(
 // Listing
 
 /** Whether a schema says anything about its documents' fields. */
-const says = (schema: unknown): boolean =>
-  plain(schema) &&
-  (plain(schema.properties) && Object.keys(schema.properties).length > 0 ||
-    ["anyOf", "oneOf", "allOf"].some((key) => Array.isArray(schema[key])) ||
-    plain(schema.additionalProperties) || plain(schema.patternProperties));
-
 const opened = (callers?: Callers) => !!callers && callers.anonymous !== "no";
 
 /**

@@ -762,7 +762,18 @@ test("no password, hash, code, token or session is in the log, and no actor read
   }
 });
 
+/**
+ * The limits count in windows on the clock's quarter hours (an hour for messages), so a test that
+ * fills one starts clear of an edge: a window turning over midway empties its counter.
+ */
+async function clearOfWindowEdge(margin = 10_000) {
+  const quarter = 15 * 60_000;
+  const left = quarter - Date.now() % quarter;
+  if (left < margin) await new Promise((resolve) => setTimeout(resolve, left + 50));
+}
+
 test("limits: messages to an address, tries at it, and what one caller asks, the same for anyone", async () => {
+  await clearOfWindowEdge();
   const { rt, resend } = await start({ settings: { limits: { sends: 2, tries: 3, address: 6 } } });
   try {
     // Messages to one address: two an hour, whether or not it has an account.

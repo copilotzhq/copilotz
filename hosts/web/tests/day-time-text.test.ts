@@ -7,7 +7,7 @@
  */
 import { assert, assertEquals, assertMatch } from "@std/assert";
 import { test } from "../../../testing/mod.ts";
-import { formatPattern } from "../toolkit/dates.ts";
+import { formatPattern, lastOfMonth } from "../toolkit/dates.ts";
 import { dayTimePattern, parseDayTime, patternProblem } from "../toolkit/day-time-text.ts";
 
 const LOCALES = [
@@ -376,4 +376,226 @@ test("the toolkit guide's examples, as written there", () => {
   assertEquals(formatPattern("2026-11-02 14:30:05", typed, "en-US"), "11/02/2026 02:30:05 PM");
   assertEquals(parseDayTime("11/02/2026 2:30:05 pm", typed, "en-US"), "2026-11-02 14:30:05");
   assertEquals(dayTimePattern("pt-BR"), "dd'/'MM'/'yyyy HH':'mm':'ss");
+});
+
+// Review round 1: each finding's case, then its class.
+
+/** Whether the runtime's `Intl` supports a language (not only accepts its tag). */
+const supports = (tag: string) => {
+  try {
+    return Intl.DateTimeFormat.supportedLocalesOf([tag]).length === 1;
+  } catch {
+    return false;
+  }
+};
+
+/** Every language the runtime supports, by its two- and three-letter codes. */
+const SUPPORTED = (() => {
+  const letters = "abcdefghijklmnopqrstuvwxyz";
+  const codes: string[] = [];
+  for (const a of letters) {
+    for (const b of letters) {
+      codes.push(a + b);
+      for (const c of letters) codes.push(a + b + c);
+    }
+  }
+  return Intl.DateTimeFormat.supportedLocalesOf(codes);
+})();
+
+/** Each calendar the runtime has, in languages with names and with numbers for months. */
+const CALENDARS = Intl.supportedValuesOf("calendar").flatMap((calendar) =>
+  ["en", "th", "ja", "zh-TW"].map((language) => `${language}-u-ca-${calendar}`)
+);
+
+/**
+ * Days whose month a calendar can get wrong: the first, middle and last of every month in the
+ * first and last supported years (0000, 9999), across the centuries a Julian calendar drifts
+ * from the Gregorian (0, 100, 1000, 1500), at the 1582 change and around it, and now.
+ */
+const EDGES: string[] = [];
+for (const year of [0, 1, 100, 1000, 1500, 1581, 1582, 1583, 1900, 2024, 9999]) {
+  for (let month = 1; month <= 12; month++) {
+    const last = +lastOfMonth(year, month).slice(8);
+    for (const day of [1, 15, last]) {
+      const time = `${two((month * 7 + day) % 24)}:${two((day * 13) % 60)}:${
+        two((month * 11) % 60)
+      }`;
+      EDGES.push(`${String(year).padStart(4, "0")}-${two(month)}-${two(day)} ${time}`);
+    }
+  }
+}
+for (let day = 1; day <= 31; day += 3) EDGES.push(`1582-10-${two(day)} 12:00:00`);
+
+/** Patterns with month names, of every width. */
+const NAMED = [
+  "d MMM yyyy HH:mm:ss",
+  "dd MMMM yyyy hh:mm a",
+  "EEE d MMM yyyy H:mm",
+  "EEEE, d 'de' MMMM 'de' yyyy HH:mm",
+];
+
+/** Text in the language's upper and lower case, as its people would type it. */
+const cased = (text: string, locale: string): [string, string][] => [
+  ["as written", text],
+  ["upper case", text.toLocaleUpperCase(locale)],
+  ["lower case", text.toLocaleLowerCase(locale)],
+];
+
+test("Thai month names: February 29th, 0000 isn't written as March 29th's", () => {
+  const pattern = "d MMM yyyy HH:mm:ss";
+  const problem = patternProblem(pattern, "th-TH");
+  assert(problem !== undefined, "accepted");
+  assertMatch(problem, /MMM/);
+  for (const x of ["0000-02-29 00:00:00", "0000-03-29 00:00:00"]) {
+    assertEquals(parseDayTime(formatPattern(x, pattern, "th-TH"), pattern, "th-TH"), undefined);
+  }
+  // Thai's Gregorian calendar keeps its months in every year.
+  assertEquals(patternProblem(pattern, "th-TH-u-ca-gregory"), undefined);
+});
+
+test("every language and calendar the runtime has: an accepted pattern reads back, 0000 to 9999", () => {
+  const all = [...SUPPORTED, ...CALENDARS];
+  assert(all.length > 100, `${all.length} languages`);
+  for (const locale of all) {
+    const own = [dayTimePattern(locale), dayTimePattern(locale, false)];
+    for (const pattern of own) {
+      assertEquals(patternProblem(pattern, locale), undefined, `${locale}: ${pattern}`);
+      assertMatch(pattern, /yyyy/);
+    }
+    for (const pattern of [...NAMED, ...own, "dd/MM/yyyy HH:mm:ss", "M/d/yyyy h:mm a"]) {
+      if (patternProblem(pattern, locale) !== undefined) continue;
+      const values = /MMM|EEE/.test(pattern) ? EDGES : EDGES.filter((_, i) => i % 9 === 0);
+      for (const value of values) {
+        const x = kept(value, pattern);
+        for (const [how, typed] of cased(formatPattern(x, pattern, locale), locale)) {
+          assertEquals(
+            parseDayTime(typed, pattern, locale),
+            x,
+            `${locale} ${pattern}, ${how}: ${typed}`,
+          );
+        }
+      }
+    }
+  }
+});
+
+test("names in the language's own case and punctuation: Greek, Turkish, Dzongkha, Tibetan", () => {
+  const named = "d MMMM yyyy HH:mm";
+  assertEquals(parseDayTime("2 ΜΑΪ́ΟΥ 2026 10:00", named, "el-GR"), "2026-05-02 10:00");
+  assertEquals(parseDayTime("2 ΜΑΪΟΥ 2026 10:00", named, "el-GR"), "2026-05-02 10:00");
+  assertEquals(parseDayTime("2 Μαΐου 2026 10:00", named, "el-GR"), "2026-05-02 10:00");
+  assertEquals(parseDayTime("2 MAYIS 2026 10:00", named, "tr-TR"), "2026-05-02 10:00");
+  assertEquals(parseDayTime("2 mayıs 2026 10:00", named, "tr-TR"), "2026-05-02 10:00");
+  // Where the runtime has them (Node's ICU does; Deno's doesn't): AM and PM with their tsheg.
+  for (const locale of ["dz", "dz-BT", "bo", "bo-CN"].filter(supports)) {
+    for (const pattern of [dayTimePattern(locale), "dd/MM/yyyy hh:mm:ss a"]) {
+      assertEquals(patternProblem(pattern, locale), undefined, `${locale}: ${pattern}`);
+      for (const x of ["2026-11-02 14:30:05", "2026-11-02 02:30:05", "2026-11-02 12:00:00"]) {
+        const text = formatPattern(x, pattern, locale);
+        assertEquals(parseDayTime(text, pattern, locale), x, `${locale}: ${text}`);
+      }
+    }
+  }
+});
+
+/** Patterns where a field of no fixed length meets a name or a word. */
+const BOUNDARY = [
+  "yyyy/dMMM HH:mm:ss",
+  "yyyy/MMMd HH:mm",
+  "dMMM yyyy HH:mm",
+  "yyyyMMMd HH:mm",
+  "d'日'MMM yyyy HH:mm",
+  "EEEd MMM yyyy HH:mm",
+  "MMMd, yyyy h:mm a",
+  "yyyy/M/d H:mm",
+];
+
+test("a language's own digits are digits where a field could run on: every numbering system", () => {
+  assert(patternProblem("yyyy/dMMM HH:mm:ss", "ja-JP-u-nu-hanidec") !== undefined, "hanidec");
+  const days: string[] = [];
+  for (const month of [1, 2, 10, 11, 12]) {
+    const last = +lastOfMonth(2024, month).slice(8);
+    for (const day of [1, 2, 3, 10, 11, 12, 13, 19, 20, 21, 22, 28, 29, 30, 31]) {
+      if (day <= last) days.push(`2024-${two(month)}-${two(day)} 10:07:09`);
+    }
+  }
+  let read = 0;
+  for (const system of Intl.supportedValuesOf("numberingSystem")) {
+    for (const base of ["ja-JP", "zh-CN"]) {
+      const locale = `${base}-u-nu-${system}`;
+      const digits = digitsOf(locale);
+      const own = new Set(digits).size === 10 && digits.every((d) => [...d].length === 1) &&
+        digits[0] !== "0";
+      for (const pattern of BOUNDARY) {
+        if (patternProblem(pattern, locale) !== undefined) continue;
+        for (const value of days) {
+          const x = kept(value, pattern);
+          const text = formatPattern(x, pattern, locale);
+          const texts = own ? [text, text.replace(/[0-9]/g, (d) => digits[+d])] : [text];
+          for (const typed of texts) {
+            assertEquals(parseDayTime(typed, pattern, locale), x, `${locale} ${pattern}: ${typed}`);
+            read++;
+          }
+        }
+      }
+    }
+  }
+  assert(read > 1_000, `${read} texts read`);
+});
+
+test("spaces at a pattern's edges, or doubled, read as the input's do", () => {
+  // The review's case: a trailing space, and day before month.
+  const p = "yyyy-dd-MM HH:mm:ss ";
+  const x = "2026-11-02 09:00:07";
+  assertEquals(formatPattern(x, p), "2026-02-11 09:00:07 ");
+  assertEquals(parseDayTime(formatPattern(x, p), p), x);
+  for (const locale of ["en-US", "de-DE", "ja-JP", "ar-EG"]) {
+    for (const base of [...PATTERNS, dayTimePattern(locale), "yyyy-dd-MM HH:mm:ss"]) {
+      const readable = patternProblem(base, locale) === undefined;
+      const variants = [
+        ` ${base}`,
+        `${base} `,
+        `  ${base}  `,
+        `\t${base} `,
+        base.replace(/\s+/g, (s) => s + s),
+        `' '${base}' '`,
+      ];
+      for (const variant of variants) {
+        const name = `${JSON.stringify(variant)} in ${locale}`;
+        assertEquals(patternProblem(variant, locale) === undefined, readable, name);
+        if (!readable) continue;
+        for (const value of VALUES.filter((_, i) => i % 13 === 0)) {
+          const x = kept(value, base);
+          assertEquals(parseDayTime(formatPattern(x, variant, locale), variant, locale), x, name);
+          assertEquals(parseDayTime(formatPattern(x, base, locale), variant, locale), x, name);
+          assertEquals(parseDayTime(formatPattern(x, variant, locale), base, locale), x, name);
+        }
+      }
+    }
+  }
+});
+
+test("a language the runtime doesn't support gets the toolkit's own pattern", () => {
+  assertEquals(dayTimePattern("zz-ZZ"), "yyyy-MM-dd HH:mm:ss");
+  assertEquals(dayTimePattern("zz-ZZ", false), "yyyy-MM-dd HH:mm");
+  const tags = ["zz-ZZ", "qaa", "xx", "en-ZZ", "dz", "bo", "haw", "en", "pt-BR", "not a language!"];
+  for (const tag of tags) {
+    const own = dayTimePattern(tag);
+    assertEquals(patternProblem(own, tag), undefined, tag);
+    if (!supports(tag)) {
+      assertEquals(own, "yyyy-MM-dd HH:mm:ss", tag);
+      assertMatch(patternProblem("d MMM yyyy HH:mm", tag)!, /language/, tag);
+      assertEquals(parseDayTime("2026-11-02 14:30:05", undefined, tag), "2026-11-02 14:30:05");
+    }
+  }
+});
+
+test("years are four digits, 0000 (1 BC) to 9999, and no others", () => {
+  const p = "dd/MM/yyyy HH:mm:ss";
+  assertEquals(parseDayTime("01/01/0000 00:00:00", p), "0000-01-01 00:00:00");
+  assertEquals(parseDayTime("29/02/0000 12:00:00", p), "0000-02-29 12:00:00");
+  assertEquals(parseDayTime("31/12/9999 23:59:59", p), "9999-12-31 23:59:59");
+  for (const wrong of ["01/01/10000 00:00:00", "01/01/-001 00:00:00", "01/01/+2026 00:00:00"]) {
+    assertEquals(parseDayTime(wrong, p), undefined, wrong);
+  }
 });

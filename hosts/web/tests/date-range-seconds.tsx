@@ -6,7 +6,9 @@
  */
 import assert from "node:assert/strict";
 import { test } from "../../../testing/mod.ts";
+import { addMonths, isDayTime } from "../toolkit/dates.ts";
 import { DateRangePicker } from "../toolkit/date-picker.tsx";
+import { rangeSecondsPattern, readEnd } from "../toolkit/day-time-text.ts";
 import { blur, click, ENDS, press, type } from "./date-range-steps.ts";
 import { page } from "./page.ts";
 
@@ -19,11 +21,18 @@ const footText = () => document.querySelector(".copilotz-date-foot-text")!.textC
 const ends = () => [...document.querySelectorAll<HTMLInputElement>(ENDS)].map((i) => i.value);
 const invalid = (i: number) =>
   document.querySelectorAll(ENDS)[i].getAttribute("aria-invalid") === "true";
+const applyOff = () =>
+  [...document.querySelectorAll("button")].find((b) => b.textContent === "Apply")!.disabled;
 
-/** A page of a language, with a way to draw a picker in it and the values it applies. */
+type Draw = (props: Record<string, unknown>) => Promise<void>;
+
+/**
+ * A page of a language, with a way to draw a picker in it (`draw`, a new one; `update`, the last
+ * one with new props, open as it is) and the values it applies.
+ */
 async function inPage(
   lang: string,
-  run: (draw: (props: Record<string, unknown>) => Promise<void>, applied: Range[]) => Promise<void>,
+  run: (draw: Draw, applied: Range[], update: Draw) => Promise<void>,
 ) {
   await page(async (render) => {
     document.documentElement.lang = lang;
@@ -32,19 +41,17 @@ async function inPage(
     proto.hidePopover = () => {};
     const applied: Range[] = [];
     let n = 0;
-    await run(
-      (props) =>
-        render(
-          <DateRangePicker
-            key={n++}
-            today={today}
-            seconds
-            onChange={(r: Range) => applied.push(r)}
-            {...props}
-          />,
-        ),
-      applied,
-    );
+    const picker = (key: number, props: Record<string, unknown>) =>
+      render(
+        <DateRangePicker
+          key={key}
+          today={today}
+          seconds
+          onChange={(r: Range) => applied.push(r)}
+          {...props}
+        />,
+      );
+    await run((props) => picker(++n, props), applied, (props) => picker(n, props));
   });
 }
 
@@ -70,6 +77,8 @@ const FORMATS: unknown[] = [
   "dd/MM/yyyy HH:mm",
   "MM/dd/yyyy hh:mm:ss a",
   "yyyy/Md HH:mm:ss",
+  "yyyy-dd-MM HH:mm:ss",
+  "dd/MM/yyyy HH:mm:ss ",
   (day: string) => day.split("-").reverse().join("."),
 ];
 const VALUES: Range[] = [
@@ -156,6 +165,10 @@ test("a format that can't be read back: never shown, never read, and said once",
       await click(".copilotz-date-field");
       await type(ENDS, 0, "2026/211 14:30:05");
       assert.ok(invalid(0));
+      assert.ok(applyOff(), "text that can't be read blocks Apply");
+      await press("Apply");
+      assert.deepEqual(applied.splice(0), []);
+      await type(ENDS, 0, "11/02/2026 02:30:05 PM");
       await press("Apply");
       assert.deepEqual(applied.splice(0), [value]);
       await draw({ value, format: "yyyy/dM HH:mm:ss" });
@@ -182,7 +195,11 @@ test("other calendars' years, impossible days, and instants are refused", () =>
     ) {
       await type(ENDS, 0, wrong);
       assert.ok(invalid(0), wrong);
+      assert.ok(applyOff(), wrong);
     }
+    await press("Apply");
+    assert.deepEqual(applied.splice(0), []);
+    await type(ENDS, 0, "01/11/2026 00:00:00");
     await press("Apply");
     assert.deepEqual(applied.splice(0), [value]);
     // Where the app's bounds allow it, a far year is the app's to allow.
@@ -263,4 +280,239 @@ test("with no value: today, from its first second to its last", () =>
     await draw({});
     assert.deepEqual(ends(), ["16/11/2026 00:00:00", "16/11/2026 23:59:59"]);
     assert.equal(fieldText(), "");
+  }));
+
+// Review round 1: each finding's case, then its class.
+
+test("an end being typed moves nothing until it's left or applied", () =>
+  inPage("en-GB", async (draw, applied) => {
+    const value = { start: "2026-11-15 00:00:00", end: "2026-11-21 23:59:59" };
+    const format = "dd/MM/yyyy HH:mm:ss";
+    // 21 to 20 in To, through 2: From stays on the 15th.
+    await draw({ value, format });
+    await click(".copilotz-date-field");
+    await type(ENDS, 1, "2/11/2026 23:59:59");
+    assert.deepEqual(ends()[0], "15/11/2026 00:00:00");
+    await type(ENDS, 1, "20/11/2026 23:59:59");
+    await blur(ENDS, 1);
+    await press("Apply");
+    assert.deepEqual(applied.splice(0), [{ start: value.start, end: "2026-11-20 23:59:59" }]);
+    // Seconds of 61, through 6: refused, and Apply with them.
+    await draw({ value, format });
+    await click(".copilotz-date-field");
+    await type(ENDS, 1, "21/11/2026 23:59:6");
+    await type(ENDS, 1, "21/11/2026 23:59:61");
+    await blur(ENDS, 1);
+    assert.equal(ends()[1], "21/11/2026 23:59:61");
+    assert.ok(invalid(1));
+    assert.ok(applyOff());
+    await press("Apply");
+    assert.deepEqual(applied.splice(0), []);
+  }));
+
+/** The texts a field holds as a person types `target` from empty, a character at a time. */
+const fromEmpty = (target: string) => [...target].map((_, i, all) => all.slice(0, i + 1).join(""));
+
+/**
+ * The texts a field holds as a person retypes `old` into `target`: each run of digits, or of other
+ * characters, that differs, deleted and typed again a character at a time.
+ */
+function retyped(old: string, target: string): string[] {
+  const runs = (text: string) => text.match(/\p{Nd}+|\P{Nd}+/gu) ?? [];
+  const [now, next] = [runs(old), runs(target)];
+  if (now.length !== next.length) return fromEmpty(target);
+  const out: string[] = [];
+  for (const [i, run] of next.entries()) {
+    if (now[i] === run) continue;
+    for (let k = 0; k <= [...run].length; k++) {
+      now[i] = [...run].slice(0, k).join("");
+      out.push(now.join(""));
+    }
+  }
+  return out;
+}
+
+const KEYED: unknown[] = [undefined, "dd/MM/yyyy", "d MMM yyyy", "MM/dd/yyyy hh:mm:ss a"];
+const START: Range = { start: "2026-11-15 08:00:00", end: "2026-11-21 23:59:59" };
+/** For each end, a day within the range and one past the other end, whose commit moves it. */
+const TARGETS: [field: number, end: string][] = [
+  [1, "2026-11-20 23:59:58"],
+  [1, "2026-11-02 07:05:09"],
+  [0, "2026-11-16 12:30:01"],
+  [0, "2026-11-25 00:00:00"],
+];
+
+for (const lang of ["en-US", "ar-EG"]) {
+  test(`typing an end in ${lang}, a key at a time: nothing moves, then it's as if pasted`, () =>
+    warnings(() =>
+      inPage(lang, async (draw, applied) => {
+        for (const format of KEYED) {
+          for (const [field, end] of TARGETS) {
+            const other = 1 - field;
+            await draw({ value: { start: end, end }, format });
+            const target = ends()[0];
+            // Pasted whole, then left.
+            await draw({ value: START, format });
+            await click(".copilotz-date-field");
+            const before = { ends: ends(), foot: footText() };
+            await type(ENDS, field, target);
+            await blur(ENDS, field);
+            await press("Apply");
+            const pasted = applied.splice(0);
+            assert.equal(pasted.length, 1, `${lang} ${String(format)}: ${target}`);
+            // A digit wrong where it can't be: a day, month, year or hour of 99.
+            const wrong = target.replace(/\p{Nd}+/u, "99");
+            const ways: [string[], Range[]][] = [
+              [retyped(before.ends[field], target), pasted],
+              [fromEmpty(target), pasted],
+              [retyped(before.ends[field], wrong), []],
+            ];
+            for (const [keys, expected] of ways) {
+              await draw({ value: START, format });
+              await click(".copilotz-date-field");
+              for (const text of keys) {
+                await type(ENDS, field, text);
+                const at = `${lang} ${String(format)}: "${text}"`;
+                assert.equal(ends()[other], before.ends[other], at);
+                assert.equal(footText(), before.foot, at);
+                assert.deepEqual(applied, [], at);
+              }
+              await blur(ENDS, field);
+              await press("Apply");
+              assert.deepEqual(
+                applied.splice(0),
+                expected,
+                `${lang} ${String(format)}: ${keys.at(-1)}`,
+              );
+            }
+          }
+        }
+      })
+    ));
+}
+
+test("a kept end pasted is that end, even with a format that writes year, day, month", () =>
+  warnings(() =>
+    inPage("en-AU", async (draw, applied) => {
+      await draw({ value: OTHER, format: "yyyy-dd-MM HH:mm:ss" });
+      await click(".copilotz-date-field");
+      await type(ENDS, 0, "2026-11-02 09:00:07");
+      await type(ENDS, 1, "2026-11-20T09:00:07");
+      await press("Apply");
+      assert.deepEqual(applied, [{ start: "2026-11-02 09:00:07", end: "2026-11-20 09:00:07" }]);
+    })
+  ));
+
+test("a format with spaces at its edges: what it shows reads back", () =>
+  warnings(() =>
+    inPage("en-US", async (draw, applied) => {
+      const value = { start: "2026-11-02 09:00:07", end: "2026-12-01 10:00:00" };
+      for (const format of ["dd/MM/yyyy HH:mm:ss ", " dd/MM/yyyy", "yyyy-dd-MM HH:mm:ss "]) {
+        await draw({ value, format });
+        const [from, to] = ends();
+        await draw({ value: OTHER, format });
+        await click(".copilotz-date-field");
+        await type(ENDS, 0, from);
+        await type(ENDS, 1, to);
+        await press("Apply");
+        assert.deepEqual(applied.splice(0), [value], JSON.stringify(format));
+      }
+    })
+  ));
+
+/** A day-time a number of seconds on, or undefined outside 0000 to 9999. */
+function shifted(value: string, seconds: number): string | undefined {
+  const [y, m, d, h, mi, s] = value.split(/[- :]/).map(Number);
+  const at = new Date(0);
+  at.setUTCFullYear(y, m - 1, d);
+  at.setUTCHours(h, mi, s + seconds);
+  const iso = at.toISOString();
+  return /^\d{4}-/.test(iso) ? iso.slice(0, 19).replace("T", " ") : undefined;
+}
+
+test("the window an end is typed in: 200 years either side of today, within 0000 to 9999", () =>
+  inPage("en-GB", async (draw) => {
+    const todays = [
+      "0000-01-01",
+      "0001-06-15",
+      "0100-11-16",
+      "0199-12-31",
+      "0200-02-28",
+      "2026-11-16",
+      "9799-12-31",
+      "9800-01-01",
+      "9900-11-16",
+      "9999-12-31",
+    ];
+    for (const day of todays) {
+      const year = +day.slice(0, 4);
+      const low = year < 200 ? "0000-01-01 00:00:00" : `${addMonths(day, -2400)} 00:00:00`;
+      const high = year > 9799 ? "9999-12-31 23:59:59" : `${addMonths(day, 2400)} 23:59:59`;
+      await draw({
+        today: day,
+        presets: false,
+        value: { start: `${day} 00:00:00`, end: `${day} 23:59:59` },
+      });
+      await click(".copilotz-date-field");
+      const candidates = [
+        "0000-01-01 00:00:00",
+        "0001-01-01 00:00:00",
+        low,
+        high,
+        shifted(low, -1),
+        shifted(high, 1),
+        "9999-12-31 23:59:59",
+      ];
+      for (const end of candidates) {
+        if (!end) continue;
+        await type(ENDS, 0, end.replace(" ", "T"));
+        const fits = isDayTime(end) && end >= low && end <= high;
+        assert.equal(invalid(0), !fits, `today ${day}: ${end}`);
+      }
+    }
+  }));
+
+test("seconds turned on while open: Apply gives each end to the second, as From and To show it", () =>
+  inPage("en-GB", async (draw, applied, update) => {
+    const { pattern } = rangeSecondsPattern("dd/MM/yyyy", "en-GB");
+    const values = [
+      undefined,
+      { start: "2026-11-02", end: "2026-11-05" },
+      { start: "2026-11-02 08:30", end: "2026-11-05 17:45" },
+      { start: "2026-11-02 08:30:15", end: "2026-11-05 17:45:59" },
+    ];
+    for (const time of [false, true]) {
+      for (const value of values) {
+        for (const pick of [false, true]) {
+          const props = { value, time, format: "dd/MM/yyyy" };
+          await draw({ ...props, seconds: false });
+          await click(".copilotz-date-field");
+          if (pick) {
+            await click('[data-day="2026-11-10"]');
+            await click('[data-day="2026-11-12"]');
+          }
+          await update({ ...props, seconds: true });
+          const [from, to] = ends();
+          await press("Apply");
+          const at = `time ${time}, ${JSON.stringify(value)}, picked ${pick}`;
+          assert.deepEqual(
+            applied.splice(0),
+            [{ start: readEnd(from, pattern, "en-GB"), end: readEnd(to, pattern, "en-GB") }],
+            at,
+          );
+        }
+      }
+    }
+  }));
+
+test("text typed in one pattern is never read by another", () =>
+  inPage("en-GB", async (draw, applied, update) => {
+    const value = { start: "2026-11-02 08:00:00", end: "2026-11-20 18:00:00" };
+    await draw({ value, format: "dd/MM/yyyy" });
+    await click(".copilotz-date-field");
+    await type(ENDS, 0, "03/11/2026 08:00:00");
+    await update({ value, format: "MM/dd/yyyy" });
+    assert.deepEqual(ends(), ["11/02/2026 08:00:00", "11/20/2026 18:00:00"]);
+    await press("Apply");
+    assert.deepEqual(applied, [value]);
   }));

@@ -163,3 +163,88 @@ test("the page's zone and a named one agree, and agree with the page's own Date"
     else process.env.TZ = original;
   }
 });
+
+/** The instants the process's clock changes its offset in a year, to the second, by `Date`. */
+function localChanges(year: number): number[] {
+  const offset = (ms: number) => new Date(ms).getTimezoneOffset();
+  const out: number[] = [];
+  const end = Date.UTC(year + 1, 0, 1);
+  for (let t = Date.UTC(year, 0, 1); t < end; t += 86400e3) {
+    if (offset(t) === offset(t + 86400e3)) continue;
+    let [lo, hi] = [t, t + 86400e3];
+    while (hi - lo > 1000) {
+      const mid = lo + Math.floor((hi - lo) / 2000) * 1000;
+      if (offset(mid) === offset(lo)) lo = mid;
+      else hi = mid;
+    }
+    out.push(hi);
+  }
+  return out;
+}
+
+/** What the process's clock shows at an instant, by `Date`'s local getters. */
+function localWall(ms: number): string {
+  const at = new Date(ms);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${String(at.getFullYear()).padStart(4, "0")}-${two(at.getMonth() + 1)}-${
+    two(at.getDate())
+  } ${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`;
+}
+
+/**
+ * With no zone, the process's own clock, as `Date` reads it, for POSIX zones (`GMT+3` is three
+ * hours behind UTC; `Intl` may read it as ahead) as well as IANA ones: every wall time around each
+ * change of the clock in a year, and the days a wrong offset would move.
+ */
+test("with no zone given, the process's clock as Date reads it, POSIX zones and IANA alike", () => {
+  const original = process.env.TZ;
+  const zones = [
+    "GMT+3",
+    "GMT-5",
+    "EST5EDT",
+    "CST6CDT",
+    "UTC",
+    "America/Sao_Paulo",
+    "Asia/Kolkata",
+    "Australia/Lord_Howe",
+  ];
+  let checked = 0;
+  try {
+    for (const zone of zones) {
+      process.env.TZ = zone;
+      // Whether Date follows a changed TZ here (Deno's and Node's do).
+      const follows = new Date(2026, 0, 1).getTime() !== new Date(Date.UTC(2026, 0, 1)).getTime() ||
+        zone === "UTC";
+      if (!follows) continue;
+      const walls = new Set(["2026-01-01 00:00:00", "2026-12-31 23:59:59", "0000-01-01 00:00:00"]);
+      for (const change of localChanges(2026)) {
+        const [before, after] = [change - 1000, change].map((t) => new Date(t).getTimezoneOffset());
+        for (let w = change - 3 * 3600e3; w <= change + 3 * 3600e3; w += 300e3) {
+          walls.add(localWall(w));
+        }
+        for (const edge of [change, change - 1000]) {
+          for (const step of [-60e3, 0, 60e3, (after - before) * 60e3]) {
+            walls.add(localWall(edge + step));
+          }
+        }
+      }
+      for (const wall of walls) {
+        const [y, m, d, h, mi, s] = wall.split(/[- :]/).map(Number);
+        const expected = new Date(0);
+        expected.setFullYear(y, m - 1, d);
+        expected.setHours(h, mi, s, 0);
+        assertEquals(at(wall), expected.toISOString(), `TZ=${zone} ${wall}`);
+        checked++;
+      }
+    }
+    // The review's case: three hours behind UTC, midnight stays on its day.
+    process.env.TZ = "GMT+3";
+    if (new Date(2026, 0, 1).getUTCHours() === 3) {
+      assertEquals(at("2026-01-01 00:00:00"), "2026-01-01T03:00:00.000Z");
+    }
+    if (runtime !== "bun") assert(checked > 500, `${checked} walls checked against Date`);
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+});

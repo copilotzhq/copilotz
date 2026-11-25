@@ -20,13 +20,14 @@ Under `## Unreleased`, in **New:**
   `form.value` and `form.list`. Save gives `onSave` a `RecordChange`: a new record's `values`, or a
   stored one's `set`, `unset` and MongoDB `update`, for `insertOne` or `updateOne`. An untouched
   field is never in it. A text, number or choice emptied is an `unset`, and a list emptied is `[]`.
-  A save runs to its end on the record it started on. rc.64's planned `EntityDialog` shipped as
-  `RecordDialog`.
+  The fields are read-only while the save runs, and a save runs to its end on the record it started
+  on. rc.64's planned `EntityDialog` shipped as `RecordDialog`.
 - **Refused fields.** A save refused by its field (`detail.field`) shows under the `Field` whose
   `error` is `form.error(name)`, in the words `errors` gives for it. `refusedField(error)` reads the
   field for a plain `Form`.
-- **Busy dialogs.** `Dialog` takes `busy` (Escape, the backdrop and its × wait), `role` (an
-  `alertdialog`) and `aria-describedby`. `useModal` takes `keep`.
+- **Busy dialogs.** `Dialog` takes `busy` (Escape, the backdrop and its × wait), `isolated` (it
+  answers only its own close and Escape, not a dialog's shown inside it), `role` (an `alertdialog`)
+  and `aria-describedby`. `useModal` takes `keep` and `isolated`.
 - **Words:** `toolkit.confirm`, `toolkit.delete` and `toolkit.notDone`, in English and Brazilian
   Portuguese.
 ```

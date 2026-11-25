@@ -269,8 +269,10 @@ instead of centred, and `focus="dialog"` gives the focus to the dialog itself ra
 field (Tab then goes to it). `size` is `sm`, `md`, `lg` or `auto`. `busy` (a save it started is
 under way) keeps it open: Escape, a press on the backdrop and its × wait, and it says so
 (`aria-busy`). `role="alertdialog"` is for one that interrupts to ask, and `aria-describedby` names
-what describes it when that isn't its `description`. `useModal`'s `keep` option is the same wait,
-for a dialog of the app's own.
+what describes it when that isn't its `description`. `isolated` makes it answer only its own close
+and Escape: React passes a dialog's `close` and `cancel` up through the components, so without it a
+dialog shown inside another (a confirmation over a form) closing closes the outer one too.
+`useModal`'s `keep` and `isolated` options are the same, for a dialog of the app's own.
 
 ## Confirming an action
 
@@ -317,11 +319,14 @@ export function DeleteCustomer({ customer, remove }: {
   "Confirm", `toolkit.confirm`), and gives Cancel the focus, so Enter never deletes. Without it,
   Confirm has the focus. `confirmLabel` and `cancelLabel` change the words; `message` describes the
   question; `children` go under it (what's affected).
-- **The questions belong to the component.** They show one at a time, in order. When the component
-  goes (its row deleted, the screen left) or stops drawing `{dialog}`, a question still waiting is
-  answered `false` and never shows again. One whose `onConfirm` runs is answered by how it ends, and
-  says so with a toast: `toast` when it's done, its words when it failed. Asking with no `{dialog}`
-  ever drawn rejects, so the mistake shows. `confirm` is the same function on every render.
+- **The questions belong to the component.** They show one at a time, in order. While one's
+  `onConfirm` runs, the next shows over it: a question asked from that `onConfirm` ("Her invoices
+  too?") is answered there, and the focus goes back, in the end, where the first began. When the
+  component goes (its row deleted, the screen left) or stops drawing `{dialog}`, a question still
+  waiting is answered `false` and never shows again. One whose `onConfirm` runs is answered by how
+  it ends, and says so with a toast: `toast` when it's done, its words when it failed. Asking with
+  no `{dialog}` ever drawn rejects, so the mistake shows. `confirm` is the same function on every
+  render.
 
 **`ConfirmDialog`** is the same question as a component: a dialog View at an address
 (`/customers/12/delete`), or one the screen's state opens. It's open while `open` (`true` by
@@ -330,6 +335,10 @@ and done), once. Closing it yourself (`open={false}`, or not drawing it) calls n
 element is one question**: give it the `key` of what it asks about, so that when the address moves
 to another record the question is a new one. An operation whose question has gone (closed, reopened,
 or replaced by a new `key`) closes nothing, and its outcome is a toast.
+
+A question ends once, cancelled or done, and until its owner closes it, it takes no more actions.
+What it does is what it shows: its actions use the props it was last drawn with on the screen, never
+those of a render React didn't commit (a transition that suspended).
 
 ```tsx
 <ConfirmDialog
@@ -404,19 +413,31 @@ import { DatePicker, Field, Input, RecordDialog } from "copilotz/web";
     else saved stays;
   - an edit back to the stored value isn't either;
   - a field given a value is in `set`;
-  - **a text, number or choice emptied is a clear**, in `unset`; **a list emptied is `[]`**, in
-    `set`; a checkbox is `true` or `false`;
+  - **a text, number or choice emptied is a clear**, in `unset` (clearing a field that holds
+    nothing, `null` or `""` changes nothing);
+  - **a list emptied is `[]`**, a value, in `set` unless the record holds `[]` already (`[]` over
+    `null` is sent); a checkbox is `true` or `false`, and unchecked over nothing changes nothing;
+  - a step that's a number (`lines.0.qty`) is a list's: where the record has no list, the list is
+    set whole, and a new record gets a list, not an object;
   - `update` is the same as a MongoDB update (`$set`, `$unset`), for
     `updateOne({ _id: change._id }, change.update)`. To keep `null` for a cleared field, set `null`
     for each name in `unset`. An Action takes `set` and `unset` as its input.
 - **Nothing changed**: `onSave` isn't called, and the dialog just closes.
 - **Parts**: a `useFormSubmit` part shown in the fields (another plugin's View) takes part in the
-  save; what it hands up is set too. Values are read when the save starts, after the parts, so what
-  was typed while a part uploaded is saved. In a dialog View, call `ctx.show` in the View's body and
-  put what it gives in the function.
+  save; what it hands up is set too, compared with the record as an edit is (a part handing back the
+  stored value writes nothing). In a dialog View, call `ctx.show` in the View's body and put what it
+  gives in the function.
+- **When it's read**: the fields take edits while the parts run, so what was typed while a part
+  uploaded is saved. When the save starts, the browser checks the fields again (a `required` field
+  emptied meanwhile stops it), and the values are read; from then until the save answers, the fields
+  are read-only. After a refusal they take edits again, the draft as it was.
 - **While it saves**, Save is busy, Cancel waits, and Escape and the backdrop do nothing. Done, it
   says `toast` and closes (`onClose`, once). Cancel, Escape, the backdrop and × close it while
-  nothing runs; closing it yourself (`open={false}`, or not drawing it) calls nothing.
+  nothing runs; closing it yourself (`open={false}`, or not drawing it) calls nothing. A session
+  ends once and tells `onClose` once: until it's closed, it takes no more edits or saves. Its
+  actions use the props it was last drawn with on the screen, never a render React didn't commit.
+- **A dialog in a dialog**: a confirmation, or another record's dialog, shown in the fields closes
+  and saves on its own; the record's dialog answers only its own close and its own form's submit.
 - **Each record is a session of its own** (its `_id`, or a new one), and so is each time it opens: a
   draft or a refusal never shows on another record. A save runs to its end in the session it started
   in, with that record and its handlers. If the dialog moved to another record, closed or went

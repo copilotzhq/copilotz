@@ -160,4 +160,4 @@
 - [Events, Processors and schedules](docs/architecture/events.md): Every change is an event written in the commit that made it; Processors react to events from durable cursors; and time is one more caller of Actions.
 - [Views](docs/architecture/views.md): A View turns data into what one place shows; the runtime renders it once or observes it, running again only the parts a commit changed, for whoever is looking, where they are.
 - [The ways in](docs/architecture/transports.md): Every way into an app says who the caller is and where they work, then reaches the same Actions, Views and rules: the browser's socket, the REST API and its client, MCP, and the other doors.
-- [Topology and runtimes](docs/architecture/topology.md): Where the owner, its executors, plugins' workers and browsers run, what a turn costs, many runtimes behind one address, and the JavaScript runtimes Copilotz runs on.
+- [Topology and runtimes](docs/architecture/topology.md): Where the owner, its executors, plugins' workers and browsers run, one instance per store and what a second one does, what a turn costs, many runtimes behind one address, and the JavaScript runtimes Copilotz runs on.

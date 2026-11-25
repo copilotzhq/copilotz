@@ -12,7 +12,26 @@
  * - `close(id)` closes one now (staff moving its rows), and `close()` all of
  *   them, for good. A `get` while one closes opens it again only once it has
  *   closed: two runtimes of one id never run at once, so its store has one
- *   writer.
+ *   writer;
+ * - one that lost its store (`runtime.lost`: another process opened it) has
+ *   stopped by itself, and stays, answering 503: `get` hands it as it is,
+ *   and never counts as its use, so the sweep forgets it `idleMs` after it
+ *   was lost, and the next `get` opens it again.
+ *
+ * A lost one isn't opened again at once because the process that took it
+ * is most likely the one that should have it: a newer deploy's, as a
+ * handover meant. Taking it straight back would fence that one, whose pool
+ * would take it back in turn: two processes trading the org on every
+ * request, each cutting the other's work, for as long as both are up. Kept
+ * lost a while, requests that reach this process get a 503 and are sent
+ * again (a webhook's provider, a browser reconnecting), and reach the owner
+ * when they land on its process; the org trades hands at most once every
+ * `idleMs`, and it's served here again if the other process went away (an
+ * extra instance scaled down). Nothing exits the process: the other orgs it
+ * serves are still its own. A host that runs one process for every org (one
+ * instance, `max instances` 1 on Cloud Run) knows a loss means a second
+ * process is up, and may stop this one in `open`:
+ * `runtime.lost.then(() => process.exit(1))`.
  *
  * ```ts
  * const orgs = runtimes(async (id) => {
@@ -51,8 +70,8 @@ export function runtimes(
   }
   /** Each one opening or open, by id. */
   const cells = new Map<string, Promise<Runtime | undefined>>();
-  /** Each one open now, and when it was last used. */
-  const live = new Map<string, { runtime: Runtime; last: number }>();
+  /** Each one open now, and when it was last used (lost: when it was lost). */
+  const live = new Map<string, { runtime: Runtime; last: number; lost?: true }>();
   /** Each one closing, by id: a `get` waits for it before opening another. */
   const closing = new Map<string, Promise<void>>();
   let stopped = false;
@@ -73,14 +92,14 @@ export function runtimes(
     });
   };
 
-  // Closes what's idle: unused for `idleMs`, no browsers, nothing pending. It never keeps the
-  // process alive by itself.
+  // Closes what's idle: unused for `idleMs`, no browsers, nothing pending; or lost that long
+  // ago. It never keeps the process alive by itself.
   const sweep = setInterval(() => {
     const now = Date.now();
-    for (const [id, { runtime, last }] of live) {
+    for (const [id, { runtime, last, lost }] of live) {
       if (now - last <= idleMs) continue;
       const { browsers, pending } = runtime.stats();
-      if (browsers === 0 && pending === 0) void closeOne(id);
+      if (lost || (browsers === 0 && pending === 0)) void closeOne(id);
     }
   }, Math.max(10, Math.min(idleMs, 60_000)));
   (sweep as { unref?: () => void }).unref?.();
@@ -89,7 +108,7 @@ export function runtimes(
     get(id) {
       if (stopped) return Promise.reject(new Error("runtimes: closed"));
       const kept = live.get(id);
-      if (kept) kept.last = Date.now();
+      if (kept && !kept.lost) kept.last = Date.now();
       let cell = cells.get(id);
       if (!cell) {
         const made: Promise<Runtime | undefined> = (closing.get(id) ?? Promise.resolve())
@@ -97,8 +116,16 @@ export function runtimes(
           .then((runtime) => {
             // Closed while it opened: `close` closes it once it's here.
             if (cells.get(id) !== made) return runtime;
-            if (runtime) live.set(id, { runtime, last: Date.now() });
-            else cells.delete(id);
+            if (runtime) {
+              live.set(id, { runtime, last: Date.now() });
+              // Lost, it's forgotten `idleMs` from now, however much it's asked for meanwhile.
+              void runtime.lost.then(() => {
+                const entry = live.get(id);
+                if (entry?.runtime !== runtime) return;
+                entry.lost = true;
+                entry.last = Date.now();
+              });
+            } else cells.delete(id);
             return runtime;
           });
         cell = made;

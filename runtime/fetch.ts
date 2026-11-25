@@ -27,6 +27,11 @@
  * - **The REST API** (`/api/`, see api.ts), as whoever the request is.
  * - **Plugins' routes** (see routes.ts), as whoever the request is.
  * - `GET /health`, when no route takes it: `ok`. Anything else is a 404.
+ * - **Once its store is lost** (another owner took it, see `Owner.lost`):
+ *   503 to every request, sockets, webhooks and `/health` included, with
+ *   `retry-after` (5 s) and `{ error }`; and to the request that found it
+ *   out, if it failed for it (a 5xx). A sender that retries (a webhook's
+ *   provider, a browser reconnecting) reaches whoever serves by then.
  *
  * **Who** a request is comes from plugins' `who`, asked in plugin order: the
  * first that answers wins; with none, `{ kind: "anonymous", id: "" }`. None
@@ -47,7 +52,7 @@ import { carry, clientAddress, setClientAddress } from "./address.ts";
 import { cookieReader, cookiesFor, cookiesProblem, withCookies } from "./cookies.ts";
 import { linksOf } from "./links.ts";
 import type { Actor } from "./store.ts";
-import type { Owner } from "./owner.ts";
+import type { Lost, Owner } from "./owner.ts";
 import { canonical, type Registry } from "./registry.ts";
 import { matchRoute, routeTable } from "./routes.ts";
 import { crossSite, hostsProblem, ownHost, siteOf } from "./site.ts";
@@ -62,6 +67,9 @@ export const SOCKET = "/oxian";
 const CONNECT = "/connect";
 /** Where the REST API is (see api.ts). */
 export const API = "/api";
+
+/** How long a request to a runtime that lost its store is told to wait before trying again (s). */
+const LOST_RETRY_S = 5;
 
 /** How long what a `who` queried is kept (ms), and how many answers at most. */
 const WHO_MS = 5_000;
@@ -99,7 +107,10 @@ export function refused(error: unknown, fallback: string): Response {
   };
   const status = (code && STATUS[code]) || 500;
   const said = open === true && error instanceof Error && error.message ? error.message : fallback;
-  if (status === 500) console.error(`${fallback}:`, error instanceof Error ? error.message : error);
+  // The store lost (`fenced`) is the runtime's to tell, once (see `Owner.lost`).
+  if (status === 500 && code !== "fenced") {
+    console.error(`${fallback}:`, error instanceof Error ? error.message : error);
+  }
   return json({ error: said.slice(0, 300) }, {
     status,
     ...(status === 429
@@ -254,6 +265,20 @@ export const upgradeOf = (
   response: Response,
 ): (HypervisorRequestDecision & { kind: "upgrade" }) | undefined => upgrades.get(response);
 
+/** Each runtime's own fetch handler, and its `lost`: see `lostOf`. */
+const losses = new WeakMap<object, Promise<Lost>>();
+
+/**
+ * A runtime's `lost` (see `Owner.lost`), when `fetch` is that runtime's own
+ * handler (`runtime.fetch`): a listener of Copilotz's (`listen`, from
+ * `copilotz/web/node`) serving it stops the process once the runtime has
+ * lost its store, so the platform starts another. Undefined for any other
+ * handler, one that calls a runtime's included (a directory in front of
+ * orgs' runtimes: an org's loss is the org's, not the process's).
+ */
+export const lostOf = (fetch: unknown): Promise<Lost> | undefined =>
+  typeof fetch === "function" ? losses.get(fetch) : undefined;
+
 /**
  * What's wrong with how plugins and settings shape the runtime's HTTP, thrown:
  * a route that isn't a pattern or takes the runtime's own paths, a bad
@@ -272,9 +297,10 @@ export function checkHttp(registry: Registry): void {
 
 /**
  * The runtime's fetch handler, from its registry, the owner's API (`runtime`,
- * given once it's made), its tickets, its Hypervisor and its REST API.
- * `forget` drops what `who` kept for an actor (the owner's `disconnect`
- * calls it).
+ * given once it's made), its tickets, its Hypervisor, its REST API, and
+ * whether it lost its store (`lost`: `now()` says so at once, `promise`
+ * resolves then). `forget` drops what `who` kept for an actor (the owner's
+ * `disconnect` calls it).
  */
 export function createFetch(deps: {
   registry: Registry;
@@ -282,6 +308,7 @@ export function createFetch(deps: {
   tickets: Tickets;
   hypervisor: Hypervisor;
   api: Api;
+  lost: { now(): boolean; promise: Promise<Lost> };
 }): {
   fetch(request: Request, info?: ListenerInfo): Promise<Response>;
   forget(actor: Actor): void;
@@ -439,7 +466,22 @@ export function createFetch(deps: {
     return accept(native ?? request, decision, native !== undefined);
   };
 
+  /** What any request gets once another owner holds the store: it's for later, wherever then. */
+  const lost = () =>
+    json(
+      { error: "This server lost its store to another: try again shortly" },
+      { status: 503, headers: { "retry-after": String(LOST_RETRY_S) } },
+    );
+
   const fetch = async (request: Request, info?: ListenerInfo): Promise<Response> => {
+    if (deps.lost.now()) return lost();
+    const answer = await answered(request, info);
+    // It failed because the store went meanwhile (its write was the one that found out): the
+    // same answer as the requests after it, to send again.
+    return answer.status >= 500 && deps.lost.now() ? lost() : answer;
+  };
+
+  const answered = async (request: Request, info?: ListenerInfo): Promise<Response> => {
     const url = new URL(request.url);
     const peer = clientAddress(request) === undefined ? peerOf(request, info) : undefined;
     if (peer) setClientAddress(request, peer);
@@ -486,5 +528,6 @@ export function createFetch(deps: {
     return plain(404, "Not found");
   };
 
+  losses.set(fetch, deps.lost.promise);
   return { fetch, forget };
 }

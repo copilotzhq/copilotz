@@ -264,9 +264,17 @@ export function cosine(a: number[], b: number[]): number {
   return na && nb ? dot / Math.sqrt(na * nb) : 0;
 }
 
-/** Raised when another owner claimed the store; this owner must stop writing. */
-export function fenced(): Error {
-  return Object.assign(new Error("This owner was fenced: another owner holds the store."), {
-    code: "fenced",
-  });
+/**
+ * Raised when another owner claimed the store; this owner must stop writing.
+ * A store says which it is (`sqlite /data/app.sqlite`, `postgres schema
+ * "app", tenant "acme"`) and the epoch it's at, when it knows them: the
+ * owner logs it as it stops (see `Owner.lost`).
+ */
+export function fenced(store?: string, epoch?: number): Error {
+  const which = store ? ` (${store})` : "";
+  const at = epoch !== undefined && Number.isFinite(epoch) ? ` at epoch ${epoch}` : "";
+  return Object.assign(
+    new Error(`This owner was fenced: another owner holds the store${which}${at}.`),
+    { code: "fenced" },
+  );
 }

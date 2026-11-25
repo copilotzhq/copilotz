@@ -246,6 +246,6 @@ export function bars(
   text: string,
   width = 300,
   { set, quiet }: { set?: "auto" | "B"; quiet?: boolean } = {},
-) {
+): { module: number; width: number; bars: { x: number; w: number }[] } {
   return barcodeBars(text, width, { set, quiet });
 }

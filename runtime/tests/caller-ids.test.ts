@@ -69,7 +69,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /** The reference's example under "Nested calls and retries", as written, importing this repository. */
 async function referenceExample(): Promise<ActionDef> {
-  const page = readFileSync(join(ROOT, "docs/reference.md"), "utf8");
+  // Git may check the page out with CRLF line endings (Windows).
+  const page = readFileSync(join(ROOT, "docs/reference.md"), "utf8").replaceAll("\r\n", "\n");
   const section = page.slice(page.indexOf("#### Nested calls and retries"));
   const runtime = pathToFileURL(join(ROOT, "runtime/mod.ts")).href;
   const code = /```ts\n([\s\S]*?)```/.exec(section)![1]

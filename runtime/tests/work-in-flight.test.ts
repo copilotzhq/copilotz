@@ -14,10 +14,11 @@ import { postgresStore } from "../../stores/sql/postgres/mod.ts";
 import { postgresPool } from "../../stores/sql/postgres/pool.ts";
 import { runtime as host, tempDir, tempFile, test } from "../../testing/mod.ts";
 
+// Git may check the page out with CRLF line endings (Windows).
 const page = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "../../docs/operations/stores.md"),
   "utf8",
-);
+).replaceAll("\r\n", "\n");
 const section = page.slice(page.indexOf("### Work in flight"));
 /** The page's statements, in order, without their comments. */
 const queries = /```sql\n([\s\S]*?)```/.exec(section)![1].split(";")

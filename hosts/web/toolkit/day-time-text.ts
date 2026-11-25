@@ -509,7 +509,7 @@ export function parseDayTime(text: string, pattern?: string, locale = "en"): Day
   return values.size === 1 ? [...values][0] : undefined;
 }
 
-const patterns = new Map<string, string>();
+const ownCache = new Map<string, { day: string; time: string }>();
 
 /** A part of `Intl`'s writing as a pattern's letters, or undefined for a part it doesn't know. */
 const letter = (type: string, twelve: boolean): string | undefined =>
@@ -523,34 +523,20 @@ const letter = (type: string, twelve: boolean): string | undefined =>
     dayPeriod: "a",
   } as Record<string, string>)[type];
 
-/**
- * The pattern a language writes a day and a time in, as people type them: the language's order
- * and separators and its 12- or 24-hour clock, with a four-digit year, two-digit fields, the
- * Gregorian calendar, and seconds unless `seconds` is false. `MM/dd/yyyy hh:mm:ss a` in American
- * English, `dd/MM/yyyy HH:mm:ss` in Brazilian Portuguese, `yyyy/MM/dd HH:mm:ss` in Japanese,
- * `dd.MM.yyyy HH.mm.ss` in Finnish; Thai and Persian patterns write the Gregorian year too. Its
- * words are quoted (`MM'/'dd'/'yyyy hh':'mm':'ss' 'a`), with plain spaces. A language the runtime
- * doesn't know, or one whose own pattern can't be read back, gets `yyyy-MM-dd HH:mm:ss`.
- *
- * What `parseDayTime` reads with no pattern, and what `DateRangePicker` with `seconds` shows
- * without a `format` it can read back; `formatPattern(value, dayTimePattern(locale), locale)` writes
- * a value in it.
- */
-export function dayTimePattern(locale = "en", seconds = true): string {
+/** A language's own pattern, its day and its time apart (the toolkit's order when it has none). */
+function ownParts(locale: string, seconds: boolean): { day: string; time: string } {
   const id = `${locale}\u0000${seconds}`;
-  const made = patterns.get(id);
+  const made = ownCache.get(id);
   if (made) return made;
-  let pattern = seconds ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd HH:mm";
+  let parts = { day: "yyyy-MM-dd", time: seconds ? "HH:mm:ss" : "HH:mm" };
   try {
     const cycle = new Intl.DateTimeFormat(locale, { hour: "numeric" }).resolvedOptions().hourCycle;
     const twelve = cycle === "h11" || cycle === "h12";
     const sample = new Date(Date.UTC(2026, 10, 2, 14, 30, 5));
     const common = { calendar: "gregory", numberingSystem: "latn", timeZone: "UTC" } as const;
     const lettered = (options: Intl.DateTimeFormatOptions) => {
-      const parts = new Intl.DateTimeFormat(locale, { ...common, ...options }).formatToParts(
-        sample,
-      );
-      const out = parts.map(({ type, value }) => {
+      const written = new Intl.DateTimeFormat(locale, { ...common, ...options });
+      const out = written.formatToParts(sample).map(({ type, value }) => {
         if (type === "literal") {
           const text = value.replace(/'/g, "").replace(/\s+/g, " ");
           return text ? `'${text}'` : "";
@@ -566,11 +552,58 @@ export function dayTimePattern(locale = "en", seconds = true): string {
       ...(seconds ? { second: "2-digit" } : {}),
       hourCycle: twelve ? "h12" : "h23",
     });
-    const whole = `${day} ${time}`;
-    if (day && time && patternProblem(whole, locale) === undefined) pattern = whole;
+    if (day && time && patternProblem(`${day} ${time}`, locale) === undefined) {
+      parts = { day, time };
+    }
   } catch {
     // A language the runtime doesn't know: the toolkit's own order.
   }
-  patterns.set(id, pattern);
-  return pattern;
+  ownCache.set(id, parts);
+  return parts;
+}
+
+/**
+ * The pattern a language writes a day and a time in, as people type them: the language's order
+ * and separators and its 12- or 24-hour clock, with a four-digit year, two-digit fields, the
+ * Gregorian calendar, and seconds unless `seconds` is false. `MM/dd/yyyy hh:mm:ss a` in American
+ * English, `dd/MM/yyyy HH:mm:ss` in Brazilian Portuguese, `yyyy/MM/dd HH:mm:ss` in Japanese,
+ * `dd.MM.yyyy HH.mm.ss` in Finnish; Thai and Persian patterns write the Gregorian year too. Its
+ * words are quoted (`MM'/'dd'/'yyyy hh':'mm':'ss' 'a`), with plain spaces. A language the runtime
+ * doesn't know, or one whose own pattern can't be read back, gets `yyyy-MM-dd HH:mm:ss`.
+ *
+ * What `parseDayTime` reads with no pattern, and what `DateRangePicker` with `seconds` shows
+ * without a `format` it can read back; `formatPattern(value, dayTimePattern(locale), locale)` writes
+ * a value in it.
+ */
+export function dayTimePattern(locale = "en", seconds = true): string {
+  const { day, time } = ownParts(locale, seconds);
+  return `${day} ${time}`;
+}
+
+const TIME_FIELDS = new Set<Field>(["hour", "minute", "second", "period"]);
+
+/**
+ * The pattern a range to the second (`DateRangePicker` with `seconds`) writes and reads its ends
+ * by, in a language: `format` when it can be read back (a day's pattern with the language's time
+ * after it; a day-time pattern to the minute with `:ss` after its minutes), or else the
+ * language's own (`dayTimePattern`), with why `format` was set aside.
+ */
+export function rangeSecondsPattern(
+  format: unknown,
+  locale: string,
+): { pattern: string; setAside?: string } {
+  const own = dayTimePattern(locale);
+  if (format === undefined) return { pattern: own };
+  if (typeof format !== "string") {
+    return { pattern: own, setAside: "a function can't be read back" };
+  }
+  const tokens = [...format.matchAll(TOKENS)].filter(([token]) => token[0] !== "'");
+  const mm = tokens.find(([token]) => token === "mm");
+  const pattern = !tokens.some(([token]) => TIME_FIELDS.has(FIELD_OF[token]))
+    ? `${format} ${ownParts(locale, true).time}`
+    : tokens.some(([token]) => token === "ss") || !mm
+    ? format
+    : `${format.slice(0, mm.index + 2)}:ss${format.slice(mm.index + 2)}`;
+  const problem = patternProblem(pattern, locale);
+  return problem ? { pattern: own, setAside: problem } : { pattern };
 }

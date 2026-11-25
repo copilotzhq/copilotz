@@ -1,0 +1,236 @@
+/**
+ * A record dialog's draft, as data (see record-dialog.tsx). The draft holds only what was
+ * edited, by field name or dot path (`address.city`), each in its control's own form (a number
+ * field's text). What the form shows is those edits over the record as it is now. A save sends
+ * only the edits that change something: an untouched field never goes, an edit back to the
+ * record's value doesn't either, and a field emptied is a clear (`unset`). A list emptied is
+ * the empty list, a value of its own.
+ */
+import type { ReactNode } from "react";
+import { wordsOf } from "./form-submit.ts";
+
+/** How a control keeps its field: what it shows, and what it saves. */
+export type DraftKind = "text" | "number" | "checked" | "radio" | "value" | "list" | "set";
+
+/** One edit: the control's kind, and what it holds, in its own form. */
+export type Edit = { kind: DraftKind; raw: unknown };
+
+/** The edits, by field name or dot path. */
+export type Edits = Record<string, Edit>;
+
+/**
+ * A MongoDB update of what changed: `$set` and `$unset`, each only when it has fields, never
+ * empty. For `updateOne({ _id: change._id }, change.update)`.
+ */
+export type RecordUpdate =
+  | { $set: Record<string, unknown> }
+  | { $unset: Record<string, ""> }
+  | { $set: Record<string, unknown>; $unset: Record<string, ""> };
+
+/** What changed in a stored record, if anything. */
+export type Changed = { set: Record<string, unknown>; unset: string[]; update: RecordUpdate };
+
+const isPlain = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** A path's own keys; one through `__proto__` or `constructor` reaches nothing. */
+const keysOf = (path: string): string[] | undefined => {
+  const keys = path.split(".");
+  return keys.some((key) => key === "__proto__" || key === "constructor" || key === "prototype")
+    ? undefined
+    : keys;
+};
+
+/** What a record holds at a path: `address.city`, `lines.0.qty`. */
+export function valueAt(record: unknown, path: string): unknown {
+  let at = record;
+  for (const key of keysOf(path) ?? []) {
+    if (at === null || typeof at !== "object" || !Object.hasOwn(at, key)) return undefined;
+    at = (at as Record<string, unknown>)[key];
+  }
+  return keysOf(path) ? at : undefined;
+}
+
+/** A copy of the record with a path set (objects made on the way); `undefined` deletes it. */
+export function withValue<T>(record: T, path: string, value: unknown): T {
+  const keys = keysOf(path);
+  if (!keys) return record;
+  const put = (at: unknown, [key, ...rest]: string[]): unknown => {
+    const copy: Record<string, unknown> = Array.isArray(at)
+      ? [...at] as unknown as Record<string, unknown>
+      : isPlain(at)
+      ? { ...at }
+      : {};
+    if (rest.length) copy[key] = put(Object.hasOwn(copy, key) ? copy[key] : undefined, rest);
+    else if (value === undefined) delete copy[key];
+    else copy[key] = value;
+    return copy;
+  };
+  // Clearing what isn't there leaves the record as it is.
+  if (value === undefined && valueAt(record, path) === undefined) return record;
+  return put(record, keys) as T;
+}
+
+/** Whether two values hold the same: arrays and plain objects by what's in them. */
+export function same(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, i) => same(item, b[i]));
+  }
+  if (isPlain(a) && isPlain(b)) {
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length &&
+      keys.every((key) => Object.hasOwn(b, key) && same(a[key], b[key]));
+  }
+  return false;
+}
+
+/** Nothing at all: none, `null`, or empty text. */
+const empty = (value: unknown) => value === undefined || value === null || value === "";
+
+/** What a control of a kind shows for a stored value. */
+export function shownAs(kind: DraftKind, value: unknown): unknown {
+  switch (kind) {
+    case "text":
+    case "number":
+      return value === undefined || value === null ? "" : String(value);
+    case "checked":
+      return value === true;
+    case "value":
+      return value ?? undefined;
+    case "list":
+      return Array.isArray(value) ? value : [];
+    default:
+      return value;
+  }
+}
+
+/** What an edit saves, as the record keeps it: `undefined` when it clears the field. */
+export function savedOf({ kind, raw }: Edit): unknown {
+  switch (kind) {
+    case "text":
+      return raw === "" || raw === undefined || raw === null ? undefined : String(raw);
+    case "number": {
+      const text = raw === undefined || raw === null ? "" : String(raw);
+      if (text.trim() === "") return undefined;
+      const number = Number(text);
+      // Text that isn't a number stays text: the schema refuses it, by its field.
+      return Number.isFinite(number) ? number : text;
+    }
+    case "checked":
+      return raw === true;
+    case "value":
+      return empty(raw) ? undefined : raw;
+    case "list":
+      return Array.isArray(raw) ? raw : [];
+    default:
+      return raw;
+  }
+}
+
+/** Whether an edit's saved value changes the stored one. */
+export function changes(kind: DraftKind, saved: unknown, stored: unknown): boolean {
+  // A checkbox is checked or not: a field with no value isn't checked.
+  if (kind === "checked") return (saved === true) !== (stored === true);
+  // A clear over nothing changes nothing.
+  if (saved === undefined) return !empty(stored);
+  if (kind === "list" && Array.isArray(saved) && saved.length === 0) {
+    return !(empty(stored) || (Array.isArray(stored) && stored.length === 0));
+  }
+  return !same(saved, stored);
+}
+
+/** Whether a path is `_id`, which a save names in its filter and never sets. */
+const isId = (path: string) => path === "_id" || path.startsWith("_id.");
+
+/**
+ * What changed in a stored record: the edits that change it (`set`, or `unset` for a clear),
+ * then what the form's parts handed up (set, over an edit of the same field). `undefined` when
+ * nothing did.
+ */
+export function updateOf(
+  record: unknown,
+  edits: Edits,
+  handed: Record<string, unknown>,
+): Changed | undefined {
+  const set: Record<string, unknown> = {};
+  const unset: string[] = [];
+  for (const [path, edit] of Object.entries(edits)) {
+    if (isId(path)) continue;
+    const value = savedOf(edit);
+    if (!changes(edit.kind, value, valueAt(record, path))) continue;
+    if (value === undefined) unset.push(path);
+    else set[path] = value;
+  }
+  for (const [key, value] of Object.entries(handed)) {
+    if (isId(key) || value === undefined) continue;
+    set[key] = value;
+    if (unset.includes(key)) unset.splice(unset.indexOf(key), 1);
+  }
+  const setting = Object.keys(set).length > 0;
+  if (!setting && !unset.length) return undefined;
+  const $unset = Object.fromEntries(unset.map((path) => [path, ""])) as Record<string, "">;
+  const update: RecordUpdate = !unset.length
+    ? { $set: set }
+    : !setting
+    ? { $unset }
+    : { $set: set, $unset };
+  return { set, unset, update };
+}
+
+/** A deep copy of plain data. */
+const copy = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(copy)
+    : isPlain(value)
+    ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copy(item)]))
+    : value;
+
+/**
+ * A new record: its defaults, with the edits that change them (a clear deletes the field) and
+ * what the form's parts handed up.
+ */
+export function createOf(
+  defaults: Record<string, unknown>,
+  edits: Edits,
+  handed: Record<string, unknown>,
+): Record<string, unknown> {
+  let values = copy(defaults) as Record<string, unknown>;
+  for (const [path, edit] of Object.entries(edits)) {
+    if (isId(path)) continue;
+    const value = savedOf(edit);
+    if (changes(edit.kind, value, valueAt(defaults, path))) {
+      values = withValue(values, path, value);
+    }
+  }
+  for (const [key, value] of Object.entries(handed)) {
+    if (value !== undefined) values = withValue(values, key, value);
+  }
+  return values;
+}
+
+/** Whether the field `name` holds the path `field`: itself, or a field inside it. */
+export const holds = (name: string, field: string): boolean =>
+  field === name || field.startsWith(`${name}.`);
+
+/** Whether two paths are one inside the other. */
+export const related = (a: string, b: string): boolean => holds(a, b) || holds(b, a);
+
+/**
+ * A refusal's words for people: the app's for its field, else for the nearest field holding it
+ * (`lines` for `lines.0.qty`), else the refusal's own; `undefined` when it has none.
+ */
+export function refusalWords(
+  field: string | undefined,
+  error: unknown,
+  errors?: Record<string, ReactNode>,
+): ReactNode | undefined {
+  if (field && errors) {
+    const keys = field.split(".");
+    for (let n = keys.length; n > 0; n--) {
+      const path = keys.slice(0, n).join(".");
+      if (Object.hasOwn(errors, path)) return errors[path];
+    }
+  }
+  return wordsOf(error);
+}

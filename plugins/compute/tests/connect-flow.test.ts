@@ -1,10 +1,9 @@
 /**
  * The connect flow as a state machine (views/web/connect-lines.ts): from what
- * its calls answered, the checklist (each line waiting, active, done, or
- * failed with the one thing that fixes it) and the calls to make next. The
- * founder's test, step by step; every failure, and what's offered for it;
- * several plans in one pass, one sign-in at a time; and a fix forgetting
- * what it must, so its line runs again.
+ * its calls answered, the checklist (the computer, then one line per plan,
+ * through its phases: installing, signing in, testing) and the calls to make
+ * next. The founder's test, step by step; every failure, and what fixes it;
+ * several plans in one pass, one at a time; and Try again, the one retry.
  */
 import { assertEquals } from "@std/assert";
 import type { Account } from "../../access/accounts/contract.ts";
@@ -13,10 +12,10 @@ import {
   connected,
   type Facts,
   finished,
-  forget,
   type Line,
   linesOf,
   nextOf,
+  retry,
 } from "../computers/views/web/connect-lines.ts";
 import type { Way } from "../computers/views/web/plan-states.ts";
 import { test } from "../../../testing/mod.ts";
@@ -24,44 +23,47 @@ import { test } from "../../../testing/mod.ts";
 const claude: Way = {
   provider: "claude-plan",
   title: "Claude plan",
-  plan: "Claude plan",
+  plan: "Claude",
   engine: "claude",
   model: "claude-plan/claude-haiku-5-5",
 };
 const gemini: Way = {
   provider: "gemini-plan",
   title: "Google AI plan",
-  plan: "Google AI plan",
+  plan: "Google AI",
   engine: "antigravity",
 };
 const chatgpt: Way = {
   provider: "chatgpt",
   title: "ChatGPT",
-  plan: "ChatGPT plan",
+  plan: "ChatGPT",
   account: "chatgpt",
   model: "chatgpt/gpt-6-luna",
 };
 
-const prepared = (
-  engines: Prepared["engines"] = {},
-  current = true,
-): Prepared => ({
+const at = "2026-11-25T10:00:00.000Z";
+const missing = { installed: false, signedIn: false, at };
+const installed = { installed: true, signedIn: false, at };
+const prepared = (engines: Prepared["engines"] = {}): Prepared => ({
   computer: "cloud-1",
   online: true,
   shared: false,
   engines,
-  program: { version: current ? "1.0.0-rc.66" : "1.0.0-rc.60", current },
+  program: { version: "1.0.0-rc.66", current: true },
 });
-const at = "2026-11-25T10:00:00.000Z";
-const missing = { installed: false, signedIn: false, at };
-const installed = { installed: true, signedIn: false, at };
+const account = (status: Account["status"]): Account => ({
+  _id: "a1",
+  person: "ana",
+  provider: "chatgpt",
+  status,
+  label: "ana@example.com",
+  connected: at,
+});
 
-/** Each line as `key state` (and its note, or why it failed and its fix). */
+/** Each line as `key state` (and its phase, a limit, or its fix). */
 const shown = (lines: Line[]) =>
-  lines.map(({ key, state }) =>
-    `${key} ${state.is}` +
-    (state.is === "done" && state.note ? ` (${state.note})` : "") +
-    (state.is === "failed" ? ` (${state.why}${state.fix ? `, ${state.fix}` : ""})` : "")
+  lines.map(({ key, state, phase, limit, fix }) =>
+    [key, state, phase, limit ? "limit" : undefined, fix].filter(Boolean).join(" ")
   );
 const calls = (lines: Line[], facts: Facts) =>
   nextOf(lines, facts).map((n) =>
@@ -71,240 +73,158 @@ const calls = (lines: Line[], facts: Facts) =>
       ? `test ${n.way.provider}`
       : `prepare ${n.computer}`
   );
-const empty = (): Facts => ({ signins: {}, tests: {} });
 
-test("the founder's test, as the flow runs it: the computer readied, Claude Code installed in its sign-in, signed in, answering", () => {
-  let facts: Facts = { ...empty(), computer: "cloud-1", kept: true, os: "linux" };
+test("the founder's test, as the flow runs it: the computer readied, Claude Code installed as it signs in, signed in, answering", () => {
+  let facts: Facts = { computer: "cloud-1", kept: true, os: "linux", plans: {} };
   let lines = linesOf([claude], facts, []);
-  assertEquals(shown(lines), [
-    "computer active",
-    "signin:claude-plan waiting",
-    "test:claude-plan waiting",
-  ]);
+  assertEquals(shown(lines), ["computer active", "claude-plan waiting"]);
   assertEquals(calls(lines, facts), ["prepare cloud-1"]);
-
-  // computer.prepare woke it, restarted it on the release, and asked it: Claude Code is missing.
   facts = { ...facts, preparing: true };
   assertEquals(calls(linesOf([claude], facts, []), facts), []);
+
+  // computer.prepare woke it, brought it to the release, and asked it: Claude Code is missing.
   facts = { ...facts, preparing: false, prepared: prepared({ claude: missing }) };
   lines = linesOf([claude], facts, []);
-  assertEquals(shown(lines), [
-    "computer done",
-    "install:claude-plan waiting",
-    "signin:claude-plan active",
-    "test:claude-plan waiting",
-  ]);
+  assertEquals(shown(lines), ["computer done", "claude-plan active signin"]);
   // Its sign-in installs it first: nobody is asked to.
   assertEquals(calls(lines, facts), ["signin claude-plan +install"]);
 
-  facts = { ...facts, signins: { "claude-plan": { is: "running", installing: true } } };
-  assertEquals(shown(linesOf([claude], facts, [])).slice(1, 3), [
-    "install:claude-plan active",
-    "signin:claude-plan active",
-  ]);
-  facts = {
+  const running = (more: Facts["plans"][string]) => ({
     ...facts,
-    signins: { "claude-plan": { is: "running", installing: true, url: "https://claude.ai/x" } },
-  };
-  assertEquals(shown(linesOf([claude], facts, [])).slice(1, 3), [
-    "install:claude-plan done",
-    "signin:claude-plan active",
-  ]);
+    plans: { "claude-plan": { signin: "running" as const, installing: true, ...more } },
+  });
+  assertEquals(shown(linesOf([claude], running({}), []))[1], "claude-plan active installing");
+  assertEquals(
+    shown(linesOf([claude], running({ url: "https://claude.ai/x" }), []))[1],
+    "claude-plan active signin",
+  );
 
-  facts = { ...facts, signins: { "claude-plan": { is: "done" } } };
+  facts = { ...facts, plans: { "claude-plan": { signin: "done", installed: true } } };
   lines = linesOf([claude], facts, []);
-  assertEquals(shown(lines).slice(2), ["signin:claude-plan done", "test:claude-plan active"]);
+  assertEquals(shown(lines)[1], "claude-plan active testing");
   assertEquals(calls(lines, facts), ["test claude-plan"]);
 
-  facts = { ...facts, tests: { "claude-plan": { is: "done", text: "Ready." } } };
+  facts = {
+    ...facts,
+    plans: { "claude-plan": { signin: "done", test: "done", answer: "Ready." } },
+  };
   lines = linesOf([claude], facts, []);
-  assertEquals(shown(lines), [
-    "computer done",
-    "install:claude-plan done",
-    "signin:claude-plan done",
-    "test:claude-plan done",
-  ]);
+  assertEquals(shown(lines), ["computer done", "claude-plan done"]);
   assertEquals([finished(lines), connected(lines)], [true, [claude]]);
 });
 
-test("signed in already, the sign-in is done at once, and only the test runs; an old program goes on, saying so", () => {
+test("a plan signed in already only answers its test; one with no model to try is done at once", () => {
   const facts: Facts = {
-    ...empty(),
     computer: "cloud-1",
-    prepared: prepared(
-      { claude: { installed: true, signedIn: true, account: "a@b.c", at } },
-      false,
-    ),
+    prepared: prepared({ claude: { ...installed, signedIn: true }, antigravity: installed }),
+    plans: { "gemini-plan": { signin: "done" } },
   };
-  const lines = linesOf([claude], facts, []);
-  assertEquals(shown(lines), [
-    "computer done (old)",
-    "signin:claude-plan done (already)",
-    "test:claude-plan active",
-  ]);
-  // Failing later, it says its program is older.
-  const failing = {
-    ...facts,
-    tests: { "claude-plan": { is: "failed" as const, failure: { message: "No." } } },
-  };
-  const [, , tested] = linesOf([claude], failing, []);
-  assertEquals(tested.state, {
-    is: "failed",
-    why: "test",
-    fix: "retry",
-    failure: { message: "No." },
-    old: true,
-  });
+  const lines = linesOf([claude, gemini], facts, []);
+  assertEquals(shown(lines), ["computer done", "claude-plan active testing", "gemini-plan done"]);
+  assertEquals(calls(lines, facts), ["test claude-plan"]);
 });
 
-test("every failure ends in its fix: off, waking, shared, unreachable; installs, Windows; sign-ins; tests", () => {
+test("every failure ends in Try again, or what else fixes it: a laptop that's off, an installer that failed or can't run", () => {
   const computer = (failure: Facts["unprepared"], kept = false) =>
-    shown(linesOf([claude], { ...empty(), computer: "c", kept, unprepared: failure }, []))[0];
-  assertEquals(
-    computer({ code: "offline", message: "MacBook is off." }),
-    "computer failed (off, cloud)",
-  );
-  assertEquals(
-    computer({ code: "offline", message: "It didn't wake." }, true),
-    "computer failed (wake, retry)",
-  );
-  assertEquals(
-    computer({ code: "computer_shared", message: "Shared." }),
-    "computer failed (shared, shared)",
-  );
-  assertEquals(computer({ message: "Timed out" }), "computer failed (reach, retry)");
-
-  const ready = { ...empty(), computer: "c", prepared: prepared({ claude: missing }) };
-  // On Windows the installer can't run: its command, from the computer's terminal.
-  assertEquals(shown(linesOf([claude], { ...ready, os: "win32" }, [])).slice(1, 3), [
-    "install:claude-plan failed (windows, terminal)",
-    "signin:claude-plan waiting",
+    shown(linesOf([claude], { computer: "c", kept, unprepared: failure, plans: {} }, []));
+  // A laptop that's off: a cloud computer instead (or Try again, once it's on).
+  assertEquals(computer({ code: "offline", message: "MacBook is off." }), [
+    "computer failed cloud",
+    "claude-plan waiting",
   ]);
-  // An installer that failed: the same fallback, with what it said.
-  const notInstalled: Facts = {
-    ...ready,
-    signins: { "claude-plan": { is: "failed", installed: false } },
-  };
-  assertEquals(shown(linesOf([claude], notInstalled, [])).slice(1, 3), [
-    "install:claude-plan failed (install, terminal)",
-    "signin:claude-plan waiting",
-  ]);
-  // Installed, but the sign-in didn't finish; or its computer went offline.
-  const signIn = (failure?: { code?: string; message: string }) =>
-    shown(linesOf([claude], {
-      ...ready,
-      signins: {
-        "claude-plan": { is: "failed", installed: true, ...(failure ? { failure } : {}) },
-      },
-    }, [])).slice(1, 3);
-  assertEquals(signIn(), ["install:claude-plan done", "signin:claude-plan failed (signin, retry)"]);
+  // A cloud computer that didn't wake, one that's shared, one that can't be reached: Try again.
   assertEquals(
-    signIn({ code: "offline", message: "Gone." })[1],
-    "signin:claude-plan failed (gone, retry)",
+    computer({ code: "offline", message: "It didn't wake." }, true)[0],
+    "computer failed",
   );
+  assertEquals(computer({ code: "computer_shared", message: "Shared." })[0], "computer failed");
+  assertEquals(computer({ message: "Timed out" })[0], "computer failed");
 
+  const ready = { computer: "c", prepared: prepared({ claude: missing }) };
+  const line = (more: Partial<Facts>) =>
+    shown(linesOf([claude], { ...ready, plans: {}, ...more }, []))[1];
+  // On Windows the installer can't run here; an installer that failed: its command, a fallback.
+  assertEquals(line({ os: "win32" }), "claude-plan failed installing terminal");
+  assertEquals(
+    line({ plans: { "claude-plan": { signin: "failed", installed: false } } }),
+    "claude-plan failed installing terminal",
+  );
+  // Installed, the sign-in didn't finish (or its computer went offline): Try again.
+  assertEquals(
+    line({ plans: { "claude-plan": { signin: "failed", installed: true } } }),
+    "claude-plan failed signin",
+  );
+  // Its test: at its limit, it's connected; any other failure, Try again.
   const tested = (code?: string) =>
-    shown(linesOf([claude], {
-      ...ready,
-      prepared: prepared({ claude: installed }),
-      signins: { "claude-plan": { is: "done" } },
-      tests: {
-        "claude-plan": { is: "failed", failure: { ...(code ? { code } : {}), message: "x" } },
+    line({
+      plans: {
+        "claude-plan": {
+          signin: "done",
+          test: "failed",
+          failure: { ...(code ? { code } : {}), message: "x" },
+        },
       },
-    }, [])).at(-1);
-  assertEquals(tested("engine_limit"), "test:claude-plan done (limit)");
-  assertEquals(tested("engine_model"), "test:claude-plan done (model)");
-  assertEquals(tested("engine_signed_out"), "test:claude-plan failed (signedOut, signin)");
-  assertEquals(tested(), "test:claude-plan failed (test, retry)");
+    });
+  assertEquals(tested("engine_limit"), "claude-plan done limit");
+  assertEquals(tested("engine_model"), "claude-plan failed testing");
+  assertEquals(tested(), "claude-plan failed testing");
 });
 
-test("several plans in one pass: ChatGPT signs in on the server while the computer wakes; then one sign-in at a time; one failing stops only itself", () => {
+test("several plans in one pass, one at a time: ChatGPT on the server goes while the computer wakes; one failing stops only itself", () => {
   const ways = [claude, chatgpt, gemini];
-  const account = (status: Account["status"]): Account => ({
-    _id: "a1",
-    person: "ana",
-    provider: "chatgpt",
-    status,
-    label: "ana@example.com",
-    connected: at,
-  });
-  let facts: Facts = { ...empty(), computer: "cloud-1", kept: true };
+  let facts: Facts = { computer: "cloud-1", kept: true, plans: {} };
   let lines = linesOf(ways, facts, []);
   assertEquals(shown(lines), [
     "computer active",
-    "signin:claude-plan waiting",
-    "test:claude-plan waiting",
-    "signin:chatgpt active",
-    "test:chatgpt waiting",
-    "signin:gemini-plan waiting",
+    "claude-plan waiting",
+    "chatgpt active signin",
+    "gemini-plan waiting",
   ]);
   assertEquals(calls(lines, facts), ["prepare cloud-1"]);
 
-  // Ready, while the person is still on ChatGPT's: it stays theirs; Claude's waits.
-  facts = {
-    ...facts,
-    attending: "chatgpt",
-    prepared: prepared({ claude: installed, antigravity: installed }),
-  };
+  // Ready while she's on ChatGPT's: Claude waits its turn, and nothing else starts.
+  facts = { ...facts, prepared: prepared({ claude: installed, antigravity: installed }) };
   lines = linesOf(ways, facts, []);
-  assertEquals(shown(lines).slice(1, 4), [
-    "signin:claude-plan waiting",
-    "test:claude-plan waiting",
-    "signin:chatgpt active",
+  assertEquals(shown(lines).slice(1), [
+    "claude-plan active signin",
+    "chatgpt waiting",
+    "gemini-plan waiting",
   ]);
-  assertEquals(calls(lines, facts), []);
+  assertEquals(calls(lines, facts), ["signin claude-plan"]);
 
-  // ChatGPT connected (its account says so): its test, and Claude's sign-in, go.
+  // Claude's sign-in fails: ChatGPT (connected now) answers its test, then Google's goes.
+  facts = { ...facts, plans: { "claude-plan": { signin: "failed", installed: true } } };
   lines = linesOf(ways, facts, [account("connected")]);
   assertEquals(shown(lines).slice(1), [
-    "signin:claude-plan active",
-    "test:claude-plan waiting",
-    "signin:chatgpt done",
-    "test:chatgpt active",
-    "signin:gemini-plan waiting",
+    "claude-plan failed signin",
+    "chatgpt active testing",
+    "gemini-plan waiting",
   ]);
-  assertEquals(calls(lines, facts), ["signin claude-plan", "test chatgpt"]);
-
-  // Claude's sign-in fails: Google's goes on.
-  facts = { ...facts, attending: undefined, signins: { "claude-plan": { is: "failed" } } };
+  facts = { ...facts, plans: { ...facts.plans, chatgpt: { test: "done", answer: "Ready." } } };
   lines = linesOf(ways, facts, [account("connected")]);
-  assertEquals(
-    shown(lines).find((l) => l.startsWith("signin:gemini")),
-    "signin:gemini-plan active",
-  );
-  assertEquals(calls(lines, facts).includes("signin gemini-plan"), true);
-  facts = {
-    ...facts,
-    signins: { ...facts.signins, "gemini-plan": { is: "done" } },
-    tests: { chatgpt: { is: "done", text: "Ready." } },
-  };
+  assertEquals(shown(lines).at(-1), "gemini-plan active signin");
+  assertEquals(calls(lines, facts), ["signin gemini-plan"]);
+  facts = { ...facts, plans: { ...facts.plans, "gemini-plan": { signin: "done" } } };
   lines = linesOf(ways, facts, [account("connected")]);
   assertEquals(finished(lines), true);
   assertEquals(connected(lines).map((w) => w.provider), ["chatgpt", "gemini-plan"]);
 });
 
-test("a fix forgets what its line needs again, and nothing else", () => {
+test("Try again checks the computer again and runs the line again, its plan from the start; nothing else", () => {
   const facts: Facts = {
-    ...empty(),
     computer: "c",
     prepared: prepared({ claude: installed }),
-    signins: { "claude-plan": { is: "done" }, "gemini-plan": { is: "failed" } },
-    tests: {
-      "claude-plan": { is: "failed", failure: { code: "engine_signed_out", message: "x" } },
+    plans: {
+      "claude-plan": { signin: "done", test: "failed", failure: { message: "x" } },
+      "gemini-plan": { signin: "done" },
     },
   };
   const lines = linesOf([claude, gemini], facts, []);
-  const line = (key: string) => lines.find((l) => l.key === key)!;
-  // Signed out after all: the computer is asked again, and Claude signs in again.
-  const again = forget(facts, line("test:claude-plan"));
-  assertEquals([again.prepared, again.signins["claude-plan"], again.tests["claude-plan"]], [
-    undefined,
-    undefined,
-    undefined,
-  ]);
-  assertEquals(again.signins["gemini-plan"], { is: "failed" });
-  // Google's sign-in again: only it.
-  const retried = forget(facts, line("signin:gemini-plan"));
-  assertEquals(retried.signins, { "claude-plan": { is: "done" } });
-  assertEquals(retried.prepared, facts.prepared);
+  const again = retry(facts, lines.find((l) => l.key === "claude-plan")!);
+  assertEquals(again.prepared, undefined);
+  assertEquals(again.plans, { "gemini-plan": { signin: "done" } });
+  assertEquals(calls(linesOf([claude, gemini], again, []), again), ["prepare c"]);
+  // The computer's own: checked again; every plan as it was.
+  const computer = retry({ ...facts, unprepared: { message: "x" } }, lines[0]);
+  assertEquals([computer.unprepared, computer.plans], [undefined, facts.plans]);
 });

@@ -72,7 +72,8 @@ test("AGENTS.md links docs pages that exist, and files in the repository", () =>
 });
 
 test("the package reading list follows the docs manifest and links to its pages", () => {
-  assertEquals(read("llms.txt"), llmsTxt());
+  // Git may check the file out with CRLF line endings (Windows).
+  assertEquals(read("llms.txt").replaceAll("\r\n", "\n"), llmsTxt());
   checkDocLinks(ROOT, "llms.txt");
 });
 

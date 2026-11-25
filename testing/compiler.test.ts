@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { specifier } from "../cli/folders.ts";
 import { template } from "../cli/template.ts";
 import { runtime, tempDir, test } from "./mod.ts";
@@ -215,11 +215,14 @@ test("the npm entry dispatches through a symlink on early Node 24 and stays iner
       return loaded;
     }});`,
   );
-  assert.match(run(dir, "node", ["--import", hook, bin, "unknown"], true), /Usage: copilotz/);
+  assert.match(
+    run(dir, "node", ["--import", pathToFileURL(hook).href, bin, "unknown"], true),
+    /Usage: copilotz/,
+  );
   const importer = join(dir, "import.mjs");
   writeFileSync(
     importer,
     `import ${JSON.stringify(new URL("../cli/mod.ts", import.meta.url).href)};`,
   );
-  run(dir, "node", ["--import", hook, importer, "unknown"]);
+  run(dir, "node", ["--import", pathToFileURL(hook).href, importer, "unknown"]);
 });

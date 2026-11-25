@@ -8,6 +8,19 @@ status: stable
 
 # Getting Started: one app, for people and for AI
 
+Start an app on Node 24 or newer with the project template:
+
+```sh
+npx copilotz@1.0.0-rc.64 init orders
+cd orders
+npm run check
+npm run dev
+```
+
+The template installs the dependencies and gives you a collection, an Action, a query and a web
+View. The files in each plugin folder give its declarations their names.
+[The compiler](guides/the-compiler.md) explains the layout, typed names and commands.
+
 In this guide you build one app: a hair salon's bookings. Its staff book on a web page. Its own
 agent books in a chat. ChatGPT, Claude and Gemini book over MCP, a widget draws the bookings inside
 the assistant, visitors book from a chat on the salon's site, and customers book on WhatsApp.

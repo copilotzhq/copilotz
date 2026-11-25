@@ -322,6 +322,11 @@
           "title": "A business app's screens",
           "slug": "guides/a-business-apps-screens",
           "description": "The screens back-office apps are made of, the Copilotz way: one View per file, Views that read and Actions that write, an app's own frame and home, lists with search, filters, paging and exports, forms in dialogs, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
+        },
+        {
+          "title": "The compiler: plugins from folders",
+          "slug": "guides/the-compiler",
+          "description": "Start an app with copilotz init. Generate a plugin's server, web and terminal entry points from its declarations, get checked names from the app, watch for changes, check the build or take over a plugin by hand."
         }
       ]
     },

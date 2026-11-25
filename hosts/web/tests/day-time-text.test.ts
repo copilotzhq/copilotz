@@ -367,6 +367,10 @@ test("the toolkit guide's examples, as written there", () => {
   assertEquals(parseDayTime("31/02/2026 10:00", "dd/MM/yyyy HH:mm"), undefined);
   assertEquals(parseDayTime("11/2/99, 2:30 PM", "M/d/yyyy, h:mm a"), undefined);
   assertEquals(
+    parseDayTime("2 MAYIS 2026 10:00", "d MMMM yyyy HH:mm", "tr-TR"),
+    "2026-05-02 10:00",
+  );
+  assertEquals(
     patternProblem("yyyy/dM HH:mm"),
     "`d` is followed by a digit (`M`): give it two digits or a separator",
   );

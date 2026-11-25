@@ -29,9 +29,11 @@
  * field of the end's day and time, and the field, the foot, From and To all
  * write the ends by one pattern, which reads them back too. It's `format`
  * when that can be read back (a day's pattern gets the page language's time
- * after it), or else the language's own (`dayTimePattern`). A typed end is
- * kept within `min` and `max`, and within 200 years of `today` where they
- * don't bound it.
+ * after it), or else the language's own (`dayTimePattern`). What's typed is
+ * read when it's left, on Enter or on Apply, and only then moves an end; text
+ * that can't be read keeps Apply off. A typed end is kept within `min` and
+ * `max`, and within 200 years of `today` (and 0000 to 9999) where they don't
+ * bound it.
  *
  * The field, the presets and the foot take their look from `--date-picker-*`
  * tokens, and the days from the calendar's (`--calendar-*`).
@@ -410,7 +412,10 @@ export function DateRangePicker(
      * From and To and shown whole in the field (a preset runs from `00:00:00` to `23:59:59`). One
      * pattern writes and reads them: `format` when it can be read back (a day's pattern gets the
      * page language's time after it, and a day-time pattern to the minute gets `:ss`), or else the
-     * language's (`dayTimePattern`). Implies `time`.
+     * language's (`dayTimePattern`); a pattern that would read an end typed as the toolkit keeps
+     * it (`2026-11-02 14:30:05`) as another end is set aside too. What's typed is read when it's
+     * left, on Enter or on Apply: only then may it move either end, and while it can't be read,
+     * Apply is off. Implies `time`.
      */
     seconds?: boolean;
   },

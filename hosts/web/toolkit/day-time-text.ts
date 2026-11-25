@@ -458,9 +458,12 @@ function build(pattern: string, locale: string): Compiled {
  * `MMMM`), day (`dd`, `d`), hour (`HH`, `H`, or `hh`, `h` with `a`) and minutes (`mm`), and
  * maybe seconds (`ss`) and a weekday (`EEE`, `EEEE`). A field of no fixed length (`M`, `d`, `H`,
  * `h`, a name) is followed by something that can't carry it on: `yyyy/dM` can't be read (`2026/211`
- * is November 2nd or January 21st), nor `dMMM` where month names are numbers (Chinese `11月`). Its
- * names, in the language, are distinct and Gregorian: Persian `MMM` changes within a month, so a
- * Persian pattern writes `MM`.
+ * is November 2nd or January 21st), nor `dMMM` where month names are numbers (Chinese `11月`, or
+ * `一一` in Chinese digits: the language's own digits are digits). Its names, in the language, are
+ * distinct in any case and are the Gregorian months in every year from 0000 to 9999: Persian `MMM`
+ * changes within a month, and Thai `MMM` is the Julian month before 1582, so their patterns write
+ * `MM`. A pattern with names needs a language the runtime supports. Spaces at its edges are left
+ * out, as they are from what's typed.
  */
 export function patternProblem(pattern: string, locale = "en"): string | undefined {
   return compile(pattern, locale).problem;
@@ -556,18 +559,21 @@ function valueOf(read: Read, c: Compiled): DayTime | undefined {
  * page's is `lang()`).
  *
  * It reads what the pattern writes, allowing only this: spaces of any kind and number where the
- * pattern has spaces; letters in any case; a month or weekday name without its final dot; AM
- * and PM with or without dots (`p.m.`, `pm`); one digit where the pattern writes two and no digit
- * follows; the language's own digits (Arabic-Indic, Persian, Bengali…), one kind to a field;
- * invisible marks (right-to-left marks) anywhere; and seconds left out with the `:` before them,
- * when the pattern writes them (they're `:00`).
+ * pattern has spaces, and at the text's edges; letters in any case, by the language's rules
+ * (Greek capitals without accents, Turkish `MAYIS`); a month or weekday name without its final
+ * dot; AM and PM as the language writes them, or their letters with or without dots (`p.m.`, `pm`);
+ * one digit where the pattern writes two and no digit follows; the language's own digits
+ * (Arabic-Indic, Persian, Bengali…), one kind to a field; invisible marks (right-to-left marks)
+ * anywhere; and seconds left out with the `:` before them, when the pattern writes them (they're
+ * `:00`).
  *
  * `undefined` for text that isn't one real day and time in the pattern: February 30th, 25:00,
  * 13 PM, a two-digit year, a weekday that isn't the date's, seconds the pattern doesn't write,
  * text that could be two day-times. Every text is `undefined` when the pattern can't be read back
  * (`patternProblem` says why). Days are Gregorian, whatever the language's calendar: a Buddhist
- * year typed in Thai is read as that Gregorian year. The value has seconds (`YYYY-MM-DD HH:mm:ss`)
- * when the pattern writes them, and none when it doesn't.
+ * year typed in Thai is read as that Gregorian year. Years have four digits, 0000 (1 BC) to 9999.
+ * The value has seconds (`YYYY-MM-DD HH:mm:ss`) when the pattern writes them, and none when it
+ * doesn't.
  *
  * ```ts
  * parseDayTime("02/11/2026 14:30:05", "dd/MM/yyyy HH:mm:ss"); // "2026-11-02 14:30:05"
@@ -647,7 +653,8 @@ function ownParts(locale: string, seconds: boolean): { day: string; time: string
  * English, `dd/MM/yyyy HH:mm:ss` in Brazilian Portuguese, `yyyy/MM/dd HH:mm:ss` in Japanese,
  * `dd.MM.yyyy HH.mm.ss` in Finnish; Thai and Persian patterns write the Gregorian year too. Its
  * words are quoted (`MM'/'dd'/'yyyy hh':'mm':'ss' 'a`), with plain spaces. A language the runtime
- * doesn't know, or one whose own pattern can't be read back, gets `yyyy-MM-dd HH:mm:ss`.
+ * doesn't support (`Intl.DateTimeFormat.supportedLocalesOf` leaves it out: `zz-ZZ`), or one whose
+ * own pattern can't be read back, gets `yyyy-MM-dd HH:mm:ss`.
  *
  * What `parseDayTime` reads with no pattern, and what `DateRangePicker` with `seconds` shows
  * without a `format` it can read back; `formatPattern(value, dayTimePattern(locale), locale)` writes

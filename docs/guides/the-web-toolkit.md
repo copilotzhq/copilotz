@@ -632,18 +632,24 @@ from `00:00:00` to `23:59:59`, and shows as pressed only for whole days.
   writes `02/11/2026 14:30:05` in Portuguese. A day-time pattern to the minute gets `:ss` after its
   minutes. Otherwise it's the page language's own (`dayTimePattern(lang())`): its order and
   separators, and a four-digit Gregorian year (`02/11/2026 14:30:05` in Thai, not 2569). A function
-  `format`, or a pattern that can't be read back, is set aside, and the console says why, once.
+  `format`, or a pattern that can't be read back, is set aside, and the console says why, once. So
+  is a pattern that would read an end typed as the toolkit keeps it (below) as another end:
+  `yyyy-dd-MM` reads `2026-11-02` as February 11th.
 - **The clock is the language's.** That is 12-hour with AM and PM where the language uses them:
   `11/02/2026 02:30:05 PM` in American English. An app that wants 24 hours everywhere gives a
   `format` with `HH`.
 - **Typing** reads what `parseDayTime` reads: any case, any spaces, the language's digits, and
   seconds left out (they're `:00`). It also reads an end as the toolkit keeps it,
-  `2026-11-02 14:30:05` or with a `T`, but not an instant with a zone (`…Z`). Text that isn't one
-  real day and time is marked, and changes nothing.
+  `2026-11-02 14:30:05` or with a `T`, but not an instant with a zone (`…Z`).
+- **What's typed is read when it's done**: on leaving From or To, on Enter, or on Apply. Until then
+  it's text, and nothing moves: typing `2` on the way to `20` in To doesn't move From to the 2nd.
+  Text that isn't one real day and time within the bounds stays as typed, marked, and Apply is off
+  until it's put right. Picking a day in the months, or opening the picker again, sets it aside.
 - **Bounds.** A typed end is kept within `min` and `max`, which are days and take all of them
-  (`00:00:00` to `23:59:59`). On any side they don't bound, it's kept within 200 years of `today`.
-  So a Buddhist year (`2569`) or a Persian one (`1405`), typed out of habit, is refused, not saved
-  as a Gregorian year. An app that needs years further away gives `min` or `max`.
+  (`00:00:00` to `23:59:59`). On any side they don't bound, it's kept within 200 years of `today`,
+  and always within the years the toolkit reads, 0000 to 9999; the months show no day past these
+  bounds. So a Buddhist year (`2569`) or a Persian one (`1405`), typed out of habit, is refused, not
+  saved as a Gregorian year. An app that needs years further away gives `min` or `max`.
 - From and To are `date-picker-end-time-width` wide (`15em`).
 
 ```tsx
@@ -680,10 +686,13 @@ the month, weekday and AM/PM words, and of the digits it reads besides ASCII (En
 the page's is `lang()`). The value has seconds when the pattern writes them.
 
 - **What it allows:**
-  - spaces of any kind and number where the pattern has spaces;
-  - letters in any case;
+  - spaces of any kind and number where the pattern has spaces, and none or any at the text's edges,
+    whatever the pattern has there;
+  - letters in any case, by the language's rules: Greek capitals without their accents (`ΜΑΪΟΥ`),
+    Turkish `MAYIS`;
   - a month or weekday name without its final dot (`nov` or `nov.` in French);
-  - AM and PM with or without dots (`p.m.`, `PM`);
+  - AM and PM as the language writes them, its marks and all (Tibetan's `་`), or their letters with
+    or without dots (`p.m.`, `PM`);
   - one digit where the pattern writes two and no digit follows;
   - the language's own digits (Arabic-Indic in `ar-EG`, Persian in `fa-IR`), one kind to a field;
   - invisible right-to-left marks;
@@ -699,14 +708,17 @@ the page's is `lang()`). The value has seconds when the pattern writes them.
   - seconds the pattern doesn't write;
   - text that could be read as two day-times.
 - **Days are Gregorian**, whatever the language's calendar: a Thai Buddhist year is read as that
-  Gregorian year.
+  Gregorian year. Years have four digits, from 0000 (1 BC, as ISO 8601 counts it) to 9999.
 - **`patternProblem(pattern, locale)`** says why a pattern can't be read back, or gives `undefined`
   when it can:
   - a two-digit year (`yy`);
   - a field of no fixed length running into a digit (`yyyy/dM`: `2026/211` is November 2nd or
     January 21st);
-  - month names that are numbers (Chinese `11月`) run into a number (`dMMM`);
-  - month names that change within a month, as Persian ones do (write `MM`);
+  - month names that are numbers (Chinese `11月`, or `一一` in Chinese digits) run into a number
+    (`dMMM`); the language's own digits are digits here too;
+  - month names that aren't the Gregorian months in every year from 0000 to 9999: Persian ones
+    change within a month, and the Thai, Japanese-era and Taiwanese calendars' are the Julian months
+    before 1582, so `29 มี.ค. 0000` would be both February 29th and March 29th (write `MM`);
   - a 12-hour hour without `a`;
   - a field missing or repeated.
 
@@ -715,7 +727,9 @@ the page's is `lang()`). The value has seconds when the pattern writes them.
 - **`dayTimePattern(locale, seconds)`** is the pattern a language's people type a day and a time in.
   It has the language's order and separators and its clock, with a four-digit year, two-digit fields
   and the Gregorian calendar: `MM/dd/yyyy hh:mm:ss a` in American English, `dd/MM/yyyy HH:mm:ss` in
-  Brazilian Portuguese. `formatPattern(value, dayTimePattern(locale), locale)` writes in it.
+  Brazilian Portuguese. `formatPattern(value, dayTimePattern(locale), locale)` writes in it. A
+  language the runtime doesn't support (`Intl.DateTimeFormat.supportedLocalesOf` leaves it out, as
+  it does `zz-ZZ`, and Deno does Dzongkha) gets `yyyy-MM-dd HH:mm:ss`.
 - **`dateOfDayTime(value, timeZone)`** is the moment a day-time (or a day, at its start) names in a
   time zone (the page's when none is given), as a `Date`. Where the clocks change, one rule,
   Temporal's "compatible":
@@ -723,7 +737,8 @@ the page's is `lang()`). The value has seconds when the pattern writes them.
   - a time they repeat is its first pass.
 
   It's what `new Date(y, m - 1, d, h, mi, s)` does in the page's zone, and a named zone follows it
-  too.
+  too. With no zone, the page's clock is read as `Date` reads it, so a zone set the POSIX way
+  (`TZ=GMT+3`, three hours behind UTC) is the one `Date` uses.
 
 ```ts
 import {
@@ -739,6 +754,7 @@ parseDayTime("11/2/2026 2:30 PM", "M/d/yyyy h:mm a"); // "2026-11-02 14:30"
 parseDayTime("02/11/2026 14:30", "dd/MM/yyyy HH:mm:ss"); // "2026-11-02 14:30:00"
 parseDayTime("31/02/2026 10:00", "dd/MM/yyyy HH:mm"); // undefined: February has no 31st
 parseDayTime("11/2/99, 2:30 PM", "M/d/yyyy, h:mm a"); // undefined: the year needs four digits
+parseDayTime("2 MAYIS 2026 10:00", "d MMMM yyyy HH:mm", "tr-TR"); // "2026-05-02 10:00"
 patternProblem("yyyy/dM HH:mm"); // "`d` is followed by a digit (`M`): give it two digits or a separator"
 patternProblem("dd/MM/yy HH:mm"); // "`yy` leaves out the century: write `yyyy`"
 

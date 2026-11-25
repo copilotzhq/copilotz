@@ -10,18 +10,22 @@ Under `**New:**`:
   (`YYYY-MM-DD HH:mm:ss`; a preset runs from `00:00:00` to `23:59:59`). From and To each hold the
   end's day and time, typed or pasted whole. The field, the foot, From and To write the ends by one
   pattern, which reads them back: the app's `format` when it can be read back, or else the page
-  language's own, with its clock (12-hour in American English) and a four-digit Gregorian year. A
-  typed end stays within `min` and `max`, and within 200 years of `today` where they don't bound it,
-  so a Buddhist or Persian year typed out of habit is refused.
+  language's own, with its clock (12-hour in American English) and a four-digit Gregorian year.
+  What's typed is read when it's left, on Enter or on Apply, and only then moves an end; text that
+  can't be read keeps Apply off. A typed end stays within `min` and `max`, and within 200 years of
+  `today` (and 0000 to 9999) where they don't bound it, so a Buddhist or Persian year typed out of
+  habit is refused.
 - **Typed day-times read back.** `parseDayTime(text, pattern, locale)` reads what `formatPattern`
-  writes with the same pattern, in any language: any case and spacing, names without their final
-  dot, the language's digits, seconds left out. It refuses what isn't one real day and time
-  (`31/02`, 13 PM), a two-digit year (the century is never guessed), and text that could be two
-  day-times. `patternProblem` says why a pattern can't be read back (`yy`, `yyyy/dM`, Chinese
-  `dMMM`, Persian month names), and `dayTimePattern(locale)` is the language's own.
+  writes with the same pattern, in any language, for years 0000 to 9999: any case by the language's
+  rules and any spacing, names without their final dot, the language's digits, seconds left out. It
+  refuses what isn't one real day and time (`31/02`, 13 PM), a two-digit year (the century is never
+  guessed), and text that could be two day-times. `patternProblem` says why a pattern can't be read
+  back (`yy`, `yyyy/dM`, Chinese `dMMM`, Persian month names, Thai month names, which are Julian
+  before 1582), and `dayTimePattern(locale)` is the language's own.
 - **A wall-clock time's moment.** `dateOfDayTime(value, timeZone)` is the `Date` a day-time names in
   a time zone, by Temporal's "compatible" rule: a time the clocks skip moves forward by the gap, and
-  a time they repeat is its first pass, as `new Date(…)` does in the page's zone.
+  a time they repeat is its first pass, as `new Date(…)` does in the page's zone. With no zone, the
+  page's clock is read as `Date` reads it (`TZ=GMT+3` is three hours behind UTC).
 
 Under `**Docs:**`:
 

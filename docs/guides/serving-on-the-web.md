@@ -31,6 +31,11 @@ site where visitors chat with an agent, or a WhatsApp app with no page at all:
 | The page and its code (without it, there's no page)        | the page plugin (`webPage`) and the `page` resource                                          |
 | Signing in and out (without them, nobody signs in)         | `googleSignIn`, `emailSignIn`, `passwordSignIn`, `devSignIn` (this machine), `POST /signout` |
 
+A runtime whose store another process opened has stopped serving, and every request gets a 503 with
+`retry-after` (see [One instance per store](../architecture/topology.md#one-instance-per-store)).
+`listen`, serving `runtime.fetch` itself, then exits the process with code 1, so the platform starts
+it again. With `Deno.serve`, add `runtime.lost.then(() => Deno.exit(1))`.
+
 ## Routes
 
 A route is a plain function on a plugin, keyed by a URL pattern. Routes deal with HTTP, and Actions
@@ -437,6 +442,10 @@ process.once("SIGTERM", async () => {
 ```
 
 Deno and Bun run it too.
+
+Run one instance of it per store: on Cloud Run, maximum instances 1. If a second one opens the store
+anyway, this one answers every webhook with a 503 from then on and its process exits, so the
+provider's retries reach the owner, instead of this one taking messages it can't record.
 
 A route may take a WebSocket of its own, such as a voice call's relay, with Oxian's
 `upgradeWebSocket`. It answers with the response that gives, and it can refuse first, with a 403,

@@ -102,7 +102,8 @@ cache and kept reach ─► subscribers ─► Processors ─► observed Views 
 The runtime keeps these whatever the plugins do.
 
 1. **A fenced owner can't commit.** An owner claims its store by moving the store's epoch, and every
-   commit checks it. An old owner that's still running fails with `fenced`.
+   commit checks it. An old owner that's still running fails with `fenced`, and from then on stops
+   serving: it answers 503 until its process is replaced.
 2. **An event commits with the writes that caused it,** or neither commits.
 3. **An op that fails ends its transaction.** It rolls back, and nothing after it in that
    transaction commits, even when the code caught the error. A write the rules refuse is such an op.

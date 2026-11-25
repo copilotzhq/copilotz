@@ -134,7 +134,12 @@ by the event (a write with an `_id` derived from `event.id`, or `$set` to a valu
 points that may land a moment later go through the outbox.
 
 A new owner claims the store with `open`, which moves its fencing epoch. From then on, an old
-owner's commits fail with `fenced`, so 2 owners never write one store.
+owner's commits fail with `fenced`, so 2 owners never write one store. The old owner finds out at
+its next write, or idle, by checking the epoch every 5 seconds (`fenceCheck`). It then stops
+serving: every request gets a 503 with `retry-after`, its sockets are moved off, its timers and
+Processors stop, nothing more goes to the store, and `runtime.lost` resolves so the host can exit
+the process. Run one instance per store: see
+[One instance per store](topology.md#one-instance-per-store).
 
 ## The rules, at every op
 

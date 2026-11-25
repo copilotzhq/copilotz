@@ -88,6 +88,31 @@ const server = await listen(dir.fetch, { port: 8080 }); // or Deno.serve(dir.fet
 - its cookies' names: `s_<org>` for its session, and `<name>_<org>` for the rest;
 - the directory's hooks for invitations, leaving and renaming.
 
+## When another process takes an org
+
+Each org's store has one writer. When another process opens an org this one has open (a second
+instance, a newer deploy without the lease), this process's runtime for that org stops serving: it
+answers 503 with `retry-after`, its browsers are moved off, and its timers and Processors stop (see
+[One instance per store](../architecture/topology.md#one-instance-per-store)). The process goes on
+serving its other orgs, and the directory's runtime: only `listen`'s own runtime losing its store
+exits the process.
+
+The pool keeps the lost runtime: `get` hands it as it is, so the org's requests here get its 503,
+and asking doesn't count as use. The pool forgets it `idleMs` after it was lost, and opens it again
+on its next use. It doesn't take the org straight back, because the process that took it is most
+likely the one that should have it, and taking it back would have that one take it back in turn,
+each cutting the other's work on every request. Staff's console moving the org, or `close(id)`,
+opens it again sooner.
+
+An app that runs one process for every org knows a lost org means a second process is up, and may
+stop this one instead, in `open`:
+
+```ts
+const runtime = await createRuntime({ store: await storeOf(org), plugins });
+runtime.lost.then(() => process.exit(1)); // the platform starts it again
+return runtime;
+```
+
 ## Hosts
 
 Name the app's own hosts with the `hosts` resource, such as `{ "app.example.com": true }`. Any other

@@ -1,3 +1,45 @@
+## Unreleased
+
+**Fixed:**
+
+- **A runtime that lost its store stops serving, at once and loudly.** When a second process opened
+  the store (an instance the platform added, a deploy without the lease), the first one was fenced
+  but went on answering: every webhook it was sent got a 200 and was never recorded, and an idle one
+  never noticed. Now the first one finds out at its next write, or within 5 seconds while idle
+  (`fenceCheck` on `createRuntime`, in ms; `false` for a store no other process can open), and stops
+  for good: every request gets a 503 with `retry-after: 5` (routes, webhooks, `/health`, sockets'
+  upgrades), its sockets are moved off so clients reconnect to whoever serves next, its executors
+  and workers are let go, its timers and Processors stop, and nothing more goes to the store. It
+  logs one line saying which store (a SQLite file's path, a PostgreSQL schema and tenant, never a
+  URL), the epoch each holds, and that it stopped. Senders that retry a 503 reach the owner, so a
+  second instance costs seconds and delayed messages, not lost ones. Run one instance per store all
+  the same (Cloud Run's maximum instances 1): see
+  [One instance per store](docs/architecture/topology.md#one-instance-per-store).
+
+**New:**
+
+- **`runtime.lost`**, a promise that resolves once another owner took the store, with the epoch it
+  held and the line it logged (the `Lost` type), after the runtime has stopped. `close()` after it
+  resolves without saving anything. Calls in the process (`call`, `query`, `emit`, `render`,
+  `bytes`) are refused with `fenced`, and so is a call whose job the loss cut short (it was
+  `executor_lost`).
+
+**Changed:**
+
+- **`listen` and `serve` exit the process when the runtime they serve loses its store.** `listen`
+  does when it serves a runtime's own `runtime.fetch` (a function that calls it is any handler);
+  `serve` when its app's `lost` resolves, as a lost lease already stopped it. Both stop listening
+  and say code 1 to `stopped`, whose default is now to exit the process with the code it's given (it
+  was to do nothing), for `serve`'s handover and signal too. An app that passes `stopped` (the docs'
+  `pool.close().finally(() => process.exit(code))`) keeps doing what it says. With `Deno.serve`, add
+  `runtime.lost.then(() => Deno.exit(1))`.
+- **A pool keeps a lost org's runtime answering 503** (`runtimes`): `get` hands it as it is without
+  counting as use, and the pool forgets it `idleMs` after the loss, opening it again on the next
+  use. It doesn't take the org straight back, which would have two processes trading it on every
+  request; the process keeps serving its other orgs. Why, and how an app that runs one process for
+  every org stops the process instead:
+  [the tenancy design](design/tenancy.md#many-orgs-per-process).
+
 ## 1.0.0-rc.65 — 2026-11-25
 
 This release finishes what rc.64 postponed. A retried Action finds the nested calls it completed,

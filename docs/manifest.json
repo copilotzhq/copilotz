@@ -711,7 +711,7 @@
         {
           "title": "Topology and runtimes",
           "slug": "architecture/topology",
-          "description": "Where the owner, its executors, plugins' workers and browsers run, what a turn costs, many runtimes behind one address, and the JavaScript runtimes Copilotz runs on."
+          "description": "Where the owner, its executors, plugins' workers and browsers run, one instance per store and what a second one does, what a turn costs, many runtimes behind one address, and the JavaScript runtimes Copilotz runs on."
         }
       ]
     }

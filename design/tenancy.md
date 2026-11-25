@@ -186,6 +186,22 @@ acts only as its jobs. This is in place, and it's what makes org-run workers pos
   directory's placement says where its rows are.
 - Each org's writer is held by one process at a time and fenced by the org's epoch, so a process
   that takes over an org can't be overlapped by the one before.
+- **The one before stops serving that org.** Its runtime for the org finds out it was fenced at its
+  next write, or within seconds while idle (it checks its epoch), and from then on answers 503 with
+  `retry-after`, moves its browsers off, and stops its timers and Processors. The process keeps its
+  other orgs: one org lost is the org's, not the process's, so the process-level exit (`listen`,
+  `serve`) applies only to the runtime it serves itself.
+- **The pool doesn't take a lost org straight back.** It keeps the lost runtime answering 503, and
+  forgets it `idleMs` (30 minutes) after the loss, not after the last request, so the next use opens
+  it again. Taking it back on the next request would be the wrong default both ways it happens: on a
+  deploy, the new process is the one meant to have the org, and the old one taking it back fences it
+  in turn; with two processes up by mistake, they'd trade the org on every request, each cutting the
+  other's work. Kept lost, a request that reaches this process is refused and sent again (a
+  webhook's provider, a browser reconnecting) until it reaches the owner, the org trades hands at
+  most once per `idleMs`, and if the other process goes away (an extra instance scaled down), this
+  one serves the org again within that time. An app that runs one process for every org can stop the
+  process on any lost org instead (`runtime.lost` in the pool's `open`), since there a loss means a
+  second process is up.
 - **The first deployment** runs one process holding every org's writer, with the web and executors
   beside it, much as the previous version does. Spreading orgs over several owner processes needs
   hosts that can be addressed one by one: Cloud Run can't route a request to a chosen instance. The
@@ -211,7 +227,8 @@ acts only as its jobs. This is in place, and it's what makes org-run workers pos
 ## Operations
 
 - **Deploys:** drain the old revision before the new one takes the writers, as before. Each org's
-  epoch fences any overlap.
+  epoch fences any overlap, and a fenced org's runtime stops serving at once (503) rather than
+  taking requests it can't record. One instance runs at a time (Cloud Run's maximum instances 1).
 - **Backups:** the database's own backups cover every org. Restoring one org means restoring a
   backup aside and copying that org's rows back.
 - Every log line and metric carries the org.

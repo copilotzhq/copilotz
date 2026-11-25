@@ -28,18 +28,18 @@ const searchPath = /`(SET search_path TO [a-z_]+);`/.exec(section)![1];
 
 type Row = Record<string, unknown>;
 
-/** The store's SQLite file, read as `sqlite3` reads it. */
-async function sqliteFile(path: string): Promise<(sql: string) => Row[]> {
+/** The store's SQLite file, read as `sqlite3` reads it; closed after, as Windows keeps open files. */
+async function sqliteFile(path: string): Promise<{ read: (sql: string) => Row[]; close(): void }> {
   // Not literal, so no checker resolves another runtime's module.
   const BUN_SQLITE = "bun:sqlite";
   if (host === "bun") {
     const { Database } = await import(BUN_SQLITE);
     const db = new Database(path, { readonly: true });
-    return (sql) => db.prepare(sql).all() as Row[];
+    return { read: (sql) => db.prepare(sql).all() as Row[], close: () => db.close() };
   }
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(path, { readOnly: true });
-  return (sql) => db.prepare(sql).all() as Row[];
+  return { read: (sql) => db.prepare(sql).all() as Row[], close: () => db.close() };
 }
 
 /** Work left in flight: a delivery cut short, a failed call, a timer occurrence waiting to retry. */
@@ -120,8 +120,12 @@ test("the page's queries find work in flight: SQLite, through maintenance and sq
     await runtime.close({ drain: 0 });
     release();
   }
-  const read = await sqliteFile(path);
-  check(queries.map(read));
+  const file = await sqliteFile(path);
+  try {
+    check(queries.map(file.read));
+  } finally {
+    file.close();
+  }
 });
 
 test("the page's queries find work in flight: PGlite, through maintenance and as psql", async () => {
